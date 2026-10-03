@@ -473,8 +473,8 @@ fn real_task(operation: Operation) -> RealTask {
             }
         }
         // Every point re-solved, over the adjustment's own fixture: it needs
-        // exactly what the adjustment needs -- a pixel per observation and one
-        // shared lens.
+        // exactly what the adjustment needs -- a pixel per observation and at
+        // least one posed image.
         "Retriangulate all points" => {
             let (state, id) = adjustable();
             let job = state

@@ -147,7 +147,7 @@ fn show_bundle_adjust_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeO
 pub(crate) const RETRIANGULATE_ALL_POINTS: &str = "Retriangulate All Points";
 
 /// `Retriangulate All Points`: every point of the node re-read from its own
-/// observations, at the poses and the lens the value already holds.
+/// observations, at the poses and the lenses the value already holds.
 ///
 /// Greyed rather than hidden when it cannot run, for the reason
 /// [`show_convert_entry`] is, and on `AppState`'s own sentence so the greyed
@@ -161,8 +161,8 @@ fn show_retriangulate_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeO
         )
         .on_disabled_hover_text(refusal.unwrap_or_default())
         .on_hover_text(
-            "Re-solve every point from its own observations at these poses and this lens, as \
-             one version. Moves no camera. Runs on a worker thread and can be cancelled; Undo \
+            "Re-solve every point from its own observations at these poses and these lenses, \
+             as one version. Moves no camera. Runs on a worker thread and can be cancelled; Undo \
              (Ctrl+Z) puts the geometry back.",
         );
     if out

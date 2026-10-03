@@ -103,11 +103,12 @@ pub(crate) fn convert_refusal(
 
 /// Why `node` cannot be retriangulated, or `None` when it can.
 ///
-/// The three reasons a caller can see without solving anything, and they are
-/// the core operation's own refusals ([`RetriangulateError`]) asked before the
+/// The two reasons a caller can see without solving anything, and they are the
+/// core operation's own refusals ([`RetriangulateError`]) asked before the
 /// gesture rather than after it: the observations carry no pixel to cast a ray
-/// through, no image carries a pose, and the posed images do not share one
-/// lens.
+/// through, and no image carries a pose. How many cameras the posed images are
+/// taken through is not a reason: each observation is solved through its own
+/// image's camera.
 ///
 /// A free function over the node and the busy sentence for the reason
 /// [`convert_refusal`] is one: the Scene tree's menu is drawn inside a walk
@@ -133,13 +134,8 @@ pub(crate) fn retriangulate_refusal(
                 .to_string(),
         );
     }
-    match edited.posed_lens_count() {
-        0 => Some("No image of this reconstruction carries a pose.".to_string()),
-        1 => None,
-        n => Some(format!(
-            "Retriangulation reads one shared camera, and these images are taken through {n}."
-        )),
-    }
+    (edited.posed_lens_count() == 0)
+        .then(|| "No image of this reconstruction carries a pose.".to_string())
 }
 
 /// The Action Log's focal clause for one adjustment: each released camera's
@@ -624,9 +620,9 @@ impl AppState {
         }
     }
 
-    /// Re-solve one point from its own observations, at the poses and the lens
-    /// its reconstruction already holds, and install the answer as that node's
-    /// next version.
+    /// Re-solve one point from its own observations, at the poses and the
+    /// lenses its reconstruction already holds, and install the answer as that
+    /// node's next version.
     ///
     /// A point edit: the new version's overlay carries the re-solved record and
     /// the base is the same `Arc`, so every index but this one still means what
@@ -709,10 +705,10 @@ impl AppState {
     /// Start a retriangulation of every point of `id` on a worker thread.
     ///
     /// A bulk edit: every point's geometry is re-read from its own observations
-    /// at the poses and the lens the value already holds, so the next version is
-    /// a whole new base. No point is deleted and none is created, so the indexes
-    /// do not move; what the panels cached *about* the geometry is the caller's
-    /// to drop, as it is after an adjustment.
+    /// at the poses and the lenses the value already holds, so the next version
+    /// is a whole new base. No point is deleted and none is created, so the
+    /// indexes do not move; what the panels cached *about* the geometry is the
+    /// caller's to drop, as it is after an adjustment.
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by

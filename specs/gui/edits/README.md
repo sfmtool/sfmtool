@@ -24,7 +24,7 @@ invocation, the version's label and the history entry.
 | [prune-covered-observations.md](prune-covered-observations.md) | Retire every observation a finer tracked one covers in the same photograph, and drop the points left with too few, from the reconstruction row's context menu, with nothing re-solved. |
 | [resect-image.md](resect-image.md) | Re-estimate one image's pose against structure held out from it, from the tracks and the clusters of the node's cluster-patches file, from the image menu, and keep the answer as the node's next version. |
 | [switch-camera-model.md](switch-camera-model.md) | Switch one camera to a model fitted to it as one version; the Camera Intrinsics panel's `Refit spline…` uses it to give a spline camera another coefficient count or domain end, and MCP `switch_camera_model` reaches it with any model. |
-| [retriangulate-point.md](retriangulate-point.md) | Re-solve structure at the poses and the lens the value already holds: one point from its context menu in the 3D viewport, or every point from the reconstruction row's, as the node's next version. |
+| [retriangulate-point.md](retriangulate-point.md) | Re-solve structure at the poses and the lenses the value already holds: one point from its context menu in the 3D viewport, or every point from the reconstruction row's, as the node's next version. |
 
 The two edits that predate this directory are specced with the document model
 they were built to exercise: **delete point** (the point edit) and **delete

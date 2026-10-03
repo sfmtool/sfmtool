@@ -4,10 +4,11 @@
 //! Re-solving the points of a whole reconstruction: what the value that comes
 //! back holds, what it leaves alone, and every refusal.
 //!
-//! The fixture is a synthetic scene whose truth is known -- three cameras on a
+//! The fixture is a synthetic scene whose truth is known -- three images on a
 //! short arc looking at a handful of points, every observation the exact
 //! projection -- so a retriangulation run from a copy whose points have been
-//! nudged has somewhere to converge to.
+//! nudged has somewhere to converge to. The tests of several cameras use a
+//! four-image variant whose images alternate between a pinhole and a fisheye.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -75,25 +76,38 @@ fn project(recon: &SfmrReconstruction, i: usize, world: Point3<f64>) -> Option<[
 /// box inside it, every observation the exact projection, and one square
 /// patch frame per point so a rescale is measurable.
 fn truth() -> SfmrReconstruction {
+    scene(vec![pinhole()], &[0; IMAGES], |_, _| true)
+}
+
+/// The truth's construction over any camera table: one image per entry of
+/// `camera_of`, taken through the camera it names, on the same arc, with point
+/// `p` observed in image `i` wherever `sees(p, i)` says so. Every observation a
+/// track is meant to carry has to land inside its frame.
+fn scene(
+    cameras: Vec<CameraIntrinsics>,
+    camera_of: &[u32],
+    sees: impl Fn(usize, usize) -> bool,
+) -> SfmrReconstruction {
+    let images = camera_of.len();
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = vec![pinhole()];
-    recon.image_table.images = (0..IMAGES)
+    recon.image_table.cameras = cameras;
+    recon.image_table.images = (0..images)
         .map(|i| {
-            let angle = 0.3 * (i as f64 - (IMAGES as f64 - 1.0) / 2.0);
+            let angle = 0.3 * (i as f64 - (images as f64 - 1.0) / 2.0);
             let centre = Vector3::new(8.0 * angle.sin(), 0.0, 8.0 * angle.cos());
             let rotation = UnitQuaternion::face_towards(&centre, &Vector3::y()).inverse();
             SfmrImage {
                 name: format!("image_{i:03}.jpg"),
-                camera_index: 0,
+                camera_index: camera_of[i],
                 quaternion_wxyz: rotation,
                 translation_xyz: -(rotation * centre),
             }
         })
         .collect();
     let stats = recon.image_table.depth_statistics.images[0].clone();
-    recon.image_table.depth_statistics.images = vec![stats; IMAGES];
+    recon.image_table.depth_statistics.images = vec![stats; images];
     recon.image_table.depth_histogram_counts =
-        vec![recon.image_table.depth_histogram_counts[0].clone(); IMAGES];
+        vec![recon.image_table.depth_histogram_counts[0].clone(); images];
 
     recon.point_set.points = (0..POINTS)
         .map(|p| Point3D {
@@ -108,9 +122,11 @@ fn truth() -> SfmrReconstruction {
     let mut tracks = Vec::new();
     let mut counts = Vec::new();
     let mut keypoints: Vec<[f32; 2]> = Vec::new();
+    let mut expected = Vec::new();
     for p in 0..POINTS {
         let mut count = 0u32;
-        for i in 0..IMAGES {
+        expected.push((0..images).filter(|&i| sees(p, i)).count() as u32);
+        for i in (0..images).filter(|&i| sees(p, i)) {
             let Some(pixel) = project(&recon, i, recon.point_set.points[p].position) else {
                 continue;
             };
@@ -123,10 +139,7 @@ fn truth() -> SfmrReconstruction {
         }
         counts.push(count);
     }
-    assert!(
-        counts.iter().all(|&c| c == IMAGES as u32),
-        "the fixture is degenerate: {counts:?}"
-    );
+    assert_eq!(counts, expected, "the fixture is degenerate");
     let mut keypoints_xy = Array2::<f32>::zeros((keypoints.len(), 2));
     for (row, uv) in keypoints.iter().enumerate() {
         keypoints_xy[[row, 0]] = uv[0];
@@ -137,7 +150,7 @@ fn truth() -> SfmrReconstruction {
     set.observation_counts = counts;
     set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy,
-        image_file_hashes: vec![[0u8; 16]; IMAGES],
+        image_file_hashes: vec![[0u8; 16]; images],
     };
     let mut u = Array2::<f32>::zeros((POINTS, 3));
     let mut v = Array2::<f32>::zeros((POINTS, 3));
@@ -157,7 +170,11 @@ fn truth() -> SfmrReconstruction {
 /// The truth with every point nudged off it, its pixels left where the truth
 /// put them: what a retriangulation has to find its way back from.
 fn nudged() -> SfmrReconstruction {
-    let mut recon = truth();
+    nudge(truth())
+}
+
+/// `recon` with every point nudged off where it stands.
+fn nudge(mut recon: SfmrReconstruction) -> SfmrReconstruction {
     for (p, point) in recon.point_set.points.iter_mut().enumerate() {
         point.position += Vector3::new(
             0.2 * jitter(p, 21),
@@ -557,22 +574,179 @@ fn the_patch_frame_of_a_moved_point_keeps_its_angular_size() {
     );
 }
 
+/// A fisheye camera whose focal and model both differ from [`pinhole`], so a
+/// pixel read through the wrong one of the two states a different ray.
+fn fisheye() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 300.0,
+            principal_point_x: IMG_W as f64 / 2.0 + 7.0,
+            principal_point_y: IMG_H as f64 / 2.0 - 5.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    }
+}
+
+/// Four images on the arc, alternating between [`pinhole`] (camera 0) and
+/// [`fisheye`] (camera 1). Points 0 and 1 are seen through the pinhole alone,
+/// points 2 and 3 through the fisheye alone, and point 4 through both.
+fn two_camera_truth() -> SfmrReconstruction {
+    scene(vec![pinhole(), fisheye()], &[0, 1, 0, 1], |p, i| match p {
+        0 | 1 => i % 2 == 0,
+        2 | 3 => i % 2 == 1,
+        _ => true,
+    })
+}
+
 #[test]
-fn mixed_cameras_are_refused() {
+fn each_track_is_solved_through_the_cameras_that_saw_it() {
+    let truth = two_camera_truth();
+    let start = edited(nudge(two_camera_truth()));
+    let before: Vec<f64> = (0..POINTS).map(|p| error(&start.base, &truth, p)).collect();
+    assert!(before.iter().all(|&e| e > 0.01), "{before:?}");
+
+    // A bar a fraction of a pixel wide: it reads every observation's residual
+    // through that observation's own camera, so it passes only where each
+    // one was projected through the lens that took it.
+    let options = RetriangulateOptions {
+        bar_px: Some(0.01),
+        ..RetriangulateOptions::default()
+    };
+    let (next, _, report) =
+        retriangulate_points(&start, RetriangulateWhich::All, &options, &Progress::none())
+            .expect("a value taken through two cameras retriangulates");
+
+    assert_eq!(report.read, POINTS);
+    assert_eq!(report.observations, 2 + 2 + 2 + 2 + 4);
+    assert_eq!(report.census.finite, POINTS, "{:?}", report.census);
+    assert_eq!(report.moved, POINTS);
+    for p in 0..POINTS {
+        assert!(
+            error(&next.base, &truth, p) < TRUTH_TOLERANCE,
+            "point {p} landed at {:?}",
+            next.base.point_set.points[p].position
+        );
+    }
+}
+
+#[test]
+fn a_track_read_through_the_wrong_camera_does_not_land_on_the_truth() {
+    // The control for the test above: the same pixels with the table saying
+    // every image was taken through the pinhole. The fisheye's pixels then
+    // state the wrong rays, so the tracks they belong to miss the truth, and
+    // the pinhole-only tracks are untouched by the change.
+    let truth = two_camera_truth();
+    let mut recon = nudge(two_camera_truth());
+    recon.image_table.cameras[1] = pinhole();
+    let (next, _, _) = retriangulate_points(
+        &edited(recon),
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    for p in 0..2 {
+        assert!(error(&next.base, &truth, p) < TRUTH_TOLERANCE, "point {p}");
+    }
+    for p in 2..POINTS {
+        assert!(
+            !next.base.point_set.points[p].is_at_infinity()
+                && error(&next.base, &truth, p) > 100.0 * TRUTH_TOLERANCE,
+            "point {p} landed on the truth through the wrong lens"
+        );
+    }
+}
+
+/// [`two_camera_truth`], nudged, with point 3 (seen through the fisheye
+/// alone) and point 4 (seen through both cameras) ranged at their true
+/// distance from image 1, a fisheye image. Returns the value and that image's
+/// centre.
+fn two_camera_ranged() -> (SfmrReconstruction, Point3<f64>) {
+    let truth = two_camera_truth();
+    let centre = truth.image_table.images[1].camera_center();
+    let mut recon = nudge(two_camera_truth());
+    for p in [3, 4] {
+        let range = (truth.point_set.points[p].position - centre).norm();
+        constrain(&mut recon, p, POINT_CONSTRAINT_RANGED, range, 1);
+    }
+    (recon, centre)
+}
+
+#[test]
+fn a_ranged_point_seen_through_the_second_camera_lands_on_the_truth() {
+    let truth = two_camera_truth();
+    let (recon, centre) = two_camera_ranged();
+    let (next, _, report) = retriangulate_points(
+        &edited(recon),
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("a value taken through two cameras retriangulates");
+
+    assert_eq!(report.census.ranged, 2, "{:?}", report.census);
+    for p in [3, 4] {
+        let range = (truth.point_set.points[p].position - centre).norm();
+        let got = (next.base.point_set.points[p].position - centre).norm();
+        assert!((got - range).abs() < 1e-9 * range, "{got} is not {range}");
+        assert!(
+            error(&next.base, &truth, p) < TRUTH_TOLERANCE,
+            "point {p} landed at {:?}",
+            next.base.point_set.points[p].position
+        );
+    }
+}
+
+#[test]
+fn a_ranged_point_read_through_the_wrong_camera_does_not_land_on_the_truth() {
+    // The control for the test above: the distance alone does not place the
+    // point, so with the table saying every image was taken through the
+    // pinhole, the fisheye's pixels state the wrong rays and the ranged points
+    // miss the truth while still keeping their distance.
+    let truth = two_camera_truth();
+    let (mut recon, centre) = two_camera_ranged();
+    recon.image_table.cameras[1] = pinhole();
+    let (next, _, report) = retriangulate_points(
+        &edited(recon),
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+
+    assert_eq!(report.census.ranged, 2, "{:?}", report.census);
+    for p in [3, 4] {
+        let range = (truth.point_set.points[p].position - centre).norm();
+        let got = (next.base.point_set.points[p].position - centre).norm();
+        assert!((got - range).abs() < 1e-9 * range, "{got} is not {range}");
+        assert!(
+            error(&next.base, &truth, p) > 100.0 * TRUTH_TOLERANCE,
+            "point {p} landed on the truth through the wrong lens"
+        );
+    }
+}
+
+#[test]
+fn a_camera_no_image_names_changes_nothing() {
+    let (one, _, one_report) = retriangulate_points(
+        &edited(nudged()),
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
     let mut recon = nudged();
-    recon.image_table.cameras.push(pinhole());
-    recon.image_table.images[1].camera_index = 1;
-    let start = edited(recon);
-    assert_eq!(
-        retriangulate_points(
-            &start,
-            RetriangulateWhich::All,
-            &RetriangulateOptions::default(),
-            &Progress::none(),
-        )
-        .expect_err("two lenses are refused"),
-        RetriangulateError::MixedCameras { cameras: 2 }
-    );
+    recon.image_table.cameras.push(fisheye());
+    let (two, _, two_report) = retriangulate_points(
+        &edited(recon),
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    assert_eq!(one.base.point_set.points, two.base.point_set.points);
+    assert_eq!(one_report, two_report);
 }
 
 #[test]

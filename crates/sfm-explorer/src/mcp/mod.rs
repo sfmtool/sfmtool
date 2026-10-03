@@ -257,8 +257,8 @@ pub(crate) enum Command {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,
     },
-    /// Re-solve one point from its own observations, at the poses and the lens
-    /// the reconstruction already holds.
+    /// Re-solve one point from its own observations, at the poses and the
+    /// lenses the reconstruction already holds.
     RetriangulatePoint {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,

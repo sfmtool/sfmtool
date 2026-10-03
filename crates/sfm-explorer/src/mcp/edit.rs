@@ -184,7 +184,7 @@ pub(super) fn delete_point(state: &mut AppState, label: &str, query: &PointQuery
 }
 
 /// `retriangulate_point`: one point re-solved from its own observations, at
-/// the poses and the lens the reconstruction already holds.
+/// the poses and the lenses the reconstruction already holds.
 ///
 /// A point edit, and it finishes inside the call: one track's rays are a
 /// microsecond of arithmetic whatever the reconstruction's size. The reply is

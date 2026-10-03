@@ -3282,8 +3282,8 @@ fn the_convert_entry_is_greyed_while_the_node_is_busy() {
     state.finish_background_task();
 }
 
-/// `Bundle Adjust...` is live on a node with a pixel per observation and one
-/// posed lens, sits directly above `Retriangulate All Points`, and reports the
+/// `Bundle Adjust...` is live on a node with a pixel per observation and a
+/// posed image, sits directly above `Retriangulate All Points`, and reports the
 /// node it was opened on rather than the selection.
 #[test]
 fn the_bundle_adjust_entry_is_live_on_an_adjustable_node() {

@@ -1925,6 +1925,25 @@ fn retriangulating_every_point_pushes_one_version_with_a_new_base() {
 }
 
 #[test]
+fn a_node_whose_images_are_taken_through_two_cameras_is_retriangulated() {
+    let (mut state, id) = two_camera_state();
+    assert_eq!(state.retriangulate_refusal(id), None);
+    let count = state.scene[0].point_count();
+
+    state
+        .start_retriangulate_all_points(id)
+        .expect("two cameras are retriangulated, not refused");
+    state.finish_background_task();
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert_eq!(node.point_count(), count, "no point was deleted or created");
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    assert!(entry.text.starts_with("Retriangulated "), "{}", entry.text);
+}
+
+#[test]
 fn a_cancelled_whole_value_retriangulation_pushes_no_version() {
     let (mut state, id) = nudged_point_state(11);
     let before = live_position(&state, 11);

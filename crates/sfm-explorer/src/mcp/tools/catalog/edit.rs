@@ -117,7 +117,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "retriangulate_point",
             description: "Re-solve one 3D point from its own observations, at the poses and the \
-                          lens the reconstruction already holds. Moves no camera and no other \
+                          lenses the reconstruction already holds. Moves no camera and no other \
                           point. A point edit, so every other index stays good; the point itself \
                           is deleted and re-added, so it takes a new index, which the reply's \
                           report names along with the verdict its observations supported - \
@@ -137,7 +137,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "retriangulate_all_points",
             description: "Re-solve every 3D point of one reconstruction from its own \
-                          observations, at the poses and the lens it already holds. Moves no \
+                          observations, at the poses and the lenses it already holds. Moves no \
                           camera and no lens: this is the structure re-read at a geometry \
                           somebody else decided. A bulk edit giving the node a whole new base, \
                           but it deletes no point and creates none, so every index still means \
@@ -147,7 +147,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           geometry it had. One version, and it runs on a worker thread, so a \
                           retriangulation still going after 200 ms replies with running: true \
                           and an operation_id instead of the version; cancel_background_task \
-                          stops it. Needs a pixel per observation and one shared camera.",
+                          stops it. Needs a pixel per observation and at least one posed image.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },

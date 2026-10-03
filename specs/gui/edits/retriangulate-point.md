@@ -7,8 +7,8 @@ the answer as the node's next **version**, which an undo steps back out of.
 
 Nothing about the capture moves. No camera is re-posed, no lens is re-solved,
 and no observation is added, removed or walked. What each point's own pixels
-support, at the poses and the lens the value already holds, is the whole of what
-either action decides.
+support, at the poses and the lenses the value already holds, is the whole of
+what either action decides.
 
 Related specs:
 [../../core/reconstruction/triangulation-rules.md](../../core/reconstruction/triangulation-rules.md)
@@ -64,8 +64,10 @@ choose `Retriangulate All Points`.
 
 Both are greyed, with the reason as hover text, when the node cannot be
 retriangulated: its observations carry no pixel to cast a ray through, no image
-carries a pose, its posed images are taken through more than one lens, or an
-operation is already running on it. One function answers that question --
+carries a pose, or an operation is already running on it. How many cameras the
+posed images are taken through is not a reason: each observation is solved
+through its own image's camera, so a rig with one camera per sensor is
+retriangulated like any other value. One function answers that question --
 `state::edits::retriangulate_refusal` -- and the menu entry, the wire's two
 tools and the operations themselves all ask it, so the greyed entry and a call
 that asks anyway give one answer.
@@ -188,6 +190,8 @@ what is tested here is the wrapping.
   writes one failed entry saying it was cancelled.
 - **A node with no pixel per observation is refused** in the sentence the greyed
   entry carries, and the refusal quotes it.
+- **A node whose images are taken through two cameras is retriangulated**, from
+  the state and over the wire.
 - **The menu's requests are carried out**: a menu that only opened selects the
   point and edits nothing; `Retriangulate Point` selects and pushes its version;
   `Edit on Bench` stages the track and raises Track View, which is
@@ -220,6 +224,3 @@ what is tested here is the wrapping.
 - **A per-point choice of rules.** The options exist on the core function, and
   both entries pass its defaults. A dialog for the angular floor and the
   reprojection bar is a thing to add when somebody wants one, not before.
-- **Retriangulating a rig.** The operation reads one shared camera, as the
-  adjustment does; a value whose posed images are taken through more than one
-  lens is refused rather than solved through one of them.

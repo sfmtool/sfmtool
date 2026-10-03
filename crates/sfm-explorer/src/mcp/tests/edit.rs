@@ -157,6 +157,34 @@ fn retriangulate_all_points_defers_and_comes_back_with_a_version() {
     assert!(report.contains("points moved"), "{report}");
 }
 
+/// A reconstruction whose images are taken through two cameras is
+/// retriangulated over the wire, not refused.
+#[test]
+fn retriangulate_all_points_accepts_two_cameras() {
+    let (mut state, mut viewer) = editable();
+    with_two_cameras(&mut state);
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("retriangulate_all_points", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the retriangulation must defer"),
+    };
+    state.finish_background_task();
+
+    match super::super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(reply)) => {
+            assert_eq!(reply["label"], json!("Retriangulated run_a"), "{reply}")
+        }
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    }
+    assert_eq!(version_count(&state), 2);
+}
+
 /// The prune goes to a worker, and the version it comes back with is the
 /// node's next one.
 #[test]

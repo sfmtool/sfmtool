@@ -630,8 +630,8 @@ impl Viewer3D {
             if entry(
                 ui,
                 RETRIANGULATE_POINT_LABEL,
-                "Re-solve this point from its own observations at these poses and this lens, \
-                 as one version.",
+                "Re-solve this point from its own observations at these poses and these \
+                 lenses, as one version.",
             ) {
                 self.point_menu = Some(PointGesture::Retriangulate(point));
                 ui.close();

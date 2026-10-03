@@ -177,10 +177,10 @@ pub struct SceneGraphResponse {
     /// next version.
     pub bundle_adjust: Option<ReconId>,
     /// `Retriangulate All Points` chosen from a reconstruction's context menu:
-    /// re-solve every point from its own observations at the poses and the lens
-    /// the value already holds, as the node's next version. A bulk edit, and a
-    /// long one, so `AppState::start_retriangulate_all_points` sends it to a
-    /// worker after the frame.
+    /// re-solve every point from its own observations at the poses and the
+    /// lenses the value already holds, as the node's next version. A bulk edit,
+    /// and a long one, so `AppState::start_retriangulate_all_points` sends it to
+    /// a worker after the frame.
     pub retriangulate_all_points: Option<ReconId>,
     /// `Prune Covered Observations` chosen from a reconstruction's context
     /// menu: retire every observation a finer tracked one covers, as the node's

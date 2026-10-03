@@ -313,26 +313,30 @@ fixed-height for virtualization.
 - **`Bundle Adjust...`** refines every pose and point of the node against its
   observations, as the node's next version and on a worker thread
   ([edits/bundle-adjust.md](edits/bundle-adjust.md)). It acts on the node the
-  menu was opened on, not on the selection, and opens the dialog that asks
-  whether the shared focal is released before anything runs, so the panel
-  reports it as `SceneGraphResponse::bundle_adjust` and `dock.rs` answers with
+  menu was opened on, not on the selection, and opens the dialog that asks,
+  camera by camera, whether its focal length and lens distortion are released
+  before anything runs, so the panel reports it as
+  `SceneGraphResponse::bundle_adjust` and `dock.rs` answers with
   `AppState::open_bundle_adjust`. It heads the whole-reconstruction edits
   because it is the widest of them: it moves the cameras as well as the points
   the entries under it re-read. It is **live only on a node whose observations
-  carry a pixel, whose posed images share one lens, and that nothing is running
-  on**, and greyed with the reason otherwise. Past the busy sentence, the gate
-  is `bundle_adjust_prompt::refusal`, which the operation itself also asks, so
-  the entry and the edit cannot disagree about when the adjustment can run.
+  carry a pixel, some of whose images carry a pose, and that nothing is running
+  on**, and greyed with the reason otherwise. How many cameras the posed images
+  use is not a reason, since the adjustment solves each of them. Past the busy
+  sentence, the gate is `bundle_adjust_prompt::refusal`, which the operation
+  itself also asks, so the entry and the edit cannot disagree about when the
+  adjustment can run.
 - **`Retriangulate All Points`** re-solves every point of the node from its own
-  observations, at the poses and the lens the value already holds, as the node's
-  next version and on a worker thread
+  observations, at the poses and the lenses the value already holds, as the
+  node's next version and on a worker thread
   ([background-tasks.md](background-tasks.md),
   [edits/retriangulate-point.md](edits/retriangulate-point.md)). It moves no
   camera and no lens, deletes no point and creates none, so every index still
   means what it meant. It is **live only on a node whose observations carry a
-  pixel, whose posed images share one lens, and that nothing is running on**,
-  and greyed with the reason otherwise. The gate is
-  `state::edits::retriangulate_refusal`, which the wire's
+  pixel, some of whose images carry a pose, and that nothing is running on**,
+  and greyed with the reason otherwise. Images taken through different cameras
+  are not a reason, since each observation is solved through its own image's
+  camera. The gate is `state::edits::retriangulate_refusal`, which the wire's
   `retriangulate_all_points` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer.
 - **`Prune Covered Observations`** retires every observation of the node a

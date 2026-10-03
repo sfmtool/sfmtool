@@ -727,12 +727,12 @@ impl EditedReconstruction {
     /// How many camera models the **posed** images of this value are taken
     /// through, which is zero when none of them carries a pose.
     ///
-    /// The question every operation that reads one shared lens asks before it
-    /// starts -- the retriangulation, and whether anything is posed at all --
-    /// so the sentence a menu entry is greyed with and the refusal the operation
-    /// itself produces are read off one count rather than two scans that could
-    /// drift apart. An unposed image states no ray, so it sits the operation out
-    /// and its lens is not part of the question.
+    /// Zero means nothing is posed. The viewer's menu gates for the bundle
+    /// adjustment, the retriangulation and the covered-observation prune ask
+    /// that question here, and so does `prune_covered_observations` before it
+    /// starts, so for the prune the sentence its menu entry is greyed with and
+    /// the refusal the operation produces are read off one count. An unposed
+    /// image states no ray, so its lens is not counted.
     pub fn posed_lens_count(&self) -> usize {
         self.posed_lenses().len()
     }

@@ -79,7 +79,7 @@ Two entries, in this order:
 | Entry | What it does |
 |-------|--------------|
 | `Edit on Bench` | Puts the point's track on the bench as a track-stage track and raises Track View on it ([track-view.md](track-view.md)) |
-| `Retriangulate Point` | Re-solves the point from its own observations at these poses and this lens, as one version ([edits/retriangulate-point.md](edits/retriangulate-point.md)) |
+| `Retriangulate Point` | Re-solves the point from its own observations at these poses and these lenses, as one version ([edits/retriangulate-point.md](edits/retriangulate-point.md)) |
 
 `Edit on Bench` is what ticking Track View's *Edit* box over the selected
 point does, reached from the viewport: `AppState::put_point_on_bench`, which

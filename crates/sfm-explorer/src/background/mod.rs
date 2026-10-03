@@ -107,7 +107,7 @@ impl Operation {
     };
 
     /// Every point of one node re-solved from its own observations, at the
-    /// poses and the lens the value already holds
+    /// poses and the lenses the value already holds
     /// (`specs/gui/edits/retriangulate-point.md`).
     ///
     /// Cancellable because `sfmtool_core::reconstruction::retriangulate_points`

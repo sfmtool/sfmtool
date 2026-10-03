@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Re-solving points a reconstruction already holds, from their own
-//! observations at its own poses and its own lens.
+//! observations at its own poses and its own lenses.
 //!
 //! [`super::points`] reads flat arrays and knows nothing about a
 //! reconstruction. This is the one operation a caller holding a value asks for:
@@ -19,7 +19,7 @@ use nalgebra::Point3;
 use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
 
 use super::points::{
-    triangulate_points_from_observations, FewObservations, ObservationSet, PointCensus,
+    triangulate_points_through_cameras, FewObservations, ObservationSet, PointCensus,
     PointDistance, PointRules, TriangulatedPoints,
 };
 use crate::numeric::median_in_place;
@@ -111,11 +111,6 @@ pub enum RetriangulateError {
     /// The observations carry no pixel: a `sift_files` value without the
     /// format's optional inline keypoint column.
     NoKeypoints,
-    /// The posed images do not share one set of camera intrinsics.
-    MixedCameras {
-        /// How many the posed images between them name.
-        cameras: usize,
-    },
     /// No image of the reconstruction carries a usable pose.
     NoPosedImages,
     /// An index names no live point of the value.
@@ -138,11 +133,6 @@ impl std::fmt::Display for RetriangulateError {
                 f,
                 "retriangulation needs a pixel per observation, and this reconstruction's \
                  observations are .sift feature indexes with no inline keypoints"
-            ),
-            RetriangulateError::MixedCameras { cameras } => write!(
-                f,
-                "retriangulation reads one shared camera, and these images are taken \
-                 through {cameras}"
             ),
             RetriangulateError::NoPosedImages => {
                 write!(f, "no image of this reconstruction carries a pose")
@@ -210,21 +200,24 @@ pub struct RetriangulateReport {
 }
 
 /// Re-solve the points `which` names from their own observations, at `edited`'s
-/// poses and lens, and hand back the value that holds the answers.
+/// poses and lenses, and hand back the value that holds the answers.
 ///
-/// This is [`triangulate_points_from_observations`] over a reconstruction: it
-/// gathers the pixels, the poses and the constraint columns the array form
-/// takes, runs it once, and writes each point's answer back. It is pure --
-/// `edited` is left exactly as it was -- and it moves no camera and no lens.
-/// What a point's observations support at *this* geometry is the whole of what
-/// it decides.
+/// This is the observation form of the triangulation rules over a
+/// reconstruction: it gathers the pixels, the poses, the camera each image was
+/// taken through and the constraint columns the array form takes, runs it
+/// once, and writes each point's answer back. Each observation's ray is cast,
+/// and its reprojection read, through its own image's camera, so a value whose
+/// images are taken through several cameras -- a rig with one camera per
+/// sensor -- is solved in the same call. It is pure -- `edited` is left exactly
+/// as it was -- and it moves no camera and no lens. What a point's observations
+/// support at *this* geometry is the whole of what it decides.
 ///
 /// **A point's constraint is honoured.** A held point is never read: the value
 /// owns its coordinate, so it is not in the solve and not in the answer. A
 /// ranged point keeps its distance and only its direction is re-read, measured
-/// from the mean of its reference images' camera centres at these poses; a
-/// ranged point whose reference the value does not name is solved free, because
-/// a distance from nothing constrains nothing.
+/// from its reference image's camera centre at these poses; a ranged point
+/// whose reference the value does not name, or does not pose, is solved free,
+/// because a distance from nothing constrains nothing.
 ///
 /// **A point the operation cannot speak for keeps the geometry it has.** That
 /// is a point fewer than two of whose observations state a usable ray, which
@@ -310,8 +303,9 @@ pub fn retriangulate_points(
     let table = &work.base.image_table;
     let estimates = {
         let _phase = p_solve.phase("retriangulate");
-        triangulate_points_from_observations(
-            table.camera_for_image(gathered.camera_image),
+        triangulate_points_through_cameras(
+            &table.cameras,
+            &gathered.image_camera,
             ObservationSet {
                 uv: &gathered.uv,
                 obs_image: &gathered.obs_image,
@@ -322,6 +316,7 @@ pub fn retriangulate_points(
             },
             Some(&gathered.marks),
             options.rules(gathered.distance.as_deref()),
+            None,
         )
     };
     progress.check_cancel()?;
@@ -355,8 +350,8 @@ struct Gathered {
     targets: Vec<u32>,
     /// Points not in `targets` because the value holds their coordinate.
     held: usize,
-    /// An image taken through the one camera the solve reads, for the lookup.
-    camera_image: usize,
+    /// Per image, the camera-table index of the camera it was taken through.
+    image_camera: Vec<u32>,
     uv: Vec<f64>,
     obs_image: Vec<u32>,
     obs_point: Vec<u32>,
@@ -380,10 +375,6 @@ fn gather(
     }
     let table = &work.base.image_table;
 
-    // One camera for the whole solve: the array form carries a single shared
-    // model, and a value whose images disagree about the lens has to be told so
-    // rather than silently solved through one of them. An unposed image states
-    // no ray, so it is not in the solve and its lens is not in this question.
     let posed: Vec<usize> = (0..table.images.len())
         .filter(|&i| {
             is_posed(
@@ -392,20 +383,12 @@ fn gather(
             )
         })
         .collect();
-    let Some(&camera_image) = posed.first() else {
+    if posed.is_empty() {
         return Err(RetriangulateError::NoPosedImages);
-    };
-    let mut lenses: Vec<u32> = posed
-        .iter()
-        .map(|&i| table.images[i].camera_index)
-        .collect();
-    lenses.sort_unstable();
-    lenses.dedup();
-    if lenses.len() != 1 {
-        return Err(RetriangulateError::MixedCameras {
-            cameras: lenses.len(),
-        });
     }
+    // Each image names the camera that took it, and the solve casts an
+    // observation's ray, and reads its reprojection, through that camera.
+    let image_camera: Vec<u32> = table.images.iter().map(|i| i.camera_index).collect();
 
     // Every image gets a row, so an observation indexes the table directly. An
     // unposed image's row is not a pose, and the array form drops the rays it
@@ -480,7 +463,7 @@ fn gather(
     Ok(Gathered {
         targets,
         held,
-        camera_image,
+        image_camera,
         uv,
         obs_image,
         obs_point,

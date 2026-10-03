@@ -38,6 +38,16 @@ Two forms, both CSR over tracks in the order the caller supplies:
   pixel outside the model's domain) is dropped from its track before any
   rule is read.
 
+  The camera comes in one of two shapes.
+  `triangulate_points_from_observations` takes one camera that every image was
+  taken through. `triangulate_points_through_cameras` (crate-internal) takes a
+  camera table and, per image, the index of the camera that took it, so each
+  observation's ray is cast, and its reprojection read by the `bar` and
+  `distance` rules, through its own image's camera; it also takes an optional
+  angular floor per track that replaces `floor`. Both are one body: the
+  one-camera form is the table form with a table of one and every image on it,
+  so the arithmetic, and the bytes, are the same.
+
 Per track the caller may also pass an incoming state: a position and a flag
 saying the point is currently a direction. The state is read only by the
 `marks` rule below and is never modified; the result is a new array. The
@@ -208,7 +218,7 @@ one.
 - **Admitting new tracks at a settled geometry.** `floor` at the caller's
   angular bound, `cheirality` on, `bar` at the adjustment's final pixel
   bound, `few = bearing`, `marks` off. Every candidate track is estimated
-  from scratch at the current poses and lens.
+  from scratch at the current poses and lenses.
 - **Re-estimating every point after an adjustment.** As the previous setting
   with `bar` off: the adjustment has already trimmed the observations the
   bound would cut.
@@ -226,10 +236,14 @@ The array forms know nothing about a reconstruction. `retriangulate_points`
 does: it takes an [`EditedReconstruction`](edited-reconstruction.md), says which
 of its points to re-solve, and hands back the value that holds the answers, the
 map from its indexes to that value's, and a report. It gathers the pixels, the
-poses and the constraint columns the observation form takes, runs it once, and
-writes each point's answer back. It is pure, and it moves no camera and no lens:
-what a point's observations support at *this* geometry is the whole of what it
-decides.
+poses, the camera each image was taken through and the constraint columns the
+observation form takes, runs the camera-table form once, and writes each point's
+answer back. Each observation is read through its own image's camera, so a value
+whose images are taken through several cameras -- a rig with one camera per
+sensor -- is solved in one call, and a track seen through two of them is
+solved from rays cast through both. It is pure, and it moves no camera and no
+lens: what a point's observations support at *this* geometry is the whole of
+what it decides.
 
 ```rust
 pub fn retriangulate_points(
@@ -276,12 +290,11 @@ same ratio the adjustment and the camera move resize theirs by.
 
 The preconditions are read before anything is gathered, and each is its own
 refusal: the observations have to carry a pixel (a `sift_files` value without
-the optional inline keypoint column carries none), some image has to be posed,
-and the **posed images have to share one camera**, because the observation form
-carries a single shared model and a value whose images disagree about the lens
-is better told so than silently solved through one of them. That is the same
-bar the reconstruction-level bundle adjustment sets
-([bundle-adjust.md](bundle-adjust.md)).
+the optional inline keypoint column carries none), and some image has to be
+posed. How many cameras the posed images are taken through is not a
+precondition, as it is not for the reconstruction-level bundle adjustment
+([bundle-adjust.md](bundle-adjust.md)), which also projects each observation
+through its own image's camera.
 
 `progress` names the three stages -- gathering the arrays, the solve, writing the
 answer back -- and is how the call is asked to stop. The cancel is read between
@@ -390,6 +403,16 @@ The in-front flag comes back beside the verdicts, which is what makes
   has none. A direction goes in marked and comes back one. One point is an
   overlay edit over the very same base under a `Replaced` map, a second pass
   over it moves nothing and takes no new index, and an overlay edit under
-  `All` is folded in first. Mixed lenses, an unposed value and an index naming
-  no live point are each their own refusal, and a `Progress` already cancelled
-  stops the call before it writes.
+  `All` is folded in first. An unposed value and an index naming no live point
+  are each their own refusal, and a `Progress` already cancelled stops the call
+  before it writes.
+- **Several cameras.** Over the same arc with images alternating between a
+  pinhole and an equidistant fisheye of a different focal and principal point,
+  tracks seen through one camera only, and a track seen through both, land on
+  the truth under a reprojection bar of a hundredth of a pixel. The same pixels
+  with the table saying every image is the pinhole still put the pinhole-only
+  tracks on the truth and every track with a fisheye observation off it.
+  A ranged point seen through the fisheye keeps its distance and lands on the
+  truth, and under the all-pinhole table it keeps its distance and misses.
+  A camera the table holds but no image names changes no point and no field
+  of the report.

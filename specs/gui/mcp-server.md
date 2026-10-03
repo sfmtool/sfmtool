@@ -146,7 +146,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `undo` / `redo` | write | Step one reconstruction's history back or forward a version |
 | `jump_to_version` | write | Move its cursor straight to a version |
 | `delete_point` | write | Delete one 3D point and its track |
-| `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lens the reconstruction holds |
+| `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lenses the reconstruction holds |
 | `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
 | `prune_covered_observations` | write | Retire every observation a finer tracked one covers, and drop the points left with fewer than two, on a worker thread |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
@@ -3031,7 +3031,7 @@ is no `.sift` left to copy a keypoint from -- in the same sentence the greyed
 ### `retriangulate_point` / `retriangulate_all_points`
 
 The structure re-read at a geometry somebody else decided: every point named is
-re-solved from its own observations, at the poses and the lens the
+re-solved from its own observations, at the poses and the lenses the
 reconstruction already holds, and no camera and no lens moves
 ([retriangulate-point.md](edits/retriangulate-point.md)).
 
@@ -3059,9 +3059,8 @@ cancelled retriangulation pushes no version.
 Both refuse in `AppState`'s own words, which are the words the greyed
 `Retriangulate All Points` entry in the Scene tree carries: a reconstruction
 whose observations are `.sift` feature indexes with no inline keypoint has no
-pixel to cast a ray through, and one whose posed images are taken through more
-than one lens is refused rather than silently solved through one of them. A
-point the value holds at a fixed coordinate is refused by name.
+pixel to cast a ray through, and one with no posed image has no pose to cast it
+from. A point the value holds at a fixed coordinate is refused by name.
 
 ### `prune_covered_observations`
 

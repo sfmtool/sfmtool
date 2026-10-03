@@ -30,7 +30,7 @@
 //!   which of them decided each track. With every rule off it is this solve.
 //! - [`retriangulate`] is the one operation a caller holding a whole
 //!   reconstruction asks for: re-solve these points of it, at its own poses and
-//!   its own lens, and hand back the value that holds the answers.
+//!   its own lenses, and hand back the value that holds the answers.
 //!
 //! The "re" is only in the second. This module and [`points`] triangulate from
 //! whatever rays they are given, with no opinion about whether those tracks

@@ -292,6 +292,3 @@ in order, and pinning the longest tracks spares their rows.
   sightings a track should have is the bench's work.
 - **Reading a second file.** Everything is read off the value: its frames, its
   pixels, its poses and its constraints. No `.sift` file and no workspace enters.
-- **One shared lens.** Unlike the retriangulation, each observation projects
-  through its own image's camera, so a value whose images are taken through
-  several lenses is read rather than refused.
