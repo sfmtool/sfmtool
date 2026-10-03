@@ -1,9 +1,10 @@
 # Cluster Patches: SIFT Clusters → Patch Clusters
 
-A patch cluster is a group of matched SIFT features refined against the image
-pixels: one member is the reference, and every other kept member carries a
-photometrically refined affine warp that maps the reference's patch into that
-member's image. This spec covers how a `.matches` file stores clusters and patch
+A patch cluster is a group of matched keypoints, each a position and a 2×2
+affine shape (for example SIFT detections read from `.sift` files), refined
+against the image pixels: one member is the reference, and every other kept
+member carries a photometrically refined affine warp that maps the reference's
+patch into that member's image. This spec covers how a `.matches` file stores clusters and patch
 clusters, and the `sfm cluster-patches` operation that produces the second from
 the first.
 
