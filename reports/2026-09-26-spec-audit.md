@@ -432,6 +432,7 @@ most of the per-sentence findings.
 **Recommendation:** update spec. **Also update code** for the bug below.
 **Unclear / incorrect / suspicious:** **Bug.** `sfm sift --draw DIR --tool opencv` inside a workspace draws the *workspace* tool's features. `get_sift_path_for_image` (`file.py:488-493`) ignores `feature_tool`, while `--extract --tool` writes to `features/sift-opencv-*`. So `--draw --tool` either draws the wrong features or raises FileNotFound, and no test covers it.
 > _Status (2026-10-02): **Done** for the bug — `--draw --tool` now ignores the workspace and reads the `--tool` features, with a test, commit `b19c676` (#670). The spec-side items above remain open._
+> _Status (2026-10-03): **Partially done** — spec side done: the opening paragraph is the proposed one, `--dsp` is documented as off and rejected without `--tool colmap`, `--num-threads` is marked as ignored by `sfmtool` with a pointer to `SFMTOOL_SIFT_EXTRACT_WORKERS`, and new sections cover the output location, the up-to-date skip, the `.png`/`.jpg`/`.jpeg` filter, the no-workspace error and `--tool` bypassing the workspace, branch `finding-bash-05-sift-command-spec`. Not done: the "Third copies" item (shrinking the concurrency comments in `extract_sfmtool.py`), which is a code-comment change._
 
 ### specs/cli/reconstruction/inspect-command.md
 **Summary:** Accurate on file dispatch, the default and verbose fields, point-ID resolution and `--strips`. The main error is the stale claim that verbose point inspection needs `.sift` files.
