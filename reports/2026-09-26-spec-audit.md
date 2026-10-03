@@ -605,9 +605,9 @@ most of the per-sentence findings.
 **Third copies:** The hash-slot order appears three times; the :1803 copy is incomplete. The version list appears twice, and the two copies disagree.
 **Shape:**
   - **Edit-history residue:** :962-964 "(This line previously read…)", the :1009-1013 "earlier revision" block, and "before this amendment" at :1250 and :1539.
-    > _Status (2026-10-03): **Done** — the thumbnail resize line states area averaging without the earlier wording, the "earlier revision" note is removed, and the two "before this amendment" phrases now name the versions (1–4 for `normal_confidence`, 1–5 for `observation_confidence`), branch `finding-bash-08-sfmr-edit-history-residue`._
+    > _Status (2026-10-03): **Done** — the thumbnail resize line states area averaging without the earlier wording, the "earlier revision" note is removed, and the two "before this amendment" phrases now name the versions (1–4 for `normal_confidence`, 1–5 for `observation_confidence`), PR #683._
   - :1899-1945 compare the format with a directory format that no code reads.
-    > _Status (2026-10-03): **Done** — the "Comparison with Directory Format" section is deleted; § File Structure already shows the archive layout, branch `finding-bash-08-sfmr-edit-history-residue`._
+    > _Status (2026-10-03): **Done** — the "Comparison with Directory Format" section is deleted; § File Structure already shows the archive layout, PR #683._
   - The opening passes.
 **Recommendation:** update spec. **Discuss** whether the reader and verifier should enforce the presence rules the writer enforces.
 **Unclear / incorrect / suspicious:**
