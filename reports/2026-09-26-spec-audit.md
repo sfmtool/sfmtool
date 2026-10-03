@@ -53,7 +53,7 @@ were checked**. 14 were stale:
 - **cluster-census.md:** two claims about callers that are not in the tree.
   > _Status (2026-10-03): **Done** — § Callers and the `flag_threshold` row are deleted, PR #684._
 - **track-cluster-matching.md:** four items: persisting is out of scope, the CLI consumes pairs only, "add a section", "consider lifting".
-  > _Status (2026-10-03): **Done** — all four are gone with the build-brief section; the spec's Pipeline section says `sfm match --cluster` writes the clusters file and pairs are derived from it, PR #TBD._
+  > _Status (2026-10-03): **Done** — all four are gone with the build-brief section; the spec's Pipeline section says `sfm match --cluster` writes the clusters file and pairs are derived from it, PR #704._
 - **archive-container.md:** "No schema".
 
 ---
@@ -78,7 +78,7 @@ lacks, or a wrong parameter name:
 
 > _Status (2026-10-03): **Done** — the `cluster-census.md` `flag_threshold` row is deleted, PR #684._
 >
-> _Status (2026-10-03): **Done** — both `track-cluster-matching.md` rows: the global-threshold table is deleted and the one defaults table says `alpha`, PR #TBD._
+> _Status (2026-10-03): **Done** — both `track-cluster-matching.md` rows: the global-threshold table is deleted and the one defaults table says `alpha`, PR #704._
 
 Five more mismatches came from reading the sampled specs rather than from the table scan:
 
@@ -591,7 +591,7 @@ most of the per-sentence findings.
 **Recommendation:** update spec. Rewrite :457-968 as a present-tense contract.
 **Unclear / incorrect / suspicious:** `matching_mode="cluster"` (`db_setup.py:130`) cannot be reached from any command, yet :465-468 present it as live.
 
-> _Status (2026-10-03): **Done** — Production Implementation (:457-968) is replaced by an Interface section (linked code pointers; a summary of `background_floor_clusters{,_lazy,_from_neighbors}`, `NeighborTable`, `clusters_to_pair_matches`, the five `ClusterMatchError` variants and `background_floor_clusters_kdf`; the L2, tie-break and `alpha < 1` rank-cap invariants), one defaults table, a Pipeline section and short implementation notes; the copied doc comments and signatures are gone. Every 2026-09-05 and new inconsistency above is fixed: `--cluster` writes a clusters-only file, `--camera-model` with it is a UsageError, "not lifted" is gone (the bindings are re-exported at the `sfmtool` top level), `min_size` has no flag, the COLMAP DB timing claims are removed, the query is `search_batch_with_distances_ordered`, `thiserror`, `lib.rs` and `py_kdforest.rs` are gone. The opening is the proposed sentence, reworded so the 0.8× radius is plainly the seed descriptor's own. The mannered phrases are replaced. The in-solve mode is described as reachable only from `run_global_sfm` / `run_incremental_sfm` (a test fixture uses it), and the `_run_cluster_matching` docstring now says the same; whether to keep that mode is raised on the PR. PR #TBD._
+> _Status (2026-10-03): **Done** — Production Implementation (:457-968) is replaced by an Interface section (linked code pointers; a summary of `background_floor_clusters{,_lazy,_from_neighbors}`, `NeighborTable`, `clusters_to_pair_matches`, the five `ClusterMatchError` variants and `background_floor_clusters_kdf`; the L2, tie-break and `alpha < 1` rank-cap invariants), one defaults table, a Pipeline section and short implementation notes; the copied doc comments and signatures are gone. Every 2026-09-05 and new inconsistency above is fixed: `--cluster` writes a clusters-only file, `--camera-model` with it is a UsageError, "not lifted" is gone (the bindings are re-exported at the `sfmtool` top level), `min_size` has no flag, the COLMAP DB timing claims are removed, the query is `search_batch_with_distances_ordered`, `thiserror`, `lib.rs` and `py_kdforest.rs` are gone. The opening is the proposed sentence, reworded so the 0.8× radius is plainly the seed descriptor's own. The mannered phrases are replaced. The in-solve mode is described as reachable only from `run_global_sfm` / `run_incremental_sfm` (a test fixture uses it), and the `_run_cluster_matching` docstring now says the same; whether to keep that mode is raised on the PR. PR #704._
 
 ### specs/formats/sfmr-file-format.md
 **Summary:** Entry names, dtypes, shapes, hash order and optional flags match the crate, and every entry the code writes is documented. The version bookkeeping is stale, `derived_xxh128` is mis-described, and there is no Implementations section.
@@ -881,7 +881,7 @@ and the opening paragraphs listed in check 4.
   - :692-694 say the pyramid "can be rebuilt per-octave on demand … to settle with benchmarks"; `ScaleSpace::build_chain` and `extend_octave` already do this.
   - Discuss: § Extraction-orchestration pipelining (:398-510) is Python CLI content and could move to `sift-command.md`.
 - **`specs/core/features/track-cluster-matching.md`** (two items not covered above): :474-480 present the `d = 28` prototype counts as what the production run reproduces, while the tables at :119-124 and :137-144 do not say they were measured at `d = 28`; § Location (:509-512) does not mention `covisibility.rs` and `covisibility/`.
-  > _Status (2026-10-03): **Done** — both end-to-end tables say they were measured at `d = 28`, the production counts are given as agreeing with that table at `d = 28`, and the Interface section links `covisibility.rs` and `covisibility/` and points at their specs, PR #TBD._
+  > _Status (2026-10-03): **Done** — both end-to-end tables say they were measured at `d = 28`, the production counts are given as agreeing with that table at `d = 28`, and the Interface section links `covisibility.rs` and `covisibility/` and points at their specs, PR #704._
 - **`specs/cli/image-feature/match-command.md`:** `_run_matching` records `matcher_options["min_size"]` (`feature_match/_run.py:42, 95`), but no flag sets it and the Options table does not mention it. Document it as fixed at 2, or expose it.
   > _Status (2026-10-03): **Done** — `match-command.md` § Options now says `--cluster`'s minimum cluster size is fixed at 2, has no flag, and is recorded as `min_size` in the matcher options, PR #695._
 - **`specs/cli/colmap-interop/from-colmap-bin-command.md`:** does not mention the `UsageError` for a non-`.sfmr` output (`from_colmap_bin.py:84-85`).
@@ -991,7 +991,7 @@ replaced by `gui/track-view.md`.)
      > _Status (2026-10-03): **Done** — both deleted, PR #684._
    - `track-cluster-matching.md` :457-968 is still a build brief, and 7 of the 2026-09-05 findings on it remain open.
    - The global-threshold parameter table in `track-cluster-matching.md` lists knobs that exist only in an experiment.
-     > _Status (2026-10-03): **Done** for `track-cluster-matching.md` — the build brief is rewritten as a present-tense contract and the global-threshold table is deleted, PR #TBD._
+     > _Status (2026-10-03): **Done** for `track-cluster-matching.md` — the build brief is rewritten as a present-tense contract and the global-threshold table is deleted, PR #704._
 
    Delete these, or move them into drafts.
 5. **Viewport navigation:** the Maintain Z-up insertion (#614) split the fly and tilt paragraphs in `viewport-navigation.md` (:412-435). Fix that, together with the zoom-to-fit formula and the indicator size and opacity numbers, which disagree with the code.
