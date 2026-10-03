@@ -249,7 +249,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 7,
+  "version": 11,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -285,7 +285,7 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number (`1` to `9`).
+- `version`: Format version number (`1` to `11`; the current version is `11`).
   See [Versioning and Migration](#versioning-and-migration) for the relationship
   to earlier versions.
 - `feature_source`: (version 4+) How each observation's 2D coordinate is carried
@@ -506,6 +506,7 @@ XXH128 hashes for integrity verification:
   "images_xxh128": "...",
   "points3d_xxh128": "...",
   "tracks_xxh128": "...",
+  "derived_xxh128": "...",
   "content_xxh128": "..."
 }
 ```
@@ -524,7 +525,7 @@ checks `derived/` before images but excludes that digest from the overall fold.
 - `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
-- `derived_xxh128`: (Version 10+) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`.
+- `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
 - `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying"). Before version 10 the depth statistics reached this digest through `images_xxh128`.
 
 **Note**: The two top-level entries `content_hash.json.zst` and, from
@@ -2017,9 +2018,12 @@ answer when it does not.
 
 ### Why `content_xxh128`
 
-The `content_xxh128` is the overall file integrity hash, computed from all
-section hashes (metadata, cameras, images, points, tracks, etc.). It uniquely
-identifies a specific `.sfmr` file.
+The `content_xxh128` is the overall file integrity hash, computed from the
+section hashes that describe the reconstruction (metadata, cameras, rigs,
+frames, images, points3d, tracks). From version 10 it leaves out the `derived/`
+section, as described under
+[Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying).
+It identifies a specific `.sfmr` file.
 
 `.sfmr` files are written once — each SfM solve, filter, or transform produces
 a new file with its own content hash. This means each file gets a unique
@@ -2158,7 +2162,7 @@ from the added `true` flag. A version 11 file without thumbnails has no version
 | Change | Detail |
 |---|---|
 | `derived/` section | `depth_statistics.json.zst` and `observed_depth_histogram_counts` move out of `images/` into a section of their own. |
-| `derived_xxh128` | New **optional** content-hash field: the `derived/` section's digest, verified like every other one. |
+| `derived_xxh128` | New content-hash field, **required** from version 10: the `derived/` section's digest, verified like every other one. A version 9 file has no such field. |
 | `content_xxh128` | No longer covers those two entries. `images_xxh128` no longer covers them either; the derived digest replaces their contribution and is excluded from the whole-file digest. See [Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying). |
 
 No byte of any array changes and nothing is recomputed: the same statistics are
@@ -2184,6 +2188,20 @@ no such key and reads as an empty list; a version 9 file with no ancestor writes
 no key and is byte-identical in the metadata section to the version 8 file it
 came from apart from the version number. Nothing else moves, and no existing
 array changes meaning.
+
+### Version 7 → Version 8
+
+| Change | Detail |
+|---|---|
+| top-level `written.json.zst` | New entry holding `timestamp`, the time the file was written. It is outside every section hash. See [Write Record](#3-write-record-writtenjsonzst). |
+| `metadata.json` `timestamp` | No longer written. Below version 8 it is a field of `metadata.json` and part of `metadata_xxh128`. |
+| `content_xxh128` | No longer covers the write time, so two saves of one unchanged value write the same digest. |
+
+Migration is mechanical and lossless on the data. A reader takes the timestamp
+from `written.json.zst` when that entry is present and from `metadata.json`
+otherwise. It does not recompute or rewrite a version 7 file's stored hashes, so
+a version 7 file keeps the digest it was written with. Saving it again writes
+the current version, with a different `content_xxh128`.
 
 ### Version 1 → Version 2 (history)
 
@@ -2297,7 +2315,11 @@ its camera.
 - **Version 11**: `images/thumbnails_y_x_rgb` becomes optional, flagged by
   `has_thumbnails` in `images/metadata.json`; a version 10 or earlier file
   reads as having thumbnails.
-
+- **Version 10**: `images/depth_statistics.json.zst` and
+  `images/observed_depth_histogram_counts` move into a new `derived/` section,
+  hashed into a required `derived_xxh128` that is left out of
+  `content_xxh128`. Changing how a statistic is computed no longer changes a
+  file's content hash.
 - **Version 9**: Optional top-level `lineage`: the contents this
   reconstruction descends from, each with a composed map from its points onto
   this file's rows, so a Point ID written against an ancestor still resolves

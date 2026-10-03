@@ -269,6 +269,7 @@ most of the per-sentence findings.
 - **Optional entries with no stated introducing version:** sfmr Rigs and Frames.
 - **Version-history gaps:**
   - sfmr: no v10 entry, no 7→8 migration, and the example still says v7.
+    > _Status (2026-10-03): Done — v10 history entry, 7→8 migration and a version 11 example added, branch `finding-bash-01-sfmr-version-bookkeeping`._
   - kdf: says nothing about what versions 2 and 3 changed.
 
 ---
@@ -581,9 +582,11 @@ most of the per-sentence findings.
     - The :252 example says 7.
     - Version History (:2291-2332) has no v10 entry.
     - There is no 7→8 migration.
+    > _Status (2026-10-03): Done — `version` reads "`1` to `11`", the example says 11, Version History has a v10 entry, and a Version 7 → Version 8 migration section is added (v8 already had a history entry), branch `finding-bash-01-sfmr-version-bookkeeping`._
   - **Hash fields:**
     - :2155 calls `derived_xxh128` "optional", but the verifier requires it at v10+ (`verify.rs:278`), and the :500-510 example omits it.
     - :2014-2021 say `content_xxh128` is computed from "all section hashes". That contradicts :528, which excludes derived.
+    > _Status (2026-10-03): Done — `derived_xxh128` is described as required from version 10 in the field list and the v9→v10 table, the example includes it, and "Why `content_xxh128`" names the sections it covers and the derived exclusion, branch `finding-bash-01-sfmr-version-bookkeeping`._
   - **Presence rules the reader and verifier do not enforce** (only the writer does):
     - bitmaps ⇒ patch frame (:1480)
     - confidence ⇒ normals (:1483)
@@ -927,6 +930,7 @@ replaced by `gui/track-view.md`.)
 2. **Format specs that define a field wrongly:**
    - `sift-file-format.md` defines `feature_tool_xxh128` as a workspace-propagated value with no fixed algorithm. It is the XXH128 of the stored metadata bytes, and verifiers enforce that.
    - `sfmr-file-format.md` says versions are "1 to 9" (the current version is 11), has no v10 entry, and calls `derived_xxh128` optional when the verifier requires it.
+     > _Status (2026-10-03): Done — see the sfmr-file-format section below, branch `finding-bash-01-sfmr-version-bookkeeping`._
    - The kdf version is given as 2 in `lazy-kdforest-query.md`, in two places in `kdf-file-format.md` and in `types.rs`; the code is at 3.
 
    Another tool writing these files would get them wrong.
