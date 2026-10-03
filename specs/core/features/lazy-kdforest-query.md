@@ -183,9 +183,10 @@ original SIFT feature indices even though input row IDs are newly dense.
 
 ## One corpus, one search implementation
 
-Version 2 has one storage layout. `KdfWriteOptions::default()` selects the
-descriptor, tree-chunk, origin, and compression defaults; callers may tune block
-sizes but cannot duplicate vectors per tree. Version-1 files are rejected.
+The format, at version 3, has one storage layout. `KdfWriteOptions::default()`
+selects the descriptor, tree-chunk, origin, and compression defaults; callers may
+tune block sizes but cannot duplicate vectors per tree. Files of any other
+version are rejected.
 
 Keep one best-bin-first traversal, result set, dedup set and scalar distance
 implementation. Storage access supplies node data, ordered leaf feature IDs and
@@ -372,9 +373,10 @@ matches this pipeline loses. That requires measuring the downstream matcher.
 
 ## Benchmark method
 
-The layout comparisons below are retained as the version-1 evidence that selects
-version 2's single corpus representation. Tree-local measurements describe the
-removed alternative, not a mode accepted by the current API.
+The layout comparisons below are retained as the version-1 evidence that selected
+the single corpus representation, which version 2 introduced and version 3 keeps.
+Tree-local measurements describe the removed alternative, not a mode accepted by
+the current API.
 
 One MiB is 1,048,576 decoded bytes. Start with a configurable 1 MiB target,
 then compare 256 KiB, 1, 4, 8 and 16 MiB; these are experiment settings, not
@@ -986,15 +988,16 @@ pull less. Measured from 128 KiB to 4 MiB, decoded bytes move from 19.7 to 21.7 
 and query time not at all beyond noise. The reason is already in
 [Packing policy](#packing-policy): the version-1 corpus prototype packed tree
 chunks with weights that included descriptor bytes the chunks did not store, so
-they underfilled their target by roughly 17x. Version 2 counts only stored tree
+they underfilled their target by roughly 17x. The writer now counts only stored tree
 arrays. For this access pattern, decoded volume is still driven primarily by how
 many distinct blocks scattered queries reach.
 
 ### What this suggests as defaults
 
-On this evidence version 2 keeps only the corpus layout: it measured 3.3x smaller,
-faster or equal in every regime, insensitive to a chunk-size choice that swung
-tree-local by 43x, and at full speed on a budget a third the size.
+On this evidence version 2 kept only the corpus layout, as version 3 does: it
+measured 3.3x smaller, faster or equal in every regime, insensitive to a
+chunk-size choice that swung tree-local by 43x, and at full speed on a budget a
+third the size.
 
 Leaf size **16** remains the general forest default and the measured choice when a
 256 MiB cache is substantially smaller than the index. For a shared persistent
@@ -1258,7 +1261,7 @@ geometry = lazy.resolve_feature_geometry(indices.ravel())
 Three things about that surface follow from what it is for rather than from
 the Rust API it wraps.
 
-There is no `layout` argument in version 2. `descriptor_block_bytes` tunes the
+There is no `layout` argument. `descriptor_block_bytes` tunes the
 only corpus representation, and SIFT `sources` includes `(N,2)` positions plus
 `(N,2,2)` affine shapes.
 

@@ -378,6 +378,12 @@ version it holds, the version the reader wants, and the remedy — a `.kdf` is
 derived from the `.sift` files it was built over, so rebuilding it is always
 available and is always the fix.
 
+Version 2 replaced version 1's two layouts (a shared descriptor corpus, or
+descriptors copied into each tree) with the single shared corpus. Version 3
+keeps that layout and changes only the integrity directory:
+`content_hash.json.zst` holds one digest per section instead of one per descriptor
+block, geometry block and tree chunk.
+
 ## Where this format departs from the container conventions
 
 The [archive container](archive-container.md) sets conventions all the formats in
@@ -491,7 +497,7 @@ eager `KdForest` it would be compared against is `uint8` only.
 
 This section records the measurements that selected the one-corpus
 layout. Tree-local paths and totals below describe the rejected version-1
-alternative, not entries a version-2 writer emits.
+alternative, not entries the current writer emits.
 
 Read-only inspection of `C:\DataSets\DinoLedge\frames` finds one feature set,
 `features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9`. All 1,196 images have
@@ -650,8 +656,8 @@ source payload hashes. No source files were modified and no `.kdf` was built.
 The format pays one uint32 row-map entry per feature to remove `T-1` descriptor
 copies. The version-1 comparison measured the corpus layout 3.3-3.4x smaller
 across corpora spanning 276x in size and faster in every measured regime except
-a fully resident warm batch. That evidence makes the corpus layout the only
-version-2 representation rather than a caller option.
+a fully resident warm batch. That evidence made the corpus layout the only
+representation from version 2 on, rather than a caller option.
 
 The grouped integer node columns are a deliberate adaptation of the usual
 one-entry-per-column convention: ten separate entries per chunk would cost ten

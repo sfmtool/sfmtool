@@ -3,7 +3,7 @@
 
 //! Python bindings for persistent `.kdf` forests and their file-backed queries.
 //!
-//! These make the version-2 format and the file-backed query path available to
+//! These make the `.kdf` format and the file-backed query path available to
 //! Python. A caller can export one descriptor corpus, inspect its size, and
 //! compare its queries against the eager forest.
 //!
@@ -824,7 +824,7 @@ fn write_kdf(
 /// up front and more per query.
 ///
 /// Args:
-///     path: The version-2 `.kdf` to load.
+///     path: The `.kdf` file to load.
 ///     max_chunk_bytes / max_compressed_bytes / max_metadata_bytes: reader
 ///         limits, as for `LazyKdForest`. The cache only buffers the load here,
 ///         so its budget bounds working memory during the read, not after.

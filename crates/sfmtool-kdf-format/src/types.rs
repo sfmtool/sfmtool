@@ -74,7 +74,7 @@ mod sealed {
     impl Sealed for f32 {}
 }
 
-/// Scalar types admitted by version 2 of the format.
+/// Scalar types admitted by the format.
 pub trait KdfScalar:
     sealed::Sealed + bytemuck::Pod + Copy + Send + Sync + PartialEq + std::fmt::Debug + 'static
 {
@@ -110,7 +110,7 @@ impl KdfScalar for f32 {
     }
 }
 
-/// Export controls for the single-corpus version-2 layout.
+/// Export controls for the single-corpus layout.
 #[derive(Clone, Copy, Debug)]
 pub struct KdfWriteOptions {
     /// Target decoded size in bytes of one descriptor block.
@@ -540,7 +540,7 @@ pub(crate) const NODE_COLUMNS: usize = 10;
 /// concatenated in that order. The counts are in the name so a reader still
 /// knows the exact decoded length before decompressing.
 ///
-/// Vectors are deliberately **not** in here. Version 2 stores exactly one
+/// Vectors are deliberately **not** in here. The format stores exactly one
 /// independently blocked corpus used by every tree.
 pub(crate) fn chunk_entry_name<S: KdfScalar>(
     tree: usize,

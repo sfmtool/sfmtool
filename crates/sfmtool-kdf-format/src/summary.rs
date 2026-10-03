@@ -3,7 +3,7 @@
 
 //! Size accounting for a `.kdf` corpus, trees, provenance, and feature geometry.
 //!
-//! Version 2 has one descriptor corpus. This module attributes its
+//! A `.kdf` has one descriptor corpus. This module attributes its
 //! compressed and decoded cost separately from tree topology, feature geometry,
 //! origins, and metadata without decoding the lazy block payloads.
 //!
@@ -175,7 +175,7 @@ fn section_of(name: &str) -> &'static str {
     } else if name.starts_with("features/geometry.") {
         "feature_geometry"
     } else if name.starts_with("trees/") {
-        // Version 2 tree entries contain topology and feature IDs only.
+        // Tree entries contain topology and feature IDs only.
         "tree_chunks"
     } else {
         "other"
