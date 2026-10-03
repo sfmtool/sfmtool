@@ -234,6 +234,10 @@ the tilt is clamped.
 
 ## 8. `create_bench_track` drops `label` when the point is already on the bench (low)
 
+> _Status (2026-10-03): **Done** — a `label` other than the one the point's
+> item has is refused, naming that label; the focus case answers
+> `changed: false` with a `report` describing this call, PR #705._
+
 A double-click on a point in the 3D view puts it on the bench
 (viewport-navigation.md). A following
 `create_bench_track {point: 9921, label: "t9921"}` then replied
@@ -246,6 +250,11 @@ already on the bench under another label.
 
 ## 9. Double-clicking a tracked feature in Image Detail hides Image Detail (low)
 
+> _Status (2026-10-03): **Done** — Edit on Bench and Start cluster show Track
+> View through `AppState::show_panel_beside`, which never puts it in front of
+> the panel the gesture came from (`specs/gui/panel-layout.md` § "A raise
+> from a gesture"), PR #705._
+
 A double-click on a tracked feature is Edit on Bench, which raises Track View.
 When Image Detail and Track View are tabs in the same dock node, Track View
 replaces Image Detail in front of the user in the middle of the gesture. After
@@ -254,6 +263,9 @@ that double-click, `get_window_layout` reports `image_detail.active: false` and
 one the gesture came from, or open Track View in another node.
 
 ## 10. The verdict hand-back label reads as totals but counts changes (low)
+
+> _Status (2026-10-03): **Done** — the label says what moved and then the
+> track's totals ("4 turned out, leaving 6 in, 4 out"), PR #705._
 
 `set_bench_track_verdict {verdict: "unpin", observations: "all"}` on a 10-row
 track recorded "Handed 10 verdicts back to the thresholds in
@@ -264,6 +276,9 @@ label, which the Edit History panel shows, should give the totals or say
 
 ## 11. Track View shows a finite-point condition number for a track at infinity (low)
 
+> _Status (2026-10-03): **Done** — the headline leaves the condition number
+> off a track at infinity, PR #705._
+
 After `fit_bench_track` on `pan`'s point 0 ("at infinity along … inverse-depth
 z 3.43 under the 4.00 bar"), the Track View header reads "Bearing (0.392,
 −0.920, 0.019), at infinity, condition 4606326.1". The fit states a bar of
@@ -273,6 +288,11 @@ the infinite placement, and should be dropped or labelled for an at-infinity
 track.
 
 ## 12. Extreme numbers print in full, and an overflowing transform is accepted (low)
+
+> _Status (2026-10-03): **Done** — core's `readable::Readable` prints extreme
+> numbers in exponent notation and backs the bench refusals that echo caller
+> numbers and the transform labels; a display transform that carries the
+> node's bounds past a finite squared distance is refused, PR #705._
 
 - `tilt_bench_patch {normal: [1e-300, 0, 0]}` is refused as expected, but the
   message spells the number out: "(0.0000…" with about 300 zeros, 368
@@ -288,6 +308,10 @@ validator, which already refuses a zero or negative scale, could refuse a
 transform whose image of the node's bounds is not finite.
 
 ## 13. Pluralization (low)
+
+> _Status (2026-10-03): **Done** — "Split off 1 row", and both search reports
+> write "1 image matched, 1 candidate added" through one shared writer,
+> PR #705._
 
 - Track View's button: "Split off 1 rows"
   (`crates/sfm-explorer/src/track_view/edit/mod.rs:423`).
@@ -310,12 +334,20 @@ characters should be refused.
 
 ## 15. Camera Intrinsics panel prints integer and radian parameters as floats (low)
 
+> _Status (2026-10-03): **Done** — `bspline_coeff_count` prints as an
+> integer and `bspline_theta_max` in degrees, in the table and its copied
+> text, PR #705._
+
 For an `SFMTOOL_FISHEYE` camera, the Parameters table shows
 `bspline_coeff_count 8.000000`, and `bspline_theta_max 2.617505` in radians,
 while the plot below it labels the same domain "150.0°". The count should
 print as an integer and the domain in degrees, as the rest of the panel does.
 
 ## 16. Two different "observed" angles for the same camera (low)
+
+> _Status (2026-10-03): **Done** — the refusal names the point whose ray is
+> widest, by the version's own index, and says the angle is the ray to the
+> point's position rather than through the lens, PR #705._
 
 On `orphan`, `switch_camera_model {camera_intrinsics_index: 1, camera_model:
 "SFMTOOL_PINHOLE"}` is refused with "the camera is observed at 144.91°". The
