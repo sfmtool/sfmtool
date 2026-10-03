@@ -218,7 +218,9 @@ or gives a wrong answer, **low** is a wrong message, display or schema detail.
 ## 7. The report
 
 `reports/YYYY-MM-DD-gui-bugbash.md`, in plain language (AGENTS.md "Writing
-style"). `reports/2026-09-29-gui-bugbash.md` is the model. Sections:
+style"). The 2026-09-29 report is the model; it was retired once its findings
+were fixed, so read it from history with `git show
+cb88b98a:reports/2026-09-29-gui-bugbash.md`. Sections:
 
 1. **Opening paragraph**: the build (`git rev-parse --short HEAD`), how the
    viewer was driven, and the scope with the PR numbers.
