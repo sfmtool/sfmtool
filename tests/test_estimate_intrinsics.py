@@ -52,6 +52,7 @@ def _estimate(
     confirmed=None,
     verdict_votes=None,
     escalation=None,
+    screening_vote=None,
 ) -> dict:
     """An `estimate_intrinsics` result dict, with its vote nested under `vote`.
 
@@ -67,7 +68,7 @@ def _estimate(
         "focal_px": focal_px,
         "verdict_votes": verdict_votes or [],
         "escalation": escalation,
-        "screening_vote": None,
+        "screening_vote": screening_vote,
         "vote": _vote_result(camera_model, focal_px, columns, n_pool),
     }
 
@@ -356,6 +357,31 @@ def test_json_is_serializable_and_carries_the_derived_fields(stub_estimate):
     assert payload["verdict_votes"] == [
         {"cell": "Rotation", "focal_px": 131.0, "certified": True}
     ]
+    # No escalation ran, so there is no screening vote to report.
+    assert payload["screening_vote"] is None
+
+
+def test_json_carries_the_screening_vote_of_an_escalated_run(stub_estimate):
+    screening = _vote_result("Pinhole", 95.0, n_pool=9)
+    result = _estimate(
+        camera_model="EquidistantFisheye",
+        focal_px=131.0,
+        columns=[
+            _column("Pinhole", 300.0),
+            _column("EquidistantFisheye", 131.0, rotation=4),
+        ],
+        confirmed=True,
+        escalation=["rotation_railed", "thin_pool"],
+        screening_vote=screening,
+    )
+    out = stub_estimate(result, "--json")
+    assert out.exit_code == 0, out.output
+    payload = json.loads(out.output)
+    # The top level is the escalated run; the pinhole-only numbers the
+    # escalation was decided on are under `screening_vote`.
+    assert payload["focal_px"] == pytest.approx(131.0)
+    assert payload["escalation"] == ["rotation_railed", "thin_pool"]
+    assert payload["screening_vote"] == screening
 
 
 # ── --write-camrig ───────────────────────────────────────────────────────────

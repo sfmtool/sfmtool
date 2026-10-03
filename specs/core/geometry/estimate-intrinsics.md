@@ -213,15 +213,16 @@ checked and reported in this order:
 
 - **`no_consensus`** -- `focal_px` is `None`. Fewer than the vote's
   `MIN_POOL` votes pooled, so there is no pinhole answer to weigh.
-- **`rotation_railed`** -- the consensus came from the rotation family and
-  that family's median sits within one grid step of the bottom of the
-  rotation self-calibration's focal grid, `ORTHO_GRID_LO * max(w, h)`. The
+- **`rotation_railed`** -- the pinhole vote's majority family (`vote.family`)
+  is the rotation family and that family's median sits within one grid step
+  of the bottom of the rotation self-calibration's focal grid,
+  `ORTHO_GRID_LO * max(w, h)`. The
   grid is 48 log-spaced points over `[0.3, 4.0] * max(w, h)`, so one step is
   `(4/0.3)^(1/47) = 1.0566`; an answer there is a scan that ran out of grid
   rather than one that found an interior minimum. That is what a fisheye
   capture looks like through a perspective chart: on the fleet, kerry at
   480 px lands exactly on the floor (ratio 1.000) while the nearest
-  rectilinear capture sits 2.2 grid steps above it (1.153).
+  rectilinear capture sits 2.58 grid steps above it (1.153).
 - **`family_disagreement`** -- the gap between the two families' medians
   exceeds the vote's own `FAMILY_DISAGREEMENT_BAND` (0.25 in log-focal).
   Two independent estimators past the kernel's own bimodality band are
@@ -234,8 +235,10 @@ checked and reported in this order:
   and the rectilinear captures it additionally admits all pool 3 to 8, i.e.
   thinner still.
 
-Over the fleet (42 captures at last measurement, 6 of them fisheye) the
-disjunction fires on every fisheye capture and on 9 of the 36 rectilinear
+Over the fleet (42 captures at last measurement, 6 of them fisheye; the
+commit that added the escalation, `9148c336`, records 27 of those 42 as strong
+pinhole votes that never escalate) the disjunction fires on every fisheye
+capture and on 9 of the 36 rectilinear
 ones, every one of those 9 a genuinely weak pinhole vote (7 tripped the
 bimodality band, 5 pooled 8 votes or fewer). What it buys against always
 running both columns is arbitration error: run unconditionally, 3 of those
@@ -268,7 +271,9 @@ policy pays for itself.
 - The PyO3 binding returns the estimate as a dict with the vote dict nested
   under `"vote"`, so Python callers keep full diagnostic access without a
   second call. Its `columns` argument takes the string `"auto"` for
-  `ColumnPolicy::Auto` and a sequence of column names for `Fixed`;
+  `ColumnPolicy::Auto` and a sequence of column names for `Fixed`; its default
+  `None` is `Fixed` with both columns, not `"auto"`, because arbitrating
+  between the columns is what the binding is called for;
   `escalation` comes back as the reasons' string names, `screening_vote`
   as a nested vote dict, and `camera` as a
   `sfmtool._sfmtool.geometry.CameraIntrinsics` (or `None`).

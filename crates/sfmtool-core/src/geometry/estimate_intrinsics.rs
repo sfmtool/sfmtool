@@ -104,11 +104,8 @@ impl EscalationReason {
 /// Empty means the vote stands and [`ColumnPolicy::Auto`] runs no second pass.
 ///
 /// The disjunction and its four cut points are a fleet measurement, not tuning
-/// room: over 40 captures it fires on all 4 fisheye ones and on 9 of the 36
-/// rectilinear ones, and every one of those 9 is a genuinely weak vote. What
-/// screening avoids is the arbitration error of running the columns
-/// unconditionally, which claims 3 of those 36 rectilinear captures as
-/// fisheyes.
+/// room; the counts behind them are in `specs/core/geometry/estimate-intrinsics.md`
+/// § The weak-vote escalation.
 ///
 /// - **No consensus.** Fewer than two pooled votes leaves no focal to judge.
 /// - **Rotation railed.** A rotation-family consensus within one grid step of

@@ -103,10 +103,14 @@ or parallax-poor. No consensus is still exit code 0 -- the report is the
 product; only I/O failures and rejected inputs are errors.
 
 `--json` emits the vote dict verbatim at the top level, for scripting, plus
-five keys the estimate supplies: `fisheye_confirmed`,
+six keys the estimate supplies: `fisheye_confirmed`,
 `certified_rotation_mass`, `diagonal_fov_deg`, `escalation` (the weak-vote
 reasons that made the columns worth running, `[]` when they did not run, and
-`null` under a named `--model`), and `verdict_votes` (the
+`null` under a named `--model`), `screening_vote` (the pinhole-only vote dict
+the escalation was decided on, present when the columns ran under `auto` and
+`null` otherwise; after an escalation the top-level keys describe the
+two-column run, so the pinhole consensus, pool and spread are read here), and
+`verdict_votes` (the
 winning column's certified scan votes -- the evidence behind this verdict,
 which the top-level `epipolar_votes` / `rotation_votes` are not, those always
 describing the pinhole closed-form kernel). The vote's keys stay at the top

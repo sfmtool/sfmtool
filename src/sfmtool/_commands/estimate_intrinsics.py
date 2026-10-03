@@ -471,6 +471,11 @@ def estimate_intrinsics(
         # camera-model columns worth running, `[]` when they were not run, and
         # null when the columns were named outright.
         payload["escalation"] = result["escalation"]
+        # The pinhole-only vote that decision was read off, kept when the
+        # escalation fired and null otherwise. The top-level vote keys describe
+        # the escalated two-column run, so a caller's pinhole consensus, pool
+        # and spread are read here.
+        payload["screening_vote"] = result["screening_vote"]
         # The evidence behind THIS verdict, unlike the flat vote lists above,
         # which always describe the pinhole closed-form kernel.
         payload["verdict_votes"] = result["verdict_votes"]
