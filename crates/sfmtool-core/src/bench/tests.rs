@@ -3936,7 +3936,7 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
     );
 }
 
-// ---- The world-point forms the 3D viewer names ----------------------------
+// ---- The world-unit forms the 3D viewer names -----------------------------
 
 /// The same track with its patch turned into a bearing along its own
 /// direction, and every sighting's keypoint put back on the bearing's own

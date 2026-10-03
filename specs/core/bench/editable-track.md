@@ -37,8 +37,10 @@ pipeline),
 [`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)
 (the query the descriptor search is one of), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
-(the proposal for the searches and the pull-in), and
-[`../../gui/track-view.md`](../../gui/track-view.md) (the panel it is edited in).
+(the proposal for the searches and the pull-in),
+[`../../gui/track-view.md`](../../gui/track-view.md) (the panel it is edited in), and
+[`track-at-pixel.md`](track-at-pixel.md) (the operation that builds a whole
+track from one pixel and hands it to the bench).
 
 ## Rust API
 
@@ -130,6 +132,7 @@ pub enum Unmeasured {
     OffSensor,
     NoProjection,
     Grazing { cosine: f64 },
+    SeedTooFar { offset_px: f64, bound_px: f64 },
     NoConsensus,
     Unscorable,
 }
@@ -171,6 +174,11 @@ pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
 pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
 
 // Putting one on the bench.
+pub struct CreateTrackOptions {
+    pub version: u64,                    // the origin's version serial, the caller's numbering
+    pub label: Option<String>,           // None mints pt3d_<hash>_<index> or point_<index>
+}
+
 pub fn create_track(
     bench: &Bench,
     edited: &EditedReconstruction,
@@ -488,6 +496,10 @@ pub fn search_geometry(
     options: &GeometrySearchOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, GeometrySearchReport), GeometrySearchError>;
+
+pub struct GeometrySearchOptions {
+    pub selection: ViewSelectParams,      // min_relative_zncc replaced by the track's own bar
+}
 
 pub struct GeometrySearchReport {
     pub observation: usize,
@@ -977,7 +989,7 @@ coordinate the track takes, a flag, and the number that settled it:
 The bearing a `w = 0` answer carries is the normalised mean of the rays, which
 is the robust direction those sightings agree on.
 
-**And then the sightings have the last word.** The criterion above is a
+**And then the sightings decide.** The criterion above is a
 statement about *observability* -- whether this geometry could resolve a depth --
 and on an ill-conditioned solve it can clear its own bar on a depth nothing in
 the photographs supports: the least-squares midpoint of near-parallel, slightly
@@ -1020,8 +1032,8 @@ than into a tangential one -- stretches the two half-axes differently, and that
 stretch belongs to the projection, not to the surface. So wherever a frame is
 built from a shape the half-extents are set to their geometric mean
 (`OrientedPatch::squared`), which keeps the patch's area, and a fit squares the
-frame it is handed before anything registers against it, so a track framed
-otherwise before this rule is repaired by its next fit.
+frame it is handed before anything registers against it, so a track whose
+stored frame is not square comes out of its next fit square.
 
 **A fit registers against the frame the track has.** A `w = 0` patch is
 tangent to the direction sphere and a fit of one registers against *that*: no
@@ -1731,15 +1743,19 @@ not show it. `clamp_to_photograph` is the rule, public so a caller that holds a
 `add_observation` -- those two do not, because a descriptor search places its
 candidates by the warp it found and a warp may put the patch off the edge of an
 image that only half holds it, which the reading refuses as `OffSensor` rather
-than the step inventing a sighting inside the frame. The two world-point forms
-have no photograph to be brought inside and clamp nothing: a place is bounded by
-the frame's own plane, which it is projected onto, and by nothing else.
+than the step inventing a sighting inside the frame. `translate_patch` and
+`resize_patch` take a displacement and a half-length in world units rather than
+a pixel, so they have no photograph to bring anything inside and clamp nothing.
 
 ### Searching the descriptor index
 
-`search_descriptors` is the third way an observation reaches a track, beside the
-pixel someone pointed at and the point a track was put on the bench from, and it
-is the only one that proposes several at a time. It is a **constellation query**
+`search_descriptors` adds the observations a descriptor index finds. The other
+ways an observation reaches a track are the pixel someone pointed at, the point
+a track was put on the bench from, and `search_geometry` (§ "Searching by
+geometry"); a whole track can also be built from one pixel
+([`track-at-pixel.md`](track-at-pixel.md)). The two searches and the
+track-at-pixel cascade are the ones that propose several observations at a
+time. The descriptor search is a **constellation query**
 ([`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)),
 not a lookup of one descriptor: a pixel someone pointed at is an extremum of
 nothing, so a descriptor computed there matches nothing a detector produced for
@@ -2356,8 +2372,8 @@ reconstruction's own passes use.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `noise_floor_px` | `1.0` | The measurement noise the classification assumes at each sighting, in source-image px; the per-ray angular noise is this over the observing camera's focal length. From `DEFAULT_NOISE_FLOOR_PX`. |
-| `inverse_depth_z_cutoff` | `4.0` | The inverse-depth z-score a depth has to reach to be written as a finite point rather than a bearing. From `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`. |
+| `noise_floor_px` | `1.0` | The measurement noise the classification assumes at each sighting, in source-image px; the per-ray angular noise is this over the observing camera's focal length. From `DEFAULT_CLASSIFY_NOISE_FLOOR_PX`, which is the reconstruction's own `DEFAULT_NOISE_FLOOR_PX`. |
+| `inverse_depth_z_cutoff` | `4.0` | The inverse-depth z-score a depth has to reach to be written as a finite point rather than a bearing. From `DEFAULT_CLASSIFY_Z_CUTOFF`, which is the reconstruction's own `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`. |
 | `residual_margin` | `0.8` | The fraction of the bearing's rms reprojection residual the triangulated point has to come under, on top of beating it by more than `noise_floor_px`, before the depth is believed. From `RESIDUAL_MARGIN`; the constant carries the argument for the value. |
 
 The criterion's third number, the condition-number pre-filter that settles a
@@ -2420,6 +2436,10 @@ class whose observations cross as dicts, with each stage's measurements under
 it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`;
 `"origin"`, `"descriptor"`, `"search"`, `"sweep"`, `"pixel"`, `"point"`).
 `EditableTrack.verdict_counts` is `(in, out)`. Refusals are `ValueError` carrying the core sentence.
+
+`create_track` takes `point` and, as keyword-only arguments, `version` and `label`,
+the two fields of `CreateTrackOptions`: `version` defaults to `0` and
+`label` to `None`, which mints the label as the Rust step does.
 
 `create_cluster` takes either `radius_px`, a half-width in that image's pixels,
 or `shape`, a 2x2 in keypoint-frame units; `EditableTrack.radius` is the
@@ -2616,19 +2636,25 @@ stage the edge drag scales the shape by one scalar -- so the detector's
 anisotropy survives -- moves the sighting by half the change, and holds the far
 edge of the parallelogram.
 
-The **world-point forms** are tested for the two claims that are theirs alone.
-A place off the plane moves the centre by its in-plane part and by nothing else,
-and a place naming where the centre already stands is not a move; an edge given
-a place lands on it with the far edge held and the frame square; and a bearing
-comes back on the unit sphere from both, with its far edge still reprojecting
-where it was. Beside them the reduction itself: the same pointer, put through
-the pixel form and through the world-point form with the place it names, leaves
-the patch at one centre and at one half-length, which is what having a single
-implementation of each edit means. A place that is not a finite point and a
-cluster are each refused in their own words.
+The **world-unit forms**, `translate_patch` with a `by` and `resize_patch`
+with a half-length, are tested for the claims that are theirs alone. A
+tangential `by` moves the centre by exactly that much along `u` and `v` and
+carries every sighting with it, and no displacement at all is not a move; a
+mixed `by` moves the centre by the sum of its parts, the same as its tangential
+and normal parts taken one call at a time. A resize with an edge named lands
+that edge at the length given with the far edge held and the frame square, one
+with no edge holds the centre and moves no sighting, and the size the patch
+already has is not a resize in either form. A bearing takes a tangential `by`
+and comes back on the unit sphere, refuses any `by` with a normal part as
+`AtInfinity`, and holds its far edge through an edge resize. Beside them the
+reduction itself: the same pointer, put through the pixel form and through the
+world-unit form with the displacement or the half-length it names, leaves the
+patch at one centre and at one half-length, which is what having a single
+implementation of each edit means. A displacement that is not a finite number, a
+size that is not a usable length and a cluster are each refused in their own words.
 
-The **offset** is tested for the pair of claims that make it the step no pixel
-can name. The centre travels exactly the distance asked for along the outward
+A **translation along the normal** is tested for the pair of claims that make
+it the move no pixel can name. The centre travels exactly the distance asked for along the outward
 normal while the axes, the half-length and the plane's orientation stay where
 they are; and, with every sighting first put somewhere of its own on the plane
 so the claim is not vacuous, each keeps its `(a_i, b_i)` and each keypoint comes
@@ -2639,8 +2665,8 @@ step that read each ray against the plane it had already reached would preserve
 neither. Beside them: a patch pushed out past the cameras leaves every sighting
 with no keypoint and `NoProjection`; the bitmap and the measurements go and
 nothing is pinned; an offset inside the patch's own tolerance reports
-`changed: false` and hands the track back; and a distance that is not one, a
-track at infinity and a cluster are each refused in their own words.
+`changed: false` and hands the track back; and a distance that is not a finite
+number, a bearing and a cluster are each refused in their own words.
 
 The **tilt** is tested for the three claims that make it a tilt rather than
 some other turn. It is the **least** rotation: the axis is perpendicular to
@@ -2796,7 +2822,5 @@ dropped, and a track that observes nothing at or past the image coming back as
 - **Pulling observations in from another point or another item.** The
   `Provenance::Point` a commit absorbs is set by the caller today; the step that
   reads a point's track and adds it is proposed in the same draft.
-- **Editing the patch's frame or normal by hand.** The frame is what the
-  kernels fit.
 - **Bundle adjustment after a commit.** The commit writes a record and nothing
   settles around it.
