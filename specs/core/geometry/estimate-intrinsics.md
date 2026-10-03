@@ -235,12 +235,11 @@ checked and reported in this order:
   and the rectilinear captures it additionally admits all pool 3 to 8, i.e.
   thinner still.
 
-Over the fleet (42 captures at last measurement, 6 of them fisheye; the
-commit that added the escalation, `9148c336`, records 27 of those 42 as strong
-pinhole votes that never escalate) the disjunction fires on every fisheye
-capture and on 9 of the 36 rectilinear
-ones, every one of those 9 a genuinely weak pinhole vote (7 tripped the
-bimodality band, 5 pooled 8 votes or fewer). What it buys against always
+Over the fleet (42 captures at last measurement, 6 of them fisheye) the
+disjunction fires on every fisheye capture and on 9 of the 36 rectilinear
+ones, leaving 27 strong pinhole votes that never escalate. Each of those 9
+is a genuinely weak pinhole vote (7 tripped the bimodality band, 5 pooled 8
+votes or fewer). What it buys against always
 running both columns is arbitration error: run unconditionally, 3 of those
 36 rectilinear captures arbitrate to a fisheye verdict.
 
