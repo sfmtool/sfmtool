@@ -536,6 +536,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
         bar_px: Some(1.0),
         few: FewObservations::Bearing,
         distance: None,
+        likelihood: None,
     };
     let a = triangulate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
     assert_eq!(a.census.finite, 3);
@@ -574,6 +575,8 @@ fn verdict_codes_are_the_wire_contract() {
     assert_eq!(PointVerdict::OverBar.code(), 4);
     assert_eq!(PointVerdict::Few.code(), 5);
     assert_eq!(PointVerdict::FinitePruned.code(), 6);
+    assert_eq!(PointVerdict::Ranged.code(), 7);
+    assert_eq!(PointVerdict::NoDepth.code(), 8);
 }
 
 // ── The cheirality prune, read per observation ────────────────────────────
@@ -1122,4 +1125,224 @@ fn the_range_rule_refuses_the_ray_form() {
             ..Default::default()
         },
     );
+}
+
+// ── The likelihood rule ─────────────────────────────────────────────────────
+
+/// Six cameras 0.2 apart on the x axis, and tracks at three depths seen from
+/// every one of them with a third of a pixel of deterministic noise.
+fn likelihood_scene() -> (Vec<[f64; 3]>, Vec<f64>, Vec<u32>, Vec<u32>) {
+    let centres: Vec<[f64; 3]> = (0..6).map(|i| [0.2 * i as f64, 0.0, 0.0]).collect();
+    let cam = camera();
+    let mut uv = Vec::new();
+    let mut img = Vec::new();
+    let mut pt = Vec::new();
+    for (p, depth) in [5.0, 300.0, 5000.0].into_iter().enumerate() {
+        for (i, c) in centres.iter().enumerate() {
+            let px = project(&cam, *c, [0.3, -0.2, -depth]);
+            let k = uv.len() as f64;
+            uv.extend_from_slice(&[px[0] + 0.3 * (1.7 * k).sin(), px[1] + 0.3 * (2.3 * k).cos()]);
+            img.push(i as u32);
+            pt.push(p as u32);
+        }
+    }
+    (centres, uv, img, pt)
+}
+
+#[test]
+fn the_likelihood_rule_is_the_point_or_bearing_test_on_the_rays() {
+    let cam = camera();
+    let (centres, uv, img, pt) = likelihood_scene();
+    let (q, t) = views(&centres);
+    let sigma = 0.3;
+    let out = triangulate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 3),
+        None,
+        PointRules {
+            likelihood: Some(LikelihoodRule::at(sigma)),
+            cheirality: true,
+            ..Default::default()
+        },
+    );
+    let rot = UnitQuaternion::identity();
+    let mut no_depth = 0;
+    for p in 0..3 {
+        let (mut dirs, mut cs, mut ws) = (Vec::new(), Vec::new(), Vec::new());
+        for k in (0..img.len()).filter(|&k| pt[k] as usize == p) {
+            let r = observed_ray(&cam, &rot, [uv[2 * k], uv[2 * k + 1]], sigma).expect("a ray");
+            dirs.push(r.dir);
+            cs.push(Point3::from(centres[img[k] as usize]));
+            ws.push(r.weight);
+        }
+        let score = bearing_score(&dirs, &cs, &ws).expect("a score");
+        if is_finite(&score, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD) {
+            assert_eq!(out.verdicts[p], PointVerdict::Finite, "track {p}");
+            assert_eq!(out.xyzw[p][3], 1.0);
+        } else {
+            no_depth += 1;
+            assert_eq!(out.verdicts[p], PointVerdict::NoDepth, "track {p}");
+            let b = score.bearing;
+            assert_eq!(out.xyzw[p], [b.x, b.y, b.z, 0.0], "track {p}");
+        }
+    }
+    // The near track is a point and the far one a bearing, so both verdicts
+    // are exercised.
+    assert_eq!(out.verdicts[0], PointVerdict::Finite);
+    assert_eq!(out.verdicts[2], PointVerdict::NoDepth);
+    assert_eq!(out.census.no_depth, no_depth);
+    assert_eq!(out.census.sole_verdict(), None);
+}
+
+#[test]
+fn the_likelihood_threshold_moves_the_verdict() {
+    let cam = camera();
+    let (centres, uv, img, pt) = likelihood_scene();
+    let (q, t) = views(&centres);
+    let run = |threshold: f64| {
+        triangulate_points_from_observations(
+            &cam,
+            obs(&uv, &img, &pt, &q, &t, 3),
+            None,
+            PointRules {
+                likelihood: Some(LikelihoodRule {
+                    sigma_px: 0.3,
+                    threshold,
+                }),
+                ..Default::default()
+            },
+        )
+        .census
+    };
+    assert_eq!(run(0.0).no_depth, 0, "every score reaches a threshold of 0");
+    assert_eq!(run(f64::INFINITY).no_depth, 3, "no score reaches infinity");
+}
+
+#[test]
+fn the_floor_and_the_mark_are_read_before_the_likelihood_rule() {
+    let cam = camera();
+    let (centres, uv, img, pt) = likelihood_scene();
+    let (q, t) = views(&centres);
+    let out = triangulate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 3),
+        Some(&[true, false, false]),
+        PointRules {
+            floor_rad: Some(1.0),
+            likelihood: Some(LikelihoodRule::at(0.3)),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        out.verdicts,
+        vec![PointVerdict::Marked, PointVerdict::Thin, PointVerdict::Thin]
+    );
+}
+
+#[test]
+#[should_panic(expected = "needs the observation form")]
+fn the_likelihood_rule_refuses_the_ray_form() {
+    let dirs = [0.0, 0.0, -1.0, 0.1, 0.0, -1.0];
+    let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    triangulate_points_from_rays(
+        RaySet {
+            dirs: &dirs,
+            centres: &centres,
+            offsets: &[0, 2],
+        },
+        None,
+        PointRules {
+            likelihood: Some(LikelihoodRule::at(0.5)),
+            ..Default::default()
+        },
+    );
+}
+
+/// Two cameras looking at each other along the z axis, 10 apart, with rays
+/// that are nearly opposite and cross 40 units behind the first: the bearing
+/// the test fits explains both rays to a fraction of a pixel, so the test finds
+/// no depth, but that bearing is behind one of the cameras.
+#[test]
+fn a_bearing_behind_a_camera_is_not_stored_and_goes_to_the_solve() {
+    let cam = camera();
+    // Camera 0 at the origin looking along -Z; camera 1 at z = -10 turned half
+    // a turn about y, looking along +Z.
+    let q = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let t = [0.0, 0.0, 0.0, 0.0, 0.0, -10.0];
+    // World rays (0.005, 0, -1) from camera 0 and (-0.004, 0, 1) from camera
+    // 1, which is (0.004, 0, -1) in camera 1's frame.
+    let uv = [322.5, 240.0, 322.0, 240.0];
+    let img = [0u32, 1];
+    let pt = [0u32, 0];
+    let sigma = 0.5;
+    let rays: Vec<_> = (0..2)
+        .map(|k| {
+            let o = 4 * k;
+            let rot =
+                UnitQuaternion::new_unchecked(Quaternion::new(q[o], q[o + 1], q[o + 2], q[o + 3]));
+            observed_ray(&cam, &rot, [uv[2 * k], uv[2 * k + 1]], sigma).expect("a ray")
+        })
+        .collect();
+    let score = bearing_score(
+        &[rays[0].dir, rays[1].dir],
+        &[Point3::origin(), Point3::new(0.0, 0.0, -10.0)],
+        &[rays[0].weight, rays[1].weight],
+    )
+    .expect("a score");
+    assert!(!is_finite(&score, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD));
+    assert!(!score.bearing_in_front_of_all_cameras);
+
+    let out = triangulate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            likelihood: Some(LikelihoodRule::at(sigma)),
+            cheirality: true,
+            ..Default::default()
+        },
+    );
+    // The rays cross behind camera 0, so the solve is refused by cheirality.
+    assert_eq!(out.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(out.census.no_depth, 0);
+}
+
+/// A cheirality rescue re-reads the likelihood rule over the survivors: two
+/// cameras 0.01 apart see a point 50 units out, whose rays carry no depth at
+/// half a pixel, and a third sees a ray that crosses theirs behind it. Without
+/// the rule the third is pruned and the pair is solved; with it the pair has
+/// no depth, the rescue is refused, and nothing is pruned.
+#[test]
+fn a_rescue_re_reads_the_likelihood_rule_over_the_survivors() {
+    let cam = camera();
+    let q = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    let cs = [[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [1.0, 0.0, -20.0]];
+    let t: Vec<f64> = cs.iter().flat_map(|c| [-c[0], -c[1], -c[2]]).collect();
+    let mut uv = Vec::new();
+    uv.extend_from_slice(&project(&cam, cs[0], [0.0, 0.0, -50.0]));
+    uv.extend_from_slice(&project(&cam, cs[1], [0.0, 0.0, -50.0]));
+    let (u, v) = cam.ray_to_pixel([0.5, 0.0, -1.0]).expect("in domain");
+    uv.extend_from_slice(&[u, v]);
+    let img = [0u32, 1, 2];
+    let pt = [0u32, 0, 0];
+    let run = |likelihood| {
+        triangulate_points_from_observations(
+            &cam,
+            obs(&uv, &img, &pt, &q, &t, 1),
+            None,
+            PointRules {
+                likelihood,
+                cheirality: true,
+                prune_behind: true,
+                ..Default::default()
+            },
+        )
+    };
+    let off = run(None);
+    assert_eq!(off.verdicts, vec![PointVerdict::FinitePruned]);
+    assert_eq!(off.pruned, vec![false, false, true]);
+    let on = run(Some(LikelihoodRule::at(0.5)));
+    assert_eq!(on.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(on.pruned, vec![false, false, false]);
+    assert_eq!(on.census.pruned_obs, 0);
 }

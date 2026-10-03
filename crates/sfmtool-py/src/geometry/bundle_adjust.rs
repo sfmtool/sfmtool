@@ -7,7 +7,7 @@
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 use sfmtool_core::geometry::{
@@ -211,16 +211,12 @@ fn check_releases(
 ///         rows ignore it.
 ///     free_points_cross: Re-decide every free point's representation at each
 ///         inter-round re-estimation, from its own rays at the current
-///         geometry: a track whose widest ray pair opens past the noise floor
-///         is finite, one that closes below it is a direction, and so is one
-///         that solves behind a camera observing it. ``False`` honours the
+///         geometry, on the point-or-bearing test at the noise level the
+///         previous round's residuals measure: a track whose rays ask for a
+///         depth is finite, one whose rays do not is a direction, and so is
+///         one that solves behind a camera observing it. ``False`` honours the
 ///         caller's ``point_at_infinity`` mask for the whole solve, which
 ///         reproduces the standing kernel bit for bit.
-///     noise_floor_scale: The constant ``c`` in the noise-floor angle
-///         ``theta_floor = c * s / f``, with ``s`` the round's loss scale in
-///         pixels and ``f`` the mean current focal of the cameras the track
-///         was seen through, one term per observation (default 2.0; must be
-///         positive and finite). Read only under ``free_points_cross``.
 ///     protected: Optional (n_obs,) bool mask marking protected
 ///         observations. A protected observation is never removed by the
 ///         inter-round trim gates — it stays in the solve set every round
@@ -271,6 +267,14 @@ fn check_releases(
 ///     mask unless ``free_points_cross`` let the re-estimation re-decide it, a
 ///     held point's is its input value, and a ranged point's is whether its
 ///     distance is infinite.
+///     ``crossings`` has one dict per inter-round re-estimation under
+///     ``free_points_cross`` (empty without it), in round order: ``round``,
+///     ``sigma_px`` (the noise level the free points were decided at, or
+///     ``None`` where the previous round kept no observation of a finite
+///     point and nothing crossed), ``observation_count`` and
+///     ``outlier_count`` (what that level was measured over and left out), and
+///     ``to_finite`` and ``to_direction`` (the free points that crossed each
+///     way).
 ///     ``residual_norms`` are unweighted reprojection norms at the final
 ///     state, ``+inf`` where the point is non-finite / behind the camera /
 ///     outside the model domain.
@@ -289,7 +293,6 @@ fn check_releases(
     distance=None,
     distance_from=None,
     free_points_cross=false,
-    noise_floor_scale=sfmtool_core::geometry::DEFAULT_NOISE_FLOOR_SCALE,
     protected=None,
     protected_loss_scale=3.0,
     opt_f=false,
@@ -316,7 +319,6 @@ pub fn bundle_adjust<'py>(
     distance: Option<PyReadonlyArray1<'py, f64>>,
     distance_from: Option<Bound<'py, PyAny>>,
     free_points_cross: bool,
-    noise_floor_scale: f64,
     protected: Option<PyReadonlyArray1<'py, bool>>,
     protected_loss_scale: f64,
     opt_f: bool,
@@ -415,11 +417,6 @@ pub fn bundle_adjust<'py>(
             "protected_loss_scale must be positive and finite",
         ));
     }
-    if !(noise_floor_scale.is_finite() && noise_floor_scale > 0.0) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "noise_floor_scale must be positive and finite",
-        ));
-    }
     let held_mask: Option<Vec<bool>> = held.map(|m| to_contiguous!(m).into_owned());
     let distance_values: Option<Vec<f64>> = distance.map(|r| to_contiguous!(r).into_owned());
     let origins = match &distance_from {
@@ -435,7 +432,6 @@ pub fn bundle_adjust<'py>(
     )?;
     let free_points = FreePointPolicy {
         cross: free_points_cross,
-        noise_floor_scale,
     };
     let q_in = to_contiguous!(quaternions_wxyz);
     let t_in = to_contiguous!(translations);
@@ -555,6 +551,18 @@ pub fn bundle_adjust<'py>(
         "point_at_infinity",
         PyArray1::from_vec(py, out.point_at_infinity),
     )?;
+    let crossings = PyList::empty(py);
+    for c in &out.crossings {
+        let round = PyDict::new(py);
+        round.set_item("round", c.round)?;
+        round.set_item("sigma_px", c.sigma_px)?;
+        round.set_item("observation_count", c.observation_count)?;
+        round.set_item("outlier_count", c.outlier_count)?;
+        round.set_item("to_finite", c.to_finite)?;
+        round.set_item("to_direction", c.to_direction)?;
+        crossings.append(round)?;
+    }
+    d.set_item("crossings", crossings)?;
     Ok(d)
 }
 

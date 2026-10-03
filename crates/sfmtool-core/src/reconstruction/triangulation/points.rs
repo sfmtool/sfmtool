@@ -9,17 +9,20 @@
 //! that answer should be used. Whether a track with parallel rays is a bearing,
 //! whether a point behind a camera is demoted now or left for a later trim and
 //! whether that demotion reads the track or the one observation that failed,
-//! whether a single observation still carries a direction, and whether a fresh
-//! estimate has to reproject inside a bound before it counts are the caller's
-//! rules. This module holds them once, as options with an off position, so a
+//! whether a single observation still carries a direction, whether the rays ask
+//! for a depth at all at a stated noise level, and whether a fresh estimate has
+//! to reproject inside a bound before it counts are the caller's rules. This module holds them once, as options with an off position, so a
 //! caller states its policy and the arithmetic is shared. With every option off
 //! the operation is the batch triangulation solve.
 //!
 //! See `specs/core/reconstruction/triangulation-rules.md` for the design.
 
-use nalgebra::{Matrix2, Point3, Quaternion, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Matrix2, Matrix2x3, Point3, Quaternion, UnitQuaternion, Vector2, Vector3};
 use rayon::prelude::*;
 
+use super::point_or_bearing::{
+    bearing_score, is_finite, observed_ray, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+};
 use super::triangulate_batch;
 use crate::camera::CameraIntrinsics;
 use crate::numeric::median_in_place;
@@ -70,6 +73,32 @@ impl PointDistance {
     }
 }
 
+/// The likelihood rule: the point-or-bearing test at a stated noise level.
+///
+/// Each track's observations are weighted through [`observed_ray`] at
+/// [`Self::sigma_px`] and scored with [`bearing_score`]. A track that
+/// [`is_finite`] does not call finite at [`Self::threshold`], and whose bearing
+/// lies in front of every camera observing it, has NO DEPTH and becomes that
+/// bearing. See "Rules" in `specs/core/reconstruction/triangulation-rules.md`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LikelihoodRule {
+    /// The per-axis pixel noise the rays are weighted by. Finite and positive.
+    pub sigma_px: f64,
+    /// The score a track has to reach to be finite.
+    pub threshold: f64,
+}
+
+impl LikelihoodRule {
+    /// The rule at `sigma_px` and the default threshold,
+    /// [`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`].
+    pub fn at(sigma_px: f64) -> Self {
+        Self {
+            sigma_px,
+            threshold: DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+        }
+    }
+}
+
 /// The rules a track is judged by, each with an off position.
 ///
 /// [`PointRules::default`] is every rule off, which makes the operation the
@@ -87,6 +116,11 @@ pub struct PointRules<'a> {
     /// The angular floor, in radians. A track whose widest ray pair subtends
     /// less than this is thin. `None` is off.
     pub floor_rad: Option<f64>,
+    /// The likelihood rule: a track whose rays ask for no depth at the rule's
+    /// noise level becomes the bearing the test fits. `None` is off. Reading it
+    /// needs the observation form, since a ray's noise weight comes from its
+    /// pixel through the camera model.
+    pub likelihood: Option<LikelihoodRule>,
     /// Demote a solved point that lands behind any camera observing it. Off,
     /// the point is kept and the in-front flag is reported.
     pub cheirality: bool,
@@ -126,6 +160,9 @@ pub enum PointVerdict {
     /// The caller ranged the track, so its distance was kept and only its
     /// direction was read from the observations.
     Ranged = 7,
+    /// The point-or-bearing test at the likelihood rule's noise level found no
+    /// depth in the rays.
+    NoDepth = 8,
 }
 
 impl PointVerdict {
@@ -146,6 +183,7 @@ impl PointVerdict {
             PointVerdict::Marked => "at infinity",
             PointVerdict::Ranged => "at its held distance",
             PointVerdict::Thin => "too thin to place, so at infinity",
+            PointVerdict::NoDepth => "no depth in its rays at the noise level, so at infinity",
             PointVerdict::Behind => "behind a camera that sees it, so at infinity",
             PointVerdict::OverBar => "past the reprojection bar, so at infinity",
             PointVerdict::Few => "too few observations to place, so left where it was",
@@ -166,6 +204,8 @@ pub struct PointCensus {
     pub ranged: usize,
     /// Tracks refused by the floor.
     pub thin: usize,
+    /// Tracks the likelihood rule found no depth in.
+    pub no_depth: usize,
     /// Tracks refused by cheirality.
     pub behind: usize,
     /// Tracks refused by the reprojection bar.
@@ -197,6 +237,7 @@ impl PointCensus {
             (self.marked, PointVerdict::Marked),
             (self.ranged, PointVerdict::Ranged),
             (self.thin, PointVerdict::Thin),
+            (self.no_depth, PointVerdict::NoDepth),
             (self.behind, PointVerdict::Behind),
             (self.over_bar, PointVerdict::OverBar),
             (self.few, PointVerdict::Few),
@@ -272,6 +313,9 @@ struct Track {
     centres: Vec<Point3<f64>>,
     /// The observation index of each usable ray, for the reprojection bar.
     rows: Vec<usize>,
+    /// The ray and noise weight [`observed_ray`] gives each usable ray, `None`
+    /// where it declines the pixel; empty with the likelihood rule off.
+    weighted: Vec<Option<(Vector3<f64>, Matrix2x3<f64>)>>,
     /// Whether the caller marked this track a direction.
     marked: bool,
     /// The distance and origin the caller ranged this track at, where it did.
@@ -297,6 +341,10 @@ pub fn triangulate_points_from_rays(
         assert_eq!(m.len(), n_tracks, "marks must have one entry per track");
     }
     check_distances(rules.distance, n_tracks, false);
+    assert!(
+        rules.likelihood.is_none(),
+        "the likelihood rule weights rays by their pixels and needs the observation form"
+    );
     let tracks: Vec<Track> = (0..n_tracks)
         .map(|t| {
             let (lo, hi) = (rays.offsets[t], rays.offsets[t + 1]);
@@ -321,12 +369,13 @@ pub fn triangulate_points_from_rays(
                 dirs,
                 centres,
                 rows,
+                weighted: Vec::new(),
                 marked: marks.is_some_and(|m| m[t]),
                 distance: distance_entry(rules.distance, t),
             }
         })
         .collect();
-    decide(&tracks, n_tracks, rays.dirs.len() / 3, None, rules, None)
+    decide(&tracks, n_tracks, rays.dirs.len() / 3, None, rules)
 }
 
 /// Triangulate every track of an observation set, building the world rays
@@ -347,43 +396,32 @@ pub fn triangulate_points_from_observations(
         cameras: std::slice::from_ref(cam),
         image_camera: None,
     };
-    from_observations(lenses, obs, marks, rules, None)
+    from_observations(lenses, obs, marks, rules)
 }
 
 /// [`triangulate_points_from_observations`] over images taken through several
-/// cameras, with the floor read per track.
+/// cameras.
 ///
 /// `image_camera` holds, per image, the index into `cameras` of the camera that
-/// took it, so each observation's ray is `pixel_to_ray` through its own lens.
-/// `track_floor_rad`, where given, is the angular floor of each track in the
-/// caller's track order and replaces [`PointRules::floor_rad`]: the bundle
-/// adjustment's noise floor is an angle per track, because a track can be seen
-/// through cameras of different focal lengths.
+/// took it, so each observation's ray is `pixel_to_ray` through its own lens,
+/// and its likelihood-rule weight reads that lens's projection derivative.
 pub(crate) fn triangulate_points_through_cameras(
     cameras: &[CameraIntrinsics],
     image_camera: &[u32],
     obs: ObservationSet<'_>,
     marks: Option<&[bool]>,
     rules: PointRules<'_>,
-    track_floor_rad: Option<&[f64]>,
 ) -> TriangulatedPoints {
     assert_eq!(
         image_camera.len(),
         obs.quats_wxyz.len() / 4,
         "image_camera must have one entry per image"
     );
-    if let Some(floors) = track_floor_rad {
-        assert_eq!(
-            floors.len(),
-            obs.n_tracks,
-            "track_floor_rad must have one entry per track"
-        );
-    }
     let lenses = Lenses {
         cameras,
         image_camera: Some(image_camera),
     };
-    from_observations(lenses, obs, marks, rules, track_floor_rad)
+    from_observations(lenses, obs, marks, rules)
 }
 
 /// The camera each image of an observation set was taken through.
@@ -413,7 +451,6 @@ fn from_observations(
     obs: ObservationSet<'_>,
     marks: Option<&[bool]>,
     rules: PointRules<'_>,
-    track_floor_rad: Option<&[f64]>,
 ) -> TriangulatedPoints {
     let n_obs = obs.obs_image.len();
     assert_eq!(obs.obs_point.len(), n_obs, "obs_image/obs_point mismatch");
@@ -422,6 +459,13 @@ fn from_observations(
         assert_eq!(m.len(), obs.n_tracks, "marks must have one entry per track");
     }
     check_distances(rules.distance, obs.n_tracks, true);
+    if let Some(l) = rules.likelihood {
+        assert!(
+            l.sigma_px.is_finite() && l.sigma_px > 0.0,
+            "the likelihood rule's sigma_px must be finite and positive, got {}",
+            crate::readable::Readable(l.sigma_px)
+        );
+    }
     let n_img = obs.quats_wxyz.len() / 4;
     assert_eq!(
         obs.translations.len(),
@@ -462,6 +506,7 @@ fn from_observations(
                 dirs: Vec::new(),
                 centres: Vec::new(),
                 rows: Vec::new(),
+                weighted: Vec::new(),
                 marked: marks.is_some_and(|m| m[p as usize]),
                 distance: distance_entry(rules.distance, p as usize),
             });
@@ -477,6 +522,15 @@ fn from_observations(
         last.dirs.push(world);
         last.centres.push(centres[i]);
         last.rows.push(k);
+        if let Some(l) = rules.likelihood {
+            let r = observed_ray(
+                lenses.of(i),
+                &pose_rotation(obs, i),
+                [obs.uv[2 * k], obs.uv[2 * k + 1]],
+                l.sigma_px,
+            );
+            last.weighted.push(r.map(|r| (r.dir, r.weight)));
+        }
     }
     // A track no observation names has no usable ray, so it is a `few` track.
     for (slot, seen) in named.iter().enumerate() {
@@ -486,19 +540,13 @@ fn from_observations(
                 dirs: Vec::new(),
                 centres: Vec::new(),
                 rows: Vec::new(),
+                weighted: Vec::new(),
                 marked: marks.is_some_and(|m| m[slot]),
                 distance: distance_entry(rules.distance, slot),
             });
         }
     }
-    decide(
-        &tracks,
-        obs.n_tracks,
-        n_obs,
-        Some((lenses, obs)),
-        rules,
-        track_floor_rad,
-    )
+    decide(&tracks, obs.n_tracks, n_obs, Some((lenses, obs)), rules)
 }
 
 /// The distance entry of one track, or `None` where the rule says nothing about
@@ -534,6 +582,8 @@ enum Early {
     Marked,
     /// Its widest ray pair is inside the floor.
     Thin,
+    /// The likelihood rule found no depth in its rays; the bearing it fits.
+    NoDepth(Vector3<f64>),
 }
 
 /// What the solve, and the rules read after it, made of one open track.
@@ -552,18 +602,50 @@ struct Solved {
     cos_widest: Option<f64>,
 }
 
+/// The likelihood rule's verdict on the rays `keep` selects of a track (every
+/// one for `None`): the bearing the test fits, where it finds no depth and that
+/// bearing lies in front of every camera observing the track, and `None`
+/// otherwise.
+///
+/// A track with fewer than two weighted rays is not scored, and so not decided
+/// here. Neither is one whose bearing is behind an observing camera: that
+/// bearing describes no sighting there, so the track goes on to the solve and
+/// the rules under it, as it would with the rule off.
+fn no_depth_bearing(
+    track: &Track,
+    keep: Option<&[usize]>,
+    rule: LikelihoodRule,
+) -> Option<Vector3<f64>> {
+    let n = track.weighted.len();
+    let mut dirs = Vec::with_capacity(n);
+    let mut centres = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+    let mut push = |i: usize| {
+        if let Some((d, w)) = track.weighted[i] {
+            dirs.push(d);
+            centres.push(track.centres[i]);
+            weights.push(w);
+        }
+    };
+    match keep {
+        Some(ix) => ix.iter().for_each(|&i| push(i)),
+        None => (0..n).for_each(push),
+    }
+    let score = bearing_score(&dirs, &centres, &weights)?;
+    (!is_finite(&score, rule.threshold) && score.bearing_in_front_of_all_cameras)
+        .then_some(score.bearing)
+}
+
 /// The shared decision pass over prepared tracks.
 ///
 /// `n_obs` is how many observations the caller handed in, which is the length
-/// of the per-observation prune mask. `track_floor_rad`, where given, is the
-/// floor of each track by its slot and replaces `rules.floor_rad`.
+/// of the per-observation prune mask.
 fn decide(
     tracks: &[Track],
     n_tracks: usize,
     n_obs: usize,
     reproject: Option<(Lenses<'_>, ObservationSet<'_>)>,
     rules: PointRules<'_>,
-    track_floor_rad: Option<&[f64]>,
 ) -> TriangulatedPoints {
     let mut xyzw = vec![[f64::NAN; 4]; n_tracks];
     let mut verdicts = vec![PointVerdict::Few; n_tracks];
@@ -573,10 +655,6 @@ fn decide(
     // The widest pair is read once, here, and only where the floor asks for it:
     // it costs O(K²) in the track's observation count, and a caller with the
     // floor off has not asked for that pass.
-    let floor_of = |slot: usize| match track_floor_rad {
-        Some(floors) => Some(floors[slot]),
-        None => rules.floor_rad,
-    };
     let early: Vec<(Option<Early>, Option<f64>)> = tracks
         .par_iter()
         .map(|t| {
@@ -593,13 +671,18 @@ fn decide(
             if t.marked {
                 return (Some(Early::Marked), None);
             }
-            match floor_of(t.slot).map(f64::cos) {
-                None => (None, None),
-                Some(c) => {
-                    let m = smallest_pairwise_cosine(&t.dirs);
-                    (if m > c { Some(Early::Thin) } else { None }, Some(m))
-                }
+            let widest = rules.floor_rad.map(f64::cos).map(|c| {
+                let m = smallest_pairwise_cosine(&t.dirs);
+                (m > c, m)
+            });
+            if let Some((true, m)) = widest {
+                return (Some(Early::Thin), Some(m));
             }
+            let no_depth = rules
+                .likelihood
+                .and_then(|l| no_depth_bearing(t, None, l))
+                .map(Early::NoDepth);
+            (no_depth, widest.map(|(_, m)| m))
         })
         .collect();
 
@@ -629,7 +712,7 @@ fn decide(
             }
             if rules.cheirality && !front {
                 if rules.prune_behind {
-                    if let Some(s) = prune_behind(t, p, reproject, rules, floor_of(t.slot)) {
+                    if let Some(s) = prune_behind(t, p, reproject, rules) {
                         return s;
                     }
                 }
@@ -678,6 +761,11 @@ fn decide(
                 census.thin += 1;
                 verdicts[t.slot] = PointVerdict::Thin;
                 xyzw[t.slot] = bearing(&t.dirs);
+            }
+            Some(Early::NoDepth(b)) => {
+                census.no_depth += 1;
+                verdicts[t.slot] = PointVerdict::NoDepth;
+                xyzw[t.slot] = unit([b.x, b.y, b.z]);
             }
             None => {}
         }
@@ -947,16 +1035,15 @@ fn refused(verdict: PointVerdict, dirs: &[Vector3<f64>], front: bool) -> Solved 
 /// of two is impossible, so a rescue never leaves fewer than two rays.
 ///
 /// The reduced track is then re-read by the rules the full one would have been:
-/// the floor over the surviving pair angles, cheirality again over the new
-/// solve, and the bar over the surviving observations. `None` where any of them
-/// refuses, which leaves the track the bearing it would have been anyway, with
-/// nothing pruned. `floor_rad` is the track's own floor.
+/// the floor over the surviving pair angles, the likelihood rule over the
+/// surviving rays, cheirality again over the new solve, and the bar over the
+/// surviving observations. `None` where any of them refuses, which leaves the
+/// track the bearing it would have been anyway, with nothing pruned.
 fn prune_behind(
     track: &Track,
     p: Vector3<f64>,
     reproject: Option<(Lenses<'_>, ObservationSet<'_>)>,
     rules: PointRules<'_>,
-    floor_rad: Option<f64>,
 ) -> Option<Solved> {
     let n = track.dirs.len();
     let behind: Vec<usize> = (0..n)
@@ -975,12 +1062,17 @@ fn prune_behind(
     let rows: Vec<usize> = keep.iter().map(|&i| track.rows[i]).collect();
 
     let mut cos_widest = None;
-    if let Some(c) = floor_rad.map(f64::cos) {
+    if let Some(c) = rules.floor_rad.map(f64::cos) {
         let m = smallest_pairwise_cosine(&dirs);
         if m > c {
             return None;
         }
         cos_widest = Some(m);
+    }
+    if let Some(l) = rules.likelihood {
+        if no_depth_bearing(track, Some(&keep), l).is_some() {
+            return None;
+        }
     }
     let tri = triangulate_batch(&dirs, &centres, &[0, dirs.len()]);
     let q = tri[0].point.coords;

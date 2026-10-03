@@ -21,7 +21,12 @@
 use std::borrow::Cow;
 
 use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, UnitQuaternion, Vector2, Vector3};
+use rayon::prelude::*;
 
+use crate::analysis::reprojection_noise::{
+    camera_keypoint_resolution_px, gated_reprojection_noise, ObservationResidual,
+    ReprojectionNoise, OUTLIER_GATE,
+};
 use crate::camera::distortion::bspline::{
     basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
@@ -30,8 +35,8 @@ use crate::camera::{CameraModel, PixelJacobian};
 use crate::progress::Progress;
 use crate::progress_info;
 use crate::reconstruction::triangulation::points::{
-    tangent_basis, triangulate_points_through_cameras, FewObservations, ObservationSet,
-    PointDistance, PointRules,
+    tangent_basis, triangulate_points_through_cameras, FewObservations, LikelihoodRule,
+    ObservationSet, PointDistance, PointRules,
 };
 use crate::CameraIntrinsics;
 
@@ -68,10 +73,6 @@ pub const DEFAULT_SCHEDULE: [BaSchedule; 3] = [
 /// Default widening multiplier on a stage's `loss_scale` for protected
 /// observations (see [`bundle_adjust`]'s `protected`).
 pub const DEFAULT_PROTECTED_LOSS_SCALE: f64 = 3.0;
-
-/// Default constant `c` in the noise-floor angle `θ_floor = c·s/f` a crossing
-/// free point is classified by (see [`FreePointPolicy`]).
-pub const DEFAULT_NOISE_FLOOR_SCALE: f64 = 2.0;
 
 /// What the solve owns of a point, orthogonal to the representation the point
 /// currently carries.
@@ -321,27 +322,41 @@ impl std::error::Error for PointConstraintsError {}
 /// [`FreePointPolicy::default`] is the off position: the caller's
 /// `point_at_infinity` mask is honoured for the whole solve, which is the
 /// kernel the parity requirement is stated against.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FreePointPolicy {
     /// Re-decide every free point's representation at each inter-round
-    /// re-estimation, from its own rays at the current geometry: a track whose
-    /// widest ray pair opens past the noise floor is finite, one that closes
-    /// below it is a direction, and so is one that solves behind a camera that
-    /// observes it.
+    /// re-estimation, from its own rays at the current geometry, on the
+    /// point-or-bearing test at the noise level the last round's residuals
+    /// measure: a track whose rays ask for a depth is finite, one whose rays do
+    /// not is a direction, and so is one that solves behind a camera that
+    /// observes it. See "Free points: crossing between representations" in
+    /// `specs/core/geometry/bundle-adjustment.md`.
     pub cross: bool,
-    /// The constant `c` in the noise-floor angle `θ_floor = c·s/f`, with `s`
-    /// the round's loss scale in pixels and `f` the camera's current focal.
-    /// Read only when [`Self::cross`] is set.
-    pub noise_floor_scale: f64,
 }
 
-impl Default for FreePointPolicy {
-    fn default() -> Self {
-        Self {
-            cross: false,
-            noise_floor_scale: DEFAULT_NOISE_FLOOR_SCALE,
-        }
-    }
+/// One inter-round re-estimation under [`FreePointPolicy::cross`]: the noise
+/// level it decided at and what it changed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoundCrossing {
+    /// The schedule round the re-estimation opened (1 for the first, since
+    /// round 0 has none).
+    pub round: usize,
+    /// The noise level the free points were decided at: the RMS per-axis
+    /// residual, in pixels, over the previous round's kept observations of
+    /// finite points at the state that round settled on, outliers gated out as
+    /// [`crate::analysis::reprojection_noise::OUTLIER_GATE`] does, and never
+    /// under the cameras' keypoint resolution. `None` where that round kept no
+    /// observation of a finite point, in which case nothing crossed.
+    pub sigma_px: Option<f64>,
+    /// How many observations `sigma_px` is measured over.
+    pub observation_count: usize,
+    /// How many were left out as outliers.
+    pub outlier_count: usize,
+    /// Free points that were directions and came out of the re-estimation
+    /// finite.
+    pub to_finite: usize,
+    /// Free points that were finite and came out of it directions.
+    pub to_direction: usize,
 }
 
 /// The cameras of a solve, and which of them took each image.
@@ -470,6 +485,9 @@ pub struct BundleAdjustment {
     /// point's is its input value, and a ranged point's is whether its distance
     /// is infinite.
     pub point_at_infinity: Vec<bool>,
+    /// One entry per inter-round re-estimation under
+    /// [`FreePointPolicy::cross`], in round order; empty with the crossing off.
+    pub crossings: Vec<RoundCrossing>,
 }
 
 /// Soft-L1 robust cost of a squared-residual-over-scale² argument:
@@ -740,8 +758,8 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// `constraints` optionally states a constraint per point (free, ranged or
 /// held) and what the ranged ones are held at; an absent one is every point
 /// free. `free_points` says whether a free point's representation is re-decided
-/// from its rays between rounds and at what noise floor. See "Point
-/// constraints" in
+/// from its rays between rounds, on the point-or-bearing test at the noise level
+/// the previous round's residuals measure. See "Point constraints" in
 /// `specs/core/geometry/bundle-adjustment.md`. Absent constraints and a default
 /// [`FreePointPolicy`] reproduce the kernel without them bit for bit.
 ///
@@ -1092,14 +1110,14 @@ fn residual_norms_depths(
 /// image, so a track seen by two cameras back-projects each observation
 /// through its own lens.
 ///
-/// `cross_floor` is the crossing policy for free points: `None` keeps every
+/// `cross_sigma_px` is the crossing policy for free points: `None` keeps every
 /// free point's representation as it came in (the mask is honoured for the
-/// whole solve), and `Some(θ_floor)`, one angle per point, re-decides it from
-/// the rays at this geometry -- marks off, the floor at the point's own
-/// `θ_floor`, cheirality on -- and writes the verdict back into `is_dir` for
-/// the next linearization. A ranged point is carried by the distance rule at
-/// whatever origin its reference resolves to now, and a held point is not
-/// re-estimated at all.
+/// whole solve), and `Some(σ)` re-decides it from the rays at this geometry --
+/// marks off, the likelihood rule at `σ`, cheirality on -- and writes the
+/// verdict back into `is_dir` for the next linearization. A ranged point is
+/// carried by the distance rule at whatever origin its reference resolves to
+/// now, and a held point is not re-estimated at all. Returns how many free
+/// points became finite and how many became directions.
 #[allow(clippy::too_many_arguments)]
 fn retriangulate_round(
     cams: &[CameraIntrinsics],
@@ -1112,8 +1130,9 @@ fn retriangulate_round(
     obs_img: &[u32],
     obs_pt: &[u32],
     cons: &Constraints,
-    cross_floor: Option<&[f64]>,
-) {
+    cross_sigma_px: Option<f64>,
+) -> (usize, usize) {
+    let crossing = cross_sigma_px.is_some();
     let mut quats_wxyz = Vec::with_capacity(quats.len() * 4);
     for q in quats {
         quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
@@ -1126,7 +1145,7 @@ fn retriangulate_round(
     // marks of the points the crossing does not touch are what they were.
     let marks: Vec<bool> = (0..points.len())
         .map(|p| {
-            if cross_floor.is_some() && cons.constraint[p] == PointConstraint::Free {
+            if crossing && cons.constraint[p] == PointConstraint::Free {
                 false
             } else {
                 is_dir[p]
@@ -1167,12 +1186,13 @@ fn retriangulate_round(
         Some(&marks),
         PointRules {
             distance: distances.as_deref(),
-            cheirality: cross_floor.is_some(),
+            likelihood: cross_sigma_px.map(LikelihoodRule::at),
+            cheirality: crossing,
             few: FewObservations::Absent,
             ..Default::default()
         },
-        cross_floor,
     );
+    let (mut to_finite, mut to_direction) = (0, 0);
     for (p, (row, e)) in points.iter_mut().zip(&est.xyzw).enumerate() {
         // A held point owns its coordinate; the estimate for it is discarded.
         if cons.held(p) {
@@ -1182,11 +1202,72 @@ fn retriangulate_round(
         // The crossing verdict, where the estimate says anything: an absent
         // track (`NaN`) leaves the representation it had, so a track that
         // momentarily loses its observations does not also change representation.
-        if cross_floor.is_some() && cons.constraint[p] == PointConstraint::Free && e[3].is_finite()
-        {
-            is_dir[p] = e[3] == 0.0;
+        if crossing && cons.constraint[p] == PointConstraint::Free && e[3].is_finite() {
+            let dir = e[3] == 0.0;
+            match (is_dir[p], dir) {
+                (true, false) => to_finite += 1,
+                (false, true) => to_direction += 1,
+                _ => {}
+            }
+            is_dir[p] = dir;
         }
     }
+    (to_finite, to_direction)
+}
+
+/// The noise level a crossing round decides its free points at: the gated RMS
+/// per-axis residual over `kept` observations of finite points at the state
+/// the arrays hold, the estimator of
+/// [`crate::analysis::reprojection_noise`] (each camera's residuals gated at
+/// [`OUTLIER_GATE`] robust spreads, no degrees-of-freedom correction), never
+/// under the cameras' keypoint resolution.
+///
+/// `kept` is the previous round's solve set and the state the one that solve
+/// settled on, so the level measures the residuals the adjustment has just
+/// minimised rather than its schedule's loss scale. A direction's residuals
+/// are left out, as the stored measure leaves out points at infinity: they are
+/// the bearing's, which is the model under question. An observation the camera
+/// model cannot image at that state carries no residual and is left out too.
+#[allow(clippy::too_many_arguments)]
+fn round_noise(
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
+    quats: &[UnitQuaternion<f64>],
+    trans: &[Vector3<f64>],
+    points: &[[f64; 3]],
+    is_dir: &[bool],
+    uv: &[[f64; 2]],
+    obs_img: &[u32],
+    obs_pt: &[u32],
+    kept: &[usize],
+) -> ReprojectionNoise {
+    let residuals: Vec<ObservationResidual> = kept
+        .par_iter()
+        .filter_map(|&k| {
+            let p = obs_pt[k] as usize;
+            if is_dir[p] {
+                return None;
+            }
+            let x = points[p];
+            if !(x[0].is_finite() && x[1].is_finite() && x[2].is_finite()) {
+                return None;
+            }
+            let i = obs_img[k] as usize;
+            let camera = image_camera[i] as usize;
+            let c = quats[i] * Vector3::new(x[0], x[1], x[2]) + trans[i];
+            let (u, v) = cams[camera].ray_to_pixel([c.x, c.y, c.z])?;
+            let residual = [u - uv[k][0], v - uv[k][1]];
+            (residual[0].is_finite() && residual[1].is_finite())
+                .then_some(ObservationResidual { camera, residual })
+        })
+        .collect();
+    let mut noise = gated_reprojection_noise(&residuals, cams.len(), OUTLIER_GATE);
+    let resolution = cams
+        .iter()
+        .map(camera_keypoint_resolution_px)
+        .fold(f64::from(f32::EPSILON), f64::max);
+    noise.sigma_px = noise.sigma_px.map(|s| s.max(resolution));
+    noise
 }
 
 /// Robust cost over the kept observations at a candidate state. `points` are
@@ -1580,56 +1661,6 @@ impl<'a> Lens<'a> {
             self.base.with_focal_k1(f, k1)
         }
     }
-}
-
-/// The noise-floor angle `scale / f` of every point, with `f` the mean focal of
-/// the cameras its observations were taken through, one term per observation
-/// (the mean of a camera's two focals where its model carries two).
-///
-/// A track seen through one camera takes that camera's focal as it is rather
-/// than as a mean of copies of it, which could round differently, so a solve
-/// with one camera reads the floor it always has. A point with no observation
-/// takes the first camera's, which nothing reads: the re-estimation calls such
-/// a track absent before it asks for a floor.
-fn track_noise_floors(
-    cams: &[CameraIntrinsics],
-    obs_cam: &[usize],
-    obs_pt: &[u32],
-    n_pt: usize,
-    scale: f64,
-) -> Vec<f64> {
-    let focal: Vec<f64> = cams
-        .iter()
-        .map(|c| {
-            let (fx, fy) = c.focal_lengths();
-            0.5 * (fx + fy)
-        })
-        .collect();
-    let mut first: Vec<Option<usize>> = vec![None; n_pt];
-    let mut mixed = vec![false; n_pt];
-    let mut sum = vec![0.0f64; n_pt];
-    let mut count = vec![0usize; n_pt];
-    for (k, &p) in obs_pt.iter().enumerate() {
-        let p = p as usize;
-        let j = obs_cam[k];
-        match first[p] {
-            None => first[p] = Some(j),
-            Some(j0) if j0 != j => mixed[p] = true,
-            Some(_) => {}
-        }
-        sum[p] += focal[j];
-        count[p] += 1;
-    }
-    (0..n_pt)
-        .map(|p| {
-            let f = if mixed[p] {
-                sum[p] / count[p] as f64
-            } else {
-                focal[first[p].unwrap_or(0)]
-            };
-            scale / f
-        })
-        .collect()
 }
 
 /// One robust sparse LM solve over the kept observations with mixed finite
@@ -2426,6 +2457,10 @@ fn bundle_adjust_staged(
                 .join("/")
         );
     }
+    // What each crossing re-estimation measured and changed, and the solve set
+    // of the round before it, whose residuals the next one measures.
+    let mut crossings: Vec<RoundCrossing> = Vec::new();
+    let mut prev_kept: Vec<usize> = Vec::new();
     let rounds = progress.split_evenly(schedule.len());
     for ((rnd, stage), p_round) in schedule.iter().enumerate().zip(rounds) {
         // Between rounds the poses and the points hold what the last round
@@ -2435,23 +2470,28 @@ fn bundle_adjust_staged(
         }
         let round = p_round.phase("round");
         let cams_now: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
-        // The noise floor a crossing free point is classified at: the parallax
-        // this stage's own residual scale cannot tell from noise, `c·s/f` in
-        // radians with `f` the mean focal of the cameras its track was seen
-        // through, so a wide-baseline stage keeps more tracks finite than a
-        // tight one and the boundary moves with the focal as the release walks
-        // it.
-        let cross_floor = free_points.cross.then(|| {
-            track_noise_floors(
-                &cams_now,
-                &obs_cam,
-                obs_pt,
-                points.len(),
-                free_points.noise_floor_scale * stage.loss_scale,
-            )
-        });
         if rnd > 0 {
-            retriangulate_round(
+            // The noise level a crossing free point is decided at is measured,
+            // not scheduled: the residuals of the observations the last round
+            // solved on, at the state it settled on. A rough round measures a
+            // large level and so asks more of a track before calling it finite;
+            // a converged one measures the capture's own noise.
+            let noise = free_points.cross.then(|| {
+                round_noise(
+                    &cams_now,
+                    image_camera,
+                    quats,
+                    trans,
+                    points,
+                    is_dir,
+                    uv,
+                    obs_img,
+                    obs_pt,
+                    &prev_kept,
+                )
+            });
+            let sigma = noise.as_ref().and_then(|n| n.sigma_px);
+            let (to_finite, to_direction) = retriangulate_round(
                 &cams_now,
                 image_camera,
                 quats,
@@ -2462,8 +2502,24 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 cons,
-                cross_floor.as_deref(),
+                sigma,
             );
+            if let Some(n) = noise {
+                if let Some(s) = sigma {
+                    progress_info!(
+                        round,
+                        "noise {s:.3} px; {to_finite} to finite, {to_direction} to directions"
+                    );
+                }
+                crossings.push(RoundCrossing {
+                    round: rnd,
+                    sigma_px: sigma,
+                    observation_count: n.observation_count,
+                    outlier_count: n.outlier_count,
+                    to_finite,
+                    to_direction,
+                });
+            }
         }
         let (norms, depths) = residual_norms_depths(
             &cams_now,
@@ -2515,6 +2571,7 @@ fn bundle_adjust_staged(
                 cameras: lenses.iter().map(Lens::camera).collect(),
                 residual_norms: vec![f64::INFINITY; n_obs],
                 point_at_infinity: is_dir.to_vec(),
+                crossings,
             };
         }
         if spline_cols {
@@ -2556,6 +2613,7 @@ fn bundle_adjust_staged(
                 &round,
             );
         }
+        prev_kept = kept;
         drop(round);
         progress.count(rnd as u64 + 1, Some(schedule.len() as u64), "round");
     }
@@ -2586,6 +2644,7 @@ fn bundle_adjust_staged(
         cameras: cams_final,
         residual_norms,
         point_at_infinity: is_dir.to_vec(),
+        crossings,
     }
 }
 

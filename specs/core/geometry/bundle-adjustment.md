@@ -49,8 +49,8 @@ callers refill).
 The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
 (`bundle_adjust`, `BaCameras`, `BaSchedule`, `BundleAdjustment`,
-`PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`),
-bound as `sfmtool._sfmtool.geometry.bundle_adjust`.
+`PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`,
+`RoundCrossing`), bound as `sfmtool._sfmtool.geometry.bundle_adjust`.
 
 ```rust
 pub struct BaSchedule {
@@ -86,7 +86,7 @@ pub fn bundle_adjust(
     obs_pt: &[u32],                      // n_obs
     point_at_infinity: Option<&[bool]>,  // n_pt, the INITIAL representation
     constraints: Option<&PointConstraints>,  // n_pt constraints; None = all free
-    free_points: FreePointPolicy,        // crossing switch + noise-floor constant
+    free_points: FreePointPolicy,        // whether free points cross representations
     protected: Option<&[bool]>,          // n_obs
     protected_loss_scale: f64,
     opt_f: bool,
@@ -103,6 +103,7 @@ pub struct BundleAdjustment {
     pub cameras: Vec<CameraIntrinsics>,  // n_cam, the cameras after the solve
     pub residual_norms: Vec<f64>,        // n_obs
     pub point_at_infinity: Vec<bool>,    // n_pt, the representation each ended with
+    pub crossings: Vec<RoundCrossing>,   // one per crossing re-estimation
 }
 ```
 
@@ -162,9 +163,9 @@ Per schedule round, mirroring the experiment scripts exactly:
    *all* supplied observations at the current poses, through the point
    estimation operation
    ([triangulation-rules.md](../reconstruction/triangulation-rules.md)) with `marks`
-   on for the round's direction mask, `few = absent`, and the floor, cheirality
-   and bar rules off, the settings a free point crossing representations moves
-   off, and a ranged or held point never reads (see "Point constraints"):
+   on for the round's direction mask, `few = absent`, and the floor, likelihood,
+   cheirality and bar rules off, the settings a free point crossing
+   representations moves off, and a ranged or held point never reads (see "Point constraints"):
    world rays `R_iᵀ · pixel_to_ray(uv)`, each through the camera of its own
    image, so a track seen by two cameras back-projects each observation through
    its own lens, and centers `−R_iᵀ t_i` per
@@ -408,11 +409,12 @@ Everything that reads a camera reads the camera of the observation's image,
 columns; the trim's in-front measure and its `1e-3 · f` floor; and
 `pixel_to_ray` in the inter-round re-estimation.
 
-The noise floor under `FreePointPolicy::cross`, `θ_floor = c · s / f`, is an
-angle per track. A track takes `f` as the mean of the focal lengths of its
-observations' cameras, one term per observation (each camera's focal the mean
-of its two where the model carries two). A track seen through one camera takes
-that camera's focal as it is, which is the single-camera rule.
+Under `FreePointPolicy::cross` the crossing reads each camera twice more. The
+noise level pools every camera's residuals and gates each camera's against its
+own robust spread, as the stored measure does, and each ray's noise weight is
+the projection derivative of its own image's camera, so a track seen through
+two lenses weights each sighting by the pixels per radian of the lens that took
+it.
 
 ### Parity
 
@@ -446,11 +448,8 @@ bundle_adjust(
                                # indices to average, with -1 where there is
                                # none; a finite `distance` requires one
     free_points_cross=False,   # re-decide every free point's representation at
-                               # each inter-round re-estimation
-    noise_floor_scale=2.0,     # the constant c in theta_floor = c*s/f, f the
-                               # mean focal of the track's cameras (positive
-                               # and finite); read only under
-                               # `free_points_cross`
+                               # each inter-round re-estimation, on the
+                               # point-or-bearing test at the measured noise
     protected=None,            # (n_obs,) bool; protected observations survive
                                # every trim gate and take the wider loss scale.
                                # None/all-False reproduces the unprotected
@@ -472,7 +471,8 @@ bundle_adjust(
                                # quaternions_wxyz (n_img, 4),
                                # translations (n_img, 3), points (n_pt, 3),
                                # residual_norms (n_obs,),
-                               # point_at_infinity (n_pt,)
+                               # point_at_infinity (n_pt,),
+                               # crossings (list of dict)
 ```
 
 `cameras` in the result holds one `CameraIntrinsics` per input camera, in
@@ -505,13 +505,17 @@ and adds none of its own. `None` comes back where every point is free, which is
 the off position the parity requirement is stated against.
 The refusals are a point that is both held and ranged, a distance that is
 not strictly positive, a finite distance with no origin, and an origin past the
-image set; the binding adds a non-positive or non-finite `noise_floor_scale`.
+image set.
 `distance_from` is ignored on a `NaN` or `+inf` row, which is measured from
 nothing.
 
 `point_at_infinity` in the result is the representation each point ended with,
-and is the only way a caller learns the outcome of a crossing: `True` where the
-returned row is a direction, `False` where it is a position.
+and is how a caller learns the outcome of a crossing: `True` where the returned
+row is a direction, `False` where it is a position. `crossings` is
+`BundleAdjustment::crossings` as one dict per re-estimation, with the
+`RoundCrossing` fields as keys (`round`, `sigma_px` or `None`,
+`observation_count`, `outlier_count`, `to_finite`, `to_direction`), and empty
+without `free_points_cross`.
 
 A reconstruction read from a `.sfmr` carries its constraints as the
 `point_constraints` column, a `uint8` array in the canonical numbering (`0`
@@ -629,9 +633,10 @@ Python's point of view).
     directions observed at `θ = 100°` survive the trim and recover the rotation
     of an image whose only observations they are; on a perspective camera a
     direction behind the image plane is trimmed.
-  - *The noise floor.* A track seen through two cameras takes the mean of their
-    focals, one term per observation; one seen through one camera takes that
-    camera's focal as it is.
+  - *The crossing reads each lens.* A crossing round over images split between
+    two focal lengths measures the level the residuals of both cameras give, and
+    decides each track as `bearing_score` does on rays weighted through the
+    camera of each sighting's image.
   - *Shape checks.* An index past the camera list, an `image_camera` of the
     wrong length and an empty list panic; the binding raises `ValueError` for
     each, and names the camera a refused release does not admit.
@@ -777,7 +782,7 @@ cons.constrain_distance(sky, f64::INFINITY, None);  // a bearing, no reference
 bundle_adjust(&BaCameras::shared(&cam, quats.len()),
               quats, trans, points, uv, obs_img, obs_pt,
               None, Some(&cons),
-              FreePointPolicy { cross: true, noise_floor_scale: 2.0 },
+              FreePointPolicy { cross: true },
               None, DEFAULT_PROTECTED_LOSS_SCALE,
               true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12);
 ```
@@ -794,37 +799,185 @@ constraint triple (see
 
 ### Free points: crossing between representations
 
-A proposal to decide this crossing on the point-or-bearing likelihood-ratio
-test instead of the `floor`, and to solve free points in inverse depth, is the
-amendment draft
+A proposal to solve free points in inverse depth, so that a point can move
+between near and infinity within a round, is the amendment draft
 [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
+
+```rust
+#[derive(Default)]
+pub struct FreePointPolicy {
+    pub cross: bool, // re-decide free points between rounds; off by default
+}
+
+pub struct RoundCrossing {
+    pub round: usize,            // the round the re-estimation opened (1, 2, ...)
+    pub sigma_px: Option<f64>,   // the level it decided at; None: nothing crossed
+    pub observation_count: usize,
+    pub outlier_count: usize,
+    pub to_finite: usize,        // free directions that came out finite
+    pub to_direction: usize,     // free points that came out directions
+}
+```
 
 Within a round nothing changes: a finite point perturbs in three Euclidean
 degrees of freedom and a direction in the two of its tangent plane. The crossing
 happens where the representation is already re-read, the inter-round
 re-estimation, which under `cross` runs the retriangulation operation with
 `marks` **off** for free points, `cheirality` **on**, `few = absent`, and the
-`floor` at the round's noise-floor angle
+`likelihood` rule at the round's measured noise level `σ`
+([triangulation-rules.md](../reconstruction/triangulation-rules.md) § "The
+likelihood rule"). Each free track's rays and noise weights are built through
+the camera of each observing image as it stands at the round, with the focal,
+`k1` or spline a release has walked to, and the track is decided by the
+point-or-bearing test
+([batch-triangulation-api.md](../reconstruction/batch-triangulation-api.md)
+§ "Point or bearing"): a track whose rays ask for a depth at `σ` is finite, one
+whose rays do not becomes the bearing the test fits, and both are ordinary
+outcomes rather than events. The level comes from the previous round's kept
+observations only, but the verdict reads every observation of the track at the
+round's geometry, those the trim left out included, as the re-estimation always
+has. A track that turns finite starts from the
+midpoint the operation solves, and the next round's solve places it, so no
+separate point fit runs. A track whose fitted bearing is behind an observing
+camera is not stored as that bearing: it goes to the solve, and a solved point
+behind a camera becomes the mean ray under `cheirality`, as a thin track did
+before the test.
 
-```
-θ_floor = noise_floor_scale · s / f
-```
+The verdict is written into the mask the next linearization reads; the first
+round has no re-estimation, so the caller's input mask is what the first
+linearization uses. A track whose estimate comes back absent keeps the
+representation it had, so momentarily losing its observations does not also
+change its constraint. Ranged and held points do not cross. A free point that
+ends as a direction comes back as a unit row, as any direction does.
 
-with `s` the round's `loss_scale` in pixels and `f` the current focal of the
-cameras the track was seen through, their mean over the track's observations
-(each camera's focal the mean of its two where a model carries two). That is the parallax the
-stage's own residual scale cannot tell from noise, so a wide-baseline stage
-keeps more tracks finite than a tight one, and the boundary walks with a
-released focal. A direction whose rays open past it becomes finite at the next
-re-estimation, a finite point whose rays close below it becomes a direction, and
-both are ordinary outcomes rather than events. The verdict is written into the
-mask the next linearization reads; the first round has no re-estimation, so the
-caller's input mask is what the first linearization uses. A track whose estimate
-comes back absent keeps the representation it had, so momentarily losing its
-observations does not also change its constraint.
+**The noise level is measured each round.** `σ` is the RMS per-axis residual
+over the observations the previous round solved on (its kept set, after the
+trim and `min_track`) of points that were finite in it, at the state that
+round's solve settled on: the estimator of the stored measure
+([batch-triangulation-api.md](../reconstruction/batch-triangulation-api.md)
+§ "The measured noise level"), each camera's residuals gated at
+`OUTLIER_GATE` robust spreads, no degrees-of-freedom correction, and never
+under the cameras' keypoint resolution. A direction's residuals are left out,
+because they are the bearing's, which is the model in question.
 
-Ranged and held points do not cross. A free point that ends as a direction comes
-back as a unit row, as any direction does.
+- **Not the loss scale.** `loss_scale` is a schedule constant, chosen before
+  anything is measured, and one schedule runs over captures whose noise
+  differs fivefold: the measured levels of the clean inputs below run from
+  0.19 px on a Kerry Park solve to 1.06 px on the 85-image `dino_dog_toy`
+  solve. A level read off the residuals follows the scene being adjusted.
+- **From the last round's kept set.** Those are the residuals the solve has
+  just minimised, so the level follows the adjustment as it converges. The
+  trim before that round capped every residual it kept at its `trim_px`
+  (50 px, then 12, by default), which bounds what a gross outlier can add once
+  the poses are rough enough that the robust spread grows with them and the
+  gate passes it (the stored measure's known limitation).
+- **A round with no finite observation** has no level. It decides nothing:
+  every free point keeps the representation it had, and its `RoundCrossing`
+  reports `sigma_px: None`.
+- **One more projection per round.** The residuals are projected once, at the
+  top of each crossing round, over the previous round's kept observations. The
+  solve's own evaluations are of candidate states, and keeping the accepted
+  one's residuals would mean carrying them through every damping step for a
+  pass that costs less than one iteration. On the 36,587 observations of the
+  `dino_dog_toy` solve, the default schedule takes 4.93 s with the crossing on
+  and 4.91 s with it off.
+
+**A rough round decides more bearings.** A round whose poses are far from
+converged leaves large residuals and measures a large `σ`, and at a large `σ`
+fewer tracks ask for a depth. As the rounds converge `σ` falls toward the
+capture's noise and the tracks whose rays carry a depth at that level come back
+finite. With five iterations a round, so that the first rounds stop short of
+convergence, from poses perturbed by 1° and 5% of the camera extents and 1 px
+of keypoint noise, the first re-estimation measures 6.0, 5.1 and 7.2 px on
+`tk117`, the seoul bull ground truth and a seoul bull `sift_files` solve, and
+the second 2.9, 2.7 and 3.5 px; the first makes 54, 64 and 232 points
+directions and the second makes 23, 54 and 157 finite again. With the default
+60 iterations the first round gets close enough from the same start (on
+`tk117` it uses all 60 without meeting its convergence test) that the first
+re-estimation measures the noise: 0.91, 0.90 and 0.79 px.
+
+On the Kerry Park solve the same five-iteration start makes most of the
+reconstruction directions and leaves it worse than not crossing at all. Its
+first round stops with `σ` at 3.1 px where the converged level is about
+0.8 px, so the level is mostly pose error. That capture is a short-baseline
+rig with about 3.6 observations per point, and at 3 px 71% of its points show
+no depth, against 5 to 14% of the other three inputs' points at the same level
+(whose own first re-estimations, at their 5 to 7 px, make 14 to 28% of their
+points directions); the first re-estimation makes 633 of its 886 points
+directions, although their rays do
+carry a depth at the converged level. Solved as directions in the next round,
+they bend the poses: that round's finite `σ` rises from 2.67 to 3.26 px,
+where without the crossing it falls from 3.11 to 2.23. The second
+re-estimation measures that worse state over only the 1,008 observations of
+the points still finite and keeps them directions (4 back, 29 more), and the
+solve ends with 658 directions and a median residual of 2.03 px, against
+1.05 px with the crossing off. Recovery needs the level to fall: with eight
+rounds the third re-estimation measures 1.03 px and makes 359 of them finite
+again. This happens only when a round stops on its iteration budget far from
+convergence; on that solve it takes ten iterations a round or fewer, and with
+the default 60 no start up to 4° and 20% of the camera extents makes it, nor
+does any production caller cross free points (every one passes
+`FreePointPolicy::default()`).
+
+The crossing has no guard against it. Letting a round that used its whole
+iteration budget only promote, since an inflated level errs toward demotion
+only, fixes this case (no directions, median residual 1.05 px), but it also
+holds back legitimate demotions after a default-budget round that used its 60
+iterations: with poses perturbed by 0.2° and 1% and 1 px of keypoint noise,
+the Kerry Park solve's disagreements with the test at its own result rise
+from 34 to 67 (its 150 demotions wait for the last re-estimation) and
+`tk117`'s from 0 to 1. Skipping the crossing after such a round regresses the
+same case, and reverting a re-estimation's demotions past a share of the free
+points depends on a share that a legitimate first re-estimation on that solve
+already reaches (18%). A solve whose rounds converge is the case the crossing
+is for; solving free points in inverse depth within each round (the amendment
+draft) removes the dependence on the round boundary.
+
+**No damping.** The rule has no hysteresis, because none was needed. The
+round's solve fits the representation it was handed, and that already pulls a
+borderline track's score toward the side it is on: over ten cameras and 300
+points with 0.76 px of noise, a track 1,500 units out whose rays score 33 at
+the true poses scores 38 at the end of a solve that started it finite and 6 at
+the end of one that started it as a direction, and stays as it started. Nothing in the
+measurements flips back and forth. Over the seven re-estimations of an
+eight-round schedule on a Kerry Park solve with 1 px of keypoint noise, the
+points changing at each are 137, 39, 26, 14, 7, 6 and 7 as marginal far points
+settle as directions; over the eight re-estimations of a nine-round schedule
+3 of its 886 points change twice (each once each way, rounds apart) and none more; in the synthetic sweep
+of the testing requirements, a track crosses at the first re-estimation or not
+at all.
+
+**Measured against the floor.** The default schedule over the four inputs of
+the point-or-bearing work, clean and degraded (poses perturbed by 0.2° and 1%
+of the camera extents, 1 px of keypoint noise, both, and 1° and 5% with
+1 px), with every free point crossing and the focal held. The floor is the
+rule this one replaced, `θ_floor = 2 · loss_scale / f`. "Disagree" counts the
+points whose stored representation the point-or-bearing test at the result's
+own measured noise disagrees with, which is what `sfm analyze
+--depth-reliability` lists; "dirs" are the directions in and out.
+
+| Input | Start | Floor: dirs, disagree | Likelihood: dirs, disagree | Median residual, floor / likelihood (px) |
+|---|---|---|---|---|
+| `tk117` | clean | 12 → 11, 2 | 12 → 9, 0 | 0.169 / 0.168 |
+| `tk117` | 1 px keypoints | 12 → 2, 10 | 12 → 12, 0 | 1.025 / 1.018 |
+| `tk117` | 1° and 5%, 1 px | 12 → 2, 13 | 12 → 12, 0 | 1.049 / 1.015 |
+| seoul bull ground truth | clean | 14 → 14, 0 | 14 → 14, 0 | 0.256 / 0.256 |
+| seoul bull ground truth | 0.2° and 1%, 1 px | 14 → 12, 2 | 14 → 14, 0 | 0.904 / 0.911 |
+| Kerry Park solve | clean | 0 → 45, 23 | 0 → 0, 0 | 0.190 / 0.173 |
+| Kerry Park solve | 1 px keypoints | 0 → 17, 163 | 0 → 174, 27 | 0.791 / 0.863 |
+| Kerry Park solve | 1° and 5%, 1 px | 0 → 17, 183 | 0 → 218, 33 | 0.781 / 0.897 |
+| seoul bull `sift_files` solve | every start | 0 → 0, 0 | 0 → 0, 0 | equal |
+
+On `tk117` the test makes points 298, 294 and 295 finite, as reclassification
+does, where the floor promoted one; at 1 px of keypoint noise the floor, whose
+angle does not move with the noise, promotes ten of the twelve bearings and the
+test none. On the clean Kerry Park solve the floor demotes 45 points, 23 of
+which the test calls finite. The 27 to 33 disagreements left on the noisy Kerry
+Park solve are marginal far points still settling as directions when the three
+rounds end (eight rounds leave 8), and the median residual rises with them
+because a bearing explains a marginal point's pixels slightly worse than a
+point does. No input produced a `NaN` point, and the count of observations
+under 4 px is within one of the floor's, or higher, on every input.
 
 ### Ranged points: a direction at a distance
 
@@ -894,17 +1047,48 @@ directions keeps its translation live, which is what a surveyed landmark is for.
 - **Parity**: on a fixture mixing finite points, directions and protected
   observations, an absent `constraints` and an all-free one under a default
   policy agree on every output field to the bit (poses, points, focal,
-  residual norms and the reported representation) with a wild
-  `noise_floor_scale` that `cross = false` must ignore.
+  residual norms and the reported representation), and neither reports a
+  crossing round.
 - **The ranged Jacobian**: the analytic blocks of every observation, assembled
   into a dense Jacobian, match a central difference of the whole residual
   vector on a small ranged scene, with the reference image apart from the
   observers, among them, and as the mean of two.
 - **Crossing, both directions**: a near cloud started at infinity comes back
-  finite at its true positions, and a far track started finite comes back as a
-  unit direction, with the reported representation matching the row.
-- **The noise floor**: the same track is finite at one `noise_floor_scale` and
-  a bearing at twice it, and finite again when the focal doubles.
+  finite at its true positions, and a far track started finite in a capture
+  with a third of a pixel of noise comes back as a unit direction, with the
+  reported representation matching the row and one crossing counted. On exact
+  pixels the measured level is the keypoint resolution and any parallax is a
+  depth, so the far case needs the noise.
+- **The boundary is the measured noise**: over ten cameras and 300 points, the
+  same track 3,000 units out is finite with 0.09 px of noise and a bearing with
+  0.76 px, from either starting representation, and the measured level follows
+  the noise put in.
+- **A crossing round, by hand**: with no iterations and no trim, so the state
+  the first re-estimation reads is the input, its level is the gated RMS of the
+  finite residuals computed by hand (a 40 px mismatch is the one outlier), and
+  every verdict and bearing is that of `bearing_score` and `is_finite` on rays
+  `observed_ray` builds through each image's own camera, over two cameras of
+  different focal length.
+- **No finite observation, no crossing**: a directions-only solve reports no
+  level and changes no representation.
+- **No oscillation**: across distances whose score runs from about 60 to about
+  8 at the measured level, from both starting representations, over six rounds,
+  a far track crosses at the first re-estimation or not at all.
+- **A rough start**: from rotations perturbed by up to 0.6° and two
+  iterations a round, the first re-estimation measures more than 1.5 times the
+  level of the last, every near point ends finite, the far tracks end
+  directions, nothing is `NaN`, and the last re-estimation changes nothing.
+- **An unconverged round demotes, and later rounds restore**: from rotations
+  perturbed by up to about 6° about each axis, translations by up to 0.2 units
+  along each axis, and three iterations a round, the first re-estimation
+  measures more than five times the level of the last and makes at least 25
+  points directions (its `to_direction`), which the thirty points 250 to 395
+  units out supply, though their rays carry a depth at the converged level;
+  the rounds after it make them finite again, and every one ends finite. With
+  60 iterations a round no re-estimation makes any point a direction. A fitted
+  bearing behind a camera and a rescue's survivors are covered by the rule's
+  own tests ([triangulation-rules.md](../reconstruction/triangulation-rules.md)
+  § "Testing").
 - **Held points**: their coordinates come back to the bit while free points
   move, and their observations still carry residuals; an image whose only
   finite evidence is one held point solves its translation, where the same

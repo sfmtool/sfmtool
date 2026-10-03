@@ -16,7 +16,11 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.analysis import triangulate_batch
+from sfmtool._sfmtool.analysis import (
+    bearing_score_batch,
+    observed_rays,
+    triangulate_batch,
+)
 from sfmtool._sfmtool.geometry import CameraIntrinsics
 from sfmtool._sfmtool.reconstruction import VERDICT_CODES, triangulate_points
 
@@ -27,6 +31,7 @@ BEHIND = VERDICT_CODES["behind"]
 OVER_BAR = VERDICT_CODES["over_bar"]
 FEW = VERDICT_CODES["few"]
 FINITE_PRUNED = VERDICT_CODES["finite_pruned"]
+NO_DEPTH = VERDICT_CODES["no_depth"]
 
 #: Identity world-to-camera rotation, WXYZ.
 IDENTITY_Q = np.array([1.0, 0.0, 0.0, 0.0])
@@ -289,6 +294,7 @@ def test_the_verdict_code_table_is_exposed():
         "few": 5,
         "finite_pruned": 6,
         "ranged": 7,
+        "no_depth": 8,
     }
 
 
@@ -569,3 +575,90 @@ def test_the_distance_rule_is_shape_checked():
         _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], distance=np.zeros((1, 3)))
     with pytest.raises(ValueError, match="one row per track"):
         _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], distance=np.full((2, 4), np.nan))
+
+
+# ── The likelihood rule ─────────────────────────────────────────────────────
+
+
+def _likelihood_scene():
+    """Six cameras 0.2 apart on the x axis and tracks 5, 300 and 5000 units
+    out, each seen by every camera with a third of a pixel of noise."""
+    cam = _cam()
+    centres = np.array([[0.2 * i, 0.0, 0.0] for i in range(6)])
+    world = np.array([[0.3, -0.2, -d] for d in (5.0, 300.0, 5000.0)])
+    pairs = [(i, p) for p in range(3) for i in range(6)]
+    uv, oi, op = _observations(cam, centres, world, pairs)
+    k = np.arange(len(uv), dtype=float)
+    uv = uv + 0.3 * np.stack([np.sin(1.7 * k), np.cos(2.3 * k)], axis=1)
+    return cam, centres, uv, oi, op
+
+
+def test_the_likelihood_rule_is_the_point_or_bearing_test():
+    cam, centres, uv, oi, op = _likelihood_scene()
+    quats, trans = _views(centres)
+    sigma = 0.3
+    out = triangulate_points(
+        uv=uv,
+        obs_image=oi,
+        obs_point=op,
+        camera=cam,
+        quaternions_wxyz=quats,
+        translations=trans,
+        n_points=3,
+        likelihood_sigma_px=sigma,
+        cheirality=True,
+    )
+    rays = observed_rays(cam, quats[oi.astype(np.int64)], uv, sigma)
+    scores = bearing_score_batch(
+        rays["dirs"],
+        centres[oi.astype(np.int64)],
+        np.array([0, 6, 12, 18], np.int64),
+        rays["weights"],
+    )
+    want = np.where(scores["is_finite"], FINITE, NO_DEPTH)
+    npt.assert_array_equal(out["verdicts"], want)
+    assert out["verdicts"][0] == FINITE and out["verdicts"][2] == NO_DEPTH
+    bearings = ~scores["is_finite"]
+    npt.assert_allclose(
+        out["xyzw"][bearings, :3], scores["bearing"][bearings], atol=1e-12
+    )
+    assert (out["xyzw"][bearings, 3] == 0.0).all()
+    assert out["census"]["no_depth"] == int(bearings.sum())
+
+
+def test_the_likelihood_threshold_moves_the_verdict():
+    cam, centres, uv, oi, op = _likelihood_scene()
+    quats, trans = _views(centres)
+    kw = dict(
+        uv=uv,
+        obs_image=oi,
+        obs_point=op,
+        camera=cam,
+        quaternions_wxyz=quats,
+        translations=trans,
+        n_points=3,
+        likelihood_sigma_px=0.3,
+    )
+    assert triangulate_points(likelihood_threshold=0.0, **kw)["census"]["no_depth"] == 0
+    assert (
+        triangulate_points(likelihood_threshold=np.inf, **kw)["census"]["no_depth"] == 3
+    )
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, np.inf, np.nan])
+def test_the_likelihood_noise_level_is_validated(bad):
+    cam = _cam()
+    with pytest.raises(ValueError, match="likelihood_sigma_px"):
+        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], likelihood_sigma_px=bad)
+
+
+def test_the_likelihood_rule_refuses_the_ray_form():
+    dirs = np.array([[0.0, 0.0, -1.0], [0.1, 0.0, -1.0]])
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    with pytest.raises(ValueError, match="observation form"):
+        triangulate_points(
+            dirs=dirs,
+            centres=PAIR,
+            offsets=np.array([0, 2], np.int64),
+            likelihood_sigma_px=0.5,
+        )

@@ -12,7 +12,8 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::reconstruction::triangulation::{
     triangulate_points_from_observations, triangulate_points_from_rays, FewObservations,
-    ObservationSet, PointDistance, PointRules, PointVerdict, RaySet,
+    LikelihoodRule, ObservationSet, PointDistance, PointRules, PointVerdict, RaySet,
+    DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
 
 use crate::geometry::PyCameraIntrinsics;
@@ -28,6 +29,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     d.set_item("few", PointVerdict::Few.code())?;
     d.set_item("finite_pruned", PointVerdict::FinitePruned.code())?;
     d.set_item("ranged", PointVerdict::Ranged.code())?;
+    d.set_item("no_depth", PointVerdict::NoDepth.code())?;
     Ok(d)
 }
 
@@ -67,6 +69,14 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 ///         own poses first. Needs the observation form, which is where the
 ///         pixels are.
 ///     floor_rad: Angular floor in radians, or None for the rule off.
+///     likelihood_sigma_px: The per-axis pixel noise the likelihood rule
+///         weights each ray by, or None for the rule off. A track whose rays
+///         the point-or-bearing test finds no depth in at that noise level, and
+///         whose fitted bearing is in front of every camera observing it, is
+///         ``no_depth`` and comes back as that bearing. Needs the observation
+///         form, since a ray's weight comes from its pixel through the camera.
+///     likelihood_threshold: The score a track has to reach to be finite
+///         under the likelihood rule (default 25.0).
 ///     cheirality: Demote a point behind any observing camera (default False).
 ///     prune_behind: Read that demotion per observation (default False). Where
 ///         the observations seeing the point behind them are a strict minority,
@@ -100,6 +110,8 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     marks=None,
     distance=None,
     floor_rad=None,
+    likelihood_sigma_px=None,
+    likelihood_threshold=DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
     cheirality=false,
     prune_behind=false,
     bar_px=None,
@@ -121,6 +133,8 @@ pub fn triangulate_points<'py>(
     marks: Option<PyReadonlyArray1<'py, bool>>,
     distance: Option<PyReadonlyArray2<'py, f64>>,
     floor_rad: Option<f64>,
+    likelihood_sigma_px: Option<f64>,
+    likelihood_threshold: f64,
     cheirality: bool,
     prune_behind: bool,
     bar_px: Option<f64>,
@@ -150,8 +164,25 @@ pub fn triangulate_points<'py>(
         }
         None => None,
     };
+    if let Some(s) = likelihood_sigma_px {
+        if !(s.is_finite() && s > 0.0) {
+            return Err(PyValueError::new_err(
+                "likelihood_sigma_px must be finite and positive",
+            ));
+        }
+    }
+    if likelihood_threshold.is_nan() {
+        return Err(PyValueError::new_err(
+            "likelihood_threshold must not be NaN",
+        ));
+    }
+    let likelihood = likelihood_sigma_px.map(|sigma_px| LikelihoodRule {
+        sigma_px,
+        threshold: likelihood_threshold,
+    });
     let rules = PointRules {
         floor_rad,
+        likelihood,
         cheirality,
         prune_behind,
         bar_px,
@@ -211,6 +242,12 @@ pub fn triangulate_points<'py>(
             return Err(PyValueError::new_err(
                 "distance needs the observation form: the rule minimizes a reprojection \
                  residual and the ray form carries no pixels",
+            ));
+        }
+        if likelihood.is_some() {
+            return Err(PyValueError::new_err(
+                "likelihood_sigma_px needs the observation form: a ray's noise weight \
+                 comes from its pixel through the camera, and the ray form carries no pixels",
             ));
         }
         let dd = to_contiguous!(d);
@@ -353,6 +390,7 @@ pub fn triangulate_points<'py>(
     census.set_item("marked", c.marked)?;
     census.set_item("ranged", c.ranged)?;
     census.set_item("thin", c.thin)?;
+    census.set_item("no_depth", c.no_depth)?;
     census.set_item("behind", c.behind)?;
     census.set_item("over_bar", c.over_bar)?;
     census.set_item("few", c.few)?;

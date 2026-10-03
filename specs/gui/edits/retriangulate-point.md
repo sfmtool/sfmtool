@@ -157,9 +157,9 @@ The point entry's tail is the core operation's **status** for that point
 held once in `sfmtool-core` for the Action Log and the wire. First the verdict,
 in the words `PointVerdict::label` holds: `finite`, `finite, on the observations
 that agree`, `at infinity`, `at its held distance`, `too thin to place, so at
-infinity`, `behind a camera that sees it, so at infinity`, `past the
-reprojection bar, so at infinity`, `too few observations to place, so left where
-it was`. A point solved on the observations that agree then says how many it
+infinity`, `no depth in its rays at the noise level, so at infinity`, `behind a
+camera that sees it, so at infinity`, `past the reprojection bar, so at
+infinity`, `too few observations to place, so left where it was`. A point solved on the observations that agree then says how many it
 left out -- `(1 observation that sees it behind was left out)` -- and a point
 whose answer is the geometry it already had says `unchanged`. Last, where the
 point was rewritten, the index it took: `now point 5310`. A point that was not
@@ -171,18 +171,25 @@ the entry learns where to find the point next.
 The whole-value entry's tail is what the run did, in the same shape every other
 bulk edit reports, each count read off the per-point statuses: how many of how
 many points moved, how many crossed to or from infinity, how many each rule
-turned into a direction (`too thin to place`, `behind a camera that sees them`,
-`past the reprojection bar`), how many were placed on the observations that
-agree, how many were left where they were for too few observations, how many
-were held, and the median distance a point that stayed finite travelled. A count
-of zero is left out:
+turned into a direction (`too thin to place`, `with no depth in their rays at
+the noise level`, `behind a camera that sees them`, `past the reprojection
+bar`), how many were placed on the observations that agree, how many were left
+where they were for too few observations, how many were held, and the median
+distance a point that stayed finite travelled. A count of zero is left out:
 
 ```text
-Retriangulated seoul_bull: 4 of 6 points moved, 2 crossed to or from infinity,
-1 too thin to place, 1 behind a camera that sees them, 1 placed on the
-observations that agree, 1 left where they were for too few observations,
-1 held, median shift 1.0000 (v3 → v4)
+Retriangulated seoul_bull: 6 of 8 points moved, 4 crossed to or from infinity,
+1 too thin to place, 2 with no depth in their rays at the noise level, 1 behind
+a camera that sees them, 1 placed on the observations that agree, 1 left where
+they were for too few observations, 1 held, median shift 1.0000 (v3 → v4)
 ```
+
+The words for each rule that makes a direction come from one exhaustive match
+over `PointVerdict` in `edits.rs`, so a verdict added to the core does not
+compile until the sentence has words for it. Both entries run the operation at
+its defaults, where the angular floor, the likelihood rule and the reprojection
+bar are off, so of those rules only cheirality turns points into directions
+here; the sentence still names every rule, for the day an entry passes others.
 
 A refusal pushes no version and writes one failed entry, in the state's own
 words, which are the words the greyed menu entry carries.
@@ -206,7 +213,8 @@ what is tested here is the wrapping.
 - **A point the answer leaves as it was says so**: retriangulating a settled
   point again reads `finite, unchanged` and names no new index.
 - **The whole-value entry counts each kind of status**: over a report holding
-  one point of each kind, the sentence names every count and leaves out none.
+  one point of each kind, two of them made directions by the likelihood rule,
+  the sentence names every count and leaves out none.
 - **Undo puts the point back**, byte for byte.
 - **The bulk edit pushes one version with a new base**, the same point count,
   the label `Retriangulated <node>`, a point pulled back toward its truth, a
@@ -247,5 +255,6 @@ what is tested here is the wrapping.
   should not quietly cost a reviewer their structure. Deleting is its own
   gesture.
 - **A per-point choice of rules.** The options exist on the core function, and
-  both entries pass its defaults. A dialog for the angular floor and the
-  reprojection bar is a thing to add when somebody wants one, not before.
+  both entries pass its defaults. A dialog for the angular floor, the
+  likelihood rule's noise level and the reprojection bar is a thing to add when
+  somebody wants one, not before.

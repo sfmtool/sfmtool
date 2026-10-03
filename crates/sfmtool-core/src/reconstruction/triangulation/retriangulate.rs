@@ -19,8 +19,8 @@ use nalgebra::Point3;
 use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
 
 use super::points::{
-    triangulate_points_through_cameras, FewObservations, ObservationSet, PointCensus,
-    PointDistance, PointRules, PointVerdict, TriangulatedPoints,
+    triangulate_points_through_cameras, FewObservations, LikelihoodRule, ObservationSet,
+    PointCensus, PointDistance, PointRules, PointVerdict, TriangulatedPoints,
 };
 use crate::numeric::median_in_place;
 use crate::progress::{Cancelled, Progress};
@@ -59,6 +59,11 @@ pub struct RetriangulateOptions {
     /// which is the default, and off means no free point crosses between the
     /// two representations on the rays' account alone.
     pub floor_rad: Option<f64>,
+    /// The likelihood rule: a point whose rays ask for no depth at the rule's
+    /// noise level becomes the direction the point-or-bearing test fits. `None`
+    /// is off, which is the default; a caller that wants it states the noise
+    /// level, such as the value's own measured reprojection noise.
+    pub likelihood: Option<LikelihoodRule>,
     /// Demote a point that solves behind a camera observing it. On by default:
     /// a point the cameras that see it stand in front of is not a place in the
     /// scene, and the direction its rays agree on is the most its observations
@@ -78,6 +83,7 @@ impl Default for RetriangulateOptions {
     fn default() -> Self {
         Self {
             floor_rad: None,
+            likelihood: None,
             cheirality: true,
             prune_behind: true,
             bar_px: None,
@@ -92,6 +98,7 @@ impl RetriangulateOptions {
         PointRules {
             distance,
             floor_rad: self.floor_rad,
+            likelihood: self.likelihood,
             cheirality: self.cheirality,
             prune_behind: self.prune_behind,
             bar_px: self.bar_px,
@@ -222,8 +229,11 @@ pub enum RetriangulateOutcome {
         /// [`PointVerdict::Finite`], [`PointVerdict::FinitePruned`] and
         /// [`PointVerdict::Ranged`] at a finite distance the answer is a
         /// position; under [`PointVerdict::Marked`], [`PointVerdict::Thin`],
-        /// [`PointVerdict::Behind`], [`PointVerdict::OverBar`] and
-        /// [`PointVerdict::Ranged`] at an infinite distance it is a direction.
+        /// [`PointVerdict::NoDepth`], [`PointVerdict::Behind`],
+        /// [`PointVerdict::OverBar`] and [`PointVerdict::Ranged`] at an infinite
+        /// distance it is a direction. Under [`PointVerdict::NoDepth`] the
+        /// direction is the bearing the point-or-bearing test fits, not the
+        /// mean of the rays.
         verdict: PointVerdict,
         /// Observations the cheirality prune left out of the solve because they
         /// see the point behind them. Nonzero only under
@@ -416,8 +426,9 @@ impl RetriangulateReport {
 /// comes back absent; its status is [`RetriangulateOutcome::Kept`] rather than
 /// a `NaN` written into the value. Every other verdict is written: a point the
 /// floor calls thin, or cheirality refuses, or the bar turns down, becomes the
-/// direction its rays agree on, and the patch frame of a point that moved is
-/// rescaled so the patch keeps the angular size it had.
+/// direction its rays agree on; a point the likelihood rule finds no depth in
+/// becomes the bearing the point-or-bearing test fits; and the patch frame of a
+/// point that moved is rescaled so the patch keeps the angular size it had.
 ///
 /// **The report says what happened to every point asked about.**
 /// [`RetriangulateReport::points`] holds one [`RetriangulatedPoint`] per point,
@@ -521,7 +532,6 @@ pub fn retriangulate_points(
             },
             Some(&gathered.marks),
             options.rules(gathered.distance.as_deref()),
-            None,
         )
     };
     progress.check_cancel()?;

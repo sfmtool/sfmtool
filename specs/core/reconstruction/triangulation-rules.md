@@ -16,7 +16,8 @@ caller that holds a whole value rather than arrays, and that one is a
 The midpoint solve answers one question, where the rays come closest, and
 reports how well the depth was observed. It does not say whether that answer
 should be used. Whether a track with parallel rays is a bearing or a defect,
-whether a point behind a camera is kept for a later trim or demoted now,
+whether its rays ask for a depth at all at the noise level they were measured
+at, whether a point behind a camera is kept for a later trim or demoted now,
 whether a single observation still carries a direction, and whether a fresh
 estimate has to reproject inside a bound before it counts: these are the
 caller's rules, and every caller in the codebase had written its own copy of
@@ -42,11 +43,11 @@ Two forms, both CSR over tracks in the order the caller supplies:
   `triangulate_points_from_observations` takes one camera that every image was
   taken through. `triangulate_points_through_cameras` (crate-internal) takes a
   camera table and, per image, the index of the camera that took it, so each
-  observation's ray is cast, and its reprojection read by the `bar` and
-  `distance` rules, through its own image's camera; it also takes an optional
-  angular floor per track that replaces `floor`. Both are one body: the
-  one-camera form is the table form with a table of one and every image on it,
-  so the arithmetic, and the bytes, are the same.
+  observation's ray is cast, its reprojection read by the `bar` and
+  `distance` rules, and its `likelihood` noise weight taken, through its own
+  image's camera. Both are one body: the one-camera form is the table form
+  with a table of one and every image on it, so the arithmetic, and the
+  bytes, are the same.
 
 Per track the caller may also pass an incoming state: a position and a flag
 saying the point is currently a direction. The state is read only by the
@@ -66,22 +67,22 @@ nothing else.
 | **distance** | a distance and an origin per track | a track the caller holds at a known distance from a known world point keeps that distance: only its direction is read from the observations, and the estimate is that direction carried at that distance. `+∞` is a direction. Off, and per track where the distance is not strictly positive, nothing is held. |
 | **marks** | incoming direction flags | a track flagged as a direction is not solved: its estimate is the normalized mean of its rays. Off, every track is solved. |
 | **floor** | an angle | a track whose widest ray pair subtends less than the floor is THIN and becomes a bearing (the normalized mean ray). The pair angle is the minimum cosine over every ray pair of the track, read as a pairwise statistic and not from the solve's spectrum, so that a track's verdict depends on its rays alone and not on the count of them. Off, no track is thin. |
+| **likelihood** | a pixel noise level and a threshold | a track whose rays the point-or-bearing test finds no depth in at that noise level has NO DEPTH and becomes the bearing the test fits, where that bearing is in front of every camera observing the track. See "The likelihood rule" below. Requires the observation form. Off, no track is decided on the test. |
 | **cheirality** | on / off | a solved point that lands behind any camera that observes it (non-positive depth along that camera's ray) is BEHIND and becomes a bearing. Off, the point is kept and the flag is reported. |
 | **prune** | on / off | how the cheirality failure is read: per observation rather than per track. See below. Off, one observation behind the point decides the whole track. |
 | **bar** | a pixel bound | a solved point that survives the rules above is reprojected through the camera at the same geometry; when the median finite residual over its observations exceeds the bound the track is OVER THE BAR and becomes a bearing. Requires the observation form. Off, no reprojection is read. |
 
-Bundle adjustment's crossing reads the `floor`; deciding that crossing on the
-point-or-bearing likelihood-ratio test instead is proposed in the amendment
-draft [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
-and the `floor` stays for callers that want a pure geometric cut.
+Bundle adjustment's crossing reads the `likelihood` rule; the `floor` stays for
+callers that want a pure geometric cut, such as demotion in a stored
+reconstruction and the admission of new tracks.
 
 Bearings are unit vectors with the point flagged as a direction. The
 fallback for a track with no usable ray at all, and for a mean ray whose norm
 is zero or not finite, is the camera convention's forward direction.
 
 The rules are read in the order of the table. A track leaves at the first
-rule that decides it, so a thin track is never solved, and a behind track is
-never reprojected.
+rule that decides it, so a thin track is never scored, a track with no depth is
+never solved, and a behind track is never reprojected.
 
 `few` heads the order because every rule under it needs at least two rays to
 say anything: the floor needs a pair, cheirality and the bar need a solve, and
@@ -130,6 +131,67 @@ The rule reads pixels, so it needs the observation form. Asking for it on a ray
 set is refused rather than accepted and ignored, the way `prune_behind` with
 `cheirality` off is.
 
+## The likelihood rule
+
+The `floor` asks whether a track's rays open past an angle. The `likelihood`
+rule asks the question the angle stands in for: does giving the track a depth
+explain where it was seen better than a direction alone does, by more than the
+measurement noise could explain? That is the point-or-bearing test of
+[batch-triangulation-api.md](batch-triangulation-api.md) § "Point or bearing",
+and the rule is that test read at the caller's noise level.
+
+```rust
+pub struct LikelihoodRule {
+    pub sigma_px: f64,  // per-axis pixel noise the rays are weighted by
+    pub threshold: f64, // the score a track has to reach to be finite
+}
+impl LikelihoodRule {
+    /// At DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD.
+    pub fn at(sigma_px: f64) -> Self;
+}
+
+let rules = PointRules {
+    likelihood: Some(LikelihoodRule::at(0.4)),
+    cheirality: true,
+    ..Default::default()
+};
+```
+
+Per track, each usable observation's ray and its 2×3 noise weight come from
+`observed_ray` through the camera of the observing image, its rotation and its
+pixel, at `sigma_px`, and the track is scored with `bearing_score` over those
+rays and the observing images' centres. Where `is_finite` at `threshold` says
+no, and the score's bearing lies in front of every camera observing the track,
+the track's verdict is NO DEPTH and its estimate is that bearing: the
+eigenvector bearing the test fits, which weights each ray by its noise, rather
+than the plain mean ray the `floor` and `marks` return. Otherwise the rule says
+nothing and the track goes on to the solve, so a finite verdict is placed by
+the midpoint solve and read by the rules under it like any track.
+
+Two cases the rule leaves to those rules:
+
+- **A bearing behind a camera.** The sine residual cannot tell a ray from its
+  opposite, so a bearing can fit rays some of which point away from it. Such a
+  bearing describes no sighting from those cameras, and the rule does not store
+  it: the track goes to the solve, where `cheirality` reads the solved point as
+  it would with the rule off (BEHIND, and the mean ray, where the point is
+  behind a camera; finite where it is not). Reclassification makes the same
+  choice for a stored point
+  ([batch-triangulation-api.md](batch-triangulation-api.md) § "Consumers").
+- **Fewer than two weighted rays.** `observed_ray` declines a pixel outside the
+  camera model's domain, and a track left with fewer than two weighted rays has
+  no score. It goes to the solve, as with the rule off.
+
+The weight needs a pixel and a camera, which only the observation form
+carries: asking for the rule on a ray set is refused, as the `distance` rule
+is. The prune re-reads the rule over a rescued track's survivors, so a rescue
+whose surviving rays ask for no depth is refused like one inside the floor.
+
+The rule takes the noise level as given and does not measure it, because what
+it should be measured over depends on the caller: a stored reconstruction's
+own residuals (`SfmrReconstruction::reprojection_noise_px`), or the residuals
+a bundle adjustment's last round settled on.
+
 ## A cheirality failure read per observation
 
 The cheirality rule as written is a statement about the track: one observation
@@ -141,8 +203,9 @@ ray is non-positive, which is the test the solve already reports as the track's
 in-front flag, taken one observation at a time. Where that set is a strict
 minority of the track's usable observations, the failing observations are
 dropped, the survivors are solved again, and the rules are read once more over
-the reduced track: the floor over the surviving pair angles, cheirality over the
-new solve, and the bar over the surviving observations. A reduced track that
+the reduced track: the floor over the surviving pair angles, the likelihood rule
+over the surviving rays, cheirality over the new solve, and the bar over the
+surviving observations. A reduced track that
 clears all three is FINITE PRUNED, and the observations that were dropped are
 reported. Where any of them refuses, the track is the bearing the whole-track
 rule would have made it, with nothing dropped and nothing recorded, so a refused
@@ -173,7 +236,7 @@ not decide it either. That case is open.
 
 Per track the operation returns the estimate, the direction flag, and one
 verdict: `finite`, `marked`, `thin`, `behind`, `over_bar`, `few`,
-`finite_pruned`, `ranged`. A `ranged` track's estimate is a position where its
+`finite_pruned`, `ranged`, `no_depth`. A `ranged` track's estimate is a position where its
 distance is finite and a bearing where it is infinite, which is the one verdict
 that does not fix the flag on its own. Alongside, a census of the counts per verdict, the number of
 tracks seen, and the median triangulation angle (the widest pair angle) over the
@@ -208,11 +271,12 @@ one.
   operation, decides what a behind point means.
 
   With the adjustment's free points crossing representations, the same call
-  reads `marks` off for those tracks and turns on the `floor` at the round's
-  noise-floor angle and `cheirality`, so every free track's representation is
-  re-decided from its own rays; the adjustment carries a ranged point through
-  the `distance` rule at the origin its reference resolves to at the round's
-  poses, and holds a held point's estimate back. See "Point constraints" in
+  reads `marks` off for those tracks and turns on the `likelihood` rule at the
+  noise level the previous round's residuals measure, and `cheirality`, so
+  every free track's representation is re-decided from its own rays; the
+  adjustment carries a ranged point through the `distance` rule at the origin
+  its reference resolves to at the round's poses, and holds a held point's
+  estimate back. See "Free points: crossing between representations" in
   [bundle-adjustment.md](../geometry/bundle-adjustment.md).
 
   The adjustment holds no copy of the arithmetic: its round is this call. The
@@ -271,10 +335,10 @@ the addition set's derived indexes per point, so it is for a handful.
 `RetriangulateOptions` is the per-track rules minus the two a reconstruction
 answers for itself: the incoming direction mark is the point's own `w`, and the
 distance rule is the value's own constraint columns. Its default is the floor
-off, cheirality and its per-observation prune on, and no reprojection bar --
-with the floor off no free point crosses between a position and a direction on
-the rays' account alone, and a caller that wants that crossing states the angle
-it means.
+and the likelihood rule off, cheirality and its per-observation prune on, and no
+reprojection bar -- with both off no free point crosses between a position and a
+direction on the rays' account alone, and a caller that wants that crossing
+states the angle, or the noise level, it means.
 
 **A point's constraint is honoured.** A held point is never read: the value owns
 its coordinate, so it is not in the solve and not in the answer, and a call over
@@ -289,9 +353,11 @@ point fewer than two of whose observations state a usable ray, which comes back
 absent: its status says it was kept rather than a `NaN` being written, because
 saying nothing is not the same as saying a point is nowhere. Every other
 verdict is written. A point the floor calls thin, or cheirality refuses, or the
-bar turns down becomes the direction its rays agree on, and the patch frame of a
-point that moved is rescaled so the patch keeps the angular size it had, by the
-same ratio the adjustment and the camera move resize theirs by.
+bar turns down, becomes the direction its rays agree on; a point the likelihood
+rule finds no depth in becomes the bearing the point-or-bearing test fits; and
+the patch frame of a point that moved is rescaled so the patch keeps the angular
+size it had, by the same ratio the adjustment and the camera move resize theirs
+by.
 
 ### The report
 
@@ -336,8 +402,9 @@ position stays a position or a direction stays a direction, with the distance a
 position travelled (a direction's change is a turn and carries none); and
 `Crossed` where a position becomes a direction or a direction a position. The
 verdict says what the answer is: `finite`, `finite_pruned` and `ranged` at a
-finite distance are positions, and `marked`, `thin`, `behind`, `over_bar` and
-`ranged` at an infinite distance are directions. `pruned` is how many of the
+finite distance are positions, and `marked`, `thin`, `no_depth`, `behind`,
+`over_bar` and `ranged` at an infinite distance are directions; a `no_depth`
+direction is the bearing the likelihood rule's test fits. `pruned` is how many of the
 point's observations the cheirality prune left out of its solve, nonzero only
 under `finite_pruned`; the observations stay on the track, since leaving them
 out of a solve is not deleting them.
@@ -411,7 +478,13 @@ either memory order and returned C-contiguous.
 `prune_behind` with `cheirality` off is refused rather than accepted and
 ignored: it names a reading of a rule the call has turned off. The `distance`
 rule on a ray set is refused the same way, since it reads pixels the ray form
-does not carry.
+does not carry, and so is the `likelihood` rule.
+
+The `likelihood` rule is two keywords, `likelihood_sigma_px` (`None`, the
+default, is the rule off; otherwise finite and positive) and
+`likelihood_threshold` (`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`, 25, by
+default): two rather than one tuple, because a caller changes the noise level
+far more often than the threshold.
 
 The `distance` keyword is an `(n_track, 4)` float64 array whose rows are
 `(distance, ox, oy, oz)`, with an all-`NaN` row for a track the rule says
@@ -446,6 +519,17 @@ The in-front flag comes back beside the verdicts, which is what makes
 - **Rule order.** A track that is both thin and behind reads `thin`; a track
   under the bar with a behind camera reads `behind`; a marked track is never
   solved even when its rays cross.
+- **Likelihood.** On tracks near and far, with pixel noise, the verdict and
+  the bearing are those of `bearing_score` and `is_finite` called by hand on the
+  rays `observed_ray` builds; a threshold of 0 finds a depth in every track and
+  an infinite one in none; a marked track and a thin one are decided before the
+  rule; the rule on a ray set is refused. Two cameras facing each other whose
+  nearly opposite rays cross behind one of them give a bearing verdict whose
+  bearing is behind a camera: the track is not `no_depth` but goes to the solve
+  and is `behind`. A track whose third ray crosses the other two behind its
+  camera is rescued by the prune with the rule off, and with it on the two
+  survivors, 0.01 apart and 50 units out, have no depth, so the rescue is
+  refused and nothing is pruned.
 - **Few.** One usable ray: `bearing` returns that ray; `absent` returns NaN.
   No usable ray: the fallback direction.
 - **Floor edge.** A pair exactly at the floor is not thin (strict comparison
@@ -485,8 +569,8 @@ The in-front flag comes back beside the verdicts, which is what makes
   are each their own refusal, and a `Progress` already cancelled stops the call
   before it writes.
 - **Statuses.** Every status kind is reached: `Held`, `Kept`, and `Solved` under
-  `finite`, `finite_pruned`, `marked`, `ranged`, `thin`, `behind` and
-  `over_bar`, with each of `Unchanged`, `Moved` with and without a distance, and
+  `finite`, `finite_pruned`, `marked`, `ranged`, `thin`, `no_depth`, `behind`
+  and `over_bar`, with each of `Unchanged`, `Moved` with and without a distance, and
   `Crossed`. The `finite_pruned` and `behind` cases add a fourth image beyond
   the points, looking away from them, whose one sighting of a point lies on the
   backward extension of a ray through its truth: with the prune on that
@@ -507,5 +591,17 @@ The in-front flag comes back beside the verdicts, which is what makes
   tracks on the truth and every track with a fisheye observation off it.
   A ranged point seen through the fisheye keeps its distance and lands on the
   truth, and under the all-pinhole table it keeps its distance and misses.
-  A camera the table holds but no image names changes no point and no field
-  of the report.
+  Under the `likelihood` rule at a fifth of a pixel, a track seen through both
+  cameras from far beyond the arc has no depth and becomes a bearing within
+  `1e-5` rad of its true direction, while the near tracks stay finite on the
+  truth; its status is `Solved` under `no_depth` with the change `Crossed`, the
+  near ones' are `finite` and `Moved`, and the census and the counts agree with
+  them. Named alone under `These`, the far track is rewritten to the same
+  bearing, takes a new index, and reports the same status. Under the
+  all-pinhole table that bearing is lost. A track seen
+  through the fisheye alone, far enough out that its verdict changes between
+  0.15 and 0.25 px, is finite at the first and a direction at the second,
+  which holds only when each ray's noise weight is taken through the fisheye
+  that took it: weighted through the pinhole's larger focal, its rays claim
+  about 2.8 times the depth evidence and it stays finite. A camera the table
+  holds but no image names changes no point and no field of the report.

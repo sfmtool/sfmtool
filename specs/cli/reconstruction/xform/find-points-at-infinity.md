@@ -384,8 +384,9 @@ What the numbers say:
   kerry_park the 239 finite verdicts, of which 238 could be placed, are
   marginal: 0.645 px against 0.327, with the effect on
   `σ` above. Whether a quality gate could keep the consistent finite
-  candidates is an open question of the
-  [amendment draft](../../../drafts/point-or-bearing-likelihood-ratio.md).
+  candidates is an open question of
+  [batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md)
+  § "Open questions".
 - **A track with a short baseline is appended as a bearing.** When the
   observing cameras are too close together to tell a point at the capture's own
   scale from infinity (`resolvable_distance` under the camera extents, at `σ`

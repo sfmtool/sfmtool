@@ -1,372 +1,104 @@
-# Point or Bearing by Likelihood Ratio
+# Point or Bearing by Likelihood Ratio: Inverse-Depth Free Points
 
-**Status:** Draft. Proposes moving the four rules that decide whether a track is
-a finite point or a bearing onto one likelihood-ratio test. The test's core
-primitives exist and are specified in
+**Status:** Draft. Proposes solving bundle adjustment's free points in inverse
+depth, so that whether a track is a finite point or a bearing becomes a storage
+decision at the end of the solve rather than a representation the solve carries
+between rounds. Everything else this draft once proposed is built and specified
+in the standing specs: the point-or-bearing likelihood-ratio test, its theory
+and the measured noise level in
 [core/reconstruction/batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
-§ "Point or bearing", as are the measured noise level, the test over a
-reconstruction's points and the Python bindings. The reports that print the
-test beside `inverse_depth_z` are specified in
-[cli/reconstruction/analyze-command.md](../cli/reconstruction/analyze-command.md)
-§ "Depth Reliability" and
-[cli/reconstruction/inspect-command.md](../cli/reconstruction/inspect-command.md).
-Reclassification (`classify_points_at_infinity`), discovery
-(`find_points_at_infinity`) and the track bench (`classify_track_rays`) decide
-on the test, and how σ is measured is settled; all are in the standing spec
-(§ "Consumers" and § "The measured noise level"), with discovery's interface
-and the measurements behind its choices in
-[cli/reconstruction/xform/find-points-at-infinity.md](../cli/reconstruction/xform/find-points-at-infinity.md)
-and the bench's in
-[core/bench/editable-track.md](../core/bench/editable-track.md) § "Finite
-points and bearings". The inverse-depth z rule, its pre-filter and its noise
-floor are retired; `inverse_depth_z` stays as a diagnostic. This draft covers
-what remains: bundle adjustment. Amends
-[core/reconstruction/triangulation-rules.md](../core/reconstruction/triangulation-rules.md)
-(the `floor` rule) and
+§ "Point or bearing" and § "The measured noise level"; reclassification,
+discovery, the bench and the reports, which decide on it, in the same spec's
+§ "Consumers"; and bundle adjustment's crossing between rounds, which decides
+on it at the noise level each round measures, in
 [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md)
-(§ "Free points: crossing between representations"). Decided: the statistic, the split between
-deciding and placing, the order of the steps, and σ for a stored
-reconstruction. Not decided: the default threshold and σ in bundle
-adjustment (see "Open questions").
+§ "Free points: crossing between representations" and the `likelihood` rule of
+[core/reconstruction/triangulation-rules.md](../core/reconstruction/triangulation-rules.md).
+Amends bundle-adjustment.md.
 
 ## Purpose
 
-A track in a reconstruction is stored either as a finite point (`w = 1`) or as
-a bearing, a direction with no depth (`w = 0`). Deciding which one to store is a
-question about the photographs: does giving the track a depth explain where it
-was seen better than a direction alone does, by more than measurement noise
-could explain? This draft proposes answering that question directly. Fit both
-models to the track's observations, measure how much the extra depth parameter
-reduces the residual, and compare that reduction with what noise alone would
-produce. That comparison is a likelihood-ratio test between two nested models.
-It is one number per track, it needs one noise level, and it is the same
-number whether it is read by a reclassification pass, by discovery, by the
-bench or inside bundle adjustment.
+A free point in bundle adjustment is a finite point (three Euclidean degrees of
+freedom) or a direction (two on the unit sphere), and it can change between the
+two only at an inter-round re-estimation, where the point-or-bearing test reads
+its rays at the geometry the last round settled on. That geometry was solved
+with the point in the representation it had, and the solve fits that
+representation: over ten cameras and 300 points with 0.76 px of noise, a track
+1,500 units out whose rays score 33 at the true poses scores 38 at the end of a
+solve that started it finite and 6 at the end of one that started it as a
+direction. On weaker structure the effect is larger: over six cameras and 40
+points, one round's solve bends the poses by up to half a degree to fit a far
+track as whichever of a point or a direction it was given, and the next
+re-estimation reads that bend back, so the track never crosses. A borderline
+track therefore keeps the representation it started with, and a marginal one
+needs several rounds to settle (on a Kerry Park solve with 1 px of keypoint
+noise, the points changing at each of the seven re-estimations of an
+eight-round schedule are 137, 39, 26, 14, 7, 6 and 7). A round that stops on its
+iteration budget far from convergence makes it worse: its inflated level makes
+points with a depth directions, the next round's solve bends the poses to fit
+them, and recovery waits for the level to fall (bundle-adjustment.md § "Free
+points: crossing between representations").
 
-## The problem
+Solving free points as `(u, ρ)` about a fixed anchor removes the choice from
+the solve: `ρ = 0` is a value the solve can reach, so a point moves between near
+and infinity within a round, and far points stay well-conditioned because the
+inverse depth is close to linear in the observations there. The representation
+the file stores becomes the verdict of `is_finite` at the end.
 
-### Four rules answer the same question differently
+## Proposal
 
-| Where | Rule before this draft | Reads |
-|---|---|---|
-| `classify_rays_at_infinity` (removed), used by the bench, `classify_points_at_infinity` and `find_points_at_infinity` until they moved to the test | condition number below `1e4` is finite; otherwise `resolvable_distance < finite_horizon` is indeterminate; otherwise `inverse_depth_z < 4` (or behind a camera) is a bearing | linear midpoint solve; per-ray noise `max(point error, 1 px) / f` |
-| The `floor` rule in [triangulation-rules.md](../core/reconstruction/triangulation-rules.md), used by bundle adjustment's crossing and by demotion | the widest ray pair subtending less than `θ_floor` is a bearing | pairwise ray angles; `θ_floor = noise_floor_scale · s / f` with `s` the stage's `loss_scale` |
-| `classify_track_rays` (before it moved to the test) | the z rule above, then overridden when the midpoint's RMS reprojection error is not under `0.8×` the mean bearing's (and by more than the noise floor), or the reverse | the midpoint point and the mean ray, neither fitted to minimise pixel error |
-| `COINCIDENT_CAMERA_FRACTION` in `classify_points_at_infinity` (removed with that pass's move) | observing cameras spanning under `1e-4` of the camera extent make the track a bearing | camera centres only |
-
-Each rule is a proxy for "does a depth explain the pixels". The bench's override
-exists because the z rule was seen to disagree with the pixels; its own comment
-notes that neither candidate it compares is fitted, so its `0.8` ratio has to
-cover the slack.
-
-### A measured case
-
-On the Kerry Park ground-truth candidate `tk117`, point `pt3d_a9665942_298`
-(10 views) is stored as a bearing. Fitting both models to its keypoints by
-minimising pixel error:
-
-| | Bearing | Finite point (515 units from the centroid of all cameras) |
-|---|---|---|
-| Mean / max reprojection error | 0.62 / 1.55 px | 0.16 / 0.32 px |
-| Sum of squared residuals | 6.53 px² | 0.37 px² |
-
-The finite point explains every view to a third of a pixel, so the photographs
-place the track at a depth. The z rule calls it a bearing, though. Its rays span
-about 1.2°, so the condition number is 33,532 and it skips the pre-filter. Its
-per-ray noise is the 1 px floor, which gives `z = 2.23` at the point fitted to
-the pixel residuals above, under the cutoff of 4 (`sfm analyze
---depth-reliability` reports 2.18, at the plain least-squares fit of the sine
-residuals, 511 units from the observing cameras' centroid).
-The reconstruction's measured per-axis noise is 0.216 px, so the floor overstates
-this track's noise roughly five-fold, and z by the same factor. The stored error
-that feeds `max(error, floor)` is also the bearing's own residual once the point
-has been demoted, so a demoted point stays demoted on a second pass.
-
-The same computation over all twelve bearings in that file, with σ = 0.216 px
-(the RMS per-axis residual over the 3,510 observations of finite points):
-
-| Point | Views | Finite distance (from all cameras' centroid) | SSE bearing → finite (px²) | Λ |
-|---|---|---|---|---|
-| 298 | 10 | 515 | 6.53 → 0.37 | 132 |
-| 294 | 21 | 1,078 | 4.90 → 1.02 | 84 |
-| 295 | 18 | 1,159 | 2.53 → 1.09 | 31 |
-| 269 | 7 | 2,810 | 0.89 → 0.23 | 14 |
-| 270 | 17 | 4,847 | 1.16 → 0.62 | 12 |
-| 153–157, 176, 268 | 21–26 | 4,600–13,000 | ≈1.0 → 0.5–1.1 | 1.3–9.5 |
-| *finite points 10, 300, 200, for scale* | 5–9 | 3–81 | | *2,762 to 485,654* |
-
-Λ here is from fits of both models to the pixel residuals through the camera
-model. Three bearings are clearly finite, seven are clearly bearings, and two sit
-between 10 and 25. Units are the file's own (it has no metric scale yet).
-`sfm analyze --depth-reliability` measures the distance from the centroid of
-the point's observing cameras instead, which gives 511, 1,076 and 1,160 for the
-first three.
-
-## The primitives
-
-`bearing_score` / `bearing_score_batch` decide: they fit the bearing in closed
-form and evaluate the score statistic for an inverse depth there, with no
-iteration. `fit_point_and_bearing` / `fit_point_and_bearing_batch` place: they
-run the iterative point fit and return Λ exactly. `is_finite` reads the verdict
-off a score against a threshold. Their interface, the reasons for its shape, the
-theory of the two nested models and the fit are in
-[batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
-§ "Point or bearing"; the sections below cover the measurements that motivate
-deciding on them and how each consumer moves.
-
-A consumer holding a reconstruction builds its rays with `track_rays` (or
-`observation_ray` for one sighting) from `(image, pixel)` observations, at the
-noise level `SfmrReconstruction::reprojection_noise_px` measures. The bench
-builds its uncommitted sightings' rays that way (with `observed_ray`, from each
-sighting's projected image) and calls the single-track functions on them, as
-discovery does the batch ones for its candidate tracks from `.sift` keypoints; the reports use `SfmrReconstruction::point_or_bearing_scores`, the
-same construction over stored points, and reclassification builds the stored
-points' rays with `track_rays` itself. All of these, and their Python bindings, are in the same
-spec (§ "The measured noise level", § "Over a reconstruction", § "Consumers"
-and § "Python bindings").
-
-## Theory
-
-### Three forms of one test
-
-A test of a nested parameter has three classical forms, and each is evaluated
-at a different place:
-
-| Form | Evaluated at | Here |
-|---|---|---|
-| **Wald** | the full model's fit | `inverse_depth_z`, today's rule: the fitted depth over its linearised standard deviation |
-| **Likelihood ratio** | both fits | Λ: needs the iterative point fit |
-| **Score** | the restricted model's fit only | `depth_score`: the gradient of the point model's cost with respect to ρ at the bearing, normalised by the Gauss-Newton curvature there |
-
-With the same σ the three agree asymptotically, and they differ in where their
-approximations are accurate. Wald linearises around the fitted depth, which is
-worst near infinity, where the depth's uncertainty is lopsided and the fitted
-depth is itself mostly noise. That is the regime where the decision is close.
-The score test linearises around ρ = 0, which is exactly that regime, and in
-inverse depth the point model is close to linear there. Measured on `tk117`
-with σ = 0.216 px, the score from `bearing_score` (sine residuals, per-ray
-weights from `observed_ray`; see "The noise weight per ray") against Λ from a
-full fit of both models to the pixel residuals through the camera model:
-
-| Point | Views | Score (`bearing_score`) | Λ (pixel residuals) |
-|---|---|---|---|
-| 154 | 26 | 1.33 | 1.32 |
-| 153, 155 | 25 | 4.19, 4.21 | 4.19, 4.21 |
-| 157 | 25 | 6.76 | 6.76 |
-| 268 | 26 | 7.94 | 7.95 |
-| 176 | 21 | 8.27 | 8.27 |
-| 156 | 24 | 9.47 | 9.46 |
-| 270 | 17 | 11.63 | 11.62 |
-| 269 | 7 | 14.34 | 14.34 |
-| 295 | 18 | 30.98 | 30.93 |
-| 294 | 21 | 83.30 | 83.23 |
-| 298 | 10 | 131.97 | 132.04 |
-| 10 (finite, 81 units) | 9 | 2,732 | 2,762 |
-| 50 (finite) | 13 | 79,711 | 85,331 |
-
-The two agree to the first decimal wherever the verdict is in question, and
-part for near points, where both are thousands of times the threshold. They
-part completely for tracks whose rays spread over a wide angle: there the
-bearing describes nothing, and the score at `ρ = 0` can be 0 while `Λ` is in
-the hundreds of thousands (tk117 point 91, 4 views over 105°: score 0, `Λ`
-635,749 from `fit_point_and_bearing` on the sine residuals, and 1,267,297
-from pixel residuals as in the table).
-So the decision needs the score for near-parallel rays and the midpoint bound
-below for wide ones, and both need only the bearing and one linear solve.
-
-### What the score replaces
-
-- **The condition-number pre-filter.** `Λ ≤ bearing_cost`, so a track whose
-  `bearing_cost` is under the threshold is a bearing whatever the point fit
-  would find. On `tk117` this alone settles 153, 176 and 269 without the score.
-  It is the rigorous form of today's condition-number pre-filter: `λ_min` of
-  the unweighted `A = Σ(I − dᵢdᵢᵀ)` is the best bearing's cost in square
-  radians, and `λ_max ≈ K`, so `cond(A) = λ_max / λ_min` is roughly the view
-  count over the bearing cost with no noise model. That is why its threshold
-  drifts with track length.
-- **The midpoint bound is the early exit for finite points.** A finite
-  candidate's cost at the weighted linear midpoint gives a rigorous lower
-  bound on Λ (`bearing_cost − cost`). For near-parallel rays the midpoint is a
-  poor candidate (on `tk117` it costs more than the bearing for most far
-  points), and the score decides. For rays spread over a wide angle the score
-  says nothing and the bound is what decides: on `tk117` it calls 12 of the
-  375 finite points finite that the score alone would call bearings, and on
-  synthetic object-centric arcs it decides every one the score misses.
-  Today's rule reaches those points through the condition-number pre-filter,
-  which calls any well-conditioned track finite.
-
-Per track, deciding therefore costs the same order as `triangulate_batch` plus
-`depth_uncertainty_batch`, which today's rule already runs, and with no
-iteration. Only the tracks that come out finite and need a refined position run
-the point fit, warm-started from the position the caller holds.
-
-### Relation to the inverse-depth z test
-
-The current `inverse_depth_z` is the Wald form above. Its square approximates
-`Λ` when both use the same σ: for point 298 at 1 px noise, `z² = 5.0` and
-`Λ = 6.2`. Two things separate them in practice:
-
-- **Noise.** The z rule's per-ray noise is `max(point error, 1 px)`. The floor
-  exists because a short track's own error understates the noise: its few
-  views are fitted almost exactly whatever the depth. A reconstruction-wide σ
-  from the observations of all finite points has no such bias, so the floor is
-  not needed. The threshold on the score already charges a short track for its
-  extra parameter.
-- **Where it linearises.** As above: at the fitted depth, the worst place for a
-  far point.
-
-### Where σ comes from
-
-- **A stored reconstruction** (reclassification, discovery, the bench,
-  `analyze`): `SfmrReconstruction::reprojection_noise_px`, the RMS per-axis
-  pixel residual over the observations of its finite points with gross
-  outliers gated out, and no degrees-of-freedom correction. The standing spec
-  § "The measured noise level" has the estimator, the comparison with the
-  plain RMS, trimmed RMS and robust spread that chose it, and the reasons;
-  each consumer's step makes it that consumer's default.
-- **Bundle adjustment**: the same RMS over the round's kept observations of
-  finite points at the round's state, measured at re-estimation. Not
-  `loss_scale`, which is a schedule constant chosen per stage and not a
-  measurement.
-
-### The noise weight per ray
-
-Two questions this draft first left open are settled by measurement on
-`tk117`, at σ = 0.216 px. The Kerry Park fisheyes stretch pixels per radian by
-up to 2.1 to 1 between the radial and tangential directions, and one scalar
-angular noise per ray misplaces the statistic: for point 298, 160.9 with the
-geometric mean of the two stretches and 100.8 with σ_px over the focal length,
-against 132 from pixel residuals through the camera model. The primitives
-therefore take a 2×3 world-frame weight per ray, built by `observed_ray` from
-the camera model's projection derivative, and with it the sine residuals and
-the eigenvector bearing reproduce the pixel-residual table above:
-
-| Point | Score | Λ | Pixel reference Λ |
-|---|---|---|---|
-| 298 | 132.0 | 132.0 | 132.0 |
-| 294 | 83.3 | 83.3 | 83.2 |
-| 295 | 31.0 | 30.9 | 30.9 |
-| 269 | 14.3 | 14.4 | 14.3 |
-| 270 | 11.6 | 11.6 | 11.6 |
-| 10 (finite) | 2,732 | 2,746 | 2,762 |
-
-Over the file, no finite point gets a bearing verdict, and of the twelve
-bearings the three in the first rows are finite at a threshold of 25.
-
-### Interaction with the `indeterminate` state
-
-The z rule calls a track *indeterminate* when its observing cameras are too
-close together to place a point even at the capture's own scale; neither
-reclassification nor discovery, which used to leave such a point alone or drop
-such a track, has that third state now. `Λ` answers the case of near-parallel rays from a short baseline: a near
-point and a bearing explain them equally well, `Λ` is near zero, and the track
-is a bearing, which is an accurate description of what the rays say. The same
-holds for rays from one centre that agree on a direction, as from a camera
-panning in place. Rays from centres that a solver collapsed onto one point,
-diverging because the poses kept their rotations, fit no bearing; their
-centres differ only by round-off, which the test treats as one centre, so they
-too get no depth score and a bearing verdict (standing spec § "Fitting").
-Discovery adds such tracks as bearings and counts them; the reasons and the
-counts on the in-repo captures are in
-[find-points-at-infinity.md](../cli/reconstruction/xform/find-points-at-infinity.md)
-§ "Decisions".
-
-## Bundle adjustment
-
-Two changes, in order.
-
-1. **Crossing on `Λ`.** At each inter-round re-estimation, the retriangulation
-   operation gains a rule beside `floor`, `likelihood`, which runs
-   `bearing_score_batch` over the free tracks with σ measured as above and
-   writes the verdict of `is_finite` into the mask the next linearisation
-   reads. A track that turns finite starts from the solve's own estimate, so
-   the next round's solve does the placing and no separate point fit runs. It replaces `floor` in bundle adjustment's call, and
-   `noise_floor_scale` is retired from `FreePointPolicy`. The `floor` rule stays
-   for callers that want a pure geometric cut.
-2. **Inverse-depth free points.** Free points are solved inside each round as
-   `(u, ρ)` about a fixed anchor, so a point can move between near and infinity
-   within a round instead of only between rounds, and far points stay
-   well-conditioned. `ρ = 0` is a value the solve can reach, so the
-   representation becomes a storage decision made by `is_finite` at the
-   end, not a mode of the solve. This is a larger change to the kernel's
-   parameter blocks (3 per point, as today, but in a different
-   parametrisation), and it is a separate step.
-
-## Migration
-
-Each step is one PR and keeps the other rules unchanged until its turn. The
-reports came first and are in place (see the status line), so the disagreements
-each step resolves can be read off `sfm analyze --depth-reliability` before
-and after it.
-
-Done: reclassification, discovery and the bench decide on the test, with the
-consumer rule shared between reclassification and the bench, and the z rule,
-its pre-filter, its noise floor, `COINCIDENT_CAMERA_FRACTION` and the bench's
-residual check are gone (standing spec § "Consumers" and § "Decisions").
-What remains:
-
-1. **Bundle adjustment crossing** (step 1 of the section above).
-2. **Inverse-depth free points in bundle adjustment** (step 2 of the section
-   above).
-
-## Parameters
-
-| Parameter | Proposed default | Meaning |
-|---|---|---|
-| threshold | `25.0` (`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`) | Score (and Λ) above which a track is a finite point. See "Open questions". |
-| σ | measured | RMS per-axis pixel residual over finite points' observations; per round in bundle adjustment. |
-
-## Testing
-
-The primitives' own tests (nesting, calibration against the half-χ²₁ law,
-recovery, robustness, the exact bearing, score against Λ, batch parity) are in
-[point_or_bearing/tests.rs](../../crates/sfmtool-core/src/reconstruction/triangulation/point_or_bearing/tests.rs).
-The measured noise level's tests (a known σ recovered, per camera, from every
-observation source, with points at infinity left out) are in
-[analysis/reprojection_noise/tests.rs](../../crates/sfmtool-core/src/analysis/reprojection_noise/tests.rs),
-and those of the ray construction and the test over a reconstruction (agreement
-with the primitives called by hand, alignment to the indexes asked for, tracks
-with fewer than two rays) in
-[analysis/point_or_bearing/tests.rs](../../crates/sfmtool-core/src/analysis/point_or_bearing/tests.rs).
-The consumer steps' tests are in their own specs (the bench's override cases
-are ordinary outcomes of the test in
-[bench/tests.rs](../../crates/sfmtool-core/src/bench/tests.rs), see
-editable-track.md § "Testing"). Bundle adjustment's step adds:
-
-- **Regression on real data.** The `tk117` table above, from a checked-in copy
-  of the Kerry Park ground truth once it lands.
+- **Parameter blocks.** A free point's block is `(u, ρ)` with `u` in the
+  tangent plane of the unit sphere (two degrees of freedom, as a direction
+  today) and `ρ ≥ 0`, three in all as a finite point today, so the Schur
+  complement keeps its 3×3 blocks. The point is `a + u / ρ`, and its
+  observation from camera `i` projects the direction `u + ρ (a − cᵢ)`, which is
+  the direction case at `ρ = 0`. This is the parametrisation the test's point
+  fit already uses (`fit_point_and_bearing`).
+- **The anchor.** Fixed per point for the whole solve, so that `ρ` keeps its
+  meaning across rounds: the centroid of the observing cameras' centres at the
+  input poses, as the point fit's default. A ranged or held point keeps its
+  own parametrisation.
+- **The bound.** `ρ` is clamped at 0 inside the damping ladder, as the point
+  fit clamps it: a step that would take `ρ` negative is replaced by a step in
+  `u` alone.
+- **Storage.** At the end of the solve each free point is scored at the final
+  poses and the final round's measured noise level, and stored finite at
+  `a + u / ρ` where `is_finite` says so and as the bearing `u` otherwise. The
+  inter-round crossing is no longer needed for free points.
 
 ## Open questions
 
-- **Threshold.** `25` puts 298, 294 and 295 finite and keeps 269 (Λ 14) and 270
-  (Λ 12) as bearings. `10.8` makes those two finite as well, at 2,800 and 4,800
-  units. Both are defensible on `tk117`; a larger capture with a known far
-  field (KerryPark360) should decide it.
-- **Per-camera σ.** One σ per reconstruction, or one per camera when the
-  cameras differ (the two Kerry Park lenses are close, 0.2155 and 0.2157 px
-  from `reprojection_noise`'s per-camera values; other rigs may not be).
-- **σ in bundle adjustment.** The stored-reconstruction measure gates
-  outliers at 30 robust spreads and applies no degrees-of-freedom correction
-  (standing spec § "The measured noise level"). Bundle adjustment measures σ
-  over a round's kept observations, after its own outlier handling; whether it
-  uses the same gate is for its step to settle.
-- **Finite candidates in discovery.** Discovery appends only bearings and
-  drops the candidates whose rays ask for a depth (standing spec §
-  "Consumers"). On the seoul bull `sift_files` solve at `0.5,300,2` the 60 it
-  drops are sound (RMS 0.484 px against the solve's 0.509, `σ` unchanged when
-  they are added, mostly 2-view at a distance of about 147 against a median
-  scene distance of 5.2); on kerry_park the 239 finite verdicts, 238 of which
-  could be placed, are marginal (0.645 px against 0.327, `σ` raised from 0.231
-  to 0.318 px, 109 points demoted by a reclassification after them). Whether a quality gate (a bound on the placed
-  point's reprojection error against `σ`, say) could keep the consistent ones
-  without moving the noise level is open; the measurements are in
-  [find-points-at-infinity.md](../cli/reconstruction/xform/find-points-at-infinity.md)
-  § "Decisions".
-- **Robust decision.** The decision tier is plain least squares. Whether a
-  track whose score clears the threshold should also have to clear it under the
-  soft-L1 point fit, so one bad sighting cannot make it finite, or whether
-  reconstruction-level outlier trimming upstream is enough.
-- **Naming.** `bearing_score`, `BearingScore`, `depth_score`,
-  `fit_point_and_bearing`, `PointBearingFit`, `depth_likelihood_ratio` and
-  `is_finite` are the names the primitives carry; whether they stand is
-  settled, and given a glossary row, when this draft is filed.
+- **Translation observability.** A direction carries no translation Jacobian,
+  which is what freezes the translation of an image observing only directions.
+  At `ρ` near 0 the translation column is small but not zero; whether the
+  reduced system needs the same pinning, or a damping that reads the column's
+  size, is open.
+- **The anchor under large pose updates.** A fixed anchor taken at the input
+  poses can sit far from the observing cameras after a rough start has moved
+  them; whether to re-anchor between rounds, at the cost of `ρ` changing meaning,
+  is open.
+- **The level at the end of an unconverged solve.** The storage decision reads
+  the final round's level, which a final round that stops on its iteration
+  budget inflates just as an early one does: on the Kerry Park solve with five
+  iterations a round and the crossing off, the final level is 2.0 px, at which
+  the test would make 453 points directions, against about 160 at the
+  converged level. Whether the decision should wait for convergence, or read a
+  level that discounts pose error, is open.
+- **What the crossing leaves at a converged end.** From a 4° and 20% start
+  with the default 60 iterations, the Kerry Park solve shows no mass flip, but
+  its result still disagrees with the test at its own level (0.95 px) on 142
+  points, 34 to promote and 107 to demote, with 26% of its points made
+  directions: the residue of decisions taken at round boundaries, which
+  inverse-depth points that cross within a round would not leave.
+- **Cost.** The inverse-depth Jacobian has one more chain-rule factor than the
+  Euclidean one; whether the per-iteration cost is measurable on the largest
+  inputs is to be measured.
+
+## Testing
+
+- The crossing tests of bundle-adjustment.md hold with the crossing replaced by
+  the end-of-solve verdict: a near cloud started at infinity ends finite, a far
+  track started finite ends a direction at the measured noise, and a borderline
+  track's verdict no longer depends on its starting representation.
+- A far point started at a wrong depth converges to the same verdict and
+  direction from either starting representation.

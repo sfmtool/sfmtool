@@ -227,7 +227,7 @@ pub fn keypoint_resolution_px(recon: &SfmrReconstruction) -> f64 {
 }
 
 /// [`keypoint_resolution_px`] for one camera.
-fn camera_keypoint_resolution_px(camera: &crate::camera::CameraIntrinsics) -> f64 {
+pub(crate) fn camera_keypoint_resolution_px(camera: &crate::camera::CameraIntrinsics) -> f64 {
     f64::from(camera.width.max(camera.height).max(1)) * f64::from(f32::EPSILON)
 }
 

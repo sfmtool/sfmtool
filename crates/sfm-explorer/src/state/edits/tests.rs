@@ -1989,6 +1989,8 @@ fn the_whole_value_entry_counts_what_happened_to_each_point() {
         ),
         solved(PointVerdict::Behind, 0, GeometryChange::Crossed),
         solved(PointVerdict::Thin, 0, GeometryChange::Crossed),
+        solved(PointVerdict::NoDepth, 0, GeometryChange::Crossed),
+        solved(PointVerdict::NoDepth, 0, GeometryChange::Crossed),
         RetriangulateOutcome::Kept,
         RetriangulateOutcome::Held,
     ];
@@ -2007,7 +2009,8 @@ fn the_whole_value_entry_counts_what_happened_to_each_point() {
     };
     assert_eq!(
         super::retriangulate_summary(&report),
-        "4 of 6 points moved, 2 crossed to or from infinity, 1 too thin to place, \
+        "6 of 8 points moved, 4 crossed to or from infinity, 1 too thin to place, \
+         2 with no depth in their rays at the noise level, \
          1 behind a camera that sees them, 1 placed on the observations that agree, \
          1 left where they were for too few observations, 1 held, median shift 1.0000"
     );

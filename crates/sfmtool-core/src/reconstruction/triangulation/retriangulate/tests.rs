@@ -24,8 +24,8 @@ use crate::reconstruction::data::{
 };
 use crate::reconstruction::edited::{EditedReconstruction, PointMap};
 use crate::reconstruction::triangulation::{
-    retriangulate_points, GeometryChange, PointVerdict, RetriangulateError, RetriangulateOptions,
-    RetriangulateOutcome, RetriangulateReport, RetriangulateWhich,
+    retriangulate_points, GeometryChange, LikelihoodRule, PointVerdict, RetriangulateError,
+    RetriangulateOptions, RetriangulateOutcome, RetriangulateReport, RetriangulateWhich,
 };
 
 use sfmtool_sfmr_format::{POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
@@ -224,6 +224,7 @@ fn assert_statuses_agree(report: &RetriangulateReport) {
         (c.marked, PointVerdict::Marked),
         (c.ranged, PointVerdict::Ranged),
         (c.thin, PointVerdict::Thin),
+        (c.no_depth, PointVerdict::NoDepth),
         (c.behind, PointVerdict::Behind),
         (c.over_bar, PointVerdict::OverBar),
         (c.few, PointVerdict::Few),
@@ -923,6 +924,209 @@ fn a_ranged_point_read_through_the_wrong_camera_does_not_land_on_the_truth() {
             "point {p} landed on the truth through the wrong lens"
         );
     }
+}
+
+/// `recon` with point `p` moved to `world` and each of its observations
+/// re-projected through its own image's camera.
+fn move_point(recon: &mut SfmrReconstruction, p: usize, world: Point3<f64>) {
+    recon.point_set.points[p].position = world;
+    let rows: Vec<(usize, usize)> = recon
+        .point_set
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.point_index as usize == p)
+        .map(|(row, t)| (row, t.image_index as usize))
+        .collect();
+    let pixels: Vec<[f32; 2]> = rows
+        .iter()
+        .map(|&(_, i)| project(recon, i, world).expect("the moved point is in every frame"))
+        .collect();
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
+    else {
+        unreachable!("the fixture embeds its keypoints");
+    };
+    for (&(row, _), uv) in rows.iter().zip(&pixels) {
+        keypoints_xy[[row, 0]] = uv[0];
+        keypoints_xy[[row, 1]] = uv[1];
+    }
+    recon.rebuild_derived_fields();
+}
+
+/// [`two_camera_truth`] with point 4, the one seen through both cameras,
+/// moved out to `FAR` units in front of the arc, so its four rays cross at an
+/// angle far below what a fraction of a pixel of noise can resolve. Returns
+/// the value and the direction the far point lies in.
+fn two_camera_far() -> (SfmrReconstruction, Vector3<f64>) {
+    const FAR: f64 = 1.0e5;
+    let mut recon = two_camera_truth();
+    let far = Point3::new(30.0, -20.0, -FAR);
+    move_point(&mut recon, 4, far);
+    (recon, far.coords.normalize())
+}
+
+#[test]
+fn a_far_track_seen_through_two_cameras_becomes_its_bearing() {
+    // The likelihood rule on a value taken through two cameras: the far track,
+    // seen through the pinhole and the fisheye, has no depth at a fifth of a
+    // pixel and becomes the bearing its rays share, while the near tracks --
+    // through the pinhole alone, the fisheye alone, or both -- keep a depth
+    // and land on the truth.
+    let (recon, direction) = two_camera_far();
+    let truth = recon.clone();
+    let options = RetriangulateOptions {
+        likelihood: Some(LikelihoodRule::at(0.2)),
+        ..RetriangulateOptions::default()
+    };
+    let start = edited(nudge(recon));
+    let (next, map, report) =
+        retriangulate_points(&start, RetriangulateWhich::All, &options, &Progress::none())
+            .expect("a value taken through two cameras retriangulates");
+
+    assert_eq!(report.census.no_depth, 1, "{:?}", report.census);
+    assert_eq!(report.census.finite, POINTS - 1, "{:?}", report.census);
+    assert_eq!(report.crossed(), 1);
+    for p in 0..4 {
+        assert!(error(&next.base, &truth, p) < TRUTH_TOLERANCE, "point {p}");
+    }
+    let far = &next.base.point_set.points[4];
+    assert!(far.is_at_infinity());
+    let off = far.position.coords.normalize().angle(&direction);
+    assert!(off < 1e-5, "the bearing is {off} rad off the far point");
+
+    // The far point's status names the rule that made it a direction, and it
+    // crossed from the position it was stored at; the near ones moved as
+    // positions.
+    assert_eq!(
+        outcome_of(&report, 4),
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::NoDepth,
+            pruned: 0,
+            change: GeometryChange::Crossed,
+        }
+    );
+    assert_eq!(
+        outcome_of(&report, 4).to_string(),
+        PointVerdict::NoDepth.label()
+    );
+    for p in 0..4 {
+        assert!(
+            matches!(
+                outcome_of(&report, p),
+                RetriangulateOutcome::Solved {
+                    verdict: PointVerdict::Finite,
+                    pruned: 0,
+                    change: GeometryChange::Moved { shift: Some(_) },
+                }
+            ),
+            "point {p}: {:?}",
+            outcome_of(&report, p)
+        );
+    }
+    assert_eq!(report.with_verdict(PointVerdict::NoDepth), 1);
+    assert_eq!(report.with_verdict(PointVerdict::Finite), POINTS - 1);
+    assert_eq!(report.moved(), POINTS);
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+}
+
+#[test]
+fn a_far_point_named_alone_is_rewritten_as_its_bearing_and_says_why() {
+    // The likelihood rule under `These`: the far point is the one asked about,
+    // it becomes its bearing, takes a new index, and its status says the
+    // likelihood rule decided it.
+    let (recon, direction) = two_camera_far();
+    let options = RetriangulateOptions {
+        likelihood: Some(LikelihoodRule::at(0.2)),
+        ..RetriangulateOptions::default()
+    };
+    let start = edited(recon);
+    let (next, map, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&[4]),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    assert_eq!(report.points.len(), 1);
+    let status = *report.point(4).expect("point 4 was asked about");
+    assert_eq!(
+        status.outcome,
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::NoDepth,
+            pruned: 0,
+            change: GeometryChange::Crossed,
+        }
+    );
+    assert_ne!(status.new_index, 4, "a rewritten point takes a new index");
+    let far = next.point(status.new_index).expect("live").point().clone();
+    assert!(far.is_at_infinity());
+    assert!(far.position.coords.normalize().angle(&direction) < 1e-5);
+    assert_eq!(report.census.no_depth, 1);
+    assert_eq!(report.crossed(), 1);
+    assert!(report.median_shift().is_nan(), "a crossing has no distance");
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+}
+
+#[test]
+fn a_far_track_read_through_the_wrong_camera_misses_its_bearing() {
+    // The control for the test above: with the table saying every image was
+    // taken through the pinhole, the far track's fisheye pixels state rays
+    // that point elsewhere, and whatever the rule makes of the track, it is
+    // not the direction the far point lies in.
+    let (mut recon, direction) = two_camera_far();
+    recon.image_table.cameras[1] = pinhole();
+    let options = RetriangulateOptions {
+        likelihood: Some(LikelihoodRule::at(0.2)),
+        ..RetriangulateOptions::default()
+    };
+    let (next, _, _) = retriangulate_points(
+        &edited(recon),
+        RetriangulateWhich::All,
+        &options,
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let far = &next.base.point_set.points[4];
+    let off = far.position.coords.normalize().angle(&direction);
+    assert!(
+        !far.is_at_infinity() || off > 1e-3,
+        "the far point found its bearing through the wrong lens ({off} rad off)"
+    );
+}
+
+/// Whether point 2 of [`two_camera_truth`], moved 1000 units out and so seen
+/// through the fisheye alone at a parallax near what the noise resolves, comes
+/// back as a direction under the likelihood rule at `sigma_px`.
+fn fisheye_track_is_a_direction_at(sigma_px: f64) -> bool {
+    let mut recon = two_camera_truth();
+    move_point(&mut recon, 2, Point3::new(2.0, 1.0, -1000.0));
+    let options = RetriangulateOptions {
+        likelihood: Some(LikelihoodRule::at(sigma_px)),
+        ..RetriangulateOptions::default()
+    };
+    let (next, _, _) = retriangulate_points(
+        &edited(recon),
+        RetriangulateWhich::All,
+        &options,
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    next.base.point_set.points[2].is_at_infinity()
+}
+
+#[test]
+fn the_likelihood_rule_weighs_each_ray_through_its_own_camera() {
+    // A ray's noise weight is the pixel noise carried through its own lens's
+    // derivative. The fisheye resolves 300 px per radian at its centre and the
+    // pinhole 500, so a fisheye ray weighted as if the pinhole took it would
+    // claim (500 / 300)^2, about 2.8 times, the depth evidence it carries.
+    // This track's verdict changes between sigma 0.15 and 0.25 px, a factor of
+    // 2.8 in the score, so at 0.25 px it is a direction only when each ray is
+    // weighted through the camera that took it.
+    assert!(!fisheye_track_is_a_direction_at(0.15));
+    assert!(fisheye_track_is_a_direction_at(0.25));
 }
 
 #[test]

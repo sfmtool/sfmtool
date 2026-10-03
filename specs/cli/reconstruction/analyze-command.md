@@ -55,9 +55,11 @@ no step decides on; the second is the likelihood-ratio test specified in
 [core/reconstruction/batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
 § "Point or bearing", which reclassification (`sfm xform
 --classify-points-at-infinity`), discovery (`--find-points-at-infinity`) and
-the bench decide with, and bundle adjustment is to move to (the
-[amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md) says
-how). Neither part changes the file. The second part's
+the bench decide with, as does bundle adjustment's crossing between a point and
+a direction
+([core/geometry/bundle-adjustment.md](../../core/geometry/bundle-adjustment.md)
+§ "Free points: crossing between representations"). Neither part changes the
+file. The second part's
 disagreements with the stored representation are what reclassification would
 change, and it says so. The printer is
 [`analyze/point_or_bearing.py`](../../../src/sfmtool/analyze/point_or_bearing.py),

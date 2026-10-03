@@ -57,7 +57,7 @@ pub use point_or_bearing::{
 };
 pub use points::{
     triangulate_points_from_observations, triangulate_points_from_rays, FewObservations,
-    ObservationSet, PointCensus, PointDistance, PointRules, PointVerdict, RaySet,
+    LikelihoodRule, ObservationSet, PointCensus, PointDistance, PointRules, PointVerdict, RaySet,
     TriangulatedPoints, FALLBACK_DIRECTION,
 };
 pub use retriangulate::{

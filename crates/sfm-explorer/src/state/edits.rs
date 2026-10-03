@@ -291,6 +291,30 @@ fn bench_deletion_text(deletion: &ImageDeletion) -> String {
     text
 }
 
+/// How many rules [`direction_rule`] names.
+const DIRECTION_RULES: usize = 4;
+
+/// Where a rule that turns a point into a direction goes in the whole-value
+/// sentence, and the words that name it there; `None` for a verdict that leaves
+/// a position, or a direction the caller stated, or says nothing about the
+/// point.
+///
+/// The match names every verdict, so a new one does not compile until it is
+/// placed here and the sentence cannot leave a rule out without saying so.
+fn direction_rule(verdict: PointVerdict) -> Option<(usize, &'static str)> {
+    match verdict {
+        PointVerdict::Thin => Some((0, "too thin to place")),
+        PointVerdict::NoDepth => Some((1, "with no depth in their rays at the noise level")),
+        PointVerdict::Behind => Some((2, "behind a camera that sees them")),
+        PointVerdict::OverBar => Some((3, "past the reprojection bar")),
+        PointVerdict::Finite
+        | PointVerdict::FinitePruned
+        | PointVerdict::Marked
+        | PointVerdict::Ranged
+        | PointVerdict::Few => None,
+    }
+}
+
 /// What one retriangulation did, as the Action Log says it.
 ///
 /// The version label is the short half the Edit History panel lists; the
@@ -305,13 +329,16 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
     // The rules that turned a point into a direction, each named where it
     // took any, so a reader can tell a thin capture from a geometry the
     // cameras disagree with.
-    for (verdict, words) in [
-        (PointVerdict::Thin, "too thin to place"),
-        (PointVerdict::Behind, "behind a camera that sees them"),
-        (PointVerdict::OverBar, "past the reprojection bar"),
-    ] {
-        let n = report.with_verdict(verdict);
-        if n > 0 {
+    let mut directions = [0usize; DIRECTION_RULES];
+    let mut words = [""; DIRECTION_RULES];
+    for status in &report.points {
+        if let Some((k, w)) = status.outcome.verdict().and_then(direction_rule) {
+            directions[k] += 1;
+            words[k] = w;
+        }
+    }
+    for (n, words) in directions.iter().zip(words) {
+        if *n > 0 {
             text.push_str(&format!(", {n} {words}"));
         }
     }

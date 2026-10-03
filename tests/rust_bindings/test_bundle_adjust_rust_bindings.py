@@ -1110,7 +1110,6 @@ def test_constraint_kwargs_at_their_off_position_change_nothing():
             "distance": None,
             "distance_from": None,
             "free_points_cross": False,
-            "noise_floor_scale": 2.0,
         },
         {
             "held": np.zeros(30, dtype=bool),
@@ -1128,6 +1127,7 @@ def test_constraint_kwargs_at_their_off_position_change_nothing():
         npt.assert_array_equal(out["points"], ref["points"])
         npt.assert_array_equal(out["residual_norms"], ref["residual_norms"])
         npt.assert_array_equal(out["point_at_infinity"], ref["point_at_infinity"])
+        assert out["crossings"] == []
 
 
 def test_point_at_infinity_is_reported_and_echoes_the_input_mask():
@@ -1233,6 +1233,16 @@ def test_crossing_promotes_a_direction_whose_rays_carry_parallax():
     crossed = _run(s, point_at_infinity=mask, free_points_cross=True)
     assert not crossed["point_at_infinity"][7]
     npt.assert_allclose(crossed["points"][7], s["points"][7], atol=1e-3)
+    # One crossing round per re-estimation, each with the noise level it read
+    # from the previous round's residuals of finite points.
+    rounds = crossed["crossings"]
+    assert [c["round"] for c in rounds] == [1, 2]
+    assert sum(c["to_finite"] for c in rounds) == 1
+    assert sum(c["to_direction"] for c in rounds) == 0
+    for c in rounds:
+        assert c["sigma_px"] is not None and c["sigma_px"] > 0.0
+        assert c["observation_count"] > 0
+        assert c["outlier_count"] == 0
 
 
 def test_held_and_ranged_on_one_point_is_rejected():
@@ -1280,13 +1290,6 @@ def test_constraint_shape_validation():
         _run(s, distance=np.full(3, np.nan))
     with pytest.raises(ValueError, match="one entry per point"):
         _run(s, distance_from=np.full(3, -1, dtype=np.int64))
-
-
-@pytest.mark.parametrize("bad_scale", [0.0, -1.0, np.inf, np.nan])
-def test_noise_floor_scale_validation(bad_scale):
-    s = _perturbed_scene()
-    with pytest.raises(ValueError, match="noise_floor_scale"):
-        _run(s, noise_floor_scale=bad_scale)
 
 
 # ── Several cameras ──────────────────────────────────────────────────────────

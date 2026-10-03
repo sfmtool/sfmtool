@@ -233,11 +233,11 @@ models. A stored reconstruction supplies the noise level from its own residuals
 ("The measured noise level") and runs the test over its points with one method
 ("Over a reconstruction"), and both are bound to Python. Reclassifying a
 reconstruction's points and discovering new points at infinity decide on it,
-so does the track bench, and the `analyze` and `inspect` reports print it (see
-"Consumers"). Moving bundle adjustment's crossing onto it is the amendment
-draft
-[point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
-which also carries the measurements that motivate the test.
+so does the track bench and bundle adjustment's crossing between a point and a
+direction, and the `analyze` and `inspect` reports print it (see "Consumers").
+Solving bundle adjustment's free points in inverse depth, so that the test
+becomes a storage decision at the end of the solve, is the amendment draft
+[point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
 
 ### Interface
 
@@ -449,6 +449,52 @@ calling a true bearing finite.
   is a bearing whatever the point fit would find, and
   `midpoint_bound ≥ threshold` is a finite point. `is_finite` is finite when
   `bearing_cost` reaches the threshold and either the score or the bound does.
+- **Score against `Λ`.** A test of a nested parameter has three classical
+  forms: the Wald form at the full model's fit (`inverse_depth_z`, the fitted
+  depth over its linearised deviation), the likelihood ratio from both fits
+  (`Λ`), and the score form at the restricted model's fit alone
+  (`depth_score`). With one `σ` they agree asymptotically and differ in where
+  their linearisation is accurate. Wald linearises at the fitted depth, which
+  for a far point is mostly noise and has a lopsided uncertainty; the score
+  linearises at `ρ = 0`, where the inverse-depth model is close to linear and
+  where the verdict is in question. On the Kerry Park ground truth `tk117` at
+  `σ = 0.216` px, the score from `bearing_score` (sine residuals, weights from
+  `observed_ray`) against `Λ` from fits of both models to the pixel residuals
+  through the camera model:
+
+  | Point | Views | `depth_score` | `Λ` (pixel residuals) |
+  |---|---|---|---|
+  | 154 | 26 | 1.33 | 1.32 |
+  | 153, 155 | 25 | 4.19, 4.21 | 4.19, 4.21 |
+  | 157 | 25 | 6.76 | 6.76 |
+  | 268 | 26 | 7.94 | 7.95 |
+  | 176 | 21 | 8.27 | 8.27 |
+  | 156 | 24 | 9.47 | 9.46 |
+  | 270 | 17 | 11.63 | 11.62 |
+  | 269 | 7 | 14.34 | 14.34 |
+  | 295 | 18 | 30.98 | 30.93 |
+  | 294 | 21 | 83.30 | 83.23 |
+  | 298 | 10 | 131.97 | 132.04 |
+  | 10 (finite, 81 units) | 9 | 2,732 | 2,762 |
+  | 50 (finite) | 13 | 79,711 | 85,331 |
+
+  The twelve bearings stored in that file are the first eleven rows. The two
+  forms agree to the first decimal wherever the verdict is in question and part
+  only where both are thousands of times the threshold, or where the rays
+  spread so wide that the bound decides (point 91, 4 views over 105°: score 0,
+  `Λ` 635,749). Point 298 is the case that motivated the test: its finite point
+  explains all ten views to a third of a pixel (0.16 px mean, against 0.62 px
+  for the bearing), while the z rule, at its 1 px per-ray noise floor, gave it
+  `z = 2.23`, under its cutoff of 4.
+- **Why a 2×3 weight per ray.** The Kerry Park fisheyes stretch pixels per
+  radian by up to 2.1 to 1 between the radial and tangential directions, and
+  one scalar angular noise per ray misplaces the statistic: for point 298,
+  160.9 with the geometric mean of the two stretches and 100.8 with `σ_px`
+  over the focal length, against 132.0 from pixel residuals through the camera
+  model. With the 2×3 weight `observed_ray` builds from the camera model's
+  projection derivative, the score and the fitted `Λ` reproduce the
+  pixel-residual values (298: 132.0 and 132.0; 294: 83.3 and 83.3; 10: 2,732
+  and 2,746 against 2,762).
 
 ### Fitting
 
@@ -656,14 +702,14 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   ground truth or a hand-edited file was not fitted as one least-squares
   problem at all. And the correction is one factor on `σ` for the whole
   reconstruction, which scales every score by `1/factor²`: a change of the
-  threshold, which is calibrated against `σ` as measured here (see the
-  amendment draft's open question on the threshold).
+  threshold, which is calibrated against `σ` as measured here (see "Open
+  questions").
 - **One value, and one per camera beside it.** The default everywhere is the
   overall value. The per-camera values cost one more accumulator per camera
   and are what a caller reads to decide whether one value is enough: the two
   Kerry Park lenses measure 0.2155 and 0.2157 px. Whether a capture whose
-  cameras differ should weight each camera's rays by its own value is the
-  draft's open question.
+  cameras differ should weight each camera's rays by its own value is open
+  (see "Open questions").
 - **Where the pixel comes from.** An observation's pixel is the inline
   keypoint when the reconstruction carries the column (every
   `embedded_patches` file, and a `sift_files` one with the optional copy,
@@ -696,7 +742,11 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   and 5% on `tk117` (over different random draws). The verdicts degrade the way
   a larger `σ` makes them: more tracks get bearing verdicts. The measure is
   for a reconstruction that has been bundle-adjusted; on a rough one it
-  overstates the noise.
+  overstates the noise. Bundle adjustment reads the same estimator on each
+  round's kept observations, which the round's trim has already capped at its
+  `trim_px`, so a gross outlier the gate passes there adds a bounded amount
+  ([bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
+  crossing between representations").
 
 On the Kerry Park ground truth `tk117` it is 0.2156 px over 3,510
 observations with none left out; on the in-repo seoul bull ground truth,
@@ -810,16 +860,16 @@ for (k, &point) in result.point_indexes.iter().enumerate() {
   passes `soft_l1_scale: None` (see the robust loss under "Fitting").
 - **σ defaults to the measured value**, and the result carries the value used,
   so a report can print it. A caller that wants another (an override on the
-  command line, or bundle adjustment's per-round value) passes it. When it is
+  command line) passes it. When it is
   measured, the pixels are read once for both the measure and the rays, so a
   `sift_files` reconstruction without the inline column reads each `.sift`
   file once.
 
-On `tk117` the method reproduces the 12-bearing table of the amendment draft:
-at the measured 0.2156 px, points 298, 294 and 295 score 132.48, 83.62 and 31.10
-and are finite, 269 and 270 score 14.40 and 11.67, and none of the 375 finite
-points gets a bearing verdict (12 of them are finite on the midpoint bound
-alone). At the 0.216 px the draft used, the scores are the draft's 131.97,
+On `tk117` the method reproduces the table of "Score against `Λ`" under
+"Theory": at the measured 0.2156 px, points 298, 294 and 295 score 132.48,
+83.62 and 31.10 and are finite, 269 and 270 score 14.40 and 11.67, and none of
+the 375 finite points gets a bearing verdict (12 of them are finite on the
+midpoint bound alone). At the table's 0.216 px the scores are its 131.97,
 83.30, 30.98, 14.34 and 11.63; the scores scale as `1/σ²`. On the seoul bull
 ground truth no finite point gets a bearing verdict and none of its 14 bearings
 gets a finite one.
@@ -1105,6 +1155,25 @@ point, clean and with keypoint noise of 0.5 and 2 px or pose noise of 0.05° and
 grows (`base_ba`: 886 at 0.20 px, 820 at 0.54, 397 at 2.0) and no step refuses
 or fails.
 
+**Bundle adjustment.** With `FreePointPolicy::cross`, the staged bundle
+adjustment re-decides every free point's representation at each inter-round
+re-estimation through the retriangulation operation's `likelihood` rule
+([triangulation-rules.md](triangulation-rules.md) § "The likelihood rule"):
+`observed_ray` through each observing image's camera as the round holds it,
+`bearing_score` and `is_finite` at `DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`,
+a no-depth verdict stored as the score's bearing, and a finite one left to the
+midpoint solve and the next round's solve to place. Its noise level is not a
+stored reconstruction's: it is this section's estimator read each round over
+the observations of finite points the previous round solved on, at the state
+that round settled on, so it follows the adjustment from a rough start to
+convergence. The interface, the choices and the measurements against the
+angular floor the rule replaced are in
+[bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
+crossing between representations". On `tk117` the crossing makes points 298,
+294 and 295 finite, as reclassification does, and on each of the four inputs
+measured there the test at a clean start's result's own measured noise, which
+is what `sfm analyze --depth-reliability` lists, disagrees with no point.
+
 **Reports.** Per-point depth reliability appears in `sfm inspect --verbose` and in
 `sfm analyze --depth-reliability`, both through the PyO3 surface below. Each
 prints `inverse_depth_z` and, beside it, the verdicts of "Point or bearing"
@@ -1136,7 +1205,8 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
   `inverse_depth_z` or the condition number. Reclassification, discovery and
   the bench share the test, the measured noise level and the consumer rule
   that places a finite verdict, so one set of sightings earns one
-  representation whichever step reads it. `inverse_depth_z` is the Wald form
+  representation whichever step reads it; bundle adjustment's crossing reads
+  the same test and the same estimator of the noise, over its own rounds. `inverse_depth_z` is the Wald form
   of the same question, linearised at the fitted depth, which is the worst
   place for a far point; it stays as a diagnostic, beside the condition number
   (which grows with K).
@@ -1164,8 +1234,28 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
 
 - Whether to compute the precise per-track perpendicular baseline `B⊥` for
   the short-baseline diagnostic, or accept the scalar camera-extent upper bound.
-  The threshold and noise questions of the decision are the amendment
-  draft's.
+- **The threshold.** `25` puts `tk117`'s points 298, 294 and 295 finite and
+  keeps 269 (`Λ` 14) and 270 (`Λ` 12) as bearings; `10.8` makes those two finite
+  as well, at 2,800 and 4,800 units. Both are defensible on `tk117`; a larger
+  capture with a known far field (KerryPark360) should decide it.
+- **Per-camera σ.** One level per reconstruction, or one per camera when the
+  cameras differ (the two Kerry Park lenses are close, 0.2155 and 0.2157 px;
+  other rigs may not be).
+- **Finite candidates in discovery.** Discovery appends only bearings (see
+  "Consumers"). On the seoul bull `sift_files` solve the finite candidates it
+  drops are sound, and on kerry_park they are marginal and raise `σ`; whether a
+  quality gate, a bound on the placed point's reprojection error against `σ`
+  say, could keep the consistent ones without moving the noise level is open
+  ([find-points-at-infinity.md](../../cli/reconstruction/xform/find-points-at-infinity.md)
+  § "Decisions" has the measurements).
+- **A robust decision.** The decision is plain least squares. Whether a track
+  whose score clears the threshold should also have to clear it under the
+  soft-L1 point fit, so one bad sighting cannot make it finite, or whether
+  outlier trimming upstream is enough.
+- **Naming.** `bearing_score`, `BearingScore`, `depth_score`,
+  `fit_point_and_bearing`, `PointBearingFit`, `depth_likelihood_ratio` and
+  `is_finite` are the names the primitives carry; whether they stand, and a
+  glossary row for them, is open.
 - Weighted vs unweighted midpoint as the default (unweighted matches current
   behavior; inverse-depth² is closer to reprojection error).
 

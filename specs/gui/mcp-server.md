@@ -3066,7 +3066,8 @@ it meant and no cache is dropped for it until the version lands. It polls the
 cancel flag between its stages, so `cancel_background_task` stops it and a
 cancelled retriangulation pushes no version. Its `report` counts the per-point
 statuses: points moved, crossed to or from infinity, turned into directions by
-each rule, placed on the observations that agree, kept for too few
+each rule (too thin, no depth at the noise level, behind a camera, past the
+reprojection bar), placed on the observations that agree, kept for too few
 observations, and held ([edits/retriangulate-point.md](edits/retriangulate-point.md)
 § "The version").
 
