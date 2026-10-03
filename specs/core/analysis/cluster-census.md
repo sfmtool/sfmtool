@@ -91,8 +91,8 @@ treat as "no evidence", not "clean".
 
 ### 2. Cluster placement at the candidate
 
-Triangulate **every** raw cluster observed by ≥ 2 posed images at the
-candidate poses (batch mid-point triangulation,
+Triangulate **every** raw cluster with ≥ 2 observations on posed images at
+the candidate poses (batch mid-point triangulation,
 [batch-triangulation-api.md](../reconstruction/batch-triangulation-api.md)), then compute:
 
 - `med(c)` — the per-cluster **median** reprojection residual of its
@@ -140,11 +140,11 @@ contamination shifts it marginally rather than flipping it.
 
 A **bridge** is a measurable cluster whose observations span ≥ 2 groups. For each
 group pair, over the bridges of that pair that are `eligible` and
-high-parallax (`para ≥ hi_para`):
+high-parallax (`para ≥ hi_parallax_deg`):
 
 ```
 frac(pair)   =  #unsatisfied / #eligible-high-parallax
-census(pair) =  WilsonLB( #unsatisfied, #eligible-high-parallax, z )
+census(pair) =  WilsonLB( #unsatisfied, #eligible-high-parallax, wilson_z )
 ```
 
 The Wilson lower bound shrinks small denominators toward zero: three
@@ -161,8 +161,8 @@ low-parallax bridges tolerate large relative-placement and focal error (their
 rays barely converge), so they carry count but no constraint. The residual of
 a high-parallax bridge grows with the seam's gauge disagreement and with
 focal error, which is why the score decreases monotonically as a candidate
-approaches the true placement and focal — the property the arbitration
-callers rely on.
+approaches the true placement and focal — the property a caller relies on
+when it compares candidate solves by their scores.
 
 ### 5. Companion: global satisfaction
 
@@ -251,7 +251,7 @@ CensusReport {
     score:      f64,              // max per-pair Wilson lower bound
     n_groups:   usize,            // < 2 ⇒ unverifiable, score is vacuous
     group_of:   Vec<i32>,         // per input image, -1 = unposed
-    pairs:      Vec<PairStats>,   // (ga, gb, n_eligible_hi, n_unsatisfied_hi, wilson_lb)
+    pairs:      Vec<PairStats>,   // (group_a, group_b, n_eligible_hi, n_unsatisfied_hi, wilson_lb)
     sat_pct:    f64,
     group_consistency: Option<GroupConsistency>,
         // per-group corrections; explained_pct with n_explained /
@@ -268,40 +268,16 @@ clusters, including the `n_groups < 2` case where the score is vacuous: it
 needs no grouping.
 
 The candidate's intrinsics enter as a full camera model, not a bare focal, so
-the operation applies to any model the projection supports; the arbitration
-callers pass a shared pinhole.
-
-## <a name="callers"></a>Callers
-
-- **Finalization focal arbitration** (`_finalize_seed`): score each candidate
-  BA result; keep the lower-scoring candidate, ties to the vote.
-- **`census_echo` seed confidence flag**: after finalization, flag the seed
-  when `score ≥ flag_threshold` (and, with § 6 enabled, explained fraction ≥
-  a coherence threshold to suppress junk-evidence flags). The flag reports the
-  failure axis the focal flags cannot see: correct focal, wrong placement.
-  It is scored on the **accepted** candidate — the census of the solve that
-  ships, not of the candidates the arbitration compared. `n_groups < 2` is
-  unverifiable rather than clean, so the flag requires two or more viewpoint
-  groups outright instead of relying on the vacuous score to sit under the
-  threshold. The flag is
-  metadata: it lands in the seed's `confidence_flags` in the artifact's
-  `tool_options`, and the finalization ships the same reconstruction either
-  way. The coherence conjunct is **not applied**: the threshold it needs has no
-  calibrated value — live finalizations report explained fractions spread
-  through the gap between the prototype's junk band (0–5 %) and its genuine
-  misregistrations (49–97 %), so any bar drawn in that gap suppresses flags on
-  captures the score condemns.
-- **Fleet / analysis tooling**: per-solve echo screening over a workspace.
+the operation applies to any model the projection supports.
 
 ## Parameters
 
 | name | default | nature |
 |---|---|---|
 | `sat_px` | 2.0 px | the pipeline's shared inlier threshold (same constant as the BA inlier accounting); candidates for a resolution-relative form should change it everywhere together |
-| `hi_para` | 5° | well under the parallax of genuine cross-group bridges (tens of degrees) and above the regime where residuals stop responding to gauge error |
-| warp-consistency percentile | P95 | tail width of the eligibility threshold; the threshold itself is data-derived, the tail is fixed |
-| Wilson `z` | 1.96 | standard 95 % bound |
-| `flag_threshold` | 0.25 | calibration constant for the flag caller; **not yet data-derived** — revisit with a per-capture null (e.g. the census of a within-group split, which should be ≈ 0) |
+| `hi_parallax_deg` | 5° | well under the parallax of genuine cross-group bridges (tens of degrees) and above the regime where residuals stop responding to gauge error |
+| `warp_percentile` | P95 | tail width of the eligibility threshold; the threshold itself is data-derived, the tail is fixed |
+| `wilson_z` | 1.96 | standard 95 % bound |
 | `compute_group_consistency` | false | opt-in for § 6; it costs a solve and answers a different question from the score |
 | § 6 robust scale | 3.0 px | soft-L1 transition of the group-consistency cost; above `sat_px`, so a satisfied bridge sits in the quadratic regime and a false match cannot drag the solve |
 | § 6 fit-set cap | 1200 bridges | 7 dof per group are over-determined by a few hundred bridges, so beyond the cap the fit strides down to it; the fit set bounds the whole descent — Jacobian, normal equations, trial steps — and a finite difference within it touches only the fit bridges its parameter block moves, while the corrections are still *scored* on the complete bridge population |

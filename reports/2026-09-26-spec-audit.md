@@ -49,6 +49,7 @@ were checked**. 14 were stale:
   - "temporary proxy"
   - the inertia non-goal
 - **cluster-census.md:** two claims about callers that are not in the tree.
+  > _Status (2026-10-03): **Done** — § Callers and the `flag_threshold` row are deleted, branch `finding-bash-09-cluster-census-unmerged`._
 - **track-cluster-matching.md:** four items: persisting is out of scope, the CLI consumes pairs only, "add a section", "consider lifting".
 - **archive-container.md:** "No schema".
 
@@ -71,6 +72,8 @@ lacks, or a wrong parameter name:
 | core/features/track-cluster-matching.md:358-363 | `threshold`, `cliff_pct`, `t_scale`, `refine`, `prefilter` | cliff, 50, 1.0, 0, off | none exist (`sfmtool-py/src/matching/cluster.rs:93`, `cluster_match/mod.rs:53-59`); prototype-only in an unmerged experiment | code — delete table |
 | core/features/track-cluster-matching.md:352 | `bg_alpha` | 0.8 | `alpha=0.8` | code — rename |
 | core/analysis/cluster-census.md:304 | `flag_threshold` | 0.25 | absent; its callers exist only on unmerged branch `fork/bootstrap-core-migration` | code — delete row |
+
+> _Status (2026-10-03): the `cluster-census.md` `flag_threshold` row is **Done** — deleted, branch `finding-bash-09-cluster-census-unmerged`._
 
 Five more mismatches came from reading the sampled specs rather than from the table scan:
 
@@ -526,6 +529,7 @@ most of the per-sentence findings.
 **Summary:** The algorithm and every numeric default match the code: CNM grouping, the P95 screen, the Wilson bound, `sat_pct`, and the group-consistency solve (3.0 px, 1200 bridges). § Callers and `flag_threshold` describe experiment scripts that were never merged to `main`.
 **Implementing code:** `analysis/cluster_census.rs` (`CensusParams` :71-100), `cluster_census/group_consistency.rs`, `sfmtool-py/src/analysis/cluster_census.rs:103-117`.
 **Inconsistencies:**
+> _Status (2026-10-03): **Done** for all four items — § Callers, the `flag_threshold` row and the two "arbitration callers" remarks are deleted (the callers live only on the unmerged branch, which keeps their text, so no draft was written); the spec uses `hi_parallax_deg`, `wilson_z`, `warp_percentile` and `group_a`/`group_b`; § 2 says "≥ 2 observations on posed images"; `analysis/README.md` says "global satisfaction", branch `finding-bash-09-cluster-census-unmerged`. The third-copies and shape items remain open._
   - :276-293 and :304 describe `_finalize_seed`, `census_echo` and `flag_threshold`. `git log -S` finds them only in `7bd2f079` and `ecfa6714` on the unmerged `fork/bootstrap-core-migration`. On `main`, `cluster_census` has test callers only.
   - :301 and :143 say `hi_para`; the code says `hi_parallax_deg`. :303 says "Wilson z"; the code says `wilson_z`. :254 says `ga`/`gb`; the code says `group_a`/`group_b`.
   - :94 says "observed by ≥ 2 posed images". The code counts observations, not distinct images (`:592`).
@@ -933,6 +937,7 @@ replaced by `gui/track-view.md`.)
 3. **Format specs are not independent of the code.** Six of the seven format specs with hits have no *Implementations* section. Adding one to each is the fix that resolves most of the 45 or so failure-6 findings. `archive-container.md` should split its crate API into its own spec, and `cluster-selection.md` should move out of `formats/`.
 4. **Standing specs that describe code which is not there:**
    - `cluster-census.md` § Callers and `flag_threshold` refer to an unmerged branch.
+     > _Status (2026-10-03): **Done** — both deleted, branch `finding-bash-09-cluster-census-unmerged`._
    - `track-cluster-matching.md` :457-968 is still a build brief, and 7 of the 2026-09-05 findings on it remain open.
    - The global-threshold parameter table in `track-cluster-matching.md` lists knobs that exist only in an experiment.
 
