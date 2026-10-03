@@ -226,12 +226,12 @@ camera centers) so all seven parameters of a block are comparable. Report:
   solve is scored on **all** bridges, so a correction that fixes one seam
   by breaking another nets ≈ 0 and does not count as an explanation.
 
-The decomposition discriminates a flag's cause: a genuine misregistration
+The decomposition tells apart the causes of a high score: a genuine misregistration
 is coherent (a non-trivial correction explains its seam's unsatisfied
 bridges); a false-match population that survived the eligibility screen is
 incoherent (jointly unsatisfiable by any rigid correction — explained
 fraction ≈ 0). The corrections are the natural initialization for callers
-that re-glue a flagged group — after checking the net, which can come out
+that re-glue a misplaced group — after checking the net, which can come out
 *negative* when the group split does not align with the actual
 misplacement; the operation itself is analysis only and
 never modifies the candidate, and it costs a solve, so it is opt-in
