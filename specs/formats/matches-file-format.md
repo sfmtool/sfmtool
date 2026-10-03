@@ -211,13 +211,17 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 **Field descriptions:**
 - `version`: Format version number. `1` through `6` (see
   [Versioning and Migration](#versioning-and-migration))
-- `matching_method`: Type of matching used to produce these matches
-  - `"exhaustive"`: Exhaustive pairwise matching
-  - `"sequential"`: Sequential matching with overlap
-  - `"vocab_tree"`: Vocabulary tree-based matching
-  - `"spatial"`: Spatial matching (GPS/location-based pair selection)
-  - `"transitive"`: Transitive matching
-  - `"custom"`: Any other method
+- `matching_method`: Type of matching used to produce these matches. The
+  format does not restrict the string; the writers in this repository emit:
+  - `"exhaustive"`: Exhaustive pairwise matching (`sfm match -e`)
+  - `"sequential"`: Sequential matching with overlap (`sfm match -s`)
+  - `"flow"`: Optical-flow matching (`sfm match --flow`)
+  - `"cluster"`: Cluster matching, a cluster-backbone file (`sfm match --cluster`,
+    and the cluster-patches operation)
+  - `"merged"`: The union of several `.matches` files (`sfm match --merge`); the
+    source files' methods are listed in `matching_options["source_methods"]`
+  - A file derived from another one (`sfm match --derive-pairs`, a cluster
+    selection) keeps its source's value
 - `matching_tool`: Tool that produced the matches (e.g., `"colmap"`)
 - `matching_tool_version`: Version string of the tool
 - `matching_options`: Method-specific parameters. Contents depend on `matching_method` and
@@ -614,7 +618,9 @@ refinement measured and which members stand.
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `uint8`
 - Per-member status:
-  - `0 reference` — the cluster's reference member (identity affine, ZNCC 1.0)
+  - `0 reference` — the cluster's reference member. It is refined against itself,
+    so its reference→member warp is the identity, its geometry is its detection,
+    its `member_zncc` is 1.0 and its `member_shift_px` is 0
   - `1 kept` — refined and vetted successfully
   - `2 rejected_low_zncc` — achieved ZNCC below the acceptance threshold
   - `3 rejected_shift` — translation drifted too far from the SIFT seed
@@ -663,9 +669,6 @@ refinement measured and which members stand.
 - A **stored signal, not a gate** — consumers choose their own threshold
   (e.g. ~0.3 as a RANSAC prefilter, ~0.1 for purity-first harvesting),
   mirroring how `member_zncc` enables re-vetting without re-running
-- _Added 2026-07-10 to format version 3 without a version bump (no public
-  release had shipped version-3 files); cluster-patch files written before
-  the addition must be regenerated_
 
 ### 7. Two-View Geometries (Optional Section)
 
@@ -910,10 +913,12 @@ defined by the operation. All other metadata — including the timestamp — is
 inherited from the source; the derived file's content hashes are its own,
 computed at write time. The source file is never modified.
 
-When the source was itself an unwritten selection it has no
-`content_xxh128`, and the record carries an optional `source_selection` key
-holding the source's own record, so the chain still names the archive it
-started from. The key is absent whenever the source is an ordinary file.
+When the source carries a `cluster_selection` record of its own (it is itself
+a selection), the new record carries a `source_selection` key holding that
+record. An unwritten selection has no `content_xxh128`, so the nesting is what
+keeps the chain naming the archive it started from; nesting repeats to any
+depth, and the innermost `source_content_xxh128` names that archive. The key is
+absent whenever the source is an ordinary file.
 
 **Sentinel scoping.** Only in a file carrying the `cluster_selection`
 provenance record may `reference_members[c] = 0xFFFFFFFF` additionally mean
