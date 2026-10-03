@@ -77,8 +77,8 @@ record:
   in that sense.
 
 `SceneNode::show_camera_images` drives frustum and image-quad visibility. It is
-named for the images it shows, and `scene-graph.md`, `camera-views.md` and
-`viewport-hud.md` use the same name.
+named for the images it shows: `scene-graph.md` and `camera-views.md` use the
+same field name, and `viewport-hud.md` labels the layer `Show Camera Images`.
 
 ---
 
@@ -1284,8 +1284,8 @@ No model is exempt from either property, `THIN_PRISM_FISHEYE` and
 core that both entry points call with the coordinates they hold: the
 perspective entry point converts `(tan θ·dx, …)` into that space first, and the
 ray entry point behind `CameraModel::distort_ray` forms the equidistant
-`(θ·dx, θ·dy)` straight from the ray direction, so the forward map converts
-once and zero coefficients leave every grid node where the ideal map puts it.
+`(θ·dx, θ·dy)` straight from the ray direction. Neither path converts twice,
+so zero coefficients leave every grid node where the ideal map puts it.
 
 Two caveats remain, both named in the tests rather than left implicit:
 
