@@ -1,18 +1,19 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""``classify_points_at_infinity`` — the single-viewpoint branch.
+"""``classify_points_at_infinity`` on a track seen from a single viewpoint.
 
 When a track's observing cameras all sit at essentially one optical centre — a
 camera panning in place, or a solver that collapsed a run of frames — there is
-no camera motion to give a depth cue, so a finite point looks just like an
-infinite one and its triangulated position is meaningless (often landing right
-on the cameras). The classifier stores such a point as ``w = 0`` with a
-direction recovered from its keypoints, which also unblocks FeatureSize patch
-sizing (``to_embedded_patches``), whose ``σ·d/f`` world size vanishes at zero
-viewing distance ``d``.
+no camera motion to give a depth cue, so a finite point explains its rays no
+better than a bearing does and its triangulated position is meaningless (often
+landing right on the cameras). The point-or-bearing test then finds no gain
+from a depth, and the point is stored as ``w = 0`` at the bearing fitted to its
+keypoints' rays. That also unblocks FeatureSize patch sizing
+(``to_embedded_patches``), whose ``σ·d/f`` world size vanishes at zero viewing
+distance ``d``.
 
-This needs on-disk ``.sift`` files (the bearing is unprojected from the stored
+This needs on-disk ``.sift`` files (the rays are unprojected from the stored
 keypoints), so it lives on the Python side over the ``seoul_bull_workspace``
 fixture rather than as a Rust unit test.
 """
@@ -116,18 +117,22 @@ def test_coincident_cameras_classified_as_infinity(
     # position), but its cameras all sit at one optical centre.
     assert not bool(np.asarray(collapsed.point_is_at_infinity)[pidx])
 
-    classified = collapsed.classify_points_at_infinity(1.0)
+    classified, summary = collapsed.classify_points_at_infinity(1.0)
     at_inf = np.asarray(classified.point_is_at_infinity)
 
-    # It is demoted to a point at infinity, with a unit bearing that matches the
-    # independent keypoint-unprojection mean.
+    # It is demoted to a point at infinity, at the unit bearing its score
+    # fitted to the keypoints' rays.
     assert bool(at_inf[pidx])
+    assert summary["demoted"] >= 1
     xyzw = np.asarray(classified.positions_xyzw)[pidx]
     assert xyzw[3] == 0.0
     np.testing.assert_allclose(np.linalg.norm(xyzw[:3]), 1.0, atol=1e-9)
-    np.testing.assert_allclose(
-        xyzw[:3], _expected_keypoint_bearing(recon, pidx), atol=1e-6
-    )
+    scored = collapsed.point_or_bearing_scores(point_indexes=[pidx], sigma_px=1.0)
+    np.testing.assert_allclose(xyzw[:3], scored["bearing"][0], atol=1e-12)
+    # That bearing lies among the rays, close to their independently
+    # recomputed mean (the rays span a few degrees here).
+    mean = _expected_keypoint_bearing(recon, pidx)
+    assert np.degrees(np.arccos(np.clip(xyzw[:3] @ mean, -1.0, 1.0))) < 2.0
 
 
 def test_coincident_cameras_unblock_feature_size_embedding(
@@ -147,7 +152,7 @@ def test_coincident_cameras_unblock_feature_size_embedding(
 
     # After classifying it to infinity, the angular (distance-free) size applies
     # and the conversion succeeds.
-    classified = collapsed.classify_points_at_infinity(1.0)
+    classified, _ = collapsed.classify_points_at_infinity(1.0)
     embedded = classified.to_embedded_patches(
         normal="mean_viewing", extent="feature_size", extent_value=2.5
     )
@@ -156,14 +161,14 @@ def test_coincident_cameras_unblock_feature_size_embedding(
 
 
 def test_spread_cameras_are_not_demoted(seoul_bull_workspace: Path):
-    """The baseline gate is tight: an ordinary well-triangulated point (real
-    baseline) is left finite — the branch only fires on a near-perfect collapse."""
+    """An ordinary well-triangulated point (real baseline) is left finite at the
+    measured noise level: only a track whose rays ask for no depth is demoted."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    before_inf = int(np.count_nonzero(recon.point_is_at_infinity))
-    classified = recon.classify_points_at_infinity(1.0)
+    assert not np.asarray(recon.point_is_at_infinity).any()
+    classified, summary = recon.classify_points_at_infinity()
     after_inf = int(np.count_nonzero(classified.point_is_at_infinity))
     # A forward-facing capture has few/no unconstrained points and certainly no
     # zero-baseline collapse, so classification does not sweep the scene to
     # infinity.
     assert after_inf < recon.point_count * 0.5
-    assert after_inf >= before_inf
+    assert after_inf == summary["demoted"]

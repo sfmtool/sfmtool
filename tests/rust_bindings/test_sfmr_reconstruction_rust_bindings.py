@@ -75,46 +75,125 @@ class TestHomogeneousPointAccessors:
         assert np.array_equal(clone.positions_xyzw[:, 3], np.ones(len(clone.positions)))
 
 
+def _world_to_camera(quaternion_wxyz) -> np.ndarray:
+    """The world-to-camera rotation matrix of a stored WXYZ quaternion."""
+    w, x, y, z = (float(c) for c in quaternion_wxyz)
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
+def _observed_far_away(recon: SfmrReconstruction, idx: int) -> SfmrReconstruction:
+    """``recon`` with point ``idx`` moved a million units out along the
+    direction it is seen in, and its keypoints moved to where it projects from
+    there: its rays are parallel to far below any noise."""
+    quats = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
+    trans = np.asarray(recon.translations, dtype=np.float64)
+    centers = np.array(
+        [-_world_to_camera(q).T @ t for q, t in zip(quats, trans)], dtype=np.float64
+    )
+    rows = np.flatnonzero(np.asarray(recon.track_point_indexes) == idx)
+    images = np.asarray(recon.track_image_indexes)[rows]
+    observers = centers[images].mean(axis=0)
+    point = np.asarray(recon.positions, dtype=np.float64)[idx]
+    far = observers + 1.0e6 * (point - observers) / np.linalg.norm(point - observers)
+
+    keypoints = np.asarray(recon.keypoints_xy, dtype=np.float32).copy()
+    cameras = recon.cameras
+    camera_indexes = np.asarray(recon.camera_indexes)
+    for row, image in zip(rows, images):
+        p_cam = _world_to_camera(quats[image]) @ far + trans[image]
+        keypoints[row] = cameras[int(camera_indexes[image])].ray_to_pixel(
+            p_cam.tolist()
+        )
+    positions = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+    positions[idx] = np.append(far, 1.0)
+    return recon.clone_with_changes(positions=positions, keypoints_xy=keypoints)
+
+
 class TestInfinityConversions:
-    def test_classify_preserves_point_count(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        classified = recon.classify_points_at_infinity()
+    def test_classify_preserves_point_count(self, seoul_bull_ground_truth_sfmr):
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        classified, summary = recon.classify_points_at_infinity()
         # Reclassification never adds or drops points or observations.
         assert classified.point_count == recon.point_count
         assert classified.observation_count == recon.observation_count
         assert classified.infinity_point_count == int(
             classified.point_is_at_infinity.sum()
         )
+        # The ground truth agrees with the test at its measured noise level.
+        assert summary["sigma_px"] == pytest.approx(recon.reprojection_noise_px())
+        assert summary["noise"]["outlier_count"] == 4
+        assert (summary["promoted"], summary["demoted"]) == (0, 0)
+        assert summary["kept"] + summary["unscored"] == recon.point_count
 
-    def test_classify_detects_a_far_point(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        # Pick a well-observed point and push it far away so its observation
-        # rays become parallel — its parallax collapses below the noise floor.
-        idx = int(np.argmax(recon.observation_counts))
-        positions = recon.positions_xyzw.copy()
-        positions[idx] = [0.0, 0.0, 1.0e7, 1.0]
-        recon = recon.clone_with_changes(positions=positions)
+    def test_classify_demotes_a_point_seen_far_away(self, seoul_bull_ground_truth_sfmr):
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        finite = ~np.asarray(recon.point_is_at_infinity)
+        counts = np.asarray(recon.observation_counts)
+        idx = int(np.argmax(np.where(finite, counts, 0)))
+        far = _observed_far_away(recon, idx)
 
-        classified = recon.classify_points_at_infinity()
+        classified, summary = far.classify_points_at_infinity()
         assert classified.point_is_at_infinity[idx]
-        # The cached count reflects the newly-classified far point.
-        assert classified.infinity_point_count >= 1
+        assert summary["demoted"] == 1
         assert classified.infinity_point_count == int(
             classified.point_is_at_infinity.sum()
         )
-        # A point at infinity stores a unit-length direction.
+        # A point at infinity stores a unit-length direction: its scored bearing.
         np.testing.assert_allclose(
             np.linalg.norm(classified.positions[idx]), 1.0, atol=1e-9
         )
+        scored = far.point_or_bearing_scores(
+            point_indexes=[idx], sigma_px=summary["sigma_px"]
+        )
+        np.testing.assert_allclose(
+            classified.positions[idx], scored["bearing"][0], atol=1e-12
+        )
 
-    def test_classify_noise_floor_is_monotone(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        # A larger noise floor can only classify a superset of points.
-        strict = recon.classify_points_at_infinity(noise_floor_px=0.01)
-        loose = recon.classify_points_at_infinity(noise_floor_px=1.0e4)
+    def test_classify_sigma_is_monotone(self, seoul_bull_ground_truth_sfmr):
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        # A larger noise level can only call more points bearings.
+        strict, _ = recon.classify_points_at_infinity(sigma_px=0.01)
+        loose, summary = recon.classify_points_at_infinity(sigma_px=1.0e4)
+        assert summary["sigma_px"] == 1.0e4
+        assert summary["noise"] is None
         assert loose.point_is_at_infinity.sum() >= strict.point_is_at_infinity.sum()
         assert strict.infinity_point_count == int(strict.point_is_at_infinity.sum())
         assert loose.infinity_point_count == int(loose.point_is_at_infinity.sum())
+
+    def test_classify_rejects_a_bad_sigma(self, seoul_bull_ground_truth_sfmr):
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        for sigma in (0.0, -1.0, float("nan"), float("inf")):
+            with pytest.raises(ValueError):
+                recon.classify_points_at_infinity(sigma_px=sigma)
+
+    def test_classify_needs_the_pixels(self, seoul_bull_sfmr_only):
+        # A sift_files reconstruction without its .sift files has no pixels to
+        # decide on.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        bare = recon.clone_with_changes(keypoints_xy=None)
+        with pytest.raises(OSError):
+            bare.classify_points_at_infinity()
+
+    def test_classify_without_finite_points_changes_nothing(
+        self, seoul_bull_ground_truth_sfmr
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+        xyzw[:, :3] /= np.linalg.norm(xyzw[:, :3], axis=1)[:, None]
+        xyzw[:, 3] = 0.0
+        bearings = recon.clone_with_changes(positions=xyzw)
+        classified, summary = bearings.classify_points_at_infinity()
+        assert summary["sigma_px"] is None
+        assert summary["promoted"] == summary["demoted"] == 0
+        np.testing.assert_array_equal(
+            classified.positions_xyzw, bearings.positions_xyzw
+        )
 
     def test_materialize_makes_every_point_finite(self, seoul_bull_sfmr_only):
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)

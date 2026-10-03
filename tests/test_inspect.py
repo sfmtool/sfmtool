@@ -316,8 +316,8 @@ def test_inspect_sfmr_verbose_point_or_bearing(seoul_bull_ground_truth_sfmr):
     out = result.output
     assert "Point or bearing (likelihood-ratio test, threshold 25):" in out
     assert (
-        "Noise level: 0.6461 px, measured over 1,233 observations of finite points"
-        in out
+        "Noise level: 0.4677 px, measured over 1,229 observations of finite "
+        "points, 4 excluded as outliers" in out
     )
     assert "Finite points called bearings: 0 of 266 scored" in out
     assert "Points at infinity called finite: 0 of 14 scored" in out

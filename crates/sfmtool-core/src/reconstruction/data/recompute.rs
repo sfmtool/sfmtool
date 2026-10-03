@@ -319,11 +319,12 @@ impl SfmrReconstruction {
     /// Recompute mean reprojection errors for points at infinity only, leaving
     /// finite points' errors untouched.
     ///
-    /// Used after bundle adjustment: a point that was materialised to a finite
-    /// landmark, refined, then reclassified back to `w = 0` carries an error
-    /// describing the landmark, not its bearing. Only those points need fixing,
-    /// so finite points keep the errors the solve produced and `.sift` files are
-    /// read only for images that observe a point at infinity.
+    /// For a reconstruction whose points at infinity carry errors that describe
+    /// something else (set by hand, or by a pass that changes `w` without
+    /// recomputing errors): finite points keep their errors and `.sift` files
+    /// are read only for images that observe a point at infinity.
+    /// `classify_points_at_infinity` recomputes the errors of the points it
+    /// changes itself, so it needs no call to this.
     pub fn recompute_infinity_point_errors(&mut self) -> Result<(), ReconstructionError> {
         let num_points = self.point_set.points.len();
         let is_infinity: Vec<bool> = self
@@ -489,13 +490,32 @@ pub(crate) fn observation_reprojection_error(
     at_infinity: bool,
     observed_xy: [f64; 2],
 ) -> Option<f64> {
+    let [du, dv] = observation_reprojection_residual(
+        rotation,
+        translation,
+        camera,
+        point,
+        at_infinity,
+        observed_xy,
+    )?;
+    Some((du * du + dv * dv).sqrt())
+}
+
+/// The pixel offset `(du, dv)` from an observation to its point's projection,
+/// whose length is [`observation_reprojection_error`]; `None` where that is.
+pub(crate) fn observation_reprojection_residual(
+    rotation: &UnitQuaternion<f64>,
+    translation: &Vector3<f64>,
+    camera: &CameraIntrinsics,
+    point: &Point3<f64>,
+    at_infinity: bool,
+    observed_xy: [f64; 2],
+) -> Option<[f64; 2]> {
     let p_cam = if at_infinity {
         rotation * point.coords
     } else {
         rotation * point.coords + translation
     };
     let (u_proj, v_proj) = camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z])?;
-    let du = u_proj - observed_xy[0];
-    let dv = v_proj - observed_xy[1];
-    Some((du * du + dv * dv).sqrt())
+    Some([u_proj - observed_xy[0], v_proj - observed_xy[1]])
 }

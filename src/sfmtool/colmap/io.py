@@ -352,14 +352,14 @@ def _detect_infinity_points(recon):
 
     COLMAP stores every point as a finite ``(x, y, z)``, but a track whose
     observation rays are parallel to within measurement noise has no real
-    depth — it is a point at infinity. This reclassifies such points so
+    depth — it is a point at infinity. This reclassifies such points with the
+    point-or-bearing test, at the noise the reconstruction measures, so
     downstream consumers see the homogeneous model. See
     ``specs/formats/sfmr-file-format.md``.
     """
-    classified = recon.classify_points_at_infinity()
-    count = int(np.count_nonzero(classified.point_is_at_infinity))
-    if count:
-        print(f"  Detected {count} point(s) at infinity")
+    classified, summary = recon.classify_points_at_infinity()
+    if summary["demoted"]:
+        print(f"  Detected {summary['demoted']} point(s) at infinity")
     return classified
 
 

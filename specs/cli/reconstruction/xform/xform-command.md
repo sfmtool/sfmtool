@@ -277,15 +277,33 @@ reconstruction's workspace, so the SIFT artifacts must still be present.
 --find-points-at-infinity 0.1,200,2,1.5
 ```
 
-#### `--classify-points-at-infinity <noise_floor_px>`
+#### `--classify-points-at-infinity [<sigma_px>]`
 
-Reclassifies *existing* finite points whose depth is unconstrained as points at
-infinity (`w = 0`). A finite point is reclassified when its parallax signal
-falls below the track's measurement noise (never taken below `noise_floor_px`).
-It finds no new points and leaves the point count unchanged.
+Decides every *existing* point with the point-or-bearing likelihood-ratio test
+and stores it the way the verdict says: a finite point whose rays ask for no
+depth becomes a point at infinity (`w = 0`) at its fitted bearing, and a point
+at infinity whose rays ask for one becomes a finite point at the fitted
+position. The rays are weighted by `sigma_px`, the per-axis pixel noise, which
+defaults to the noise the reconstruction measures from its finite points'
+residuals (gross outliers left out). It finds no new points and leaves the
+point count unchanged. It prints the noise level and where it came from (with
+how many observations were excluded as outliers), how many points it promoted,
+demoted and kept, and, when there are any, how many finite points it moved off
+a stored position behind or on top of a camera, and how many it left as they
+were: a finite point whose bearing is behind a camera, a point at infinity
+whose fit gave no usable point, a finite point stored behind or on top of a
+camera that neither a usable point nor its bearing describes, and a point with
+fewer than two usable rays. A
+reconstruction with no observation of a finite point, given no `sigma_px`, is
+left unchanged. It reads each observation's pixel, so a `sift_files`
+reconstruction without inline keypoints needs its `.sift` files. The rule, and
+what happens to normals, errors, patch frames and constraints, is in
+[batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md)
+§ "Consumers".
 
 ```bash
---classify-points-at-infinity 1.0
+--classify-points-at-infinity
+--classify-points-at-infinity 0.5
 ```
 
 #### `--max-features <N>`

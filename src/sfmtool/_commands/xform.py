@@ -279,8 +279,16 @@ from ..xform._arg_parser import (
 )
 @click.option(
     "--classify-points-at-infinity",
+    is_flag=False,
+    flag_value="",
     multiple=True,
-    help="Reclassify finite points whose depth is unconstrained as points at infinity: noise_floor_px (e.g. '1.0')",
+    help=(
+        "Decide every point with the point-or-bearing test: demote a finite "
+        "point whose rays ask for no depth to a point at infinity, and promote "
+        "a point at infinity whose rays ask for one to the fitted point. The "
+        "optional value is the per-axis pixel noise to weight the rays by "
+        "(e.g. '0.5'); by default it is measured from the reconstruction."
+    ),
 )
 @click.option(
     "--max-features",
@@ -329,7 +337,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
     Points at infinity:
       --find-points-at-infinity SPEC      Discover points at infinity: eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]
-      --classify-points-at-infinity NOISE Reclassify unconstrained finite points as points at infinity
+      --classify-points-at-infinity [SIGMA_PX]  Store each point as the point-or-bearing test decides
       --max-features N                    Cap features per image for --find-points-at-infinity (largest first)
 
     \b

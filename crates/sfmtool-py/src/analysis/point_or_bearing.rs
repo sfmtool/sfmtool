@@ -525,5 +525,13 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "DEFAULT_POINT_FIT_MAX_ITERATIONS",
         DEFAULT_POINT_FIT_MAX_ITERATIONS,
     )?;
+    m.add(
+        "REPROJECTION_NOISE_OUTLIER_GATE",
+        sfmtool_core::analysis::reprojection_noise::OUTLIER_GATE,
+    )?;
+    m.add(
+        "DEFAULT_MIN_DEPTH_FRACTION",
+        sfmtool_core::analysis::infinity::DEFAULT_MIN_DEPTH_FRACTION,
+    )?;
     Ok(())
 }

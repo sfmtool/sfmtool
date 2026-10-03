@@ -171,15 +171,13 @@ class BundleAdjustTransform:
 
             refined = self._reconstruction_to_data(reconstruction, ba_input)
 
-        result = refined.classify_points_at_infinity()
-        n_after = int(np.count_nonzero(result.point_is_at_infinity))
-        if n_after:
-            print(f"    Reclassified {n_after} point(s) as at infinity")
-            # The errors read back from the (materialised) BA solve describe the
-            # finite landmark, not the w = 0 bearing the point reverted to.
-            # Recompute only those points from the feature positions; finite
-            # points keep the errors the BA solve produced.
-            result.recompute_infinity_point_errors()
+        # Every point comes back from the solve finite. The reclassification
+        # demotes those whose rays ask for no depth, at the noise the adjusted
+        # reconstruction measures, and recomputes their errors as bearings;
+        # the others keep the errors the solve produced.
+        result, summary = refined.classify_points_at_infinity()
+        if summary["demoted"]:
+            print(f"    Reclassified {summary['demoted']} point(s) as at infinity")
         return result
 
     @staticmethod

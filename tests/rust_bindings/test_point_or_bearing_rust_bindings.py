@@ -224,8 +224,10 @@ def test_reprojection_noise(seoul_bull_ground_truth_sfmr):
     recon = SfmrReconstruction.load(str(seoul_bull_ground_truth_sfmr))
     sigma = recon.reprojection_noise_px()
     assert isinstance(sigma, float)
-    # The in-repo ground truth measures 0.6460 px over 1,233 observations.
-    assert sigma == pytest.approx(0.64605, abs=5e-5)
+    # The in-repo ground truth measures 0.4677 px over 1,229 observations; four
+    # mismatched keypoints, 7 to 16 px off, are left out as outliers (with them
+    # the RMS is 0.6460 px).
+    assert sigma == pytest.approx(0.46769, abs=5e-5)
 
     noise = recon.reprojection_noise()
     assert noise["sigma_px"] == sigma
@@ -234,7 +236,8 @@ def test_reprojection_noise(seoul_bull_ground_truth_sfmr):
     assert noise["observation_count"] <= int(finite_obs.sum())
     assert noise["per_camera_sigma_px"].shape == (recon.camera_count,)
     assert noise["per_camera_observation_count"].sum() == noise["observation_count"]
-    assert noise["observation_count"] == 1233
+    assert noise["observation_count"] == 1229
+    assert noise["outlier_count"] == 4
 
 
 def _rays_by_hand(recon, sigma_px):

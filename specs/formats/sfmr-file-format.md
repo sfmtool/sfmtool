@@ -1089,11 +1089,16 @@ The same `w = 0` model also captures a track seen from a **single viewpoint**:
 if the camera stops and pans around from one optical centre, a point seen only
 during that motion has no depth cue — every frame sees it in the same
 direction, so a finite point looks exactly like an infinite one. (A solver can
-also collapse a run of frames onto one centre, with the same effect.) When a
-track's observing cameras all sit at essentially the same centre,
-`classify_points_at_infinity` stores it as `w = 0` with a direction recovered
-from its keypoints, since its triangulated position is meaningless (it often
-lands right on the cameras). This is the correct model — the depth genuinely
+also collapse a run of frames onto one centre, with much the same effect.)
+When a track's observing cameras all sit at essentially the same centre, the
+point-or-bearing test finds no gain from a depth, and
+`classify_points_at_infinity` stores the track as `w = 0` at the bearing fitted
+to its keypoints' rays. For a real pan the rays agree on one direction and the
+bearing fits them. A solver's collapse can leave them diverging, since the
+poses kept their rotations; then no bearing fits them well, but nothing else
+does either, and the pass still stores the bearing (see
+[batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
+§ "Consumers"). This is the correct model — the depth genuinely
 cannot be known — and it lets distance-free operations (angular patch sizing,
 bearing reprojection) proceed where a degenerate finite position could not.
 
@@ -1440,9 +1445,9 @@ preserving apparent size: demotion divides the half-vectors by the
 demotion-time distance from the camera-cloud centroid and projects them onto
 the tangent plane of `d` (enforcing `u × v` along `-d`; a degenerate
 projection, or a demotion whose finite position was meaningless, clears the
-patch and its bitmap row); materialisation multiplies the angular
-half-vectors by the placement distance, yielding a fronto-parallel world
-surfel.
+patch and its bitmap row); promotion and materialisation multiply the angular
+half-vectors by the new point's distance from the same centroid, yielding a
+fronto-parallel world surfel.
 
 These arrays are **optional** (present only in format version 3+, when
 `points3d/metadata.json`'s `has_uv_frames` is `true`) and **per 3D point**,

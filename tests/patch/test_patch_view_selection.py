@@ -310,8 +310,15 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
 
     Same model-stated invariant as the finite B1 test above, on the same
     wide-fisheye rig: `(R·d).z < 0` would restrict a >180° rig to its forward
-    hemisphere, which is not what its camera model says it sees."""
-    recon = SfmrReconstruction.load(kerry_park_workspace)
+    hemisphere, which is not what its camera model says it sees.
+
+    The solve's points are all finite at the noise level it measures, so the
+    test makes points at infinity: at a stated 1 px, the point-or-bearing test
+    calls the tracks with the weakest depth evidence bearings, and the
+    reclassification stores them as directions."""
+    solved = SfmrReconstruction.load(kerry_park_workspace)
+    recon, summary = solved.classify_points_at_infinity(sigma_px=1.0)
+    assert summary["demoted"] > 0, summary
     images = load_images(recon)
     # Default includes points at infinity.
     cloud = PatchCloud.from_reconstruction(
@@ -324,11 +331,7 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     cam_idx = np.asarray(recon.camera_indexes)
 
     inf_ids = [int(p) for p in np.asarray(cloud.point_indexes) if is_inf[int(p)]]
-    assert inf_ids, (
-        "the kerry_park cloud carries no point at infinity, which "
-        "kerry_park_workspace_once guarantees (MIN_INFINITY_POINTS) — the fixture "
-        "accepted a reconstruction it should have re-rolled, not a defect here"
-    )
+    assert inf_ids, "the kerry_park cloud carries no point at infinity"
     results = cloud.select_views(recon, images, point_indexes=inf_ids, resolution=12)
 
     checked = 0

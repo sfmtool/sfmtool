@@ -966,12 +966,15 @@ says, so the coordinate and the frame's centre are one thing in both.
 **Every step that triangulates decides which, on one criterion.** The criterion
 is not the bench's: `classify_track_rays`
 ([`classify.rs`](../../../crates/sfmtool-core/src/bench/classify.rs)) calls
-`classify_rays_at_infinity`, the same per-track test
-`classify_points_at_infinity` reclassifies a whole reconstruction with and
+`classify_rays_at_infinity`, the inverse-depth z rule
 `find_points_at_infinity` admits discovered tracks on
 ([`../reconstruction/batch-triangulation-api.md`](../reconstruction/batch-triangulation-api.md)
-§ "Consumers"), with the same defaults. It reads the rays and answers with the
-coordinate the track takes, a flag, and the number that settled it:
+§ "Consumers"), with the same defaults. Reclassifying a whole reconstruction
+(`classify_points_at_infinity`) decides on the point-or-bearing test instead;
+the bench moves to it in a later step of
+[the amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md).
+`classify_track_rays` reads the rays and answers with the coordinate the track
+takes, a flag, and the number that settled it:
 
 - a well-conditioned in-front solve is **finite** on the condition number
   alone, before any noise model is consulted (`well_conditioned`);
@@ -981,10 +984,9 @@ coordinate the track takes, a flag, and the number that settled it:
   too;
 - a baseline that cannot place a point even at the capture's own scale
   (`resolvable_distance` short of the camera cloud's extent) is a **bearing**
-  (`baseline_too_short`). The reconstruction passes leave such a track alone,
-  because leaving it alone is an option when the pass is relabel-only; a fit has
-  to write something, and what the numbers say is that the depth is not
-  observable.
+  (`baseline_too_short`). Discovery drops such a track, because leaving it
+  out is an option for a pass that only adds; a fit has to write something, and
+  what the numbers say is that the depth is not observable.
 
 The bearing a `w = 0` answer carries is the normalised mean of the rays, which
 is the robust direction those sightings agree on.

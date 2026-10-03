@@ -814,9 +814,10 @@ impl PySfmrReconstruction {
     /// Recompute mean reprojection errors for points at infinity only.
     ///
     /// Finite points keep their existing errors. Reads `.sift` files only for
-    /// images that observe a point at infinity. Intended for use after bundle
-    /// adjustment, where points reclassified back to ``w = 0`` carry an error
-    /// describing their materialised landmark rather than their bearing.
+    /// images that observe a point at infinity. For a reconstruction whose
+    /// points at infinity were set by hand or by a pass that leaves their
+    /// errors as they were; ``classify_points_at_infinity`` recomputes the
+    /// errors of the points it changes itself.
     fn recompute_infinity_point_errors(&mut self) -> PyResult<()> {
         self.inner
             .recompute_infinity_point_errors()
@@ -910,29 +911,76 @@ impl PySfmrReconstruction {
         Ok(Self { inner })
     }
 
-    /// Reclassify finite points whose depth is unconstrained as points at
-    /// infinity, returning a new reconstruction.
+    /// Decide every point with the point-or-bearing test and store it the way
+    /// its verdict says, returning a new reconstruction and what changed.
     ///
-    /// A finite point becomes a point at infinity (``w = 0``) when the
-    /// triangulation of its observation rays is statistically indistinguishable
-    /// from infinity: a degenerate or behind-camera solve, or — in the
-    /// ill-conditioned regime — an inverse-depth z-score below the cutoff. The
-    /// per-ray angular noise is ``max(reprojection_error, noise_floor_px) / fᵢ``.
-    /// Its coordinate is replaced with the bearing-mean direction of its
-    /// observation rays. Points already at infinity, and points with fewer than
-    /// two observations, are left unchanged.
+    /// Each point, finite or at infinity, is scored on the rays of its
+    /// observed pixels (see ``point_or_bearing_scores``) at ``sigma_px`` and
+    /// judged at ``DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD``. A finite point
+    /// with a bearing verdict is demoted to ``w = 0`` at its scored bearing,
+    /// unless that bearing is behind one of its observing cameras. A point at
+    /// infinity with a finite verdict is promoted to the plain least-squares
+    /// point fit, unless the fit gives no point in front of every observing
+    /// camera and at least ``DEFAULT_MIN_DEPTH_FRACTION`` of the scene scale
+    /// from each. A finite point stored where no point can be (behind or on top
+    /// of a camera) is re-fitted from there, or demoted when the fit gives no
+    /// such point either. A changed point gets a zero normal and normal confidence,
+    /// its error recomputed, its patch frame converted between world and
+    /// angular extents, and its constraint released. No point is added or
+    /// removed.
     ///
     /// Args:
-    ///     noise_floor_px: SIFT keypoint localisation noise floor in pixels;
-    ///         the per-point noise estimate is never taken below this. Defaults
-    ///         to 1.0.
-    #[pyo3(signature = (noise_floor_px=None))]
-    fn classify_points_at_infinity(&self, noise_floor_px: Option<f64>) -> Self {
-        let floor =
-            noise_floor_px.unwrap_or(sfmtool_core::analysis::infinity::DEFAULT_NOISE_FLOOR_PX);
-        Self {
-            inner: self.inner.classify_points_at_infinity(floor),
+    ///     sigma_px: Per-axis pixel noise the rays are weighted by; defaults to
+    ///         the measured ``reprojection_noise()``.
+    ///
+    /// Returns:
+    ///     ``(reconstruction, summary)``. ``summary`` is a dict: ``sigma_px``
+    ///     (float, or ``None`` when none was given and the reconstruction has
+    ///     no observation of a finite point, in which case the reconstruction
+    ///     is returned unchanged), ``noise`` (``reprojection_noise()``'s dict
+    ///     when the noise was measured, else ``None``), and the counts
+    ///     ``promoted``, ``demoted``, ``kept``, ``refitted`` (finite points
+    ///     moved off a stored position behind or on top of a camera),
+    ///     ``bearing_behind_camera`` (left finite), ``no_usable_point`` (left
+    ///     at infinity), ``left_unusable`` (finite points stored behind or on
+    ///     top of a camera that neither a point nor the bearing describes, left
+    ///     where they are) and ``unscored`` (fewer than two usable rays).
+    ///
+    /// Raises:
+    ///     ValueError: ``sigma_px`` is not finite and positive.
+    ///     IOError: A ``.sift`` file could not be read.
+    #[pyo3(signature = (sigma_px=None))]
+    fn classify_points_at_infinity(
+        &self,
+        py: Python<'_>,
+        sigma_px: Option<f64>,
+    ) -> PyResult<(Self, Py<PyAny>)> {
+        use sfmtool_core::analysis::point_or_bearing::PointOrBearingError;
+
+        let recon = &self.inner;
+        let (inner, summary) = py
+            .detach(|| recon.classify_points_at_infinity(sigma_px))
+            .map_err(|e| match e {
+                PointOrBearingError::Reconstruction(_) => {
+                    pyo3::exceptions::PyIOError::new_err(e.to_string())
+                }
+                _ => PyValueError::new_err(e.to_string()),
+            })?;
+        let dict = PyDict::new(py);
+        dict.set_item("sigma_px", summary.sigma_px)?;
+        match &summary.noise {
+            Some(noise) => dict.set_item("noise", noise_to_py(py, noise)?)?,
+            None => dict.set_item("noise", py.None())?,
         }
+        dict.set_item("promoted", summary.promoted)?;
+        dict.set_item("demoted", summary.demoted)?;
+        dict.set_item("kept", summary.kept)?;
+        dict.set_item("refitted", summary.refitted)?;
+        dict.set_item("bearing_behind_camera", summary.bearing_behind_camera)?;
+        dict.set_item("no_usable_point", summary.no_usable_point)?;
+        dict.set_item("left_unusable", summary.left_unusable)?;
+        dict.set_item("unscored", summary.unscored)?;
+        Ok((Self { inner }, dict.into_any().unbind()))
     }
 
     /// Triangulation observability diagnostics for the stored finite points.
@@ -1026,12 +1074,16 @@ impl PySfmrReconstruction {
     }
 
     /// The RMS per-axis reprojection residual in pixels over the observations
-    /// of finite points, or ``None`` when there are none.
+    /// of finite points, gross outliers left out, or ``None`` when there are
+    /// none.
     ///
     /// The residual is measured against the inline keypoints, or against the
     /// ``.sift`` positions for a ``sift_files`` reconstruction without them
     /// (those files must then be in the workspace). Points at infinity are left
-    /// out. This is the default noise level of ``point_or_bearing_scores``.
+    /// out, as is an observation whose residual is more than
+    /// ``REPROJECTION_NOISE_OUTLIER_GATE`` robust spreads of its camera's
+    /// residuals. This is the default noise level of
+    /// ``point_or_bearing_scores`` and ``classify_points_at_infinity``.
     fn reprojection_noise_px(&self, py: Python<'_>) -> PyResult<Option<f64>> {
         let recon = &self.inner;
         py.detach(|| recon.reprojection_noise_px())
@@ -1042,40 +1094,17 @@ impl PySfmrReconstruction {
     ///
     /// Returns:
     ///     A dict: ``sigma_px`` (float or ``None``), ``observation_count``
-    ///     (int), ``per_camera_sigma_px`` ``(C,)`` float64 (NaN for a camera
-    ///     with no counted observation) and ``per_camera_observation_count``
-    ///     ``(C,)`` int64, indexed as the reconstruction's cameras.
+    ///     (int), ``outlier_count`` (int, the observations left out as
+    ///     outliers), ``per_camera_sigma_px`` ``(C,)`` float64 (NaN for a
+    ///     camera with no counted observation) and
+    ///     ``per_camera_observation_count`` ``(C,)`` int64, indexed as the
+    ///     reconstruction's cameras.
     fn reprojection_noise(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let recon = &self.inner;
         let noise = py
             .detach(|| recon.reprojection_noise())
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        let dict = PyDict::new(py);
-        dict.set_item("sigma_px", noise.sigma_px)?;
-        dict.set_item("observation_count", noise.observation_count)?;
-        dict.set_item(
-            "per_camera_sigma_px",
-            PyArray1::from_vec(
-                py,
-                noise
-                    .per_camera_sigma_px
-                    .iter()
-                    .map(|s| s.unwrap_or(f64::NAN))
-                    .collect(),
-            ),
-        )?;
-        dict.set_item(
-            "per_camera_observation_count",
-            PyArray1::from_vec(
-                py,
-                noise
-                    .per_camera_observation_count
-                    .iter()
-                    .map(|&n| n as i64)
-                    .collect(),
-            ),
-        )?;
-        Ok(dict.into_any().unbind())
+        noise_to_py(py, &noise)
     }
 
     /// The point-or-bearing test on points of this reconstruction.
@@ -1387,4 +1416,38 @@ impl PySfmrReconstruction {
             self.inner.observation_count(),
         )
     }
+}
+
+/// ``reprojection_noise()``'s dict.
+fn noise_to_py(
+    py: Python<'_>,
+    noise: &sfmtool_core::analysis::reprojection_noise::ReprojectionNoise,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("sigma_px", noise.sigma_px)?;
+    dict.set_item("observation_count", noise.observation_count)?;
+    dict.set_item("outlier_count", noise.outlier_count)?;
+    dict.set_item(
+        "per_camera_sigma_px",
+        PyArray1::from_vec(
+            py,
+            noise
+                .per_camera_sigma_px
+                .iter()
+                .map(|s| s.unwrap_or(f64::NAN))
+                .collect(),
+        ),
+    )?;
+    dict.set_item(
+        "per_camera_observation_count",
+        PyArray1::from_vec(
+            py,
+            noise
+                .per_camera_observation_count
+                .iter()
+                .map(|&n| n as i64)
+                .collect(),
+        ),
+    )?;
+    Ok(dict.into_any().unbind())
 }

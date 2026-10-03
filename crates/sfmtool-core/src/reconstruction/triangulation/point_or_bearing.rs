@@ -87,6 +87,7 @@ pub struct BearingScore {
     /// spread over a wide angle (an arc of cameras around an object), where
     /// the bearing is a poor model, `ρ = 0` is far from the point, and the
     /// score linearised there says nothing.
+    /// 0 for a track whose camera centres coincide to round-off.
     pub midpoint_bound: f64,
     /// [`Self::bearing`] lies in front of every observing camera:
     /// `dᵢ · bearing > 0` for every ray. The sine residual cannot tell a ray
@@ -418,6 +419,23 @@ const CONVERGED_REL: f64 = 1e-12;
 /// fit of an exact bearing from creeping off `ρ = 0` on round-off.
 const CONVERGED_ABS: f64 = 1e-12;
 
+/// Camera centres whose offsets from their centroid are all within this
+/// fraction of the centres' distance from the origin are one centre. Such
+/// offsets are round-off (a solver that collapsed a run of frames onto one
+/// centre leaves centres a few ulps apart), and the score, which does not
+/// depend on the scale of the offsets, would otherwise read a depth from that
+/// round-off. A track seen from one centre has no depth leverage, so the
+/// centres are made exactly equal, at their centroid: `ρ` then has no
+/// direction, the depth score is 0 and there is no midpoint.
+///
+/// The tolerance is relative, so a real baseline under `1e-12` of the
+/// centres' distance from the origin is treated as round-off too: below
+/// 1 µm for centres a million units out, about 6 µm for metre-scale ECEF
+/// coordinates. Double precision resolves such a centre to about `2e-16` of
+/// that distance, so the rule leaves four orders of magnitude between the
+/// round-off it removes and the smallest baseline it keeps.
+const COINCIDENT_CENTRE_TOLERANCE: f64 = 1e-12;
+
 /// One usable ray, prepared for the residual.
 #[derive(Debug, Clone, Copy)]
 struct Ray {
@@ -434,6 +452,8 @@ struct Ray {
 struct Track {
     rays: Vec<Ray>,
     anchor: Point3<f64>,
+    /// Every centre is the anchor (see `COINCIDENT_CENTRE_TOLERANCE`).
+    one_centre: bool,
 }
 
 /// A point-model state and its cost.
@@ -567,16 +587,38 @@ impl Track {
                 }
                 Point3::from(sum / usable.len() as f64)
             });
+        // Centres that differ only by round-off are one centre (see
+        // `COINCIDENT_CENTRE_TOLERANCE`). They are compared with their own
+        // centroid, not the anchor, which a caller may set anywhere.
+        let mut sum = Vector3::zeros();
+        for (_, c, _) in &usable {
+            sum += c.coords;
+        }
+        let centroid = Point3::from(sum / usable.len() as f64);
+        let magnitude = usable
+            .iter()
+            .map(|(_, c, _)| c.coords.norm())
+            .fold(0.0, f64::max);
+        let one_centre = usable
+            .iter()
+            .all(|(_, c, _)| (centroid - c).norm() <= COINCIDENT_CENTRE_TOLERANCE * magnitude);
         let rays = usable
             .into_iter()
-            .map(|(d, center, a)| Ray {
-                d,
-                a,
-                offset: anchor - center,
-                center,
+            .map(|(d, center, a)| {
+                let center = if one_centre { centroid } else { center };
+                Ray {
+                    d,
+                    a,
+                    offset: anchor - center,
+                    center,
+                }
             })
             .collect();
-        Some(Self { rays, anchor })
+        Some(Self {
+            rays,
+            anchor,
+            one_centre,
+        })
     }
 
     /// The bearing minimising the plain least-squares cost, and that cost.
@@ -763,8 +805,13 @@ impl Track {
 
     /// The weighted linear midpoint `(Σ Aᵢᵀ Aᵢ)⁻¹ Σ Aᵢᵀ Aᵢ cᵢ`, the point
     /// minimising `Σ ‖Aᵢ (X − cᵢ)‖²`, when it is finite and lies in front of
-    /// every camera.
+    /// every camera, and the track has more than one centre.
     fn midpoint_in_front(&self) -> Option<Point3<f64>> {
+        // From one centre the midpoint is that centre, and which side of it
+        // the solve lands on is round-off.
+        if self.one_centre {
+            return None;
+        }
         let mut m = Matrix3::<f64>::zeros();
         let mut b = Vector3::<f64>::zeros();
         for r in &self.rays {

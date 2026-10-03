@@ -204,12 +204,10 @@ Dropping keeps the `.sfmr` model binary (`w=1` / `w=0`) — no third state to
 store. It is clean in discovery, which is additive: an indeterminate candidate
 is simply never appended, so the base solve is untouched and the discovered
 cloud holds only tracks whose depth the geometry could actually adjudicate.
-`classify_points_at_infinity` stays relabel-only and non-destructive: it never
-removes a solve point. It demotes a point to `w=0` only on a *confident*
-infinity call (sufficient baseline and `inverse_depth_z` below the cutoff); an
-indeterminate solve point — one we lack the baseline to adjudicate — is left as
-the finite point the solve produced. So "drop" applies to discovery candidates;
-reclassify simply declines to demote.
+Reclassifying a reconstruction's own points (`classify_points_at_infinity`)
+used this gate too, leaving an indeterminate point as the solve produced it; it
+now decides on the likelihood-ratio test of "Point or bearing" and has no third
+state (see "Consumers").
 
 This makes "at infinity" *scene-relative* and honest: not "infinitely far"
 (unprovable), but "farther than this capture's geometry can place within the
@@ -255,8 +253,8 @@ perpendicular spread of the observing cameras about the mean viewing direction.
 `DepthUncertainty` and adds no input to `depth_uncertainty_batch`.
 `finite_horizon` is policy, so it enters the classifier —
 `analysis/infinity/convert.rs::classify_rays_at_infinity` and the public
-`classify_points_at_infinity` / `find_points_at_infinity` (and the GUI
-diagnostics) — defaulting to the reconstruction's camera extents.
+`find_points_at_infinity` (and the GUI diagnostics) — defaulting to the
+reconstruction's camera extents.
 
 ## Point or bearing
 
@@ -268,9 +266,11 @@ than the noise could explain? It fits both models to the track's rays and
 compares their costs, which is a likelihood-ratio test between two nested
 models. A stored reconstruction supplies the noise level from its own residuals
 ("The measured noise level") and runs the test over its points with one method
-("Over a reconstruction"), and both are bound to Python. No classifier reads
-it yet; the `analyze` and `inspect` reports do (see "Consumers"). Moving the
-four finite-or-bearing rules onto it is the amendment draft
+("Over a reconstruction"), and both are bound to Python. Reclassifying a
+reconstruction's points decides on it, and the `analyze` and `inspect` reports
+print it (see "Consumers"). Moving the other finite-or-bearing rules
+(discovery, the bench, bundle adjustment's crossing) onto it is the amendment
+draft
 [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
 which also carries the measurements that motivate it.
 
@@ -554,6 +554,26 @@ tracks whose rays spread over a wide angle (63 of the Kerry Park ground
 truth's 387 tracks), where the bearing describes nothing and the verdict is
 finite.
 
+Camera centres that coincide to round-off are one centre. A track's centres
+whose offsets from their centroid are all within `1e-12` of their distance
+from the origin are made exactly equal, at the centroid, before the test runs,
+so `ρ` has no direction, the depth score is 0, there is no midpoint, and the
+fit's `Λ` is 0. The comparison is with the centroid rather than the anchor,
+which a caller may place anywhere. Such offsets
+are what a solver leaves when it collapses a run of frames onto one centre
+(the poses keep their rotations and the centres end a few ulps apart), and
+the score does not depend on the scale of the offsets: without the rule its
+verdict on those tracks was decided by the round-off. On eight collapsed
+seoul bull points, four scored 0 and four 854 to 913, while the exact fit's
+`Λ` was 0 for all of them. The tolerance is relative, so it also takes a real
+baseline under `1e-12` of the centres' distance from the origin for
+round-off: under 1 µm for centres a million units out, about 6 µm in
+metre-scale ECEF coordinates. Double precision holds such a centre to about
+`2e-16` of that distance, so four orders of magnitude separate the round-off
+the rule removes from the smallest baseline it keeps; a capture far from its
+origin with sub-tolerance baselines should be re-centred. Consistent rays from one centre, as from a camera
+that pans in place, give `Λ ≈ 0` and a bearing with or without the rule.
+
 Weights so large that the bearing's cost overflows make the track `None`
 rather than give it an infinite cost.
 
@@ -573,14 +593,20 @@ point 50 has 85,424 and 5,892), so a report that sets `Λ` beside `depth_score` 
 
 The weights are over a per-axis pixel noise `σ_px`, and a stored
 reconstruction measures its own: the RMS per-axis reprojection residual over
-the observations of its finite points. It lives in
+the observations of its finite points, with gross outliers left out. It lives
+in
 [analysis/reprojection_noise.rs](../../../crates/sfmtool-core/src/analysis/reprojection_noise.rs).
 
 ```rust
+/// How many robust spreads a residual may be before it is an outlier.
+pub const OUTLIER_GATE: f64 = 30.0;
+
 pub struct ReprojectionNoise {
     /// √(Σ (du² + dv²) / 2n) over every counted observation; None when none.
     pub sigma_px: Option<f64>,
     pub observation_count: usize,
+    /// Observations left out because their residual passed the gate.
+    pub outlier_count: usize,
     /// The same over each camera's observations, indexed as image_table.cameras.
     pub per_camera_sigma_px: Vec<Option<f64>>,
     pub per_camera_observation_count: Vec<usize>,
@@ -594,21 +620,73 @@ impl SfmrReconstruction {
 ```
 
 ```rust
-let sigma_px = recon.reprojection_noise_px()?.expect("a finite point with observations");
+let noise = recon.reprojection_noise()?;
+let sigma_px = noise.sigma_px.expect("a finite point with observations");
+println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
 ```
 
 - **Finite points only.** The test this measure feeds is about whether a
   track is a bearing, and a bearing's residuals are the residuals of the model
   under question. A reconstruction with no observation of a finite point has no
   measure, and the result is `None` rather than a guessed default.
-- **RMS, not a robust spread.** `σ_px` has to cover pose, lens-model and
-  keypoint error together, and those are heavier-tailed than a Gaussian. On
-  the Kerry Park ground truth the robust spread is 0.137 px against an RMS of
-  0.216 px, and at 0.137 px even its 13,000-unit bearings score up to 35.
-  The plain RMS is sensitive to a few gross residuals and takes no account
-  of the parameters bundle adjustment fitted; whether to trim outliers or
-  correct for degrees of freedom is open in the
-  [amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md).
+- **Only observations the test reads.** An observation is left out when its
+  pixel is not finite, when the camera model cannot image its point, and when
+  `observed_ray` declines its pixel (outside the camera model's domain), since
+  the test then gives it no ray either. Before this rule, an observation the
+  test never read could set the noise level the test read the others at: two
+  keypoints moved to 1e9 px made `σ` 7e7 px.
+- **An RMS, gated by a robust spread.** `σ_px` has to cover pose, lens-model
+  and keypoint error together, and those are heavier-tailed than a Gaussian,
+  so it is an RMS rather than a robust spread. On the Kerry Park ground truth
+  the robust spread is 0.137 px against an RMS of 0.216 px, and at 0.137 px
+  even its 13,000-unit bearings score up to 35. A few gross residuals,
+  mismatched keypoints rather than noise, can still dominate an RMS, so each
+  camera's robust spread `s = 1.4826 · median |r|` over the per-axis
+  components of its residuals sets a gate, and an observation whose residual
+  is longer than `OUTLIER_GATE · s` is counted in `outlier_count` and left out.
+  The gate is per camera so that a noisier camera keeps its own tail.
+- **Why the gate is 30 spreads.** The residuals of real solves are not
+  Gaussian, and a gate set for a Gaussian (4 to 6 spreads) cuts into the tail
+  `σ` is meant to cover. Measured on the Kerry Park ground truth `tk117`, the
+  in-repo seoul bull ground truth, and `inf2`, a 17-image seoul bull
+  `sift_files` solve with 365 discovered points at infinity, each estimator's
+  `σ` (with the observations a gate leaves out) and the stored points whose
+  verdict at the default threshold disagrees with their storage (points at
+  infinity called finite / finite points called bearings):
+
+  | Estimator | `tk117` | seoul bull ground truth | `inf2` |
+  |---|---|---|---|
+  | Plain RMS | 0.2156 (3 / 0) | 0.6461 (0 / 0) | 0.3593 (34 / 0) |
+  | Gate at 5 spreads | 0.1652, 129 out (3 / 0) | 0.2461, 80 out (1 / 0) | 0.2858, 101 out (48 / 0) |
+  | Gate at 10 | 0.2014, 14 out (3 / 0) | 0.3133, 35 out (0 / 0) | 0.3445, 9 out (36 / 0) |
+  | Gate at 20 | 0.2156, 0 out (3 / 0) | 0.4239, 8 out (0 / 0) | 0.3593, 0 out (34 / 0) |
+  | **Gate at 30** | **0.2156, 0 out (3 / 0)** | **0.4677, 4 out (0 / 0)** | **0.3593, 0 out (34 / 0)** |
+  | RMS less the top 1% | 0.1905 (3 / 0) | 0.4002 (0 / 0) | 0.3237 (42 / 0) |
+  | RMS less the top 2% | 0.1783 (3 / 0) | 0.3446 (0 / 0) | 0.3038 (45 / 0) |
+  | Robust spread (MAD) | 0.1370 (5 / 0) | 0.2046 (1 / 0) | 0.2363 (61 / 0) |
+
+  The two bundle-adjusted solves have their largest residuals at 18.8 and
+  13.1 spreads; a gate at 5 leaves out 3.7% and 3.3% of their observations
+  and lowers `σ` by 23% and 20%, and trimming a fixed fraction lowers it
+  whether or not anything is gross. On the ground truth the largest four
+  residuals, 7 to 16 px at 34 to 79 spreads, stand apart from the rest of its
+  tail (27 spreads and under) and carry about half of `Σ e²`. A gate at 30 is
+  the one in the table that leaves both solves' tails whole and removes
+  exactly those four. Its `σ` gives the same verdicts as the plain RMS on all
+  three files; on the ground truth it moves bearing 188's score from 3.6 to
+  6.9, and that point turns finite only below 0.246 px.
+- **No degrees-of-freedom correction.** The RMS divides by the `2n` residual
+  components and takes no account of the parameters fitted to them, so for a
+  least-squares fit with Gaussian noise it understates `σ`; the textbook
+  correction `2n − 3P − 6I + 7` (`P` finite points, `I` images, less the 7 of
+  the similarity gauge) would raise it by 1.118 on `tk117` and 1.25 on the
+  seoul bull. It is not applied. The parameter count is not something a file
+  records: rigs share poses, intrinsics are released or held per camera, and a
+  ground truth or a hand-edited file was not fitted as one least-squares
+  problem at all. And the correction is one factor on `σ` for the whole
+  reconstruction, which scales every score by `1/factor²`: a change of the
+  threshold, which is calibrated against `σ` as measured here (see the
+  amendment draft's open question on the threshold).
 - **One value, and one per camera beside it.** The default everywhere is the
   overall value. The per-camera values cost one more accumulator per camera
   and are what a caller reads to decide whether one value is enough: the two
@@ -623,12 +701,11 @@ let sigma_px = recon.reprojection_noise_px()?.expect("a finite point with observ
   the same lookup, `SfmrReconstruction::observation_pixels` in
   [recompute.rs](../../../crates/sfmtool-core/src/reconstruction/data/recompute.rs),
   whose `.sift` read (`tracked_sift_positions`) is also the one
-  `compute_observation_reprojection_errors` makes. An
-  observation is left out when its pixel is not finite or the camera model
-  cannot image its point.
+  `compute_observation_reprojection_errors` makes.
 
 On the Kerry Park ground truth `tk117` it is 0.2156 px over 3,510
-observations; on the in-repo seoul bull ground truth, 0.646 px over 1,233.
+observations with none left out; on the in-repo seoul bull ground truth,
+0.4677 px over 1,229, four left out as outliers.
 
 ### Over a reconstruction
 
@@ -794,7 +871,7 @@ fit = fit_point_and_bearing_batch(dirs, centers, offsets, weights,
 #   depth_likelihood_ratio (M,), in_front_of_all_cameras (M,) bool, num_views (M,) int64
 
 recon.reprojection_noise_px()  # float or None
-recon.reprojection_noise()     # sigma_px, observation_count,
+recon.reprojection_noise()     # sigma_px, observation_count, outlier_count,
                                # per_camera_sigma_px (C,), per_camera_observation_count (C,)
 out = recon.point_or_bearing_scores(point_indexes=None, sigma_px=None, fit=False,
                                     threshold=25.0, soft_l1_scale=None,
@@ -802,7 +879,16 @@ out = recon.point_or_bearing_scores(point_indexes=None, sigma_px=None, fit=False
 #   bearing_score_batch's dict, one row per point index, plus sigma_px and
 #   point_indexes (M,) int64; with fit=True, out["fit"] is
 #   fit_point_and_bearing_batch's dict, aligned the same way
+reclassified, summary = recon.classify_points_at_infinity(sigma_px=None)
+#   summary: sigma_px (float or None), noise (reprojection_noise()'s dict when
+#   measured, else None), promoted, demoted, kept, refitted,
+#   bearing_behind_camera, no_usable_point, unscored
 ```
+
+`OUTLIER_GATE` and `DEFAULT_MIN_DEPTH_FRACTION` are in `sfmtool._sfmtool.analysis`
+as `REPROJECTION_NOISE_OUTLIER_GATE` and `DEFAULT_MIN_DEPTH_FRACTION`.
+`classify_points_at_infinity` raises `ValueError` for a `sigma_px` that is not
+finite and positive and `OSError` when the pixels cannot be read.
 
 - **Keys are the Rust field names**, `bearing_in_front_of_all_cameras` and
   `in_front_of_all_cameras` included, as `triangulate_batch`'s are, so a
@@ -827,24 +913,147 @@ is for the CLI/inspect/analyze/notebook paths.
 
 ## Consumers
 
-**Points at infinity.** `analysis/infinity/discover.rs::classify_track`,
-`analysis/infinity/convert.rs::classify_points_at_infinity` and the track
-bench's `bench/classify.rs::classify_track_rays` share
+**Reclassification.** `SfmrReconstruction::classify_points_at_infinity` in
+[analysis/infinity/convert.rs](../../../crates/sfmtool-core/src/analysis/infinity/convert.rs)
+decides every point of a reconstruction, finite or at infinity, with the test
+of "Point or bearing", and stores each one the way its verdict says.
+
+```rust
+/// The minimum depth of a promoted point, as a fraction of the median distance
+/// from a finite point to an observing camera's centre.
+pub const DEFAULT_MIN_DEPTH_FRACTION: f64 = 0.01;
+
+pub struct InfinityReclassification {
+    /// The caller's noise level, or the measured one; None when neither exists.
+    pub sigma_px: Option<f64>,
+    /// The measurement behind sigma_px, when the pass measured it.
+    pub noise: Option<ReprojectionNoise>,
+    pub promoted: usize,
+    pub demoted: usize,
+    pub kept: usize,
+    /// Finite points moved off a stored position no point can have.
+    pub refitted: usize,
+    /// Bearing verdicts left finite: the bearing is behind a camera.
+    pub bearing_behind_camera: usize,
+    /// Finite verdicts left at infinity: the fit gave no usable point.
+    pub no_usable_point: usize,
+    /// Finite points stored where no point can be, with no usable fit and a
+    /// bearing behind a camera: left where they are.
+    pub left_unusable: usize,
+    /// Fewer than two usable rays.
+    pub unscored: usize,
+}
+
+impl SfmrReconstruction {
+    pub fn classify_points_at_infinity(
+        &self,
+        sigma_px: Option<f64>,
+    ) -> Result<(Self, InfinityReclassification), PointOrBearingError>;
+}
+```
+
+```rust
+let (reclassified, summary) = recon.classify_points_at_infinity(None)?;
+println!("{} promoted, {} demoted", summary.promoted, summary.demoted);
+```
+
+Each point's observations become rays through `track_rays` at `sigma_px` (the
+measured noise level when `None`), each track is scored with
+`bearing_score_batch`, and `is_finite` at
+`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD` gives the verdict. A point is
+*usable* where it lies in front of every observing camera, along the ray its
+pixel gives, and no closer to any of their centres than the minimum depth.
+
+- **Agreement keeps the point.** A finite point with a finite verdict at a
+  usable stored position, and a point at infinity with a bearing verdict, are
+  left exactly as stored: the pass does not re-place points it agrees with.
+- **Demotion.** A finite point with a bearing verdict becomes `w = 0` at the
+  score's closed-form bearing. When that bearing is behind an observing camera
+  it does not describe that sighting, and the point is left finite and counted
+  in `bearing_behind_camera`: the pass removes no point and prunes no
+  sighting, so the "prune or drop" of "Fitting" is left to a caller that may.
+- **Promotion.** A point at infinity with a finite verdict is placed by
+  `fit_point_and_bearing` with plain least squares (the fit the score
+  approximates) and no start, since a bearing holds no position. A usable
+  result becomes `w = 1` there; otherwise the point stays a bearing and is
+  counted in `no_usable_point`. This is the consumer rule of "Fitting" for a
+  caller holding no position. The fit's own `Λ` must also reach the threshold:
+  the score is a linear prediction at `ρ = 0` and can exceed `Λ` where the
+  geometry is degenerate, and the point stored is the fit's. On `tk117`, the
+  seoul bull ground truth and `inf2` no promotion fails it.
+- **A finite point stored where no point can be.** A finite verdict on a
+  finite point whose stored position is not usable (behind a camera, or on
+  top of one) gets the same rule with the position it holds: the fit runs from
+  it, the point moves to a usable result (`refitted`), and otherwise the track
+  is treated as a bearing and demoted as above. When that bearing is behind a
+  camera too, no representation describes every sighting and the point is
+  left at its stored position, counted in `left_unusable`, for a caller that
+  can prune sightings or drop points.
+- **A track whose cameras collapsed onto one centre.** Its centres coincide to
+  round-off, so the test gives it no depth leverage (see "Fitting") and a
+  bearing verdict, and the point is demoted to its bearing; the stored
+  position, on the cameras, leaves no patch extent to convert. That holds
+  whether its rays agree (a real pan, `Λ ≈ 0`) or diverge, as a solver's
+  collapse that kept the rotations leaves them. Diverging rays fit no bearing,
+  but the point fit can only run onto the shared centre, which the minimum
+  depth rejects, so a finite verdict would end in the same demotion through
+  the refit.
+- **What a change carries with it.** A changed point's normal is zeroed and its
+  normal confidence set to 0 (the writer fills a finite point's zero normal
+  from its viewing directions, and a `w = 0` row is zero by the format), its
+  error is recomputed against its observed pixels in the new representation,
+  and its constraint is released. Its patch frame crosses the boundary at the
+  distance from the camera-cloud centroid: demotion divides the half-vectors by
+  the stored point's distance and projects them onto the bearing's tangent
+  plane, promotion multiplies them by the placed point's distance, and a frame
+  solved at a position that was no depth (a refit, or a demotion from a
+  position on a camera) is cleared.
+- **The minimum depth** is `DEFAULT_MIN_DEPTH_FRACTION` of the median distance
+  from a finite point to the centre of a camera observing it (the camera
+  extents when no finite point is observed). On `tk117`, the seoul bull ground
+  truth and `inf2` the stored finite point nearest a camera sits at 13%, 42%
+  and 39% of that median, so 1% is an order of magnitude below any stored
+  point and well above the near-zero depths of the fit's degenerate results.
+- **No noise level, no decision.** Without `sigma_px` and with no observation
+  of a finite point, nothing is measured and the reconstruction comes back
+  unchanged, with `sigma_px: None` in the summary. A `sigma_px` that is not
+  finite and positive is `InvalidNoiseLevel`, and pixels that cannot be read
+  (a `sift_files` file without its `.sift` files) are `Reconstruction`.
+
+The constants `CONDITION_NUMBER_PREFILTER`, `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`
+and `DEFAULT_NOISE_FLOOR_PX`, the `finite_horizon` gate and the
+`Indeterminate` state play no part in it. On `tk117` it promotes points 298,
+294 and 295 to 511, 1,077 and 1,160 units from their observing cameras
+(errors 0.16, 0.19 and 0.22 px, from 0.81, 0.48 and 0.38 as bearings) and
+demotes nothing; on the seoul bull ground truth it changes nothing; on `inf2`
+it promotes 34 discovered points, at 94 to 400 units (the capture's camera
+extent is 11), and demotes nothing. `sfm analyze --depth-reliability` on each
+result lists no disagreement.
+
+Callers: `sfm xform --classify-points-at-infinity [<sigma_px>]`
+([xform-command.md](../../cli/reconstruction/xform/xform-command.md)), the
+COLMAP import (`colmap/io.py`, after a solve or `from-colmap`), and the
+pycolmap bundle adjustment (`xform/_bundle_adjust.py`), which materialises
+the points at infinity for the solve and runs it afterwards at the adjusted
+reconstruction's own noise level.
+
+**Discovery and the bench.** `analysis/infinity/discover.rs::classify_track`
+and the track bench's `bench/classify.rs::classify_track_rays` share
 `classify_rays_at_infinity`, which decides finite-versus-infinity on
-`inverse_depth_z` with `condition_number` as a cheap geometric pre-filter. It is
-`pub` for that third caller: every bench step that triangulates -- the
-track-stage fit and the cluster-to-track upgrade
+`inverse_depth_z` with `condition_number` as a cheap geometric pre-filter.
+Moving them to the score is a later step of the amendment draft. It is `pub`
+for the bench: every bench step that triangulates -- the track-stage fit and
+the cluster-to-track upgrade
 ([`../bench/editable-track.md`](../bench/editable-track.md) § "Finite points and
-bearings") -- ends at it with these same defaults, so a hand-edited track and a
-whole-reconstruction pass cannot come to disagree about which representation one
-set of rays has earned. The bench differs in two places, both about what to do
-with an answer rather than about how to reach one: a relabel-only pass leaves an
-`Indeterminate` track as the solve produced it, while a fit has to write
-something and writes the bearing the numbers describe; and the bench then
-reprojects both candidates into the sightings and keeps the criterion's answer
-only where the pixels agree, because this criterion says whether a depth is
-*observable* and an ill-conditioned midpoint can clear its own bar on a depth
-that is not there. `RayClassification` carries the triangulated `point` beside
+bearings") -- ends at it with these same defaults, so a hand-edited track and
+discovery cannot come to disagree about which representation one set of rays
+has earned. The bench differs in two places, both about what to do with an
+answer rather than about how to reach one: discovery drops an `Indeterminate`
+track, while a fit has to write something and writes the bearing the numbers
+describe; and the bench then reprojects both candidates into the sightings and
+keeps the criterion's answer only where the pixels agree, because this
+criterion says whether a depth is *observable* and an ill-conditioned midpoint
+can clear its own bar on a depth that is not there. `RayClassification` carries the triangulated `point` beside
 its `class` for that second caller: a caller that refuses the depth may still
 want to know what it refused. The
 thresholds — `DEFAULT_INVERSE_DEPTH_Z_CUTOFF = 4.0` and
@@ -863,8 +1072,11 @@ whose verdict disagrees with how they are stored; `analyze` fits and lists those
 points and takes `--sigma-px` and `--depth-likelihood-ratio-threshold`
 ([analyze-command.md](../../cli/reconstruction/analyze-command.md) § "Depth
 Reliability", [inspect-command.md](../../cli/reconstruction/inspect-command.md)).
-Neither decides anything; they are there to compare the two rules on real
-files.
+Neither changes the file. The disagreements they count are the points
+reclassification would change, less those it declines to change (a bearing
+behind a camera, a fit with no usable point), and `analyze` prints what
+reclassification would do at the same noise level. The `inverse_depth_z`
+column stays as information while discovery and the bench still decide on it.
 
 **The GUI** consumes the core functions directly. Two overlay modes back onto
 these diagnostics — "Depth Reliability", driven by `inverse_depth_z` (low =
@@ -889,12 +1101,21 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
 - **Indeterminate tracks are dropped, not represented.** The `.sfmr` model stays
   binary (`w=1` finite / `w=0` at infinity); a track that fails the
   `resolvable_distance` gate is not given a third state. In discovery it is
-  dropped (never appended). `classify_points_at_infinity` stays non-destructive:
-  it only demotes confident-infinity points to `w=0` and leaves an indeterminate
-  solve point as the finite point the solve produced — it never removes a point.
+  dropped (never appended). Reclassification no longer has the state: it
+  decides on the likelihood-ratio test, whose `Λ ≈ 0` for a track the cameras
+  cannot resolve is a bearing verdict.
+- **Reclassification is non-destructive and moves points both ways.**
+  `classify_points_at_infinity` never adds or removes a point or a sighting.
+  It demotes a finite point with a bearing verdict and promotes a point at
+  infinity with a finite verdict, and declines either change when the result
+  would describe a sighting wrongly (a bearing behind a camera) or place a
+  point where none can be (behind or on top of a camera). See "Consumers".
 - **Ray source is the caller's concern.** Discovery (`find`) supplies
-  keypoint-un-projected rays; reclassify/GUI supply camera→stored-point rays
-  (cheap, no `.sift`). The core function is agnostic.
+  keypoint-un-projected rays; the GUI's diagnostics and
+  `triangulation_diagnostics` supply camera→stored-point rays (cheap, no
+  `.sift`). Reclassification and the point-or-bearing reports un-project each
+  observation's pixel (`track_rays`), so they need the inline keypoints or the
+  `.sift` files. The core functions are agnostic.
 - **Do not persist diagnostics to `.sfmr`.** Derivable from geometry; storing
   per-point would bloat the format and go stale.
 
@@ -913,13 +1134,13 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
   sub-questions: the `finite_horizon` multiple of the camera extents (1×? a
   fraction?), and whether to compute the precise per-track perpendicular baseline
   `B⊥` or accept the scalar camera-extent upper bound.
-- Noise model: per-camera `noise_px` default, and whether to fold per-point
-  reprojection error into σ as `classify_points_at_infinity` does today
+- Noise model for the z rule: per-camera `noise_px` default, and whether to
+  fold per-point reprojection error into σ as `triangulation_diagnostics` does
   (`noise = max(reproj_error, floor)`). Discovered points carry their mean
   reprojection error against the appended track, so the same fold is
   available to them. Deciding on the likelihood ratio of "Point or bearing"
   instead, with σ measured from the reconstruction's finite points and no
-  floor, is proposed in
+  floor, as reclassification now does, is the remaining migration of
   [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
 - Weighted vs unweighted midpoint as the default (unweighted matches current
   behavior; inverse-depth² is closer to reprojection error).

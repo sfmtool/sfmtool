@@ -9,6 +9,8 @@ removing existing geometry, so the point count grows. See
 specs/cli/reconstruction/xform/find-points-at-infinity.md.
 """
 
+import numpy as np
+
 from .._sfmtool.reconstruction import SfmrReconstruction
 
 
@@ -61,17 +63,74 @@ class FindPointsAtInfinityTransform:
 
 
 class ClassifyPointsAtInfinityTransform:
-    """Reclassify existing finite points whose depth is unconstrained.
+    """Decide every existing point with the point-or-bearing test.
 
-    Only relabels already-triangulated points as ``w = 0``; it finds no new
-    points and leaves the point count unchanged.
+    A finite point whose rays ask for no depth is demoted to ``w = 0``, and a
+    point at infinity whose rays ask for one is promoted to the fitted point.
+    It finds no new points and leaves the point count unchanged. ``sigma_px``
+    overrides the measured reprojection noise the rays are weighted by. See
+    specs/core/reconstruction/batch-triangulation-api.md, "Consumers".
     """
 
-    def __init__(self, noise_floor_px: float = 1.0):
-        self.noise_floor_px = noise_floor_px
+    def __init__(self, sigma_px: float | None = None):
+        if sigma_px is not None and not (np.isfinite(sigma_px) and sigma_px > 0):
+            raise ValueError(f"sigma_px must be finite and positive, got {sigma_px}")
+        self.sigma_px = sigma_px
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        return recon.classify_points_at_infinity(self.noise_floor_px)
+        result, summary = recon.classify_points_at_infinity(self.sigma_px)
+        for line in classify_summary_lines(summary, recon):
+            print(f"    {line}")
+        return result
 
     def description(self) -> str:
-        return f"Classify points at infinity (noise_floor={self.noise_floor_px}px)"
+        if self.sigma_px is None:
+            return "Classify points at infinity (measured noise)"
+        return f"Classify points at infinity (sigma_px={self.sigma_px}px)"
+
+
+def classify_summary_lines(summary: dict, recon: SfmrReconstruction) -> list[str]:
+    """What ``classify_points_at_infinity`` did on ``recon``, one statement per line."""
+    from ..analyze.point_or_bearing import no_noise_reason
+
+    sigma = summary["sigma_px"]
+    if sigma is None:
+        reason = no_noise_reason(recon)
+        return [f"{reason[0].upper()}{reason[1:]}; the points are left as they are"]
+    noise = summary["noise"]
+    if noise is None:
+        lines = [f"Noise level: {sigma:.4g} px (given)"]
+    else:
+        lines = [
+            f"Noise level: {sigma:.4g} px, measured over "
+            f"{noise['observation_count']:,} observations, "
+            f"{noise['outlier_count']:,} excluded as outliers"
+        ]
+    lines.append(
+        f"Promoted to finite: {summary['promoted']:,}; "
+        f"demoted to infinity: {summary['demoted']:,}; "
+        f"kept: {summary['kept']:,}"
+    )
+    if summary["refitted"]:
+        lines.append(
+            "Moved off a position behind or on top of a camera: "
+            f"{summary['refitted']:,}"
+        )
+    if summary["bearing_behind_camera"]:
+        lines.append(
+            f"Left finite, bearing behind a camera: {summary['bearing_behind_camera']:,}"
+        )
+    if summary["no_usable_point"]:
+        lines.append(
+            f"Left at infinity, no usable fitted point: {summary['no_usable_point']:,}"
+        )
+    if summary["left_unusable"]:
+        lines.append(
+            "Left finite behind or on top of a camera, no usable point or bearing: "
+            f"{summary['left_unusable']:,}"
+        )
+    if summary["unscored"]:
+        lines.append(
+            f"Not scored (fewer than two usable rays): {summary['unscored']:,}"
+        )
+    return lines

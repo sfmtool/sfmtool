@@ -114,15 +114,16 @@ def test_analyze_depth_reliability_point_or_bearing(seoul_bull_ground_truth_sfmr
     assert result.exit_code == 0, result.output
     out = result.output
     assert "Point or bearing (likelihood-ratio test on the depth):" in out
+    # Four mismatched keypoints (7 to 16 px) are left out of the measure.
     assert (
-        "Noise level: 0.6461 px, measured over 1,233 observations of finite points"
-        in out
+        "Noise level: 0.4677 px, measured over 1,229 observations of finite "
+        "points, 4 excluded as outliers" in out
     )
     assert "Threshold: 25" in out
     assert "Finite points: 266 scored" in out
     assert "Points at infinity: 14 scored" in out
     assert (
-        "Bearing verdict: 14 (100.0%), 14 with the bearing cost under the threshold"
+        "Bearing verdict: 14 (100.0%), 12 with the bearing cost under the threshold"
         in out
     )
     assert "Finite points the test calls bearings: 0" in out
@@ -146,15 +147,17 @@ def test_analyze_depth_reliability_sigma_override(seoul_bull_ground_truth_sfmr):
     )
     assert result.exit_code == 0, result.output
     out = result.output
-    assert "Noise level: 0.216 px given (measured 0.6461 px" in out
+    assert "Noise level: 0.216 px given (measured 0.4677 px" in out
     assert "Points at infinity the test calls finite: 1" in out
     row = next(line for line in out.splitlines() if line.strip().startswith("pt3d_"))
     fields = row.split()
     assert fields[0].endswith("_188")
     assert int(fields[1]) == 5  # views
     assert fields[2:] == ["32.5", "27.5", "32.5", "1.04", "414.9"]
-    # score, midpoint bound, likelihood ratio, the current rule's z (under its
+    # score, midpoint bound, likelihood ratio, the z rule's z (under its
     # cutoff of 4, so that rule calls it a bearing) and the fitted distance.
+    # Reclassification at the given noise level would store it finite.
+    assert "Reclassification would promote 1 and demote 0" in out
 
 
 def test_analyze_depth_reliability_threshold_override(seoul_bull_ground_truth_sfmr):
@@ -172,7 +175,9 @@ def test_analyze_depth_reliability_threshold_override(seoul_bull_ground_truth_sf
     assert result.exit_code == 0, result.output
     out = result.output
     assert "Threshold: 1000" in out
-    assert "Finite points the test calls bearings: 41" in out
+    # At the measured 0.4677 px the scores are higher than at the 0.646 px the
+    # RMS gave before outliers were left out, so fewer fall under 1000.
+    assert "Finite points the test calls bearings: 24" in out
     rows = [
         line.split() for line in out.splitlines() if line.strip().startswith("pt3d_")
     ]
@@ -180,7 +185,11 @@ def test_analyze_depth_reliability_threshold_override(seoul_bull_ground_truth_sf
     scores = [float(r[2].replace(",", "")) for r in rows]
     assert scores == sorted(scores)
     assert all(s < 1000 for s in scores)
-    assert "... and 21 more" in out
+    assert "... and 4 more" in out
+    # Reclassification decides at the default threshold, under which no
+    # stored point disagrees.
+    assert "Reclassification would promote 0 and demote 0" in out
+    assert "(it decides at the threshold 25, not 1000)" in out
 
 
 def test_analyze_depth_reliability_point_or_bearing_sift_files(seoul_bull_workspace):
@@ -199,7 +208,8 @@ def test_analyze_depth_reliability_point_or_bearing_sift_files(seoul_bull_worksp
     out = result.output
     assert (
         f"Noise level: {noise['sigma_px']:.4g} px, measured over "
-        f"{noise['observation_count']:,} observations of finite points"
+        f"{noise['observation_count']:,} observations of finite points, "
+        f"{noise['outlier_count']:,} excluded as outliers"
     ) in out
     assert f"Finite points: {n_finite:,} scored" in out
     assert f"Finite points the test calls bearings: {n_demoted:,}" in out

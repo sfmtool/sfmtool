@@ -7,7 +7,7 @@ direction it would have if it were infinitely far away, clusters those
 directions on the unit sphere, confirms each cluster with SIFT descriptors,
 and appends the surviving tracks to the reconstruction as new points. It
 complements the companion `--classify-points-at-infinity` operation, which
-only *reclassifies* points the solve already triangulated and so finds nothing
+only *reclassifies* points the reconstruction already has and so finds nothing
 new.
 
 [v2 model]: ../../../formats/sfmr-file-format.md
@@ -197,9 +197,10 @@ Uncapped by default; `2000` is the value the calibration below used. The flag
 applies to this operation alone and is rejected when no
 `--find-points-at-infinity` is present.
 
-The companion `--classify-points-at-infinity <noise_floor_px>` reclassifies
-points the solve already triangulated, and composes naturally before or after
-this one.
+The companion `--classify-points-at-infinity [<sigma_px>]` reclassifies
+the points the reconstruction already has with the point-or-bearing test (see
+[batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md)
+§ "Consumers"), and composes naturally before or after this one.
 
 The operation is *additive*: it appends new points and tracks through the
 `Transform.apply(recon) -> recon` protocol. It emits both kinds of point on its

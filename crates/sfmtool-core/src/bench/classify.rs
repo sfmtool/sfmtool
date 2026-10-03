@@ -12,16 +12,16 @@
 //! representation one set of sightings has earned.
 //!
 //! The criterion is not the bench's own. It is
-//! [`classify_rays_at_infinity`], the same per-track test
-//! [`classify_points_at_infinity`](crate::SfmrReconstruction::classify_points_at_infinity)
-//! reclassifies a whole reconstruction with and
+//! [`classify_rays_at_infinity`], the inverse-depth z rule
 //! [`find_points_at_infinity`](crate::SfmrReconstruction::find_points_at_infinity)
 //! admits discovered tracks on, called here over one track's rays with the same
-//! defaults. What the bench adds is the third answer's disposal: a
-//! reconstruction pass leaves an *indeterminate* track alone, because leaving it
-//! alone is an option when the pass is relabel-only, and a fit has to write
-//! something. A track whose baseline cannot resolve a scene-scale depth is
-//! written as the bearing it is.
+//! defaults. (Reclassifying a whole reconstruction,
+//! [`classify_points_at_infinity`](crate::SfmrReconstruction::classify_points_at_infinity),
+//! has moved to the point-or-bearing likelihood-ratio test; the bench and
+//! discovery move to it in a later step of
+//! `specs/drafts/point-or-bearing-likelihood-ratio.md`.) What the bench adds is
+//! the third answer's disposal: a fit has to write something, so a track whose
+//! baseline cannot resolve a scene-scale depth is written as the bearing it is.
 //!
 //! **And the bench checks the criterion's answer against the sightings.** The
 //! criterion is a statement about *observability* -- whether the geometry could

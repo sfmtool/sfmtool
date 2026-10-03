@@ -71,8 +71,8 @@ A missing match, or an index beyond the file's point count, is a clear error.
   `SfmrReconstruction.inspect_point`): it un-projects each member keypoint
   through its camera to rebuild the observation rays, then runs the same
   `triangulate_batch` / `depth_uncertainty_batch` /
-  `classify_rays_at_infinity` path the points-at-infinity discovery and
-  reclassify operations use (see
+  `classify_rays_at_infinity` path the points-at-infinity discovery and the
+  bench use (see
   [`specs/core/reconstruction/batch-triangulation-api.md`](../../core/reconstruction/batch-triangulation-api.md)),
   so the reported diagnostics match the production gate exactly. It requires
   a `sift_files` reconstruction (`embedded_patches` is rejected — the rays
@@ -206,12 +206,14 @@ The default output is a compact label/value block. The fields per type:
   [batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
   § "Point or bearing" run over every point at the measured reprojection noise
   and the default threshold, compared with how each point is stored. Nothing
-  is fitted and nothing in the file changes. On the Kerry Park ground-truth
-  candidate `tk117`:
+  is fitted and nothing in the file changes; the disagreements are what
+  `sfm xform --classify-points-at-infinity` would change, less the points it
+  declines to (see [analyze-command.md](analyze-command.md)). On the Kerry
+  Park ground-truth candidate `tk117`:
 
   ```
     Point or bearing (likelihood-ratio test, threshold 25):
-      Noise level: 0.2156 px, measured over 3,510 observations of finite points
+      Noise level: 0.2156 px, measured over 3,510 observations of finite points, 0 excluded as outliers
       Finite points called bearings: 0 of 375 scored
       Points at infinity called finite: 3 of 12 scored (points 298, 294, 295)
   ```

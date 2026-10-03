@@ -7,8 +7,12 @@
 stored point, what the test in
 ``SfmrReconstruction.point_or_bearing_scores`` would call it (a finite point or
 a bearing) and compare that with how the point is stored. Nothing here changes
-a reconstruction; the report exists so the test and the current
-``inverse_depth_z`` rule can be compared on real files.
+a reconstruction. ``SfmrReconstruction.classify_points_at_infinity`` (``sfm
+xform --classify-points-at-infinity``) is what stores the verdicts, so the
+disagreements listed here are the points it would change, less the ones it
+declines to (a bearing behind a camera, a fit with no usable point). The
+``inverse_depth_z`` rule printed beside the test is the one discovery and the
+bench still decide with.
 """
 
 import re
@@ -78,6 +82,23 @@ def _io_reason(error: OSError) -> str:
     return str(error)
 
 
+def no_noise_reason(recon: SfmrReconstruction) -> str:
+    """Why ``reprojection_noise()`` measured nothing: no observation of a finite
+    point at all, or observations whose pixels gave no usable residual."""
+    at_infinity = np.asarray(recon.point_is_at_infinity)
+    observed = np.asarray(recon.track_point_indexes)
+    if not (~at_infinity[observed]).any():
+        return (
+            "the reconstruction has no observation of a finite point, "
+            "so it has no measured noise level"
+        )
+    return (
+        "no observation of a finite point gives a usable residual (no finite "
+        "pixel, or none the camera model can image), so there is no measured "
+        "noise level"
+    )
+
+
 def point_or_bearing_report(
     recon: SfmrReconstruction,
     sigma_px: float | None = None,
@@ -99,10 +120,7 @@ def point_or_bearing_report(
     try:
         noise = recon.reprojection_noise()
         if noise["sigma_px"] is None:
-            noise_error = (
-                "the reconstruction has no observation of a finite point, "
-                "so it has no measured noise level"
-            )
+            noise_error = no_noise_reason(recon)
     except OSError as e:
         noise_error = f"the reprojection noise could not be measured: {_io_reason(e)}"
 
@@ -137,22 +155,25 @@ def _px(value: float) -> str:
     return f"{value:.4g} px"
 
 
+def _measured_over(noise: dict) -> str:
+    """How many observations a measured noise level is over, and how many were
+    left out of it as outliers."""
+    return (
+        f"over {noise['observation_count']:,} observations of finite points, "
+        f"{noise['outlier_count']:,} excluded as outliers"
+    )
+
+
 def _noise_line(report: PointOrBearingReport) -> str:
     """The noise level used and where it came from, on one line."""
     noise = report.noise
     measured = None
     if noise is not None and noise["sigma_px"] is not None:
-        measured = (
-            f"{_px(noise['sigma_px'])} over {noise['observation_count']:,} "
-            "observations of finite points"
-        )
+        measured = f"{_px(noise['sigma_px'])} {_measured_over(noise)}"
     if report.sigma_given:
         tail = f"measured {measured}" if measured else "none measured"
         return f"{_px(report.sigma_px)} given ({tail})"
-    return (
-        f"{_px(report.sigma_px)}, measured over "
-        f"{noise['observation_count']:,} observations of finite points"
-    )
+    return f"{_px(report.sigma_px)}, measured {_measured_over(noise)}"
 
 
 def _point_id(recon: SfmrReconstruction, index: int) -> str:
@@ -257,7 +278,7 @@ def _print_disagreements(
     with np.errstate(divide="ignore", invalid="ignore"):
         distance = np.where(fit["fitted"], 1.0 / inverse_depth, np.nan)
 
-    # The current rule's z: at the stored point for a finite point, and at the
+    # The z rule's z: at the stored point for a finite point, and at the
     # fitted point for a point at infinity, which has no stored depth. The
     # fitted points go into a copy, whose diagnostics are read for them alone.
     # The rule's per-point noise is max(error, noise_px), and a point at
@@ -312,8 +333,7 @@ def print_point_or_bearing(
     """The detailed report `sfm analyze --depth-reliability` prints.
 
     ``stored_z`` is ``triangulation_diagnostics()["inverse_depth_z"]``, the
-    current rule's z at each stored finite point, at the noise floor
-    noise_px.
+    z rule's z at each stored finite point, at the noise floor noise_px.
     """
     click.echo("\nPoint or bearing (likelihood-ratio test on the depth):")
     if report.scores is None:
@@ -357,10 +377,11 @@ def print_point_or_bearing(
         stored_z=stored_z,
         noise_px=noise_px,
     )
+    _print_reclassification(recon, report)
     if report.demotions.size or report.promotions.size:
         legend = (
             "Score: depth score. Bound: midpoint bound. Lambda: likelihood "
-            "ratio of the plain least-squares fit. z: the current rule's "
+            "ratio of the plain least-squares fit. z: the z rule's "
             f"inverse-depth z, with per-point noise max(error, {noise_px:g} px), at "
             "the stored point and its stored error, or for a point at infinity at "
             "the fitted point and its error there. Distance: the fitted point's "
@@ -374,6 +395,54 @@ def print_point_or_bearing(
                 subsequent_indent="    ",
                 break_on_hyphens=False,
             )
+        )
+
+
+def _print_reclassification(
+    recon: SfmrReconstruction, report: PointOrBearingReport
+) -> None:
+    """What ``classify_points_at_infinity`` would store, at the report's noise level.
+
+    The pass decides at the default threshold, so when the report's threshold
+    differs its counts differ from the disagreements above.
+    """
+    try:
+        _, summary = recon.classify_points_at_infinity(sigma_px=report.sigma_px)
+    except (OSError, ValueError) as e:
+        click.echo(f"    Reclassification: unavailable ({e})")
+        return
+    line = (
+        f"    Reclassification would promote {summary['promoted']:,} and demote "
+        f"{summary['demoted']:,}"
+    )
+    if summary["refitted"]:
+        line += (
+            f", and move {summary['refitted']:,} off a position behind or on "
+            "top of a camera"
+        )
+    declined = []
+    if summary["bearing_behind_camera"]:
+        declined.append(
+            f"{summary['bearing_behind_camera']:,} left finite with the bearing "
+            "behind a camera"
+        )
+    if summary["no_usable_point"]:
+        declined.append(
+            f"{summary['no_usable_point']:,} left at infinity without a usable "
+            "fitted point"
+        )
+    if summary["left_unusable"]:
+        declined.append(
+            f"{summary['left_unusable']:,} left behind or on top of a camera, "
+            "with no usable point and the bearing behind a camera"
+        )
+    if declined:
+        line += "; " + ", ".join(declined)
+    click.echo(line)
+    if report.threshold != DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD:
+        click.echo(
+            f"    (it decides at the threshold "
+            f"{DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD:g}, not {report.threshold:g})"
         )
 
 

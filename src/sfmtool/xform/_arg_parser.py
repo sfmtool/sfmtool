@@ -531,6 +531,19 @@ def _parse_find_points_at_infinity(param: str, max_features: int | None):
         )
 
 
+def _parse_classify_points_at_infinity(param: str, _max_features: int | None):
+    """An optional ``sigma_px`` override; bare means the measured noise."""
+    if not param.strip():
+        return ClassifyPointsAtInfinityTransform()
+    return _parse_scalar(
+        param,
+        "--classify-points-at-infinity",
+        float,
+        ClassifyPointsAtInfinityTransform,
+        catch_constructor=True,
+    )
+
+
 # The rule says whether a value is absent ("none"), required ("required": joined
 # with "=" or the next token, whatever it starts with), or optional ("optional":
 # joined with "=" or the next token when that token is not an option).
@@ -647,12 +660,7 @@ _TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] =
     "--include-by-distribution": ("required", _parse_include_by_distribution),
     "--camera-model": ("required", lambda p, _: parse_camera_model_params(p)),
     "--find-points-at-infinity": ("required", _parse_find_points_at_infinity),
-    "--classify-points-at-infinity": (
-        "required",
-        lambda p, _: _parse_scalar(
-            p, "--classify-points-at-infinity", float, ClassifyPointsAtInfinityTransform
-        ),
-    ),
+    "--classify-points-at-infinity": ("optional", _parse_classify_points_at_infinity),
 }
 
 

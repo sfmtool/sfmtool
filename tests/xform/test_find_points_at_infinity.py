@@ -192,3 +192,83 @@ def test_cli_find_points_at_infinity(seoul_bull_workspace):
     assert transformed.infinity_point_count == int(
         np.asarray(transformed.point_is_at_infinity).sum()
     )
+
+
+def test_classify_cli_uses_the_measured_noise(seoul_bull_ground_truth_sfmr):
+    """Bare ``--classify-points-at-infinity`` measures the noise and changes
+    nothing on the ground truth, which agrees with the test at that level."""
+    out_path = seoul_bull_ground_truth_sfmr.parent / "classified.sfmr"
+    result = CliRunner().invoke(
+        main,
+        [
+            "xform",
+            str(seoul_bull_ground_truth_sfmr),
+            str(out_path),
+            "--classify-points-at-infinity",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (
+        "Noise level: 0.4677 px, measured over 1,229 observations, "
+        "4 excluded as outliers" in result.output
+    )
+    assert "Promoted to finite: 0; demoted to infinity: 0; kept: 280" in result.output
+    original = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    classified = SfmrReconstruction.load(out_path)
+    np.testing.assert_array_equal(
+        classified.point_is_at_infinity, original.point_is_at_infinity
+    )
+
+
+def test_classify_cli_promotes_at_a_given_noise_level(seoul_bull_ground_truth_sfmr):
+    """At a stated 0.216 px, bearing 188 scores 32.5 and is promoted to the
+    fitted point, about 415 m from its observing cameras."""
+    out_path = seoul_bull_ground_truth_sfmr.parent / "promoted.sfmr"
+    result = CliRunner().invoke(
+        main,
+        [
+            "xform",
+            str(seoul_bull_ground_truth_sfmr),
+            str(out_path),
+            "--classify-points-at-infinity",
+            "0.216",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Noise level: 0.216 px (given)" in result.output
+    assert "Promoted to finite: 1; demoted to infinity: 0" in result.output
+    original = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    promoted = SfmrReconstruction.load(out_path)
+    assert original.point_is_at_infinity[188]
+    assert not promoted.point_is_at_infinity[188]
+    assert promoted.infinity_point_count == original.infinity_point_count - 1
+    # Its error is recomputed at the placed point, far under the bearing's.
+    assert promoted.errors[188] < original.errors[188]
+
+
+def test_classify_cli_rejects_a_bad_noise_level(seoul_bull_ground_truth_sfmr):
+    result = CliRunner().invoke(
+        main,
+        [
+            "xform",
+            str(seoul_bull_ground_truth_sfmr),
+            str(seoul_bull_ground_truth_sfmr.parent / "out.sfmr"),
+            "--classify-points-at-infinity=abc",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--classify-points-at-infinity" in result.output
+
+
+def test_classify_without_usable_pixels_says_why(seoul_bull_ground_truth_sfmr, capsys):
+    """Finite points whose pixels give no residual leave no noise level to
+    measure, and the transform says that rather than that there are no finite
+    points; the reconstruction is left as it is."""
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    keypoints = np.full_like(np.asarray(recon.keypoints_xy), np.nan)
+    blind = recon.clone_with_changes(keypoints_xy=keypoints)
+
+    result = ClassifyPointsAtInfinityTransform().apply(blind)
+    out = capsys.readouterr().out
+    assert "No observation of a finite point gives a usable residual" in out
+    np.testing.assert_array_equal(result.positions_xyzw, blind.positions_xyzw)

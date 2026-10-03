@@ -50,19 +50,21 @@ algorithms and parameter semantics.
 
 ## Depth Reliability (`--depth-reliability`)
 
-The report has two parts. The first is the rule that decides finite points
-against bearings today; the second is the likelihood-ratio test that is to
-replace it, specified in
+The report has two parts. The first is the inverse-depth z rule, which
+discovery (`--find-points-at-infinity`) and the bench still decide finite points
+against bearings with; the second is the likelihood-ratio test specified in
 [core/reconstruction/batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
-§ "Point or bearing". The second part changes nothing in the file. It is there
-so the two can be compared on real reconstructions before the test decides
-anything (the
-[amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md) says
-what moves when). The printer is
+§ "Point or bearing", which reclassification (`sfm xform
+--classify-points-at-infinity`) decides with and the others are to move to
+(the [amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md) says
+what moves when). Neither part changes the file. The second part's
+disagreements with the stored representation are what reclassification would
+change, and it says so. The printer is
 [`analyze/point_or_bearing.py`](../../../src/sfmtool/analyze/point_or_bearing.py),
-over the binding `SfmrReconstruction.point_or_bearing_scores`.
+over the bindings `SfmrReconstruction.point_or_bearing_scores` and
+`classify_points_at_infinity`.
 
-### The current rule
+### The inverse-depth z rule
 
 `triangulation_diagnostics(noise_px=1.0)` over the finite points with two or
 more observations: the median, mean and range of the inverse-depth z, the count
@@ -76,9 +78,10 @@ condition number, being purely geometric, looks normal.
 ### The point-or-bearing test
 
 - **Noise level.** The σ the rays are weighted by, and where it came from: the
-  measured reprojection noise and the number of observations of finite points
-  it was measured over, and, with more than one camera, each camera's value and
-  count. With `--sigma-px` the given value is used and the measured one is
+  measured reprojection noise, the number of observations of finite points it
+  was measured over and the number left out of it as outliers (see
+  batch-triangulation-api.md § "The measured noise level"), and, with more than
+  one camera, each camera's value and count. With `--sigma-px` the given value is used and the measured one is
   printed beside it. A reconstruction with no observation of a finite point has
   no measured value, and one whose `.sift` files cannot be read cannot be
   measured; without `--sigma-px` the part then prints `Unavailable` and why.
@@ -108,10 +111,10 @@ condition number, being purely geometric, looks normal.
   per-point noise `max(stored error, 1 px)`. A point at infinity has no stored
   depth, and its stored error is the bearing's residual, so its `z` is read
   from a copy of the reconstruction with the fitted points put in and their
-  errors recomputed there: the current rule at the fitted point, with noise
-  `max(error at the fitted point, 1 px)`. That is the `z` the current rule
-  would give the point the test places, and it says whether that rule would
-  demote it again. `z` prints `n/a` and the distance `inf` when the fit leaves
+  errors recomputed there: the z rule at the fitted point, with noise
+  `max(error at the fitted point, 1 px)`. That is the `z` the z rule would
+  give the point the test places, and it says whether that rule would call it
+  a bearing. `z` prints `n/a` and the distance `inf` when the fit leaves
   the point at infinity (inverse depth 0), which happens to points the test
   calls finite only through a low threshold (at
   `--depth-likelihood-ratio-threshold 0` the seoul bull ground truth lists 11
@@ -120,15 +123,27 @@ condition number, being purely geometric, looks normal.
   been scored, since scoring reads the same pixels. Numbers too wide for their
   column print in exponent form, and noise levels to four significant
   figures.
+- **What reclassification would do**: `classify_points_at_infinity` run at the
+  same noise level. The changes it would make come first: its promotions and
+  demotions, and, when there are any, the finite points it would move off a
+  stored position behind or on top of a camera (`refitted`). Then the points
+  it declines to change, each count shown only when not zero: a finite point
+  whose bearing is behind a camera (left finite), a point at infinity whose
+  fit gives no usable point (left a bearing), and a finite point stored
+  behind or on top of a camera with no usable point and its bearing behind a
+  camera too (left where it is, `left_unusable`). Reclassification decides at the default threshold, so with
+  `--depth-likelihood-ratio-threshold` the line says it decides at 25, and
+  its counts can differ from the disagreements listed. It prints
+  `unavailable` and the reason when the pixels cannot be read.
 
 Both parts are cheap: the score is closed-form per track, and the only fits are
 the listed rows.
 
 On the Kerry Park ground-truth candidate `tk117` (12 of 387 points at
-infinity), the measured noise is 0.2156 px over 3,510 observations (0.2155 and
-0.2157 px for the two lenses), no finite point is called a bearing, 12 finite
-points are finite on the midpoint bound alone, and three points at infinity are
-called finite:
+infinity), the measured noise is 0.2156 px over 3,510 observations with none
+left out (0.2155 and 0.2157 px for the two lenses), no finite point is called a
+bearing, 12 finite points are finite on the midpoint bound alone, and three
+points at infinity are called finite:
 
 ```
     Points at infinity the test calls finite: 3
@@ -136,12 +151,17 @@ called finite:
       pt3d_a9665942_298     10        132.5        132.1        132.5    2.18       511.1
       pt3d_a9665942_294     21         83.6         77.9         83.6    1.82     1,076.5
       pt3d_a9665942_295     18         31.1         13.2         31.0    1.10     1,160.3
+    Reclassification would promote 3 and demote 0
 ```
 
-The current rule's `z` at each fitted point is under 4, so it would demote all
-three again. On the in-repo seoul bull ground truth (0.6461 px over 1,233
-observations) the test agrees with every stored point; with `--sigma-px 0.216`
-it calls bearing 188 finite (score 32.5).
+The z rule's `z` at each fitted point is under 4, so it would call all three
+bearings. After `sfm xform --classify-points-at-infinity` the report on the
+result lists no disagreement (the noise level is then 0.2149 px over 3,559
+observations, the promoted points' among them). On the in-repo seoul bull
+ground truth (0.4677 px over 1,229 observations, four mismatched keypoints of
+7 to 16 px left out as outliers) the test agrees with every stored point; with
+`--sigma-px 0.216` it calls bearing 188 finite (score 32.5), and
+reclassification at that level would promote it.
 
 ## Per-Image Quality Metrics (`--metrics`)
 

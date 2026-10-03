@@ -764,19 +764,19 @@ KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
 KERRY_PARK_SOLVE_FRAME_COUNT = 8
 
 # GLOMAP is not seed-deterministic, so "16 images and >= 200 points" does not pin
-# down *which* reconstruction the session gets, and three patch tests assert a
+# down *which* reconstruction the session gets, and two patch tests assert a
 # property of it that a legitimate solve can lack. Each floor below is a
 # guarantee the fixture holds out for, so those tests measure the algorithm
 # rather than the luck of the solve; the counts behind them are read off the
 # reconstruction's own arrays, with no patch cloud and no images.
 #
-# Multi-view points at infinity, for
-# test_patch_view_selection.py::test_select_views_infinity_admitted_are_in_front,
-# which selects views for *every* infinity point in the cloud. A handful is
-# enough for the test to have something to check, and a solve that yields none at
-# all is the degenerate case worth re-rolling. (Ten sample solves of this fixture
-# gave 5 to 14.)
-MIN_INFINITY_POINTS = 5
+# (The solve's import reclassifies its points with the point-or-bearing test,
+# under which this capture's points are all finite: the weakest point of a
+# solve scores several times the threshold of 25 (62 and 73 in two solves). A
+# test that needs points at
+# infinity makes them itself; see
+# test_patch_view_selection.py::test_select_views_infinity_admitted_are_in_front.)
+#
 # Points the rig can see past 90 deg off axis, for
 # test_patch_view_selection.py::test_select_views_admitted_points_are_in_front_of_camera,
 # which needs at least one *admitted* view out there. See
@@ -883,21 +883,10 @@ def _kerry_park_reject_reason(recon) -> str | None:
     """Why this kerry_park solve is unfit for the patch tests, or ``None`` if it is.
 
     The ``accept`` hook of :func:`build_cluster_reconstruction`, holding the
-    reconstruction to the three ``MIN_*`` guarantees above. Each check is a count
+    reconstruction to the two ``MIN_*`` guarantees above. Each check is a count
     over the reconstruction's own arrays, so the whole hook costs a fraction of
     the solve attempt it vets.
     """
-    at_infinity = np.asarray(recon.point_is_at_infinity)
-    observed = np.bincount(
-        np.asarray(recon.track_point_indexes), minlength=len(at_infinity)
-    )
-    # Points at infinity that carry a real (multi-view) track.
-    infinity_points = int(np.count_nonzero(at_infinity & (observed >= 2)))
-    if infinity_points < MIN_INFINITY_POINTS:
-        return (
-            f"points at infinity with a multi-view track: {infinity_points} "
-            f"(>= {MIN_INFINITY_POINTS} required)"
-        )
     past_90 = len(points_with_past_90_candidate(recon))
     if past_90 < MIN_PAST_90_CANDIDATE_POINTS:
         return (
@@ -1005,9 +994,9 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
     # (CI has seen ~80). Insist on a substantive point cloud (well above the
     # test's >= 150 floor, leaving margin for the trailing camera-coincident
     # point drop) and retry hard for it, keeping the densest complete attempt.
-    # ``accept`` adds the structural guarantees the patch tests assert -- points
-    # at infinity, past-90-deg observations, obliquely-viewed points -- which no
-    # point count implies.
+    # ``accept`` adds the structural guarantees the patch tests assert --
+    # past-90-deg observations and obliquely-viewed points -- which no point
+    # count implies.
     sfmr_path = build_cluster_reconstruction(
         workspace_dir,
         image_paths,

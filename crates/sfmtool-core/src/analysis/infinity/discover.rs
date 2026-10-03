@@ -7,7 +7,7 @@
 //!
 //! See `specs/cli/reconstruction/xform/find-points-at-infinity.md` for the design. This
 //! complements [`SfmrReconstruction::classify_points_at_infinity`], which only
-//! *reclassifies* points the solve already triangulated; here we *discover* new
+//! *reclassifies* points the reconstruction already has; here we *discover* new
 //! tracks the solve's parallax filters threw away.
 //!
 //! The geometric insight: a point at infinity is seen along the *same*

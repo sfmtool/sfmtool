@@ -876,6 +876,54 @@ fn coincident_cameras_give_no_depth() {
     );
 }
 
+/// Camera centres a few ulps apart, as a solver that collapsed a run of frames
+/// onto one centre leaves them, with rays that diverge by degrees: the rays fit
+/// no bearing, but the offsets between the centres are round-off, and the
+/// score, which does not depend on their scale, would read a depth from them.
+/// They are one centre, so there is no depth score, no midpoint and no `Λ`.
+#[test]
+fn centres_apart_by_round_off_give_no_depth() {
+    let base = Point3::new(4.0, -3.0, 1.5);
+    let ulp = f64::EPSILON * 4.0;
+    let centers = vec![
+        base,
+        Point3::new(base.x + ulp, base.y, base.z),
+        Point3::new(base.x, base.y - ulp, base.z + ulp),
+    ];
+    assert!(centers[0] != centers[1] && centers[0] != centers[2]);
+    let dirs = vec![
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.05, 0.0, 1.0).normalize(),
+        Vector3::new(0.0, 0.05, 1.0).normalize(),
+    ];
+    let s = score(&dirs, &centers, 1e-3);
+    assert!(
+        s.bearing_cost > T,
+        "the rays fit no bearing: {}",
+        s.bearing_cost
+    );
+    assert_eq!(s.depth_score, 0.0);
+    assert_eq!(s.midpoint_bound, 0.0);
+    assert!(!is_finite(&s, T));
+    let f = fit(&dirs, &centers, 1e-3, None, &PLAIN);
+    assert!(
+        f.depth_likelihood_ratio < 1e-6,
+        "{}",
+        f.depth_likelihood_ratio
+    );
+
+    // A real baseline well above 1e-12 of the centres' distance from the
+    // origin (here 2e-7 of it) is not round-off and keeps its leverage.
+    let spread = vec![
+        base,
+        Point3::new(base.x + 1e-6, base.y, base.z),
+        Point3::new(base.x, base.y - 1e-6, base.z),
+    ];
+    let target = Point3::new(base.x, base.y, base.z + 1e-5);
+    let dirs: Vec<Vector3<f64>> = spread.iter().map(|c| (target - c).normalize()).collect();
+    assert!(is_finite(&score(&dirs, &spread, 1e-3), T));
+}
+
 /// A warm-started fit never reports a `Λ` below the midpoint bound, even
 /// with few iterations, as bundle adjustment would run it: starts up to 4
 /// units off a point inside object-centric arcs.

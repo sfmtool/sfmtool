@@ -10,7 +10,10 @@ test beside `inverse_depth_z` are specified in
 [cli/reconstruction/analyze-command.md](../cli/reconstruction/analyze-command.md)
 § "Depth Reliability" and
 [cli/reconstruction/inspect-command.md](../cli/reconstruction/inspect-command.md).
-This draft covers what remains: the consumers that decide on the test. Amends
+Reclassification (`classify_points_at_infinity`) decides on the test, and how
+σ is measured is settled; both are in the standing spec (§ "Consumers" and §
+"The measured noise level"). This draft covers what remains: discovery, the
+bench and bundle adjustment. Amends
 batch-triangulation-api.md (the inverse-depth z test, its pre-filter and its
 noise floor),
 [core/reconstruction/triangulation-rules.md](../core/reconstruction/triangulation-rules.md)
@@ -19,9 +22,10 @@ noise floor),
 (§ "Free points: crossing between representations") and
 [core/bench/editable-track.md](../core/bench/editable-track.md)
 (§ "Finite points and bearings"). Decided: the statistic, the split between
-deciding and placing, and the order of the steps. Not decided: the default threshold, how
-σ is estimated in each caller, and what becomes of the `indeterminate` state
-(see "Open questions").
+deciding and placing, the order of the steps, and σ for a stored
+reconstruction. Not decided: the default threshold, σ in bundle adjustment,
+and what discovery does with a track its cameras cannot resolve (see "Open
+questions").
 
 ## Purpose
 
@@ -41,12 +45,12 @@ bench or inside bundle adjustment.
 
 ### Four rules answer the same question differently
 
-| Where | Rule today | Reads |
+| Where | Rule before this draft | Reads |
 |---|---|---|
-| `classify_rays_at_infinity` ([convert.rs](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)), used by `classify_points_at_infinity`, `find_points_at_infinity` and the bench | condition number below `1e4` is finite; otherwise `resolvable_distance < finite_horizon` is indeterminate; otherwise `inverse_depth_z < 4` (or behind a camera) is a bearing | linear midpoint solve; per-ray noise `max(point error, 1 px) / f` |
+| `classify_rays_at_infinity` ([convert.rs](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)), used by `find_points_at_infinity` and the bench (and by `classify_points_at_infinity` until it moved to the test) | condition number below `1e4` is finite; otherwise `resolvable_distance < finite_horizon` is indeterminate; otherwise `inverse_depth_z < 4` (or behind a camera) is a bearing | linear midpoint solve; per-ray noise `max(point error, 1 px) / f` |
 | The `floor` rule in [triangulation-rules.md](../core/reconstruction/triangulation-rules.md), used by bundle adjustment's crossing and by demotion | the widest ray pair subtending less than `θ_floor` is a bearing | pairwise ray angles; `θ_floor = noise_floor_scale · s / f` with `s` the stage's `loss_scale` |
 | `classify_track_rays` ([bench/classify.rs](../../crates/sfmtool-core/src/bench/classify.rs)) | the z rule above, then overridden when the midpoint's RMS reprojection error is not under `0.8×` the mean bearing's (and by more than the noise floor), or the reverse | the midpoint point and the mean ray, neither fitted to minimise pixel error |
-| `COINCIDENT_CAMERA_FRACTION` in `classify_points_at_infinity` | observing cameras spanning under `1e-4` of the camera extent make the track a bearing | camera centres only |
+| `COINCIDENT_CAMERA_FRACTION` in `classify_points_at_infinity` (removed with that pass's move) | observing cameras spanning under `1e-4` of the camera extent make the track a bearing | camera centres only |
 
 Each rule is a proxy for "does a depth explain the pixels". The bench's override
 exists because the z rule was seen to disagree with the pixels; its own comment
@@ -112,11 +116,12 @@ A consumer holding a reconstruction builds its rays with `track_rays` (or
 `observation_ray` for one sighting) from `(image, pixel)` observations, at the
 noise level `SfmrReconstruction::reprojection_noise_px` measures. Discovery
 builds its candidate tracks from `.sift` keypoints that way and the bench its
-uncommitted sightings, then calls the batch functions on them; the reports and
-reclassification use `SfmrReconstruction::point_or_bearing_scores`, the same
-construction over stored points. All of these, and their Python bindings, are
-in the same spec (§ "The measured noise level", § "Over a reconstruction" and
-§ "Python bindings").
+uncommitted sightings, then calls the batch functions on them; the reports use
+`SfmrReconstruction::point_or_bearing_scores`, the same construction over
+stored points, and reclassification builds the stored points' rays with
+`track_rays` itself. All of these, and their Python bindings, are in the same
+spec (§ "The measured noise level", § "Over a reconstruction", § "Consumers"
+and § "Python bindings").
 
 ## Theory
 
@@ -211,14 +216,12 @@ The current `inverse_depth_z` is the Wald form above. Its square approximates
 ### Where σ comes from
 
 - **A stored reconstruction** (reclassification, discovery, the bench,
-  `analyze`): the RMS per-axis pixel residual over the observations of its
-  finite points. RMS rather than a robust spread, because σ has to cover pose,
-  lens-model and keypoint error together, and those are heavier-tailed than a
-  Gaussian. On `tk117` the robust spread is 0.137 px against an RMS of 0.216
-  px, and at 0.137 px even the 13,000-unit bearings score `Λ` up to 35.
-  This is `SfmrReconstruction::reprojection_noise_px`, specified in the
-  standing spec § "The measured noise level"; each consumer's step makes it
-  that consumer's default.
+  `analyze`): `SfmrReconstruction::reprojection_noise_px`, the RMS per-axis
+  pixel residual over the observations of its finite points with gross
+  outliers gated out, and no degrees-of-freedom correction. The standing spec
+  § "The measured noise level" has the estimator, the comparison with the
+  plain RMS, trimmed RMS and robust spread that chose it, and the reasons;
+  each consumer's step makes it that consumer's default.
 - **Bundle adjustment**: the same RMS over the round's kept observations of
   finite points at the round's state, measured at re-estimation. Not
   `loss_scale`, which is a schedule constant chosen per stage and not a
@@ -250,14 +253,20 @@ bearings the three in the first rows are finite at a threshold of 25.
 
 ### Interaction with the `indeterminate` state
 
-The batch triangulation spec drops (in discovery) or leaves alone (in
-reclassification) a track whose observing cameras are too close together to
-place a point even at the capture's own scale. `Λ` answers that case without a
-third state: when the cameras are all at one stop, a near point and a bearing
-explain the rays equally well, `Λ` is near zero, and the track is a bearing,
-which is an accurate description of what the rays say. Whether discovery should
-still drop such tracks, rather than add them as bearings, is a policy question
-left open below; `resolvable_distance` stays available to answer it.
+The batch triangulation spec drops (in discovery) a track whose observing
+cameras are too close together to place a point even at the capture's own
+scale; reclassification, which used to leave such a point alone, now has no
+third state. `Λ` answers the case of near-parallel rays from one stop: a near
+point and a bearing explain them equally well, `Λ` is near zero, and the track
+is a bearing, which is an accurate description of what the rays say. The same
+holds for rays from one centre that agree on a direction, as from a camera
+panning in place. Rays from centres that a solver collapsed onto one point,
+diverging because the poses kept their rotations, fit no bearing; their
+centres differ only by round-off, which the test treats as one centre, so they
+too get no depth score and a bearing verdict (standing spec § "Fitting").
+Whether discovery should still
+drop such tracks, rather than add them as bearings, is a policy question left
+open below; `resolvable_distance` stays available to answer it.
 
 ## Bundle adjustment
 
@@ -287,16 +296,23 @@ reports came first and are in place (see the status line), so the disagreements
 each step resolves can be read off `sfm analyze --depth-reliability` before
 and after it.
 
-1. **Reclassification, discovery and the bench.** `classify_rays_at_infinity`
+1. **Discovery and the bench.** (Reclassification went first:
+   `classify_points_at_infinity` decides on the score and promotes as well as
+   demotes, as the standing spec § "Consumers" describes, and
+   `COINCIDENT_CAMERA_FRACTION` went with it.) `classify_rays_at_infinity`
    decides on the score. `CONDITION_NUMBER_PREFILTER`, `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`
    and `DEFAULT_NOISE_FLOOR_PX` stop deciding anything. The bench's `0.8` RMS
    ratio and its override variants go, since the criterion now compares fitted
-   candidates. `COINCIDENT_CAMERA_FRACTION` goes, since `Λ ≈ 0` covers that
-   case. `classify_points_at_infinity` is no longer relabel-only towards
-   infinity: it also promotes a bearing whose score clears the threshold,
-   placing it with the point fit, which
-   is the point-298 case. The `--find-points-at-infinity` noise-floor component
-   becomes a σ override.
+   candidates. The `--find-points-at-infinity` noise-floor component becomes a
+   σ override. Two findings from reclassification carry over. A track from
+   cameras collapsed onto one centre, with rays that diverge, got a verdict
+   decided by the round-off between its centres, so the primitives now treat
+   centres equal to round-off as one centre (standing spec § "Fitting"). And
+   a finite verdict can come with a fit whose point is on top of a camera or
+   whose `Λ` falls short of the score; reclassification applies the consumer
+   rule of § "Fitting" (a minimum depth) and requires the fit's `Λ` to reach
+   the threshold, and discovery and the bench need the same wherever they
+   place a point.
 2. **Bundle adjustment crossing** (step 1 of the section above).
 3. **Inverse-depth free points in bundle adjustment** (step 2 of the section
    above).
@@ -337,29 +353,11 @@ The consumer steps add:
 - **Per-camera σ.** One σ per reconstruction, or one per camera when the
   cameras differ (the two Kerry Park lenses are close, 0.2155 and 0.2157 px
   from `reprojection_noise`'s per-camera values; other rigs may not be).
-- **Outliers in the measured σ.** The RMS is dominated by a few large
-  residuals when a reconstruction has them. On the seoul bull ground truth one
-  16 px residual carries about 25% of `Σe²` and the top 1% of observations
-  62%, so the RMS of 0.646 px compares with 0.345 px after trimming the top
-  2% and 0.205 px from the MAD; bearing 188 scores 3.63 at 0.646 px and 32.5
-  at 0.216 px, which is a bearing verdict against a finite one. On `tk117` the
-  top 1% carry only 23%. Reclassification (step 1 of "Migration") has to
-  choose among three: the plain RMS, which never calls a bearing finite on an
-  understated σ but can keep a true point as a bearing when outliers inflate
-  it; a trimmed RMS (drop the top fraction of residuals), which is robust to a
-  few gross outliers but understates σ by the trimmed fraction's share of a
-  true heavy tail; or excluding observations whose residual is above some
-  multiple of a robust spread before taking the RMS, which removes gross
-  outliers (mismatches) while keeping the moderate tail that pose and lens
-  error produce. The second and third need a fraction or a multiple chosen on
-  more captures than these two.
-- **Degrees of freedom in σ.** The raw RMS divides by `2N` and ignores the
-  parameters bundle adjustment fitted to the same residuals, so it
-  understates the noise. Correcting by `2N − 3P − 6I + 7` (`P` finite points,
-  `I` images, less the 7 of the similarity gauge) raises σ by a factor of
-  1.118 on `tk117` and 1.25 on the seoul bull. Whether to apply it, and its
-  per-camera form, is open with the outlier question; it scales every score
-  by `1/factor²`.
+- **σ in bundle adjustment.** The stored-reconstruction measure gates
+  outliers at 30 robust spreads and applies no degrees-of-freedom correction
+  (standing spec § "The measured noise level"). Bundle adjustment measures σ
+  over a round's kept observations, after its own outlier handling; whether it
+  uses the same gate is for its step to settle.
 - **Discovery and single-stop tracks.** Whether `find_points_at_infinity`
   should still drop a track whose observing cameras cannot resolve a depth at
   the capture's scale, or add it as a bearing as `Λ` says.

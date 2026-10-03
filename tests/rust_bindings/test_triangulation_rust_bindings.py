@@ -147,16 +147,16 @@ def test_triangulation_diagnostics_shapes_and_nan(
 
 
 def test_triangulation_diagnostics_flags_distant_as_low_z(
-    seoul_bull_sfmr_only,
+    seoul_bull_workspace,
 ):
-    """Points the classifier moves to infinity carry the lowest z-scores."""
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    """Points the point-or-bearing test moves to infinity carry the lowest z-scores."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     diag = recon.triangulation_diagnostics(noise_px=1.0)
     z = diag["inverse_depth_z"]
 
-    # Reclassify with a high noise floor to surface near-infinity points, then
+    # Reclassify at a high noise level to surface near-infinity points, then
     # check those points sat at low z in the original diagnostics.
-    classified = recon.classify_points_at_infinity(50.0)
+    classified, _ = recon.classify_points_at_infinity(50.0)
     newly_infinite = np.asarray(classified.point_is_at_infinity) & ~np.asarray(
         recon.point_is_at_infinity
     )
