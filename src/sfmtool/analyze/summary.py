@@ -16,6 +16,7 @@ import numpy as np
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.spatial import KdTree3d
 from .._histogram_utils import print_histogram
+from .point_or_bearing import print_point_or_bearing_brief
 
 # Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
 # point's depth is statistically indistinguishable from infinity.
@@ -567,6 +568,7 @@ def print_reconstruction_summary(
         print_histogram(errors, "Error distribution", show_stats=False)
 
         _print_depth_reliability(recon)
+        print_point_or_bearing_brief(recon)
 
     # Observation statistics
     if recon.point_count > 0:

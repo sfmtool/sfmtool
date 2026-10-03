@@ -5,9 +5,14 @@ a finite point or a bearing onto one likelihood-ratio test. The test's core
 primitives exist and are specified in
 [core/reconstruction/batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
 § "Point or bearing", as are the measured noise level, the test over a
-reconstruction's points and the Python bindings; this draft covers what
-remains: the reports and the consumers. Amends that spec (the
-inverse-depth z test, its pre-filter and its noise floor),
+reconstruction's points and the Python bindings. The reports that print the
+test beside `inverse_depth_z` are specified in
+[cli/reconstruction/analyze-command.md](../cli/reconstruction/analyze-command.md)
+§ "Depth Reliability" and
+[cli/reconstruction/inspect-command.md](../cli/reconstruction/inspect-command.md).
+This draft covers what remains: the consumers that decide on the test. Amends
+batch-triangulation-api.md (the inverse-depth z test, its pre-filter and its
+noise floor),
 [core/reconstruction/triangulation-rules.md](../core/reconstruction/triangulation-rules.md)
 (the `floor` rule),
 [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md)
@@ -54,7 +59,7 @@ On the Kerry Park ground-truth candidate `tk117`, point `pt3d_a9665942_298`
 (10 views) is stored as a bearing. Fitting both models to its keypoints by
 minimising pixel error:
 
-| | Bearing | Finite point (515 units out) |
+| | Bearing | Finite point (515 units from the centroid of all cameras) |
 |---|---|---|
 | Mean / max reprojection error | 0.62 / 1.55 px | 0.16 / 0.32 px |
 | Sum of squared residuals | 6.53 px² | 0.37 px² |
@@ -62,7 +67,10 @@ minimising pixel error:
 The finite point explains every view to a third of a pixel, so the photographs
 place the track at a depth. The z rule calls it a bearing, though. Its rays span
 about 1.2°, so the condition number is 33,532 and it skips the pre-filter. Its
-per-ray noise is the 1 px floor, which gives `z = 2.23`, under the cutoff of 4.
+per-ray noise is the 1 px floor, which gives `z = 2.23` at the point fitted to
+the pixel residuals above, under the cutoff of 4 (`sfm analyze
+--depth-reliability` reports 2.18, at the plain least-squares fit of the sine
+residuals, 511 units from the observing cameras' centroid).
 The reconstruction's measured per-axis noise is 0.216 px, so the floor overstates
 this track's noise roughly five-fold, and z by the same factor. The stored error
 that feeds `max(error, floor)` is also the bearing's own residual once the point
@@ -71,7 +79,7 @@ has been demoted, so a demoted point stays demoted on a second pass.
 The same computation over all twelve bearings in that file, with σ = 0.216 px
 (the RMS per-axis residual over the 3,510 observations of finite points):
 
-| Point | Views | Finite distance | SSE bearing → finite (px²) | Λ |
+| Point | Views | Finite distance (from all cameras' centroid) | SSE bearing → finite (px²) | Λ |
 |---|---|---|---|---|
 | 298 | 10 | 515 | 6.53 → 0.37 | 132 |
 | 294 | 21 | 1,078 | 4.90 → 1.02 | 84 |
@@ -84,6 +92,9 @@ The same computation over all twelve bearings in that file, with σ = 0.216 px
 Λ here is from fits of both models to the pixel residuals through the camera
 model. Three bearings are clearly finite, seven are clearly bearings, and two sit
 between 10 and 25. Units are the file's own (it has no metric scale yet).
+`sfm analyze --depth-reliability` measures the distance from the centroid of
+the point's observing cameras instead, which gives 511, 1,076 and 1,160 for the
+first three.
 
 ## The primitives
 
@@ -271,14 +282,12 @@ Two changes, in order.
 
 ## Migration
 
-Each step is one PR and keeps the other rules unchanged until its turn.
+Each step is one PR and keeps the other rules unchanged until its turn. The
+reports came first and are in place (see the status line), so the disagreements
+each step resolves can be read off `sfm analyze --depth-reliability` before
+and after it.
 
-1. **Reports.** The primitives, the measured noise level, the test over a
-   reconstruction's points and their Python bindings are in place (see "The
-   primitives"). This step has `analyze --depth-reliability` and
-   `inspect --verbose` report the score and `Λ` beside `inverse_depth_z`, so
-   they can be compared on real files before anything decides on them.
-2. **Reclassification, discovery and the bench.** `classify_rays_at_infinity`
+1. **Reclassification, discovery and the bench.** `classify_rays_at_infinity`
    decides on the score. `CONDITION_NUMBER_PREFILTER`, `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`
    and `DEFAULT_NOISE_FLOOR_PX` stop deciding anything. The bench's `0.8` RMS
    ratio and its override variants go, since the criterion now compares fitted
@@ -288,8 +297,8 @@ Each step is one PR and keeps the other rules unchanged until its turn.
    placing it with the point fit, which
    is the point-298 case. The `--find-points-at-infinity` noise-floor component
    becomes a σ override.
-3. **Bundle adjustment crossing** (step 1 of the section above).
-4. **Inverse-depth free points in bundle adjustment** (step 2 of the section
+2. **Bundle adjustment crossing** (step 1 of the section above).
+3. **Inverse-depth free points in bundle adjustment** (step 2 of the section
    above).
 
 ## Parameters
@@ -334,7 +343,7 @@ The consumer steps add:
   62%, so the RMS of 0.646 px compares with 0.345 px after trimming the top
   2% and 0.205 px from the MAD; bearing 188 scores 3.63 at 0.646 px and 32.5
   at 0.216 px, which is a bearing verdict against a finite one. On `tk117` the
-  top 1% carry only 23%. Reclassification (step 2 of "Migration") has to
+  top 1% carry only 23%. Reclassification (step 1 of "Migration") has to
   choose among three: the plain RMS, which never calls a bearing finite on an
   understated σ but can keep a true point as a bearing when outliers inflate
   it; a trimmed RMS (drop the top fraction of residuals), which is robust to a

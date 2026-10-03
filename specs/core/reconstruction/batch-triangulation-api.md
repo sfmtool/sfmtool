@@ -268,9 +268,9 @@ than the noise could explain? It fits both models to the track's rays and
 compares their costs, which is a likelihood-ratio test between two nested
 models. A stored reconstruction supplies the noise level from its own residuals
 ("The measured noise level") and runs the test over its points with one method
-("Over a reconstruction"), and both are bound to Python. No classifier or
-report reads it yet; moving the four finite-or-bearing rules onto
-it is the amendment draft
+("Over a reconstruction"), and both are bound to Python. No classifier reads
+it yet; the `analyze` and `inspect` reports do (see "Consumers"). Moving the
+four finite-or-bearing rules onto it is the amendment draft
 [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
 which also carries the measurements that motivate it.
 
@@ -856,7 +856,15 @@ below. The noise floor reaches the CLI as the fourth component of
 (`eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]`).
 
 **Reports.** Per-point depth reliability appears in `sfm inspect --verbose` and in
-`sfm analyze --depth-reliability`, both through the PyO3 surface below.
+`sfm analyze --depth-reliability`, both through the PyO3 surface below. Each
+prints `inverse_depth_z` and, beside it, the verdicts of "Point or bearing"
+from `point_or_bearing_scores` at the measured noise, and counts the points
+whose verdict disagrees with how they are stored; `analyze` fits and lists those
+points and takes `--sigma-px` and `--depth-likelihood-ratio-threshold`
+([analyze-command.md](../../cli/reconstruction/analyze-command.md) § "Depth
+Reliability", [inspect-command.md](../../cli/reconstruction/inspect-command.md)).
+Neither decides anything; they are there to compare the two rules on real
+files.
 
 **The GUI** consumes the core functions directly. Two overlay modes back onto
 these diagnostics — "Depth Reliability", driven by `inverse_depth_z` (low =

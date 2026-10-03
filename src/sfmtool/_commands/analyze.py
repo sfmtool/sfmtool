@@ -3,6 +3,7 @@
 
 """Reconstruction analysis command."""
 
+import math
 from pathlib import Path
 
 import click
@@ -13,6 +14,13 @@ from ..analyze.depth import print_depth_reliability, print_z_range
 from ..analyze.images import print_images_table
 from ..analyze.metrics import print_metrics_analysis
 from .._sfmtool.reconstruction import SfmrReconstruction
+
+
+def _require_finite(ctx, param, value):
+    """Reject NaN and infinity, which FloatRange lets through."""
+    if value is not None and not math.isfinite(value):
+        raise click.BadParameter(f"{value} is not a finite number.")
+    return value
 
 
 @click.command("analyze")
@@ -53,7 +61,29 @@ from .._sfmtool.reconstruction import SfmrReconstruction
     "--depth-reliability",
     "depth_reliability_flag",
     is_flag=True,
-    help="Print per-point triangulation conditioning (inverse-depth z-score, condition number).",
+    help="Print per-point triangulation conditioning (inverse-depth z-score, "
+    "condition number) and the point-or-bearing likelihood-ratio test, with the "
+    "points whose verdict disagrees with how they are stored.",
+)
+@click.option(
+    "--sigma-px",
+    "sigma_px",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=None,
+    callback=_require_finite,
+    help="Per-axis pixel noise the point-or-bearing test weights its rays by "
+    "(default: the reconstruction's measured reprojection noise). Only with "
+    "--depth-reliability.",
+)
+@click.option(
+    "--depth-likelihood-ratio-threshold",
+    "depth_likelihood_ratio_threshold",
+    type=click.FloatRange(min=0.0),
+    default=None,
+    callback=_require_finite,
+    help="The threshold the point-or-bearing test's verdict applies (default: 25): "
+    "a point is finite when its bearing cost and either its depth score or its "
+    "midpoint bound reach it. Only with --depth-reliability.",
 )
 @click.option(
     "--range",
@@ -90,6 +120,8 @@ def analyze(
     images_flag,
     metrics_flag,
     depth_reliability_flag,
+    sigma_px,
+    depth_likelihood_ratio_threshold,
     range_expr,
     near_percentile,
     far_percentile,
@@ -120,7 +152,12 @@ def analyze(
 
     With --depth-reliability, prints per-point triangulation conditioning: the
     inverse-depth z-score (depth / sigma, low => near-infinity) and the
-    normal-matrix condition number, summarised across the finite points.
+    normal-matrix condition number, summarised across the finite points. It
+    then reports the point-or-bearing likelihood-ratio test: the measured
+    reprojection noise it weights rays by, its depth score over finite points
+    and points at infinity, and the points whose verdict disagrees with how
+    they are stored. --sigma-px and --depth-likelihood-ratio-threshold
+    override the test's noise level and threshold.
 
     RECONSTRUCTION_PATH must be a .sfmr file.
 
@@ -141,6 +178,8 @@ def analyze(
         sfm analyze reconstruction.sfmr --metrics --range 1-10
 
         sfm analyze reconstruction.sfmr --depth-reliability
+
+        sfm analyze reconstruction.sfmr --depth-reliability --sigma-px 0.5
     """
     reconstruction_path = Path(reconstruction_path)
 
@@ -168,6 +207,17 @@ def analyze(
 
     if range_expr is not None and not metrics_flag:
         raise click.UsageError("--range can only be used with --metrics.")
+
+    if not depth_reliability_flag:
+        if sigma_px is not None:
+            raise click.UsageError(
+                "--sigma-px can only be used with --depth-reliability."
+            )
+        if depth_likelihood_ratio_threshold is not None:
+            raise click.UsageError(
+                "--depth-likelihood-ratio-threshold can only be used with "
+                "--depth-reliability."
+            )
 
     if not frustum_flag:
         if near_percentile != 5.0:
@@ -213,6 +263,11 @@ def analyze(
             elif images_flag:
                 print_images_table(recon, recon_name=recon_name)
             elif depth_reliability_flag:
-                print_depth_reliability(recon, recon_name=recon_name)
+                print_depth_reliability(
+                    recon,
+                    recon_name=recon_name,
+                    sigma_px=sigma_px,
+                    threshold=depth_likelihood_ratio_threshold,
+                )
     except Exception as e:
         raise click.ClickException(str(e))

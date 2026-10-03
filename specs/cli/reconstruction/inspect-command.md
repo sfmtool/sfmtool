@@ -191,12 +191,36 @@ The default output is a compact label/value block. The fields per type:
   `xform`, solver flags for `solve`, etc.), workspace, per-camera parameter
   tables, rig configuration, 3D point statistics with histograms, reprojection
   error, per-point depth-reliability diagnostics (inverse-depth z-score and
-  condition number), observation statistics, nearest-neighbor distances. The
+  condition number) followed by the point-or-bearing counts described below,
+  observation statistics, nearest-neighbor distances. The
   3D point count carries the same `(N at infinity)` annotation as the default
   summary when any points at infinity are present, and the `Thumbnails` and
   `Patch bitmaps` lines appear under the reconstruction summary. An empty
   absolute workspace path, which means none was recorded (as `sfm xform
   --minimal` writes), prints as `(none recorded)`.
+
+  The point-or-bearing counts are the short form of `sfm analyze
+  --depth-reliability`'s second part (see
+  [analyze-command.md](analyze-command.md) § "Depth Reliability"): the
+  likelihood-ratio test of
+  [batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
+  § "Point or bearing" run over every point at the measured reprojection noise
+  and the default threshold, compared with how each point is stored. Nothing
+  is fitted and nothing in the file changes. On the Kerry Park ground-truth
+  candidate `tk117`:
+
+  ```
+    Point or bearing (likelihood-ratio test, threshold 25):
+      Noise level: 0.2156 px, measured over 3,510 observations of finite points
+      Finite points called bearings: 0 of 375 scored
+      Points at infinity called finite: 3 of 12 scored (points 298, 294, 295)
+  ```
+
+  The counts are out of the scored points; a point with fewer than two usable
+  rays is in neither. The promoted points are named by index, highest depth
+  score first, up to five. A reconstruction with no observation of a finite point, or whose
+  `.sift` files cannot be read, prints `Point or bearing: unavailable` and the
+  reason instead. `inspect` takes no override; `analyze` does.
 
 - **`.sift`** — adds image file size and hashes, feature tool and content
   hashes, feature tool options, and the top 5 features by size.

@@ -305,3 +305,44 @@ def test_inspect_workspace_arg_rejected_for_file(
     result = CliRunner().invoke(main, ["inspect", str(sfmr), str(sfmr.parent)])
     assert result.exit_code != 0
     assert "point ID" in result.output
+
+
+def test_inspect_sfmr_verbose_point_or_bearing(seoul_bull_ground_truth_sfmr):
+    """Verbose inspect prints the point-or-bearing counts under depth reliability."""
+    result = CliRunner().invoke(
+        main, ["inspect", "-v", str(seoul_bull_ground_truth_sfmr)]
+    )
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Point or bearing (likelihood-ratio test, threshold 25):" in out
+    assert (
+        "Noise level: 0.6461 px, measured over 1,233 observations of finite points"
+        in out
+    )
+    assert "Finite points called bearings: 0 of 266 scored" in out
+    assert "Points at infinity called finite: 0 of 14 scored" in out
+
+
+def test_inspect_sfmr_verbose_point_or_bearing_names_promotions(
+    seoul_bull_ground_truth_sfmr,
+):
+    """A point at infinity the test calls finite is named on the summary line."""
+    recon = SfmrReconstruction.load(str(seoul_bull_ground_truth_sfmr))
+    # Store finite points 0 and 1 as bearings. The test reads their observations,
+    # not the stored coordinate, so their rays still place them at a depth.
+    xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+    assert np.all(xyzw[:2, 3] == 1.0)
+    xyzw[:2, :3] /= np.linalg.norm(xyzw[:2, :3], axis=1)[:, None]
+    xyzw[:2, 3] = 0.0
+    path = seoul_bull_ground_truth_sfmr.parent / "two_bearings.sfmr"
+    recon.clone_with_changes(positions=xyzw).save(str(path))
+
+    result = CliRunner().invoke(main, ["inspect", "-v", str(path)])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Finite points called bearings: 0 of 264 scored" in out
+    line = next(x for x in out.splitlines() if "Points at infinity called finite" in x)
+    assert "2 of 16 scored" in line
+    assert "(points " in line
+    named = line.split("(points ")[1].rstrip(")").split(", ")
+    assert sorted(named) == ["0", "1"]

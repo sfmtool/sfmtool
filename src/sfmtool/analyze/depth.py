@@ -15,6 +15,7 @@ from .._histogram_utils import (
     render_histogram_string,
 )
 from .._image_pair_graph import _has_valid_depth_statistics
+from .point_or_bearing import point_or_bearing_report, print_point_or_bearing
 
 # Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
 # point's depth is statistically indistinguishable from infinity.
@@ -100,6 +101,8 @@ def print_depth_reliability(
     recon: SfmrReconstruction,
     recon_name: str | None = None,
     noise_px: float = 1.0,
+    sigma_px: float | None = None,
+    threshold: float | None = None,
 ):
     """Print per-point triangulation observability diagnostics.
 
@@ -108,7 +111,13 @@ def print_depth_reliability(
     mean the depth is statistically indistinguishable from infinity — and the
     normal-matrix condition number, the cheap geometric proxy that scales with
     track length. Points at infinity and sub-2-view points have no finite depth
-    and are excluded.
+    and are excluded from those two.
+
+    It then reports the point-or-bearing likelihood-ratio test over every point,
+    finite and at infinity, and the points where its verdict disagrees with the
+    stored representation (see :mod:`sfmtool.analyze.point_or_bearing`).
+    ``sigma_px`` overrides the measured noise level the test weights its rays
+    by, and ``threshold`` its threshold.
     """
     if recon_name is None:
         recon_name = recon.source_metadata.get("source_path", "reconstruction")
@@ -154,8 +163,19 @@ def print_depth_reliability(
     n = int(finite.sum())
     if n == 0:
         click.echo("\nNo finite, >=2-view points to diagnose.")
-        return
-    zf = z[finite]
+    else:
+        _print_inverse_depth_z(z[finite], cond)
+
+    if recon.point_count > 0:
+        report = point_or_bearing_report(recon, sigma_px=sigma_px, threshold=threshold)
+        print_point_or_bearing(recon, report, stored_z=z, noise_px=noise_px)
+
+    click.echo("")
+
+
+def _print_inverse_depth_z(zf: np.ndarray, cond: np.ndarray) -> None:
+    """The inverse-depth z and condition-number sections over the finite points."""
+    n = zf.size
 
     below = int((zf < DEPTH_RELIABILITY_Z_CUTOFF).sum())
     click.echo(f"\nDiagnosed points: {n:,}")
@@ -186,5 +206,3 @@ def print_depth_reliability(
                 max_val=float(edges[-1]),
                 show_stats=False,
             )
-
-    click.echo("")
