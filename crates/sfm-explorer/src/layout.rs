@@ -201,7 +201,9 @@ impl Tab {
     ];
 
     /// The panel's name on the wire: its title, lower-cased and joined with
-    /// underscores.
+    /// underscores, except `viewer_3d` for the "3D Viewer" title. These
+    /// strings are stored in saved layouts, so they stay fixed when a title
+    /// changes.
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Tab::SceneGraph => "scene",
