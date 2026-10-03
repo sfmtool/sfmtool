@@ -1,4 +1,4 @@
-// DIS inverse search — one thread per patch (Option B from spec).
+// DIS inverse search — one thread per patch.
 //
 // Each thread handles a single patch on the regular grid:
 // 1. Read initial flow at patch center

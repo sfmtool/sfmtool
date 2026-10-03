@@ -5,9 +5,9 @@
 //!
 //! Three compute shaders form the DIS per-level pipeline:
 //! 1. **Gradients** — central differences on the reference image
-//! 2. **Inverse Search** — one thread per patch (Option B), with Hessian
+//! 2. **Inverse Search** — one thread per patch, with Hessian
 //!    precomputation, iterative bilinear sampling, and outlier rejection
-//! 3. **Densify** — gather-based weighted averaging (Option B), one thread per
+//! 3. **Densify** — gather-based weighted averaging, one thread per
 //!    output pixel
 
 use super::super::{DisFlowParams, FlowField, GrayImage};

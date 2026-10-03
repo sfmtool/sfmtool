@@ -57,8 +57,22 @@ The full GPU pipeline:
 
 The `gpu_min_pixels` field on `DisFlowParams` (default: 50,000, roughly 224×224)
 controls per-level routing. Below the threshold, DIS and variational run on CPU;
-above it, they run on GPU. The decision is per pyramid level in
-`refine_flow_at_level` in `dis.rs`.
+above it, they run on GPU. The threshold is checked in two places:
+
+- `compute_optical_flow_timed` in
+  [`optical_flow/mod.rs`](../../../crates/sfmtool-core/src/features/optical_flow/mod.rs)
+  picks a `gpu_start_scale`: the coarsest pyramid level with at least
+  `gpu_min_pixels` pixels. It does this only when a GPU context is given and
+  `variational_refinement` is on. Levels coarser than `gpu_start_scale` run on
+  CPU; that level and every finer one run as one batch on the GPU through the
+  pipeline above, with flow kept on the GPU between levels.
+- `refine_flow_at_level` in
+  [`optical_flow/dis.rs`](../../../crates/sfmtool-core/src/features/optical_flow/dis.rs)
+  checks the threshold for each level it is given. With variational refinement
+  off (the `fast` preset), `gpu_start_scale` is `None` and the all-CPU loop calls
+  `refine_flow_at_level` with the GPU context, so each level at or above the
+  threshold runs DIS on the GPU and copies its flow back to the CPU. The same
+  per-level check applies in `compute_optical_flow_with_init`.
 
 Per-level routing for fisheye 3840×3840 high_quality (7 pyramid levels):
 
@@ -128,7 +142,9 @@ with between-pixel centering at offsets -2.5, -1.5, -0.5, +0.5, +1.5, +2.5.
 
 ### 2. Inverse Search (`inverse_search.wgsl`, `compute_gradients.wgsl`)
 
-One thread per patch with a sequential loop over the 64 pixels (8×8 patch).
+One thread per patch with a sequential loop over the patch's `patch_size²`
+pixels (64 for the 8×8 patch of the `fast` and `default` presets, 144 for the
+12×12 patch of `high_quality`).
 Dispatched 1D with 64-thread workgroups. Gradient computation runs as a
 separate dispatch in the same compute pass.
 
@@ -250,6 +266,10 @@ than Gauss–Seidel, and it is the property the CPU SOR path deliberately does n
 The uniforms (`width`, `height`, `alpha`) sit in a second bind group so the data group
 can be rebuilt without touching them.
 
+The Jacobi shader reads every neighbour value from global storage buffers; it does
+not cache tiles in workgroup shared memory. Caching them is proposed in
+[../../drafts/gpu-optical-flow-jacobi-shared-memory-amendment.md](../../drafts/gpu-optical-flow-jacobi-shared-memory-amendment.md).
+
 ## Timing Profiles
 
 **Fisheye 3840×3840 high_quality** (164ms GPU, 1300ms CPU = 7.9x):
@@ -275,14 +295,6 @@ can be rebuilt without touching them.
 Note: CPU variational on coarse levels is surprisingly expensive — the fisheye L7
 (30×30) takes 10ms because `outer_iterations = 1 × (7+1) = 8`. This is 14% of
 total GPU time and runs entirely on CPU.
-
-## Future Work
-
-**Workgroup shared memory for Jacobi.** The Jacobi shader reads 8 storage buffer
-arrays per pixel per iteration. Caching `flow_u`, `flow_v`, `du_old`, `dv_old` in
-workgroup shared memory with a 1-pixel halo (standard tiled-stencil pattern) could
-reduce global memory traffic. Expected impact is moderate — the current shader
-already achieves 7–13x speedup on large images.
 
 ## References
 

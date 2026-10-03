@@ -1,12 +1,14 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! GPU-accelerated variational refinement using wgpu compute shaders.
+//! GPU-accelerated DIS optical flow using wgpu compute shaders.
 //!
-//! This module implements the variational refinement stage of DIS optical flow
-//! on the GPU. The Jacobi solver is the primary bottleneck (~57% of per-scale
-//! CPU time) and maps perfectly to GPU compute: each pixel is independent within
-//! an iteration, with simple stencil access patterns.
+//! This module runs the per-level stages of DIS optical flow on the GPU: the
+//! Gaussian pyramid, DIS inverse search and densification, variational
+//! refinement, and the 2x flow upsampling between levels and to full
+//! resolution. The variational Jacobi solver is the largest CPU cost (~57% of
+//! per-scale CPU time) and maps directly to GPU compute: each pixel is
+//! independent within an iteration, with simple stencil access patterns.
 //!
 //! # Architecture
 //!

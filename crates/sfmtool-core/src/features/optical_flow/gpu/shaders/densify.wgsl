@@ -1,4 +1,4 @@
-// Gather-based flow densification — one thread per output pixel (Option B from spec).
+// Gather-based flow densification — one thread per output pixel.
 //
 // For each output pixel, finds all overlapping patches on the regular grid,
 // computes photometric-error-weighted contributions, and normalizes.
