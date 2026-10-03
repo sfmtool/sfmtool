@@ -53,8 +53,12 @@ split the whole-file hash into a stable `feature_set_xxh128` plus a
 ## File naming and path convention
 
 For an image file `/path/to/myimage.jpg`, a `.sift` file of extracted features goes
-in `/path/to/features/{feature_type}-{feature_tool_xxh128}/myimage.jpg.sift`, where `{feature_tool_xxh128}`
-is the feature tool hash (see [Feature tool hash computation](#feature-tool-hash-computation)).
+in `/path/to/features/{feature_type}-{feature_cache_hash}/myimage.jpg.sift`. The
+`features/{feature_type}-{feature_cache_hash}` part is the workspace's `feature_prefix_dir`,
+and `{feature_cache_hash}` is a hash of the workspace's extraction configuration; see
+[Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). It is a
+different value from the `feature_tool_xxh128` field stored inside the file (see
+[Feature tool hash computation](#feature-tool-hash-computation)).
 The value of `{feature_type}` encodes the tool and relevant options:
 
 - `sift-colmap` — COLMAP SIFT (default)
@@ -87,8 +91,8 @@ JSON. It contains the following fields (ignore additional fields for future back
 * `feature_options`: (object) All parameters that affect the extracted features. The keys
   are tool-defined — different tools will have different options. Writers should include
   every parameter that affects feature output, and exclude runtime parameters that don't
-  (e.g. GPU index, thread count). This object, together with `feature_tool` and
-  `feature_type`, is used to compute `feature_tool_xxh128`
+  (e.g. GPU index, thread count). Because `feature_tool_xxh128` is the hash of this
+  entry's bytes, these values determine it
   (see [Feature tool hash computation](#feature-tool-hash-computation)).
 
   The image-to-gray conversion belongs in here, because SIFT operates on a single-channel
@@ -121,9 +125,8 @@ is immutable once written.
 JSON, containing the following fields:
 
 * `metadata_xxh128`: XXH128 hash of the uncompressed `metadata.json` content bytes.
-* `feature_tool_xxh128`: Hash identifying the feature extraction configuration, derived from
-  `feature_tool`, `feature_type`, and `feature_options`. Computed once during workspace
-  initialization and propagated from there.
+* `feature_tool_xxh128`: XXH128 hash of the uncompressed `feature_tool_metadata.json`
+  content bytes, computed the same way as `metadata_xxh128`.
   See [Feature tool hash computation](#feature-tool-hash-computation).
 * `content_xxh128`: the whole-file digest. Every entry is its own one-entry
   section, and the sections contribute in this order:
@@ -207,23 +210,23 @@ for the extractors that produce the pixels.
 
 ## Feature tool hash computation
 
-The `feature_tool_xxh128` identifies a specific feature extraction configuration. It is a hash
-derived from `feature_tool`, `feature_type`, and `feature_options`.
+`feature_tool_xxh128` is the XXH128 hash of the uncompressed bytes of the
+`feature_tool_metadata.json` entry, exactly as stored in the file. A writer computes it from
+the bytes it writes, and a verifier recomputes it from the bytes it reads and reports a
+mismatch as a hash error, the same as for `metadata_xxh128`. The value identifies the
+extraction configuration only as far as the serialized `feature_tool_metadata.json` does: two
+writers that serialize the same configuration to different bytes (key order, float
+formatting, whitespace) produce different values.
 
-The spec does not prescribe a specific serialization or hashing algorithm. The implementation
-computes the hash during workspace initialization (`sfm ws init`) and stores the result in
-`.sfm-workspace.json` as part of `feature_prefix_dir`. From that point on, the hash is never
-recomputed — it is read from the workspace config and propagated into `.sift`, `.sfmr`, and
-`.matches` files as-is.
+`.sfmr` and `.matches` files record this field per image, copied from each `.sift` file's
+`content_hash.json`, so a consumer can confirm which feature configuration it was built from.
 
-This avoids cross-implementation issues with floating point serialization.
-
-Implementations should make a best effort to compute the hash deterministically from the
-logical configuration values, so that reinitializing a workspace with the same settings
-produces the same `feature_prefix_dir` and reuses cached features. For example, an
-implementation might serialize the options with sorted keys and a consistent float format,
-then hash the result. The important thing is that a single implementation is consistent
-with itself — cross-implementation agreement is nice to have but not required.
+The hash in the workspace's `feature_prefix_dir` directory name is a separate value. It is
+computed once at workspace initialization from `feature_tool`, the workspace `feature_type`
+(for example `sift-colmap`) and `feature_options` minus options that do not affect the output,
+and is not recomputed from any `.sift` file; see
+[Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). The two hashes
+do not in general agree, and a reader must not compare one with the other.
 
 ## Using CLI commands to pull apart a .sift file
 
@@ -276,7 +279,7 @@ $ jq . metadata.json
 $ jq . content_hash.json
 {
   "metadata_xxh128": "a7b3c1d2e4f56789abcdef0123456789",
-  "feature_tool_xxh128": "c220a90eb516a6654748c328f3403054",
+  "feature_tool_xxh128": "8f0d6e2b71c94a35b2e1d07c6a59f3e4",
   "content_xxh128": "5a90164dc1d970770e2a881114ad040a"
 }
 

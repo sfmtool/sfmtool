@@ -703,6 +703,7 @@ most of the per-sentence findings.
     - The workspace directory hash is a *different* computation (`file.py:96-111`).
     - A real file confirms the two differ: `…sift-colmap-dsp-max3000-a3e02aa8…/*.sift` stores `e43b2d42…`.
     - So :56-57 equate two different values.
+    > _Status (2026-10-03): **Done** — the spec defines `feature_tool_xxh128` as the XXH128 of the stored `feature_tool_metadata.json` bytes, enforced by the verifier; the path convention calls the directory component the workspace's feature-cache hash and says it is a different value; § Feature tool hash computation now separates the two and states that `.sfmr` and `.matches` copy the `.sift` field per image (checked: `colmap/io.py`, `feature_match/_db_populate.py`, `_undistort_images.py`), which answers the **Check** in the recommendation. The example's hash no longer reuses the directory hash from `matches-file-format.md`. Branch `finding-bash-02-sift-feature-tool-hash`._
   - :160-163 say features are ordered by descending size. Neither the writer nor the verifier checks this; only the extractors sort.
 **Format independence:**
   - :40-42 name the crate and `SIFT_FORMAT_VERSION` → "a conforming writer writes 1; a reader rejects newer versions".
@@ -926,6 +927,7 @@ replaced by `gui/track-view.md`.)
    > other spec-side items in those sections, and priorities 2–5, remain open._
 2. **Format specs that define a field wrongly:**
    - `sift-file-format.md` defines `feature_tool_xxh128` as a workspace-propagated value with no fixed algorithm. It is the XXH128 of the stored metadata bytes, and verifiers enforce that.
+     > _Status (2026-10-03): **Done** — field definition corrected and separated from the directory hash; see the sift-file-format section. Branch `finding-bash-02-sift-feature-tool-hash`._
    - `sfmr-file-format.md` says versions are "1 to 9" (the current version is 11), has no v10 entry, and calls `derived_xxh128` optional when the verifier requires it.
    - The kdf version is given as 2 in `lazy-kdforest-query.md`, in two places in `kdf-file-format.md` and in `types.rs`; the code is at 3.
 
