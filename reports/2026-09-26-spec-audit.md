@@ -790,6 +790,7 @@ and the opening paragraphs listed in check 4.
   - :268-271 do not say that the binding's `columns=None` means `Fixed` with both columns, not `"auto"`.
   - Command side: the `--json` payload (`_commands/estimate_intrinsics.py:459-477`) never includes `screening_vote`, so the pinhole numbers the spec tells callers to read from it cannot be reached from `sfm estimate-intrinsics`. Expose it, or say so in `estimate-intrinsics-command.md`.
 - **`specs/cli/reconstruction/motion-command.md`:**
+  > _Status (2026-10-03): Done — § Tests now lists the cases in `tests/test_motion_report.py`; the build-plan table is replaced by an § Implementation table of the modules the command uses; the settled "Extrapolation order" question is removed; the KerryPark citation is dropped; `shared_points` notes the 90° angle filter; the stride options state their minimums, branch `finding-bash-12-motion-command-spec`._
   - :592-628 § Tests describes a 10-frame fixture and a "NaN round-trips as `null`" test that do not exist; the tests are in `tests/test_motion_report.py`.
   - :630-641 "Code and patterns to build on" is a build plan, and two of its rows name helpers the motion code does not use.
   - :645-647 open question "Extrapolation order" is settled by the shipped linear+quadratic minimum.

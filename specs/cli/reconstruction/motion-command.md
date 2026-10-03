@@ -57,9 +57,9 @@ sfm motion [OPTIONS] PATHS...
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--range`, `-r` | | Range expression of file numbers to use from input directories. |
-| `--initial-stride N` | 1 | Starting stride for adaptive sampling. |
-| `--min-stride N` | 1 | Minimum stride (floor for adaptive shrinking). |
-| `--max-stride N` | 32 | Maximum stride (ceiling for adaptive growing). |
+| `--initial-stride N` | 1 | Starting stride for adaptive sampling. Must be at least 1. |
+| `--min-stride N` | 1 | Minimum stride (floor for adaptive shrinking). Must be at least 1. |
+| `--max-stride N` | 32 | Maximum stride (ceiling for adaptive growing). Must be at least 2; Click rejects a smaller value. |
 | `--no-adaptive` | false | Disable adaptive stride adjustment; keep stride fixed. |
 | `--save-flow-dir PATH` | | Directory to save optical flow color images (Middlebury convention). |
 | `--json PATH` | | Write a machine-readable JSON report of the analysis to this path. Human-readable output is unchanged. |
@@ -333,9 +333,9 @@ The output partitions discontinuities into:
 - **Multi-signal (high confidence):** two or more of {P, S, C} fired, or at least one
   plus Obs context at an endpoint.
 
-Scale-shift discontinuities that the pose test misses (as in the KerryPark 831→832
-case) reliably trigger both Step and Cov simultaneously and show up as high-confidence
-hits.
+A scale-shift discontinuity that the pose test misses changes both the step length
+and the set of tracks seen across the edge, so it usually fires Step and Cov together
+and is reported as a high-confidence hit.
 
 ### Step 3: Reprojection Error Context
 
@@ -458,7 +458,7 @@ Each entry in `discontinuities` (one per `core_edge` after clustering):
 | `step_ratio` | Step-size ratio at this edge, or `null` near sequence ends. |
 | `overlap_drop` | Covisibility drop factor at this edge, or `null` near ends. |
 | `obs_z_a`, `obs_z_b` | Per-frame obs z-scores for the two endpoints, or `null`. |
-| `shared_points` | Number of shared 3D points between the two endpoints. |
+| `shared_points` | Number of 3D points observed in both endpoint images. The counts come from `build_covisibility_pairs` in [`_image_pair_graph.py`](../../../src/sfmtool/_image_pair_graph.py), which drops pairs whose viewing directions differ by more than 90°, so `0` means either no shared points or a pair removed by that angle filter. |
 | `reproj_error_a`, `reproj_error_b` | Mean reprojection error (pixels) for each endpoint image, or `null` if not available. |
 | `signals` | Array of fired primary codes (subset of `["P", "S", "C", "O"]`, sorted). `P` aggregates the four pose-residual flags. |
 | `confidence` | `"high"` if `len(signals) >= 2`, else `"low"`. Matches the footer partition rule. |
@@ -591,60 +591,57 @@ Reconstruction mode, two discontinuities clustered to single edges:
 
 ### Tests
 
-`tests/test_motion_report.py`:
+[`tests/test_motion_report.py`](../../../tests/test_motion_report.py) covers the
+`--json` report. Most cases use the `seoul_bull_workspace` fixture, a `.sfmr`
+of the 17 `seoul_bull_sculpture` images built at the ground-truth poses:
 
-- **Reconstruction with planted discontinuity.** Build a small in-memory
-  `SfmrReconstruction` (10 frames, image names `frame_0000.jpg`…
-  `frame_0009.jpg`, pose jump between frame 4 and 5). Run
-  `analyze_reconstruction` and serialize. Assert:
-  - `schema_version == 1`, `mode == "reconstruction"`.
-  - One sequence with `frame_count == 10`.
-  - `len(discontinuities) == 1` and `edge == [4, 5]`.
-  - `len(segments) == 2`; segment 0 = `[0, 4]`, segment 1 = `[5, 9]`.
-  - `json.dumps(report, allow_nan=False)` does not raise (no `NaN`/`Infinity`
-    leaks).
-  - `thresholds.step_ratio == 1.5`, `thresholds.overlap_drop == 1.8`,
-    `thresholds.obs_z == 2.5`, `thresholds.pose_trans_factor == 3.0`,
-    `thresholds.pose_rot_deg == 15.0`.
-  - `sequences[0].pose_trans_threshold == 3.0 * sequences[0].median_trans`.
-- **Reconstruction with no discontinuity.** Same fixture but a smooth pose
-  sequence. Assert `discontinuities == []` and `segments` has exactly one
-  full-length entry covering `[0, n-1]`.
-- **Singleton-segment edge case.** Construct a fixture where the only
-  discontinuity is on edge `(0, 1)`. Assert segment 0 = `[0, 0]`
-  (`frame_count == 1`).
-- **NaN reprojection error round-trips as `null`.** Construct a fixture
-  where one endpoint image has no valid observations so
-  `_compute_per_image_mean_errors` returns `nan` for it. Assert the
-  serialized `reproj_error_a` (or `_b`) is `null`, not `NaN`.
-- **Image-sequence mode.** Run `analyze_image_sequence` on the
-  `seoul_bull_17_images` fixture or equivalent and serialize. Assert
-  `mode == "image_sequence"`, `samples` length matches non-superseded
-  sample points, no `segments` field at sequence level, no numpy arrays
-  remain (verify by `json.dumps(allow_nan=False)`).
-- **Write-failure.** `--json /nonexistent/dir/out.json` raises
-  `ClickException`. Analysis printed before the failure is acceptable.
+- **Planted discontinuity.** Every image with file number 11 or higher is moved
+  50 units along x. The report has `schema_version == 1` and
+  `mode == "reconstruction"`, one sequence with `frame_count == 17`, a
+  discontinuity between frames 10 and 11 with `P` in its `signals`, and
+  segments that partition the sequence (one more segment than discontinuities,
+  frame counts summing to `frame_count`).
+- **No discontinuity.** The unmodified reconstruction gives
+  `discontinuities == []` and one segment covering `[0, frame_count - 1]`.
+- **Thresholds.** The `thresholds` block echoes the module constants, and
+  `pose_trans_threshold == 3.0 * median_trans`.
+- **Strict JSON.** `json.dumps(report, allow_nan=False)` succeeds on the
+  planted-discontinuity report.
+- **Infinite overlap drop.** A synthetic three-frame sequence result whose
+  landing edge has `overlap_drop = inf` serializes that field as `null` and
+  still lists `"Cov"` in the frame's `flags`. A synthetic input is used because
+  overlap drop needs `3 * OVERLAP_WINDOW` (48) frames and the checked-in
+  datasets are shorter.
+- **Segment edge cases.** `_segments_from_core_edges` is called directly for no
+  edges, an edge at `(0, 1)` (singleton first segment), an edge at the last
+  position (singleton last segment), and two adjacent edges (singleton middle
+  segment).
+- **Image-sequence mode.** `sfm motion` on `seoul_bull_sculpture` frames 1-4
+  with `--no-adaptive --json` gives `mode == "image_sequence"`,
+  `ratio_lower` and `ratio_upper` in `thresholds`, no `segments` field,
+  `sample_count == len(samples)`, the documented fields on every sample, and a
+  report that passes `json.dumps(allow_nan=False)`.
+- **CLI.** `sfm motion <file>.sfmr --json PATH` writes a reconstruction-mode
+  report, and a `--json` path whose parent directory does not exist exits
+  non-zero with "Failed to write JSON report".
 
+The console output and option handling of both modes are tested in
+[`tests/test_motion.py`](../../../tests/test_motion.py).
 
+## Implementation
 
-Code and patterns to build on:
-
-| Component | Location | Relevance |
-|---|---|---|
-| Camera center computation | `analyze/images.py:_compute_camera_centers()` | World-space positions |
-| Rotation angle computation | `analyze/images.py:_compute_rotation_angle()` | Rotation between poses |
-| DIS optical flow | `_sfmtool.flow.compute_optical_flow()` | Flow computation |
-| DIS with initial flow | `_sfmtool.flow.compute_optical_flow_with_init()` | Stride flow from scaled local |
-| Sequence detection | `deadline.job_attachments.api.summarize_paths_by_sequence` | Input grouping |
-| Flow visualization | `visualization/_flow_display.py:_flow_to_color()`, `_draw_flow_legend()` | Middlebury color images |
-| Reprojection errors | `analyze/metrics.py` | Error context for flagged frames |
-| Covisibility graph | `_image_pair_graph.py` | Shared point counts |
+| Part | Location |
+|---|---|
+| CLI command and option parsing | [`_commands/motion.py`](../../../src/sfmtool/_commands/motion.py) |
+| Image-sequence analysis (adaptive stride, DIS flow via `compute_optical_flow` and `compute_optical_flow_with_init`) | [`motion/image_sequence.py`](../../../src/sfmtool/motion/image_sequence.py), [`motion/flow_stats.py`](../../../src/sfmtool/motion/flow_stats.py), [`motion/ratio_band.py`](../../../src/sfmtool/motion/ratio_band.py) |
+| Image-sequence console output and flow images | [`visualization/_discontinuity_display.py`](../../../src/sfmtool/visualization/_discontinuity_display.py) |
+| Reconstruction analysis (pose extrapolation, step ratio, overlap drop, obs z-score, edge clustering) | [`motion/recon_discontinuity.py`](../../../src/sfmtool/motion/recon_discontinuity.py), [`motion/constants.py`](../../../src/sfmtool/motion/constants.py) |
+| Reconstruction console output | [`motion/_recon_console.py`](../../../src/sfmtool/motion/_recon_console.py) |
+| `--json` report | [`motion/report.py`](../../../src/sfmtool/motion/report.py) |
+| Sequence detection | [`_path_summary.py`](../../../src/sfmtool/_path_summary.py) (`summarize_paths_by_sequence`) |
+| Shared point counts | [`_image_pair_graph.py`](../../../src/sfmtool/_image_pair_graph.py) (`build_covisibility_pairs`) |
 
 ## Open Questions
-
-- **Extrapolation order**: Quadratic vs cubic fit for pose extrapolation. Three points
-  allow a quadratic fit; using more neighbors could improve accuracy but may smooth over
-  real changes in motion.
 
 - **Histogram comparison metric**: Histogram intersection, chi-squared distance, and
   earth mover's distance are all options. Which works best in practice for flow
