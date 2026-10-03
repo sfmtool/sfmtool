@@ -79,7 +79,7 @@ Five more mismatches came from reading the sampled specs rather than from the ta
 - **viewport-navigation.md:766:** says the indicator opacity runs 50%→10%. The shader and the spec's own table say 20%→5%.
 - **focal-vote.md:167:** says "at most 60" rotation images. The code allows up to 119.
 - **kdf-constellation-query.md:593:** says a length mismatch raises `ValueError`. The code raises `OSError`.
-> _Status (2026-10-02): the focal-vote and constellation items are **Done** in code, commits `f32453d` and `58db6dd`; both specs already described the fixed behaviour. The `--dsp` and indicator items remain open._
+> _Status (2026-10-02): the focal-vote and constellation items are **Done** in code, commit `b19c676` (#670); both specs already described the fixed behaviour. The `--dsp` and indicator items remain open._
 
 ### 2. Prose duplicated between a spec and its code
 
@@ -344,7 +344,7 @@ most of the per-sentence findings.
 **Implementing code:** `features/kdforest/constellation.rs` (`constellation_query` :403, `constellation_at_pixel` :976, `constellation_from_keypoints` :1039, `radius_for_feature_count` :944); `neighbor_index.rs`; `sfmtool-py/src/spatial/{constellation_query,kdf,kdforest}.rs`.
 **Inconsistencies:**
   - **Behavioural.** The spec at :593-596 and the docstring at `kdf.rs:540` say mismatched array lengths raise `ValueError`. In fact `KdfError::ShapeMismatch` (constellation.rs:420, :429) maps to **`OSError`** (`kdf.rs:70`), and no test covers it.
-    > _Status (2026-10-02): **Done** — the length checks return `KdfError::InvalidQuery`, which maps to `ValueError`, with a test, commit `58db6dd`. The spec was already right._
+    > _Status (2026-10-02): **Done** — the length checks return `KdfError::InvalidQuery`, which maps to `ValueError`, with a test, commit `b19c676` (#670). The spec was already right._
   - :459-460 say the origin-table pass is paid "once per `constellation_at_pixel` call". It is also paid on every `constellation_from_keypoints` call, which is the bench's per-gesture path (`bench/search.rs:356`), and nothing caches it.
   - A bad `positions` dtype raises `TypeError` and a missing `sources` key raises `KeyError`, not `ValueError`.
 **Third copies:** These Rust doc comments in `constellation.rs` should each shrink to a contract plus a link:
@@ -380,7 +380,7 @@ most of the per-sentence findings.
 **Implementing code:** `geometry/focal_vote.rs` (`focal_vote*`, `FocalVoteOptions`, `FocalVoteResult`), `focal_vote/column_scan.rs`, `homography_estimation.rs`, `simd.rs`; `sfmtool-py/src/geometry/{focal_vote,homography_estimation}.rs`.
 **Inconsistencies:**
   - :167 says "at most 60" rotation images. `step = (n_img/60).max(1)` (`:1036`) visits up to 119. **This is probably a code bug; use `div_ceil`.**
-    > _Status (2026-10-02): **Done** — the stride is `n_img.div_ceil(60)`, so at most 60 images are visited, with a test, commit `f32453d`. The spec was already right._
+    > _Status (2026-10-02): **Done** — the stride is `n_img.div_ceil(60)`, so at most 60 images are visited, with a test, commit `b19c676` (#670). The spec was already right._
   - :577-584 list "three" environment flags. The code also reads `SFMTOOL_FOCAL_VOTE_F64_EPI` and `SFMTOOL_FOCAL_VOTE_F32_ROT` (simd.rs:67,75). F32_ROT contradicts :75 "stays f64". The code also reads `_F32_AUDIT` and `SFMTOOL_PROFILE`.
   - :56 says "every computation below is `f64`". That contradicts :69, since epipolar residuals are f32 by default. There is no stated parity test for the 8-lane f32 kernel.
   - :469-471 give the wrong `estimate_homography` signature. The real one is keyword-only, with `confidence`, `max_iterations`, `min_inliers` and `local_optimization`.
@@ -431,7 +431,7 @@ most of the per-sentence findings.
   - **Proposed:** *"`sfm sift` detects SIFT keypoints and descriptors in a set of images and writes one `.sift` file per image for `sfm match` and `sfm solve`; with `--draw` it draws those keypoints onto copies of the images."*
 **Recommendation:** update spec. **Also update code** for the bug below.
 **Unclear / incorrect / suspicious:** **Bug.** `sfm sift --draw DIR --tool opencv` inside a workspace draws the *workspace* tool's features. `get_sift_path_for_image` (`file.py:488-493`) ignores `feature_tool`, while `--extract --tool` writes to `features/sift-opencv-*`. So `--draw --tool` either draws the wrong features or raises FileNotFound, and no test covers it.
-> _Status (2026-10-02): **Done** for the bug — `--draw --tool` now ignores the workspace and reads the `--tool` features, with a test, commit `db00e2d`. The spec-side items above remain open._
+> _Status (2026-10-02): **Done** for the bug — `--draw --tool` now ignores the workspace and reads the `--tool` features, with a test, commit `b19c676` (#670). The spec-side items above remain open._
 
 ### specs/cli/reconstruction/inspect-command.md
 **Summary:** Accurate on file dispatch, the default and verbose fields, point-ID resolution and `--strips`. The main error is the stale claim that verbose point inspection needs `.sift` files.
@@ -590,7 +590,7 @@ most of the per-sentence findings.
     - `embedded_patches` ⇒ patch frame (:1690)
   - **Rigs and frames:** they must appear together (:698), but only `rigs/` is checked, so a `frames/` without `rigs/` passes.
   - **Keypoint bounds:** the writer does not check them (:1572), so it can write a file its own reader rejects.
-    > _Status (2026-10-02): **Done** — the writer runs `validate_keypoints`, with tests, commit `a197947`._
+    > _Status (2026-10-02): **Done** — the writer runs `validate_keypoints`, with tests, commit `b19c676` (#670)._
   - **Usage Examples** (:1812-1897) use `SfmrFileReader`, `write_sfm` and `verify_sfm`, none of which exist.
 **Format independence:** Twelve confirmed findings. The main ones, with who should replace the name:
   - :112-116 `SfmrReconstruction`/`conversion` → "a reader converts on load".
@@ -617,11 +617,12 @@ most of the per-sentence findings.
 **Implementing code:** `sfmtool-matches-format/src/{entries,types,write,read,verify}.rs`; `sfmtool-py/src/io/{matches,matches_file}.rs`.
 **Inconsistencies:**
   - :496, :530, :550 and :851 say member geometry is NaN-free. The writer and verifier do not check this.
-    > _Status (2026-10-02): **Done** — the writer refuses NaN member geometry and the verifier reports it, with tests, commit `05dc87f`._
+    > _Status (2026-10-02): **Done** — the writer refuses NaN member geometry and the verifier reports it, with tests, commit `b19c676` (#670)._
   - :214-220 list `matching_method` values `vocab_tree`, `spatial`, `transitive` and `custom`. The writers emit `flow`, `cluster` and `merged`, none of which is listed.
   - :577-593 leave out `refine_options.max_keypoint_uncertainty`, which is the threshold behind status 6.
+    > _Status (2026-10-03): **Superseded** — the member gate now uses the ZNCC self-similarity radius. The metadata paragraph (:590-597) lists `max_member_zncc_self_similarity_radius` and notes that older files carry `max_keypoint_uncertainty`, commits `086f8e1` (#651) and `c4a9db8` (#654)._
   - :727 says a verifier checks config indices. `verify.rs` does not bound-check them.
-    > _Status (2026-10-02): **Done** — the verifier reports out-of-range config indices, with a test, commit `05dc87f`._
+    > _Status (2026-10-02): **Done** — the verifier reports out-of-range config indices, with a test, commit `b19c676` (#670)._
   - :907-910 give the `source_selection` nesting condition wrongly. `cluster-selection.md:121` states it correctly.
   - :1056-1131 Usage Examples use APIs that do not exist.
   - :660 "Added… without a version bump" and :613 "identity affine" are stale.
@@ -632,6 +633,7 @@ most of the per-sentence findings.
   - :418-422 describe expansion as the CLI command → keep the rule and move the CLI sentence to background.
   - **Definitions carried by links:**
     - Status 6 (:620-624) → restate as "uncertainty above `refine_options.max_keypoint_uncertainty`".
+      > _Status (2026-10-03): **Done** — status 6 is now defined inline as a ZNCC self-similarity radius above the member gate's bar (:625-627), and the link is kept only for details, commits `086f8e1` (#651) and `c4a9db8` (#654)._
     - :650-653 `M_k`, `T_c`, `J` are defined only in `core/patch/cluster-warp-consistency.md`.
     - :901 provenance keys are undefined here.
   - **Opening**, proposed: *"A `.matches` file records feature correspondences among a set of images — pairwise per image pair, or clusters across images — with optional verification or vetting results, and names the `.sift` files whose indexes it uses."*
@@ -778,16 +780,15 @@ most of the per-sentence findings.
    - The matches verifier does not bounds-check config indices, and no layer enforces NaN-free member geometry.
    - The sfmr writer can write out-of-bounds keypoints that its own reader rejects.
 
-   > _Status (2026-10-01): **Done**, each with a test. The `--draw --tool` bug
-   > is fixed by a keyword-only `ignore_workspace` on `get_sift_path_for_image`
-   > and `draw_sift_features`, commit `db00e2d`. The constellation length checks
-   > return `KdfError::InvalidQuery`, so they raise `ValueError`, commit
-   > `58db6dd`. The rotation-scan stride rounds up, commit `f32453d`. The
-   > matches writer refuses NaN member geometry, and the verifier reports it and
-   > out-of-range config indexes, commit `05dc87f`. The sfmr writer runs
-   > `validate_keypoints`, commit `a197947`. The specs already described
-   > the fixed behaviour; each finding above is marked. The other spec-side
-   > items in those sections, and priorities 2–5, remain open._
+   > _Status (2026-10-01): **Done**, each with a test, in commit `b19c676`
+   > (#670). The `--draw --tool` bug is fixed by a keyword-only
+   > `ignore_workspace` on `get_sift_path_for_image` and `draw_sift_features`.
+   > The constellation length checks return `KdfError::InvalidQuery`, so they
+   > raise `ValueError`. The rotation-scan stride rounds up. The matches writer
+   > refuses NaN member geometry, and the verifier reports it and out-of-range
+   > config indexes. The sfmr writer runs `validate_keypoints`. The specs
+   > already described the fixed behaviour; each finding above is marked. The
+   > other spec-side items in those sections, and priorities 2–5, remain open._
 2. **Format specs that define a field wrongly:**
    - `sift-file-format.md` defines `feature_tool_xxh128` as a workspace-propagated value with no fixed algorithm. It is the XXH128 of the stored metadata bytes, and verifiers enforce that.
    - `sfmr-file-format.md` says versions are "1 to 9" (the current version is 11), has no v10 entry, and calls `derived_xxh128` optional when the verifier requires it.
