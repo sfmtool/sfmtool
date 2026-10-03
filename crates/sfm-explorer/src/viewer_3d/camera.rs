@@ -242,17 +242,23 @@ impl ViewportCamera {
             return None;
         }
 
-        // Transform points into camera space (right, up, -forward)
+        // Read the points on the camera's axes (right, up, forward), measured
+        // from one of the points rather than from the camera. The fit's answer
+        // does not depend on where the camera is, only on how it is turned,
+        // and measuring from a camera far from the points (one left framing a
+        // node drawn at a scale of 1e20) loses every digit that tells the
+        // points apart: the fit then lands on a rounded place with no
+        // distance to its target.
         let right = self.camera.right();
         let up = self.camera.up();
         let forward = self.camera.forward();
-        let cam_pos = self.camera.position;
+        let origin = points[0];
 
         let mut view_xs: Vec<f64> = Vec::with_capacity(points.len());
         let mut view_ys: Vec<f64> = Vec::with_capacity(points.len());
         let mut view_zs: Vec<f64> = Vec::with_capacity(points.len());
         for p in points {
-            let d = p - cam_pos;
+            let d = p - origin;
             view_xs.push(d.dot(&right));
             view_ys.push(d.dot(&up));
             view_zs.push(d.dot(&forward)); // positive = in front
@@ -286,7 +292,7 @@ impl ViewportCamera {
         let camera_distance = dist_for_height.max(dist_for_width);
 
         // World-space center of the percentile bounding box
-        let world_center = cam_pos + right * cx + up * cy + forward * cz;
+        let world_center = origin + right * cx + up * cy + forward * cz;
 
         Some((world_center - forward * camera_distance, camera_distance))
     }

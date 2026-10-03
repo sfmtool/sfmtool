@@ -165,6 +165,23 @@ fn bearings_evenly_spread_over_the_sphere_still_frame_deterministically() {
     assert_eq!(camera.compute_fit(&points, 1.5, true), Some(end));
 }
 
+/// The fit depends on how the camera is turned and not on where it stands, so
+/// a camera left far away -- framing a node drawn at a scale of 1e20 -- frames
+/// a node of ordinary size exactly as a camera beside it does, rather than
+/// landing on a rounded place with no distance to its target.
+#[test]
+fn a_fit_from_a_camera_far_away_is_the_fit_from_close_by() {
+    let (_, finite) = node_with(400, |_| None);
+    let near = rolled_camera();
+    let mut far = rolled_camera();
+    far.camera.position = Point3::new(-1.9e20, -5.7e21, 3.3e21);
+    let (want, want_distance) = near.compute_zoom_to_fit(&finite, 1.5).expect("framed");
+    let (got, got_distance) = far.compute_zoom_to_fit(&finite, 1.5).expect("framed");
+    assert!(want_distance > 0.0);
+    assert!((got - want).norm() < 1e-9, "{got} is not {want}");
+    assert!((got_distance - want_distance).abs() < 1e-9);
+}
+
 #[test]
 fn nothing_to_frame_moves_nothing() {
     let camera = ViewportCamera::default();

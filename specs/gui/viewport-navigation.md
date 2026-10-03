@@ -441,7 +441,11 @@ keeps your orientation, rather than snapping to a fixed viewpoint.
 
 ### Algorithm
 
-1. Transform all visible points into **camera space** (right / up / forward axes)
+1. Read all visible points on the camera's **right / up / forward axes**,
+   measured from one of the points rather than from the camera. Only the
+   camera's orientation enters the fit, and measuring from a camera far from
+   the points (one left framing a node drawn at a huge scale) would round away
+   the differences between them
 2. Sort each axis independently and compute a **percentile bounding box**
    using the 20th–80th percentile range, which automatically ignores outliers
 3. Find the center of the percentile box in camera space (cx, cy, cz)

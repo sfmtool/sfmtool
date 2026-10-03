@@ -1550,8 +1550,10 @@ Two refusals, each attached to the part of `by` that earns it. A **bearing**
 direction it was, so a tangential `by` is carried like any other; a `by` with a
 **normal** part is refused as `TrackEditError::AtInfinity`, a direction patch's
 normal being its own bearing, so there is no line standing off it to move along.
-A `by` that is not finite is refused as `BadDisplacement`, the way a pixel that
-is not one is refused as `BadPixel`.
+A `by` that is not finite, or whose length is not (`(1e300, 0, 0)`), is refused
+as `BadDisplacement`, the way a pixel that is not one is refused as `BadPixel`;
+a moved centre whose squared distance from the origin is not finite is refused
+as `BadPlace`.
 
 **`translate_patch_to_pixel` is that step named as a pixel.** A person dragging the
 outline in a photograph names a place by pointing at it, so the pixel is read

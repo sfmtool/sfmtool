@@ -43,6 +43,7 @@ use sfmtool_core::bench::{
     Stage, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
+use sfmtool_core::readable::Readable;
 use sfmtool_core::EditedReconstruction;
 
 use crate::action_log::{version_step_text, Kind};
@@ -1294,10 +1295,10 @@ impl AppState {
                 let centre = report.center;
                 format!(
                     "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3}){}",
-                    report.moved,
-                    centre.x,
-                    centre.y,
-                    centre.z,
+                    Readable(report.moved),
+                    Readable(centre.x),
+                    Readable(centre.y),
+                    Readable(centre.z),
                     clamp_note(report.clamped_from, report.pixel)
                 )
             }
@@ -1313,18 +1314,21 @@ impl AppState {
                 let by = report.by;
                 let across = by.x.hypot(by.y);
                 let how = if across == 0.0 && by.z != 0.0 {
-                    format!("{:.3} units along its normal", by.z)
+                    format!("{:.3} units along its normal", Readable(by.z))
                 } else if by.z == 0.0 {
-                    format!("{:.3} units", report.moved)
+                    format!("{:.3} units", Readable(report.moved))
                 } else {
                     format!(
-                        "{across:.3} units across its plane and {:.3} along its normal",
-                        by.z
+                        "{:.3} units across its plane and {:.3} along its normal",
+                        Readable(across),
+                        Readable(by.z)
                     )
                 };
                 format!(
                     "Moved {label} by {how} to ({:.3}, {:.3}, {:.3})",
-                    centre.x, centre.y, centre.z
+                    Readable(centre.x),
+                    Readable(centre.y),
+                    Readable(centre.z)
                 )
             }
             // The turn actually made, and the observation that cut it short
