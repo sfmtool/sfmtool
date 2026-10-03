@@ -7,9 +7,13 @@ is already known. With the rotation fixed the problem is linear in the
 three translation components, which makes the solve stable exactly where
 full 6-DOF resection is fragile: low-parallax observations constrain a
 translation firmly while leaving a joint rotation–translation solve free
-to trade the two against each other. Callers with a rotation from any
-source — a far-field rotation skeleton, a rig calibration, an external
-attitude — resect position only.
+to trade the two against each other. The kernel does not care where the
+rotation came from. Its one in-repo caller is the far-field rotation
+skeleton in
+[rotation_init.rs](../../../crates/sfmtool-core/src/geometry/rotation_init.rs),
+which resects each camera's position after fixing its rotation; the
+Python binding exposes the same function for any other source of
+rotation.
 
 ## Mechanism
 
@@ -22,17 +26,26 @@ are the Python binding's signature defaults (see
 rotation skeleton, passes its own `RESECT_MAX_ERROR_PX` /
 `RESECT_MIN_INLIERS`.
 
-Each observation's ray `r_k = pixel_to_ray(uv_k)` (unit, camera frame)
-must be parallel to `R·X_k + t`:
+The function returns `None` before any solve when `uv` and `points`
+differ in length, or when there are fewer than `max(min_inliers, 1)`
+observations.
+
+Each observation's ray `r_k = pixel_to_ray(uv_k)` (normalized to unit
+length, camera frame) must be parallel to `R·X_k + t`:
 
 ```
 [r_k]ₓ · (R·X_k + t) = 0    →    [r_k]ₓ · t = −[r_k]ₓ · R·X_k
 ```
 
-Three linear rows per observation (rank 2). The solve is trimmed
-iteratively reweighted least squares:
+Three linear rows per observation (rank 2). An observation whose
+`pixel_to_ray` is non-finite or has length below `1e-12`, or whose
+rotated world point `R·X_k` is non-finite, is excluded from every
+solve and every kept set; if fewer than `min_inliers` observations
+remain after that exclusion, the resection fails before the first
+round. The solve is trimmed iteratively reweighted least squares:
 
-1. Least-squares solve over the current observation set (all, initially).
+1. Least-squares solve over the current observation set (all valid
+   observations, initially).
 2. Reproject: keep observations in front of the camera with pixel
    residual below `max_error_px`.
 3. Repeat 3 rounds or until the kept set is stable. Fewer than
@@ -63,7 +76,8 @@ Output: `t`, the surviving-observation mask, and pixel residual norms.
 All three outputs are per **input** observation and length `n`: a
 non-survivor keeps the residual it scored at the final translation, and
 an observation the camera cannot image — behind it, outside the model's
-domain, or with a non-finite ray — reports `INVALID_RESIDUAL` (`1e6`)
+domain, or excluded above for a non-finite or zero-length ray or a
+non-finite point — reports `INVALID_RESIDUAL` (`1e6`)
 rather than a real number. Zipping `residual_norms` against the inlier
 subset instead of the inputs misaligns it.
 
@@ -110,8 +124,9 @@ resect_translation(camera, rotation_wxyz, points, uv,
   half-space gate would drop them) and still rejects the antipodal
   reflection along each ray. A perspective camera evaluates the same
   half-space expression it always did.
-- Failure path: fewer than `min_inliers` consistent observations returns
-  `None` (binding) / failure (core).
+- Failure path: fewer than `min_inliers` consistent observations, or
+  `uv` and `points` of different lengths, returns `None` (core and
+  binding).
 - Degenerate ray bundles (all rays near-parallel) still return the
   least-squares `t` — conditioning is the caller's concern, correctness
   of the normal equations is this kernel's.

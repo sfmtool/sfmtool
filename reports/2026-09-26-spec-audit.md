@@ -822,6 +822,7 @@ and the opening paragraphs listed in check 4.
   - :56 does not say that `rounds == 0` is legal (`:263`).
   - Discuss: the module has no caller outside its tests. Keep it or retire it.
 - **`specs/core/geometry/rotation-locked-resection.md`:**
+  > _Status (2026-10-03): Done — the spec now states the up-front `None` on a length mismatch or fewer than `max(min_inliers, 1)` observations, the exclusion of non-finite or zero-length rays and non-finite points, and names `rotation_init.rs` as the only in-repo caller, branch `finding-bash-18-rotation-locked-resection-spec`._
   - :113-114 do not state the up-front `None` when `uv.len() != n` or `n < min_inliers.max(1)` (`resect_translation.rs:159`).
   - The spec does not say that rays with a non-finite or near-zero `pixel_to_ray` are excluded (`:172-181`).
   - :11-12 present "a rig calibration, an external attitude" as callers; the only caller is `rotation_init.rs`.
