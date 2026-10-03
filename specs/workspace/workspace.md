@@ -117,12 +117,15 @@ path. For example:
 features/sift-colmap-d1245b460906df27ee4730273e0aba41
 ```
 
-This is structured as `features/{feature_type}-{feature_tool_xxh128}`, where:
+This is structured as `features/{feature_type}-{feature_cache_hash}`, where:
 
 - `feature_type` identifies the descriptor format (e.g., `sift-colmap`, `sift-opencv`, `sift-sfmtool`)
-- `feature_tool_xxh128` is a hash derived from `feature_tool`, `feature_type`, and
+- `feature_cache_hash` is a hash derived from `feature_tool`, `feature_type`, and
   `feature_options`, computed once during `sfm ws init`. The spec does not prescribe a specific
-  serialization algorithm — the implementation decides how to hash these values.
+  serialization algorithm — the implementation decides how to hash these values. It is a
+  different value from the `feature_tool_xxh128` field stored inside each `.sift` file, which is
+  the hash of that file's `feature_tool_metadata.json` bytes (see
+  [Feature tool hash computation](../formats/sift-file-format.md#feature-tool-hash-computation)).
   Implementations should be deterministic so that reinitializing a workspace with the same
   settings produces the same hash and reuses cached features
 
