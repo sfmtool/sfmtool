@@ -3971,9 +3971,8 @@ fn as_bearing(track: &EditableTrack, edited: &EditedReconstruction) -> EditableT
     track
 }
 
-/// The place named is projected onto the plane before anything moves, so a
-/// point off the plane slides the patch to the place directly under it and the
-/// patch never leaves the plane it is in.
+/// A `by` with no normal part moves the centre by exactly that much along `u`
+/// and `v`, keeps the plane it is in, and carries every sighting with it.
 #[test]
 fn a_translation_across_the_plane_moves_the_centre_and_every_sighting() {
     let scene = Scene::new();

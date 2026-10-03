@@ -2437,9 +2437,10 @@ it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`;
 `"origin"`, `"descriptor"`, `"search"`, `"sweep"`, `"pixel"`, `"point"`).
 `EditableTrack.verdict_counts` is `(in, out)`. Refusals are `ValueError` carrying the core sentence.
 
-`create_track` takes `point` and, as keyword-only arguments, `version` and `label`,
-the two fields of `CreateTrackOptions`: `version` defaults to `0` and
-`label` to `None`, which mints the label as the Rust step does.
+`create_track` takes `bench`, `edited` and `point` and, as keyword-only
+arguments, `version` and `label`, the two fields of `CreateTrackOptions`:
+`version` defaults to `0` and `label` to `None`, which mints the label as the
+Rust step does.
 
 `create_cluster` takes either `radius_px`, a half-width in that image's pixels,
 or `shape`, a 2x2 in keypoint-frame units; `EditableTrack.radius` is the
