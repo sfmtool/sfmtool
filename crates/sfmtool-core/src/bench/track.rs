@@ -642,7 +642,7 @@ pub struct Origin {
 /// [`Self::geometry_search_min_relative_zncc`]'s default is read from view
 /// selection's own parameter type rather than written out again, so the bench and the batch
 /// pass start from the same bar and moving it is the person choosing to
-/// differ. The other four are the bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
+/// differ. The other five are the bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
 /// fit may move a sighting, and the cluster refinement's 3 px turned away walks
 /// a person wanted. [`BENCH_MIN_ZNCC`] and [`BENCH_MIN_ZNCC_MIDDLE`]: the
 /// cluster refinement's `0.85` judges the score it reached by fitting a whole
@@ -676,10 +676,9 @@ pub struct Thresholds {
     /// be from where the correlation wants it, how far the evaluation looks, and
     /// how far a fit may walk it.
     ///
-    /// Both are the observation's **own** evidence. The bar is deliberately not
-    /// judged on [`TrackMeasurement::projection_offset_px`], which is a verdict
-    /// on the point rather than on the sighting: a mis-triangulated point would
-    /// otherwise turn out every observation of the track that would fix it.
+    /// Both are the observation's **own** evidence. The distance to the
+    /// point's projection is judged by its own bar,
+    /// [`Self::max_projection_error_px`].
     ///
     /// At the track stage it is also the bound on a fit's walk: a sighting the
     /// fit's kernels would move further than this from where it sat keeps its
@@ -699,6 +698,24 @@ pub struct Thresholds {
     /// or it was read back from a committed point, has nothing to judge and
     /// clears the bar.
     pub max_zncc_self_similarity_radius: f64,
+    /// The largest reprojection error an observation may have, in
+    /// **source-image px**: [`TrackMeasurement::reprojection_error`] where the
+    /// track is triangulated and [`TrackMeasurement::projection_offset_px`]
+    /// before it is, the number Track View's *Proj. err* cell prints. Judged at
+    /// the track stage alone, since the cluster stage has no point to project.
+    ///
+    /// Unlike the other bars it judges the **point** as much as the sighting:
+    /// a mis-triangulated point gives every row a large error, and this bar
+    /// then proposes turning them all out, including the observations that
+    /// would move the point back. A row that fails this bar alone, beside rows
+    /// that fail it too, says the point is off rather than the sighting. The
+    /// default is [`BENCH_MAX_PROJECTION_ERROR_PX`].
+    ///
+    /// `0` turns the bar off, as it does [`Self::min_zncc_middle`]: no
+    /// reading clears a bar of `0` but an exact projection, so the value says
+    /// nothing a bar could mean. An observation with no reading has nothing to
+    /// judge and clears the bar.
+    pub max_projection_error_px: f64,
     /// The fraction of the track's own self-agreement a candidate's ZNCC has to
     /// reach for a geometry search ([`search_geometry`](super::search_geometry))
     /// to admit it. It judges no observation of the track: the evaluation, the
@@ -712,6 +729,10 @@ pub struct Thresholds {
 /// as far as the batch localizer does. Separate from the cluster refinement's
 /// own `max_shift_px` (3 source-image px), which stays the batch pass's bar.
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
+
+/// The bench's default [`Thresholds::max_projection_error_px`], in
+/// source-image px.
+pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 
 /// The bench's default [`Thresholds::min_zncc`].
 ///
@@ -757,6 +778,7 @@ impl Default for Thresholds {
             min_zncc_middle: BENCH_MIN_ZNCC_MIDDLE,
             max_shift_px: BENCH_MAX_SHIFT_PX,
             max_zncc_self_similarity_radius: BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
+            max_projection_error_px: BENCH_MAX_PROJECTION_ERROR_PX,
             geometry_search_min_relative_zncc: ViewSelectParams::default().min_relative_zncc,
         }
     }

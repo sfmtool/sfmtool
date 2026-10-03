@@ -157,12 +157,15 @@ pub struct Thresholds {
     pub min_zncc_middle: f64,                // 0 turns it off
     pub max_shift_px: f64,
     pub max_zncc_self_similarity_radius: f64, // patch-grid px; 3 or more turns nothing out
+    pub max_projection_error_px: f64,       // source-image px; track stage only; 0 turns it off
     pub geometry_search_min_relative_zncc: f64, // judges no row: the bar a geometry search admits by
 }
 // The bench's own default bars: the shift bar the localizer's search radius,
-// in patch-grid px, the ZNCC bars below the cluster refinement's 0.85, and
-// the self-similarity bar under the largest shift the radius reads.
+// in patch-grid px, the ZNCC bars below the cluster refinement's 0.85, the
+// self-similarity bar under the largest shift the radius reads, and the
+// projection error bar in source-image px.
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
+pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 pub const BENCH_MIN_ZNCC: f64 = 0.7;
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
 pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
@@ -231,6 +234,12 @@ pub struct BarChecks {                // one per bar, named after it
     pub min_zncc_middle: BarCheck,
     pub max_shift_px: BarCheck,
     pub max_zncc_self_similarity_radius: BarCheck,
+    pub max_projection_error_px: BarCheck,
+}
+
+impl BarChecks {
+    pub fn clears_every_bar(&self) -> bool; // no bar failed it
+    pub fn failed(&self) -> usize;           // how many bars failed it
 }
 
 pub fn duplicate(
@@ -1380,7 +1389,10 @@ exactly when no bar fails it (`BarChecks::clears_every_bar`) and its image is
 free, so the painting, `unpin_verdicts`, an evaluation's repaint, and a
 viewer that colours each reading by its bar all read the same judgement, and a
 reading shown as passing cannot sit on a row the painting turns out for that
-reading.
+reading. `BarChecks::failed` counts the bars that fail, which a viewer orders
+rows by. The projection bar judges `reprojection_error` where the track carries
+one and `projection_offset_px` before it does, and is not judged at the cluster
+stage, which has no point to project.
 
 `verdicts_if_unpinned` is what the thresholds propose for every observation
 whatever the person decided: for an unpinned one the verdict `apply_thresholds`
@@ -1918,8 +1930,8 @@ reading. What lands in each slot is:
 | `zncc_middle` | The same samples at the same peak against the same consensus, read over the middle square of the tile only (§ "The middle ZNCC"). |
 | `zncc_grid` | The same samples read over each ninth of the tile (§ "The ZNCC grid"). |
 | `seed_shift_px` | How far that peak sits from the observation's own keypoint, in patch-grid px on the patch's plane, both ends through the unprojection the localizer seeds from. The **sighting's** own evidence, and what `max_shift_px` paints on. In the unit of the self-similarity radius, so a shift inside the radius is within what the patch cannot tell apart. |
-| `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. |
-| `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. |
+| `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. What `max_projection_error_px` paints on before the track is triangulated. |
+| `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. The px is what `max_projection_error_px` paints on once the track is triangulated. |
 | `zncc_self_similarity_radius` and its middle, grid, slide and surface | How far the observation's own tile's core, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
@@ -1932,7 +1944,11 @@ the projection, and that distance is often the thing that explains the row.
 Anchoring the shift at the projection -- which is what the localizer's own
 `offsets_px` and its `max_shift_px` gate do -- makes a sighting five px from a
 mis-triangulated point look like a sighting that moved five px, and turns out
-the very observation that would pull the point back.
+the very observation that would pull the point back. The distance to the
+projection has a bar of its own, `max_projection_error_px`, so the two
+questions are judged apart: a row that fails only the projection bar, beside
+rows that fail it too, says the point is off, and one that fails the shift bar
+says the sighting is.
 
 **A row without a score names its refusal.** `Unmeasured` is that name, one
 short sentence each: `NoSeed` (nothing says where it sits), `OffSensor` (it sits
@@ -2299,7 +2315,7 @@ them, and a fit re-triangulates from what is left.
 `geometry_search_min_relative_zncc` defaults to view selection's own bar, read from its
 parameter type rather than written out again, so the bench and the batch pass
 start from the same bar and moving it is the person choosing to differ. The
-other four are the bench's own. `max_shift_px` is
+other five are the bench's own. `max_shift_px` is
 `BENCH_MAX_SHIFT_PX`, the localizer's own search radius, because on the bench
 it is also the radius a reading searches and the bound on a fit's walk
 (§ "The fit's walk is bounded by the person's bar"). `min_zncc` is
@@ -2311,15 +2327,17 @@ keeps its `0.85`. `min_zncc_middle` is `BENCH_MIN_ZNCC_MIDDLE` (§ "The middle
 ZNCC"). `max_zncc_self_similarity_radius` is
 `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, the keypoint localizer's default
 member bar, which the bench applies in its painting rather than in the kernel
-(§ "The ZNCC self-similarity radius"). A track keeps the bars it was made with: one created under an
+(§ "The ZNCC self-similarity radius"). `max_projection_error_px` is
+`BENCH_MAX_PROJECTION_ERROR_PX`, 3 source-image px. A track keeps the bars it was made with: one created under an
 earlier default carries that default until someone moves it.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `min_zncc` | `0.7` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. `BENCH_MIN_ZNCC`, not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
 | `min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
-| `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
+| `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, to the point's projection, is judged by `max_projection_error_px`. |
 | `max_zncc_self_similarity_radius` | `2.5` | The largest ZNCC self-similarity radius an observation's own tile may have, in patch-grid px: `zncc_self_similarity_radius` of the cluster measurement at the cluster stage and of the track measurement at the track stage. `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The radius reads at most `3`, meaning "3 or more", so a bar of `3` or more turns nothing out; a row with no reading clears it and a `NaN` fails it (§ "The ZNCC self-similarity radius"). |
+| `max_projection_error_px` | `3.0` | The largest reprojection error an observation may have, in source-image px: `reprojection_error` where the track is triangulated and `projection_offset_px` before it is. Track stage only. It judges the point as much as the sighting: a mis-triangulated point fails it on every row, the observations that would move the point back among them. `BENCH_MAX_PROJECTION_ERROR_PX`; `0` turns it off, a row with no reading clears it and a `NaN` fails it. The track-at-pixel cascade builds its tracks with it off. |
 | `geometry_search_min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a candidate has to reach for a geometry search to admit it. It judges no observation, so the evaluation, the painting and `apply_thresholds` do not read it. From `ViewSelectParams::default`. |
 
 The reading's two memory bounds are not thresholds either: nothing about them is

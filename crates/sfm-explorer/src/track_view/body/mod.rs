@@ -330,6 +330,10 @@ pub struct TrackBody {
     /// threshold row follow its sideways part. Kept to add a drag of the
     /// headings to.
     scroll_offset: egui::Vec2,
+    /// The order the table's rows are drawn in, set by a click on a heading.
+    /// A tool setting for the reason [`TrackBody::lock`] is, kept for the
+    /// session and across tracks.
+    sort: table::TableSort,
 }
 
 impl Default for TrackBody {
@@ -363,6 +367,7 @@ impl TrackBody {
             lock: true,
             split_settings: SplitSettings::default(),
             scroll_offset: egui::Vec2::ZERO,
+            sort: table::TableSort::default(),
         }
     }
 
@@ -1511,6 +1516,18 @@ const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a
     match. A row whose whole tile reads further than this is painted out, since a match \
     cannot pin its position, as along a straight edge or over a flat patch. At 3, the largest \
     radius read, it turns nothing out.";
+
+/// The text after the projection error box in the threshold row, the unit of
+/// the *Proj. err* cell's first line. The box is the largest reprojection
+/// error an observation may have.
+pub(crate) const MAX_PROJECTION_ERROR_LABEL: &str = "px";
+
+/// The projection error box's hover text.
+const MAX_PROJECTION_ERROR_TIP: &str = "The largest reprojection error a sighting may have, in \
+    the photograph's pixels: how far it may sit from where the track's point projects. A row \
+    further than this is painted out. The bar judges the point as much as the sighting: when \
+    every row fails it, the point is off rather than the sightings. Track stage only, and 0 \
+    turns it off.";
 
 /// A kept-at-seed row's menu entry, which puts the sighting where the fit's
 /// walk would have taken it.

@@ -25,6 +25,15 @@
 //! after it, so the switch wins the clicks that land on it and the row takes
 //! the rest.
 //!
+//! The rows are in increasing order of *Img* until a heading is clicked. A
+//! click on a heading orders them by that column, worst first where a bar
+//! judges the column and increasing where none does, and a second click on
+//! the same heading reverses the order; the heading the rows
+//! are ordered by carries a triangle pointing up for increasing and down for
+//! decreasing. A row with no reading in the column sorts after every row with
+//! one, either way, and rows that tie stay in increasing order of image.
+//! *Crop*, *Patch* and *From* order nothing.
+//!
 //! A cell with two readings, the whole patch's and its middle's, prints them
 //! on two lines, each with its unit and its name (`93% whole` over `89% mid`),
 //! so the headings carry names alone.
@@ -42,8 +51,9 @@ use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
     row_grids, row_radius, row_surface, self_similarity_cell_color, zncc_cell_color, BodyMode,
     BoxHover, BoxesMoved, Judgement, RowGrids, TrackBody, TrackBodyResponse,
-    MAX_SELF_SIMILARITY_LABEL, MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL, MAX_SHIFT_TIP,
-    MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL, MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
+    MAX_PROJECTION_ERROR_LABEL, MAX_PROJECTION_ERROR_TIP, MAX_SELF_SIMILARITY_LABEL,
+    MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL, MAX_SHIFT_TIP, MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL,
+    MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -79,6 +89,9 @@ const GRID_SIDE: f32 = 3.0 * GRID_CELL + 4.0;
 const PLOT_SIDE: f32 = 44.0;
 /// Side of the same plot in its hover view.
 const PLOT_HOVER_SIDE: f32 = 220.0;
+/// Half the width of the triangle after the heading the rows are ordered by.
+/// Small, since *Img* has little room before *Crop*.
+const SORT_TRIANGLE_HALF_WIDTH: f32 = 4.0;
 
 /// What one row drew, kept so that a test reads the table the app draws rather
 /// than a second computation of it.
@@ -101,7 +114,7 @@ pub(crate) struct RowSummary {
     /// pin say and why the bars propose what they do, in Viewed mode why the
     /// bars give the row the verdict they do.
     pub keep_hover: String,
-    /// The *Verdict* cell as printed, `in`, `out` or `-`, in Viewed mode;
+    /// The *Verdict* cell as printed, `in`, `out`, `out (2)` or `-`, in Viewed mode;
     /// `None` in Edited mode, which draws a switch there.
     pub verdict_text: Option<String>,
     /// The colour the verdict cell was tinted, or `None` for an untinted one.
@@ -149,7 +162,8 @@ pub(super) struct ColumnLayout {
 impl ColumnLayout {
     pub(super) fn new() -> Self {
         let image = 0.0;
-        let crop = image + 34.0;
+        // Room for the *Img* heading and the sort triangle after it.
+        let crop = image + 44.0;
         let tile = crop + TILE_SIZE + 4.0;
         let keep = tile + TILE_SIZE + 8.0;
         let zncc = keep + KEEP_WIDTH + 6.0;
@@ -162,9 +176,10 @@ impl ColumnLayout {
         let self_similarity_grid = self_similarity + 88.0;
         let offset = self_similarity_grid + GRID_SIDE + 10.0;
         // Room for the error in px over the same residual in degrees,
-        // `12.65 px` over `0.08°`. The shift sits beside the status, which
-        // says what a fit did with a shift past the bar.
-        let shift = offset + 66.0;
+        // `12.65 px` over `0.08°`, and for the bar's box and its `px` in the
+        // threshold row. The shift sits beside the status, which says what a
+        // fit did with a shift past the bar.
+        let shift = offset + 76.0;
         // Room for `12.25 px`.
         let status = shift + 62.0;
         // The status cell holds a sentence at the track stage -- the reason a
@@ -264,6 +279,185 @@ impl ColumnLayout {
     }
 }
 
+/// A column the rows can be put in order by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SortColumn {
+    /// The image's index.
+    Image,
+    /// How many bars the row fails: *Keep* in Edited mode and *Verdict* in
+    /// Viewed mode. Among rows that fail the same number, the ones the bars
+    /// propose `in` come before the ones they propose `out`, which for a row
+    /// that fails none is one whose image another sighting holds.
+    Verdict,
+    /// The whole patch's ZNCC.
+    Zncc,
+    /// The whole tile's self-similarity radius.
+    SelfSimilarity,
+    /// The reprojection error in px.
+    ProjectionError,
+    /// The shift in px.
+    Shift,
+    /// The status cell's text.
+    Status,
+    /// The image's name.
+    Name,
+}
+
+impl SortColumn {
+    /// The column the heading `heading` orders the rows by, or `None` for
+    /// one that orders nothing: *Crop* and *Patch*, which are pictures, and
+    /// *From*.
+    pub(super) fn of_heading(heading: &str) -> Option<Self> {
+        Some(match heading {
+            "Img" => SortColumn::Image,
+            "Keep" | "Verdict" => SortColumn::Verdict,
+            "ZNCC" => SortColumn::Zncc,
+            "Self-similarity" => SortColumn::SelfSimilarity,
+            "Proj. err" => SortColumn::ProjectionError,
+            "Shift" => SortColumn::Shift,
+            "Status" => SortColumn::Status,
+            "Name" => SortColumn::Name,
+            _ => return None,
+        })
+    }
+
+    /// Whether a click that makes this the column the rows are ordered by
+    /// orders them decreasing. A column a bar judges starts at its worst
+    /// rows: the most bars failed, the lowest ZNCC, the largest
+    /// self-similarity radius, projection error and shift. A column no bar
+    /// judges starts increasing.
+    pub(super) fn worst_first_descending(self) -> bool {
+        match self {
+            SortColumn::Verdict
+            | SortColumn::SelfSimilarity
+            | SortColumn::ProjectionError
+            | SortColumn::Shift => true,
+            SortColumn::Image | SortColumn::Zncc | SortColumn::Status | SortColumn::Name => false,
+        }
+    }
+
+    /// What the heading's accessible name calls the column.
+    fn name(self) -> &'static str {
+        match self {
+            SortColumn::Image => "image",
+            SortColumn::Verdict => "missed thresholds",
+            SortColumn::Zncc => "ZNCC",
+            SortColumn::SelfSimilarity => "self-similarity",
+            SortColumn::ProjectionError => "projection error",
+            SortColumn::Shift => "shift",
+            SortColumn::Status => "status",
+            SortColumn::Name => "name",
+        }
+    }
+}
+
+/// The order the rows are drawn in: by which column, and which way. A tool
+/// setting kept for the session, as *Lock* is: it moves nothing on the track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TableSort {
+    /// The column the rows are ordered by.
+    pub column: SortColumn,
+    /// Whether the order is decreasing rather than increasing.
+    pub descending: bool,
+}
+
+impl Default for TableSort {
+    /// Increasing by image.
+    fn default() -> Self {
+        Self {
+            column: SortColumn::Image,
+            descending: false,
+        }
+    }
+}
+
+impl TableSort {
+    /// The order a click on `column`'s heading leaves: the same column the
+    /// other way when the rows are already ordered by it, and otherwise that
+    /// column in the direction [`SortColumn::worst_first_descending`] gives.
+    pub(super) fn clicked(self, column: SortColumn) -> Self {
+        let descending = if self.column == column {
+            !self.descending
+        } else {
+            column.worst_first_descending()
+        };
+        Self { column, descending }
+    }
+}
+
+/// What a row is ordered by in one column: two numbers compared in turn, or
+/// a text. Only a verdict uses the second number, `1` for a row proposed
+/// `out` and `0` for one proposed `in`.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum SortKey {
+    Number(f64, f64),
+    Text(String),
+}
+
+impl SortKey {
+    fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (SortKey::Number(a0, a1), SortKey::Number(b0, b1)) => {
+                a0.total_cmp(b0).then(a1.total_cmp(b1))
+            }
+            (SortKey::Text(a), SortKey::Text(b)) => a.cmp(b),
+            // One column gives every row the same kind of key.
+            _ => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
+/// One reading of a cluster-stage measurement, which a column orders by.
+type ClusterReading = fn(&sfmtool_core::bench::ClusterMeasurement) -> Option<f64>;
+
+/// One reading of a track-stage measurement, which a column orders by.
+type TrackReading = fn(&sfmtool_core::bench::TrackMeasurement) -> Option<f64>;
+
+/// A reading as a key: none for a missing or `NaN` reading.
+fn number_key(value: Option<f64>) -> Option<SortKey> {
+    value
+        .filter(|v| !v.is_nan())
+        .map(|v| SortKey::Number(v, 0.0))
+}
+
+/// The order to draw rows in, as indexes into `keys`: by key, increasing or
+/// decreasing as `sort` says, with every row that has no key after every row
+/// that has one. Ties keep increasing order of `images`, then of index.
+pub(super) fn sorted_rows(keys: &[Option<SortKey>], images: &[u32], sort: TableSort) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by(|&a, &b| {
+        let by_key = match (&keys[a], &keys[b]) {
+            (Some(ka), Some(kb)) => {
+                let ord = ka.compare(kb);
+                if sort.descending {
+                    ord.reverse()
+                } else {
+                    ord
+                }
+            }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        by_key.then(images[a].cmp(&images[b])).then(a.cmp(&b))
+    });
+    order
+}
+
+/// The *Verdict* cell's text for a proposal and its checks: `in`, `out`, or
+/// `-` where nothing has measured the row. An `out` that fails bars says how
+/// many, `out (2)`; one that fails none lost its image to another sighting.
+pub(super) fn verdict_text(judged: Option<&Judgement>) -> String {
+    match judged {
+        None => "-".to_string(),
+        Some(j) if j.proposal == Verdict::In => "in".to_string(),
+        Some(j) => match j.checks.failed() {
+            0 => "out".to_string(),
+            n => format!("out ({n})"),
+        },
+    }
+}
+
 /// The *Verdict* heading's hover text, in Viewed mode.
 pub(super) const VERDICT_TIP: &str = "What the thresholds say about the observation: in where \
     it clears every bar and holds its image, out where it does not, and - where nothing has \
@@ -271,7 +465,10 @@ pub(super) const VERDICT_TIP: &str = "What the thresholds say about the observat
     point is on the bench and the row unpinned.\n\n\
     Every observation of a committed point is in its track, and nothing here changes that: \
     the threshold boxes recolour this column and the readings. Tick Edit to work on the \
-    track. Hover a cell for the reason.";
+    track. Hover a cell for the reason.\n\n\
+    An out row that fails bars says how many in brackets, out (2); one that fails none lost \
+    its image to another sighting. Click the heading to order the rows by how many bars they \
+    fail.";
 
 /// The *Keep* heading's hover text.
 pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A kept observation \
@@ -338,7 +535,8 @@ pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels
     The degrees are the angle between the observation's ray and the direction from its camera \
     to the point. They are comparable across lenses and depths, where a pixel is not.\n\n\
     Large errors on every row beside small seed shifts say the point is off, not the \
-    sightings. Track stage only.";
+    sightings. Track stage only.\n\n\
+    The box under this heading is the bar that judges the px.";
 
 /// The self-similarity heading's hover text.
 pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: how far, in \
@@ -463,8 +661,9 @@ fn keep_switch(
 }
 
 /// A row's *Verdict* cell, in Viewed mode: the word `in` or `out` for the
-/// verdict the read-only bars give the row, or `-` where nothing has measured
-/// it, in the cell the caller has tinted. The cell takes the pointer for its
+/// verdict the read-only bars give the row, with how many bars an `out` row
+/// fails, or `-` where nothing has measured it, in the cell the caller has
+/// tinted. The cell takes the pointer for its
 /// hover text and no click, so a click on it is still the row's. Returns the
 /// hover text and the word.
 fn draw_verdict(
@@ -479,15 +678,11 @@ fn draw_verdict(
         egui::pos2(rect.min.x + cols.keep, rect.min.y),
         egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
     );
-    let text = match judged.map(|j| j.proposal) {
-        Some(Verdict::In) => "in",
-        Some(Verdict::Out) => "out",
-        None => "-",
-    };
+    let text = verdict_text(judged);
     ui.painter().text(
         egui::pos2(cell.min.x + 6.0, cell.center().y),
         egui::Align2::LEFT_CENTER,
-        text,
+        &text,
         egui::TextStyle::Body.resolve(ui.style()),
         ui.visuals().text_color(),
     );
@@ -498,7 +693,7 @@ fn draw_verdict(
         egui::Sense::hover(),
     )
     .on_hover_text(&hover);
-    (hover, text.to_string())
+    (hover, text)
 }
 
 /// The pin beside a row's *Keep* switch, filling `rect`: a pushpin drawn solid
@@ -613,6 +808,7 @@ fn proposal_reason(judged: Option<&Judgement>, image: u32) -> String {
             checks.max_zncc_self_similarity_radius,
             "Self-similarity whole is over the bar",
         ),
+        (checks.max_projection_error_px, "Proj. err is over the bar"),
     ]
     .into_iter()
     .filter(|&(check, _)| check == BarCheck::Fail)
@@ -658,7 +854,8 @@ pub(super) fn proposal_tint(
 /// What each line of a row's five cells is coloured by: the bar that judges
 /// it, from `judged`, where the cell prints the reading that bar judged. No
 /// line is judged on a row the bars do not judge or whose cells print no
-/// numbers.
+/// numbers. The projection error's bar judges its px line, and nothing judges
+/// the degrees under it.
 pub(super) fn cell_checks(
     judged: Option<&Judgement>,
     evaluation: &crate::bench::live::Evaluation,
@@ -675,7 +872,7 @@ pub(super) fn cell_checks(
     [
         [checks.min_zncc, checks.min_zncc_middle],
         [checks.max_shift_px, BarCheck::NotJudged],
-        none,
+        [checks.max_projection_error_px, BarCheck::NotJudged],
         [checks.max_zncc_self_similarity_radius, BarCheck::NotJudged],
         none,
     ]
@@ -817,7 +1014,7 @@ impl TrackBody {
                 // it reports after drawing, so that offset is a frame ahead of
                 // the rows, and the headings are placed from this edge.
                 left = ui.max_rect().left();
-                for observation in 0..track.observations.len() {
+                for observation in self.row_order(recon, track, stage, mode) {
                     self.draw_row(
                         ui,
                         recon,
@@ -846,20 +1043,25 @@ impl TrackBody {
             .filter(|&i| track.observations[i].pinned)
             .collect();
         let rows = track.observations.len();
-        if draw_header(
+        let clicked = draw_header(
             ui,
             table(header_rect),
             &cols,
             mode,
+            self.sort,
             pinned.len(),
             rows,
             state.bench_edit_refusal(id).as_deref(),
-        ) {
+        );
+        if clicked.pin {
             if pinned.is_empty() {
                 response.pin_verdicts = Some((0..rows).collect());
             } else {
                 response.unpin_verdicts = Some(pinned);
             }
+        }
+        if let Some(column) = clicked.sort {
+            self.sort = self.sort.clicked(column);
         }
         // Under the headings, so each bar stays beside the heading of the
         // readings it judges.
@@ -871,6 +1073,81 @@ impl TrackBody {
             &mut self.thresholds,
             bars_hover,
         )
+    }
+
+    /// The observations in the order the rows are drawn, by [`TrackBody::sort`].
+    ///
+    /// Each key is the value the row prints, so the order is the order of
+    /// what a person reads: a viewed track that could not be evaluated prints
+    /// no readings and no verdicts, and gives the columns that hold them no
+    /// key, and the projection error is the px the cell prints.
+    fn row_order(
+        &self,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        stage: StageKind,
+        mode: BodyMode,
+    ) -> Vec<usize> {
+        use crate::bench::live::Evaluation;
+        let printed = !matches!(
+            self.evaluation,
+            Evaluation::Refused(_) | Evaluation::Failed(_)
+        );
+        let judged_shown = mode == BodyMode::Edited || printed;
+        let keys: Vec<Option<SortKey>> = track
+            .observations
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let readings = |cluster: ClusterReading, tracked: TrackReading| {
+                    if !printed {
+                        return None;
+                    }
+                    match stage {
+                        StageKind::Cluster => row.cluster.as_ref().and_then(cluster),
+                        StageKind::Track => row.track.as_ref().and_then(tracked),
+                    }
+                };
+                match self.sort.column {
+                    SortColumn::Image => number_key(Some(f64::from(row.image))),
+                    SortColumn::Verdict => self
+                        .judged
+                        .get(i)
+                        .copied()
+                        .flatten()
+                        .filter(|_| judged_shown)
+                        .map(|j| {
+                            SortKey::Number(
+                                j.checks.failed() as f64,
+                                if j.proposal == Verdict::Out { 1.0 } else { 0.0 },
+                            )
+                        }),
+                    SortColumn::Zncc => number_key(readings(|m| m.zncc, |m| m.zncc)),
+                    SortColumn::SelfSimilarity => number_key(readings(
+                        |m| m.zncc_self_similarity_radius,
+                        |m| m.zncc_self_similarity_radius,
+                    )),
+                    SortColumn::ProjectionError => number_key(readings(
+                        |_| None,
+                        |m| m.reprojection_error.or(m.projection_offset_px),
+                    )),
+                    SortColumn::Shift => number_key(readings(|m| m.shift_px, |m| m.seed_shift_px)),
+                    SortColumn::Status => Some(SortKey::Text(
+                        measurements(row, stage, &self.evaluation)[4].clone(),
+                    )),
+                    SortColumn::Name => Some(SortKey::Text(
+                        recon
+                            .image_table
+                            .images
+                            .get(row.image as usize)
+                            .map(|im| im.name.clone())
+                            .unwrap_or_else(|| format!("#{}", row.image)),
+                    )),
+                }
+            })
+            .collect();
+        let images: Vec<u32> = track.observations.iter().map(|row| row.image).collect();
+        sorted_rows(&keys, &images, self.sort)
     }
 
     /// The row's own menu, in Edited mode: what a search runs *from* is one
@@ -1696,50 +1973,143 @@ fn threshold_row_height(ui: &egui::Ui) -> f32 {
 /// In Edited mode the *Keep* heading carries a pin over the rows' pin column,
 /// which unpins every pinned verdict of the track, or pins every verdict as it
 /// stands when none is pinned; `pinned` is how many are pinned, `rows` how
-/// many observations the track has and `busy` the node's busy refusal. Returns
-/// whether that pin was clicked.
+/// many observations the track has and `busy` the node's busy refusal.
+///
+/// A heading that orders the rows takes a click, and the one `sort` orders
+/// them by carries a triangle after its word, pointing up for increasing and
+/// down for decreasing. Returns what was clicked.
+#[allow(clippy::too_many_arguments)]
 fn draw_header(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     cols: &ColumnLayout,
     mode: BodyMode,
+    sort: TableSort,
     pinned: usize,
     rows: usize,
     busy: Option<&str>,
-) -> bool {
+) -> HeaderClicks {
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let color = ui.visuals().weak_text_color();
     let headers = cols.headers(mode);
+    let mut clicks = HeaderClicks::default();
     for (k, &(x, label, tip)) in headers.iter().enumerate() {
-        ui.painter().text(
+        // The heading's region runs to where the next one starts, so the
+        // whole width of its column answers, not only the word.
+        let end = headers
+            .get(k + 1)
+            .map_or(rect.max.x, |&(next, _, _)| rect.min.x + next);
+        let cell = egui::Rect::from_x_y_ranges(rect.min.x + x..=end, rect.y_range());
+        let column = SortColumn::of_heading(label);
+        let sense = if column.is_some() {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let response = ui.interact(cell, ui.id().with(("track_view_heading", k)), sense);
+        let color = if column.is_some() && response.hovered() {
+            ui.visuals().text_color()
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        let word = ui.painter().text(
             egui::pos2(rect.min.x + x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
             font.clone(),
             color,
         );
-        // The heading's hover region runs to where the next one starts, so the
-        // whole width of its column answers, not only the word.
-        let end = headers
-            .get(k + 1)
-            .map_or(rect.max.x, |&(next, _, _)| rect.min.x + next);
-        let cell = egui::Rect::from_x_y_ranges(rect.min.x + x..=end, rect.y_range());
-        ui.interact(
-            cell,
-            ui.id().with(("track_view_heading", k)),
-            egui::Sense::hover(),
-        )
-        .on_hover_text(tip);
+        if let Some(column) = column {
+            let ordered = sort.column == column;
+            if ordered {
+                paint_sort_triangle(
+                    ui.painter(),
+                    egui::pos2(
+                        word.right() + 2.0 + SORT_TRIANGLE_HALF_WIDTH,
+                        rect.center().y,
+                    ),
+                    sort.descending,
+                    color,
+                );
+            }
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    format!("Sort by {}", column.name()),
+                )
+            });
+            if response.clicked() {
+                clicks.sort = Some(column);
+            }
+            response.on_hover_text(format!("{tip}\n\n{}", sort_hover(sort, column)));
+        } else {
+            response.on_hover_text(tip);
+        }
     }
-    if mode != BodyMode::Edited {
-        return false;
+    if mode == BodyMode::Edited {
+        // After the headings, so it takes the pointer over its own few points.
+        let pin_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + cols.keep + SWITCH_CELL_WIDTH, rect.min.y),
+            egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
+        );
+        clicks.pin = heading_pin(ui, pin_rect, pinned, rows, busy);
     }
-    // After the headings, so it takes the pointer over its own few points.
-    let pin_rect = egui::Rect::from_min_max(
-        egui::pos2(rect.min.x + cols.keep + SWITCH_CELL_WIDTH, rect.min.y),
-        egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
-    );
-    heading_pin(ui, pin_rect, pinned, rows, busy)
+    clicks
+}
+
+/// What a click on the header asked for.
+#[derive(Debug, Default)]
+struct HeaderClicks {
+    /// The *Keep* heading's pin was clicked.
+    pin: bool,
+    /// A heading was clicked, which orders the rows by its column.
+    sort: Option<SortColumn>,
+}
+
+/// The last paragraph of a heading's hover text that orders the rows: what a
+/// click on it does with the order `sort` stands at.
+pub(super) fn sort_hover(sort: TableSort, column: SortColumn) -> &'static str {
+    match (sort.column == column, sort.descending) {
+        (true, false) => "The rows are in increasing order by this column. Click to reverse it.",
+        (true, true) => "The rows are in decreasing order by this column. Click to reverse it.",
+        (false, _) if column.worst_first_descending() => {
+            "Click to put the rows in decreasing order by this column, worst first."
+        }
+        (false, _) if column == SortColumn::Zncc => {
+            "Click to put the rows in increasing order by this column, worst first."
+        }
+        (false, _) => "Click to put the rows in increasing order by this column.",
+    }
+}
+
+/// The small triangle beside the heading the rows are ordered by, centred at
+/// `c`: pointing up for increasing order and down for decreasing.
+fn paint_sort_triangle(
+    painter: &egui::Painter,
+    c: egui::Pos2,
+    descending: bool,
+    color: egui::Color32,
+) {
+    let (half, rise) = (SORT_TRIANGLE_HALF_WIDTH, 3.0);
+    // Clockwise on the screen, as egui's tessellator wants a filled shape.
+    let points = if descending {
+        vec![
+            egui::pos2(c.x - half, c.y - rise),
+            egui::pos2(c.x + half, c.y - rise),
+            egui::pos2(c.x, c.y + rise),
+        ]
+    } else {
+        vec![
+            egui::pos2(c.x - half, c.y + rise),
+            egui::pos2(c.x, c.y - rise),
+            egui::pos2(c.x + half, c.y + rise),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// The threshold row under the headings: each bar's box in the column whose
@@ -1812,6 +2182,17 @@ fn draw_threshold_row(
                 .max_decimals(1),
             MAX_SHIFT_LABEL,
             MAX_SHIFT_TIP,
+        ),
+        // In source-image px, the unit of the projection error's first line.
+        (
+            cols.offset,
+            0,
+            egui::DragValue::new(&mut bars.max_projection_error_px)
+                .range(0.0..=100.0)
+                .speed(0.05)
+                .max_decimals(1),
+            MAX_PROJECTION_ERROR_LABEL,
+            MAX_PROJECTION_ERROR_TIP,
         ),
     ];
     let mut moved = BoxesMoved::default();

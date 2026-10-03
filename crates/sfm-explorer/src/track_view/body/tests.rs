@@ -1040,7 +1040,6 @@ fn each_threshold_box_stands_under_the_heading_of_what_it_judges() {
             "Self-similarity",
             "Proj. err",
         ),
-        (super::MAX_SHIFT_LABEL, "Shift", "Status"),
     ] {
         let press = box_point(label, rect(label));
         assert!(
@@ -1051,6 +1050,23 @@ fn each_threshold_box_stands_under_the_heading_of_what_it_judges() {
             rect(label).top() > rect(under).bottom(),
             "{label:?} is not under its heading"
         );
+    }
+    // The projection error and the shift boxes are both followed by `px`, in
+    // that order from the left.
+    assert_eq!(super::MAX_PROJECTION_ERROR_LABEL, super::MAX_SHIFT_LABEL);
+    let mut px: Vec<egui::Rect> = texts
+        .iter()
+        .filter(|t| t.text == super::MAX_SHIFT_LABEL)
+        .map(|t| t.rect)
+        .collect();
+    px.sort_by(|a, b| a.left().total_cmp(&b.left()));
+    assert_eq!(px.len(), 2, "{px:?}");
+    for (label, under, before) in [(px[0], "Proj. err", "Shift"), (px[1], "Shift", "Status")] {
+        assert!(
+            heading(under) <= label.left() && label.right() <= heading(before),
+            "a px box is not in the {under:?} column"
+        );
+        assert!(label.top() > rect(under).bottom(), "not under {under:?}");
     }
     let (whole, mid) = (
         rect(super::MIN_ZNCC_LABEL),
@@ -2918,8 +2934,8 @@ fn each_line_of_the_zncc_cell_is_judged_by_its_own_bar() {
     );
 }
 
-/// The readings no bar judges stay in the plain colour: the projection error,
-/// the self-similarity middle radius, the status, the middle ZNCC while its
+/// The readings no bar judges stay in the plain colour: the projection error
+/// in degrees, the self-similarity middle radius, the status, the middle ZNCC while its
 /// bar is off, a reading that is missing, and every reading of a row nothing
 /// has measured or whose evaluation was refused.
 #[test]
@@ -2933,7 +2949,7 @@ fn readings_no_bar_judges_are_drawn_plain() {
     let plain = [BarCheck::NotJudged; 2];
     for row in panel.rows() {
         assert_eq!(row.checks[0][1], BarCheck::NotJudged, "mid ZNCC, bar off");
-        assert_eq!(row.checks[2], plain, "Proj. err");
+        assert_eq!(row.checks[2][1], BarCheck::NotJudged, "Proj. err degrees");
         assert_eq!(row.checks[3][1], BarCheck::NotJudged, "self-similarity mid");
         assert_eq!(row.checks[4], plain, "Status");
         assert_ne!(
@@ -3929,6 +3945,281 @@ fn a_view_only_bench_draws_the_row_switches_disabled() {
         .count();
     assert!(kept > 0, "the fixture keeps no row");
     assert_eq!(green, kept, "each kept row's switch is green");
+}
+
+// ── The projection error bar ────────────────────────────────────────────────
+
+/// The reprojection error in px of each observation of the focused item, by
+/// observation index: the reading the *Proj. err* cell prints and its bar
+/// judges.
+fn projection_errors(state: &AppState, id: ReconId, label: &str) -> Vec<f64> {
+    let track = state.bench_track(id, label).expect("on the bench");
+    track
+        .observations
+        .iter()
+        .map(|o| {
+            let m = o.track.as_ref().expect("a track-stage reading");
+            m.reprojection_error
+                .or(m.projection_offset_px)
+                .expect("a projection error")
+        })
+        .collect()
+}
+
+/// The projection error's bar colours the px line of the *Proj. err* cell and
+/// nothing under it, and a row it fails says so in its *Keep* hover.
+#[test]
+fn the_projection_error_bar_judges_the_px_line() {
+    use sfmtool_core::bench::BarCheck;
+
+    let (state, id, label, mut panel, ctx) = measured_on_the_bench();
+    let errors = projection_errors(&state, id, &label);
+    let mut sorted = errors.clone();
+    sorted.sort_by(f64::total_cmp);
+    assert!(sorted[0] < sorted[2], "the fixture's errors are all equal");
+    // Between the smallest and the largest, so the bar passes one and fails
+    // another.
+    let bar = 0.5 * (sorted[0] + sorted[2]);
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.max_projection_error_px = bar;
+    });
+    for row in panel.rows() {
+        let error = errors[row.observation];
+        let expected = if error <= bar {
+            BarCheck::Pass
+        } else {
+            BarCheck::Fail
+        };
+        assert_eq!(row.checks[2], [expected, BarCheck::NotJudged], "{row:?}");
+        assert_eq!(
+            row.keep_hover.contains("Proj. err is over the bar"),
+            expected == BarCheck::Fail,
+            "{}",
+            row.keep_hover
+        );
+    }
+}
+
+/// The bench's default bar is 3 px, and its box stands in the threshold row.
+#[test]
+fn the_projection_error_bar_defaults_to_3_px() {
+    assert_eq!(Thresholds::default().max_projection_error_px, 3.0);
+    assert!(super::table::PROJECTION_ERROR_TIP.contains("box under this heading"));
+}
+
+// ── Ordering the rows ───────────────────────────────────────────────────────
+
+/// The images of the rows the table drew, top to bottom.
+fn row_images(panel: &TrackBody) -> Vec<u32> {
+    panel.rows().iter().map(|row| row.image).collect()
+}
+
+/// Click the heading that reads `heading`.
+fn click_heading(panel: &mut TrackBody, ctx: &egui::Context, state: &AppState, heading: &str) {
+    let texts = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
+        panel.show(ui, state);
+    });
+    let at = texts
+        .iter()
+        .find(|t| t.text == heading)
+        .unwrap_or_else(|| panic!("{heading:?} is not drawn"))
+        .rect
+        .center();
+    at_pointer(panel, ctx, state, at, true);
+    run_frame(panel, ctx, state);
+}
+
+/// The rows start in increasing order of image, and a click on *Img* reverses
+/// that, and a second click puts it back.
+#[test]
+fn the_rows_start_in_increasing_order_of_image_and_a_click_reverses_it() {
+    let (state, _id, _label, mut panel, ctx) = measured_on_the_bench();
+    assert_eq!(panel.sort, super::table::TableSort::default());
+    assert_eq!(row_images(&panel), [0, 1, 2]);
+
+    click_heading(&mut panel, &ctx, &state, "Img");
+    assert!(panel.sort.descending);
+    assert_eq!(row_images(&panel), [2, 1, 0]);
+
+    click_heading(&mut panel, &ctx, &state, "Img");
+    assert!(!panel.sort.descending);
+    assert_eq!(row_images(&panel), [0, 1, 2]);
+}
+
+/// A click on *Proj. err* orders the rows by the px they print, the largest
+/// error first, and a second click puts the smallest first.
+#[test]
+fn a_click_on_proj_err_orders_the_rows_by_their_error() {
+    let (state, id, label, mut panel, ctx) = measured_on_the_bench();
+    let errors = projection_errors(&state, id, &label);
+    let mut by_error: Vec<u32> = (0..3).collect();
+    by_error.sort_by(|&a, &b| errors[b as usize].total_cmp(&errors[a as usize]));
+
+    click_heading(&mut panel, &ctx, &state, "Proj. err");
+    assert_eq!(panel.sort.column, super::table::SortColumn::ProjectionError);
+    assert!(panel.sort.descending);
+    assert_eq!(row_images(&panel), by_error);
+
+    click_heading(&mut panel, &ctx, &state, "Proj. err");
+    by_error.reverse();
+    assert_eq!(row_images(&panel), by_error);
+}
+
+/// A click on *Keep* orders the rows by how many bars they fail, most first,
+/// and a second click puts the fewest first.
+#[test]
+fn a_click_on_keep_orders_the_rows_by_how_many_bars_they_fail() {
+    use sfmtool_core::bench::BarCheck;
+
+    let (state, _id, _label, mut panel, ctx) = measured_on_the_bench();
+    let failed = |panel: &TrackBody| -> Vec<usize> {
+        panel
+            .rows()
+            .iter()
+            .map(|row| {
+                row.checks
+                    .iter()
+                    .flatten()
+                    .filter(|&&c| c == BarCheck::Fail)
+                    .count()
+            })
+            .collect()
+    };
+    click_heading(&mut panel, &ctx, &state, "Keep");
+    assert_eq!(panel.sort.column, super::table::SortColumn::Verdict);
+    let decreasing = failed(&panel);
+    assert!(
+        decreasing.windows(2).all(|w| w[0] >= w[1]),
+        "{decreasing:?}"
+    );
+    assert_ne!(
+        decreasing.first(),
+        decreasing.last(),
+        "the fixture's rows all fail as many bars"
+    );
+
+    click_heading(&mut panel, &ctx, &state, "Keep");
+    let increasing = failed(&panel);
+    assert!(
+        increasing.windows(2).all(|w| w[0] <= w[1]),
+        "{increasing:?}"
+    );
+}
+
+/// A click on another heading orders the rows worst first where a bar judges
+/// the column and increasing where none does; a click on the same heading
+/// reverses the order.
+#[test]
+fn a_heading_click_starts_worst_first_and_a_second_reverses() {
+    use super::table::{SortColumn, TableSort};
+    let start = TableSort::default();
+    for (column, descending) in [
+        (SortColumn::Image, false),
+        (SortColumn::Verdict, true),
+        (SortColumn::Zncc, false),
+        (SortColumn::SelfSimilarity, true),
+        (SortColumn::ProjectionError, true),
+        (SortColumn::Shift, true),
+        (SortColumn::Status, false),
+        (SortColumn::Name, false),
+    ] {
+        let from = TableSort {
+            column: if column == SortColumn::Name {
+                SortColumn::Image
+            } else {
+                SortColumn::Name
+            },
+            descending: !descending,
+        };
+        assert_eq!(
+            from.clicked(column),
+            TableSort { column, descending },
+            "{column:?}"
+        );
+    }
+    let zncc = start.clicked(SortColumn::Zncc);
+    assert_eq!((zncc.column, zncc.descending), (SortColumn::Zncc, false));
+    let reversed = zncc.clicked(SortColumn::Zncc);
+    assert_eq!(
+        (reversed.column, reversed.descending),
+        (SortColumn::Zncc, true)
+    );
+    let name = reversed.clicked(SortColumn::Name);
+    assert_eq!((name.column, name.descending), (SortColumn::Name, false));
+}
+
+/// A row with no reading sorts after every row with one, whichever way the
+/// order runs, and rows that tie keep increasing order of image.
+#[test]
+fn a_row_with_no_reading_sorts_last_both_ways_and_ties_go_by_image() {
+    use super::table::{sorted_rows, SortColumn, SortKey, TableSort};
+    let keys = [
+        Some(SortKey::Number(2.0, 0.0)),
+        None,
+        Some(SortKey::Number(1.0, 0.0)),
+        Some(SortKey::Number(2.0, 0.0)),
+    ];
+    let images = [7, 0, 5, 3];
+    let up = TableSort {
+        column: SortColumn::Zncc,
+        descending: false,
+    };
+    assert_eq!(sorted_rows(&keys, &images, up), [2, 3, 0, 1]);
+    let down = TableSort {
+        descending: true,
+        ..up
+    };
+    assert_eq!(sorted_rows(&keys, &images, down), [3, 0, 2, 1]);
+
+    let names = [
+        Some(SortKey::Text("b".into())),
+        Some(SortKey::Text("a".into())),
+    ];
+    assert_eq!(sorted_rows(&names, &[0, 1], up), [1, 0]);
+}
+
+/// Every heading that orders the rows says so in its hover text, and the
+/// pictures and *From* order nothing.
+#[test]
+fn the_sortable_headings_are_the_ones_with_readings() {
+    use super::table::SortColumn;
+    for (_, heading, _) in super::table::ColumnLayout::new().headers(super::BodyMode::Edited) {
+        let sortable = SortColumn::of_heading(heading).is_some();
+        assert_eq!(
+            sortable,
+            !matches!(heading, "Crop" | "Patch" | "From"),
+            "{heading:?}"
+        );
+    }
+    assert_eq!(SortColumn::of_heading("Verdict"), Some(SortColumn::Verdict));
+}
+
+/// The *Verdict* text of an `out` row says how many bars it fails, and one that
+/// fails none, which lost its image to another sighting, says `out` alone.
+#[test]
+fn the_verdict_text_counts_the_bars_an_out_row_fails() {
+    use super::table::verdict_text;
+    use super::Judgement;
+    use sfmtool_core::bench::{BarCheck, BarChecks};
+    let checks = |fail: usize| {
+        let mut all = [BarCheck::Pass; 5];
+        all[..fail].fill(BarCheck::Fail);
+        BarChecks {
+            min_zncc: all[0],
+            min_zncc_middle: all[1],
+            max_shift_px: all[2],
+            max_zncc_self_similarity_radius: all[3],
+            max_projection_error_px: all[4],
+        }
+    };
+    let judged = |fail, proposal| Judgement {
+        checks: checks(fail),
+        proposal,
+    };
+    assert_eq!(verdict_text(None), "-");
+    assert_eq!(verdict_text(Some(&judged(0, Verdict::In))), "in");
+    assert_eq!(verdict_text(Some(&judged(0, Verdict::Out))), "out");
+    assert_eq!(verdict_text(Some(&judged(2, Verdict::Out))), "out (2)");
 }
 
 // ── Viewed mode ─────────────────────────────────────────────────────────────

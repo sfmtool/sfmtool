@@ -523,7 +523,7 @@ set of numbers. The differences are these:
 | Under the header | the stage's headline | how to change the track, or the item on the bench from this point |
 | Toolbar | evaluation state; *Fit*, *Stage*, *Split*, *Duplicate*, *Commit*, *Discard*; *Lock*, *Rename* | evaluation state only |
 | Threshold boxes | the item's bars; a release applies them as one version | the session's read-only bars; they judge the readings and the *Verdict* column and change nothing |
-| Verdict column | *Keep*: switch and pin, tinted by what the bars propose | *Verdict*: `in` or `out` in a cell tinted green or red, the verdict the bars give the row |
+| Verdict column | *Keep*: switch and pin, tinted by what the bars propose | *Verdict*: `in` or `out`, with how many bars an `out` row fails, in a cell tinted green or red, the verdict the bars give the row |
 | Heading pin | on the *Keep* heading | absent |
 | Row click | select image, reveal, pick into the split selection | select image, reveal |
 | Row double-click | camera view toward the observation | same |
@@ -802,14 +802,14 @@ cannot say which of two tracks it belongs to.
 
 #### The thresholds
 
-Five boxes, one per bar of `Thresholds`, so no bar is one only the wire can
-move. Four of them judge the table's readings, and they stand in **a threshold
+Six boxes, one per bar of `Thresholds`, so no bar is one only the wire can
+move. Five of them judge the table's readings, and they stand in **a threshold
 row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
 Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Status  ...  Name
-Thresholds              [70]% whole         [2.5] px whole                   [6.0] px
+Thresholds              [70]% whole         [2.5] px whole      [3.0] px   [6.0] px
                         [70]% mid
 ```
 
@@ -834,10 +834,17 @@ looks for each peak within, so moving it evaluates the track again, and the
 bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"). There is no separate search radius.
+The projection error box, `px`, is the largest reprojection error, in the
+photograph's pixels, 3 on a new track, and takes `0` to `100` to one decimal.
+It judges the px line of the *Proj. err* cell, at the track stage only, and `0`
+turns it off; a track made by *Create Track Here* arrives with it off. Unlike
+the other four it judges the point as much as the sighting: a mis-triangulated
+point fails it on every row, so a track whose rows fail this bar alone has a
+point that is off rather than bad sightings.
 The text after each box has hover text saying what the bar is and what a row
 past it is.
 
-The fifth box, *geometry search min relative ZNCC (%)*, is
+The sixth box, *geometry search min relative ZNCC (%)*, is
 `geometry_search_min_relative_zncc`: the fraction of the track's own
 self-agreement a photograph's ZNCC has to reach for *Find matches by geometry*
 to add it. It judges no reading and no verdict, so it has no column; it stands
@@ -847,12 +854,13 @@ reads in percent, 70 on a new track.
 
 Each box is a number box: dragging it left or right changes the bar (half a
 percent per point for the ZNCC bars, 0.05 grid px per point for the shift, 0.02
-grid px per point for the self-similarity radius), and clicking it takes a
+grid px per point for the self-similarity radius, 0.05 px per point for the
+projection error), and clicking it takes a
 typed value. There is no slider rail beside it, since a rail would say nothing
 the box does not.
 
 **A box applies to the focused item when it is let go.** Dragging one
-recolours the table live; releasing it sets the track's bars to where the five
+recolours the table live; releasing it sets the track's bars to where the six
 boxes stand and turns the painting into verdicts, one version carrying both,
 with the row `Applied the thresholds to …` in the Action Log, and Undo reverses
 it. A typed value is the same gesture, applied when the field is left rather
@@ -905,8 +913,40 @@ track").
 
 #### The observation table
 
-One row per observation, in index order, with the headings above the scroll
-area.
+One row per observation, with the headings above the scroll area.
+
+**The rows are ordered by a column**, increasing by *Img* when the panel opens.
+Clicking a heading orders the rows by that column, worst first where a bar
+judges the column and increasing where none does, and clicking the same
+heading again reverses the order. Worst first is decreasing for *Keep* and
+*Verdict* (the most bars failed), *Self-similarity*, *Proj. err* and *Shift*,
+and increasing for *ZNCC*; *Img*, *Status* and *Name* start increasing. The heading the rows are
+ordered by carries a small triangle after its word, pointing up for increasing
+and down for decreasing, and a heading that orders the rows is drawn in the
+plain text colour under the pointer. Its hover text ends by saying what a click
+does with the order as it stands, and its accessible name is *Sort by …*. The
+keys are what the rows print:
+
+| Heading | Ordered by |
+|---|---|
+| Img | the image's index |
+| Keep, Verdict | how many bars the row fails; among rows that fail the same number, the ones the bars propose `in` come first, so a row that fails none and is `out` because another sighting holds its image comes after the `in` rows |
+| ZNCC | the whole patch's ZNCC |
+| Self-similarity | the whole tile's radius |
+| Proj. err | the reprojection error in px |
+| Shift | the shift in px |
+| Status | the Status cell's text, compared character by character |
+| Name | the image's file name, compared character by character |
+
+*Crop* and *Patch* are pictures and *From* is provenance, so they order
+nothing. A row with no key in the column -- a reading that is not there or is
+`NaN`, a row nothing has measured, or every reading of a viewed track whose
+evaluation was refused -- sorts after every row with one, whichever way the
+order runs. Rows that tie stay in increasing order of image, then of
+observation index. The order is a tool setting on the body, as *Lock* is: it
+moves nothing on the track, pushes no version, is kept for the session across
+tracks and modes, and is not saved with the layout. Selecting rows does not
+depend on it, since a Shift- or Ctrl-click adds or removes one row.
 
 **The table scrolls both ways.** The rows scroll up and down under the
 headings and the threshold row, which stay in place. The table is wider than a
@@ -974,7 +1014,8 @@ says what the radius is and what its two readings, its colours and its lines
 mean, and ends by saying that the box under the heading is the bar that judges
 the whole tile's radius. The *Proj. err* heading's says what the error is measured to before and
 after the track is triangulated, and that the degrees are the same residual as
-an angle.
+an angle, and ends by saying that the box under the heading is the bar that
+judges the px.
 
 **A cell with two readings prints them on two lines**, each with its unit, and
 the whole patch's and the middle's each with its name: `93% whole` over
@@ -989,7 +1030,7 @@ that is not there prints a bare `-`, with no unit.
 | Crop | the photograph around the observation's parallelogram, with the parallelogram over it; hovering it shows it in context, with the patch's two axes in pixels | the photograph around the patch's outline as Image Detail draws it, with the outline over it; hovering it shows it in context, with the projection and the patch's two axes in pixels |
 | Patch (the tile) | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through `patch::patch_color_image`; hovering it shows it in context, with the projection |
 | Keep (Edited) | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
-| Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, in a cell tinted green or red by it; `-` untinted where nothing has measured the row |
+| Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, with the number of bars an `out` row fails in brackets (`out (2)`), in a cell tinted green or red by it; `-` untinted where nothing has measured the row |
 | Img | the image's index; hovering it shows the file name whole, as hovering *Name* does | the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within the shift bar of the observation, over the middle ZNCC, then the ZNCC grid |
 | Self-similarity | the surface plot, then the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid | the same |
@@ -1017,8 +1058,8 @@ the column narrow. A sentence that quotes a pair, such as the walk's Status
 cell, writes it on one line (`87% / 41%`). The bars and the wire keep ZNCC on
 its own `0 .. 1` scale. A row with a ZNCC and no middle reading prints `- mid`
 under it, as on a track read back from a committed point before its first
-evaluation, since `.sfmr` stores the whole-patch score alone. The table has no column sort, so nothing is ordered by
-either reading.
+evaluation, since `.sfmr` stores the whole-patch score alone. Ordering by the *ZNCC*
+column orders by the whole reading.
 
 **Beside the two readings is the ZNCC grid**, drawn as three rows of three
 boxes with a border: the same samples correlated over each ninth of the patch's
@@ -1081,7 +1122,9 @@ is the sighting's own evidence, where the correlation would rather sit, and is
 what the shift bar paints on. *Proj. err* is a statement about
 the point: a mis-triangulated track shows a column of large errors beside a
 column of near-zero shifts, the picture that says the position is wrong and the
-sightings are not.
+sightings are not. The projection error bar judges it all the same, so such a
+track is painted red down the *Proj. err* column, and its rows proposed `out`,
+by that bar alone.
 
 **One column holds the reprojection error.** The measurement carries it twice:
 `projection_offset_px`, to where the patch's centre projects, and
@@ -1251,15 +1294,16 @@ them; like a tile, a crop whose photograph is not decoded yet is not cached,
 so it appears once the decode ends. The hover view is rendered the first time the pointer rests on the
 crop. Its hover region takes no click, so a click on the crop is the row's.
 
-**Each judged reading is coloured by its bar.** Four readings are judged, one
+**Each judged reading is coloured by its bar.** Five readings are judged, one
 per bar: the *whole* line of the ZNCC cell by the minimum ZNCC, its *mid* line
-by the minimum middle ZNCC, the Shift cell by the shift bar, and the *whole*
-line of the Self-similarity cell by the self-similarity bar. A reading that clears its bar is drawn
+by the minimum middle ZNCC, the Shift cell by the shift bar, the *whole*
+line of the Self-similarity cell by the self-similarity bar, and the px line of
+the Proj. err cell by the projection error bar. A reading that clears its bar is drawn
 green and one that does not red, in a green and a red chosen for each of the
 dark and light visuals so they read as text on the panel's background. Each line
 of a two-line cell takes its own colour, so a whole ZNCC can be green over a red
-middle one. Everything no bar judges keeps the plain text colour: *Proj. err*,
-the self-similarity *mid* line, Status, From, the *mid* ZNCC while its bar is
+middle one. Everything no bar judges keeps the plain text colour: the degrees of
+*Proj. err*, the self-similarity *mid* line, Status, From, the *mid* ZNCC while its bar is
 off at 0, a reading that is not there (`-`, though it clears its bar), and every
 reading of a row nothing at this stage has measured or whose evaluation was
 refused. A `NaN` reading fails its bar and is red. While an evaluation is on its
@@ -1279,7 +1323,8 @@ green one, is a hand ruling against the bars. The switch's hover text says what
 the switch and the pin say, then why the bars propose what they do: that the
 row clears every bar, or which bars it fails, named as the headings name the
 readings (`ZNCC whole is under the bar`, `ZNCC mid is under the bar`, `Shift is
-over the bar`, `Self-similarity whole is over the bar`), or, for a row that
+over the bar`, `Self-similarity whole is over the bar`, `Proj. err is over the
+bar`), or, for a row that
 clears every bar and is still proposed `out`, that another sighting in the same
 image is kept, naming the image.
 
@@ -1295,8 +1340,13 @@ red, which for the viewed track's pinned rows is the verdict the bench's own
 evaluation would give each row once the point is on the bench and the row
 unpinned. Its hover text is the *Keep* switch's second half: that the row
 clears every bar, which bars it fails, named as above, or which other sighting
-holds its image. The cell takes the pointer for its hover text and no click, so
+holds its image. An `out` row that fails bars says how many after the word,
+`out (2)`, which is the number the column is ordered by; an `out` row that
+fails none says `out` alone, since what turned it out is another sighting of
+its image. The cell takes the pointer for its hover text and no click, so
 a click on it is the row's. There is no switch, no pin and no heading pin.
+*Keep* has no room for the count beside its switch and pin; the red readings
+and the switch's hover text say which bars a row fails.
 
 **The Keep switch is the verdict.** On is `in`: the evaluation and a fit read
 the track by the observation, and a commit writes it. Off is `out`. The

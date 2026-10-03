@@ -332,7 +332,7 @@ They are the Python candidates' defaults, which the harness chose.
 | `constellation.min_inliers` | `6` | fewest agreeing correspondences for an image |
 | `constellation.lateral_searches` | `2` | searches from the best images found |
 | `constellation.normal_prior` | `true` | tilt toward the prior's normal after the upgrade |
-| `thresholds` | the bench's `Thresholds::default()` with `max_shift_px` at `3.0` | the bars every track the cascade builds carries: what its painting judges by and, at the track stage, how far a fit may move a sighting. The shift bar stays at the cluster refinement's 3 px rather than the bench's 8 px, because the other parameters here were chosen against it, so a track made by *Create Track Here* arrives on the bench with that bar |
+| `thresholds` | the bench's `Thresholds::default()` with `max_shift_px` at `3.0` and `max_projection_error_px` at `0` | the bars every track the cascade builds carries: what its painting judges by and, at the track stage, how far a fit may move a sighting. The shift bar stays at the cluster refinement's 3 px rather than the bench's 6 px, because the other parameters here were chosen against it, and the projection error bar is off, because they were chosen before it existed. A track made by *Create Track Here* arrives on the bench with those two bars |
 | `*.depth_mode_gap` | `1.15` | depth ratio that separates two surfaces |
 | `*.default_radius_px` | `8.0` | patch half-width when no neighbour states one |
 | `*.min_radius_px`, `*.max_radius_px` | `4.0`, `40.0` | bounds on a patch half-width |

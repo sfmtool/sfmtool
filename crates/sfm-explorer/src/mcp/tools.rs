@@ -522,6 +522,7 @@ pub(crate) fn parse(
                 max_shift_px: args.optional_f64("max_shift_px")?,
                 max_zncc_self_similarity_radius: args
                     .optional_f64("max_zncc_self_similarity_radius")?,
+                max_projection_error_px: args.optional_f64("max_projection_error_px")?,
                 geometry_search_min_relative_zncc: args
                     .optional_f64("geometry_search_min_relative_zncc")?,
             },

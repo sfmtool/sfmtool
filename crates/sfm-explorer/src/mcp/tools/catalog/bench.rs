@@ -604,7 +604,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the call does not name stays where the track has it. The reply's report \
                           says how many were turned in, turned out, left pinned and left \
                           unmeasured. Track View's threshold boxes are this step: releasing \
-                          one applies the five bars as one version.",
+                          one applies the six bars as one version.",
             kind: Write,
             schema: object(
                 &[
@@ -648,6 +648,17 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              radius reads at most 3, which means 3 or more, so 3 turns nothing \
                              out. The bench's default is 2.5. An observation with no reading \
                              clears it.",
+                        ),
+                    ),
+                    (
+                        "max_projection_error_px",
+                        threshold_schema(
+                            "The largest reprojection error an observation may have, in \
+                             source-image px: reprojection_error where the track is \
+                             triangulated, projection_offset_px before it is. Track stage only. \
+                             It judges the point as much as the sighting, so a mis-triangulated \
+                             point fails it on every row. The bench's default is 3, and 0 \
+                             turns it off. An observation with no reading clears it.",
                         ),
                     ),
                     (

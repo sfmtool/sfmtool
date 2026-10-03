@@ -281,8 +281,9 @@ impl AppState {
 
 /// The bars in `bars` that differ from the defaults, named as Track View's
 /// boxes name them, for the label of a put that carried them: `min ZNCC 80%`,
-/// `max shift 4.0 px`. The three ZNCC bars read in percent and the other two
-/// in patch-grid px, as the boxes show them.
+/// `max shift 4.0 px`. The three ZNCC bars read in percent, the projection
+/// error bar in source-image px and the other two in patch-grid px, as the
+/// boxes show them.
 pub(super) fn bars_phrase(bars: &Thresholds) -> String {
     let defaults = Thresholds::default();
     let percent = |name: &str, value: f64| format!("{name} {:.0}%", 100.0 * value);
@@ -302,6 +303,9 @@ pub(super) fn bars_phrase(bars: &Thresholds) -> String {
             "max self-similarity",
             bars.max_zncc_self_similarity_radius,
         ));
+    }
+    if bars.max_projection_error_px != defaults.max_projection_error_px {
+        named.push(px("max projection error", bars.max_projection_error_px));
     }
     if bars.geometry_search_min_relative_zncc != defaults.geometry_search_min_relative_zncc {
         named.push(percent(

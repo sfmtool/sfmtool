@@ -474,6 +474,7 @@ impl PyEditableTrack {
             "max_zncc_self_similarity_radius",
             t.max_zncc_self_similarity_radius,
         )?;
+        d.set_item("max_projection_error_px", t.max_projection_error_px)?;
         d.set_item(
             "geometry_search_min_relative_zncc",
             t.geometry_search_min_relative_zncc,
@@ -1248,8 +1249,10 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 #[pyfunction]
 #[pyo3(signature = (
     track, *, min_zncc = None, max_shift_px = None, max_zncc_self_similarity_radius = None,
-    geometry_search_min_relative_zncc = None, min_zncc_middle = None
+    geometry_search_min_relative_zncc = None, min_zncc_middle = None,
+    max_projection_error_px = None
 ))]
+#[allow(clippy::too_many_arguments)]
 fn apply_thresholds(
     py: Python<'_>,
     track: &PyEditableTrack,
@@ -1258,6 +1261,7 @@ fn apply_thresholds(
     max_zncc_self_similarity_radius: Option<f64>,
     geometry_search_min_relative_zncc: Option<f64>,
     min_zncc_middle: Option<f64>,
+    max_projection_error_px: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let mut seeded = (*track.inner).clone();
     let t = &mut seeded.thresholds;
@@ -1273,6 +1277,7 @@ fn apply_thresholds(
             geometry_search_min_relative_zncc,
         ),
         (&mut t.min_zncc_middle, min_zncc_middle),
+        (&mut t.max_projection_error_px, max_projection_error_px),
     ] {
         if let Some(value) = value {
             *slot = value;

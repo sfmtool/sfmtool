@@ -1517,6 +1517,25 @@ fn apply_bench_track_thresholds_moves_the_bars_it_names() {
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_eq!(after["thresholds"]["min_zncc"], json!(0.42), "{after}");
+
+    // The projection error bar is on the wire as the other bars are.
+    assert_eq!(
+        before["max_projection_error_px"],
+        json!(sfmtool_core::bench::BENCH_MAX_PROJECTION_ERROR_PX),
+        "{before}"
+    );
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "run_a", "max_projection_error_px": 1.5 }),
+    );
+    assert_eq!(
+        reply["thresholds"]["max_projection_error_px"],
+        json!(1.5),
+        "{reply}"
+    );
+    assert_eq!(reply["thresholds"]["min_zncc"], json!(0.42), "{reply}");
 }
 
 /// A sighting the fit kept at its seed says on the wire where the walk would

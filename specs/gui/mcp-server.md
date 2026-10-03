@@ -634,6 +634,7 @@ one at the cursor, and this block reports it.
     "thresholds": { "min_zncc": 0.8, "min_zncc_middle": 0.7,
                     "max_shift_px": 6.0,
                     "max_zncc_self_similarity_radius": 2.5,
+                    "max_projection_error_px": 3.0,
                     "geometry_search_min_relative_zncc": 0.7 },
     "observations": [ { "observation": 0, "camera_image": 3,
                         "camera_image_name": "images/IMG_0042.jpg",
@@ -3359,7 +3360,10 @@ could not be read. The
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a
 new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
 further is painted `out`, a row with no reading clears it, and at `3`, the
-largest radius read, it turns nothing out.
+largest radius read, it turns nothing out. `max_projection_error_px`, in
+source-image px and `3` on a new track, judges `reprojection_error`, or
+`projection_offset_px` before the track is triangulated, at the track stage
+only; `0` turns it off, and a row with no reading clears it.
 The bound is the track's `max_shift_px`, 6 px by default on the bench. **A refused
 walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 `pixel`: that is Track View's *Accept walk*, and like any placed sighting it pins

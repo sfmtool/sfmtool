@@ -1184,6 +1184,9 @@ fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
     slot(&mut track, 1).zncc_middle = Some(0.3);
     slot(&mut track, 1).seed_shift_px = Some(track.thresholds.max_shift_px + 1.0);
     slot(&mut track, 1).zncc_self_similarity_radius = Some(3.0);
+    slot(&mut track, 0).reprojection_error = Some(0.5);
+    slot(&mut track, 1).reprojection_error = None;
+    slot(&mut track, 1).projection_offset_px = Some(track.thresholds.max_projection_error_px + 1.0);
     let stage = track.stage_kind();
 
     let passes = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
@@ -1194,9 +1197,11 @@ fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
             min_zncc_middle: BarCheck::Pass,
             max_shift_px: BarCheck::Pass,
             max_zncc_self_similarity_radius: BarCheck::Pass,
+            max_projection_error_px: BarCheck::Pass,
         }
     );
     assert!(passes.clears_every_bar());
+    assert_eq!(passes.failed(), 0);
 
     let fails = bar_checks(&track.observations[1], stage, &track.thresholds).expect("measured");
     assert_eq!(
@@ -1206,15 +1211,18 @@ fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
             min_zncc_middle: BarCheck::Fail,
             max_shift_px: BarCheck::Fail,
             max_zncc_self_similarity_radius: BarCheck::Fail,
+            max_projection_error_px: BarCheck::Fail,
         }
     );
     assert!(!fails.clears_every_bar());
+    assert_eq!(fails.failed(), 5);
 
     // A reading no round produced fails its bar, whichever bar it is.
     for set in [
         |m: &mut TrackMeasurement| m.zncc_middle = Some(f64::NAN),
         |m: &mut TrackMeasurement| m.seed_shift_px = Some(f64::NAN),
         |m: &mut TrackMeasurement| m.zncc_self_similarity_radius = Some(f64::NAN),
+        |m: &mut TrackMeasurement| m.reprojection_error = Some(f64::NAN),
     ] {
         let mut nan = track.clone();
         set(slot(&mut nan, 0));
@@ -1226,6 +1234,33 @@ fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
     assert_eq!(checks.min_zncc, BarCheck::Fail);
 }
 
+/// The projection bar judges the reprojection error where the track carries
+/// one, and the offset to the patch centre's projection only before it does,
+/// the reading Track View's *Proj. err* cell prints.
+#[test]
+fn projection_bar_judges_the_reprojection_error_before_the_projection_offset() {
+    let mut track = scored_track([0.95, 0.90]);
+    let bar = track.thresholds.max_projection_error_px;
+    let stage = track.stage_kind();
+    let check = |track: &EditableTrack| {
+        bar_checks(&track.observations[0], stage, &track.thresholds)
+            .expect("measured")
+            .max_projection_error_px
+    };
+    slot(&mut track, 0).reprojection_error = None;
+    slot(&mut track, 0).projection_offset_px = Some(bar + 1.0);
+    assert_eq!(check(&track), BarCheck::Fail);
+    slot(&mut track, 0).reprojection_error = Some(bar - 1.0);
+    assert_eq!(check(&track), BarCheck::Pass);
+    slot(&mut track, 0).reprojection_error = Some(bar + 1.0);
+    slot(&mut track, 0).projection_offset_px = Some(0.0);
+    assert_eq!(check(&track), BarCheck::Fail);
+
+    // At 0 the bar is off, and judges even a large error not at all.
+    track.thresholds.max_projection_error_px = 0.0;
+    assert_eq!(check(&track), BarCheck::NotJudged);
+}
+
 /// A missing reading is not judged and clears its bar, the middle bar at `0`
 /// judges nothing, and a row with no whole-patch ZNCC has no checks at all.
 #[test]
@@ -1235,6 +1270,8 @@ fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
     slot(&mut track, 0).zncc_middle = None;
     slot(&mut track, 0).seed_shift_px = None;
     slot(&mut track, 0).zncc_self_similarity_radius = None;
+    slot(&mut track, 0).reprojection_error = None;
+    slot(&mut track, 0).projection_offset_px = None;
     let stage = track.stage_kind();
     let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
     assert_eq!(
@@ -1244,6 +1281,7 @@ fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
             min_zncc_middle: BarCheck::NotJudged,
             max_shift_px: BarCheck::NotJudged,
             max_zncc_self_similarity_radius: BarCheck::NotJudged,
+            max_projection_error_px: BarCheck::NotJudged,
         }
     );
     assert!(
@@ -5576,6 +5614,7 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
 fn the_bench_s_shift_bar_defaults_to_the_localizer_s_search_radius() {
     use crate::patch::keypoint_localize::KeypointLocalizeParams;
     assert_eq!(Thresholds::default().max_shift_px, 6.0);
+    assert_eq!(Thresholds::default().max_projection_error_px, 3.0);
     assert_eq!(Thresholds::default().max_shift_px, BENCH_MAX_SHIFT_PX);
     assert_eq!(
         KeypointLocalizeParams::default().search,

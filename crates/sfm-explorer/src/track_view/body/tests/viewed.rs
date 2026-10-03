@@ -12,8 +12,8 @@ use sfmtool_core::bench::{BarCheck, Thresholds, Verdict};
 use super::super::table::{proposal_tint, ColumnLayout};
 use super::super::{
     crop_caption, BodyMode, TrackBody, TrackBodyResponse, EVALUATED_LABEL, EVALUATING_LABEL,
-    GEOMETRY_SEARCH_LABEL, MAX_SELF_SIMILARITY_LABEL, MAX_SHIFT_LABEL, MIN_ZNCC_LABEL,
-    MIN_ZNCC_MIDDLE_LABEL,
+    GEOMETRY_SEARCH_LABEL, MAX_PROJECTION_ERROR_LABEL, MAX_SELF_SIMILARITY_LABEL, MAX_SHIFT_LABEL,
+    MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL,
 };
 use super::{box_point, drag_frames, input, run_frame, run_frame_with, state, versions, POINT};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
@@ -58,31 +58,37 @@ fn visuals(ctx: &egui::Context) -> egui::Visuals {
     ctx.global_style().visuals.clone()
 }
 
-/// The labels of every box, and a drag that makes each one stricter.
-const BOXES: [(&str, f32); 5] = [
-    (MIN_ZNCC_LABEL, 400.0),
-    (MIN_ZNCC_MIDDLE_LABEL, 400.0),
-    (MAX_SHIFT_LABEL, -400.0),
-    (MAX_SELF_SIMILARITY_LABEL, -400.0),
-    (GEOMETRY_SEARCH_LABEL, 400.0),
+/// Every box, by the text after it and which of the texts that read so it is
+/// counting from the left, with a drag that makes it stricter. The shift and
+/// the projection error boxes are both followed by `px`, the projection
+/// error's first, since its column is left of the shift's.
+const BOXES: [(&str, usize, f32); 6] = [
+    (MIN_ZNCC_LABEL, 0, 400.0),
+    (MIN_ZNCC_MIDDLE_LABEL, 0, 400.0),
+    (MAX_SHIFT_LABEL, 1, -400.0),
+    (MAX_SELF_SIMILARITY_LABEL, 0, -400.0),
+    (MAX_PROJECTION_ERROR_LABEL, 0, -400.0),
+    (GEOMETRY_SEARCH_LABEL, 0, 400.0),
 ];
 
-/// Drag the box labelled `label` `by` points, applying each frame's
-/// read-only bars the way the dock does, and hand back every frame's
-/// response.
+/// Drag the box labelled `label`, the `nth` of those from the left, `by`
+/// points, applying each frame's read-only bars the way the dock does, and
+/// hand back every frame's response.
 fn drag_box(
     panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &mut AppState,
     label: &str,
+    nth: usize,
     by: f32,
 ) -> Vec<TrackBodyResponse> {
     let texts = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
         panel.show(ui, state);
     });
-    let named = texts
-        .iter()
-        .find(|t| t.text == label)
+    let mut labelled: Vec<_> = texts.iter().filter(|t| t.text == label).collect();
+    labelled.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+    let named = labelled
+        .get(nth)
         .unwrap_or_else(|| panic!("the {label:?} box is not drawn"))
         .rect;
     let start = box_point(label, named);
@@ -194,13 +200,22 @@ fn each_verdict_cell_reads_what_the_bars_give_it_in_its_colour() {
     let visuals = visuals(&ctx);
     let check = |panel: &TrackBody, state: &AppState| {
         let verdicts = state.viewed_verdicts().expect("a viewed track");
-        for (row, verdict) in panel.rows().iter().zip(verdicts) {
-            let word = match verdict {
-                Some(Verdict::In) => "in",
-                Some(Verdict::Out) => "out",
-                None => "-",
+        assert_eq!(panel.rows().len(), verdicts.len());
+        for row in panel.rows() {
+            let verdict = verdicts[row.observation];
+            let failed = row
+                .checks
+                .iter()
+                .flatten()
+                .filter(|&&c| c == BarCheck::Fail)
+                .count();
+            let word = match (verdict, failed) {
+                (Some(Verdict::In), _) => "in".to_string(),
+                (Some(Verdict::Out), 0) => "out".to_string(),
+                (Some(Verdict::Out), n) => format!("out ({n})"),
+                (None, _) => "-".to_string(),
             };
-            assert_eq!(row.verdict_text.as_deref(), Some(word), "{row:?}");
+            assert_eq!(row.verdict_text.as_deref(), Some(word.as_str()), "{row:?}");
             assert_eq!(row.proposal, verdict);
             assert_eq!(row.tint, proposal_tint(&visuals, verdict), "{row:?}");
             assert_eq!(row.verdict, Verdict::In, "a viewed row was turned out");
@@ -214,6 +229,7 @@ fn each_verdict_cell_reads_what_the_bars_give_it_in_its_colour() {
         min_zncc_middle: 0.0,
         max_shift_px: 1.0e6,
         max_zncc_self_similarity_radius: 1.0e6,
+        max_projection_error_px: 1.0e6,
         ..Thresholds::default()
     });
     run_frame(&mut panel, &ctx, &state);
@@ -230,12 +246,18 @@ fn each_verdict_cell_reads_what_the_bars_give_it_in_its_colour() {
 
     state.set_viewed_thresholds(Thresholds {
         min_zncc: 1.0,
+        max_projection_error_px: 1.0e6,
         ..Thresholds::default()
     });
     run_frame(&mut panel, &ctx, &state);
     check(&panel, &state);
     let row = &panel.rows()[0];
-    assert_eq!(row.verdict_text.as_deref(), Some("out"));
+    assert!(
+        row.verdict_text
+            .as_deref()
+            .is_some_and(|text| text.starts_with("out (")),
+        "{row:?}"
+    );
     assert!(
         row.keep_hover.contains("ZNCC whole is under the bar"),
         "{}",
@@ -261,16 +283,23 @@ fn an_unmeasured_viewed_row_reads_a_dash_untinted() {
     }
 }
 
+/// Whether a row's *Verdict* cell reads `out`, with or without a count.
+fn out(row: &super::super::RowSummary) -> bool {
+    row.verdict_text
+        .as_deref()
+        .is_some_and(|text| text.starts_with("out"))
+}
+
 #[test]
 fn a_drag_of_each_box_recolours_and_changes_no_verdict() {
-    for (label, by) in BOXES {
+    for (label, nth, by) in BOXES {
         let (mut state, id, mut panel, ctx) = viewing_measured();
         let before_versions = versions(&state, id);
         let before_rows = state.action_log.entries().count();
         let before = state.viewed_thresholds.clone();
         let track = std::sync::Arc::clone(&state.viewed_track().expect("viewed").track);
 
-        let responses = drag_box(&mut panel, &ctx, &mut state, label, by);
+        let responses = drag_box(&mut panel, &ctx, &mut state, label, nth, by);
         assert!(
             responses.iter().any(|r| r.viewed_thresholds.is_some()),
             "the {label:?} box reported no bars"
@@ -301,13 +330,13 @@ fn a_drag_of_each_box_recolours_and_changes_no_verdict() {
         if label == MIN_ZNCC_LABEL {
             for row in panel.rows() {
                 assert_eq!(row.checks[0][0], BarCheck::Fail, "{row:?}");
-                assert_eq!(row.verdict_text.as_deref(), Some("out"), "{row:?}");
+                assert!(out(row), "{row:?}");
             }
         }
         if label == MIN_ZNCC_MIDDLE_LABEL {
             for row in panel.rows() {
                 assert_eq!(row.checks[0][1], BarCheck::Fail, "{row:?}");
-                assert_eq!(row.verdict_text.as_deref(), Some("out"), "{row:?}");
+                assert!(out(row), "{row:?}");
             }
         }
     }

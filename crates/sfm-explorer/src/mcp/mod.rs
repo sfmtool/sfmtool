@@ -740,7 +740,7 @@ pub(crate) struct IntrinsicsChange {
 ///
 /// Left where the track has it rather than reset to the default, because the
 /// bars are the track's own state and a call that moves one bar has said
-/// nothing about the other three. The panel's sliders are the same statement
+/// nothing about the others. The panel's sliders are the same statement
 /// made with a hand, and they start from the same place.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ThresholdChange {
@@ -748,6 +748,7 @@ pub(crate) struct ThresholdChange {
     pub(crate) min_zncc_middle: Option<f64>,
     pub(crate) max_shift_px: Option<f64>,
     pub(crate) max_zncc_self_similarity_radius: Option<f64>,
+    pub(crate) max_projection_error_px: Option<f64>,
     pub(crate) geometry_search_min_relative_zncc: Option<f64>,
 }
 
@@ -769,6 +770,9 @@ impl ThresholdChange {
         }
         if let Some(value) = self.max_zncc_self_similarity_radius {
             next.max_zncc_self_similarity_radius = value;
+        }
+        if let Some(value) = self.max_projection_error_px {
+            next.max_projection_error_px = value;
         }
         if let Some(value) = self.geometry_search_min_relative_zncc {
             next.geometry_search_min_relative_zncc = value;

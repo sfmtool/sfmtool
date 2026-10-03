@@ -388,10 +388,11 @@ pub struct TrackAtPixelOptions {
     pub constellation: ConstellationOptions,
     /// The bars every track the cascade builds carries: what its thresholds
     /// paint the verdicts by and, at the track stage, how far a fit may move a
-    /// sighting. The bench defaults, except `max_shift_px`, which stays at the
-    /// cluster refinement's 3 px rather than the bench's
-    /// [`BENCH_MAX_SHIFT_PX`](super::track::BENCH_MAX_SHIFT_PX): the cascade's
-    /// other parameters were chosen by the harness against that bar.
+    /// sighting. The bench defaults, except two bars the cascade's other
+    /// parameters were chosen by the harness without: `max_shift_px`, which
+    /// stays at the cluster refinement's 3 px rather than the bench's
+    /// [`BENCH_MAX_SHIFT_PX`](super::track::BENCH_MAX_SHIFT_PX), and
+    /// `max_projection_error_px`, which is off at `0`.
     pub thresholds: Thresholds,
 }
 
@@ -411,6 +412,12 @@ impl Default for TrackAtPixelOptions {
             constellation: ConstellationOptions::default(),
             thresholds: Thresholds {
                 max_shift_px: ClusterRefineParams::default().max_shift_px,
+                // TODO: evaluate the cascade with the bench's projection error
+                // bar (`BENCH_MAX_PROJECTION_ERROR_PX`) on. It is off here
+                // because the harness tuned the cascade before the bar
+                // existed, and it would turn out sightings of a seed point
+                // that is still off before a fit moves it.
+                max_projection_error_px: 0.0,
                 ..Thresholds::default()
             },
         }

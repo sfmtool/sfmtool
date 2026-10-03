@@ -2578,7 +2578,7 @@ impl BarCheck {
     }
 }
 
-/// What each of the four bars of [`Thresholds`] says about one observation,
+/// What each of the five bars of [`Thresholds`] says about one observation,
 /// from [`bar_checks`]. Each field is named after the bar that judged it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BarChecks {
@@ -2594,21 +2594,36 @@ pub struct BarChecks {
     /// The whole tile's ZNCC self-similarity radius against
     /// [`Thresholds::max_zncc_self_similarity_radius`].
     pub max_zncc_self_similarity_radius: BarCheck,
+    /// The reprojection error against [`Thresholds::max_projection_error_px`],
+    /// not judged at the cluster stage or when the bar is off at `0`.
+    pub max_projection_error_px: BarCheck,
 }
 
 impl BarChecks {
-    /// Whether the observation clears every bar: no bar failed it. The
-    /// thresholds propose `in` exactly when this holds and the observation's
-    /// image is free.
-    pub fn clears_every_bar(&self) -> bool {
+    /// Every check, in the order the fields are declared.
+    fn all(&self) -> [BarCheck; 5] {
         [
             self.min_zncc,
             self.min_zncc_middle,
             self.max_shift_px,
             self.max_zncc_self_similarity_radius,
+            self.max_projection_error_px,
         ]
-        .iter()
-        .all(|&check| check != BarCheck::Fail)
+    }
+
+    /// Whether the observation clears every bar: no bar failed it. The
+    /// thresholds propose `in` exactly when this holds and the observation's
+    /// image is free.
+    pub fn clears_every_bar(&self) -> bool {
+        self.failed() == 0
+    }
+
+    /// How many bars failed the observation.
+    pub fn failed(&self) -> usize {
+        self.all()
+            .iter()
+            .filter(|&&check| check == BarCheck::Fail)
+            .count()
     }
 }
 
@@ -2619,7 +2634,8 @@ impl BarChecks {
 /// This is the whole of what the thresholds judge a row by, so the verdict
 /// they propose and anything that shows a reading as passing or failing its
 /// bar come from one computation. The middle bar is off at `0`, and a bar has
-/// nothing to judge on a row without its reading, which clears it. A `NaN`
+/// nothing to judge on a row without its reading, which clears it. The
+/// projection bar is off at `0` too. A `NaN`
 /// reading fails rather than reading as unmeasured: an observation that was
 /// measured and failed is a refusal the person should see.
 ///
@@ -2627,16 +2643,17 @@ impl BarChecks {
 /// evidence at either stage -- the drift from its seed at the cluster stage, and
 /// [`TrackMeasurement::seed_shift_px`](super::track::TrackMeasurement::seed_shift_px),
 /// how far the correlation peak sits from where the sighting is, at the track
-/// stage. The other track-stage distance,
-/// [`projection_offset_px`](super::track::TrackMeasurement::projection_offset_px),
-/// is a verdict on the point: judging sightings by it would turn out the very
-/// observations that would move a mis-triangulated point back.
+/// stage. The distance to the point's projection is the other track-stage
+/// distance, and [`Thresholds::max_projection_error_px`] judges it: the
+/// reprojection error where the track is triangulated, and
+/// [`projection_offset_px`](super::track::TrackMeasurement::projection_offset_px)
+/// before it is.
 pub fn bar_checks(
     observation: &Observation,
     stage: StageKind,
     thresholds: &Thresholds,
 ) -> Option<BarChecks> {
-    let (zncc, middle, shift, radius) = match stage {
+    let (zncc, middle, shift, radius, projection) = match stage {
         StageKind::Cluster => {
             let m = observation.cluster.as_ref()?;
             (
@@ -2644,6 +2661,7 @@ pub fn bar_checks(
                 m.zncc_middle,
                 m.shift_px,
                 m.zncc_self_similarity_radius,
+                None,
             )
         }
         StageKind::Track => {
@@ -2653,6 +2671,7 @@ pub fn bar_checks(
                 m.zncc_middle,
                 m.seed_shift_px,
                 m.zncc_self_similarity_radius,
+                m.reprojection_error.or(m.projection_offset_px),
             )
         }
     };
@@ -2667,6 +2686,11 @@ pub fn bar_checks(
         max_zncc_self_similarity_radius: BarCheck::of(radius, |r| {
             r <= thresholds.max_zncc_self_similarity_radius
         }),
+        max_projection_error_px: if thresholds.max_projection_error_px <= 0.0 {
+            BarCheck::NotJudged
+        } else {
+            BarCheck::of(projection, |e| e <= thresholds.max_projection_error_px)
+        },
     })
 }
 
