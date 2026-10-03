@@ -532,7 +532,7 @@ fn real_task(operation: Operation) -> RealTask {
             let (mut state, id) = crate::bench::tests::state();
             let label = crate::bench::tests::put_on_bench(&mut state, id);
             let job = match operation.name {
-                "Fit track" => state.bench_fit_job(id, &label),
+                "Fit track" => state.bench_fit_job(id, &label, None),
                 "Fit normal" => state.bench_normal_job(id, &label, NormalStep::Photometric),
                 "Finite difference normal" => state.bench_normal_job(
                     id,
@@ -542,7 +542,7 @@ fn real_task(operation: Operation) -> RealTask {
                 "Grid plane normal" => {
                     state.bench_normal_job(id, &label, NormalStep::GridPlane(Default::default()))
                 }
-                _ => state.bench_stage_job(id, &label, StageKind::Cluster),
+                _ => state.bench_stage_job(id, &label, StageKind::Cluster, None),
             }
             .expect("the fixture's track is readable");
             RealTask {

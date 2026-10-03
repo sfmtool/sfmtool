@@ -70,6 +70,11 @@ nothing else.
 | **prune** | on / off | how the cheirality failure is read: per observation rather than per track. See below. Off, one observation behind the point decides the whole track. |
 | **bar** | a pixel bound | a solved point that survives the rules above is reprojected through the camera at the same geometry; when the median finite residual over its observations exceeds the bound the track is OVER THE BAR and becomes a bearing. Requires the observation form. Off, no reprojection is read. |
 
+Bundle adjustment's crossing reads the `floor`; deciding that crossing on the
+point-or-bearing likelihood-ratio test instead is proposed in the amendment
+draft [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
+and the `floor` stays for callers that want a pure geometric cut.
+
 Bearings are unit vectors with the point flagged as a direction. The
 fallback for a track with no usable ray at all, and for a mean ray whose norm
 is zero or not finite, is the camera convention's forward direction.

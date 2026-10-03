@@ -236,3 +236,57 @@ fn track_rays_keeps_one_track_per_input_track() {
     assert_eq!(scores[2], None);
     assert_eq!(track_rays(table, &[], &[0], 0.5).offsets, vec![0]);
 }
+
+/// Rays from three cameras on a line to `target`, weighted for an isotropic
+/// angular noise of a milliradian.
+fn rays_to_target(target: Point3<f64>) -> Rays {
+    let centers = vec![
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+    ];
+    let dirs: Vec<Vector3<f64>> = centers.iter().map(|c| (target - c).normalize()).collect();
+    let weights = dirs
+        .iter()
+        .map(|d| crate::reconstruction::triangulation::isotropic_ray_weight(d, 1e-3))
+        .collect();
+    (dirs, centers, weights)
+}
+
+#[test]
+fn a_usable_point_is_in_front_and_beyond_the_minimum_depth() {
+    let (dirs, centers, _) = rays_to_target(Point3::new(0.0, 0.0, 10.0));
+    let usable = |x: Point3<f64>, min_depth: f64| is_usable_point(&x, &dirs, &centers, min_depth);
+    assert!(usable(Point3::new(0.0, 0.0, 10.0), 0.1));
+    // Behind the cameras.
+    assert!(!usable(Point3::new(0.0, 0.0, -10.0), 0.1));
+    // In front, but nearer a camera centre than the minimum depth.
+    assert!(!usable(Point3::new(0.0, 0.0, 10.0), 20.0));
+    // Not a point at all.
+    assert!(!usable(Point3::new(f64::NAN, 0.0, 10.0), 0.1));
+}
+
+#[test]
+fn the_usable_fit_keeps_only_a_point_that_clears_the_rule() {
+    let target = Point3::new(0.0, 0.0, 10.0);
+    let (dirs, centers, weights) = rays_to_target(target);
+    let placed = fit_usable_point(&dirs, &centers, &weights, None, 0.1, 25.0);
+    let fit = placed.fit.expect("three rays fit");
+    assert!(fit.depth_likelihood_ratio >= 25.0);
+    assert!((placed.point.expect("a usable point") - target).norm() < 1e-6);
+
+    // The same fit, refused by the minimum depth and by a threshold above its
+    // likelihood ratio.
+    let deep = fit_usable_point(&dirs, &centers, &weights, None, 50.0, 25.0);
+    assert_eq!(deep.fit, placed.fit);
+    assert_eq!(deep.point, None);
+    let high = fit.depth_likelihood_ratio * 2.0;
+    assert_eq!(
+        fit_usable_point(&dirs, &centers, &weights, None, 0.1, high).point,
+        None
+    );
+    // A threshold of 0 asks nothing of the likelihood ratio.
+    assert!(fit_usable_point(&dirs, &centers, &weights, None, 0.1, 0.0)
+        .point
+        .is_some());
+}

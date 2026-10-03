@@ -13,21 +13,19 @@
 //! direction. [`SfmrReconstruction::materialize_points_at_infinity`] places
 //! every point at infinity at a finite depth for a consumer that cannot store
 //! `w = 0`; that depth is supplied, not measured, so the two are not inverses.
-//!
-//! [`classify_rays_at_infinity`] is the older inverse-depth z rule, which the
-//! bench still decides with.
 
 use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array4, Axis};
 
-use crate::analysis::point_or_bearing::{track_rays, PointOrBearingError};
+use crate::analysis::point_or_bearing::{
+    fit_usable_point, is_usable_point, track_rays, PointOrBearingError,
+};
 use crate::analysis::reprojection_noise::ReprojectionNoise;
 use crate::reconstruction::data::{count_points_at_infinity, observation_reprojection_error};
 use crate::reconstruction::triangulation::{
-    bearing_score_batch, depth_uncertainty_batch, fit_point_and_bearing, is_finite,
-    triangulate_batch, PointBearingFitOptions, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+    bearing_score_batch, is_finite, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
 use crate::reconstruction::SfmrReconstruction;
 
@@ -37,7 +35,8 @@ use crate::reconstruction::SfmrReconstruction;
 ///
 /// [`SfmrReconstruction::classify_points_at_infinity`] promotes a point at
 /// infinity only to a fitted position at least this far from every observing
-/// camera centre. In near-camera geometry the point fit can end almost on a
+/// camera centre, and the bench places a finite track only there
+/// ([`SfmrReconstruction::min_point_depth`]). In near-camera geometry the point fit can end almost on a
 /// camera's centre, which fits the rays but is no depth to store. On the Kerry
 /// Park ground truth, the seoul bull ground truth and a seoul bull solve, the
 /// stored finite point nearest a camera sits at 13%, 42% and 39% of that
@@ -229,64 +228,9 @@ fn camera_cloud_centroid(centers: &[Point3<f64>]) -> Point3<f64> {
     Point3::from(sum / centers.len() as f64)
 }
 
-/// SIFT keypoint localisation noise floor (pixels), for the z rule of
-/// [`classify_rays_at_infinity`].
-///
-/// A caller of the z rule estimates a track's measurement noise from its
-/// reprojection error but never lets it fall below this floor: a short track is
-/// triangulated to fit its few observations almost exactly regardless of depth
-/// conditioning, so its reprojection error under-states the true noise.
-pub const DEFAULT_NOISE_FLOOR_PX: f64 = 1.0;
-
-/// Provisional inverse-depth z-score cutoff: a track whose `depth / σ_depth`
-/// falls below this is statistically indistinguishable from infinity and is
-/// classified as a `w = 0` point. (KerryPark360 populations: genuine z ≈ 62 vs
-/// discovered z ≈ 3.) The scale-free z-score is the decision variable; final
-/// calibration on larger captures is deferred — see the spec's open questions.
-pub const DEFAULT_INVERSE_DEPTH_Z_CUTOFF: f64 = 4.0;
-
-/// Cheap geometric pre-filter on the condition number of the normal matrix `A`.
-/// A track this well-conditioned has an observable depth and is finite without
-/// computing the noise-calibrated z-score; the z-score is only consulted in the
-/// ill-conditioned regime above this. (KerryPark360 medians: genuine 82 vs
-/// degenerate 89,599.) Note the condition number scales with track length, so
-/// it is a pre-filter, not the decision variable.
-pub const CONDITION_NUMBER_PREFILTER: f64 = 1e4;
-
-/// What a track's rays resolve to.
-#[derive(Debug, Clone, Copy)]
-pub enum Classification {
-    /// Triangulated finite point.
-    Finite(Point3<f64>),
-    /// Point at infinity — a unit bearing direction.
-    Infinity(Point3<f64>),
-    /// The baseline could not place a point even at `finite_horizon`, so neither
-    /// finite nor infinity is earned (see `classify_rays_at_infinity`).
-    Indeterminate,
-}
-
-/// A track's classification plus the diagnostics behind it, kept for debug
-/// review of the points that get dropped.
-#[derive(Debug, Clone, Copy)]
-pub struct RayClassification {
-    pub class: Classification,
-    /// The least-squares point the rays triangulated to, whatever [`Self::class`]
-    /// made of it.
-    ///
-    /// Beside the class rather than only inside `Classification::Finite`, because
-    /// a caller that refused the depth may still want to know what was refused:
-    /// the bench scores this point and [`Self::bearing`] against the sightings and
-    /// keeps whichever explains them, which needs both candidates in hand.
-    pub point: Point3<f64>,
-    pub condition_number: f64,
-    pub resolvable_distance: f64,
-    pub inverse_depth_z: f64,
-    pub bearing: Point3<f64>,
-    pub num_views: usize,
-}
-
 /// Spatial extent (bounding-box diagonal) of a set of camera centers — the
-/// scale of the region a capture explored, and the default `finite_horizon`.
+/// scale of the region a capture explored, which the `resolvable_distance`
+/// diagnostic is read against (`finite_horizon`).
 pub fn camera_extents(centers: &[Point3<f64>]) -> f64 {
     let Some(first) = centers.first() else {
         return 0.0;
@@ -298,97 +242,6 @@ pub fn camera_extents(centers: &[Point3<f64>]) -> f64 {
         hi = hi.sup(&c.coords);
     }
     (hi - lo).norm()
-}
-
-/// Classify one track from its observation rays into finite / at-infinity /
-/// indeterminate.
-///
-/// `dirs` are the unit world-space rays (at least one), `centers` the matching
-/// camera centers, and `sigma_rad` the per-ray angular noise (`noise_px / fᵢ`).
-/// The decision:
-///
-/// - A clearly well-conditioned, in-front solve (condition number below
-///   [`CONDITION_NUMBER_PREFILTER`]) is **finite** — no noise model needed.
-/// - Otherwise, if the geometry cannot resolve a point even at `finite_horizon`
-///   (`resolvable_distance < finite_horizon`), the call is **indeterminate**:
-///   the baseline is too small to tell a scene-scale finite point from infinity.
-/// - With adequate baseline, a degenerate/behind solve or an inverse-depth
-///   z-score below `z_cutoff` is **at infinity** (a `w = 0` bearing direction —
-///   the mean of the rays, or the first ray if they cancel exactly); else
-///   **finite**.
-pub fn classify_rays_at_infinity(
-    dirs: &[Vector3<f64>],
-    centers: &[Point3<f64>],
-    sigma_rad: &[f64],
-    z_cutoff: f64,
-    finite_horizon: f64,
-) -> RayClassification {
-    let offsets = [0usize, dirs.len()];
-    let tri = triangulate_batch(dirs, centers, &offsets)
-        .pop()
-        .expect("one track");
-
-    // The direction to store for a w = 0 point: the bearing mean of the rays,
-    // or the first ray if they cancel exactly (degenerate; unreachable for
-    // genuine near-parallel infinity tracks, whose rays sum to ≈ K·d ≠ 0).
-    let bearing = {
-        let mut sum = Vector3::zeros();
-        for d in dirs {
-            sum += d;
-        }
-        let norm = sum.norm();
-        if norm > 0.0 {
-            Point3::from(sum / norm)
-        } else {
-            Point3::from(dirs[0])
-        }
-    };
-    let num_views = dirs.len();
-
-    // A rank-deficient solve (parallel rays → infinite condition number), a
-    // point behind a camera, or a non-finite point cannot be a physical finite
-    // point.
-    let geometrically_finite = tri.in_front_of_all_cameras
-        && tri.condition_number.is_finite()
-        && tri.point.coords.iter().all(|c| c.is_finite());
-
-    // Cheap pre-filter: a well-conditioned, in-front depth is finite without the
-    // noise-calibrated test (and has ample baseline, so never indeterminate).
-    if geometrically_finite && tri.condition_number < CONDITION_NUMBER_PREFILTER {
-        return RayClassification {
-            class: Classification::Finite(tri.point),
-            point: tri.point,
-            condition_number: tri.condition_number,
-            resolvable_distance: f64::NAN,
-            inverse_depth_z: f64::NAN,
-            bearing,
-            num_views,
-        };
-    }
-
-    // Degenerate / near-parallel / behind regime: needs the noise-calibrated
-    // diagnostics. `resolvable_distance` is depth-independent, so it stays valid
-    // even when the solved point (and hence `inverse_depth_z`) is noise.
-    let du = depth_uncertainty_batch(&[tri], dirs, centers, &offsets, sigma_rad)
-        .pop()
-        .expect("one track");
-    let class = if du.resolvable_distance < finite_horizon {
-        // Baseline can't reach the required distance — can't adjudicate.
-        Classification::Indeterminate
-    } else if !geometrically_finite || du.inverse_depth_z < z_cutoff {
-        Classification::Infinity(bearing)
-    } else {
-        Classification::Finite(tri.point)
-    };
-    RayClassification {
-        class,
-        point: tri.point,
-        condition_number: tri.condition_number,
-        resolvable_distance: du.resolvable_distance,
-        inverse_depth_z: du.inverse_depth_z,
-        bearing,
-        num_views,
-    }
 }
 
 impl SfmrReconstruction {
@@ -421,7 +274,7 @@ impl SfmrReconstruction {
     ///   of the observing cameras it describes no sighting there, and the point
     ///   is left as the solve produced it.
     /// - **Promotion.** A point at infinity with a finite verdict is placed by
-    ///   [`fit_point_and_bearing`] with plain least squares and becomes
+    ///   [`fit_usable_point`], the plain least-squares point fit, and becomes
     ///   `w = 1` there, when the fit gives a usable point: one in front of every
     ///   observing camera and no closer to any of their centres than the
     ///   minimum depth, [`DEFAULT_MIN_DEPTH_FRACTION`] of the reconstruction's
@@ -522,11 +375,7 @@ impl SfmrReconstruction {
             .map(|im| im.camera_center())
             .collect();
         let origin = camera_cloud_centroid(&centers);
-        let min_depth = DEFAULT_MIN_DEPTH_FRACTION * self.scene_scale_for_min_depth(&centers);
-        let plain = PointBearingFitOptions {
-            soft_l1_scale: None,
-            ..PointBearingFitOptions::default()
-        };
+        let min_depth = self.min_point_depth();
 
         let mut recon = self.clone_for_edit();
         let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
@@ -536,35 +385,23 @@ impl SfmrReconstruction {
                 continue;
             };
             let (lo, hi) = (rays.offsets[p], rays.offsets[p + 1]);
-            // A position to store: in front of every observing camera, along
-            // the ray its pixel gives, and no nearer any camera centre than the
-            // minimum depth.
+            // The consumer rule, shared with the bench: a position to store is
+            // in front of every observing camera and no nearer any camera
+            // centre than the minimum depth, and a fitted one has a `Λ` that
+            // itself clears the threshold.
             let usable = |x: &Point3<f64>| {
-                x.coords.iter().all(|c| c.is_finite())
-                    && rays.dirs[lo..hi]
-                        .iter()
-                        .zip(&rays.centers[lo..hi])
-                        .all(|(d, c)| (x - c).dot(d) > 0.0 && (x - c).norm() >= min_depth)
+                is_usable_point(x, &rays.dirs[lo..hi], &rays.centers[lo..hi], min_depth)
             };
-            // The plain least-squares point fit, from `start` when given, kept
-            // when it gives a usable point and its `Λ` itself clears the
-            // threshold: the score is a prediction at `ρ = 0`, and where the
-            // geometry is degenerate it can exceed the `Λ` the fit finds.
             let fit_usable = |start: Option<Point3<f64>>| {
-                fit_point_and_bearing(
+                fit_usable_point(
                     &rays.dirs[lo..hi],
                     &rays.centers[lo..hi],
                     &rays.weights[lo..hi],
                     start,
-                    None,
-                    &plain,
+                    min_depth,
+                    DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
                 )
-                .filter(|f| {
-                    f.in_front_of_all_cameras
-                        && f.depth_likelihood_ratio >= DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD
-                })
-                .and_then(|f| f.point)
-                .filter(&usable)
+                .point
             };
             let finite = is_finite(score, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD);
             let point = &mut recon.point_set.points[p];
@@ -657,6 +494,24 @@ impl SfmrReconstruction {
         apply_patch_fixes(&mut recon, patch_fixes);
         recon.point_set.infinity_point_count = count_points_at_infinity(&recon.point_set.points);
         Ok((recon, summary))
+    }
+
+    /// The minimum depth a consumer of the point-or-bearing test stores a
+    /// finite point at: [`DEFAULT_MIN_DEPTH_FRACTION`] of the median distance
+    /// from a finite point to the centre of a camera observing it, or, with no
+    /// finite point observed, of the camera extents.
+    ///
+    /// [`Self::classify_points_at_infinity`] reads it for a promoted or
+    /// re-fitted point, and the bench for every point it places (see
+    /// [`is_usable_point`]).
+    pub fn min_point_depth(&self) -> f64 {
+        let centers: Vec<Point3<f64>> = self
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.camera_center())
+            .collect();
+        DEFAULT_MIN_DEPTH_FRACTION * self.scene_scale_for_min_depth(&centers)
     }
 
     /// The length the minimum depth of a promoted point is a fraction of: the

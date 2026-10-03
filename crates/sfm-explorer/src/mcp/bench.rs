@@ -1199,13 +1199,18 @@ fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed
 
 /// `fit_bench_track`: the track localized, re-triangulated, re-fused and read
 /// back, on a worker thread.
-pub(super) fn fit_bench_track(state: &mut AppState, label: &str, named: Option<&str>) -> Outcome {
+pub(super) fn fit_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    sigma_px: Option<f64>,
+) -> Outcome {
     let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
     let since = state.action_log.revision();
-    match state.start_bench_fit(id, &item) {
+    match state.start_bench_fit_at(id, &item, sigma_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started(state, id, since),
     }
@@ -1241,13 +1246,14 @@ pub(super) fn set_bench_track_stage(
     label: &str,
     named: Option<&str>,
     stage: StageKind,
+    sigma_px: Option<f64>,
 ) -> Outcome {
     let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
     let since = state.action_log.revision();
-    match state.start_bench_stage(id, &item, stage) {
+    match state.start_bench_stage_at(id, &item, stage, sigma_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started(state, id, since),
     }

@@ -460,6 +460,7 @@ most of the per-sentence findings.
   - Passing a directory gives "file not found".
   - WORKSPACE falls back to the given path when no workspace is found (`inspect.py:225`).
 **Third copies:** The stale `.sift` claim is repeated in three places: the PyO3 docstring (`sfmr_reconstruction.rs:1016-1019`), `summary.py:650-653` and the Click help (`inspect.py:103-104`). Cut them back to the Rust contract. `strips/_inspect.py:4-17` repeats the spec's Feature-source paragraph. `summary.py:20-22` hand-copies `DEFAULT_INVERSE_DEPTH_Z_CUTOFF` from Rust; export it through the binding instead.
+> _Status (2026-10-03): **Superseded** for the cutoff — `DEFAULT_INVERSE_DEPTH_Z_CUTOFF` is gone from Rust with the z rule, and `summary.py`'s `DEPTH_RELIABILITY_Z_CUTOFF` is now the report's own reading of the diagnostic, said so in its comment (step 6 of the point-or-bearing draft, #709). The `.sift` items remain open._
 **Shape:**
   - **Opening**, proposed: *"`sfm inspect` prints a summary of one sfmtool file (`.sfmr`, `.sift`, `.matches`, `.camrig`) or image, explains a single 3D point given its `pt3d_` id, or renders chosen points as a patch-strip image for judging their quality."*
   - The "Inspected with" column and :69-79 list internal function names (failure 4).
@@ -494,6 +495,7 @@ most of the per-sentence findings.
   - :1734-1735 refers to `§ "The split"`, which does not exist. It should be "Splitting".
   - `GeometrySearchOptions` is not in the API block.
   - :1862 names `DEFAULT_NOISE_FLOOR_PX`. `FitOptions::default` reads `DEFAULT_CLASSIFY_*` (same values).
+    > _Status (2026-10-03): **Superseded** — the bench decides on the point-or-bearing test; `DEFAULT_NOISE_FLOOR_PX`, `DEFAULT_CLASSIFY_*` and the z rule are gone, and `FitOptions` carries `sigma_px` and `depth_likelihood_ratio_threshold`, which the spec's Parameters table lists (step 6 of the point-or-bearing draft, #709)._
   - `track-at-pixel.md` is not linked.
   - The `create_track` keywords `version=` and `label=` are not documented.
 **Third copies:** These code comments should shrink to a contract plus a link:
@@ -502,6 +504,7 @@ most of the per-sentence findings.
   - `MAX_TILT_DEG` (`steps.rs:65-75`).
 
   For `RESIDUAL_MARGIN` (`classify.rs:62-82`), shrink the *spec* copy instead, since the spec says the constant carries the argument.
+  > _Status (2026-10-03): **Superseded** — `RESIDUAL_MARGIN` and the residual check it set are gone with the z rule (step 6 of the point-or-bearing draft, #709)._
 **Shape:**
   - The Testing section (:2030-2246) retells each claim at length, and that is where the staleness came from. Replace it with a list of property statements per test module.
   - **Stale non-goal:** "Editing the patch's frame or normal by hand" (:2260). `tilt_patch`, `spin_patch` and friends do exactly that.

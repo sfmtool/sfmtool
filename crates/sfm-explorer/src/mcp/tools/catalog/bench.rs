@@ -768,10 +768,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           thread, so a fit still going after 200 ms replies with running: true \
                           and an operation_id to poll with get_background_task instead of the \
                           version it pushed. Needs the photographs, which are decoded on \
-                          demand.",
+                          demand. Whether the track is a point or a bearing is decided by \
+                          the point-or-bearing test at the reconstruction's measured \
+                          reprojection noise, or at sigma_px when it is given.",
             kind: Write,
             schema: object(
-                &[("track", bench_track_schema())],
+                &[
+                    ("track", bench_track_schema()),
+                    ("sigma_px", bench_sigma_px_schema()),
+                ],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },
@@ -846,7 +851,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the stage a track is already at changes nothing.",
             kind: Write,
             schema: object(
-                &[("track", bench_track_schema())],
+                &[("track", bench_track_schema()), ("sigma_px", bench_sigma_px_schema())],
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     (

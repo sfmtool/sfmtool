@@ -18,9 +18,8 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 
 use sfmtool_core::bench::{
     build_track_at_pixel as core_build_track_at_pixel, CandidateKind, CandidateRecord,
-    CascadeMember, ClassificationReason, MatchesClusters, MemberRefusal, SiftIndexSource,
-    StageRecord, TiltRecord, TrackAtPixelError as CoreError, TrackAtPixelOptions,
-    TrackAtPixelSources,
+    CascadeMember, MatchesClusters, MemberRefusal, SiftIndexSource, StageRecord, TiltRecord,
+    TrackAtPixelError as CoreError, TrackAtPixelOptions, TrackAtPixelSources,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::progress::Progress;
@@ -367,22 +366,6 @@ fn candidate_dict<'py>(py: Python<'py>, c: &CandidateRecord) -> PyResult<Bound<'
     Ok(d)
 }
 
-/// The snake-case name of a classification reason.
-fn reason_name(reason: ClassificationReason) -> &'static str {
-    match reason {
-        ClassificationReason::WellConditioned => "well_conditioned",
-        ClassificationReason::DepthResolved => "depth_resolved",
-        ClassificationReason::DepthUnresolved => "depth_unresolved",
-        ClassificationReason::BaselineTooShort => "baseline_too_short",
-        ClassificationReason::FiniteDoesNotExplainTheSightings => {
-            "finite_does_not_explain_the_sightings"
-        }
-        ClassificationReason::BearingDoesNotExplainTheSightings => {
-            "bearing_does_not_explain_the_sightings"
-        }
-    }
-}
-
 /// Write each stage record into `d` under the key the Python candidates use
 /// for the same step.
 fn stages_into(py: Python<'_>, d: &Bound<'_, PyDict>, stages: &[StageRecord]) -> PyResult<()> {
@@ -472,7 +455,10 @@ fn stages_into(py: Python<'_>, d: &Bound<'_, PyDict>, stages: &[StageRecord]) ->
             } => {
                 let e = PyDict::new(py);
                 e.set_item("at_infinity", at_infinity)?;
-                e.set_item("reason", reason.map(reason_name))?;
+                e.set_item(
+                    "reason",
+                    reason.map(sfmtool_core::bench::ClassificationReason::name),
+                )?;
                 e.set_item("zncc_median", zncc_median)?;
                 d.set_item("upgrade", e)?;
             }

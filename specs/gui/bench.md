@@ -506,7 +506,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Turn one sighting's shape | `Rotated observation 3 of IMG_0042@142,198 by 12.3 degrees` |
 | Apply the thresholds | `Applied the thresholds to IMG_0042@142,198: 3 in, 1 out, 1 pinned, 0 unmeasured` |
 | Accept a walk | `Accepted the walk of observation 3 of pt3d_a1b2c3d4_1207: moved 11.2 px to (1050.8, 1702.4) in IMG_0042.jpg` |
-| Fit | `Fitted IMG_0042@142,198: finite at (x, y, z): condition number 82 under the 10000 bar, rms 0.1 px finite against 48.3 px as a bearing, rays up to 15.204 deg apart` |
+| Fit | `Fitted IMG_0042@142,198: finite at (x, y, z): depth score 5210.3 over the 25 threshold, likelihood ratio 5208.9, 4.012 from the observing cameras, at 0.468 px noise over 3 rays up to 15.204 deg apart` |
 | Set the stage | `Set IMG_0042@142,198 to the track stage` |
 | Split | `Split 2 observations off pt3d_a1b2c3d4_1207 as pt3d_a1b2c3d4_1207-split` |
 | Discard | `Discarded IMG_0042@142,198 from the bench` |
@@ -533,13 +533,22 @@ when the patch does not project there.
 finite-versus-bearing decision is the step's real outcome on a distant track
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
 points and bearings"), so the **version label** carries it -- `Fitted
-IMG_0042@142,198: at infinity along (0.553, -0.809, -0.198): finite point would
-have 15.1 px rms against the bearing's 5.2 px rms` -- rather than naming the item and
-stopping there. A person scrolling the history can therefore see which fit
+IMG_0042@142,198: at infinity along (0.553, -0.809, -0.198): depth score 4.2 and
+midpoint bound 0.0 under the 25 threshold, at 0.216 px noise over 8 rays up to
+0.312 deg apart` -- rather than naming the item and stopping there. A person scrolling the history can therefore see which fit
 crossed the boundary, and on what evidence, without opening each version and
 re-reading its coordinate. The **Action Log row** is the whole report, which is
 that sentence with the counts around it: how many sightings the kernels placed
 and how many the walk bound left at their seeds.
+
+**A reconstruction holding only bearings has no noise level to classify at.**
+The test weights the sightings at the reprojection noise measured over the
+reconstruction's finite points, and with none there is nothing to measure, so
+Track View's *Fit* and the upgrade to the track stage are refused with that
+sentence in the Action Log rather than run at a guessed level. The panel offers
+no way to give one: an agent passes `sigma_px` to `fit_bench_track` or
+`set_bench_track_stage` ([mcp-server.md](mcp-server.md)), and a person adds or
+keeps a finite point in the reconstruction first.
 
 ### Labels
 
@@ -1666,7 +1675,7 @@ point's exact projection and a photograph cached for every image:
   row naming the row that would give it one, and an index build on a node with
   no `.sift` files is refused the same way;
 - a fit's **version label** names the item and then says which representation
-  the rays earned and on what residuals, while its **Action Log row** carries the
+  the rays earned and on what test, while its **Action Log row** carries the
   whole report, counts and all: the two are different lengths on purpose, and a
   label that stopped at the item would hide the step's real outcome.
 

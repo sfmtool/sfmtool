@@ -10,20 +10,21 @@ test beside `inverse_depth_z` are specified in
 [cli/reconstruction/analyze-command.md](../cli/reconstruction/analyze-command.md)
 § "Depth Reliability" and
 [cli/reconstruction/inspect-command.md](../cli/reconstruction/inspect-command.md).
-Reclassification (`classify_points_at_infinity`) and discovery
-(`find_points_at_infinity`) decide on the test, and how σ is measured is
-settled; all are in the standing spec (§ "Consumers" and § "The measured noise
-level"), with discovery's interface and the measurements behind its choices in
-[cli/reconstruction/xform/find-points-at-infinity.md](../cli/reconstruction/xform/find-points-at-infinity.md).
-This draft covers what remains: the bench and bundle adjustment. Amends
-batch-triangulation-api.md (the inverse-depth z test, its pre-filter and its
-noise floor),
+Reclassification (`classify_points_at_infinity`), discovery
+(`find_points_at_infinity`) and the track bench (`classify_track_rays`) decide
+on the test, and how σ is measured is settled; all are in the standing spec
+(§ "Consumers" and § "The measured noise level"), with discovery's interface
+and the measurements behind its choices in
+[cli/reconstruction/xform/find-points-at-infinity.md](../cli/reconstruction/xform/find-points-at-infinity.md)
+and the bench's in
+[core/bench/editable-track.md](../core/bench/editable-track.md) § "Finite
+points and bearings". The inverse-depth z rule, its pre-filter and its noise
+floor are retired; `inverse_depth_z` stays as a diagnostic. This draft covers
+what remains: bundle adjustment. Amends
 [core/reconstruction/triangulation-rules.md](../core/reconstruction/triangulation-rules.md)
-(the `floor` rule),
+(the `floor` rule) and
 [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md)
-(§ "Free points: crossing between representations") and
-[core/bench/editable-track.md](../core/bench/editable-track.md)
-(§ "Finite points and bearings"). Decided: the statistic, the split between
+(§ "Free points: crossing between representations"). Decided: the statistic, the split between
 deciding and placing, the order of the steps, and σ for a stored
 reconstruction. Not decided: the default threshold and σ in bundle
 adjustment (see "Open questions").
@@ -48,9 +49,9 @@ bench or inside bundle adjustment.
 
 | Where | Rule before this draft | Reads |
 |---|---|---|
-| `classify_rays_at_infinity` ([convert.rs](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)), used by the bench (and by `classify_points_at_infinity` and `find_points_at_infinity` until they moved to the test) | condition number below `1e4` is finite; otherwise `resolvable_distance < finite_horizon` is indeterminate; otherwise `inverse_depth_z < 4` (or behind a camera) is a bearing | linear midpoint solve; per-ray noise `max(point error, 1 px) / f` |
+| `classify_rays_at_infinity` (removed), used by the bench, `classify_points_at_infinity` and `find_points_at_infinity` until they moved to the test | condition number below `1e4` is finite; otherwise `resolvable_distance < finite_horizon` is indeterminate; otherwise `inverse_depth_z < 4` (or behind a camera) is a bearing | linear midpoint solve; per-ray noise `max(point error, 1 px) / f` |
 | The `floor` rule in [triangulation-rules.md](../core/reconstruction/triangulation-rules.md), used by bundle adjustment's crossing and by demotion | the widest ray pair subtending less than `θ_floor` is a bearing | pairwise ray angles; `θ_floor = noise_floor_scale · s / f` with `s` the stage's `loss_scale` |
-| `classify_track_rays` ([bench/classify.rs](../../crates/sfmtool-core/src/bench/classify.rs)) | the z rule above, then overridden when the midpoint's RMS reprojection error is not under `0.8×` the mean bearing's (and by more than the noise floor), or the reverse | the midpoint point and the mean ray, neither fitted to minimise pixel error |
+| `classify_track_rays` (before it moved to the test) | the z rule above, then overridden when the midpoint's RMS reprojection error is not under `0.8×` the mean bearing's (and by more than the noise floor), or the reverse | the midpoint point and the mean ray, neither fitted to minimise pixel error |
 | `COINCIDENT_CAMERA_FRACTION` in `classify_points_at_infinity` (removed with that pass's move) | observing cameras spanning under `1e-4` of the camera extent make the track a bearing | camera centres only |
 
 Each rule is a proxy for "does a depth explain the pixels". The bench's override
@@ -116,9 +117,9 @@ deciding on them and how each consumer moves.
 A consumer holding a reconstruction builds its rays with `track_rays` (or
 `observation_ray` for one sighting) from `(image, pixel)` observations, at the
 noise level `SfmrReconstruction::reprojection_noise_px` measures. The bench
-is to build its uncommitted sightings' rays that way and call the batch
-functions on them, as discovery does for its candidate tracks from `.sift`
-keypoints; the reports use `SfmrReconstruction::point_or_bearing_scores`, the
+builds its uncommitted sightings' rays that way (with `observed_ray`, from each
+sighting's projected image) and calls the single-track functions on them, as
+discovery does the batch ones for its candidate tracks from `.sift` keypoints; the reports use `SfmrReconstruction::point_or_bearing_scores`, the
 same construction over stored points, and reclassification builds the stored
 points' rays with `track_rays` itself. All of these, and their Python bindings, are in the same
 spec (§ "The measured noise level", § "Over a reconstruction", § "Consumers"
@@ -298,25 +299,14 @@ reports came first and are in place (see the status line), so the disagreements
 each step resolves can be read off `sfm analyze --depth-reliability` before
 and after it.
 
-1. **The bench.** (Reclassification and discovery went first:
-   `classify_points_at_infinity` decides on the score and promotes as well as
-   demotes, and `find_points_at_infinity` appends the candidates it calls
-   bearings, as the standing spec § "Consumers" describes;
-   `COINCIDENT_CAMERA_FRACTION`, discovery's use of the z rule and the
-   `--find-points-at-infinity` noise floor went with them.)
-   `classify_rays_at_infinity` decides on the score. `CONDITION_NUMBER_PREFILTER`, `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`
-   and `DEFAULT_NOISE_FLOOR_PX` stop deciding anything. The bench's `0.8` RMS
-   ratio and its override variants go, since the criterion now compares fitted
-   candidates. Two findings from reclassification carry over. A track from
-   cameras collapsed onto one centre, with rays that diverge, got a verdict
-   decided by the round-off between its centres, so the primitives now treat
-   centres equal to round-off as one centre (standing spec § "Fitting"). And
-   a finite verdict can come with a fit whose point is on top of a camera or
-   whose `Λ` falls short of the score; reclassification applies the consumer
-   rule of § "Fitting" (a minimum depth) and requires the fit's `Λ` to reach
-   the threshold, and the bench needs the same wherever it places a point.
-2. **Bundle adjustment crossing** (step 1 of the section above).
-3. **Inverse-depth free points in bundle adjustment** (step 2 of the section
+Done: reclassification, discovery and the bench decide on the test, with the
+consumer rule shared between reclassification and the bench, and the z rule,
+its pre-filter, its noise floor, `COINCIDENT_CAMERA_FRACTION` and the bench's
+residual check are gone (standing spec § "Consumers" and § "Decisions").
+What remains:
+
+1. **Bundle adjustment crossing** (step 1 of the section above).
+2. **Inverse-depth free points in bundle adjustment** (step 2 of the section
    above).
 
 ## Parameters
@@ -338,11 +328,11 @@ and those of the ray construction and the test over a reconstruction (agreement
 with the primitives called by hand, alignment to the indexes asked for, tracks
 with fewer than two rays) in
 [analysis/point_or_bearing/tests.rs](../../crates/sfmtool-core/src/analysis/point_or_bearing/tests.rs).
-The consumer steps add:
+The consumer steps' tests are in their own specs (the bench's override cases
+are ordinary outcomes of the test in
+[bench/tests.rs](../../crates/sfmtool-core/src/bench/tests.rs), see
+editable-track.md § "Testing"). Bundle adjustment's step adds:
 
-- **The bench's override cases** become ordinary outcomes: an ill-conditioned
-  midpoint that reprojects worse than the bearing gets `Λ ≈ 0`, and a
-  well-explained depth with a low z gets a large `Λ`.
 - **Regression on real data.** The `tk117` table above, from a checked-in copy
   of the Kerry Park ground truth once it lands.
 

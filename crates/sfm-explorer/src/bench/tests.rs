@@ -1609,8 +1609,8 @@ fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report
         "and what it says is which representation the rays earned: {version}"
     );
     assert!(
-        version.contains("rms"),
-        "with the residuals it was judged on: {version}"
+        version.contains("threshold") && version.contains("px noise"),
+        "with the test it was judged on, and the noise level: {version}"
     );
 
     let rows = rows(&state);

@@ -1595,6 +1595,101 @@ fn a_fit_of_a_bearing_reports_the_classification_and_can_promote_it() {
     assert!(stage["position"].is_array(), "{track}");
 }
 
+/// A reconstruction holding only bearings has no finite point to measure its
+/// noise from, so a fit there is refused in those words -- and `sigma_px` on
+/// the call is how an agent asks for one at a level it states.
+#[test]
+fn a_fit_over_a_bearing_only_reconstruction_takes_sigma_px() {
+    let mut recon = bearing_demo();
+    for point in recon.point_set.points.iter_mut() {
+        if !point.is_at_infinity() {
+            point.position = nalgebra::Point3::from(point.position.coords.normalize());
+            point.w = 0.0;
+            point.normal = nalgebra::Vector3::zeros();
+        }
+    }
+    recon.rebuild_derived_fields();
+    let (mut state, mut viewer) = benchable_with(recon);
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let arguments = json!({ "reconstruction_label": "run_a", "track": item })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("fit_bench_track", Some(&arguments)).expect("a valid call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        _ => panic!("a fit defers to a worker"),
+    };
+    state.finish_background_task();
+    match super::super::edit::background_reply(&state, &pending).expect("finished") {
+        Err(e) => assert!(
+            e.0.contains("no observation of a finite point"),
+            "the refusal says why: {e}"
+        ),
+        Ok(_) => panic!("a bearing-only fit with no sigma_px ran"),
+    }
+
+    let fitted = worked(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item, "sigma_px": 0.5 }),
+    );
+    let report = fitted["report"].as_str().expect("a report");
+    assert!(report.contains("at 0.500 px noise"), "{report}");
+}
+
+/// A `sigma_px` that weights no ray is refused at the call, before a worker
+/// starts and before any photograph is read, on both tools that take it.
+#[test]
+fn a_sigma_px_that_is_not_a_positive_number_is_refused_up_front() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+    for (tool, extra) in [
+        ("fit_bench_track", json!({})),
+        ("set_bench_track_stage", json!({ "stage": "cluster" })),
+    ] {
+        for sigma in [json!(0.0), json!(-1.0), json!("half a pixel")] {
+            let mut arguments = json!({
+                "reconstruction_label": "run_a", "track": item, "sigma_px": sigma,
+            });
+            for (key, value) in extra.as_object().expect("an object") {
+                arguments[key] = value.clone();
+            }
+            let refusal = refused_call(&mut state, &mut viewer, tool, arguments);
+            assert!(refusal.0.contains("sigma_px"), "{tool}: {refusal}");
+            assert!(state.background_task().is_none(), "{tool} started a task");
+        }
+    }
+    assert_eq!(version_count(&state), before, "a refusal pushed a version");
+}
+
+/// The upgrade classifies at a `sigma_px` it is given, as a fit does.
+#[test]
+fn a_stage_change_takes_sigma_px() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "track": item, "stage": "cluster" }),
+    );
+    let staged = worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({
+            "reconstruction_label": "run_a", "track": item, "stage": "track",
+            "sigma_px": 0.5,
+        }),
+    );
+    let report = staged["report"].as_str().expect("a report");
+    assert!(report.contains("at 0.500 px noise"), "{report}");
+}
+
 // ── The no-effect contract, the clamp, and a frameless bearing ─────────────
 
 /// A step told to do what has already been done answers successfully and says

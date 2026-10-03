@@ -17,8 +17,10 @@ from .._histogram_utils import (
 from .._image_pair_graph import _has_valid_depth_statistics
 from .point_or_bearing import point_or_bearing_report, print_point_or_bearing
 
-# Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
-# point's depth is statistically indistinguishable from infinity.
+# The inverse-depth z under which the report counts a point as near infinity:
+# its depth is within a quarter of its own uncertainty. A reading of the
+# diagnostic only; what is stored as a point or a bearing is decided by the
+# point-or-bearing test.
 DEPTH_RELIABILITY_Z_CUTOFF = 4.0
 
 

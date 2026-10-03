@@ -345,4 +345,17 @@ fn round_off_residuals_are_not_outliers() {
     assert_eq!(noise.outlier_count, 0);
     assert_eq!(noise.observation_count, 100);
     assert!(noise.sigma_px.unwrap() < 1e-3);
+    // And the level is never finer than such a keypoint can be stored.
+    let resolution = super::keypoint_resolution_px(&recon);
+    assert!(noise.sigma_px.unwrap() >= resolution);
+    for (sigma, camera) in noise
+        .per_camera_sigma_px
+        .iter()
+        .zip(&recon.image_table.cameras)
+    {
+        if let Some(sigma) = sigma {
+            assert!(*sigma >= super::camera_keypoint_resolution_px(camera));
+        }
+    }
+    assert!(noise.per_camera_sigma_px.iter().flatten().count() > 0);
 }

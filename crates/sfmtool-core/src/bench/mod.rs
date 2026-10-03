@@ -58,10 +58,7 @@ mod tests;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-pub use classify::{
-    classify_track_rays, ClassificationReason, TrackClassification, TrackRays,
-    DEFAULT_CLASSIFY_NOISE_FLOOR_PX, DEFAULT_CLASSIFY_Z_CUTOFF, RESIDUAL_MARGIN,
-};
+pub use classify::{classify_track_rays, ClassificationReason, TrackClassification, TrackRays};
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{
     evaluate, evaluate_preconditions, open_localizer, EvaluateError, EvaluateOptions,

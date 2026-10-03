@@ -515,6 +515,8 @@ pub(crate) enum Command {
     FitBenchTrack {
         reconstruction_label: String,
         track: Option<String>,
+        /// The noise level to classify at, in place of the measured one.
+        sigma_px: Option<f64>,
     },
     /// Turn the track's patch to an estimated normal, on a worker.
     FitBenchTrackNormal {
@@ -527,6 +529,8 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
         stage: sfmtool_core::bench::StageKind,
+        /// The noise level the upgrade classifies at, in place of the measured one.
+        sigma_px: Option<f64>,
     },
     /// Ask the node's SIFT index which other photographs hold the patch
     /// around one observation, and add each `out` and unpinned, on a worker.
@@ -1638,7 +1642,8 @@ pub(crate) fn apply_with_window(
         Command::FitBenchTrack {
             reconstruction_label,
             track,
-        } => bench::fit_bench_track(state, &reconstruction_label, track.as_deref()),
+            sigma_px,
+        } => bench::fit_bench_track(state, &reconstruction_label, track.as_deref(), sigma_px),
         Command::FitBenchTrackNormal {
             reconstruction_label,
             track,
@@ -1648,7 +1653,14 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             track,
             stage,
-        } => bench::set_bench_track_stage(state, &reconstruction_label, track.as_deref(), stage),
+            sigma_px,
+        } => bench::set_bench_track_stage(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            stage,
+            sigma_px,
+        ),
         Command::SearchBenchTrackDescriptors {
             reconstruction_label,
             track,

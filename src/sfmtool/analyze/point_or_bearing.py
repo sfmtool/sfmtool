@@ -11,8 +11,8 @@ a reconstruction. ``SfmrReconstruction.classify_points_at_infinity`` (``sfm
 xform --classify-points-at-infinity``) is what stores the verdicts, so the
 disagreements listed here are the points it would change, less the ones it
 declines to (a bearing behind a camera, a fit with no usable point). The
-``inverse_depth_z`` rule printed beside the test is the one discovery and the
-bench still decide with.
+``inverse_depth_z`` printed beside the test is a diagnostic: reclassification,
+discovery and the bench all decide on the test.
 """
 
 import re
@@ -278,10 +278,10 @@ def _print_disagreements(
     with np.errstate(divide="ignore", invalid="ignore"):
         distance = np.where(fit["fitted"], 1.0 / inverse_depth, np.nan)
 
-    # The z rule's z: at the stored point for a finite point, and at the
+    # The inverse-depth z: at the stored point for a finite point, and at the
     # fitted point for a point at infinity, which has no stored depth. The
     # fitted points go into a copy, whose diagnostics are read for them alone.
-    # The rule's per-point noise is max(error, noise_px), and a point at
+    # Its per-point noise is max(error, noise_px), and a point at
     # infinity's stored error is its bearing's residual, so the copy's errors
     # are recomputed at the fitted points first.
     z = np.full(listed.size, np.nan)
@@ -333,7 +333,7 @@ def print_point_or_bearing(
     """The detailed report `sfm analyze --depth-reliability` prints.
 
     ``stored_z`` is ``triangulation_diagnostics()["inverse_depth_z"]``, the
-    z rule's z at each stored finite point, at the noise floor noise_px.
+    inverse-depth z at each stored finite point, at the noise floor noise_px.
     """
     click.echo("\nPoint or bearing (likelihood-ratio test on the depth):")
     if report.scores is None:
@@ -381,8 +381,8 @@ def print_point_or_bearing(
     if report.demotions.size or report.promotions.size:
         legend = (
             "Score: depth score. Bound: midpoint bound. Lambda: likelihood "
-            "ratio of the plain least-squares fit. z: the z rule's "
-            f"inverse-depth z, with per-point noise max(error, {noise_px:g} px), at "
+            "ratio of the plain least-squares fit. z: the "
+            f"inverse-depth z diagnostic, with per-point noise max(error, {noise_px:g} px), at "
             "the stored point and its stored error, or for a point at infinity at "
             "the fitted point and its error there. Distance: the fitted point's "
             "distance from its observing cameras' centroid."

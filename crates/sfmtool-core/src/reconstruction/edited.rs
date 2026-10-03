@@ -429,6 +429,21 @@ pub struct EditedReconstruction {
     /// The base's content hashes, computed on first request. Not part of the
     /// value: two equal values agree on it whether or not either has asked.
     base_hash: OnceLock<ContentHash>,
+    /// What the point-or-bearing test reads off the base, measured on first
+    /// request and shared by every version cloned from this one, since they
+    /// share the base. Not part of the value, for the reason `base_hash` is
+    /// not.
+    base_measures: Arc<BaseMeasures>,
+}
+
+/// The base's measured noise level and minimum point depth, each computed
+/// once. See [`EditedReconstruction::base_reprojection_noise_px`].
+#[derive(Default)]
+struct BaseMeasures {
+    /// `reprojection_noise_px`, or why there is none, as a sentence.
+    noise_px: OnceLock<Result<f64, String>>,
+    /// `min_point_depth`.
+    min_point_depth: OnceLock<f64>,
 }
 
 impl Clone for EditedReconstruction {
@@ -439,6 +454,7 @@ impl Clone for EditedReconstruction {
             added: self.added.clone(),
             replaces: self.replaces.clone(),
             base_hash: self.base_hash.clone(),
+            base_measures: Arc::clone(&self.base_measures),
         }
     }
 }
@@ -516,7 +532,58 @@ impl EditedReconstruction {
             added,
             replaces: Vec::new(),
             base_hash: OnceLock::new(),
+            base_measures: Arc::default(),
         }
+    }
+
+    /// The base's reprojection noise level, in px: its
+    /// [`reprojection_noise_px`](SfmrReconstruction::reprojection_noise_px),
+    /// measured on the first call and kept for every version that shares this
+    /// base.
+    ///
+    /// The noise level the bench weights a track's rays by in the
+    /// point-or-bearing test. It is the base's and not this version's because a
+    /// version differs from its base by a handful of edited points, while the
+    /// measure is over every observation of every finite point; and the base is
+    /// what a run of edits shares, so the measure is taken once per base rather
+    /// than once per edit. A new base (a load, a materialisation, a whole-value
+    /// edit) starts with none.
+    ///
+    /// # Errors
+    ///
+    /// A sentence saying why there is no level: no observation of a finite
+    /// point to measure it from, or pixels that could not be read (a
+    /// `sift_files` base without its `.sift` files). The error is kept too, so
+    /// a base without a level does not re-read its `.sift` files on every call.
+    /// A base whose keypoints sit at the exact projections of its points
+    /// measures the resolution an `f32` keypoint is stored at
+    /// ([`keypoint_resolution_px`](crate::analysis::reprojection_noise::keypoint_resolution_px)).
+    pub fn base_reprojection_noise_px(&self) -> Result<f64, String> {
+        self.base_measures
+            .noise_px
+            .get_or_init(|| match self.base.reprojection_noise_px() {
+                Ok(Some(s)) if s.is_finite() => Ok(s),
+                Ok(Some(s)) => Err(format!(
+                    "the reconstruction's reprojection noise measures {s} px"
+                )),
+                Ok(None) => Err(
+                    "the reconstruction has no observation of a finite point to \
+                                 measure the reprojection noise from"
+                        .to_string(),
+                ),
+                Err(e) => Err(format!("the reprojection noise could not be measured: {e}")),
+            })
+            .clone()
+    }
+
+    /// The base's [`min_point_depth`](SfmrReconstruction::min_point_depth),
+    /// computed on the first call and kept as
+    /// [`Self::base_reprojection_noise_px`] is.
+    pub fn base_min_point_depth(&self) -> f64 {
+        *self
+            .base_measures
+            .min_point_depth
+            .get_or_init(|| self.base.min_point_depth())
     }
 
     /// How many points this version holds: the base's, less the deletions, plus

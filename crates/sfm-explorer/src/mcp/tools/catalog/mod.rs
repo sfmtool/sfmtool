@@ -168,6 +168,20 @@ fn bench_track_schema() -> Value {
     })
 }
 
+/// The noise level a bench fit or upgrade classifies a track at, which is
+/// optional: a call that gives none uses the reconstruction's measured one.
+fn bench_sigma_px_schema() -> Value {
+    json!({
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "description":
+            "The per-axis pixel noise the point-or-bearing test weights the sightings' \
+             rays by. Omit for the reconstruction's measured reprojection noise. A \
+             reconstruction with no finite point measures none, and a fit or upgrade there \
+             is refused unless this is given.",
+    })
+}
+
 /// One sighting's affine shape: the detector's canonical keypoint frame mapped
 /// onto that image's pixels.
 fn affine_schema() -> Value {

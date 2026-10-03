@@ -21,8 +21,9 @@ use crate::progress::Progress;
 use crate::reconstruction::data::{patch_affine_shape, Point3D};
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::classify::classify_track_rays;
-use super::fit::{fit_track, triangulate_in_seeds, FitError, FitOptions, FitReport};
+use super::fit::{
+    classify, fit_track, noise_level, triangulate_in_seeds, FitError, FitOptions, FitReport,
+};
 use super::track::{
     ClusterMeasurement, ClusterPayload, EditableTrack, Stage, StageKind, TrackPayload, Verdict,
 };
@@ -324,14 +325,10 @@ fn upgrade(
         stage: Stage::Track(TrackPayload::default()),
         ..track.clone()
     };
-    let (_, rays) = triangulate_in_seeds(&seeded, images)?;
-    let classification = classify_track_rays(
-        &rays,
-        images,
-        options.noise_floor_px,
-        options.inverse_depth_z_cutoff,
-        options.residual_margin,
-    );
+    let sigma_px = noise_level(edited, options)?;
+    let (_, rays) = triangulate_in_seeds(&seeded, images, sigma_px)?;
+    // A cluster holds no coordinate, so the point fit starts from nothing.
+    let classification = classify(&rays, None, edited, options)?;
 
     // 2. The patch: the reference observation's own shape, unprojected onto
     //    the plane at the depth it stands, turned to face the views that see it.

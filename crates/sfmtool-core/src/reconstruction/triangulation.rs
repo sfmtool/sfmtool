@@ -101,17 +101,18 @@ pub struct DepthUncertainty {
     /// depth is unobservable).
     pub sigma: f64,
     /// Inverse-depth z-score `depth / sigma`. Small (≲ 3-4) ⇒ statistically
-    /// indistinguishable from infinity. Scale-free; the finite-vs-∞ test, but
-    /// reliable only on a non-degenerate solve (it divides by the solved depth,
-    /// which is noise when the rays are near-parallel).
+    /// indistinguishable from infinity. Scale-free; a diagnostic (the Wald form
+    /// of the point-or-bearing test, which is what decides), reliable only on
+    /// a non-degenerate solve (it divides by the solved depth, which is noise
+    /// when the rays are near-parallel).
     pub inverse_depth_z: f64,
     /// Farthest depth this track's geometry can tell from infinity:
     /// `B⊥ / σ_ray`, the perpendicular camera baseline over the RMS per-ray
     /// angular noise — equivalently the depth at which `inverse_depth_z` would
     /// fall to 1. Computed from the camera geometry and noise alone, *not* the
     /// solved point, so it stays meaningful where `inverse_depth_z` goes
-    /// unstable. Gate the finite-vs-∞ decision on this against a policy
-    /// `finite_horizon` (default: the camera extents).
+    /// unstable. Read against the camera extents (`finite_horizon`), it says
+    /// whether the capture can resolve a point at its own scale.
     pub resolvable_distance: f64,
 }
 

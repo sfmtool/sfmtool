@@ -11,109 +11,81 @@
 //! [`classify_track_rays`], so the two cannot come to disagree about which
 //! representation one set of sightings has earned.
 //!
-//! The criterion is not the bench's own. It is
-//! [`classify_rays_at_infinity`], the inverse-depth z rule, called here over
-//! one track's rays with its defaults; the bench is the one consumer that
-//! still decides on it, and point inspection (`sfm inspect pt3d_*`) reports
-//! it. (Reclassifying a whole reconstruction,
-//! [`classify_points_at_infinity`](crate::SfmrReconstruction::classify_points_at_infinity),
-//! and discovering points at infinity,
-//! [`find_points_at_infinity`](crate::SfmrReconstruction::find_points_at_infinity),
-//! have moved to the point-or-bearing likelihood-ratio test; the bench moves to
-//! it in a later step of `specs/drafts/point-or-bearing-likelihood-ratio.md`.) What the bench adds is
-//! the third answer's disposal: a fit has to write something, so a track whose
-//! baseline cannot resolve a scene-scale depth is written as the bearing it is.
-//!
-//! **And the bench checks the criterion's answer against the sightings.** The
-//! criterion is a statement about *observability* -- whether the geometry could
-//! resolve a depth -- and on an ill-conditioned solve it can clear its own bar
-//! on a depth that nothing in the photographs supports: the least-squares
-//! midpoint of near-parallel, slightly inconsistent rays lands wherever the
-//! inconsistency throws it, and then reprojects nowhere near the sightings it was
-//! solved from. So both candidates are scored on the one thing the person can
-//! see -- the rms pixel distance from each sighting to where the candidate
-//! projects in its own photograph -- and the criterion's answer stands only if
-//! that agrees. See [`RESIDUAL_MARGIN`].
+//! The criterion is not the bench's. It is the point-or-bearing
+//! likelihood-ratio test of `specs/core/reconstruction/batch-triangulation-api.md`
+//! § "Point or bearing": [`bearing_score`] and [`is_finite`] decide, at the
+//! reconstruction's measured noise level, and the plain least-squares point fit
+//! places a finite track by the consumer rule [`fit_usable_point`] carries, the
+//! same rule reclassifying a whole reconstruction
+//! ([`classify_points_at_infinity`](crate::SfmrReconstruction::classify_points_at_infinity))
+//! places its points by. What the bench adds is what a fit writes when the
+//! rule leaves a track with no representation that describes every sighting,
+//! since a fit has to write something.
 
 use std::fmt;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Matrix2x3, Point3, Vector3};
 
-use crate::analysis::infinity::{
-    camera_extents, classify_rays_at_infinity, Classification, DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
-    DEFAULT_NOISE_FLOOR_PX,
-};
+use crate::analysis::point_or_bearing::{fit_usable_point, is_usable_point};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::readable::Readable;
+use crate::reconstruction::triangulation::{bearing_score, is_finite, observed_ray};
 
-/// The measurement noise a bench classification assumes at each sighting, in
-/// source-image px.
+/// Which outcome of the test settled a track, and so what the sentence beside
+/// the verdict says.
 ///
-/// The reconstruction's own floor, unchanged: the per-ray angular noise is this
-/// over the observing camera's focal length, which is what turns a spread of
-/// rays into a depth uncertainty. A bench track's sightings are localized by the
-/// same kernels the embed pass runs, so they carry the same floor.
-pub const DEFAULT_CLASSIFY_NOISE_FLOOR_PX: f64 = DEFAULT_NOISE_FLOOR_PX;
-
-/// The inverse-depth z-score a track's depth has to reach to be written as a
-/// finite point.
-///
-/// [`DEFAULT_INVERSE_DEPTH_Z_CUTOFF`], the reconstruction's own bar.
-pub const DEFAULT_CLASSIFY_Z_CUTOFF: f64 = DEFAULT_INVERSE_DEPTH_Z_CUTOFF;
-
-/// How much better a finite point has to explain the sightings than the bearing
-/// does before the depth is believed: its rms reprojection residual must be
-/// under this fraction of the bearing's, **and** under it by more than the noise
-/// floor.
-///
-/// A fraction rather than a difference because the comparison has no natural
-/// scale -- a scene metre is a pixel count that depends on the lens and the
-/// depth -- and a two-sided test because neither half alone is enough. Without
-/// the fraction a residual of 0.4 px would beat one of 1.5 px and the depth
-/// would be believed on a pixel of noise; without the noise-floor term a
-/// residual of 0.05 px would beat one of 0.07 px, which is two roundings of the
-/// same answer.
-///
-/// **Why the bearing is the default and the finite point has to earn it.** The
-/// finite candidate has three degrees of freedom against the bearing's two, and
-/// neither is fitted to minimise pixel error -- so a finite point that fits the
-/// sightings *slightly* better has bought that with its extra freedom, while one
-/// that fits them clearly better has found a depth. `0.8` asks for a fifth off
-/// the residual, which is far more than a degree of freedom buys on a track
-/// whose parallax is real, and far less than the several-fold gap a genuine
-/// finite point shows against a bearing that cannot bend toward it.
-pub const RESIDUAL_MARGIN: f64 = 0.8;
-
-/// Which of the criterion's three tests settled a track, and so what the
-/// sentence beside the verdict says.
+/// The first two are finite verdicts the point fit placed; the next two are
+/// bearing verdicts; the last four are the consumer rule's, where the verdict
+/// and what the rays can be stored as disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassificationReason {
-    /// The solve is conditioned well enough that the depth is observable without
-    /// a noise model at all, which is the criterion's cheap pre-filter.
-    WellConditioned,
-    /// The depth stands clear of its own uncertainty: the inverse-depth z-score
-    /// reached the bar.
-    DepthResolved,
-    /// The depth does not stand clear of its own uncertainty: the z-score fell
-    /// short of the bar, or the solve was degenerate or behind a camera.
-    DepthUnresolved,
-    /// The observing baseline cannot place a point even at the capture's own
-    /// scale, so neither answer is earned on the numbers and the honest one is
-    /// the bearing.
-    BaselineTooShort,
-    /// The criterion found the depth observable, and the triangulated point then
-    /// reprojected no better than the bearing: an ill-conditioned midpoint that
-    /// landed wherever the rays' inconsistency threw it. The bearing stands.
-    ///
-    /// The two residuals are on the classification
-    /// ([`TrackClassification::finite_rms_px`] and
-    /// [`TrackClassification::bearing_rms_px`]) rather than in here, the same
-    /// way [`Self::DepthResolved`] names the test and
-    /// [`TrackClassification::inverse_depth_z`] carries its number.
-    FiniteDoesNotExplainTheSightings,
-    /// The criterion found the depth unobservable, and the bearing then
-    /// reprojected clearly worse than the triangulated point: whatever the
-    /// conditioning says, the photographs place the track at a depth.
-    BearingDoesNotExplainTheSightings,
+    /// Finite: the depth score reached the threshold, and the point fit placed
+    /// a usable point.
+    ScoreCleared,
+    /// Finite: the midpoint bound reached the threshold where the depth score
+    /// did not -- rays spread over a wide angle, where the bearing describes
+    /// nothing -- and the point fit placed a usable point.
+    MidpointBoundCleared,
+    /// A bearing: the bearing's own cost is under the threshold, and no depth
+    /// can lower a cost by more than the cost itself.
+    BearingCostBelowThreshold,
+    /// A bearing: neither the depth score nor the midpoint bound reached the
+    /// threshold.
+    ScoreBelowThreshold,
+    /// A finite verdict whose point fit gave no usable point, written at the
+    /// place the track held because that place is usable: in front of every
+    /// observing camera and no nearer one than the minimum depth.
+    /// Reclassification keeps such a stored point as it is.
+    HeldPointKept,
+    /// A finite verdict, written as the bearing: the point fit gave no usable
+    /// point (none, one behind a camera or nearer a camera centre than the
+    /// minimum depth, or one whose `Λ` falls short of the threshold).
+    NoUsablePoint,
+    /// A bearing verdict, written as the point fit's usable point: the bearing
+    /// is behind one of the observing cameras, so it describes no sighting
+    /// there.
+    BearingBehindCamera,
+    /// Neither a usable point nor a bearing in front of every observing camera
+    /// describes the sightings, so the track keeps the coordinate it had, or
+    /// takes the bearing when it had none. A sighting that looks the other way
+    /// is the person's to turn out.
+    LeftUnusable,
+}
+
+impl ClassificationReason {
+    /// The snake-case name the bindings and the wire carry.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ScoreCleared => "score_cleared",
+            Self::MidpointBoundCleared => "midpoint_bound_cleared",
+            Self::BearingCostBelowThreshold => "bearing_cost_below_threshold",
+            Self::ScoreBelowThreshold => "score_below_threshold",
+            Self::HeldPointKept => "held_point_kept",
+            Self::NoUsablePoint => "no_usable_point",
+            Self::BearingBehindCamera => "bearing_behind_camera",
+            Self::LeftUnusable => "left_unusable",
+        }
+    }
 }
 
 /// What one set of a track's rays resolves to, and the numbers behind the call.
@@ -126,187 +98,176 @@ pub enum ClassificationReason {
 pub struct TrackClassification {
     /// Whether the rays fix a bearing only, which is `w == 0`.
     pub at_infinity: bool,
-    /// The coordinate the track takes: the triangulated point when finite, the
-    /// unit direction when at infinity.
+    /// The coordinate the track takes: the placed point when finite, the unit
+    /// direction when at infinity.
     pub coordinate: Point3<f64>,
-    /// Which test settled it.
+    /// Which outcome settled it.
     pub reason: ClassificationReason,
-    /// The triangulation's condition number.
-    pub condition_number: f64,
-    /// The inverse-depth z-score, `NaN` where the pre-filter settled the call
-    /// before the noise model was consulted.
-    pub inverse_depth_z: f64,
-    /// The bar that z-score was judged against.
-    pub inverse_depth_z_cutoff: f64,
-    /// The farthest depth this track's geometry can tell from infinity, in world
-    /// units. `NaN` where the pre-filter settled the call.
-    pub resolvable_distance: f64,
-    /// The distance the resolvable one had to reach: the camera cloud's extent,
-    /// which is the scale of the region the capture explored.
-    pub finite_horizon: f64,
+    /// The per-axis pixel noise the rays were weighted by: the reconstruction's
+    /// measured reprojection noise, unless a caller gave its own.
+    pub sigma_px: f64,
+    /// The threshold the score, the bound and `Λ` were judged against.
+    pub threshold: f64,
+    /// The bearing's cost in units of the noise. `Λ` cannot exceed it.
+    pub bearing_cost: f64,
+    /// The score statistic for a depth at the bearing.
+    pub depth_score: f64,
+    /// The cost reduction at the weighted linear midpoint, a lower bound on
+    /// `Λ`.
+    pub midpoint_bound: f64,
+    /// `Λ` of the plain least-squares point fit, `NaN` where no fit ran (a
+    /// bearing verdict whose bearing is in front of every camera).
+    pub depth_likelihood_ratio: f64,
+    /// The distance from the observing cameras' centroid to the coordinate the
+    /// track takes, in world units; `NaN` for a bearing.
+    pub distance: f64,
+    /// The minimum depth a placed point keeps from every observing camera's
+    /// centre, in world units.
+    pub min_depth: f64,
+    /// How many rays the test read.
+    pub num_views: usize,
     /// The widest angle between any two of the rays, in degrees. Not a test --
     /// it is the number a person reads a near-parallel track by, and it is the
     /// one Track View already shows for a committed track.
     pub max_pair_angle_deg: f64,
-    /// Rms distance, in px, from each sighting to where the **triangulated
-    /// point** projects in its own photograph. `NaN` when no sighting's view
-    /// could be projected into.
-    pub finite_rms_px: f64,
-    /// Rms distance, in px, from each sighting to where the **bearing** projects
-    /// in its own photograph.
-    pub bearing_rms_px: f64,
-    /// The fraction of `bearing_rms_px` that `finite_rms_px` had to come under
-    /// for the depth to be believed. [`RESIDUAL_MARGIN`] unless a caller moved
-    /// it.
-    pub residual_margin: f64,
-}
-
-impl TrackClassification {
-    /// Whether the finite point explains the sightings clearly better than the
-    /// bearing does: under the margin's fraction of its residual, and under it by
-    /// more than one sighting's worth of noise.
-    ///
-    /// The one comparison, written once, because it is asked in both directions:
-    /// a finite answer stands only when this holds, and a bearing answer stands
-    /// only when it does not.
-    fn finite_explains_better(&self, noise_floor_px: f64) -> bool {
-        self.finite_rms_px.is_finite()
-            && self.bearing_rms_px.is_finite()
-            && self.finite_rms_px < self.residual_margin * self.bearing_rms_px
-            && self.finite_rms_px + noise_floor_px < self.bearing_rms_px
-    }
-
-    /// How the finite candidate's residual reads, as the phrase a sentence puts
-    /// it in.
-    ///
-    /// `NaN` is not a residual and is never printed as one. A candidate that
-    /// reprojects into none of the sightings has nothing to be scored against,
-    /// which is the whole of what there is to say about it -- and it is the state
-    /// [`Self::finite_explains_better`] already treats as no evidence, so the
-    /// sentence and the call agree.
-    fn finite_phrase(&self) -> String {
-        if self.finite_rms_px.is_finite() {
-            format!("{:.1} px rms", self.finite_rms_px)
-        } else {
-            "reprojects into none of the sightings".to_string()
-        }
-    }
-
-    /// The same, for the bearing candidate.
-    fn bearing_phrase(&self) -> String {
-        if self.bearing_rms_px.is_finite() {
-            format!("{:.1} px rms", self.bearing_rms_px)
-        } else {
-            "reprojects into none of the sightings".to_string()
-        }
-    }
 }
 
 impl fmt::Display for TrackClassification {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let c = self.coordinate;
+        // Every number goes through `Readable`: a caller's `sigma_px`, or a
+        // score at a keypoint-resolution noise level, can be far outside the
+        // range `{:.1}` prints in a few characters.
+        let [x, y, z] = [self.coordinate.x, self.coordinate.y, self.coordinate.z].map(Readable);
+        let [score, bound, ratio, cost, threshold] = [
+            self.depth_score,
+            self.midpoint_bound,
+            self.depth_likelihood_ratio,
+            self.bearing_cost,
+            self.threshold,
+        ]
+        .map(Readable);
         if self.at_infinity {
-            write!(f, "at infinity along ({:.4}, {:.4}, {:.4})", c.x, c.y, c.z)?;
+            write!(f, "at infinity along ({x:.4}, {y:.4}, {z:.4})")?;
         } else {
-            write!(f, "finite at ({:.4}, {:.4}, {:.4})", c.x, c.y, c.z)?;
+            write!(f, "finite at ({x:.4}, {y:.4}, {z:.4})")?;
         }
         write!(f, ": ")?;
         match self.reason {
-            ClassificationReason::WellConditioned => write!(
+            ClassificationReason::ScoreCleared => write!(
                 f,
-                "condition number {:.0} under the {:.0} bar",
-                self.condition_number,
-                crate::analysis::infinity::CONDITION_NUMBER_PREFILTER
+                "depth score {score:.1} over the {threshold:.0} threshold, likelihood ratio \
+                 {ratio:.1}"
             )?,
-            ClassificationReason::DepthResolved => write!(
+            ClassificationReason::MidpointBoundCleared => write!(
                 f,
-                "inverse-depth z {:.2} over the {:.2} bar",
-                self.inverse_depth_z, self.inverse_depth_z_cutoff
+                "midpoint bound {bound:.1} over the {threshold:.0} threshold (depth score \
+                 {score:.1}), likelihood ratio {ratio:.1}"
             )?,
-            ClassificationReason::DepthUnresolved => write!(
+            ClassificationReason::BearingCostBelowThreshold => write!(
                 f,
-                "inverse-depth z {:.2} under the {:.2} bar",
-                self.inverse_depth_z, self.inverse_depth_z_cutoff
+                "the bearing's cost {cost:.1} is under the {threshold:.0} threshold, so no depth \
+                 can clear it"
             )?,
-            ClassificationReason::BaselineTooShort => write!(
+            ClassificationReason::ScoreBelowThreshold => write!(
                 f,
-                "the baseline tells depth apart from infinity only to {:.3}, short of \
-                 the {:.3} the capture spans",
-                self.resolvable_distance, self.finite_horizon
+                "depth score {score:.1} and midpoint bound {bound:.1} under the {threshold:.0} \
+                 threshold"
             )?,
-            ClassificationReason::FiniteDoesNotExplainTheSightings => write!(
+            ClassificationReason::HeldPointKept => write!(
                 f,
-                "finite point would have {} against the bearing's {}",
-                self.finite_phrase(),
-                self.bearing_phrase()
+                "depth score {score:.1} (bound {bound:.1}) clears the {threshold:.0} threshold; \
+                 the point fit gave no usable point, so the track keeps the usable place it held"
             )?,
-            ClassificationReason::BearingDoesNotExplainTheSightings => write!(
+            ClassificationReason::NoUsablePoint => write!(
                 f,
-                "bearing would have {} against the point's {}",
-                self.bearing_phrase(),
-                self.finite_phrase()
+                "depth score {score:.1} (bound {bound:.1}) clears the {threshold:.0} threshold, \
+                 but the point fit gave no usable point"
+            )?,
+            ClassificationReason::BearingBehindCamera => write!(
+                f,
+                "depth score {score:.1} under the {threshold:.0} threshold, but the bearing is \
+                 behind an observing camera; placed by a point fit with likelihood ratio \
+                 {ratio:.1}"
+            )?,
+            ClassificationReason::LeftUnusable => write!(
+                f,
+                "neither a usable point nor the bearing describes every sighting \
+                 (depth score {score:.1}, threshold {threshold:.0})"
             )?,
         }
-        // The two residuals are the evidence a person reads the call by, so they
-        // are in every sentence and not only in the two the data check settled.
-        if !matches!(
-            self.reason,
-            ClassificationReason::FiniteDoesNotExplainTheSightings
-                | ClassificationReason::BearingDoesNotExplainTheSightings
-        ) {
-            match (
-                self.finite_rms_px.is_finite(),
-                self.bearing_rms_px.is_finite(),
-            ) {
-                (true, true) => write!(
-                    f,
-                    ", rms {:.1} px finite against {:.1} px as a bearing",
-                    self.finite_rms_px, self.bearing_rms_px
-                )?,
-                (false, true) => write!(
-                    f,
-                    ", finite point reprojects into none of the sightings, against \
-                     {:.1} px as a bearing",
-                    self.bearing_rms_px
-                )?,
-                (true, false) => write!(
-                    f,
-                    ", rms {:.1} px finite, and the bearing reprojects into none of \
-                     the sightings",
-                    self.finite_rms_px
-                )?,
-                (false, false) => write!(
-                    f,
-                    ", neither the finite point nor the bearing reprojects into any \
-                     of the sightings"
-                )?,
-            }
+        if !self.at_infinity && self.distance.is_finite() {
+            write!(
+                f,
+                ", {:.3} from the observing cameras",
+                Readable(self.distance)
+            )?;
         }
-        write!(f, ", rays up to {:.3} deg apart", self.max_pair_angle_deg)
+        write!(
+            f,
+            ", at {:.3} px noise over {} rays up to {:.3} deg apart",
+            Readable(self.sigma_px),
+            self.num_views,
+            Readable(self.max_pair_angle_deg)
+        )
     }
 }
 
-/// One track's rays in world, and the lens each was measured through.
+/// One track's rays in world, each weighted for the test.
 ///
 /// Built once per triangulation and handed to both the solve and the
 /// classification, so the two read one set of rays.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrackRays {
     /// Unit world-space ray per sighting.
     pub dirs: Vec<Vector3<f64>>,
     /// The camera centre each was cast from.
     pub centers: Vec<Point3<f64>>,
-    /// The largest focal length of the camera each was measured through, in px,
-    /// which is what turns the pixel noise floor into an angular one.
-    pub focal_max: Vec<f64>,
-    /// The pixel each ray was cast from, in its own photograph. What the
-    /// residual check scores a candidate against, because it is what a person
-    /// looking at that photograph can see.
-    pub pixels: Vec<[f64; 2]>,
-    /// The image each ray was cast in, as an index into the views.
-    pub views: Vec<usize>,
+    /// Each ray's 2×3 world-frame noise weight at [`Self::sigma_px`], as
+    /// [`observed_ray`] builds it from the lens the sighting was measured
+    /// through.
+    pub weights: Vec<Matrix2x3<f64>>,
+    /// The per-axis pixel noise the weights are over.
+    pub sigma_px: f64,
 }
 
 impl TrackRays {
+    /// The rays of `sightings`, each a pixel and the index of the image in
+    /// `images` it was seen in, weighted at `sigma_px`.
+    ///
+    /// A sighting gives no ray when its image is past `images`, its pixel is
+    /// not finite, or [`observed_ray`] declines it (a pixel outside the camera
+    /// model's domain, or a `sigma_px` that is not finite and positive), which
+    /// is how the reconstruction-level test treats an observation too.
+    pub fn of_sightings(
+        sightings: &[([f64; 2], usize)],
+        images: &[ProjectedImage<'_>],
+        sigma_px: f64,
+    ) -> Self {
+        let mut rays = Self {
+            dirs: Vec::with_capacity(sightings.len()),
+            centers: Vec::with_capacity(sightings.len()),
+            weights: Vec::with_capacity(sightings.len()),
+            sigma_px,
+        };
+        for &(pixel, image) in sightings {
+            let Some(view) = images.get(image) else {
+                continue;
+            };
+            if !(pixel[0].is_finite() && pixel[1].is_finite()) {
+                continue;
+            }
+            let rotation = view.cam_from_world.rotation.as_nalgebra();
+            let Some(ray) = observed_ray(view.camera, rotation, pixel, sigma_px) else {
+                continue;
+            };
+            rays.dirs.push(ray.dir);
+            rays.centers
+                .push(view.cam_from_world.inverse_translation_origin());
+            rays.weights.push(ray.weight);
+        }
+        rays
+    }
+
     /// How many rays there are.
     pub fn len(&self) -> usize {
         self.dirs.len()
@@ -318,166 +279,168 @@ impl TrackRays {
     }
 }
 
-/// Decide whether `rays` fix a point or only a bearing: the reconstruction's own
-/// criterion, checked against what the two candidates do to the sightings.
+/// Decide whether `rays` fix a point or only a bearing, and where the track
+/// stands: the point-or-bearing test, and the consumer rule that places a
+/// finite verdict.
 ///
-/// `noise_floor_px` is the per-sighting measurement noise, `z_cutoff` the
-/// inverse-depth z-score a depth has to reach and `residual_margin` the fraction
-/// of the bearing's residual a finite point has to come under; all three default
-/// to the constants at the top of this module, the first two being the
-/// reconstruction's own. `images` supplies the photographs the residuals are
-/// measured in and the camera cloud the `finite_horizon` is measured over: the
-/// extent of **every** image's centre, not just the observing ones, because the
-/// horizon is the scale of the region the capture explored and a track observed
-/// by three neighbouring frames is still a track in that capture.
+/// `held` is the coordinate the track has and whether it is a bearing, `None`
+/// for a track that has none yet (a cluster being upgraded). A finite `held`
+/// is where the point fit starts, so a refit of a track that has not moved
+/// converges where it stands; it is also what the track keeps when nothing
+/// describes its sightings. `min_depth` is the reconstruction's
+/// [`min_point_depth`](crate::SfmrReconstruction::min_point_depth), and
+/// `threshold` the one the score, the bound and the fit's `Λ` are judged
+/// against, by default
+/// [`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`](crate::reconstruction::triangulation::DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD).
 ///
-/// **The criterion answers first and the sightings have the last word.** The
-/// criterion says whether the depth is *observable*; the residuals say whether
-/// the depth it found is *there*. Where they disagree the answer is the one the
-/// photographs support, and the reason names that
-/// ([`ClassificationReason::FiniteDoesNotExplainTheSightings`] and its
-/// counterpart), because a call overturned on the pixels is a different thing to
-/// report than a call the conditioning settled.
+/// - **A finite verdict** ([`is_finite`]) is placed by [`fit_usable_point`],
+///   from `held` when it is finite. A usable point is written; otherwise a
+///   usable held place is kept, as reclassification keeps a usable stored
+///   point ([`ClassificationReason::HeldPointKept`]), and with none the track
+///   is a bearing ([`ClassificationReason::NoUsablePoint`]).
+/// - **A bearing verdict** writes the score's closed-form bearing, when it is
+///   in front of every observing camera.
+/// - **A bearing behind a camera** describes no sighting there. The track is
+///   then placed by the point fit, with no bar on its `Λ` since the verdict
+///   asked for none ([`ClassificationReason::BearingBehindCamera`]), and when
+///   that gives no usable point either it keeps `held`, or takes the bearing
+///   when it has none ([`ClassificationReason::LeftUnusable`]).
+///
+/// `None` when the rays are too few for the test (fewer than two, or weights
+/// so large the bearing's cost overflows).
 ///
 /// # Example
 ///
 /// ```no_run
-/// # use sfmtool_core::bench::classify::{classify_track_rays, DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
-/// #     DEFAULT_CLASSIFY_Z_CUTOFF, RESIDUAL_MARGIN};
+/// # use sfmtool_core::bench::classify::{classify_track_rays, TrackRays};
+/// # use sfmtool_core::reconstruction::triangulation::DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD;
 /// # fn run(
-/// #     rays: &sfmtool_core::bench::classify::TrackRays,
+/// #     sightings: &[([f64; 2], usize)],
 /// #     images: &[sfmtool_core::patch::normal_refine::ProjectedImage<'_>],
-/// # ) {
-/// let call = classify_track_rays(
-///     rays,
-///     images,
-///     DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
-///     DEFAULT_CLASSIFY_Z_CUTOFF,
-///     RESIDUAL_MARGIN,
-/// );
-/// println!("{call}");   // "at infinity along (…): finite point would have 15.1 px rms …"
+/// #     edited: &sfmtool_core::EditedReconstruction,
+/// # ) -> Result<(), String> {
+/// let sigma_px = edited.base_reprojection_noise_px()?;
+/// let rays = TrackRays::of_sightings(sightings, images, sigma_px);
+/// if let Some(call) = classify_track_rays(
+///     &rays,
+///     None,
+///     edited.base_min_point_depth(),
+///     DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+/// ) {
+///     println!("{call}"); // "finite at (…): depth score 132.0 over the 25 threshold, …"
+/// }
+/// # Ok(())
 /// # }
 /// ```
 pub fn classify_track_rays(
     rays: &TrackRays,
-    images: &[ProjectedImage<'_>],
-    noise_floor_px: f64,
-    z_cutoff: f64,
-    residual_margin: f64,
-) -> TrackClassification {
-    let centers: Vec<Point3<f64>> = images
-        .iter()
-        .map(|view| view.cam_from_world.inverse_translation_origin())
-        .collect();
-    let finite_horizon = camera_extents(&centers);
-    let sigma_rad: Vec<f64> = rays
-        .focal_max
-        .iter()
-        .map(|&f| if f > 0.0 { noise_floor_px / f } else { 0.0 })
-        .collect();
-    let rc = classify_rays_at_infinity(
-        &rays.dirs,
-        &rays.centers,
-        &sigma_rad,
-        z_cutoff,
-        finite_horizon,
-    );
-    // Both candidates, always: the triangulated point the criterion judged, and
-    // the bearing it would fall back to. Which the criterion picked decides
-    // nothing here -- the residuals are a reading of the data and not of the
-    // answer, so they are the same two numbers either way.
-    let finite_point = rc.point;
-    let finite_rms_px = residual_rms_px(rays, images, &finite_point, 1.0);
-    let bearing_rms_px = residual_rms_px(rays, images, &rc.bearing, 0.0);
+    held: Option<(Point3<f64>, bool)>,
+    min_depth: f64,
+    threshold: f64,
+) -> Option<TrackClassification> {
+    let score = bearing_score(&rays.dirs, &rays.centers, &rays.weights)?;
+    let bearing = Point3::from(score.bearing);
+    let held_point = held
+        .filter(|&(x, at_infinity)| !at_infinity && x.coords.iter().all(|c| c.is_finite()))
+        .map(|(x, _)| x);
+    let fit_from_held = |bar: f64| {
+        fit_usable_point(
+            &rays.dirs,
+            &rays.centers,
+            &rays.weights,
+            held_point,
+            min_depth,
+            bar,
+        )
+    };
 
-    // The criterion leaves the noise-calibrated diagnostics `NaN` when its cheap
-    // condition-number pre-filter settled the call, which is exactly how a
-    // caller tells the two finite paths apart.
-    let (at_infinity, reason) = match rc.class {
-        Classification::Finite(_) => (
-            false,
-            if rc.inverse_depth_z.is_nan() {
-                ClassificationReason::WellConditioned
+    let mut likelihood_ratio = f64::NAN;
+    let (at_infinity, coordinate, reason) = if is_finite(&score, threshold) {
+        let placed = fit_from_held(threshold);
+        likelihood_ratio = placed.fit.map_or(f64::NAN, |f| f.depth_likelihood_ratio);
+        match placed.point {
+            Some(x) => (
+                false,
+                x,
+                if score.depth_score >= threshold {
+                    ClassificationReason::ScoreCleared
+                } else {
+                    ClassificationReason::MidpointBoundCleared
+                },
+            ),
+            // Reclassification keeps a usable stored point it agrees with, and
+            // so does the bench when the fit from it found nothing better.
+            None if held_point
+                .is_some_and(|x| is_usable_point(&x, &rays.dirs, &rays.centers, min_depth)) =>
+            {
+                (
+                    false,
+                    held_point.expect("checked above"),
+                    ClassificationReason::HeldPointKept,
+                )
+            }
+            None if score.bearing_in_front_of_all_cameras => {
+                (true, bearing, ClassificationReason::NoUsablePoint)
+            }
+            None => left_unusable(held, bearing),
+        }
+    } else if score.bearing_in_front_of_all_cameras {
+        (
+            true,
+            bearing,
+            if score.bearing_cost < threshold {
+                ClassificationReason::BearingCostBelowThreshold
             } else {
-                ClassificationReason::DepthResolved
+                ClassificationReason::ScoreBelowThreshold
             },
-        ),
-        Classification::Infinity(_) => (true, ClassificationReason::DepthUnresolved),
-        // A reconstruction pass can leave an indeterminate track alone; a fit has
-        // to write something, and what the numbers say is that this track's
-        // depth is not observable.
-        Classification::Indeterminate => (true, ClassificationReason::BaselineTooShort),
-    };
-    let mut call = TrackClassification {
-        at_infinity,
-        coordinate: if at_infinity {
-            rc.bearing
-        } else {
-            finite_point
-        },
-        reason,
-        condition_number: rc.condition_number,
-        inverse_depth_z: rc.inverse_depth_z,
-        inverse_depth_z_cutoff: z_cutoff,
-        resolvable_distance: rc.resolvable_distance,
-        finite_horizon,
-        max_pair_angle_deg: max_pair_angle_deg(&rays.dirs),
-        finite_rms_px,
-        bearing_rms_px,
-        residual_margin,
+        )
+    } else {
+        let placed = fit_from_held(0.0);
+        likelihood_ratio = placed.fit.map_or(f64::NAN, |f| f.depth_likelihood_ratio);
+        match placed.point {
+            Some(x) => (false, x, ClassificationReason::BearingBehindCamera),
+            None => left_unusable(held, bearing),
+        }
     };
 
-    // The data check, in both directions. A finite answer stands only where the
-    // point explains the sightings clearly better than the bearing; a bearing
-    // answer stands only where it does not.
-    let finite_wins = call.finite_explains_better(noise_floor_px);
-    match (call.at_infinity, finite_wins) {
-        (false, false) => {
-            call.at_infinity = true;
-            call.coordinate = rc.bearing;
-            call.reason = ClassificationReason::FiniteDoesNotExplainTheSightings;
+    let distance = if at_infinity {
+        f64::NAN
+    } else {
+        let mut sum = Vector3::zeros();
+        for c in &rays.centers {
+            sum += c.coords;
         }
-        (true, true) => {
-            call.at_infinity = false;
-            call.coordinate = finite_point;
-            call.reason = ClassificationReason::BearingDoesNotExplainTheSightings;
-        }
-        _ => {}
-    }
-    call
+        (coordinate.coords - sum / rays.centers.len() as f64).norm()
+    };
+    Some(TrackClassification {
+        at_infinity,
+        coordinate,
+        reason,
+        sigma_px: rays.sigma_px,
+        threshold,
+        bearing_cost: score.bearing_cost,
+        depth_score: score.depth_score,
+        midpoint_bound: score.midpoint_bound,
+        depth_likelihood_ratio: likelihood_ratio,
+        distance,
+        min_depth,
+        num_views: score.num_views,
+        max_pair_angle_deg: max_pair_angle_deg(&rays.dirs),
+    })
 }
 
-/// Rms distance, in px, from each sighting to where the homogeneous candidate
-/// `(coordinate, w)` projects in that sighting's own photograph.
-///
-/// The residual is [`observation_metrics`](super::evaluate::observation_metrics)'
-/// own first number -- the one the *Error* column shows and the one a commit
-/// stores -- so what the classification compares is what the panel then
-/// tabulates. A sighting whose view the candidate does not project into scores
-/// nothing rather than zero; with none left the answer is `NaN`, which
-/// `finite_explains_better` reads as "no evidence" and refuses to act on.
-fn residual_rms_px(
-    rays: &TrackRays,
-    images: &[ProjectedImage<'_>],
-    coordinate: &Point3<f64>,
-    w: f64,
-) -> f64 {
-    let mut sum = 0.0_f64;
-    let mut count = 0usize;
-    for (k, &view) in rays.views.iter().enumerate() {
-        let Some(image) = images.get(view) else {
-            continue;
-        };
-        let (error, _) = super::evaluate::observation_metrics(image, coordinate, w, rays.pixels[k]);
-        if error.is_finite() {
-            sum += error * error;
-            count += 1;
+/// What a track with no representation that describes every sighting writes:
+/// the coordinate it held, or the bearing when it held none.
+fn left_unusable(
+    held: Option<(Point3<f64>, bool)>,
+    bearing: Point3<f64>,
+) -> (bool, Point3<f64>, ClassificationReason) {
+    match held {
+        Some((x, at_infinity)) if x.coords.iter().all(|c| c.is_finite()) => {
+            (at_infinity, x, ClassificationReason::LeftUnusable)
         }
+        _ => (true, bearing, ClassificationReason::LeftUnusable),
     }
-    if count == 0 {
-        return f64::NAN;
-    }
-    (sum / count as f64).sqrt()
 }
 
 /// The widest angle between any two of `dirs`, in degrees.

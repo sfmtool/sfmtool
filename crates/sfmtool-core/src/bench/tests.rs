@@ -2233,7 +2233,26 @@ fn evaluate_over(
     )
 }
 
-/// Fit `track` over `scene` with the default kernel parameters.
+/// The per-axis pixel noise the fits and stage changes below classify at.
+///
+/// The fixtures store their keypoints at the exact projections, so the noise
+/// level a reconstruction measures from them is `f32` round-off, a few
+/// hundred-thousandths of a pixel, at which every track with any parallax at
+/// all asks for a depth. What a fit's own sightings carry is the localizer's
+/// noise on the rendered photographs, a fraction of a pixel, and that is the
+/// level the tests state.
+const TEST_SIGMA_PX: f64 = 0.5;
+
+/// The default fit options, at [`TEST_SIGMA_PX`].
+fn test_fit_options() -> FitOptions {
+    FitOptions {
+        sigma_px: Some(TEST_SIGMA_PX),
+        ..FitOptions::default()
+    }
+}
+
+/// Fit `track` over `scene` with the default kernel parameters, at
+/// [`TEST_SIGMA_PX`].
 fn fit_over(
     scene: &Scene,
     edited: &EditedReconstruction,
@@ -2243,7 +2262,7 @@ fn fit_over(
         track,
         edited,
         &scene.views(),
-        &FitOptions::default(),
+        &test_fit_options(),
         &Progress::none(),
     )
 }
@@ -2275,7 +2294,8 @@ fn a_fit_squares_a_rectangular_frame_keeping_its_area() {
     );
 }
 
-/// Put `track` into `stage` over `scene` with the default kernel parameters.
+/// Put `track` into `stage` over `scene` with the default kernel parameters,
+/// at [`TEST_SIGMA_PX`].
 fn stage_over(
     scene: &Scene,
     edited: &EditedReconstruction,
@@ -2287,7 +2307,7 @@ fn stage_over(
         edited,
         &scene.views(),
         stage,
-        &FitOptions::default(),
+        &test_fit_options(),
         &Progress::none(),
     )
 }
@@ -5273,8 +5293,20 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
         "a third of a pixel of parallax over two hundred units is a bearing, \
          the fit said {call}"
     );
-    assert_eq!(call.reason, ClassificationReason::DepthUnresolved);
-    assert!(call.inverse_depth_z < call.inverse_depth_z_cutoff, "{call}");
+    assert!(
+        matches!(
+            call.reason,
+            ClassificationReason::BearingCostBelowThreshold
+                | ClassificationReason::ScoreBelowThreshold
+        ),
+        "{call}"
+    );
+    assert!(call.depth_score < call.threshold, "{call}");
+    assert!(
+        call.depth_likelihood_ratio.is_nan(),
+        "no point fit runs for a bearing: {call}"
+    );
+    assert_eq!(call.sigma_px, TEST_SIGMA_PX);
     assert!(call.max_pair_angle_deg < 0.5, "{call}");
     assert_eq!(report.kept_at_seed, 0);
 
@@ -5358,7 +5390,14 @@ fn a_finite_track_fits_finite_and_says_which_test_settled_it() {
         !call.at_infinity,
         "fifteen degrees of parallax is a point, the fit said {call}"
     );
-    assert_eq!(call.reason, ClassificationReason::WellConditioned);
+    assert!(
+        matches!(
+            call.reason,
+            ClassificationReason::ScoreCleared | ClassificationReason::MidpointBoundCleared
+        ),
+        "{call}"
+    );
+    assert!(call.depth_likelihood_ratio >= call.threshold, "{call}");
     assert!(call.max_pair_angle_deg > 1.0, "{call}");
     assert!((call.coordinate - WORLD).norm() < 0.02, "{call}");
     let after = placement_of(&fitted);
@@ -5858,15 +5897,16 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
     );
 }
 
-// ---- The criterion checked against the sightings ---------------------------
+// ---- The outcomes of the test ----------------------------------------------
 //
-// The criterion answers whether a depth is *observable*. On an ill-conditioned
-// solve it can clear its own bar on a depth nothing in the photographs supports:
-// the least-squares midpoint of near-parallel, slightly inconsistent rays lands
-// wherever the inconsistency throws it. The shape below is that case, built to
-// order: the sightings agree with a bearing to a couple of pixels, the
-// criterion's z-score clears the bar on a point a few units out, and the point
-// reprojects three times worse than the bearing does.
+// On an ill-conditioned solve the inverse-depth z-score can clear 4 on a depth
+// nothing in the photographs supports: the least-squares midpoint of
+// near-parallel, slightly inconsistent rays lands wherever the inconsistency
+// throws it. The likelihood-ratio test fits both models to the same sightings,
+// so the case is an ordinary outcome: the depth buys almost nothing, and the
+// score says so. The shape below is that case,
+// built to order: the sightings agree with a bearing to a couple of pixels, and
+// the z-score clears 4 on a point a few units out.
 
 /// How far the 5256-shaped fixture tilts its sightings across the run, in px
 /// per camera: a weak linear trend, which is the parallax signal the midpoint
@@ -5894,123 +5934,120 @@ fn skewed_sightings(scene: &Scene) -> Vec<([f64; 2], usize)> {
         .collect()
 }
 
-/// Classify `rays` over `views` with the defaults, and hand back the rays too.
+/// Classify `rays` over `views` at `sigma_px`, with no held coordinate, the
+/// default threshold and a minimum depth of `min_depth`; hand back the rays
+/// too.
+fn classify_at(
+    views: &[crate::patch::normal_refine::ProjectedImage<'_>],
+    rays: &[([f64; 2], usize)],
+    sigma_px: f64,
+    min_depth: f64,
+) -> (TrackClassification, TrackRays) {
+    let (_, built) = super::fit::triangulate_rays(rays, views, sigma_px).expect("a solve");
+    let call = classify_track_rays(
+        &built,
+        None,
+        min_depth,
+        crate::reconstruction::triangulation::DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+    )
+    .expect("enough rays for the test");
+    (call, built)
+}
+
+/// [`classify_at`] at [`TEST_SIGMA_PX`] and a minimum depth of a hundredth of a
+/// unit.
 fn classify_over(
     views: &[crate::patch::normal_refine::ProjectedImage<'_>],
     rays: &[([f64; 2], usize)],
 ) -> (TrackClassification, TrackRays) {
-    let (_, built) = super::fit::triangulate_rays(rays, views).expect("a solve");
-    let call = classify_track_rays(
-        &built,
-        views,
-        DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
-        DEFAULT_CLASSIFY_Z_CUTOFF,
-        RESIDUAL_MARGIN,
-    );
-    (call, built)
+    classify_at(views, rays, TEST_SIGMA_PX, 0.01)
 }
 
-/// What the shared criterion alone made of `rays`, with no data check over it.
-fn criterion_alone(
-    views: &[crate::patch::normal_refine::ProjectedImage<'_>],
-    rays: &TrackRays,
-) -> crate::analysis::infinity::RayClassification {
-    let centers: Vec<Point3<f64>> = views
-        .iter()
-        .map(|view| view.cam_from_world.inverse_translation_origin())
-        .collect();
-    let sigma_rad: Vec<f64> = rays
-        .focal_max
-        .iter()
-        .map(|&f| DEFAULT_CLASSIFY_NOISE_FLOOR_PX / f)
-        .collect();
-    crate::analysis::infinity::classify_rays_at_infinity(
-        &rays.dirs,
-        &rays.centers,
-        &sigma_rad,
-        DEFAULT_CLASSIFY_Z_CUTOFF,
-        crate::analysis::infinity::camera_extents(&centers),
-    )
+/// The inverse-depth z-score of `rays` at a 1 px noise floor, kept as a
+/// diagnostic.
+fn z_at_one_px(views: &[crate::patch::normal_refine::ProjectedImage<'_>], rays: &TrackRays) -> f64 {
+    use crate::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
+    let offsets = [0, rays.len()];
+    let tri = triangulate_batch(&rays.dirs, &rays.centers, &offsets);
+    let (fx, fy) = views[0].camera.focal_lengths();
+    let sigma_rad = vec![1.0 / fx.max(fy); rays.len()];
+    depth_uncertainty_batch(&tri, &rays.dirs, &rays.centers, &offsets, &sigma_rad)[0]
+        .inverse_depth_z
 }
 
 #[test]
-fn a_depth_the_sightings_do_not_support_is_refused_and_the_bearing_stands() {
+fn a_depth_the_sightings_do_not_support_has_a_score_below_the_threshold() {
     let scene = far_scene();
     let views = scene.views();
     let rays = skewed_sightings(&scene);
     let (call, built) = classify_over(&views, &rays);
 
-    // The criterion on its own calls this finite, and not on the cheap
-    // pre-filter either: the solve is ill-conditioned, the baseline reaches the
-    // horizon, and the z-score clears the bar. Which is the whole point of the
-    // fixture -- without this the test would be checking the criterion rather
-    // than the check over it.
-    let alone = criterion_alone(&views, &built);
-    assert!(
-        matches!(
-            alone.class,
-            crate::analysis::infinity::Classification::Finite(_)
-        ),
-        "the criterion should call this finite, it called it {:?}",
-        alone.class
-    );
-    assert!(
-        alone.condition_number > crate::analysis::infinity::CONDITION_NUMBER_PREFILTER,
-        "the pre-filter should not have settled it: condition {}",
-        alone.condition_number
-    );
-    assert!(
-        alone.inverse_depth_z > DEFAULT_CLASSIFY_Z_CUTOFF,
-        "the z-score should clear the bar: {}",
-        alone.inverse_depth_z
-    );
-    assert!(
-        alone.resolvable_distance > call.finite_horizon,
-        "the baseline should reach the horizon: {} against {}",
-        alone.resolvable_distance,
-        call.finite_horizon
-    );
+    // The z-score at a 1 px floor accepts this depth: the fixture is the case a
+    // z-score gets wrong, without which the test would not be about anything.
+    let z = z_at_one_px(&views, &built);
+    assert!(z > 4.0, "the z-score should clear 4: {z}");
 
-    // And the sightings say otherwise, so the bearing stands.
-    assert!(
-        call.at_infinity,
-        "the check let a bad depth through: {call}"
-    );
-    assert_eq!(
-        call.reason,
-        ClassificationReason::FiniteDoesNotExplainTheSightings
-    );
-    assert!(
-        call.finite_rms_px > 3.0 * call.bearing_rms_px,
-        "the fixture should reproject three times worse as a point: \
-         {} px against {} px",
-        call.finite_rms_px,
-        call.bearing_rms_px
-    );
-    assert!(
-        call.bearing_rms_px < 3.0,
-        "and the sightings should agree with the bearing to a couple of pixels: {} px",
-        call.bearing_rms_px
-    );
+    // The jitter costs the bearing more than the threshold, so it is the score
+    // that decides, and the trend is too weak for a depth to buy much.
+    assert!(call.at_infinity, "a bad depth got through: {call}");
+    assert_eq!(call.reason, ClassificationReason::ScoreBelowThreshold);
+    assert!(call.bearing_cost >= call.threshold, "{call}");
+    assert!(call.depth_score < call.threshold, "{call}");
+    assert!(call.midpoint_bound < call.threshold, "{call}");
     assert!(
         (call.coordinate.coords.norm() - 1.0).abs() < 1e-12,
         "the coordinate is the unit bearing, it is {}",
         call.coordinate
     );
-    // The sentence carries both residuals, which is what a person reading the
-    // Action Log judges the call by.
+    assert!(
+        (call.coordinate.coords - far_direction().coords).norm() < 1e-2,
+        "the bearing is the direction the sightings agree on, it is {}",
+        call.coordinate
+    );
     let said = call.to_string();
     assert!(
-        said.contains("finite point would have") && said.contains("against the bearing's"),
-        "the sentence should name both residuals: {said}"
+        said.contains("depth score") && said.contains("under the 25 threshold"),
+        "the sentence names the score and the threshold: {said}"
     );
 }
 
 #[test]
-fn a_depth_the_sightings_do_support_survives_the_check() {
+fn a_well_explained_depth_with_a_low_z_is_a_point() {
+    // The far point's exact projections from the eight near cameras: a third
+    // of a pixel of parallax. At a noise level of a fiftieth of a pixel that is
+    // a depth the photographs place, whatever the 1 px floor said.
+    let scene = far_scene();
+    let views = scene.views();
+    let rays: Vec<([f64; 2], usize)> = (0..FAR_NEAR_VIEWS)
+        .map(|k| (scene.project(k, far_world()), k))
+        .collect();
+    let (call, built) = classify_at(&views, &rays, 0.02, 0.01);
+
+    let z = z_at_one_px(&views, &built);
+    assert!(z < 4.0, "a z-score reads this as near infinity: {z}");
+    assert!(!call.at_infinity, "{call}");
+    assert_eq!(call.reason, ClassificationReason::ScoreCleared, "{call}");
+    assert!(call.depth_likelihood_ratio >= call.threshold, "{call}");
+    assert!(
+        (call.coordinate - far_world()).norm() < 1.0,
+        "the point stands on the plane: {call}"
+    );
+    assert!(
+        (call.distance - FAR_Z).abs() < 2.0,
+        "and about {FAR_Z} from the cameras: {call}"
+    );
+
+    // The same rays at the tests' half pixel are a bearing: the verdict
+    // follows the noise level, and a noisier capture asks more of a depth.
+    let (noisy, _) = classify_over(&views, &rays);
+    assert!(noisy.at_infinity, "{noisy}");
+}
+
+#[test]
+fn a_depth_the_sightings_do_support_is_a_point() {
     // The near scene's own track, at its exact projections: the parallax is
-    // fifteen degrees and the bearing cannot bend toward it, so the point wins
-    // by a wide margin and the criterion's answer stands.
+    // fifteen degrees, the bearing cannot bend toward it, and the depth clears
+    // the threshold by orders of magnitude.
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -6031,20 +6068,313 @@ fn a_depth_the_sightings_do_support_survives_the_check() {
     let (call, _) = classify_over(&views, &rays);
 
     assert!(!call.at_infinity, "{call}");
-    assert_eq!(call.reason, ClassificationReason::WellConditioned);
     assert!(
-        call.finite_rms_px < call.residual_margin * call.bearing_rms_px,
-        "the point should explain the sightings clearly better: {} px against {} px",
-        call.finite_rms_px,
-        call.bearing_rms_px
+        matches!(
+            call.reason,
+            ClassificationReason::ScoreCleared | ClassificationReason::MidpointBoundCleared
+        ),
+        "{call}"
+    );
+    assert!(call.bearing_cost > 100.0 * call.threshold, "{call}");
+    assert!((call.coordinate - WORLD).norm() < 0.02, "{call}");
+    assert!(call.to_string().contains("likelihood ratio"), "{call}");
+}
+
+/// Rays built by hand, each weighted for an isotropic angular noise.
+fn hand_rays(dirs: &[Vector3<f64>], centers: &[Point3<f64>], sigma_rad: f64) -> TrackRays {
+    let dirs: Vec<Vector3<f64>> = dirs.iter().map(|d| d.normalize()).collect();
+    TrackRays {
+        weights: dirs
+            .iter()
+            .map(|d| crate::reconstruction::triangulation::isotropic_ray_weight(d, sigma_rad))
+            .collect(),
+        dirs,
+        centers: centers.to_vec(),
+        sigma_px: 1.0,
+    }
+}
+
+/// Rays from a ring of five cameras around a point, all looking at it, each
+/// with an angular noise of 0.04 rad: the bearing describes nothing, so the
+/// depth score linearised at it says little, and it is the midpoint bound that
+/// decides.
+#[test]
+fn rays_spread_over_a_wide_angle_are_a_point_on_the_midpoint_bound() {
+    let heights = [1.0, 1.2, 0.8, 1.1, 0.9];
+    let centers: Vec<Point3<f64>> = (0..5)
+        .map(|i| {
+            let a = (72.0 * i as f64).to_radians();
+            Point3::new(5.0 * a.cos(), heights[i], 5.0 * a.sin())
+        })
+        .collect();
+    let target = Point3::new(0.5, 0.0, 0.2);
+    let dirs: Vec<Vector3<f64>> = centers.iter().map(|c| target - c).collect();
+    let rays = hand_rays(&dirs, &centers, 0.04);
+    let call = classify_track_rays(&rays, None, 0.05, 25.0).expect("five rays");
+    assert!(!call.at_infinity, "{call}");
+    assert_eq!(
+        call.reason,
+        ClassificationReason::MidpointBoundCleared,
+        "{call}"
+    );
+    assert!(call.depth_score < call.threshold, "{call}");
+    assert!(call.midpoint_bound > 10.0 * call.threshold, "{call}");
+    assert!((call.coordinate - target).norm() < 1e-6, "{call}");
+    assert!(call.to_string().contains("midpoint bound"), "{call}");
+}
+
+/// Parallel rays: the bearing fits them exactly, so its cost is under any
+/// threshold and no depth can clear it.
+#[test]
+fn parallel_rays_are_a_bearing_on_the_bearing_cost() {
+    let centers = [
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+    ];
+    let rays = hand_rays(&[Vector3::z(); 3], &centers, 1e-3);
+    let call = classify_track_rays(&rays, None, 0.01, 25.0).expect("three rays");
+    assert!(call.at_infinity, "{call}");
+    assert_eq!(call.reason, ClassificationReason::BearingCostBelowThreshold);
+    assert!(
+        (call.coordinate.coords - Vector3::z()).norm() < 1e-9,
+        "{call}"
+    );
+    assert!(call.distance.is_nan());
+    assert!(!call.to_string().contains("NaN"), "{call}");
+}
+
+/// The consumer rule: a finite verdict whose fitted point is nearer an
+/// observing camera than the minimum depth is no point to store, and the track
+/// is written as its bearing.
+#[test]
+fn a_finite_verdict_with_no_usable_point_is_written_as_the_bearing() {
+    let target = Point3::new(0.0, 0.0, 10.0);
+    let centers = [
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+    ];
+    let dirs: Vec<Vector3<f64>> = centers.iter().map(|c| target - c).collect();
+    let rays = hand_rays(&dirs, &centers, 1e-3);
+
+    let placed = classify_track_rays(&rays, None, 0.1, 25.0).expect("three rays");
+    assert!(!placed.at_infinity, "{placed}");
+    assert!((placed.coordinate - target).norm() < 1e-6, "{placed}");
+
+    // The same rays, with a minimum depth past the point.
+    let call = classify_track_rays(&rays, None, 50.0, 25.0).expect("three rays");
+    assert!(call.at_infinity, "{call}");
+    assert_eq!(call.reason, ClassificationReason::NoUsablePoint);
+    assert!(call.depth_score >= call.threshold, "{call}");
+    assert!(call.depth_likelihood_ratio >= call.threshold, "{call}");
+    assert!(call.to_string().contains("no usable point"), "{call}");
+
+    // A usable place held when the fit finds none is kept, as reclassification
+    // keeps a usable stored point: the minimum depth rules out the fitted
+    // point, ten units out, and not the held one, sixty units out.
+    let held = Point3::new(0.0, 0.0, 60.0);
+    let kept = classify_track_rays(&rays, Some((held, false)), 30.0, 25.0).expect("three rays");
+    assert!(!kept.at_infinity, "{kept}");
+    assert_eq!(kept.reason, ClassificationReason::HeldPointKept);
+    assert_eq!(kept.coordinate, held);
+    // A held place inside the minimum depth is not kept either.
+    let near = classify_track_rays(&rays, Some((target, false)), 30.0, 25.0).expect("three rays");
+    assert_eq!(near.reason, ClassificationReason::NoUsablePoint);
+    assert!(near.at_infinity, "{near}");
+}
+
+/// A finite track's fit starts where it stands, and a held bearing is no start:
+/// the classification is the consumer rule's fit from that position.
+#[test]
+fn the_point_fit_starts_from_the_held_position() {
+    let target = Point3::new(0.3, -0.2, 10.0);
+    let centers = [
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.5, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+    ];
+    // A little inconsistency, so the fit has somewhere to go.
+    let dirs: Vec<Vector3<f64>> = centers
+        .iter()
+        .enumerate()
+        .map(|(k, c)| target - c + Vector3::new(0.0, 1e-3 * k as f64, 0.0))
+        .collect();
+    let rays = hand_rays(&dirs, &centers, 1e-3);
+    let held = Point3::new(0.29, -0.21, 9.9);
+
+    let call = classify_track_rays(&rays, Some((held, false)), 0.1, 25.0).expect("three rays");
+    let expected = crate::analysis::point_or_bearing::fit_usable_point(
+        &rays.dirs,
+        &rays.centers,
+        &rays.weights,
+        Some(held),
+        0.1,
+        25.0,
+    );
+    assert_eq!(Some(call.coordinate), expected.point, "{call}");
+    assert_eq!(
+        call.depth_likelihood_ratio,
+        expected.fit.expect("a fit").depth_likelihood_ratio
+    );
+
+    // A held bearing is a direction, not a place to start from.
+    let from_bearing =
+        classify_track_rays(&rays, Some((Point3::from(Vector3::z()), true)), 0.1, 25.0)
+            .expect("three rays");
+    let from_nothing = classify_track_rays(&rays, None, 0.1, 25.0).expect("three rays");
+    assert_eq!(from_bearing, from_nothing);
+}
+
+/// Two cameras looking at each other along one line: the bearing fits both rays
+/// exactly, and is behind one of them.
+fn facing_rays() -> TrackRays {
+    let centers = [Point3::new(-1.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0)];
+    hand_rays(&[Vector3::x(), -Vector3::x()], &centers, 1e-3)
+}
+
+/// A bearing verdict whose bearing is behind a camera describes no sighting
+/// there, so the track is placed by the point fit instead.
+#[test]
+fn a_bearing_behind_a_camera_is_placed_by_the_point_fit() {
+    let rays = facing_rays();
+    let call =
+        classify_track_rays(&rays, Some((Point3::origin(), false)), 0.1, 25.0).expect("two rays");
+    assert!(call.bearing_cost < call.threshold, "{call}");
+    assert!(!call.at_infinity, "{call}");
+    assert_eq!(call.reason, ClassificationReason::BearingBehindCamera);
+    // Anywhere between the two cameras fits; the fit started from the origin
+    // and stays on the segment.
+    assert!(
+        call.coordinate.x > -1.0 && call.coordinate.x < 3.0,
+        "{call}"
     );
     assert!(
-        call.finite_rms_px + DEFAULT_CLASSIFY_NOISE_FLOOR_PX < call.bearing_rms_px,
-        "and by more than a pixel of noise: {} px against {} px",
-        call.finite_rms_px,
-        call.bearing_rms_px
+        call.to_string().contains("behind an observing camera"),
+        "{call}"
     );
-    assert!(call.to_string().contains("rms"), "{call}");
+}
+
+/// When no point is usable either, the track keeps what it had, or takes the
+/// bearing when it had nothing.
+#[test]
+fn a_track_nothing_describes_keeps_what_it_held() {
+    let rays = facing_rays();
+    let held = Point3::new(0.5, 0.0, 0.0);
+    let call = classify_track_rays(&rays, Some((held, false)), 100.0, 25.0).expect("two rays");
+    assert_eq!(call.reason, ClassificationReason::LeftUnusable);
+    assert!(!call.at_infinity);
+    assert_eq!(call.coordinate, held);
+
+    let call = classify_track_rays(&rays, None, 100.0, 25.0).expect("two rays");
+    assert_eq!(call.reason, ClassificationReason::LeftUnusable);
+    assert!(call.at_infinity, "{call}");
+    assert!(!call.to_string().contains("NaN"), "{call}");
+}
+
+/// A fit with no `sigma_px` reads the reconstruction's measured noise level,
+/// and every version cloned from one value reads the one measurement.
+#[test]
+fn a_fit_classifies_at_the_reconstructions_measured_noise() {
+    let scene = Scene::new();
+    // The fixture's stored keypoints moved a third of a pixel off the exact
+    // projections, alternately, so the level it measures is a third of a pixel.
+    let mut recon = fixture_with_columns(&scene, WORLD, BITMAP_R);
+    if let crate::reconstruction::data::ObservationSource::EmbeddedPatches {
+        keypoints_xy, ..
+    } = &mut recon.point_set.observations
+    {
+        for (row, mut xy) in keypoints_xy.rows_mut().into_iter().enumerate() {
+            let sign = if row % 2 == 0 { 1.0 } else { -1.0 };
+            xy[0] += sign / 3.0;
+            xy[1] -= sign / 3.0;
+        }
+    }
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    let measured = edited
+        .base_reprojection_noise_px()
+        .expect("the fixture's finite point measures one");
+    assert_eq!(
+        Some(measured),
+        edited.base.reprojection_noise_px().expect("inline pixels"),
+        "the cached level is the base's own"
+    );
+    // A clone shares the measurement rather than taking its own.
+    assert_eq!(edited.clone().base_reprojection_noise_px(), Ok(measured));
+
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (_, report) = fit(
+        &track,
+        &edited,
+        &scene.views(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect("a fit");
+    let call = call_of(&report);
+    assert!((measured - 1.0 / 3.0).abs() < 1e-3, "measured {measured}");
+    assert_eq!(call.sigma_px, measured, "{call}");
+    assert_eq!(call.min_depth, edited.base.min_point_depth());
+    assert!(!call.at_infinity, "{call}");
+
+    // Keypoints at the exact projections have residuals of 0, and the measure
+    // is the resolution an `f32` keypoint states instead, a ten-thousandth of
+    // a pixel or so, which the fit classifies at rather than refusing.
+    let exact = edited_with_columns(&scene, WORLD);
+    let resolution = crate::analysis::reprojection_noise::keypoint_resolution_px(&exact.base);
+    assert_eq!(exact.base_reprojection_noise_px(), Ok(resolution));
+    let (bench, label) = bench_with_point(&exact, 0);
+    let (_, report) = fit(
+        &track_of(&bench, &label),
+        &exact,
+        &scene.views(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect("a fit");
+    let call = call_of(&report);
+    assert_eq!(call.sigma_px, resolution, "{call}");
+    assert!(resolution > 0.0 && resolution < 1e-3);
+    assert!(!call.at_infinity, "{call}");
+}
+
+/// A reconstruction with no finite point has no noise level to measure, and a
+/// fit there asks for one rather than guessing.
+#[test]
+fn a_fit_over_a_reconstruction_with_no_finite_point_needs_a_noise_level() {
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let refused = fit(
+        &track,
+        &edited,
+        &scene.views(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect_err("no noise level to classify at");
+    assert!(
+        matches!(
+            &refused,
+            FitError::NoNoiseLevel(why) if why.contains("no observation of a finite point")
+        ),
+        "{refused}"
+    );
+    // A level the caller gives is not a level that weights nothing.
+    let refused = fit(
+        &track,
+        &edited,
+        &scene.views(),
+        &FitOptions {
+            sigma_px: Some(0.0),
+            ..FitOptions::default()
+        },
+        &Progress::none(),
+    )
+    .expect_err("a zero noise level");
+    assert!(matches!(refused, FitError::NoNoiseLevel(_)), "{refused}");
 }
 
 #[test]
@@ -6340,60 +6670,156 @@ fn a_pixel_off_the_photograph_is_brought_inside_it() {
     assert_eq!(report.clamped_from, None);
 }
 
-// ---- What a classification says when a candidate reprojects nowhere ---------
+// ---- What a classification says --------------------------------------------
 
-/// A candidate that reprojects into none of the sightings has no residual, and
-/// the sentence says that rather than printing `NaN` as though it were a number
-/// of pixels. The classification already treats it as no evidence.
+/// Every reason has a sentence, and none prints `NaN`: a bearing has no
+/// distance and a bearing verdict runs no point fit, and the sentence leaves
+/// those out rather than printing a number that is not one.
 #[test]
-fn a_candidate_that_reprojects_nowhere_is_named_rather_than_printed_as_nan() {
+fn every_reason_reads_as_a_sentence_without_nan() {
     let call = TrackClassification {
         at_infinity: true,
         coordinate: Point3::new(0.0, 0.0, 1.0),
-        reason: ClassificationReason::DepthUnresolved,
-        condition_number: 1.0e6,
-        inverse_depth_z: -22.30,
-        inverse_depth_z_cutoff: 4.0,
-        resolvable_distance: f64::NAN,
-        finite_horizon: 1.0,
+        reason: ClassificationReason::BearingCostBelowThreshold,
+        sigma_px: 0.216,
+        threshold: 25.0,
+        bearing_cost: 3.1,
+        depth_score: 0.4,
+        midpoint_bound: 0.0,
+        depth_likelihood_ratio: f64::NAN,
+        distance: f64::NAN,
+        min_depth: 0.05,
+        num_views: 10,
         max_pair_angle_deg: 0.01,
-        finite_rms_px: f64::NAN,
-        bearing_rms_px: 9.3,
-        residual_margin: 0.8,
     };
-    let said = call.to_string();
-    assert!(!said.contains("NaN"), "{said}");
-    assert!(
-        said.contains("finite point reprojects into none of the sightings"),
-        "{said}"
+    let finite = TrackClassification {
+        at_infinity: false,
+        coordinate: Point3::new(1.0, 2.0, 3.0),
+        depth_likelihood_ratio: 131.9,
+        distance: 515.2,
+        depth_score: 132.0,
+        ..call
+    };
+    let cases = [
+        (call, "the bearing's cost 3.1 is under the 25 threshold"),
+        (
+            TrackClassification {
+                reason: ClassificationReason::ScoreBelowThreshold,
+                bearing_cost: 40.0,
+                ..call
+            },
+            "depth score 0.4 and midpoint bound 0.0 under the 25 threshold",
+        ),
+        (
+            TrackClassification {
+                reason: ClassificationReason::ScoreCleared,
+                ..finite
+            },
+            "depth score 132.0 over the 25 threshold, likelihood ratio 131.9",
+        ),
+        (
+            TrackClassification {
+                reason: ClassificationReason::MidpointBoundCleared,
+                midpoint_bound: 900.0,
+                depth_score: 0.0,
+                ..finite
+            },
+            "midpoint bound 900.0 over the 25 threshold",
+        ),
+        (
+            TrackClassification {
+                reason: ClassificationReason::NoUsablePoint,
+                depth_score: 40.0,
+                ..call
+            },
+            "the point fit gave no usable point",
+        ),
+        (
+            TrackClassification {
+                reason: ClassificationReason::BearingBehindCamera,
+                ..finite
+            },
+            "placed by a point fit with likelihood ratio 131.9",
+        ),
+        (
+            TrackClassification {
+                reason: ClassificationReason::HeldPointKept,
+                ..finite
+            },
+            "so the track keeps the usable place it held",
+        ),
+        (
+            TrackClassification {
+                reason: ClassificationReason::LeftUnusable,
+                ..call
+            },
+            "neither a usable point nor the bearing describes every sighting",
+        ),
+    ];
+    for (case, phrase) in cases {
+        let said = case.to_string();
+        assert!(said.contains(phrase), "{said}");
+        assert!(!said.contains("NaN"), "{said}");
+        assert!(
+            !said.contains('\n') && !said.contains("  "),
+            "one line, single-spaced: {said:?}"
+        );
+        assert!(said.contains("at 0.216 px noise over 10 rays"), "{said}");
+        assert_eq!(
+            said.contains("515.200 from the observing cameras"),
+            !case.at_infinity,
+            "{said}"
+        );
+        assert!(!case.reason.name().is_empty());
+    }
+}
+
+/// A caller's `sigma_px` and the scores it gives can be far outside the range
+/// positional notation prints in a few characters; the sentence prints them in
+/// exponent notation instead, through `Readable`.
+#[test]
+fn an_extreme_number_in_the_sentence_prints_in_exponent_notation() {
+    let said = TrackClassification {
+        at_infinity: false,
+        coordinate: Point3::new(1e300, 2.0, 3.0),
+        reason: ClassificationReason::ScoreCleared,
+        sigma_px: 1e300,
+        threshold: 25.0,
+        bearing_cost: 1e40,
+        depth_score: 1e40,
+        midpoint_bound: 1e40,
+        depth_likelihood_ratio: 1e40,
+        distance: 1e300,
+        min_depth: 0.05,
+        num_views: 10,
+        max_pair_angle_deg: 0.01,
+    }
+    .to_string();
+    assert!(said.len() < 300, "{said}");
+    assert!(said.contains("depth score 1.0e40"), "{said}");
+    assert!(said.contains("at 1.000e300 px noise"), "{said}");
+}
+
+/// A sighting whose pixel gives no ray (here, one that is not a number) is not
+/// in the triangulation, and two sightings with one ray between them are
+/// refused in those terms rather than as one observation.
+#[test]
+fn sightings_that_give_too_few_rays_are_refused_as_such() {
+    let scene = Scene::new();
+    let views = scene.views();
+    let pixel = scene.project(0, WORLD);
+    let refused = super::fit::triangulate_rays(
+        &[(pixel, 0), ([f64::NAN, f64::NAN], 1)],
+        &views,
+        TEST_SIGMA_PX,
+    )
+    .expect_err("one ray");
+    assert_eq!(
+        refused,
+        FitError::TooFewRays {
+            usable: 1,
+            sightings: 2
+        }
     );
-    assert!(said.contains("9.3 px as a bearing"), "{said}");
-
-    // The other side, and the overturned reasons, read the same way.
-    let swapped = TrackClassification {
-        finite_rms_px: 3.4,
-        bearing_rms_px: f64::NAN,
-        ..call
-    };
-    let said = swapped.to_string();
-    assert!(!said.contains("NaN"), "{said}");
-    assert!(
-        said.contains("the bearing reprojects into none of the sightings"),
-        "{said}"
-    );
-
-    let overturned = TrackClassification {
-        reason: ClassificationReason::FiniteDoesNotExplainTheSightings,
-        ..call
-    };
-    let said = overturned.to_string();
-    assert!(!said.contains("NaN"), "{said}");
-    assert!(said.contains("finite point would have"), "{said}");
-
-    let neither = TrackClassification {
-        finite_rms_px: f64::NAN,
-        bearing_rms_px: f64::NAN,
-        ..call
-    };
-    assert!(!neither.to_string().contains("NaN"), "{neither}");
+    assert!(refused.to_string().contains("only 1 of the 2"), "{refused}");
 }

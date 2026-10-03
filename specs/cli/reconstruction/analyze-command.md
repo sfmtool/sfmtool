@@ -50,22 +50,21 @@ algorithms and parameter semantics.
 
 ## Depth Reliability (`--depth-reliability`)
 
-The report has two parts. The first is the inverse-depth z rule, which the
-bench still decides finite points against bearings with; the second is the
-likelihood-ratio test specified in
+The report has two parts. The first is the inverse-depth z diagnostic, which
+no step decides on; the second is the likelihood-ratio test specified in
 [core/reconstruction/batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
 § "Point or bearing", which reclassification (`sfm xform
---classify-points-at-infinity`) and discovery (`--find-points-at-infinity`)
-decide with and the others are to move to
-(the [amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md) says
-what moves when). Neither part changes the file. The second part's
+--classify-points-at-infinity`), discovery (`--find-points-at-infinity`) and
+the bench decide with, and bundle adjustment is to move to (the
+[amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md) says
+how). Neither part changes the file. The second part's
 disagreements with the stored representation are what reclassification would
 change, and it says so. The printer is
 [`analyze/point_or_bearing.py`](../../../src/sfmtool/analyze/point_or_bearing.py),
 over the bindings `SfmrReconstruction.point_or_bearing_scores` and
 `classify_points_at_infinity`.
 
-### The inverse-depth z rule
+### The inverse-depth z diagnostic
 
 `triangulation_diagnostics(noise_px=1.0)` over the finite points with two or
 more observations: the median, mean and range of the inverse-depth z, the count
@@ -103,7 +102,7 @@ condition number, being purely geometric, looks normal.
   shows at most 20 rows, the finite points with the lowest depth score first and
   the points at infinity with the highest first, then `... and N more`. A row
   is the point ID (`pt3d_<hash>_<index>`, which `sfm inspect` takes), its views,
-  depth score, midpoint bound, `Λ`, the current rule's `z`, and the fitted
+  depth score, midpoint bound, `Λ`, the inverse-depth `z`, and the fitted
   distance. `Λ` and the distance come from the plain least-squares fit of both
   models (`fit=True`), and only the listed points are fitted, since the fit
   iterates and the decision does not need it. The distance is from the
@@ -112,10 +111,10 @@ condition number, being purely geometric, looks normal.
   per-point noise `max(stored error, 1 px)`. A point at infinity has no stored
   depth, and its stored error is the bearing's residual, so its `z` is read
   from a copy of the reconstruction with the fitted points put in and their
-  errors recomputed there: the z rule at the fitted point, with noise
-  `max(error at the fitted point, 1 px)`. That is the `z` the z rule would
-  give the point the test places, and it says whether that rule would call it
-  a bearing. `z` prints `n/a` and the distance `inf` when the fit leaves
+  errors recomputed there: the inverse-depth z at the fitted point, with
+  noise `max(error at the fitted point, 1 px)`. That is the `z` of the point
+  the test places, read against the cutoff of 4 the retired z rule decided
+  at. `z` prints `n/a` and the distance `inf` when the fit leaves
   the point at infinity (inverse depth 0), which happens to points the test
   calls finite only through a low threshold (at
   `--depth-likelihood-ratio-threshold 0` the seoul bull ground truth lists 11
@@ -155,8 +154,8 @@ points at infinity are called finite:
     Reclassification would promote 3 and demote 0
 ```
 
-The z rule's `z` at each fitted point is under 4, so it would call all three
-bearings. After `sfm xform --classify-points-at-infinity` the report on the
+The `z` at each fitted point is under 4, so the retired z rule called all
+three bearings. After `sfm xform --classify-points-at-infinity` the report on the
 result lists no disagreement (the noise level is then 0.2149 px over 3,559
 observations, the promoted points' among them). On the in-repo seoul bull
 ground truth (0.4677 px over 1,229 observations, four mismatched keypoints of

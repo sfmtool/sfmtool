@@ -154,8 +154,8 @@ def test_analyze_depth_reliability_sigma_override(seoul_bull_ground_truth_sfmr):
     assert fields[0].endswith("_188")
     assert int(fields[1]) == 5  # views
     assert fields[2:] == ["32.5", "27.5", "32.5", "1.04", "414.9"]
-    # score, midpoint bound, likelihood ratio, the z rule's z (under its
-    # cutoff of 4, so that rule calls it a bearing) and the fitted distance.
+    # score, midpoint bound, likelihood ratio, the inverse-depth z (under 4,
+    # which the retired z rule read as a bearing) and the fitted distance.
     # Reclassification at the given noise level would store it finite.
     assert "Reclassification would promote 1 and demote 0" in out
 

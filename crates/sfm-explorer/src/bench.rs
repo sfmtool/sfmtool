@@ -1888,7 +1888,20 @@ impl AppState {
     /// tool error -- rather than starting a task whose only act is to decode a
     /// dozen images and then fail.
     pub(crate) fn start_bench_fit(&mut self, id: ReconId, label: &str) -> Result<(), String> {
-        let outcome = self.begin_bench_fit(id, label);
+        self.start_bench_fit_at(id, label, None)
+    }
+
+    /// [`Self::start_bench_fit`], classifying at the per-axis pixel noise
+    /// `sigma_px` rather than the reconstruction's measured one when it is
+    /// given. A reconstruction holding no finite point measures none, so this
+    /// is how a fit over it is asked for.
+    pub(crate) fn start_bench_fit_at(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        sigma_px: Option<f64>,
+    ) -> Result<(), String> {
+        let outcome = self.begin_bench_fit(id, label, sigma_px);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -1897,10 +1910,15 @@ impl AppState {
 
     /// The fit up to the moment the worker has it, so that everything this can
     /// refuse is refused before a photograph is read.
-    fn begin_bench_fit(&mut self, id: ReconId, label: &str) -> Result<(), String> {
+    fn begin_bench_fit(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        sigma_px: Option<f64>,
+    ) -> Result<(), String> {
         let (_, _, track) = self.bench_step_target(id, label)?;
         bench::fit_preconditions(&track).map_err(|e| format!("Cannot fit {label}: {e}"))?;
-        let job = self.bench_fit_job(id, label)?;
+        let job = self.bench_fit_job(id, label, sigma_px)?;
         self.start_background_task(Operation::BENCH_FIT, id, job)
     }
 
@@ -1921,6 +1939,18 @@ impl AppState {
         label: &str,
         stage: StageKind,
     ) -> Result<(), String> {
+        self.start_bench_stage_at(id, label, stage, None)
+    }
+
+    /// [`Self::start_bench_stage`], with the upgrade classifying at `sigma_px`
+    /// when it is given, as [`Self::start_bench_fit_at`] does.
+    pub(crate) fn start_bench_stage_at(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        stage: StageKind,
+        sigma_px: Option<f64>,
+    ) -> Result<(), String> {
         // Before the no-effect answer: on a view-only bench no stage step is
         // offered, so none is reported as one that happened to change nothing.
         if let Some(why) = self.bench_view_only_refusal(id) {
@@ -1936,7 +1966,7 @@ impl AppState {
             ));
             return Ok(());
         }
-        let outcome = self.begin_bench_stage(id, label, stage);
+        let outcome = self.begin_bench_stage(id, label, stage, sigma_px);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -1950,11 +1980,12 @@ impl AppState {
         id: ReconId,
         label: &str,
         stage: StageKind,
+        sigma_px: Option<f64>,
     ) -> Result<(), String> {
         let (_, _, track) = self.bench_step_target(id, label)?;
         bench::set_stage_preconditions(&track, stage)
             .map_err(|e| format!("Cannot set the stage of {label}: {e}"))?;
-        let job = self.bench_stage_job(id, label, stage)?;
+        let job = self.bench_stage_job(id, label, stage, sigma_px)?;
         self.start_background_task(Operation::BENCH_SET_STAGE, id, job)
     }
 
@@ -2506,10 +2537,18 @@ impl AppState {
     /// Reachable from the crate's tests as well as from the step, so the test
     /// that holds [`Operation::BENCH_FIT`]'s cancellable declaration to its
     /// claim runs the real work rather than a stand-in for it.
-    pub(crate) fn bench_fit_job(&mut self, id: ReconId, label: &str) -> Result<Job, String> {
+    pub(crate) fn bench_fit_job(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        sigma_px: Option<f64>,
+    ) -> Result<Job, String> {
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
-        let options = FitOptions::default();
+        let options = FitOptions {
+            sigma_px,
+            ..FitOptions::default()
+        };
         Ok(Box::new(move |progress| {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
@@ -2553,6 +2592,7 @@ impl AppState {
         id: ReconId,
         label: &str,
         stage: StageKind,
+        sigma_px: Option<f64>,
     ) -> Result<Job, String> {
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
@@ -2574,7 +2614,10 @@ impl AppState {
                 &edited,
                 &views,
                 stage,
-                &FitOptions::default(),
+                &FitOptions {
+                    sigma_px,
+                    ..FitOptions::default()
+                },
                 progress,
             ) {
                 Err(sfmtool_core::bench::StageError::Fit(

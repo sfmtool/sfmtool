@@ -1409,7 +1409,7 @@ class TestFinitePointsAndBearings:
         np.testing.assert_allclose(written["normal"], [0.0, 0.0, 0.0])
 
     def test_a_fit_reports_which_representation_the_rays_earned(
-        self, edited, images, long_track_point
+        self, edited, embedded, images, long_track_point
     ):
         _, track = create_track(Bench(), edited, long_track_point)
         fitted, report = fit(track, edited, images)
@@ -1420,72 +1420,75 @@ class TestFinitePointsAndBearings:
         assert report["kept_at_seed"] >= 0
         call = report["classification"]
         assert call["at_infinity"] is False
-        assert call["reason"] in ("well_conditioned", "depth_resolved")
+        assert call["reason"] in ("score_cleared", "midpoint_bound_cleared")
         assert call["max_pair_angle_deg"] > 0.0
-        assert call["condition_number"] > 0.0
-        assert call["finite_horizon"] > 0.0
         assert "finite at (" in call["text"]
+        assert "likelihood ratio" in call["text"]
         assert not fitted.at_infinity
         np.testing.assert_allclose(fitted.position, report["position"])
 
-        # The two candidates' rms reprojection residuals, and the margin the
-        # depth had to beat: a finite answer means the point explained the
-        # sightings clearly better than the bearing could.
-        assert call["residual_margin"] == pytest.approx(0.8)
-        assert call["finite_rms_px"] >= 0.0
-        assert call["bearing_rms_px"] > call["finite_rms_px"]
-        assert call["finite_rms_px"] < call["residual_margin"] * call["bearing_rms_px"]
-        assert "rms" in call["text"]
+        # The test's numbers: the rays are weighted at the reconstruction's
+        # own measured noise, the depth cleared the threshold, and the point
+        # fit that placed the track cleared it too.
+        assert call["sigma_px"] == pytest.approx(embedded.reprojection_noise_px())
+        assert call["threshold"] == pytest.approx(25.0)
+        assert call["bearing_cost"] >= call["threshold"]
+        assert max(call["depth_score"], call["midpoint_bound"]) >= call["threshold"]
+        assert call["depth_likelihood_ratio"] >= call["threshold"]
+        assert call["distance"] > call["min_depth"] > 0.0
+        assert call["num_views"] >= 3
 
-    def test_a_depth_the_sightings_refuse_is_not_written(
+    def test_a_threshold_nothing_clears_writes_the_bearing(
         self, edited, images, long_track_point
     ):
-        """A margin nothing can beat leaves every track a bearing.
+        """A threshold above the bearing's own cost leaves every track a bearing.
 
-        The criterion says whether a depth is *observable*; the residual check
-        says whether the depth it found is there. With the margin at zero no
-        finite point can clear it, so the check overturns the criterion and says
-        so -- which is the mechanism an ill-conditioned midpoint is caught by.
+        No depth can lower the bearing's cost by more than the cost itself, so
+        the reason names the bearing's cost rather than the score.
         """
         _, track = create_track(Bench(), edited, long_track_point)
-        demoted, report = fit(track, edited, images, residual_margin=0.0)
+        demoted, report = fit(
+            track, edited, images, depth_likelihood_ratio_threshold=1e300
+        )
 
         assert report["at_infinity"] is True
         call = report["classification"]
-        assert call["reason"] == "finite_does_not_explain_the_sightings"
-        assert call["residual_margin"] == pytest.approx(0.0)
-        assert "finite point would have" in call["text"]
+        assert call["reason"] == "bearing_cost_below_threshold"
+        assert call["threshold"] == pytest.approx(1e300)
+        assert np.isnan(call["depth_likelihood_ratio"]), "no point fit ran"
+        assert np.isnan(call["distance"]), "a bearing has no distance"
+        assert "NaN" not in call["text"]
+        np.testing.assert_allclose(np.linalg.norm(report["direction"]), 1.0)
         assert demoted.at_infinity
         assert demoted.placement["w"] == 0.0
 
     def test_the_classification_knobs_are_keyword_arguments(
         self, edited, images, long_track_point
     ):
-        """The criterion's two knobs, defaulting to the reconstruction's own.
+        """The test's two knobs, defaulting to the reconstruction's own.
 
-        ``inverse_depth_z_cutoff`` is the z-score a depth has to reach and
-        ``noise_floor_px`` the measurement noise it is scored against; the
-        report echoes the bar it judged by. Neither moves a well-conditioned
-        track: the criterion settles that one on the condition number alone,
-        before the noise model is consulted, which is what ``well_conditioned``
-        in the reason says.
+        ``sigma_px`` is the noise level the rays are weighted by and
+        ``depth_likelihood_ratio_threshold`` the bar; the report echoes both.
+        A larger noise level scales every cost down alike, so on a track with
+        this much parallax it moves the numbers and not the place: the point
+        fit's minimum does not depend on a uniform weight.
         """
         _, track = create_track(Bench(), edited, long_track_point)
         _, default = fit(track, edited, images)
-        assert default["classification"]["inverse_depth_z_cutoff"] == pytest.approx(4.0)
 
         _, moved = fit(
             track,
             edited,
             images,
-            inverse_depth_z_cutoff=25.0,
-            noise_floor_px=3.0,
+            sigma_px=2.0,
+            depth_likelihood_ratio_threshold=10.0,
         )
         call = moved["classification"]
-        assert call["inverse_depth_z_cutoff"] == pytest.approx(25.0)
-        assert call["reason"] == "well_conditioned"
+        assert call["sigma_px"] == pytest.approx(2.0)
+        assert call["threshold"] == pytest.approx(10.0)
         assert call["at_infinity"] is False
-        np.testing.assert_allclose(moved["position"], default["position"], atol=1e-9)
+        assert call["bearing_cost"] < default["classification"]["bearing_cost"]
+        np.testing.assert_allclose(moved["position"], default["position"], atol=1e-6)
 
 
 class TestNoEffectAndTheClamp:

@@ -10,7 +10,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
-use sfmtool_core::analysis::infinity::Classification;
 use sfmtool_core::geometry::viewing_angle::viewing_rays;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::progress::Progress;
@@ -1202,21 +1201,31 @@ impl PySfmrReconstruction {
     }
 
     /// Full triangulation analysis of a single 3D point, re-deriving its rays
-    /// from the workspace ``.sift`` files.
-    ///
-    /// Reads the observing images' ``.sift`` files, so they must be present.
+    /// from its observed pixels: the inline keypoints when the reconstruction
+    /// carries them (every ``embedded_patches`` file), otherwise the observing
+    /// images' ``.sift`` files, which must then be present.
     /// Returns a dict: ``w``, ``position`` (3,), ``error``, ``color`` (3,),
-    /// ``classification`` ("finite"/"at_infinity"/"indeterminate"),
+    /// ``verdict`` (``"finite"`` or ``"at_infinity"``, the point-or-bearing
+    /// test at the measured noise level and the default threshold, or
+    /// ``None`` when no level can be measured or the point has fewer than two
+    /// usable rays) with ``sigma_px``, ``bearing_cost``, ``depth_score``,
+    /// ``midpoint_bound`` and ``depth_likelihood_ratio`` (the plain
+    /// least-squares fit's) beside it (``NaN`` without a verdict),
     /// ``triangulated_point`` (3,), ``eigenvalues`` (3,), ``condition_number``,
     /// ``in_front``, ``depth``, ``sigma``, ``inverse_depth_z``,
     /// ``resolvable_distance``, ``finite_horizon``, ``baseline_span``,
     /// ``max_ray_angle_deg``, and ``observations`` (list of dicts with
-    /// ``image_index``, ``image_name``, ``feature_index``, ``incidence_deg``).
+    /// ``image_index``, ``image_name``, ``feature_index``, ``incidence_deg``;
+    /// ``feature_index`` is ``None`` for an ``embedded_patches``
+    /// reconstruction, and ``incidence_deg`` NaN for an observation whose
+    /// pixel could not be read).
     ///
     /// Args:
     ///     point_index: Index into the points array.
-    ///     noise_px: Per-ray pixel noise; per-point noise is
-    ///         ``max(reprojection_error, noise_px)``. Defaults to 1.0.
+    ///     noise_px: The noise floor of the inverse-depth z diagnostic: its
+    ///         per-point noise is ``max(reprojection_error, noise_px)``.
+    ///         Defaults to 1.0. The point-or-bearing verdict reads the
+    ///         measured noise level instead.
     #[pyo3(signature = (point_index, noise_px=1.0))]
     fn inspect_point(
         &self,
@@ -1240,13 +1249,29 @@ impl PySfmrReconstruction {
         dict.set_item("position", [rep.position.x, rep.position.y, rep.position.z])?;
         dict.set_item("error", rep.error)?;
         dict.set_item("color", [rep.color[0], rep.color[1], rep.color[2]])?;
+        let verdict = rep.point_or_bearing.as_ref();
         dict.set_item(
-            "classification",
-            match rep.classification {
-                Classification::Finite(_) => "finite",
-                Classification::Infinity(_) => "at_infinity",
-                Classification::Indeterminate => "indeterminate",
-            },
+            "verdict",
+            verdict.map(|v| if v.finite { "finite" } else { "at_infinity" }),
+        )?;
+        dict.set_item("sigma_px", verdict.map_or(f64::NAN, |v| v.sigma_px))?;
+        dict.set_item(
+            "bearing_cost",
+            verdict.map_or(f64::NAN, |v| v.score.bearing_cost),
+        )?;
+        dict.set_item(
+            "depth_score",
+            verdict.map_or(f64::NAN, |v| v.score.depth_score),
+        )?;
+        dict.set_item(
+            "midpoint_bound",
+            verdict.map_or(f64::NAN, |v| v.score.midpoint_bound),
+        )?;
+        dict.set_item(
+            "depth_likelihood_ratio",
+            verdict
+                .and_then(|v| v.fit)
+                .map_or(f64::NAN, |f| f.depth_likelihood_ratio),
         )?;
         dict.set_item(
             "triangulated_point",

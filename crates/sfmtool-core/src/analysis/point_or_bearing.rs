@@ -11,9 +11,11 @@
 //! that holds a reconstruction weights a track's rays alike: the stored-point
 //! convenience [`SfmrReconstruction::point_or_bearing_scores`] here, and the
 //! tracks that discovery assembles from `.sift` keypoints and the bench from
-//! its uncommitted sightings. See
+//! its uncommitted sightings. [`is_usable_point`] and [`fit_usable_point`] are
+//! the consumer rule a caller that stores a finite verdict places it by, shared
+//! by reclassification and the bench. See
 //! `specs/core/reconstruction/batch-triangulation-api.md` § "Over a
-//! reconstruction".
+//! reconstruction" and § "Fitting".
 
 use std::borrow::Cow;
 
@@ -23,8 +25,8 @@ use rayon::prelude::*;
 
 use crate::readable::Readable;
 use crate::reconstruction::triangulation::point_or_bearing::{
-    bearing_score_batch, fit_point_and_bearing_batch, observed_ray, BearingScore, PointBearingFit,
-    PointBearingFitOptions,
+    bearing_score_batch, fit_point_and_bearing, fit_point_and_bearing_batch, observed_ray,
+    BearingScore, PointBearingFit, PointBearingFitOptions,
 };
 use crate::reconstruction::{ImageTable, ReconstructionError, SfmrReconstruction};
 
@@ -141,6 +143,88 @@ pub fn track_rays(
         rays.offsets.push(rays.dirs.len());
     }
     rays
+}
+
+/// Whether `x` is a position a consumer of the test stores for a track with
+/// rays `dirs` cast from `centers`: finite, in front of every observing camera
+/// along the ray its pixel gives (`(x − cᵢ) · dᵢ > 0`), and no nearer any of
+/// their centres than `min_depth`.
+///
+/// The consumer rule of `specs/core/reconstruction/batch-triangulation-api.md`
+/// § "Fitting": a point fit can end with no point, behind a camera, or almost
+/// on a camera's centre, and none of those is a depth to store.
+pub fn is_usable_point(
+    x: &Point3<f64>,
+    dirs: &[Vector3<f64>],
+    centers: &[Point3<f64>],
+    min_depth: f64,
+) -> bool {
+    x.coords.iter().all(|c| c.is_finite())
+        && dirs
+            .iter()
+            .zip(centers)
+            .all(|(d, c)| (x - c).dot(d) > 0.0 && (x - c).norm() >= min_depth)
+}
+
+/// The plain least-squares point fit of one track and the usable point it
+/// gives, if any.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UsablePointFit {
+    /// The fit, `None` when [`fit_point_and_bearing`] declined the track.
+    pub fit: Option<PointBearingFit>,
+    /// The fit's point when it is usable: in front of every camera, with a
+    /// likelihood ratio `Λ` that reaches the threshold asked for, and
+    /// [`is_usable_point`] at the minimum depth asked for.
+    pub point: Option<Point3<f64>>,
+}
+
+/// Place a track with the plain least-squares point fit, started from `start`
+/// when given, and keep the point when it is one to store.
+///
+/// The fit's own `Λ` has to reach `threshold`: the score that gave a finite
+/// verdict is a prediction at `ρ = 0`, and where the geometry is degenerate it
+/// can exceed the `Λ` the fit finds. A caller that places a point on another
+/// ground than a finite verdict passes a `threshold` of 0, which every `Λ`
+/// reaches. Reclassification and the bench both place points through this, so
+/// they cannot come to disagree about which positions are usable.
+///
+/// # Example
+///
+/// ```no_run
+/// use sfmtool_core::analysis::point_or_bearing::fit_usable_point;
+/// use sfmtool_core::reconstruction::triangulation::DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD;
+/// # fn run(rays: &sfmtool_core::analysis::point_or_bearing::RayBatch, min_depth: f64) {
+/// let placed = fit_usable_point(
+///     &rays.dirs,
+///     &rays.centers,
+///     &rays.weights,
+///     None,
+///     min_depth,
+///     DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+/// );
+/// if let Some(point) = placed.point {
+///     println!("store the track finite at {point}");
+/// }
+/// # }
+/// ```
+pub fn fit_usable_point(
+    dirs: &[Vector3<f64>],
+    centers: &[Point3<f64>],
+    weights: &[Matrix2x3<f64>],
+    start: Option<Point3<f64>>,
+    min_depth: f64,
+    threshold: f64,
+) -> UsablePointFit {
+    let plain = PointBearingFitOptions {
+        soft_l1_scale: None,
+        ..PointBearingFitOptions::default()
+    };
+    let fit = fit_point_and_bearing(dirs, centers, weights, start, None, &plain);
+    let point = fit
+        .filter(|f| f.in_front_of_all_cameras && f.depth_likelihood_ratio >= threshold)
+        .and_then(|f| f.point)
+        .filter(|x| is_usable_point(x, dirs, centers, min_depth));
+    UsablePointFit { fit, point }
 }
 
 /// The point-or-bearing test over a set of a reconstruction's points.

@@ -52,7 +52,7 @@ reading in
 [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the
 fit in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs), the two
 normal steps in [bench/normal.rs](../../../crates/sfmtool-core/src/bench/normal.rs),
-the finite-versus-bearing criterion the fit and the upgrade share in
+the finite-versus-bearing test the fit and the upgrade share in
 [bench/classify.rs](../../../crates/sfmtool-core/src/bench/classify.rs), the
 stage change in
 [bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), the
@@ -611,9 +611,8 @@ pub struct FitOptions {
     pub localize: KeypointLocalizeParams,   // open_localizer
     pub refine: KeypointSubpixelParams,
     pub evaluate: EvaluateOptions,          // the reading a fit ends with
-    pub noise_floor_px: f64,                // the classification's, 1.0
-    pub inverse_depth_z_cutoff: f64,        // the classification's, 4.0
-    pub residual_margin: f64,               // the classification's, 0.8
+    pub sigma_px: Option<f64>,              // None: the base's measured reprojection noise
+    pub depth_likelihood_ratio_threshold: f64, // the classification's, 25
 }
 
 pub struct EvaluateReport {
@@ -637,45 +636,70 @@ pub struct FitReport {
     pub classification: Option<TrackClassification>,
 }
 
-// The one rule every step that triangulates goes through.
+// One track's rays, each weighted for the test at `sigma_px`.
+pub struct TrackRays {
+    pub dirs: Vec<Vector3<f64>>,
+    pub centers: Vec<Point3<f64>>,
+    pub weights: Vec<Matrix2x3<f64>>,     // observed_ray's (1/σ)·J·R
+    pub sigma_px: f64,
+}
+impl TrackRays {
+    /// A sighting gives no ray when observed_ray declines its pixel.
+    pub fn of_sightings(sightings: &[([f64; 2], usize)], images: &[ProjectedImage<'_>],
+        sigma_px: f64) -> Self;
+}
+
+// The one rule every step that triangulates goes through. `held` is the
+// coordinate the track has and whether it is a bearing; None for a cluster.
 pub fn classify_track_rays(
     rays: &TrackRays,
-    images: &[ProjectedImage<'_>],
-    noise_floor_px: f64,
-    z_cutoff: f64,
-    residual_margin: f64,
-) -> TrackClassification;
+    held: Option<(Point3<f64>, bool)>,
+    min_depth: f64,                      // the reconstruction's min_point_depth
+    threshold: f64,                      // DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD
+) -> Option<TrackClassification>;        // None: too few rays for the test
 
 pub struct TrackClassification {
     pub at_infinity: bool,
     pub coordinate: Point3<f64>,         // a world point, or a unit direction
     pub reason: ClassificationReason,
-    pub condition_number: f64,
-    pub inverse_depth_z: f64,
-    pub inverse_depth_z_cutoff: f64,
-    pub resolvable_distance: f64,
-    pub finite_horizon: f64,
+    pub sigma_px: f64,                   // the noise level the rays were weighted at
+    pub threshold: f64,
+    pub bearing_cost: f64,
+    pub depth_score: f64,
+    pub midpoint_bound: f64,
+    pub depth_likelihood_ratio: f64,     // the point fit's Λ; NaN where none ran
+    pub distance: f64,                   // from the observing cameras' centroid; NaN for a bearing
+    pub min_depth: f64,
+    pub num_views: usize,
     pub max_pair_angle_deg: f64,
-    pub finite_rms_px: f64,              // the point reprojected against the sightings
-    pub bearing_rms_px: f64,             // the bearing, against the same sightings
-    pub residual_margin: f64,
 }
 
 impl TrackClassification {
-    /// The call and the numbers behind it, as one sentence. A candidate whose
-    /// rms is `NaN` reprojected into none of the sightings, and the sentence
-    /// names that instead of printing the word.
+    /// The call and the numbers behind it, as one sentence. A number that is
+    /// `NaN` for this outcome (a bearing's distance, the Λ of a fit that did
+    /// not run) is left out rather than printed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;   // Display
 }
 
 pub enum ClassificationReason {
-    WellConditioned,      // the pre-filter settled it: finite
-    DepthResolved,        // the z-score reached the bar: finite
-    DepthUnresolved,      // it did not, or the solve was degenerate: a bearing
-    BaselineTooShort,     // no depth is resolvable at the capture's scale: a bearing
-    // The residual check, which overturns either of the criterion's answers.
-    FiniteDoesNotExplainTheSightings,
-    BearingDoesNotExplainTheSightings,
+    ScoreCleared,               // finite: the depth score reached the threshold
+    MidpointBoundCleared,       // finite: the midpoint bound did, where the score did not
+    BearingCostBelowThreshold,  // a bearing: no depth can clear it
+    ScoreBelowThreshold,        // a bearing: neither the score nor the bound reached it
+    // The consumer rule, where the verdict and what can be stored disagree.
+    HeldPointKept,              // finite verdict, no usable fit: the usable held place stays
+    NoUsablePoint,              // finite verdict, written as the bearing
+    BearingBehindCamera,        // bearing verdict, written as the point fit's point
+    LeftUnusable,               // neither describes the sightings: the held coordinate stays
+}
+impl ClassificationReason {
+    pub fn name(self) -> &'static str;   // "score_cleared", …, as the bindings carry it
+}
+
+impl EditedReconstruction {
+    // Measured once per base and shared by every version cloned from it.
+    pub fn base_reprojection_noise_px(&self) -> Result<f64, String>;
+    pub fn base_min_point_depth(&self) -> f64;
 }
 
 pub struct StageReport {
@@ -963,67 +987,100 @@ tangent to the direction sphere. That is the `.sfmr` rule for a point row
 § "Points at infinity"), and the payload's `position` holds whichever the frame
 says, so the coordinate and the frame's centre are one thing in both.
 
-**Every step that triangulates decides which, on one criterion.** The criterion
-is not the bench's: `classify_track_rays`
-([`classify.rs`](../../../crates/sfmtool-core/src/bench/classify.rs)) calls
-`classify_rays_at_infinity`, the inverse-depth z rule
-([`../reconstruction/batch-triangulation-api.md`](../reconstruction/batch-triangulation-api.md)
-§ "Consumers"), with its defaults. Reclassifying a whole reconstruction
+**Every step that triangulates decides which, on one test.** The test is not
+the bench's: `classify_track_rays`
+([`classify.rs`](../../../crates/sfmtool-core/src/bench/classify.rs)) runs the
+point-or-bearing likelihood-ratio test of
+[`../reconstruction/batch-triangulation-api.md`](../reconstruction/batch-triangulation-api.md)
+§ "Point or bearing", the one reclassifying a whole reconstruction
 (`classify_points_at_infinity`) and discovering points at infinity
-(`find_points_at_infinity`) decide on the point-or-bearing test instead;
-the bench moves to it in a later step of
-[the amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md).
-`classify_track_rays` reads the rays and answers with the coordinate the track
-takes, a flag, and the number that settled it:
+(`find_points_at_infinity`) decide on, and places a finite track by the same
+consumer rule reclassification places a point by. The question it asks of a
+track's sightings is the one a person asks of the photographs: does giving the
+track a depth explain where it was seen better than a direction alone does, by
+more than the noise could explain?
 
-- a well-conditioned in-front solve is **finite** on the condition number
-  alone, before any noise model is consulted (`well_conditioned`);
-- otherwise the inverse-depth z-score decides: at or above the cutoff the track
-  is **finite** (`depth_resolved`), below it a **bearing**
-  (`depth_unresolved`), and a degenerate or behind-a-camera solve is a bearing
-  too;
-- a baseline that cannot place a point even at the capture's own scale
-  (`resolvable_distance` short of the camera cloud's extent) is a **bearing**
-  (`baseline_too_short`): a fit has to write something, and what the
-  numbers say is that the depth is not observable.
+- **The rays.** Each `in` sighting's pixel becomes a world ray and a 2×3 noise
+  weight through `observed_ray`, at the camera model and pose of its image
+  (`TrackRays::of_sightings`). A pixel the camera model cannot take back to
+  itself (past a fisheye's wide-angle blend) gives no ray, as it gives none in
+  the reconstruction-level test; when fewer than two `in` sightings give one
+  the fit is refused (`FitError::TooFewRays`). The same rays feed the linear
+  solve whose condition number the payload keeps.
+- **The noise level** the weights are over is the reconstruction's measured
+  reprojection noise (batch-triangulation-api.md § "The measured noise
+  level"), unless `FitOptions::sigma_px` gives one. It is the **base's**,
+  measured on the first request and kept on the `EditedReconstruction` for
+  every version cloned from it (`base_reprojection_noise_px`): a version
+  differs from its base by a handful of edited points against a measure over
+  every observation of every finite point, and a run of edits shares the base,
+  so a fit does not re-read a `sift_files` base's `.sift` files. A base with no
+  observation of a finite point has no level, and a fit there without
+  `sigma_px` is refused (`FitError::NoNoiseLevel`) rather than run at a guessed
+  one. In the viewer that is the Fit button's refusal; an agent passes
+  `sigma_px` to `fit_bench_track` or `set_bench_track_stage`. The measure is
+  never finer than the **keypoint resolution**, the finest pixel coordinate an
+  `f32` keypoint states (batch-triangulation-api.md § "The measured noise
+  level"), so keypoints at the exact projections of their points, whose
+  residuals are 0, still weight their rays, and the bench, reclassification and
+  discovery read one level on such data.
+- **The verdict** is `is_finite` on `bearing_score` at
+  `FitOptions::depth_likelihood_ratio_threshold` (25 by default): finite where
+  the bearing's cost reaches the threshold and either the depth score or the
+  midpoint bound does (`score_cleared`, `midpoint_bound_cleared`), and a
+  bearing otherwise (`bearing_cost_below_threshold` when the bearing's own cost
+  is under it, since no depth can lower a cost by more than the cost itself;
+  `score_below_threshold` when neither the score nor the bound reached it).
+- **A finite verdict is placed** by `fit_usable_point`, the plain least-squares
+  point fit, started from the track's position when it holds a place (a bearing
+  is no place to start from, and a cluster holds nothing). The point is kept
+  where it is *usable*: in front of every observing camera, no nearer any of
+  their centres than the reconstruction's minimum point depth
+  (`min_point_depth`, `DEFAULT_MIN_DEPTH_FRACTION` of the median distance from
+  a finite point to an observing camera, cached beside the noise level), with a
+  fitted `Λ` that itself reaches the threshold. Otherwise a held place that is
+  usable itself is kept, as reclassification keeps a usable stored point
+  (`held_point_kept`), and with none the track is written as its bearing
+  (`no_usable_point`).
+- **A bearing verdict writes the score's bearing**, the eigenvector the test
+  fitted, when it is in front of every observing camera. One behind a camera
+  describes no sighting there, so the track is placed by the point fit instead,
+  with no bar on its `Λ` since the verdict asked for none
+  (`bearing_behind_camera`), and when that gives no usable point either the
+  track keeps the coordinate it held, or takes the bearing when it held none
+  (`left_unusable`): a sighting that looks the other way is the person's to
+  turn out.
 
-The bearing a `w = 0` answer carries is the normalised mean of the rays, which
-is the robust direction those sightings agree on.
+Where reclassification leaves a point it agrees with exactly as stored, a fit
+re-places it: the fit has just moved the sightings, so the held position is a
+start, and an answer only when the fit from it finds no usable point. Otherwise the two decide alike, and on the stored
+sightings of the seoul bull ground truth and two Kerry Park solves they agree
+on every point (§ "Testing").
 
-**And then the sightings decide.** The criterion above is a
-statement about *observability* -- whether this geometry could resolve a depth --
-and on an ill-conditioned solve it can clear its own bar on a depth nothing in
-the photographs supports: the least-squares midpoint of near-parallel, slightly
-inconsistent rays lands wherever the inconsistency throws it, and then reprojects
-nowhere near the sightings it was solved from. So both candidates are scored on
-the one thing a person looking at the photographs can check -- the rms distance,
-in px, from each sighting to where the candidate projects in its own image,
-which is
-[`observation_metrics`](../../../crates/sfmtool-core/src/bench/evaluate.rs)'
-own first number and so the same residual the *Proj. err (px / deg)* column's first
-number shows -- and:
+`TrackClassification` carries the verdict, the reason, and the numbers behind
+it: `sigma_px`, `threshold`, `bearing_cost`, `depth_score`, `midpoint_bound`,
+the point fit's `depth_likelihood_ratio` (`NaN` where no fit ran), the
+`distance` of a placed point from the observing cameras' centroid (`NaN` for a
+bearing), `min_depth`, `num_views` and `max_pair_angle_deg`. Its sentence
+names the reason in the test's own terms and ends with the noise level, the
+ray count and the widest pair angle, and a number that is `NaN` for the
+outcome is left out rather than printed:
 
-- a **finite** answer stands only where the point's residual comes under
-  `residual_margin` of the bearing's **and** under it by more than
-  `noise_floor_px`; otherwise the bearing stands, with the reason
-  `FiniteDoesNotExplainTheSightings`;
-- a **bearing** answer stands unless the point clears that same bar, in which
-  case the photographs place the track at a depth whatever the conditioning
-  says, with the reason `BearingDoesNotExplainTheSightings`.
+```text
+finite at (1.2034, -0.5521, 6.8810): depth score 132.0 over the 25 threshold,
+likelihood ratio 131.9, 515.212 from the observing cameras, at 0.216 px noise
+over 10 rays up to 1.204 deg apart
+```
 
-One comparison, asked in both directions, so the two answers cannot be settled
-by different rules. The margin is a fraction because the comparison has no
-natural scale -- a scene metre is a pixel count that depends on the lens and the
-depth -- and the absolute term is there because a fraction alone would believe a
-0.05 px residual over a 0.07 px one, which is two roundings of the same answer.
-Both residuals and the margin are on every classification, and in every sentence
-it writes, because they are the evidence a person reads the call by.
-
-The finite candidate has three degrees of freedom against the bearing's two and
-neither is fitted to minimise pixel error, so a point that fits *slightly* better
-has bought that with its extra freedom while one that fits clearly better has
-found a depth. That is what the margin's default is set by; the constant carries
-the argument.
+**The test settles the cases an inverse-depth z-score gets wrong.** On an
+ill-conditioned solve the z-score can clear 4 on a depth nothing in the
+photographs supports, since the least-squares midpoint of near-parallel,
+slightly inconsistent rays lands wherever the inconsistency throws it, and a
+depth the photographs do place can fall under 4 when the noise it assumes is
+larger than the capture's. The test fits both models to the same sightings at
+the measured noise, so the first gets a score under the threshold and the
+second a large one; `z` is a diagnostic the reports print and nothing decides
+on.
 
 **A patch is square.** Its two half-extents are equal: the patch begins as a
 square in a photograph, and turning it only tilts it. A square in a photograph
@@ -1095,7 +1152,7 @@ a point two metres from the three cameras that see it and eleven from the
 centroid comes out more than five times too large in every one of them, which
 on a fisheye runs it off the image circle and the localization then fails.
 
-**The cluster-to-track upgrade goes through the same criterion**, over the
+**The cluster-to-track upgrade goes through the same test**, over the
 refined cluster positions: a capture that only ever stated a direction becomes a
 `w = 0` track rather than a point at a depth its rays never carried. There the
 reference observation's shape is unprojected at unit distance, where a
@@ -2059,7 +2116,7 @@ resolve to (§ "Finite points and bearings") and the consensus bitmap is fused
 over them. The payload takes the coordinate, the frame, the fused bitmap, the
 colour at that bitmap's centre and the triangulation's condition number, and the
 `FitReport` carries the classification: which representation the rays earned,
-which of the criterion's tests settled it, and the numbers behind that.
+which outcome of the test settled it, and the numbers behind that.
 
 **An observation the kernels did not place keeps its pixel.** Out of frame, or
 in no round at all, its keypoint stays wherever it already sat -- the one it
@@ -2157,7 +2214,7 @@ toggle straight to it and push no version for a step that did not happen.
 **Up, cluster to track**, is the spawn pipeline's own steps over one candidate:
 
 1. **Triangulate and classify** the `in` observations' refined cluster
-   positions through their cameras, on the criterion of § "Finite points and
+   positions through their cameras, on the test of § "Finite points and
    bearings": the rays answer with a place or a bearing.
 2. **Frame** the patch at that coordinate: the in-plane axes and half-extents
    are what the reference observation's affine shape, scaled by the cluster's
@@ -2368,21 +2425,19 @@ machine, so they live on `EvaluateOptions` beside the search radius.
 | `max_seed_offset_px` | `64.0` | How far from the point's projection a seed may sit and still be read, in patch-grid px. Past it the row carries `SeedTooFar` and is left out of the round. |
 | `max_cache_bytes` | `256 MiB` | What one round's per-view tiles may take together. A round past it is refused with `TooLarge`, before anything is allocated. |
 
-The finite-versus-bearing criterion's two knobs are not thresholds either: what
+The finite-versus-bearing test's two knobs are not thresholds either: what
 they move is which representation the geometry earns rather than which sightings
 are kept, so they live on `FitOptions` and both default to the values the
 reconstruction's own passes use.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `noise_floor_px` | `1.0` | The measurement noise the classification assumes at each sighting, in source-image px; the per-ray angular noise is this over the observing camera's focal length. From `DEFAULT_CLASSIFY_NOISE_FLOOR_PX`, which is the reconstruction's own `DEFAULT_NOISE_FLOOR_PX`. |
-| `inverse_depth_z_cutoff` | `4.0` | The inverse-depth z-score a depth has to reach to be written as a finite point rather than a bearing. From `DEFAULT_CLASSIFY_Z_CUTOFF`, which is the reconstruction's own `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`. |
-| `residual_margin` | `0.8` | The fraction of the bearing's rms reprojection residual the triangulated point has to come under, on top of beating it by more than `noise_floor_px`, before the depth is believed. From `RESIDUAL_MARGIN`; the constant carries the argument for the value. |
+| `sigma_px` | `None` | The per-axis pixel noise the rays are weighted by. `None` is the base's measured reprojection noise (§ "Finite points and bearings"); a given value is used as it is, and one that is not finite and positive is refused. |
+| `depth_likelihood_ratio_threshold` | `25.0` | The bar the depth score, the midpoint bound and the point fit's `Λ` are judged against. From `DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`, which reclassification and discovery decide at. |
 
-The criterion's third number, the condition-number pre-filter that settles a
-well-conditioned solve before any noise model is consulted, is not an option
-here: it is the criterion's own constant, and a bench that could move it would be
-a second classifier.
+The minimum point depth is not an option here: it is the reconstruction's
+(`min_point_depth`), the one reclassification places points by, and a bench
+that could move it would be a second consumer rule.
 
 The descriptor search has bars of its own, which are not the track's: they say
 what the *index* is asked, and nothing about them is a verdict, so they are
@@ -2464,9 +2519,8 @@ prebuilt `ImagePyramidSet`. `evaluate` and `fit` take two optional keywords,
 `max_seed_offset_px` and `max_cache_bytes`, the two memory bounds above, each
 defaulting to the reading's own; the radius the reading looks for each peak in
 is the track's `max_shift_px`. `fit` and `set_stage` take the
-classification's three knobs as well, `noise_floor_px`,
-`inverse_depth_z_cutoff` and `residual_margin`, each defaulting to core's own
-value;
+classification's two knobs as well, `sigma_px` (default `None`, the measured
+level) and `depth_likelihood_ratio_threshold` (default 25);
 `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured` and `unmeasured`, with `reference` at the cluster stage and
@@ -2495,13 +2549,14 @@ point and is `None` for a bearing, and `direction` is the unit bearing and is
 `None` for a place. A caller that read `position` off a `w = 0` track would be
 holding a place one unit from the world origin. A fit's `classification` dict
 carries `at_infinity`, `position` or `direction`, `reason` (the lowercase words
-`"well_conditioned"`, `"depth_resolved"`, `"depth_unresolved"`,
-`"baseline_too_short"`, `"finite_does_not_explain_the_sightings"`,
-`"bearing_does_not_explain_the_sightings"`), `condition_number`,
-`inverse_depth_z`,
-`inverse_depth_z_cutoff`, `resolvable_distance`, `finite_horizon`,
-`max_pair_angle_deg`, `finite_rms_px`, `bearing_rms_px`, `residual_margin` and
-`text`, the sentence the Action Log shows.
+`ClassificationReason::name` gives: `"score_cleared"`,
+`"midpoint_bound_cleared"`, `"bearing_cost_below_threshold"`,
+`"score_below_threshold"`, `"held_point_kept"`, `"no_usable_point"`,
+`"bearing_behind_camera"`,
+`"left_unusable"`), `sigma_px`, `threshold`, `bearing_cost`, `depth_score`,
+`midpoint_bound`, `depth_likelihood_ratio`, `distance`, `min_depth`,
+`num_views`, `max_pair_angle_deg` and `text`, the sentence the Action Log
+shows.
 
 `translate_patch` takes the displacement `by` as three numbers on the patch's
 own `[u, v, n]` axes, and `tilt_patch` the outward normal as three numbers of
@@ -2759,25 +2814,43 @@ confidence, counted in the materialised value's `infinity_point_count`; and a
 slide, an edge drag, a centred resize and a turn each leave a bearing's
 coordinate on the unit sphere with the payload's coordinate following the frame's
 centre. The near scene's own track is asserted to come back **finite**, on the
-condition-number pre-filter, so the two answers are both pinned.
+depth score, so the two answers are both pinned. Those fits classify at a stated
+0.5 px (`TEST_SIGMA_PX`): the fixtures' keypoints are the exact projections, so
+the level they measure is 0, and the tests state the noise a localizer has on
+the rendered photographs instead.
 
-**The residual check has a fixture whose criterion answer is wrong.** Eight
-sightings on the far scene, tilted across the run by 0.2 px per camera and thrown
-off that tilt by 1.5 px alternating, are consistent with a bearing to 1.6 px rms
-while the midpoint solve reads a depth of 3.4 units out of the inconsistency. The
-test asserts the criterion's own answer first -- `Finite`, with the
-condition-number pre-filter *not* firing and the z-score clearing the bar -- so
-what it then checks is the check and not the criterion: the point reprojects at
-5.1 px rms, over three times the bearing's, the call comes back at infinity with
-`FiniteDoesNotExplainTheSightings`, and the sentence names both residuals. The
-near scene's track is run through the same comparison and survives it, the point
-beating the bearing by far more than the margin. And the whole fit over the
-skewed shape writes the bearing, at the frame size it arrived with.
+**Each outcome of the test has a test.** Eight sightings on the far scene,
+tilted across the run by 0.2 px per camera and thrown off that tilt by 1.5 px
+alternating, are a depth nothing supports that a z-score accepts: their
+inverse-depth z at a 1 px floor clears 4 (asserted, so the fixture stays the
+case it was built for), while the test, which fits both models, finds the
+bearing's cost over the threshold and the depth score and the midpoint bound
+under it, and writes the bearing (`ScoreBelowThreshold`), as the whole fit over
+the shape does at the frame size it arrived with. The far point's exact
+projections, a third of a pixel of parallax, are a point at a stated 0.02 px
+(`ScoreCleared`, about 200 units out) though their z is under 4, and a bearing
+at 0.5 px, so the verdict follows the noise level. Rays built by hand cover the
+rest: a ring of five cameras around a point at 0.04 rad, where the score is
+under the threshold and the bound far over it (`MidpointBoundCleared`);
+parallel rays (`BearingCostBelowThreshold`); a finite verdict with a minimum
+depth past the point (`NoUsablePoint`, written as the bearing, and
+`HeldPointKept` when a held place beyond that depth is usable); two cameras
+facing each other along one line, whose bearing fits both rays and is behind
+one of them (`BearingBehindCamera`, placed between them, and `LeftUnusable`
+with a minimum depth past both, keeping the held place, or taking the bearing
+with none held). The point fit starts from a held place and is exactly
+`fit_usable_point` from it, and a held bearing is no start.
 
-**The sentence is also read back over a candidate with no residual at all**, a
-classification built in the test with one side's rms `NaN` and then both: a
-candidate that reprojects into none of the sightings is named in words, in every
-one of the sentence's four shapes, and the word `NaN` appears in none of them.
+**The noise level is the base's.** A fit with no `sigma_px` over a fixture
+whose keypoints sit a third of a pixel off alternately classifies at the level
+the base measures, a clone of the value reads the one cached measurement, and
+`min_depth` is the base's `min_point_depth`; the exact fixture measures the
+keypoint resolution, under 10⁻³ px, classifies at it and comes back finite; a
+reconstruction holding only a bearing has no level and a fit there without
+`sigma_px` is `NoNoiseLevel`, as is one given a level of 0. Two sightings of
+which one gives a ray are `TooFewRays`. Every reason's sentence is read back
+without `NaN`, with the noise level and the ray count, and with the distance
+only for a place.
 
 The search is tested over a corpus built in the test
 ([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):

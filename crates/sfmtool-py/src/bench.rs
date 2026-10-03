@@ -34,11 +34,11 @@ use sfmtool_core::bench::{
     spin_patch as core_spin_patch, split as core_split, tilt_patch as core_tilt_patch,
     translate_patch as core_translate_patch,
     translate_patch_to_pixel as core_translate_patch_to_pixel,
-    unpin_verdicts as core_unpin_verdicts, Bench, BenchItem, ClassificationReason, ClusterSeed,
-    CreateTrackOptions, Edge, EditableTrack, EvaluateOptions, EvaluateReport, FitOptions,
-    FitReport, Found, GeometrySearchOptions, GeometrySearchReport, Observation, ObservationSeed,
-    Provenance, ResizeReport, SearchOptions, SearchReport, StageKind, TrackClassification, Verdict,
-    Viewpoint, DEFAULT_RADIUS_PX,
+    unpin_verdicts as core_unpin_verdicts, Bench, BenchItem, ClusterSeed, CreateTrackOptions, Edge,
+    EditableTrack, EvaluateOptions, EvaluateReport, FitOptions, FitReport, Found,
+    GeometrySearchOptions, GeometrySearchReport, Observation, ObservationSeed, Provenance,
+    ResizeReport, SearchOptions, SearchReport, StageKind, TrackClassification, Verdict, Viewpoint,
+    DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -1365,30 +1365,17 @@ fn classification_dict<'py>(
         "position"
     };
     d.set_item(key, PyArray1::from_vec(py, vec![c.x, c.y, c.z]))?;
-    d.set_item(
-        "reason",
-        match call.reason {
-            ClassificationReason::WellConditioned => "well_conditioned",
-            ClassificationReason::DepthResolved => "depth_resolved",
-            ClassificationReason::DepthUnresolved => "depth_unresolved",
-            ClassificationReason::BaselineTooShort => "baseline_too_short",
-            ClassificationReason::FiniteDoesNotExplainTheSightings => {
-                "finite_does_not_explain_the_sightings"
-            }
-            ClassificationReason::BearingDoesNotExplainTheSightings => {
-                "bearing_does_not_explain_the_sightings"
-            }
-        },
-    )?;
-    d.set_item("condition_number", call.condition_number)?;
-    d.set_item("inverse_depth_z", call.inverse_depth_z)?;
-    d.set_item("inverse_depth_z_cutoff", call.inverse_depth_z_cutoff)?;
-    d.set_item("resolvable_distance", call.resolvable_distance)?;
-    d.set_item("finite_horizon", call.finite_horizon)?;
+    d.set_item("reason", call.reason.name())?;
+    d.set_item("sigma_px", call.sigma_px)?;
+    d.set_item("threshold", call.threshold)?;
+    d.set_item("bearing_cost", call.bearing_cost)?;
+    d.set_item("depth_score", call.depth_score)?;
+    d.set_item("midpoint_bound", call.midpoint_bound)?;
+    d.set_item("depth_likelihood_ratio", call.depth_likelihood_ratio)?;
+    d.set_item("distance", call.distance)?;
+    d.set_item("min_depth", call.min_depth)?;
+    d.set_item("num_views", call.num_views)?;
     d.set_item("max_pair_angle_deg", call.max_pair_angle_deg)?;
-    d.set_item("finite_rms_px", call.finite_rms_px)?;
-    d.set_item("bearing_rms_px", call.bearing_rms_px)?;
-    d.set_item("residual_margin", call.residual_margin)?;
     d.set_item("text", call.to_string())?;
     Ok(d)
 }
@@ -1437,22 +1424,16 @@ fn evaluate_options(
 fn fit_options(
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
-    noise_floor_px: Option<f64>,
-    inverse_depth_z_cutoff: Option<f64>,
-    residual_margin: Option<f64>,
+    sigma_px: Option<f64>,
+    depth_likelihood_ratio_threshold: Option<f64>,
 ) -> FitOptions {
     let mut options = FitOptions {
         evaluate: evaluate_options(max_seed_offset_px, max_cache_bytes),
+        sigma_px,
         ..FitOptions::default()
     };
-    if let Some(noise_floor_px) = noise_floor_px {
-        options.noise_floor_px = noise_floor_px;
-    }
-    if let Some(cutoff) = inverse_depth_z_cutoff {
-        options.inverse_depth_z_cutoff = cutoff;
-    }
-    if let Some(margin) = residual_margin {
-        options.residual_margin = margin;
+    if let Some(threshold) = depth_likelihood_ratio_threshold {
+        options.depth_likelihood_ratio_threshold = threshold;
     }
     options
 }
@@ -1567,21 +1548,20 @@ fn evaluate(
 /// cluster has no geometry behind it to move.
 ///
 /// **A track-stage fit decides finite versus at infinity afresh.** The rays are
-/// put through the reconstruction's own criterion, so a track whose sightings
-/// have just given it a depth becomes a point and one whose rays no longer fix
-/// one becomes a bearing. ``noise_floor_px`` is the per-sighting measurement
-/// noise that criterion assumes (1.0 px) and ``inverse_depth_z_cutoff`` the
-/// z-score a depth has to reach to be called finite (4.0); both default to the
-/// reconstruction pass's own values.
-///
-/// **And the criterion's answer is checked against the sightings.** Both
-/// candidates -- the triangulated point and the bearing -- are reprojected into
-/// every sighting's own photograph, and the depth is believed only where the
-/// point's rms residual comes under ``residual_margin`` (0.8) of the bearing's
-/// *and* under it by more than ``noise_floor_px``. An ill-conditioned midpoint
-/// that landed wherever the rays' inconsistency threw it therefore does not
-/// become a point, however well the z-score reads; the report's
-/// ``classification`` carries both residuals and says which way the check went.
+/// put through the point-or-bearing likelihood-ratio test the reconstruction's
+/// own reclassification decides with, so a track whose sightings have just
+/// given it a depth becomes a point and one whose rays no longer fix one becomes
+/// a bearing. ``sigma_px`` is the per-axis pixel noise the rays are weighted by,
+/// by default the reconstruction's measured reprojection noise (measured once
+/// per loaded reconstruction), and ``depth_likelihood_ratio_threshold`` the bar
+/// the depth score, the midpoint bound and the point fit's likelihood ratio are
+/// judged against (25.0). A finite track is placed by the plain least-squares
+/// point fit started from where it stood, and kept only where that point is in
+/// front of every observing camera and no nearer one than the reconstruction's
+/// minimum point depth; otherwise it is written as the bearing. The report's
+/// ``classification`` carries the numbers and the ``reason`` that settled it.
+/// A reconstruction with no observation of a finite point has no noise level
+/// to measure, and a fit there without ``sigma_px`` is refused.
 ///
 /// A fit ends by evaluating its own result, so every number in the observations'
 /// slots and in the report is that reading's and :func:`evaluate` called after
@@ -1603,9 +1583,8 @@ fn evaluate(
     *,
     max_seed_offset_px = None,
     max_cache_bytes = None,
-    noise_floor_px = None,
-    inverse_depth_z_cutoff = None,
-    residual_margin = None,
+    sigma_px = None,
+    depth_likelihood_ratio_threshold = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn fit(
@@ -1615,9 +1594,8 @@ fn fit(
     images: &Bound<'_, PyAny>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
-    noise_floor_px: Option<f64>,
-    inverse_depth_z_cutoff: Option<f64>,
-    residual_margin: Option<f64>,
+    sigma_px: Option<f64>,
+    depth_likelihood_ratio_threshold: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
@@ -1629,9 +1607,8 @@ fn fit(
         &fit_options(
             max_seed_offset_px,
             max_cache_bytes,
-            noise_floor_px,
-            inverse_depth_z_cutoff,
-            residual_margin,
+            sigma_px,
+            depth_likelihood_ratio_threshold,
         ),
         &Progress::none(),
     )
@@ -1663,11 +1640,10 @@ fn fit(
 /// ``changed`` false, and the caller pushes no version for it.
 ///
 /// The upgrade puts the triangulated rays through the same finite-versus-
-/// infinity criterion a fit does, with the same check against the sightings, so
-/// a cluster whose sightings only ever stated a direction becomes a ``w = 0``
-/// track rather than a point at a depth they never carried. ``noise_floor_px``,
-/// ``inverse_depth_z_cutoff`` and ``residual_margin`` are that criterion's,
-/// exactly as on :func:`fit`.
+/// infinity test a fit does, so a cluster whose sightings only ever stated a
+/// direction becomes a ``w = 0`` track rather than a point at a depth they
+/// never carried. ``sigma_px`` and ``depth_likelihood_ratio_threshold`` are that
+/// test's, exactly as on :func:`fit`.
 ///
 /// Returns ``(EditableTrack, report)``, whose report carries ``from``, ``to``,
 /// ``changed``, the upgrade's ``fit`` report (``classification`` inside it) and
@@ -1679,9 +1655,8 @@ fn fit(
     images,
     stage,
     *,
-    noise_floor_px = None,
-    inverse_depth_z_cutoff = None,
-    residual_margin = None,
+    sigma_px = None,
+    depth_likelihood_ratio_threshold = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn set_stage(
@@ -1690,9 +1665,8 @@ fn set_stage(
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
     stage: &str,
-    noise_floor_px: Option<f64>,
-    inverse_depth_z_cutoff: Option<f64>,
-    residual_margin: Option<f64>,
+    sigma_px: Option<f64>,
+    depth_likelihood_ratio_threshold: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let stage = parse_stage(stage)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
@@ -1703,13 +1677,7 @@ fn set_stage(
         &edited.inner,
         &views,
         stage,
-        &fit_options(
-            None,
-            None,
-            noise_floor_px,
-            inverse_depth_z_cutoff,
-            residual_margin,
-        ),
+        &fit_options(None, None, sigma_px, depth_likelihood_ratio_threshold),
         &Progress::none(),
     )
     .map_err(refused)?;

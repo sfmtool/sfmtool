@@ -276,8 +276,23 @@ def test_inspect_point_verbose(seoul_bull_workspace):
     result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent), "-v"])
     assert result.exit_code == 0, result.output
     assert "Triangulation analysis:" in result.output
+    assert "Point or bearing: " in result.output
     assert "Inverse-depth z" in result.output
     assert "incidence" in result.output
+
+
+def test_inspect_point_verbose_on_embedded_patches(seoul_bull_ground_truth_sfmr):
+    """--verbose reads an embedded_patches file's own keypoints: no .sift needed.
+
+    Point 188 is one of the ground truth's bearings.
+    """
+    sfmr = seoul_bull_ground_truth_sfmr
+    point_id = _point_id(sfmr, 188)
+    result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent), "-v"])
+    assert result.exit_code == 0, result.output
+    assert "Point or bearing: a bearing at 0.468 px" in result.output
+    assert "incidence" in result.output
+    assert "feat " not in result.output
 
 
 def test_inspect_point_unknown_hash(seoul_bull_workspace):

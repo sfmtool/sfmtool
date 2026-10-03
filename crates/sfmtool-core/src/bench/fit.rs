@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
 use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
@@ -36,12 +36,11 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
-use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
-
-use super::classify::{
-    classify_track_rays, TrackClassification, TrackRays, DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
-    DEFAULT_CLASSIFY_Z_CUTOFF, RESIDUAL_MARGIN,
+use crate::reconstruction::triangulation::{
+    triangulate_batch, Triangulation, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
+
+use super::classify::{classify_track_rays, TrackClassification, TrackRays};
 use super::evaluate::{
     check_observation_views, check_views, evaluate, evaluate_cluster, evaluated, finite,
     grid_distance, open_localizer, plan_rounds, seed_of, shown_bytes, EvaluateError,
@@ -68,22 +67,21 @@ pub struct FitOptions {
     /// comes from. A caller that reads with its own search radius fits with the
     /// same one, so the two buttons speak in one set of terms.
     pub evaluate: EvaluateOptions,
-    /// The measurement noise the finite-versus-bearing classification assumes at
-    /// each sighting, in source-image px.
+    /// The per-axis pixel noise the finite-versus-bearing classification
+    /// weights each sighting's ray by, in source-image px. `None`, the default,
+    /// is the reconstruction's own: the base's measured
+    /// [`reprojection noise`](EditedReconstruction::base_reprojection_noise_px),
+    /// taken once per base.
     ///
     /// Here rather than on [`Thresholds`](super::track::Thresholds) because it
-    /// is not a bar a verdict is painted from: it is what the lens and the
-    /// keypoint detector are worth, and moving it changes which representation
+    /// is not a bar a verdict is painted from: it is what the lens, the poses
+    /// and the keypoints are worth, and moving it changes which representation
     /// the geometry earns rather than which sightings are kept.
-    pub noise_floor_px: f64,
-    /// The inverse-depth z-score a track's depth has to reach to be written as a
-    /// finite point rather than a bearing.
-    pub inverse_depth_z_cutoff: f64,
-    /// The fraction of the bearing's rms reprojection residual a finite point
-    /// has to come under before its depth is believed. See
-    /// [`super::classify::RESIDUAL_MARGIN`] for the default and
-    /// why it is what it is.
-    pub residual_margin: f64,
+    pub sigma_px: Option<f64>,
+    /// The threshold the classification judges the depth score, the midpoint
+    /// bound and the point fit's likelihood ratio against.
+    /// [`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`] by default.
+    pub depth_likelihood_ratio_threshold: f64,
 }
 
 impl Default for FitOptions {
@@ -92,9 +90,8 @@ impl Default for FitOptions {
             localize: open_localizer(),
             refine: KeypointSubpixelParams::default(),
             evaluate: EvaluateOptions::default(),
-            noise_floor_px: DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
-            inverse_depth_z_cutoff: DEFAULT_CLASSIFY_Z_CUTOFF,
-            residual_margin: RESIDUAL_MARGIN,
+            sigma_px: None,
+            depth_likelihood_ratio_threshold: DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
         }
     }
 }
@@ -140,6 +137,18 @@ pub enum FitError {
         /// What the allocator refused, in bytes.
         bytes: usize,
     },
+    /// Two or more `in` observations carry a pixel, but fewer than two of those
+    /// pixels give a ray the camera model takes back to the pixel (one past a
+    /// fisheye's wide-angle blend, say), so there is nothing to triangulate.
+    TooFewRays {
+        /// How many gave a ray.
+        usable: usize,
+        /// How many carried a pixel.
+        sightings: usize,
+    },
+    /// No noise level to weight the rays by: no `sigma_px` was given and the
+    /// reconstruction's could not be measured. The sentence says why.
+    NoNoiseLevel(String),
     /// The caller asked the fit to stop.
     Cancelled,
 }
@@ -183,6 +192,15 @@ impl std::fmt::Display for FitError {
             FitError::OutOfMemory { bytes } => {
                 write!(f, "{bytes} bytes could not be allocated for the fit")
             }
+            FitError::TooFewRays { usable, sightings } => write!(
+                f,
+                "only {usable} of the {sightings} in observations give a ray the camera \
+                 model takes back to its pixel, and the track stage needs two or more"
+            ),
+            FitError::NoNoiseLevel(why) => write!(
+                f,
+                "the track cannot be classified as a point or a bearing: {why}"
+            ),
             FitError::Cancelled => write!(f, "the fit was cancelled"),
         }
     }
@@ -280,11 +298,14 @@ impl std::fmt::Display for FitReport {
 /// measurement slots and the report's counts come from.
 ///
 /// **Which representation the track leaves with is the rays' to say.** The
-/// re-triangulation goes through [`classify_track_rays`], the reconstruction's
-/// own finite-versus-infinity criterion: a bearing whose sightings now carry a
-/// depth becomes a point at it, a point whose rays no longer fix one becomes a
-/// bearing, and either way the frame is carried across at the apparent size it
-/// had. [`FitReport::classification`] says which it chose and on which test.
+/// re-triangulation goes through [`classify_track_rays`], the point-or-bearing
+/// test the reconstruction's own reclassification decides with, at the
+/// reconstruction's measured noise level unless [`FitOptions::sigma_px`] gives
+/// one: a bearing whose sightings now carry a depth becomes a point at it, a
+/// point whose rays no longer fix one becomes a bearing, and either way the
+/// frame is carried across at the apparent size it had. A finite track is
+/// placed by the point fit started from where it stood.
+/// [`FitReport::classification`] says which it chose and on which outcome.
 ///
 /// **A sighting the kernels would walk further than
 /// [`Thresholds::max_shift_px`](super::track::Thresholds::max_shift_px) keeps
@@ -760,14 +781,12 @@ pub(super) fn fit_track(
     // The one classification every bench step that triangulates goes through, so
     // a fit cannot write a depth the geometry does not carry -- nor refuse a
     // track whose sightings have just given it one.
-    let (triangulation, rays) = triangulate_keypoints(&next, images, &ins)?;
-    let classification = classify_track_rays(
-        &rays,
-        images,
-        options.noise_floor_px,
-        options.inverse_depth_z_cutoff,
-        options.residual_margin,
-    );
+    let sigma_px = noise_level(edited, options)?;
+    let (triangulation, rays) = triangulate_keypoints(&next, images, &ins, sigma_px)?;
+    let held = track
+        .track()
+        .and_then(|p| p.position.map(|x| (x, p.at_infinity)));
+    let classification = classify(&rays, held, edited, options)?;
     let position = classification.coordinate;
 
     // ── The frame at the coordinate the fit found, and the consensus it shows ──
@@ -928,6 +947,45 @@ fn fit_round(
     Ok(())
 }
 
+/// The noise level a classification weights a track's rays by: the caller's,
+/// or the base's measured reprojection noise, which the reconstruction keeps
+/// once measured. The measure is never finer than the base's keypoints can be
+/// stored at (`keypoint_resolution_px`), so keypoints at the exact projections
+/// of their points still weight their rays, as they do for reclassification
+/// and discovery.
+pub(super) fn noise_level(
+    edited: &EditedReconstruction,
+    options: &FitOptions,
+) -> Result<f64, FitError> {
+    match options.sigma_px {
+        Some(s) if s.is_finite() && s > 0.0 => Ok(s),
+        Some(s) => Err(FitError::NoNoiseLevel(format!(
+            "a noise level of {} px weights no ray",
+            crate::readable::Readable(s)
+        ))),
+        None => edited
+            .base_reprojection_noise_px()
+            .map_err(FitError::NoNoiseLevel),
+    }
+}
+
+/// [`classify_track_rays`] at the reconstruction's minimum point depth and the
+/// options' threshold, for a track that held `held`.
+pub(super) fn classify(
+    rays: &TrackRays,
+    held: Option<(Point3<f64>, bool)>,
+    edited: &EditedReconstruction,
+    options: &FitOptions,
+) -> Result<TrackClassification, FitError> {
+    classify_track_rays(
+        rays,
+        held,
+        edited.base_min_point_depth(),
+        options.depth_likelihood_ratio_threshold,
+    )
+    .ok_or(FitError::Triangulation)
+}
+
 /// Triangulate the observations at `which` from the keypoints they carry, and
 /// give back the rays as well as the solve.
 ///
@@ -938,6 +996,7 @@ fn triangulate_keypoints(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
     which: &[usize],
+    sigma_px: f64,
 ) -> Result<(Triangulation, TrackRays), FitError> {
     let mut rays: Vec<([f64; 2], usize)> = Vec::with_capacity(which.len());
     for &i in which {
@@ -949,7 +1008,7 @@ fn triangulate_keypoints(
             ));
         }
     }
-    triangulate_rays(&rays, images)
+    triangulate_rays(&rays, images, sigma_px)
 }
 
 /// Triangulate the `in` observations from wherever they currently sit: the
@@ -957,6 +1016,7 @@ fn triangulate_keypoints(
 pub(super) fn triangulate_in_seeds(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
+    sigma_px: f64,
 ) -> Result<(Triangulation, TrackRays), FitError> {
     let mut rays: Vec<([f64; 2], usize)> = Vec::new();
     for &i in &track.in_observations() {
@@ -967,11 +1027,16 @@ pub(super) fn triangulate_in_seeds(
             }
         }
     }
-    triangulate_rays(&rays, images)
+    triangulate_rays(&rays, images, sigma_px)
 }
 
 /// The batch triangulator over `(pixel, image)` pairs, with the crate's
-/// camera-to-world convention, and the rays it solved over.
+/// camera-to-world convention, and the rays it solved over, weighted at
+/// `sigma_px` for the classification.
+///
+/// A sighting whose pixel the camera model cannot take back to a ray
+/// ([`TrackRays::of_sightings`]) is in neither, so the solve and the test read
+/// one set of rays.
 ///
 /// **The only refusal left here is a non-finite solve.** An infinite condition
 /// number and a point behind a camera used to be refusals too, and both are
@@ -981,47 +1046,24 @@ pub(super) fn triangulate_in_seeds(
 pub(super) fn triangulate_rays(
     rays: &[([f64; 2], usize)],
     images: &[ProjectedImage<'_>],
+    sigma_px: f64,
 ) -> Result<(Triangulation, TrackRays), FitError> {
     if rays.len() < 2 {
         return Err(FitError::TooFewObservations(rays.len()));
     }
-    let mut dirs: Vec<Vector3<f64>> = Vec::with_capacity(rays.len());
-    let mut centers: Vec<Point3<f64>> = Vec::with_capacity(rays.len());
-    let mut focal_max: Vec<f64> = Vec::with_capacity(rays.len());
-    let mut pixels: Vec<[f64; 2]> = Vec::with_capacity(rays.len());
-    let mut views: Vec<usize> = Vec::with_capacity(rays.len());
-    for &(pixel, image) in rays {
-        let view = &images[image];
-        pixels.push(pixel);
-        views.push(image);
-        let ray = view.camera.pixel_to_ray(pixel[0], pixel[1]);
-        // Camera-to-world carries the canonical (-Z forward) ray into the world
-        // frame the triangulator solves in.
-        let rotation = view.cam_from_world.to_rotation_matrix();
-        let world = rotation.transpose() * Vector3::new(ray[0], ray[1], ray[2]);
-        let norm = world.norm();
-        // Unit rays: the triangulator's normal matrix and the classification's
-        // pair angles are both stated over unit directions.
-        dirs.push(if norm > 0.0 { world / norm } else { world });
-        centers.push(view.cam_from_world.inverse_translation_origin());
-        let (fx, fy) = view.camera.focal_lengths();
-        focal_max.push(fx.max(fy));
+    let built = TrackRays::of_sightings(rays, images, sigma_px);
+    if built.len() < 2 {
+        return Err(FitError::TooFewRays {
+            usable: built.len(),
+            sightings: rays.len(),
+        });
     }
-    let offsets = [0usize, dirs.len()];
-    let triangulation = triangulate_batch(&dirs, &centers, &offsets)[0];
+    let offsets = [0usize, built.len()];
+    let triangulation = triangulate_batch(&built.dirs, &built.centers, &offsets)[0];
     if !triangulation.point.coords.iter().all(|c| c.is_finite()) {
         return Err(FitError::Triangulation);
     }
-    Ok((
-        triangulation,
-        TrackRays {
-            dirs,
-            centers,
-            focal_max,
-            pixels,
-            views,
-        },
-    ))
+    Ok((triangulation, built))
 }
 
 /// Fuse the `in` observations into one consensus tile at their final keypoints,

@@ -100,7 +100,7 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
 
     Without --verbose, prints a short summary. With --verbose, prints the full
     detail — for a point ID, the complete triangulation analysis, which reads
-    the workspace ``.sift`` files.
+    the inline keypoints or, without them, the workspace ``.sift`` files.
 
     With --strips, TARGET is a .sfmr and the remaining arguments are points to
     render as a patch-strip montage (see --strips). A ``sift_files``

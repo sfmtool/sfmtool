@@ -53,7 +53,9 @@ const MAD_TO_SIGMA: f64 = 1.482_602_218_505_602;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReprojectionNoise {
     /// The RMS per-axis residual in pixels over every counted observation, or
-    /// `None` when none was counted.
+    /// `None` when none was counted. Never under the reconstruction's
+    /// [`keypoint_resolution_px`]: a residual finer than an `f32` keypoint can
+    /// state is round-off.
     pub sigma_px: Option<f64>,
     /// How many observations `sigma_px` is measured over.
     pub observation_count: usize,
@@ -63,6 +65,7 @@ pub struct ReprojectionNoise {
     pub outlier_count: usize,
     /// The same measure over the observations made by each camera, indexed as
     /// `image_table.cameras`; `None` for a camera with no counted observation.
+    /// Each is never under that camera's keypoint resolution.
     pub per_camera_sigma_px: Vec<Option<f64>>,
     /// How many observations each entry of `per_camera_sigma_px` is measured
     /// over.
@@ -182,7 +185,20 @@ impl SfmrReconstruction {
     /// `observation_pixels` for at least [`Self::finite_observing_images`].
     pub(crate) fn reprojection_noise_from_pixels(&self, pixels: &Array2<f32>) -> ReprojectionNoise {
         let residuals = self.finite_observation_residuals(pixels);
-        gated_reprojection_noise(&residuals, self.image_table.cameras.len(), OUTLIER_GATE)
+        let mut noise =
+            gated_reprojection_noise(&residuals, self.image_table.cameras.len(), OUTLIER_GATE);
+        // Keypoints at the exact projections of their points measure round-off,
+        // or 0, which would weight every ray of the point-or-bearing test
+        // infinitely; the level is never finer than a keypoint can be stored.
+        for (sigma, camera) in noise
+            .per_camera_sigma_px
+            .iter_mut()
+            .zip(&self.image_table.cameras)
+        {
+            *sigma = sigma.map(|s| s.max(camera_keypoint_resolution_px(camera)));
+        }
+        noise.sigma_px = noise.sigma_px.map(|s| s.max(keypoint_resolution_px(self)));
+        noise
     }
 
     /// [`Self::reprojection_noise`]'s overall `sigma_px`: the RMS per-axis
@@ -191,6 +207,28 @@ impl SfmrReconstruction {
     pub fn reprojection_noise_px(&self) -> Result<Option<f64>, ReconstructionError> {
         Ok(self.reprojection_noise()?.sigma_px)
     }
+}
+
+/// The finest pixel coordinate an `f32` keypoint states in any of `recon`'s
+/// cameras: the `f32` machine epsilon times the camera's larger dimension,
+/// about 10⁻⁴ px on a 1,000 px image.
+///
+/// A bound of representation, not a noise floor: a measured noise level under
+/// it is round-off. Real captures measure tenths of a pixel, thousands of times
+/// above it, so it binds only on exact data, where every consumer of the
+/// point-or-bearing test then calls any track with parallax a point.
+pub fn keypoint_resolution_px(recon: &SfmrReconstruction) -> f64 {
+    recon
+        .image_table
+        .cameras
+        .iter()
+        .map(camera_keypoint_resolution_px)
+        .fold(f64::from(f32::EPSILON), f64::max)
+}
+
+/// [`keypoint_resolution_px`] for one camera.
+fn camera_keypoint_resolution_px(camera: &crate::camera::CameraIntrinsics) -> f64 {
+    f64::from(camera.width.max(camera.height).max(1)) * f64::from(f32::EPSILON)
 }
 
 /// The robust per-axis spread of `components`: `1.4826 · median(|c|)`.

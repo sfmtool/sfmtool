@@ -18,8 +18,10 @@ from .._sfmtool.spatial import KdTree3d
 from .._histogram_utils import print_histogram
 from .point_or_bearing import print_point_or_bearing_brief
 
-# Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
-# point's depth is statistically indistinguishable from infinity.
+# The inverse-depth z under which the report counts a point as near infinity:
+# its depth is within a quarter of its own uncertainty. A reading of the
+# diagnostic only; what is stored as a point or a bearing is decided by the
+# point-or-bearing test.
 DEPTH_RELIABILITY_Z_CUTOFF = 4.0
 
 
@@ -653,7 +655,8 @@ def print_point_summary(
 
     The compact summary uses only the stored reconstruction. ``--verbose`` adds
     the full triangulation analysis, which re-derives the point's observation
-    rays from the workspace ``.sift`` files (they must be present).
+    rays from its inline keypoints or, without them, the workspace ``.sift``
+    files (which must then be present).
     """
     xyzw = np.asarray(recon.positions_xyzw)[point_index]
     color = np.asarray(recon.colors)[point_index]
@@ -683,10 +686,20 @@ def print_point_summary(
     ev = diag["eigenvalues"]
     resolvable = diag["resolvable_distance"]
     fh = diag["finite_horizon"]
-    sufficient = "sufficient" if resolvable >= fh else "insufficient"
 
     click.echo("\nTriangulation analysis:")
-    click.echo(f"  Classification (re-derived): {diag['classification']}")
+    if diag["verdict"] is None:
+        click.echo(
+            "  Point or bearing: no verdict (no measured noise level, or too few rays)"
+        )
+    else:
+        verdict = "finite" if diag["verdict"] == "finite" else "a bearing"
+        click.echo(
+            f"  Point or bearing: {verdict} at {diag['sigma_px']:.3f} px "
+            f"(depth score {diag['depth_score']:.1f}, midpoint bound "
+            f"{diag['midpoint_bound']:.1f}, bearing cost {diag['bearing_cost']:.1f}, "
+            f"likelihood ratio {diag['depth_likelihood_ratio']:.1f})"
+        )
     click.echo(f"  Triangulated point: ({tp[0]:.3f}, {tp[1]:.3f}, {tp[2]:.3f})")
     click.echo(f"  Depth along mean view direction: {diag['depth']:.2f}")
     click.echo(f"  In front of all cameras: {'yes' if diag['in_front'] else 'no'}")
@@ -695,22 +708,23 @@ def print_point_summary(
         f"eigenvalues: [{ev[0]:.3g}, {ev[1]:.3g}, {ev[2]:.3g}]"
     )
     click.echo(
-        f"  Inverse-depth z: {diag['inverse_depth_z']:.2f} "
-        f"(sigma {diag['sigma']:.3g}; cutoff {DEPTH_RELIABILITY_Z_CUTOFF:g})"
+        f"  Inverse-depth z: {diag['inverse_depth_z']:.2f} (sigma {diag['sigma']:.3g})"
     )
     click.echo(
-        f"  Resolvable distance: {resolvable:.1f}  vs finite_horizon "
-        f"(camera extents) {fh:.1f}  -> {sufficient} baseline"
+        f"  Resolvable distance: {resolvable:.1f}  vs the camera extents {fh:.1f}"
     )
     click.echo(f"  Observing-camera baseline span: {diag['baseline_span']:.2f}")
     click.echo(f"  Ray spread (max angle to mean): {diag['max_ray_angle_deg']:.3f} deg")
 
     click.echo("\n  Observations (incidence = ray angle off optical axis):")
-    for o in sorted(
-        diag["observations"], key=lambda d: d["incidence_deg"], reverse=True
-    ):
+
+    def incidence(o):
+        return -np.inf if np.isnan(o["incidence_deg"]) else o["incidence_deg"]
+
+    for o in sorted(diag["observations"], key=incidence, reverse=True):
         edge = "  <- near fisheye edge" if o["incidence_deg"] >= 80.0 else ""
+        feature = "" if o["feature_index"] is None else f"feat {o['feature_index']}  "
         click.echo(
-            f"    {o['image_name']}  feat {o['feature_index']}  "
+            f"    {o['image_name']}  {feature}"
             f"incidence {o['incidence_deg']:.1f} deg{edge}"
         )

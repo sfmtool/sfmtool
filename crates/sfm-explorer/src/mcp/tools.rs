@@ -548,6 +548,7 @@ pub(crate) fn parse(
         "fit_bench_track" => Command::FitBenchTrack {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
+            sigma_px: args.sigma_px("sigma_px")?,
         },
         "fit_bench_track_normal" => Command::FitBenchTrackNormal {
             reconstruction_label: args.required_string("reconstruction_label")?,
@@ -558,6 +559,7 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             stage: args.stage("stage")?,
+            sigma_px: args.sigma_px("sigma_px")?,
         },
         "search_bench_track_descriptors" => Command::SearchBenchTrackDescriptors {
             reconstruction_label: args.required_string("reconstruction_label")?,
@@ -1248,6 +1250,23 @@ impl Args<'_> {
             Some(_) => Err(self.error(format!(
                 "wants {key} to be a radius greater than zero, or absent for the median radius \
                  the image's own patches project to."
+            ))),
+        }
+    }
+
+    /// A noise level in pixels for the bench's point-or-bearing test: positive
+    /// and finite, or absent for the reconstruction's measured one.
+    ///
+    /// Checked here rather than left to the fit, which would refuse it only
+    /// after the worker had decoded the photographs; a fit refuses what it can
+    /// before reading one.
+    fn sigma_px(&self, key: &str) -> Result<Option<f64>, ToolError> {
+        match self.optional_f64(key)? {
+            None => Ok(None),
+            Some(sigma) if sigma.is_finite() && sigma > 0.0 => Ok(Some(sigma)),
+            Some(_) => Err(self.error(format!(
+                "wants {key} to be a noise level in pixels greater than zero, or absent for \
+                 the reconstruction's measured reprojection noise."
             ))),
         }
     }

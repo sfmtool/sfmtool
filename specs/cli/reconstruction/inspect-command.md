@@ -58,26 +58,30 @@ A missing match, or an index beyond the file's point count, is a clear error.
   (`w = 0`), position/direction, color, reprojection error, observation count.
   Uses only the loaded reconstruction (no `.sift` needed).
 - **Verbose** — the full triangulation analysis from `inspect_point`, which
-  re-derives the point's observation rays from the workspace `.sift` files (so
-  they must be present): the re-derived classification, triangulated point and
+  re-derives the point's observation rays from its observed pixels (the
+  inline keypoints of an `embedded_patches` file, or of a `sift_files` one
+  that carries them; otherwise the workspace `.sift` files, which must then be
+  present): the point-or-bearing verdict at the reconstruction's
+  measured noise level and the default threshold, with the depth score,
+  midpoint bound, bearing cost and the plain least-squares fit's likelihood
+  ratio beside it (`no verdict` when no level can be measured or the point has
+  fewer than two usable rays); then the diagnostics: triangulated point and
   depth, condition number and eigenvalues, in-front flag, inverse-depth z-score
-  (and σ), `resolvable_distance` vs `finite_horizon` (the camera extents) with a
-  sufficient/insufficient verdict, observing-camera baseline span, ray spread,
-  and a per-observation list with each ray's incidence angle off the optical
-  axis (flagging the near-fisheye-edge observations).
+  (and σ), `resolvable_distance` against the camera extents, observing-camera
+  baseline span, ray spread, and a per-observation list with each ray's
+  incidence angle off the optical axis (flagging the near-fisheye-edge
+  observations) and, for a `sift_files` file, its feature index.
 
   The implementing module is
   `crates/sfmtool-core/src/analysis/point_inspect.rs` (bound as
   `SfmrReconstruction.inspect_point`): it un-projects each member keypoint
-  through its camera to rebuild the observation rays, then runs the same
-  `triangulate_batch` / `depth_uncertainty_batch` /
-  `classify_rays_at_infinity` path the bench uses (see
-  [`specs/core/reconstruction/batch-triangulation-api.md`](../../core/reconstruction/batch-triangulation-api.md)),
-  so the reported diagnostics match the bench's gate exactly. Discovery and
-  reclassification decide on the point-or-bearing test instead, which
-  `--verbose` reports. It requires
-  a `sift_files` reconstruction (`embedded_patches` is rejected — the rays
-  are re-derived from `.sift` keypoints).
+  through its camera to rebuild the observation rays and runs
+  `triangulate_batch` / `depth_uncertainty_batch` over them for the
+  diagnostics, and `point_or_bearing_scores` (with the plain least-squares
+  fit) on the point for the verdict, the test reclassification, discovery and
+  the bench decide with (see
+  [`specs/core/reconstruction/batch-triangulation-api.md`](../../core/reconstruction/batch-triangulation-api.md)
+  § "Point or bearing").
 
 ## Point Strips (`--strips`)
 

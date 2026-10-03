@@ -794,6 +794,11 @@ constraint triple (see
 
 ### Free points: crossing between representations
 
+A proposal to decide this crossing on the point-or-bearing likelihood-ratio
+test instead of the `floor`, and to solve free points in inverse depth, is the
+amendment draft
+[point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
+
 Within a round nothing changes: a finite point perturbs in three Euclidean
 degrees of freedom and a direction in the two of its tangent plane. The crossing
 happens where the representation is already re-read, the inter-round
