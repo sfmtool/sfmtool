@@ -988,7 +988,7 @@ pull less. Measured from 128 KiB to 4 MiB, decoded bytes move from 19.7 to 21.7 
 and query time not at all beyond noise. The reason is already in
 [Packing policy](#packing-policy): the version-1 corpus prototype packed tree
 chunks with weights that included descriptor bytes the chunks did not store, so
-they underfilled their target by roughly 17x. The writer now counts only stored tree
+they underfilled their target by roughly 17x. The current writer counts only stored tree
 arrays. For this access pattern, decoded volume is still driven primarily by how
 many distinct blocks scattered queries reach.
 
