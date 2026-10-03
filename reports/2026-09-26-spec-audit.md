@@ -270,7 +270,7 @@ most of the per-sentence findings.
 - **Version-history gaps:**
   - sfmr: no v10 entry, no 7→8 migration, and the example still says v7.
   - kdf: says nothing about what versions 2 and 3 changed.
-    > _Status (2026-10-03): Done — `kdf-file-format.md` § Version now says what versions 2 and 3 changed, branch `finding-bash-03-kdf-format-version`._
+    > _Status (2026-10-03): **Done** — `kdf-file-format.md` § Version now says what versions 2 and 3 changed, PR #680._
 
 ---
 
@@ -318,7 +318,7 @@ most of the per-sentence findings.
 **Implementing code:** `features/kdforest/persistent.rs` (`LazyKdForest`, `write_kdf[_ordered]`, `read_kdf`); `sfmtool-kdf-format/src/{types,cache,read,verify}.rs`; `sfmtool-py/src/spatial/kdf.rs`.
 **Inconsistencies:**
   - **Wrong format version.** :186-188, :989, :995 and :1261 say "Version 2… Version-1 files are rejected". The code has `KDF_FORMAT_VERSION = 3` (`types.rs:10`) and rejects version 2.
-    > _Status (2026-10-03): Done — the spec states the format is at version 3 and rejects every other version; :376 and :995 now say version 2 introduced the single corpus and version 3 keeps it, branch `finding-bash-03-kdf-format-version`._
+    > _Status (2026-10-03): **Done** — the spec states the format is at version 3 and rejects every other version; :376 and :995 now say version 2 introduced the single corpus and version 3 keeps it, PR #680._
   - **Shard cap.** :837 gives `cache_bytes / max_chunk_bytes`. The code (`cache.rs:185`) and :444 use the largest validated item.
   - **Block size.** :1005-1008 and :1289 recommend 4-8 KiB descriptor blocks. The default and :789-812 say 2 KiB.
   - **LRU.** :591-593 describe a counter-stamped LRU. The code uses an indexed doubly linked list, which :438-441 describe correctly.
@@ -662,9 +662,9 @@ most of the per-sentence findings.
   - :90 allows any root address. `read.rs:1296` requires `[0, 0]` for a nonempty tree.
   - :84 says readers resolve codes through `node_kinds`. `read.rs:1265` requires exactly `["internal","leaf"]`, so state the codes as fixed.
   - "version-2" appears at :494 and :654, in `types.rs:77,113` and in `lazy-kdforest-query.md`. The writer emits version 3.
-    > _Status (2026-10-03): Done — :494 and :654 no longer call the current layout version 2; the doc comments in `types.rs`, `summary.rs` and `sfmtool-py/src/spatial/kdf.rs` no longer name a version, branch `finding-bash-03-kdf-format-version`._
+    > _Status (2026-10-03): **Done** — :494 and :654 no longer call the current layout version 2; the doc comments in `types.rs`, `summary.rs` and `sfmtool-py/src/spatial/kdf.rs` no longer name a version, PR #680._
   - The spec has no history of what versions 2 and 3 changed.
-    > _Status (2026-10-03): Done — § Version says version 2 replaced version 1's two layouts with the single corpus and added the SIFT geometry corpus, and version 3 changed only the integrity directory to one digest per section, branch `finding-bash-03-kdf-format-version`._
+    > _Status (2026-10-03): **Done** — § Version says version 2 replaced version 1's two layouts with the single corpus and added the SIFT geometry corpus, and version 3 changed only the integrity directory to one digest per section, PR #680._
 **Format independence:**
   - :360-364 `KdfFile::verify_content` and `verify_kdf` → "the digest check runs first, then the structural checks", with the links moved to § Implementations (:466).
   - :686 names the reader option `max_metadata_bytes`, and :605 links a script.
@@ -932,7 +932,7 @@ replaced by `gui/track-view.md`.)
    - `sift-file-format.md` defines `feature_tool_xxh128` as a workspace-propagated value with no fixed algorithm. It is the XXH128 of the stored metadata bytes, and verifiers enforce that.
    - `sfmr-file-format.md` says versions are "1 to 9" (the current version is 11), has no v10 entry, and calls `derived_xxh128` optional when the verifier requires it.
    - The kdf version is given as 2 in `lazy-kdforest-query.md`, in two places in `kdf-file-format.md` and in `types.rs`; the code is at 3.
-     > _Status (2026-10-03): Done — every mention now states version 3 or describes version 2 as history, branch `finding-bash-03-kdf-format-version`._
+     > _Status (2026-10-03): **Done** — every mention now states version 3 or describes version 2 as history, PR #680._
 
    Another tool writing these files would get them wrong.
 3. **Format specs are not independent of the code.** Six of the seven format specs with hits have no *Implementations* section. Adding one to each is the fix that resolves most of the 45 or so failure-6 findings. `archive-container.md` should split its crate API into its own spec, and `cluster-selection.md` should move out of `formats/`.
