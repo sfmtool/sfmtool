@@ -361,7 +361,10 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
   reprojection error into σ as `classify_points_at_infinity` does today
   (`noise = max(reproj_error, floor)`). Discovered points carry their mean
   reprojection error against the appended track, so the same fold is
-  available to them.
+  available to them. A replacement for the z test that fits both a point and
+  a bearing and compares their costs against a measured noise level is
+  proposed in
+  [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
 - Weighted vs unweighted midpoint as the default (unweighted matches current
   behavior; inverse-depth² is closer to reprojection error).
 
