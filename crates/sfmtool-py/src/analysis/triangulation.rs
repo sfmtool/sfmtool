@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for batch triangulation with observability diagnostics.
+//! Python bindings for batch triangulation with observability diagnostics, and
+//! the parsing of the CSR ray layout the batch functions share.
 
 use nalgebra::{Point3, Vector3};
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
@@ -10,6 +11,60 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::reconstruction::triangulation::triangulate_batch as core_triangulate_batch;
+
+/// The rows of an `(N, 3)` float64 array as vectors. `name` is the argument's
+/// name, for the error.
+pub(super) fn vec3_rows(name: &str, a: &PyReadonlyArray2<f64>) -> PyResult<Vec<Vector3<f64>>> {
+    if a.shape()[1] != 3 {
+        return Err(PyValueError::new_err(format!(
+            "{name} must have shape (N, 3), got (N, {})",
+            a.shape()[1]
+        )));
+    }
+    let data = to_contiguous!(a);
+    Ok(data
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| Vector3::new(c[0], c[1], c[2]))
+        .collect())
+}
+
+/// The rows of an `(N, 3)` float64 array as points.
+pub(super) fn point3_rows(name: &str, a: &PyReadonlyArray2<f64>) -> PyResult<Vec<Point3<f64>>> {
+    Ok(vec3_rows(name, a)?.into_iter().map(Point3::from).collect())
+}
+
+/// CSR track boundaries over `t` rays, validated up front: non-negative,
+/// non-decreasing, and ending within the ray count. Otherwise the core would
+/// index the rays out of bounds and panic on user input.
+pub(super) fn csr_offsets(offsets: &PyReadonlyArray1<i64>, t: usize) -> PyResult<Vec<usize>> {
+    let offsets_data = to_contiguous!(offsets);
+    let mut offsets_vec: Vec<usize> = Vec::with_capacity(offsets_data.len());
+    let mut prev: i64 = 0;
+    for (k, &o) in offsets_data.iter().enumerate() {
+        if o < 0 {
+            return Err(PyValueError::new_err(format!(
+                "offsets must be non-negative, got {o} at index {k}"
+            )));
+        }
+        if o < prev {
+            return Err(PyValueError::new_err(format!(
+                "offsets must be non-decreasing, got {o} after {prev} at index {k}"
+            )));
+        }
+        prev = o;
+        offsets_vec.push(o as usize);
+    }
+    if let Some(&last) = offsets_vec.last() {
+        if last > t {
+            return Err(PyValueError::new_err(format!(
+                "offsets[-1] = {last} exceeds the number of rays {t}"
+            )));
+        }
+    }
+    Ok(offsets_vec)
+}
 
 /// Triangulate a batch of tracks from world-space rays, returning each track's
 /// least-squares point and the observability diagnostics the solve computes.
@@ -41,49 +96,9 @@ pub fn triangulate_batch(
         ));
     }
 
-    let dirs_data = to_contiguous!(dirs);
-    let centers_data = to_contiguous!(centers);
-    let offsets_data = to_contiguous!(offsets);
-
-    let dirs_vec: Vec<Vector3<f64>> = dirs_data
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|c| Vector3::new(c[0], c[1], c[2]))
-        .collect();
-    let centers_vec: Vec<Point3<f64>> = centers_data
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|c| Point3::new(c[0], c[1], c[2]))
-        .collect();
-
-    // Validate the CSR offsets up front: they must be non-negative,
-    // non-decreasing, and end within the ray count. Otherwise the core would
-    // index `dirs`/`centers` out of bounds and panic on user input.
-    let mut offsets_vec: Vec<usize> = Vec::with_capacity(offsets_data.len());
-    let mut prev: i64 = 0;
-    for (k, &o) in offsets_data.iter().enumerate() {
-        if o < 0 {
-            return Err(PyValueError::new_err(format!(
-                "offsets must be non-negative, got {o} at index {k}"
-            )));
-        }
-        if o < prev {
-            return Err(PyValueError::new_err(format!(
-                "offsets must be non-decreasing, got {o} after {prev} at index {k}"
-            )));
-        }
-        prev = o;
-        offsets_vec.push(o as usize);
-    }
-    if let Some(&last) = offsets_vec.last() {
-        if last > t {
-            return Err(PyValueError::new_err(format!(
-                "offsets[-1] = {last} exceeds the number of rays {t}"
-            )));
-        }
-    }
+    let dirs_vec = vec3_rows("dirs", &dirs)?;
+    let centers_vec = point3_rows("centers", &centers)?;
+    let offsets_vec = csr_offsets(&offsets, t)?;
 
     let tris = core_triangulate_batch(&dirs_vec, &centers_vec, &offsets_vec);
 

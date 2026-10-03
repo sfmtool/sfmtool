@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Reconstruction-analysis bindings: pose/track operations, least-squares +
-//! RANSAC alignment, point correspondence, batch triangulation, epipolar curves,
+//! RANSAC alignment, point correspondence, batch triangulation and the
+//! point-or-bearing test, epipolar curves,
 //! image-pair graph construction, image-space observation adjacency and the
 //! surfel normals fitted over it, per-image observation coverage grids, the
 //! per-image keypoint reach enumeration and the rule that retires a coarse
@@ -22,12 +23,14 @@ pub mod image_pair_graph;
 pub mod keypoint_reach;
 pub mod observation_adjacency;
 pub mod observation_coverage;
+pub mod point_or_bearing;
 pub mod source_clusters;
 pub mod triangulation;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     core::register(m)?;
     triangulation::register(m)?;
+    point_or_bearing::register(m)?;
     epipolar::register(m)?;
     image_pair_graph::register(m)?;
     keypoint_reach::register(m)?;

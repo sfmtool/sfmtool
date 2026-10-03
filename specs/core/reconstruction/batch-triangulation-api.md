@@ -266,7 +266,10 @@ question a stored track's representation depends on more directly: does giving
 the track a depth explain its rays better than a direction alone does, by more
 than the noise could explain? It fits both models to the track's rays and
 compares their costs, which is a likelihood-ratio test between two nested
-models. No classifier reads it yet; moving the four finite-or-bearing rules onto
+models. A stored reconstruction supplies the noise level from its own residuals
+("The measured noise level") and runs the test over its points with one method
+("Over a reconstruction"), and both are bound to Python. No classifier or
+report reads it yet; moving the four finite-or-bearing rules onto
 it is the amendment draft
 [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
 which also carries the measurements that motivate it.
@@ -566,6 +569,188 @@ robust, from bearing costs 2,753.0 and 668.8 and point costs 7.18 and 7.00;
 point 50 has 85,424 and 5,892), so a report that sets `Λ` beside `depth_score` fits with
 `soft_l1_scale: None`.
 
+### The measured noise level
+
+The weights are over a per-axis pixel noise `σ_px`, and a stored
+reconstruction measures its own: the RMS per-axis reprojection residual over
+the observations of its finite points. It lives in
+[analysis/reprojection_noise.rs](../../../crates/sfmtool-core/src/analysis/reprojection_noise.rs).
+
+```rust
+pub struct ReprojectionNoise {
+    /// √(Σ (du² + dv²) / 2n) over every counted observation; None when none.
+    pub sigma_px: Option<f64>,
+    pub observation_count: usize,
+    /// The same over each camera's observations, indexed as image_table.cameras.
+    pub per_camera_sigma_px: Vec<Option<f64>>,
+    pub per_camera_observation_count: Vec<usize>,
+}
+
+impl SfmrReconstruction {
+    pub fn reprojection_noise(&self) -> Result<ReprojectionNoise, ReconstructionError>;
+    /// reprojection_noise()?.sigma_px.
+    pub fn reprojection_noise_px(&self) -> Result<Option<f64>, ReconstructionError>;
+}
+```
+
+```rust
+let sigma_px = recon.reprojection_noise_px()?.expect("a finite point with observations");
+```
+
+- **Finite points only.** The test this measure feeds is about whether a
+  track is a bearing, and a bearing's residuals are the residuals of the model
+  under question. A reconstruction with no observation of a finite point has no
+  measure, and the result is `None` rather than a guessed default.
+- **RMS, not a robust spread.** `σ_px` has to cover pose, lens-model and
+  keypoint error together, and those are heavier-tailed than a Gaussian. On
+  the Kerry Park ground truth the robust spread is 0.137 px against an RMS of
+  0.216 px, and at 0.137 px even its 13,000-unit bearings score up to 35.
+  The plain RMS is sensitive to a few gross residuals and takes no account
+  of the parameters bundle adjustment fitted; whether to trim outliers or
+  correct for degrees of freedom is open in the
+  [amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md).
+- **One value, and one per camera beside it.** The default everywhere is the
+  overall value. The per-camera values cost one more accumulator per camera
+  and are what a caller reads to decide whether one value is enough: the two
+  Kerry Park lenses measure 0.2155 and 0.2157 px. Whether a capture whose
+  cameras differ should weight each camera's rays by its own value is the
+  draft's open question.
+- **Where the pixel comes from.** An observation's pixel is the inline
+  keypoint when the reconstruction carries the column (every
+  `embedded_patches` file, and a `sift_files` one with the optional copy,
+  which a load fills in from the `.sift` files), and otherwise the `.sift`
+  position its feature index names, read from the workspace. Both go through
+  the same lookup, `SfmrReconstruction::observation_pixels` in
+  [recompute.rs](../../../crates/sfmtool-core/src/reconstruction/data/recompute.rs),
+  whose `.sift` read (`tracked_sift_positions`) is also the one
+  `compute_observation_reprojection_errors` makes. An
+  observation is left out when its pixel is not finite or the camera model
+  cannot image its point.
+
+On the Kerry Park ground truth `tk117` it is 0.2156 px over 3,510
+observations; on the in-repo seoul bull ground truth, 0.646 px over 1,233.
+
+### Over a reconstruction
+
+Every consumer of the test that holds a reconstruction (the reports, the
+reclassification and discovery passes, the bench) builds a track's rays the
+same way: each `(image, pixel)` observation through `observed_ray`, at that
+image's camera and pose and the measured noise. Two pieces in
+[analysis/point_or_bearing.rs](../../../crates/sfmtool-core/src/analysis/point_or_bearing.rs)
+carry that. `observation_ray` and `track_rays` build rays from any
+observations, stored or not: discovery's tracks are assembled from `.sift`
+keypoints that belong to no point yet, and the bench's from sightings it has not
+committed. Discovery builds its tracks with `track_rays`; the bench, which
+holds each sighting's projected image, builds them with `track_rays` or with
+`observation_ray` or `observed_ray` per sighting, which are equally direct.
+Both call the batch functions on the result. `point_or_bearing_scores` is the convenience
+over the stored points, built on `track_rays`, for the reports and the
+reclassification pass.
+
+```rust
+/// One observation as the test reads it.
+pub struct ObservationRay {
+    pub dir: Vector3<f64>,
+    pub center: Point3<f64>,
+    /// (1/σ_px)·J·R, as observed_ray builds it.
+    pub weight: Matrix2x3<f64>,
+}
+
+/// A batch of tracks of rays in the CSR layout of the batch functions (named
+/// apart from the bench's one-track `TrackRays`).
+pub struct RayBatch {
+    pub dirs: Vec<Vector3<f64>>,
+    pub centers: Vec<Point3<f64>>,
+    pub weights: Vec<Matrix2x3<f64>>,
+    pub offsets: Vec<usize>,
+}
+
+/// None for an index past the table, a non-finite pixel, or what observed_ray declines.
+pub fn observation_ray(image_table: &ImageTable, image_index: usize, pixel: [f64; 2],
+    sigma_px: f64) -> Option<ObservationRay>;
+/// One output track per input track (CSR over observations), holding the
+/// observations that give a ray.
+pub fn track_rays(image_table: &ImageTable, observations: &[(usize, [f64; 2])],
+    offsets: &[usize], sigma_px: f64) -> RayBatch;
+
+pub struct PointOrBearingScores {
+    /// The noise the rays were weighted by: the caller's, or reprojection_noise_px.
+    pub sigma_px: f64,
+    /// The points scored, in order: the caller's indexes, or every point.
+    pub point_indexes: Vec<usize>,
+    /// One per point index; None with fewer than two usable rays.
+    pub scores: Vec<Option<BearingScore>>,
+    /// With fit options given, the fits, aligned the same way.
+    pub fits: Option<Vec<Option<PointBearingFit>>>,
+}
+
+pub enum PointOrBearingError {
+    NoNoiseLevel,
+    InvalidNoiseLevel(f64),
+    PointIndexOutOfRange { index: usize, point_count: usize },
+    Reconstruction(ReconstructionError),
+}
+
+impl SfmrReconstruction {
+    pub fn point_or_bearing_scores(
+        &self,
+        point_indexes: Option<&[usize]>,
+        sigma_px: Option<f64>,
+        fit: Option<&PointBearingFitOptions>,
+    ) -> Result<PointOrBearingScores, PointOrBearingError>;
+}
+```
+
+```rust
+let plain = PointBearingFitOptions { soft_l1_scale: None, ..Default::default() };
+let result = recon.point_or_bearing_scores(None, None, Some(&plain))?;
+for (k, &point) in result.point_indexes.iter().enumerate() {
+    let finite = result.scores[k]
+        .as_ref()
+        .is_some_and(|s| is_finite(s, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD));
+    // result.fits.as_ref().unwrap()[k] holds the point and Λ.
+}
+```
+
+- **The ray construction is separate from the stored points.** A track a
+  caller assembles itself (discovery's, from `.sift` keypoints; the bench's,
+  from its sightings) has no point index, so `track_rays` takes
+  `(image, pixel)` observations in CSR form, keeps one output track per input
+  track, and leaves the batch calls to the caller. `observation_ray` is the
+  single-observation form for a caller adding one sighting at a time.
+- **Aligned to the indexes asked for.** A report reads every point; a
+  reclassification pass scores every point and then fits only the finite
+  verdicts. Each gets results in the order it asked, repeats included, so no
+  caller re-maps a compacted batch.
+- **Points at infinity are scored.** They are the ones a finite verdict would
+  promote, so the method does not filter on the stored `w`. A bearing's
+  observations are rays like any other.
+- **`None` rather than a dropped row.** An observation gives no ray when its
+  pixel is not finite or `observed_ray` declines it (outside the model's
+  domain); a point left with fewer than two rays is `None`, as in the batch
+  functions.
+- **Scoring and fitting share the rays.** The fit is optional, because
+  deciding needs only the score. When it runs, each finite point starts from
+  its stored position, which is the warm start the primitives take, and a
+  point at infinity starts with none. The method passes the options through,
+  so the caller chooses the loss; a report that sets `Λ` beside `depth_score`
+  passes `soft_l1_scale: None` (see the robust loss under "Fitting").
+- **σ defaults to the measured value**, and the result carries the value used,
+  so a report can print it. A caller that wants another (an override on the
+  command line, or bundle adjustment's per-round value) passes it. When it is
+  measured, the pixels are read once for both the measure and the rays, so a
+  `sift_files` reconstruction without the inline column reads each `.sift`
+  file once.
+
+On `tk117` the method reproduces the 12-bearing table of the amendment draft:
+at the measured 0.2156 px, points 298, 294 and 295 score 132.48, 83.62 and 31.10
+and are finite, 269 and 270 score 14.40 and 11.67, and none of the 375 finite
+points gets a bearing verdict (12 of them are finite on the midpoint bound
+alone). At the 0.216 px the draft used, the scores are the draft's 131.97,
+83.30, 30.98, 14.34 and 11.63; the scores scale as `1/σ²`. On the seoul bull
+ground truth no finite point gets a bearing verdict and none of its 14 bearings
+gets a finite one.
+
 ## Python bindings
 
 Batch-first and numpy-friendly, matching the existing `read_*` dict-of-arrays
@@ -581,6 +766,61 @@ out = triangulate_batch(dirs, centers, offsets)  # dict of arrays:
 diag = recon.triangulation_diagnostics(noise_px=1.0)  # dict of arrays incl.
 #   condition_number (M,), depth_sigma (M,), inverse_depth_z (M,)
 ```
+
+The point-or-bearing primitives are in `sfmtool._sfmtool.analysis`, bound in
+[analysis/point_or_bearing.rs](../../../crates/sfmtool-py/src/analysis/point_or_bearing.rs),
+with the CSR layout above and one `(2, 3)` weight per ray:
+
+```python
+from sfmtool._sfmtool.analysis import (
+    bearing_score_batch, fit_point_and_bearing_batch, observed_rays,
+    DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD, DEFAULT_SOFT_L1_SCALE,
+    DEFAULT_POINT_FIT_MAX_ITERATIONS,
+)
+
+# one camera's observations: rotations (N,4) wxyz, pixels (N,2)
+rays = observed_rays(camera, cam_from_world_wxyz, pixels, sigma_px)
+#   valid (N,) bool, dirs (N,3), weights (N,2,3); NaN rows where not valid
+
+score = bearing_score_batch(dirs, centers, offsets, weights, threshold=25.0)
+#   scored (M,) bool, bearing (M,3), bearing_cost, depth_score, midpoint_bound (M,),
+#   bearing_in_front_of_all_cameras (M,) bool, num_views (M,) int64, is_finite (M,) bool
+
+fit = fit_point_and_bearing_batch(dirs, centers, offsets, weights,
+                                  starts=None, anchors=None,
+                                  soft_l1_scale=3.0, max_iterations=20)
+#   fitted (M,) bool, bearing (M,3), bearing_cost, anchor (M,3), direction (M,3),
+#   inverse_depth, point (M,3; NaN where inverse_depth is 0), point_cost,
+#   depth_likelihood_ratio (M,), in_front_of_all_cameras (M,) bool, num_views (M,) int64
+
+recon.reprojection_noise_px()  # float or None
+recon.reprojection_noise()     # sigma_px, observation_count,
+                               # per_camera_sigma_px (C,), per_camera_observation_count (C,)
+out = recon.point_or_bearing_scores(point_indexes=None, sigma_px=None, fit=False,
+                                    threshold=25.0, soft_l1_scale=None,
+                                    max_iterations=20)
+#   bearing_score_batch's dict, one row per point index, plus sigma_px and
+#   point_indexes (M,) int64; with fit=True, out["fit"] is
+#   fit_point_and_bearing_batch's dict, aligned the same way
+```
+
+- **Keys are the Rust field names**, `bearing_in_front_of_all_cameras` and
+  `in_front_of_all_cameras` included, as `triangulate_batch`'s are, so a
+  reader moving between the two layers finds the same word. A row the core
+  returns `None` for is `scored` (or `fitted`) false, NaN in its float
+  columns, false in its flags and 0 in `num_views`.
+- **`is_finite` is a column, not a function.** The verdict is the core's
+  `is_finite` at the `threshold` argument, so the rule has one implementation.
+- **The fit is a nested dict** in `point_or_bearing_scores`, under `fit`. Its
+  `bearing`, `bearing_cost` and `num_views` would otherwise collide with the
+  score's, and they differ under a robust loss.
+- **Defaults follow the caller.** `fit_point_and_bearing_batch` defaults to
+  the core's soft-L1 scale, as the primitive does; `point_or_bearing_scores`
+  defaults to plain least squares, because what it is for is setting `Λ`
+  beside `depth_score`.
+- **`observed_rays` takes one camera** and a rotation per pixel, so a caller
+  with several cameras calls it once per camera. A pixel outside the camera
+  model's domain is `valid` false rather than an error.
 
 The GUI (`sfm-explorer`, Rust) consumes the core functions directly; the binding
 is for the CLI/inspect/analyze/notebook paths.

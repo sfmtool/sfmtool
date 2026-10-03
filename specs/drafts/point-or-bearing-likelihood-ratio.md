@@ -4,8 +4,9 @@
 a finite point or a bearing onto one likelihood-ratio test. The test's core
 primitives exist and are specified in
 [core/reconstruction/batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
-§ "Point or bearing"; this draft covers what remains: the Python bindings, a
-measured noise level, the reports, and the consumers. Amends that spec (the
+§ "Point or bearing", as are the measured noise level, the test over a
+reconstruction's points and the Python bindings; this draft covers what
+remains: the reports and the consumers. Amends that spec (the
 inverse-depth z test, its pre-filter and its noise floor),
 [core/reconstruction/triangulation-rules.md](../core/reconstruction/triangulation-rules.md)
 (the `floor` rule),
@@ -96,10 +97,15 @@ theory of the two nested models and the fit are in
 § "Point or bearing"; the sections below cover the measurements that motivate
 deciding on them and how each consumer moves.
 
-The bindings this draft proposes are
-`sfmtool._sfmtool.analysis.bearing_score_batch` and
-`sfmtool._sfmtool.analysis.fit_point_and_bearing_batch`, dict-of-arrays like
-`triangulate_batch`'s.
+A consumer holding a reconstruction builds its rays with `track_rays` (or
+`observation_ray` for one sighting) from `(image, pixel)` observations, at the
+noise level `SfmrReconstruction::reprojection_noise_px` measures. Discovery
+builds its candidate tracks from `.sift` keypoints that way and the bench its
+uncommitted sightings, then calls the batch functions on them; the reports and
+reclassification use `SfmrReconstruction::point_or_bearing_scores`, the same
+construction over stored points. All of these, and their Python bindings, are
+in the same spec (§ "The measured noise level", § "Over a reconstruction" and
+§ "Python bindings").
 
 ## Theory
 
@@ -199,6 +205,9 @@ The current `inverse_depth_z` is the Wald form above. Its square approximates
   lens-model and keypoint error together, and those are heavier-tailed than a
   Gaussian. On `tk117` the robust spread is 0.137 px against an RMS of 0.216
   px, and at 0.137 px even the 13,000-unit bearings score `Λ` up to 35.
+  This is `SfmrReconstruction::reprojection_noise_px`, specified in the
+  standing spec § "The measured noise level"; each consumer's step makes it
+  that consumer's default.
 - **Bundle adjustment**: the same RMS over the round's kept observations of
   finite points at the round's state, measured at re-estimation. Not
   `loss_scale`, which is a schedule constant chosen per stage and not a
@@ -264,12 +273,11 @@ Two changes, in order.
 
 Each step is one PR and keeps the other rules unchanged until its turn.
 
-1. **Bindings and reports.** The primitives are in place (see "The
-   primitives"). This step adds their Python bindings and a
-   reconstruction-level `reprojection_noise_px` that measures σ from finite
-   points, and `analyze --depth-reliability` and `inspect --verbose` report the
-   score and `Λ` beside `inverse_depth_z`, so they can be compared on real files
-   before anything decides on them.
+1. **Reports.** The primitives, the measured noise level, the test over a
+   reconstruction's points and their Python bindings are in place (see "The
+   primitives"). This step has `analyze --depth-reliability` and
+   `inspect --verbose` report the score and `Λ` beside `inverse_depth_z`, so
+   they can be compared on real files before anything decides on them.
 2. **Reclassification, discovery and the bench.** `classify_rays_at_infinity`
    decides on the score. `CONDITION_NUMBER_PREFILTER`, `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`
    and `DEFAULT_NOISE_FLOOR_PX` stop deciding anything. The bench's `0.8` RMS
@@ -296,6 +304,13 @@ Each step is one PR and keeps the other rules unchanged until its turn.
 The primitives' own tests (nesting, calibration against the half-χ²₁ law,
 recovery, robustness, the exact bearing, score against Λ, batch parity) are in
 [point_or_bearing/tests.rs](../../crates/sfmtool-core/src/reconstruction/triangulation/point_or_bearing/tests.rs).
+The measured noise level's tests (a known σ recovered, per camera, from every
+observation source, with points at infinity left out) are in
+[analysis/reprojection_noise/tests.rs](../../crates/sfmtool-core/src/analysis/reprojection_noise/tests.rs),
+and those of the ray construction and the test over a reconstruction (agreement
+with the primitives called by hand, alignment to the indexes asked for, tracks
+with fewer than two rays) in
+[analysis/point_or_bearing/tests.rs](../../crates/sfmtool-core/src/analysis/point_or_bearing/tests.rs).
 The consumer steps add:
 
 - **The bench's override cases** become ordinary outcomes: an ill-conditioned
@@ -311,7 +326,31 @@ The consumer steps add:
   units. Both are defensible on `tk117`; a larger capture with a known far
   field (KerryPark360) should decide it.
 - **Per-camera σ.** One σ per reconstruction, or one per camera when the
-  cameras differ (the two Kerry Park lenses are close; other rigs may not be).
+  cameras differ (the two Kerry Park lenses are close, 0.2155 and 0.2157 px
+  from `reprojection_noise`'s per-camera values; other rigs may not be).
+- **Outliers in the measured σ.** The RMS is dominated by a few large
+  residuals when a reconstruction has them. On the seoul bull ground truth one
+  16 px residual carries about 25% of `Σe²` and the top 1% of observations
+  62%, so the RMS of 0.646 px compares with 0.345 px after trimming the top
+  2% and 0.205 px from the MAD; bearing 188 scores 3.63 at 0.646 px and 32.5
+  at 0.216 px, which is a bearing verdict against a finite one. On `tk117` the
+  top 1% carry only 23%. Reclassification (step 2 of "Migration") has to
+  choose among three: the plain RMS, which never calls a bearing finite on an
+  understated σ but can keep a true point as a bearing when outliers inflate
+  it; a trimmed RMS (drop the top fraction of residuals), which is robust to a
+  few gross outliers but understates σ by the trimmed fraction's share of a
+  true heavy tail; or excluding observations whose residual is above some
+  multiple of a robust spread before taking the RMS, which removes gross
+  outliers (mismatches) while keeping the moderate tail that pose and lens
+  error produce. The second and third need a fraction or a multiple chosen on
+  more captures than these two.
+- **Degrees of freedom in σ.** The raw RMS divides by `2N` and ignores the
+  parameters bundle adjustment fitted to the same residuals, so it
+  understates the noise. Correcting by `2N − 3P − 6I + 7` (`P` finite points,
+  `I` images, less the 7 of the similarity gauge) raises σ by a factor of
+  1.118 on `tk117` and 1.25 on the seoul bull. Whether to apply it, and its
+  per-camera form, is open with the outlier question; it scales every score
+  by `1/factor²`.
 - **Discovery and single-stop tracks.** Whether `find_points_at_infinity`
   should still drop a track whose observing cameras cannot resolve a depth at
   the capture's scale, or add it as a bearing as `Λ` says.

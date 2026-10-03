@@ -6,15 +6,20 @@
 //! Everything here reads observations back through the camera model and writes
 //! the result onto the reconstruction: per-image observation errors, the
 //! per-point error refresh for finite and infinity points, and the depth
-//! statistics/histograms (which also fill in missing point normals). Split out
-//! of [`super`] so the type definitions are not interleaved with this algebra.
+//! statistics/histograms (which also fill in missing point normals). It also
+//! holds the one lookup of where each observation sits in its image, inline or
+//! from `.sift`, that the reconstruction-level analyses read. Split out of
+//! [`super`] so the type definitions are not interleaved with this algebra.
 //!
 //! Named `recompute` rather than `errors` on purpose: the error *type*,
 //! [`ReconstructionError`], is part of the data model and stays in [`super`].
 //! `rebuild_derived_fields` is the one recompute that stays there too — it is
 //! pure bookkeeping over the track arrays with no camera model involved.
 
+use std::borrow::Cow;
+
 use nalgebra::{Point3, UnitQuaternion, Vector3};
+use ndarray::Array2;
 
 use sfmtool_sfmr_format::SfmrError;
 
@@ -63,16 +68,7 @@ impl SfmrReconstruction {
         // is no inline column to answer from.
         let positions = match inline {
             Some(_) => Vec::new(),
-            None => {
-                let read_count = self.point_set.max_track_feature_index[image_index] as usize + 1;
-                let sift_path = self.sift_path_for_image(image_index);
-                sfmtool_sift_format::read_sift_positions(&sift_path, read_count).map_err(|e| {
-                    ReconstructionError::SiftRead {
-                        path: sift_path,
-                        source: e.to_string(),
-                    }
-                })?
-            }
+            None => self.tracked_sift_positions(image_index)?,
         };
 
         // World-to-camera rotation (the stored unit quaternion rotates the point
@@ -122,6 +118,67 @@ impl SfmrReconstruction {
         }
 
         Ok(results)
+    }
+
+    /// The positions of image `image_index`'s `.sift` features, read up to the
+    /// highest feature index any observation names. The one `.sift` read behind
+    /// [`Self::compute_observation_reprojection_errors`] and
+    /// [`Self::observation_pixels`] when there is no inline column.
+    fn tracked_sift_positions(
+        &self,
+        image_index: usize,
+    ) -> Result<Vec<[f32; 2]>, ReconstructionError> {
+        let read_count = self.point_set.max_track_feature_index[image_index] as usize + 1;
+        let sift_path = self.sift_path_for_image(image_index);
+        sfmtool_sift_format::read_sift_positions(&sift_path, read_count).map_err(|e| {
+            ReconstructionError::SiftRead {
+                path: sift_path,
+                source: e.to_string(),
+            }
+        })
+    }
+
+    /// Where each observation sits in its image, one `(u, v)` row per entry of
+    /// `tracks`.
+    ///
+    /// The reconstruction's inline `keypoints_xy` when it carries one (every
+    /// `embedded_patches` reconstruction, and a `sift_files` one with the
+    /// optional copy), borrowed. Otherwise the `.sift` positions the feature
+    /// indexes name, read only for the images where `images[i]` is true; the
+    /// rows of the other images, and of a feature index past the end of its
+    /// file, are NaN. `images` has one entry per image.
+    pub(crate) fn observation_pixels(
+        &self,
+        images: &[bool],
+    ) -> Result<Cow<'_, Array2<f32>>, ReconstructionError> {
+        if let Some(inline) = self.keypoints_xy() {
+            return Ok(Cow::Borrowed(inline));
+        }
+        let tracks = &self.point_set.tracks;
+        let mut pixels = Array2::<f32>::from_elem((tracks.len(), 2), f32::NAN);
+        let Some(feature_indexes) = self.feature_indexes() else {
+            return Ok(Cow::Owned(pixels));
+        };
+        let mut observed = vec![false; self.image_table.images.len()];
+        for obs in tracks {
+            observed[obs.image_index as usize] = true;
+        }
+        let mut positions: Vec<Option<Vec<[f32; 2]>>> = vec![None; observed.len()];
+        for (image, slot) in positions.iter_mut().enumerate() {
+            if observed[image] && images.get(image).copied().unwrap_or(false) {
+                *slot = Some(self.tracked_sift_positions(image)?);
+            }
+        }
+        for (row, (obs, &feature)) in tracks.iter().zip(feature_indexes).enumerate() {
+            if let Some(xy) = positions[obs.image_index as usize]
+                .as_ref()
+                .and_then(|p| p.get(feature as usize))
+            {
+                pixels[[row, 0]] = xy[0];
+                pixels[[row, 1]] = xy[1];
+            }
+        }
+        Ok(Cow::Owned(pixels))
     }
 
     /// The `embedded_patches` case of
@@ -334,7 +391,7 @@ impl SfmrReconstruction {
     /// [`sfmtool_sfmr_format::compute_depth_statistics`] function that `.sfmr` file
     /// writing uses.
     pub fn recompute_depth_statistics(&mut self) -> Result<(), SfmrError> {
-        use ndarray::{Array1, Array2};
+        use ndarray::Array1;
 
         let image_count = self.image_table.images.len();
         let points3d_count = self.point_set.points.len();

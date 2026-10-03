@@ -1025,6 +1025,153 @@ impl PySfmrReconstruction {
         Ok(dict.into_any().unbind())
     }
 
+    /// The RMS per-axis reprojection residual in pixels over the observations
+    /// of finite points, or ``None`` when there are none.
+    ///
+    /// The residual is measured against the inline keypoints, or against the
+    /// ``.sift`` positions for a ``sift_files`` reconstruction without them
+    /// (those files must then be in the workspace). Points at infinity are left
+    /// out. This is the default noise level of ``point_or_bearing_scores``.
+    fn reprojection_noise_px(&self, py: Python<'_>) -> PyResult<Option<f64>> {
+        let recon = &self.inner;
+        py.detach(|| recon.reprojection_noise_px())
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    }
+
+    /// ``reprojection_noise_px`` over all cameras and for each camera.
+    ///
+    /// Returns:
+    ///     A dict: ``sigma_px`` (float or ``None``), ``observation_count``
+    ///     (int), ``per_camera_sigma_px`` ``(C,)`` float64 (NaN for a camera
+    ///     with no counted observation) and ``per_camera_observation_count``
+    ///     ``(C,)`` int64, indexed as the reconstruction's cameras.
+    fn reprojection_noise(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let recon = &self.inner;
+        let noise = py
+            .detach(|| recon.reprojection_noise())
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let dict = PyDict::new(py);
+        dict.set_item("sigma_px", noise.sigma_px)?;
+        dict.set_item("observation_count", noise.observation_count)?;
+        dict.set_item(
+            "per_camera_sigma_px",
+            PyArray1::from_vec(
+                py,
+                noise
+                    .per_camera_sigma_px
+                    .iter()
+                    .map(|s| s.unwrap_or(f64::NAN))
+                    .collect(),
+            ),
+        )?;
+        dict.set_item(
+            "per_camera_observation_count",
+            PyArray1::from_vec(
+                py,
+                noise
+                    .per_camera_observation_count
+                    .iter()
+                    .map(|&n| n as i64)
+                    .collect(),
+            ),
+        )?;
+        Ok(dict.into_any().unbind())
+    }
+
+    /// The point-or-bearing test on points of this reconstruction.
+    ///
+    /// Each observation of each point becomes a ray and its 2x3 noise weight
+    /// (see ``sfmtool._sfmtool.analysis.observed_rays``), from the
+    /// observation's pixel and its image's camera and pose, and each track is
+    /// scored with ``bearing_score_batch``. Points at infinity are scored like
+    /// finite points.
+    ///
+    /// Args:
+    ///     point_indexes: Points to score, a 1-D integer array of any integer
+    ///         dtype or a list of ints; every point when ``None``.
+    ///     sigma_px: Per-axis pixel noise; defaults to
+    ///         ``reprojection_noise_px()``.
+    ///     fit: Also fit both models with ``fit_point_and_bearing_batch``, each
+    ///         finite point warm-started from its stored position.
+    ///     threshold: Threshold of ``is_finite``, finite and not negative.
+    ///         Defaults to
+    ///         ``DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`` (25).
+    ///     soft_l1_scale: The fit's soft-L1 scale in noise units, or ``None``
+    ///         (the default here) for plain least squares, whose likelihood
+    ///         ratio is the statistic ``depth_score`` approximates.
+    ///     max_iterations: The fit's Levenberg-Marquardt iterations.
+    ///
+    /// Returns:
+    ///     The dict ``bearing_score_batch`` returns, one row per point in
+    ///     ``point_indexes`` (``scored`` false where fewer than two
+    ///     observations give a usable ray), plus ``sigma_px`` (float) and
+    ///     ``point_indexes`` ``(M,)`` int64; and with ``fit``, ``fit``: the
+    ///     dict ``fit_point_and_bearing_batch`` returns, aligned the same way.
+    ///
+    /// Raises:
+    ///     IndexError: A point index is out of range.
+    ///     ValueError: ``sigma_px`` is not finite and positive, or is not given
+    ///         and the reconstruction has no observation of a finite point.
+    ///     IOError: A ``.sift`` file could not be read.
+    #[pyo3(signature = (
+        point_indexes=None,
+        sigma_px=None,
+        fit=false,
+        threshold=sfmtool_core::reconstruction::triangulation::DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+        soft_l1_scale=None,
+        max_iterations=sfmtool_core::reconstruction::triangulation::DEFAULT_POINT_FIT_MAX_ITERATIONS,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn point_or_bearing_scores(
+        &self,
+        py: Python<'_>,
+        point_indexes: Option<Bound<'_, PyAny>>,
+        sigma_px: Option<f64>,
+        fit: bool,
+        threshold: f64,
+        soft_l1_scale: Option<f64>,
+        max_iterations: usize,
+    ) -> PyResult<Py<PyAny>> {
+        use sfmtool_core::analysis::point_or_bearing::PointOrBearingError;
+
+        crate::analysis::point_or_bearing::check_threshold(threshold)?;
+        let indexes: Option<Vec<usize>> = point_indexes
+            .as_ref()
+            .map(crate::analysis::point_or_bearing::point_index_list)
+            .transpose()?;
+        let options =
+            crate::analysis::point_or_bearing::fit_options(soft_l1_scale, max_iterations)?;
+        let recon = &self.inner;
+        let result = py
+            .detach(|| {
+                recon.point_or_bearing_scores(indexes.as_deref(), sigma_px, fit.then_some(&options))
+            })
+            .map_err(|e| match e {
+                PointOrBearingError::PointIndexOutOfRange { .. } => {
+                    pyo3::exceptions::PyIndexError::new_err(e.to_string())
+                }
+                PointOrBearingError::Reconstruction(_) => {
+                    pyo3::exceptions::PyIOError::new_err(e.to_string())
+                }
+                _ => PyValueError::new_err(e.to_string()),
+            })?;
+
+        let dict =
+            crate::analysis::point_or_bearing::scores_to_dict(py, &result.scores, threshold)?;
+        dict.set_item("sigma_px", result.sigma_px)?;
+        dict.set_item(
+            "point_indexes",
+            PyArray1::from_vec(py, result.point_indexes.iter().map(|&i| i as i64).collect()),
+        )?;
+        if let Some(fits) = &result.fits {
+            dict.set_item(
+                "fit",
+                crate::analysis::point_or_bearing::fits_to_dict(py, fits)?,
+            )?;
+        }
+        Ok(dict.into_any().unbind())
+    }
+
     /// Full triangulation analysis of a single 3D point, re-deriving its rays
     /// from the workspace ``.sift`` files.
     ///

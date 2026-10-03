@@ -83,6 +83,16 @@ def test_triangulate_batch_rejects_bad_offsets():
         triangulate_batch(dirs, centers, np.array([0, 2, 1], dtype=np.int64))
 
 
+def test_triangulate_batch_rejects_rays_without_three_columns():
+    """A (T, 2) or (T, 4) array is refused rather than read three values at a time."""
+    offsets = np.array([0, 2], dtype=np.int64)
+    good = np.array([[0.0, 0, 1], [0, 0, 1]])
+    with pytest.raises(ValueError, match="dirs"):
+        triangulate_batch(good[:, :2].copy(), good, offsets)
+    with pytest.raises(ValueError, match="centers"):
+        triangulate_batch(good, np.zeros((2, 4)), offsets)
+
+
 def test_triangulation_diagnostics_shapes_and_nan(
     seoul_bull_sfmr_only,
 ):
