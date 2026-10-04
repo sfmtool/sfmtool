@@ -58,10 +58,9 @@ per row and one row per shared point, with every edge's rows concatenated.
 `offsets[e]..offsets[e + 1]`. The graph is passed in this flattened form so
 that a whole covisibility graph is one call whose edges are solved in
 parallel, and so that the same arrays cross the Python boundary without a
-per-edge list. The function
-panics when the two ray arrays differ in length, when their length is not a
-multiple of three, when `offsets` decreases, or when its last entry exceeds the
-row count.
+per-edge list. The function panics when the two ray arrays differ in length,
+when their length is not a multiple of three, when `offsets` decreases, or when
+its last entry exceeds the row count.
 
 The result has one entry per edge, in input order. An edge with fewer than
 three rows past the parallax bound comes back `None`.
