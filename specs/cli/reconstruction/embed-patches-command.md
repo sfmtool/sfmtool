@@ -2,11 +2,19 @@
 
 ## Overview
 
-Convert a `sift_files` reconstruction into an `embedded_patches` `.sfmr` — a
-wholesale switch of `feature_source`. Each observation's reference into an
-external `.sift` file is replaced by an inline, patch-derived 2D keypoint, and a
-**new** `.sfmr` is written that needs no `.sift` companion. The input file is
-never modified.
+`sfm embed-patches` rewrites a reconstruction so that it no longer needs the
+`.sift` feature files it was solved from. Its input is a `sift_files` `.sfmr`,
+in which each observation is an index into its image's `.sift` file. Its output
+is a new `embedded_patches` `.sfmr`, in which each point carries a small
+oriented patch with an image of its appearance, each observation carries its 2D
+keypoint inline, and each image's hash is stored in the file itself. The
+keypoints are not copied from the SIFT detections: the command reads the source
+images and places each keypoint by matching the point's patch across the images
+that see it, and it adds to a point's track other images that see the point and
+pass a photometric check. Observations that do not match well are dropped, so
+the point and observation counts usually differ from the input. The `.sift`
+files are read once during the conversion, so they must still be present; the
+input file is never modified.
 
 The conversion:
 
