@@ -82,32 +82,14 @@ pub(in crate::camera::distortion) fn undistort_sfmtool_pinhole(
 
 /// The radial factor `g` of the `SFMTOOL_PINHOLE` map and its derivative
 /// `dg/d(r²)`, at squared image-plane radius `r2` — the pair the perspective
-/// family's `distort_jacobian` is parameterized by.
+/// family's `distort_jacobian` is parameterized by:
+/// `g(ρ) = 1 + δ(ρ)/ρ`, `dg/d(r²) = (ρ·δ'(ρ) − δ(ρ))/(2·ρ³)`.
 ///
-/// The map is radially symmetric in the image plane, `x_d = x·g(ρ)` with
-///
-/// ```text
-/// g(ρ) = 1 + δ(ρ)/ρ        dg/d(r²) = (ρ·δ'(ρ) − δ(ρ))/(2·ρ³)
-/// ```
-///
-/// (chain rule through `ρ = √(r²)`, `dρ/d(r²) = 1/(2ρ)`). An inactive spline
-/// or an on-axis point is `(1, 0)`. The first half of that is a limit: the
-/// gauge pins `δ(0) = 0` and `δ'(0) = 0`, so `δ(ρ)/ρ → 0` and `g → 1`,
-/// leaving the exact `SIMPLE_PINHOLE` factor at the axis.
-///
-/// The second half is **not**. The gauge says nothing about `δ''(0)`, so
-/// `δ = aρ² + O(ρ³)` and `dg/d(r²) = (ρ·δ' − δ)/(2ρ³)` diverges like
-/// `a/(2ρ)`. It stays bounded only in company: the caller reaches it through
-/// `[[g + 2x²g', 2xy g'], [2xy g', g + 2y²g']]`, where every appearance
-/// carries a `2x²`, `2y²` or `2xy` factor of order `ρ²`, so each entry's
-/// `g'` term is `O(ρ)` and the composed 2×2 tends to the identity. At
-/// `PINHOLE_AXIS_EPS = 1e-15` the term this short-circuit discards is
-/// therefore sub-ulp against `g = 1`, which is what makes returning `(1, 0)`
-/// continuous rather than merely close.
-///
-/// So the second return is not a bounded radial derivative on its own. Do not
-/// reuse it apart from the `O(ρ²)` companion factors that make the product
-/// finite.
+/// An inactive spline or an on-axis point (`ρ < PINHOLE_AXIS_EPS`) returns
+/// `(1, 0)`. The second return can diverge like `1/ρ` toward the axis and is
+/// finite only multiplied by the `O(ρ²)` factors of the radial 2×2, so do not
+/// use it on its own as a radial derivative. The derivation and the on-axis
+/// limit are in `specs/core/camera/sfmtool-pinhole-kernels.md` § "Ray Jacobian".
 pub(in crate::camera::distortion) fn sfmtool_pinhole_radial_factor(
     r2: f64,
     coeffs: &[f64],

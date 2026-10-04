@@ -902,6 +902,7 @@ and the opening paragraphs listed in check 4.
 - `motion/recon_discontinuity.py:689-700`, the threshold rationale, which is already in `constants.py`.
 - `optical_flow/gpu/mod.rs:98-103`.
 - `kernels/sfmtool_pinhole.rs:87-110`.
+  > _Status (2026-10-04): **Done** — the `sfmtool_pinhole_radial_factor` doc comment keeps the formulas, the `(1, 0)` short-circuit and the warning about the second return, and points at `sfmtool-pinhole-kernels.md` § "Ray Jacobian" for the derivation and on-axis limit, which the spec already held in full, branch `finding-fix-24-pinhole-kernel-comment`._
 - `image_detail/intrinsics/field.rs:4-65`, a 62-line module doc.
 
 ### Opening paragraphs not covered by check 4
