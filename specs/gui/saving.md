@@ -96,7 +96,7 @@ The callers that state one here are that copy's prompt and the MCP surface
 temporary file in the target's directory and is renamed over the target only once
 the whole archive is on disk, so the path holds either the previous
 reconstruction or the new one and never a prefix of the new one
-([archive-container.md](../formats/archive-container.md) § "Rust API"). Save over
+([archive-io-crate.md](../formats/archive-io-crate.md) § "Rust API"). Save over
 the node's own path is exactly the case that needs it: the file being written is
 the only copy of the one being replaced.
 

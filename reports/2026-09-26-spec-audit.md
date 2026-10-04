@@ -57,6 +57,7 @@ were checked**. 14 were stale:
 - **track-cluster-matching.md:** four items: persisting is out of scope, the CLI consumes pairs only, "add a section", "consider lifting".
   > _Status (2026-10-03): **Done** — all four are gone with the build-brief section; the spec's Pipeline section says `sfm match --cluster` writes the clusters file and pairs are derived from it, PR #704._
 - **archive-container.md:** "No schema".
+  > _Status (2026-10-04): **Done** — the container spec's "No schema" now says the container defines no entry names beyond `content_hash.json.zst`; the crate-level non-goal moved to the new `archive-io-crate.md` and names the shared `workspace` object as the one piece of metadata the crate defines, branch `report-fix-08-archive-container`._
 
 ---
 
@@ -292,6 +293,7 @@ Eight specs open with "This document describes/specifies…":
 | sift-file-format.md | 1 | 4 | 7 findings, plus a wrong field definition |
 
 > _Status (2026-10-04): **Done** for `sfmtool-camera-models.md` — its code names now sit in an Implementations section; see that spec's section below, branch `report-fix-07-camera-models-contradiction`._
+> _Status (2026-10-04): **Done** for archive-container.md — the crate API, implementation notes and tests moved to `specs/formats/archive-io-crate.md`, and the container spec now names code only in a short Implementations section, branch `report-fix-08-archive-container`._
 
 **Structural result:** six of seven format specs with hits have no
 *Implementations* section, so crate, type, function and CLI names are spread
@@ -759,6 +761,7 @@ most of the per-sentence findings.
   - "Little-endian is not negotiable" → "Numeric data is always little-endian".
   - "so that 'common' never becomes 'load-bearing'" → "so correctness does not depend on the allocator's alignment".
 **Recommendation:** update spec. Split out an archive-io crate spec and leave a short Implementations section here.
+> _Status (2026-10-04): **Done** — the crate content (Rust API, reading a whole archive, implementation notes, testing, crate non-goals) moved to the new `specs/formats/archive-io-crate.md`, listed in `specs/formats/README.md`; `archive-container.md` keeps the on-disk rules and a short Implementations section, and `gui/saving.md` now links the crate spec. In the crate spec: `sfmtool-core`'s use of `format_hash` is stated, the API block adds `json_entry_bytes`, `WorkspaceMetadata` and `WorkspaceContents`, the error list adds `KdfError`, the "No schema" non-goal names the `workspace` object, and "load-bearing" is replaced. In the container spec: the opening is the proposed one (with "normally one frame", since `.kdf`'s `.frames` entry holds several); JSON is stated as a writer rule (compact UTF-8, no whitespace between tokens, no trailing newline) with the reader accepting any valid JSON; the level is the writer's choice and readers accept any; big-endian hosts byte-swap; "a verifier" replaces `verify_*`; "Little-endian is not negotiable" is gone; branch `report-fix-08-archive-container`._
 
 ### specs/formats/sift-file-format.md
 **Summary:** Entry names, dtypes, shapes, hash order, version check and thumbnail rules match. **The definition of `feature_tool_xxh128` is wrong.**
@@ -822,6 +825,8 @@ most of the per-sentence findings.
 | explorer `elide` | no | none (acceptable) |
 | explorer (all other modules) | mostly yes | a gui/* spec each (see check 5 in the agent notes) |
 | py `align`/`analyze`/`merge`/`motion`/`camera`/`camrig`/`colmap`/`compare`/`feature_match`/`rig`/`sift`/`visualization`/`web_export`/`xform` | via CLI | the matching cli/* or workspace/* spec |
+
+> _Status (2026-10-04): **Done** for crate sfmtool-archive-io — it has its own spec, `specs/formats/archive-io-crate.md`, branch `report-fix-08-archive-container`._
 
 ### `sfm explorer` (src/sfmtool/_commands/explorer.py)
 **What it does:** It launches the SfM Explorer GUI on a reconstruction through the Python bindings. It is the only CLI command with no command spec.
@@ -1032,6 +1037,7 @@ replaced by `gui/track-view.md`.)
 
    Another tool writing these files would get them wrong.
 3. **Format specs are not independent of the code.** Six of the seven format specs with hits have no *Implementations* section. Adding one to each is the fix that resolves most of the 45 or so failure-6 findings. `archive-container.md` should split its crate API into its own spec, and `cluster-selection.md` should move out of `formats/`.
+   > _Status (2026-10-04): **Partially done** — `archive-container.md` is split: its crate API is in `specs/formats/archive-io-crate.md` and the container spec has an Implementations section, branch `report-fix-08-archive-container`. The other format specs and `cluster-selection.md` are not addressed here._
 4. **Standing specs that describe code which is not there:**
    - `cluster-census.md` § Callers and `flag_threshold` refer to an unmerged branch.
      > _Status (2026-10-03): **Done** — both deleted, PR #684._
