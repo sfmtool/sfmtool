@@ -80,10 +80,10 @@ impl PyPatchCloud {
     ///         determinant fill; see
     ///         ``specs/core/patch/patch-normal-refine-view-subset.md``). ``0`` (default)
     ///         disables the cap — byte-for-byte the uncapped behavior. The cap is
-    ///         floored at ``min_views`` internally, and ignored per-patch when the
-    ///         subset would under-constrain one tilt DOF (the conditioning
-    ///         fallback). Only the refinement basis shrinks — no observation is
-    ///         dropped from the reconstruction.
+    ///         floored at ``min_views`` internally. There is no fallback to the
+    ///         full view set for conditioning: a patch keeps every view only when
+    ///         it is a point at infinity or no view faces it. Only the refinement
+    ///         basis shrinks — no observation is dropped from the reconstruction.
     ///     use_stored_keypoints: When ``True`` (the default), anchor each
     ///         view's patch at that observation's stored per-observation 2D
     ///         keypoint (the inline keypoint an ``embedded_patches`` recon

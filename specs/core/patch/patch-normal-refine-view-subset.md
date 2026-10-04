@@ -100,8 +100,8 @@ unit surface→camera direction `dᵢ` of each of the `m` views, and the cap `K`
    - The tangent projection `gᵢ = dᵢ − cosθᵢ·n` has length `sinθᵢ`. Expressed in
      the tangent basis `(t₁, t₂)` of `n` (`parameterization::tangent_basis`),
      the information vector is `wᵢ = (gᵢ·t₁, gᵢ·t₂)` — the obliquity `sinθᵢ`
-     times the unit azimuth direction. A view with `‖gᵢ‖ ≤ 1e-6` is exactly
-     frontal and gets `wᵢ = 0`.
+     times the unit azimuth direction. A view with `‖gᵢ‖ ≤ 1e-6` is treated
+     as frontal and gets `wᵢ = 0`.
    - The view's contribution to the 2×2 information matrix is `wᵢ wᵢᵀ`.
 3. **Anchor.** The selected set starts with the least-oblique front-facing view
    (largest `cosθᵢ`). It is the view with the least foreshortening, which keeps
