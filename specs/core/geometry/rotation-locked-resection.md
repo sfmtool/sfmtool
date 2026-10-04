@@ -72,10 +72,6 @@ chirality, and it is therefore model-dependent:
   reflection, which is the one thing the sign-blind rows need the gate
   for.
 
-In both cases an observation that passes the in-front test must also
-lie in the model's own `ray_to_pixel` domain; one that does not scores
-`INVALID_RESIDUAL` like a point behind the camera.
-
 Output: `t`, the surviving-observation mask, and pixel residual norms.
 All three outputs are per **input** observation and length `n`: a
 non-survivor keeps the residual it scored at the final translation, and

@@ -899,7 +899,7 @@ and the opening paragraphs listed in check 4.
 - `sift/extract_sfmtool.py:238-256`, the `_extract_workers` docstring.
 - `sift/mod.rs:310-329`, the proof of the cap-aware walk.
 - `geometry/resect_translation.rs:95-116`, the `residual_norm` chirality argument.
-  > _Status (2026-10-04): **Done** — the `residual_norm` doc comment now states its contract (the two in-front tests and the `INVALID_RESIDUAL` cases) and points at `rotation-locked-resection.md` § Mechanism; the one fact found only in the comment, that the `ray_to_pixel` domain applies on top of the in-front test, moved into that section, and the "bit-identical to before this branch" history note was dropped, branch `finding-fix-22-resect-residual-norm-comment`._
+  > _Status (2026-10-04): **Done** — the `residual_norm` doc comment now states its contract (the two in-front tests and the `INVALID_RESIDUAL` cases) and points at `rotation-locked-resection.md` § Mechanism; the spec already covered everything the old comment said, including the `ray_to_pixel` domain check (§ Mechanism, Output paragraph), and the "bit-identical to before this branch" history note was dropped, branch `finding-fix-22-resect-residual-norm-comment`._
 - `motion/recon_discontinuity.py:689-700`, the threshold rationale, which is already in `constants.py`.
 - `optical_flow/gpu/mod.rs:98-103`.
 - `kernels/sfmtool_pinhole.rs:87-110`.
