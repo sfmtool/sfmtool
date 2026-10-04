@@ -597,9 +597,9 @@ production run sets none of them.
 - `SFMTOOL_FOCAL_VOTE_F32_AUDIT` also runs the `f64` residual loop beside
   every `f32` one, over the same rays, and adds a histogram of their
   differences to the `SFMTOOL_PROFILE` summary, so it needs that variable
-  set too to print anything. The vote still scores from the `f32` residuals, so output
-  is unchanged; the extra work roughly triples the cost of the audited
-  loops.
+  set too to print anything. The vote still scores from the `f32`
+  residuals, so output is unchanged; the extra work roughly triples the
+  cost of the audited loops.
 - `SFMTOOL_PROFILE` (set to anything but empty or `0`) times each phase of
   the vote and prints a summary to stderr when it finishes. Output is
   unchanged. Other `sfmtool-core` kernels read the same variable for their

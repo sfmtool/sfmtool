@@ -753,8 +753,9 @@ pub fn focal_vote_from_matches(
 /// full-pixel keypoint position per member. Positions are `f32` because that
 /// is the width the `.matches` backbone stores them at; each one is widened
 /// to `f64` where the pair-table pass reads it. The epipolar residual loop
-/// computes in `f32` by default; see the spec's Inputs section. The principal point is the image centre `(width/2, height/2)`. Input
-/// that breaks that contract votes nothing and comes back as the empty result.
+/// computes in `f32` by default; see the spec's Inputs section. The principal
+/// point is the image centre `(width/2, height/2)`. Input that breaks that
+/// contract votes nothing and comes back as the empty result.
 pub fn focal_vote(
     cluster_starts: &[u32],
     member_images: &[u32],
