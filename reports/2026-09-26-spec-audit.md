@@ -520,6 +520,7 @@ most of the per-sentence findings.
 
 ### specs/core/bench/editable-track.md
 > _Status (2026-10-03): **Partially done** — rechecked against the current bench code and fixed in `editable-track.md`: `SeedTooFar` added to the API block's `Unmeasured`; `CreateTrackOptions` and `GeometrySearchOptions` added to the API block; the "world-point forms" clamping sentence and Testing paragraph rewritten for `translate_patch`/`resize_patch` taking a world-unit displacement and half-length, and "The **offset**" renamed to a translation along the normal (the `tests.rs` section header too); the "only one that proposes several" claim corrected to name `search_geometry` and the track-at-pixel cascade; the classification rows now name `DEFAULT_CLASSIFY_NOISE_FLOOR_PX` / `DEFAULT_CLASSIFY_Z_CUTOFF`; `track-at-pixel.md` linked; the Python `create_track` keywords `version=`/`label=` documented; "have the last word" and "repaired by its next fit" reworded; the stale non-goal "Editing the patch's frame or normal by hand" removed. Already gone before this pass: `§ "The split"`, "parting company", "used to be refusals". Not done: shrinking the third-copy code comments and restructuring the Testing section into property lists. PR #687._
+> _Status (2026-10-04): **Done** — the two items left open above are fixed: the third-copy comments are shrunk and the Testing section is restructured into property lists, branch `report-fix-13-editable-track`._
 **Summary:** The signatures, thresholds, option defaults, classifier and geometry search match the code. #550 (steps folded into `translate_patch`/`resize_patch`) and the later search additions left stale text behind. Line numbers are against `main` after #615, which added the walk-acceptance fields and `BENCH_MAX_SHIFT_PX` (8 px); the spec documents both consistently with the code.
 **Implementing code:** `sfmtool-core/src/bench/{track,steps,evaluate,fit,classify,stage,search,geometry_search,commit}.rs`; `sfmtool-py/src/bench.rs`.
 **Inconsistencies:**
@@ -537,11 +538,13 @@ most of the per-sentence findings.
   - `open_localizer` (`evaluate.rs:57-74`, 18 lines).
   - `max_seed_offset_px` (about 16 lines).
   - `MAX_TILT_DEG` (`steps.rs:65-75`).
+  > _Status (2026-10-04): **Done** for the three — the `open_localizer`, `max_seed_offset_px` and `MAX_TILT_DEG` doc comments now state what the value is and point at the spec section holding the reasoning; every fact they carried was already in `editable-track.md`, branch `report-fix-13-editable-track`._
 
   For `RESIDUAL_MARGIN` (`classify.rs:62-82`), shrink the *spec* copy instead, since the spec says the constant carries the argument.
   > _Status (2026-10-03): **Superseded** — `RESIDUAL_MARGIN` and the residual check it set are gone with the z rule (step 6 of the point-or-bearing draft, #709)._
 **Shape:**
   - The Testing section (:2030-2246) retells each claim at length, and that is where the staleness came from. Replace it with a list of property statements per test module.
+    > _Status (2026-10-04): **Done** — the Testing section is a list of property statements under one heading per test module, with `bench/tests.rs` grouped by its own section headers; the properties were checked against the current tests and the ones the old prose missed (frame squaring, stage round trip, frameless bearings, no-effect steps, clamped pixels) were added, branch `report-fix-13-editable-track`._
   - **Stale non-goal:** "Editing the patch's frame or normal by hand" (:2260). `tilt_patch`, `spin_patch` and friends do exactly that.
   - **Residue:** :895 "…repaired by its next fit", :1906 "used to be refusals".
   - **Mannered prose:**

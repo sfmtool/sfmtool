@@ -61,22 +61,15 @@ use super::track::{
 /// The localizer with every per-view gate off and the consensus-basis cap
 /// lifted: what both an evaluation and a fit run.
 ///
-/// The four gates the kernel applies per view --
-/// [`max_shift_px`](KeypointLocalizeParams::max_shift_px),
+/// Of the four gates the kernel applies per view,
 /// [`min_absolute_zncc`](KeypointLocalizeParams::min_absolute_zncc),
 /// [`min_relative_zncc`](KeypointLocalizeParams::min_relative_zncc) and
 /// [`max_member_zncc_self_similarity_radius`](KeypointLocalizeParams::max_member_zncc_self_similarity_radius)
-/// -- each delete a view from the answer, and a deleted view is a row the bench
-/// would show empty for a reason nothing recorded. On the bench the deleting is
-/// the person's: they see the number and turn the observation `out`, or move a
-/// threshold that paints it so. The cap is lifted for the same reason -- a
-/// twelve-sighting track would otherwise have four of its views registered
-/// against a template the other eight built, and be reported in terms that are
-/// not the terms the eight were reported in.
-///
-/// `max_shift_px` goes to a large finite bar rather than to infinity so that the
-/// kernel's own "this keypoint left the photograph" signal, which it reports as
-/// an infinite shift, still lands.
+/// are off, and [`max_shift_px`](KeypointLocalizeParams::max_shift_px) is a
+/// large finite bar so that the infinite shift the kernel reports for a
+/// keypoint that left the photograph still lands. `basis_max_views` is `0`.
+/// Why the bench drops no sighting in the kernel is in
+/// `specs/core/bench/editable-track.md` § "Why it is shaped this way".
 pub fn open_localizer() -> KeypointLocalizeParams {
     KeypointLocalizeParams {
         // Disabled exactly: each of the three reads "0 or non-finite is off".
@@ -120,22 +113,10 @@ pub struct EvaluateOptions {
     /// px of the patch the reconstruction holds.
     pub localize: KeypointLocalizeParams,
     /// How far from the projection a seed may sit and still be read, in
-    /// **patch-grid px**.
-    ///
-    /// A round's window is widened to reach its furthest seed, and the tile
-    /// each view renders is `resolution + 4 · window` on a side, so the memory
-    /// one observation costs grows as the square of its offset: a seed a
-    /// couple of thousand px out asks for gigabytes per view. An observation
-    /// past this bound is left out of the round carrying
-    /// [`Unmeasured::SeedTooFar`], which is the honest reading of a sighting
-    /// that far from the point -- the correlation at the projection would say
-    /// nothing about it, and the correlation at the seed is a question about a
-    /// different surface.
-    ///
-    /// The default is `64`: a little under three tile-widths at the default
-    /// `resolution` of 24, so a sighting a couple of patches away from the
-    /// projection is still read, and a view's tile at the bound is about a
-    /// megabyte and a half rather than a gigabyte.
+    /// **patch-grid px**. An observation past it is left out of the round
+    /// carrying [`Unmeasured::SeedTooFar`]. Defaults to
+    /// [`DEFAULT_MAX_SEED_OFFSET_PX`]; why the bound exists and why it is 64 is
+    /// in `specs/core/bench/editable-track.md` § "Evaluating".
     pub max_seed_offset_px: f64,
     /// The most memory one round's per-view tiles may take together, in bytes.
     ///

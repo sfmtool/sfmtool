@@ -65,15 +65,9 @@ const NO_EFFECT_RAD: f64 = 1e-9;
 const MIN_DIRECTION: f64 = 1e-12;
 
 /// How far from an observation's line of sight the patch's outward normal may
-/// be turned, in degrees.
-///
-/// The bar [`tilt_patch`] stops at, and the number the sentence a stopped tilt
-/// writes names, so the rule and what is said about it are one value. Past it a
-/// photograph sees the patch so obliquely that its tile is a smear of a few
-/// pixels stretched over the square, and the correlation that tile is scored by
-/// says nothing; the allowed normals are the intersection of one spherical cap
-/// per observation, so a tilt held against the limit traces the edge of what the
-/// existing sightings can see.
+/// be turned, in degrees: the bar [`tilt_patch`] stops at and the number its
+/// report names. `specs/core/bench/editable-track.md` § "Placing, sizing and
+/// turning by hand" says why.
 pub const MAX_TILT_DEG: f64 = 80.0;
 
 /// What putting an item on the bench did.

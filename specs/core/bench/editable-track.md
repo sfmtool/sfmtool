@@ -2642,277 +2642,335 @@ print(report["label"])
 
 ## Testing
 
-[bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) runs over the
-synthetic textured-plane scene
+Each list below names one test module and the properties its tests hold. Most
+modules run over the synthetic textured-plane scene that
 [bench/tests/scene.rs](../../../crates/sfmtool-core/src/bench/tests/scene.rs)
-builds, wrapped as an
-`embedded_patches` reconstruction whose stored keypoints are the exact
-projections, so what a commit should have written is known to the pixel. It
-covers: a point put on the bench being at the track stage with every observation
-`in` and pinned and the stored numbers carried; an observation added at the track stage
-carrying its pixel as its keypoint and committing without a fit, and one added at
-the cluster stage carrying a seed alone; two observations in one image not both
-being `in`; the painting proposing from the measurements, leaving a pinned
-verdict alone and giving one image one `in`; `bar_checks` passing and failing
-each bar, failing a `NaN`, and judging neither a missing reading nor the middle
-bar at `0`; `verdicts_if_unpinned` giving an unpinned row the painting's verdict
-and a pinned one, `in` or `out`, with and without a competing sighting in its
-image, exactly what unpinning it and applying the thresholds makes it;
-`unpin_verdicts` handing rows back together, so of two rows of one image the
-better-scoring one takes the image whichever is named first, and changing
-nothing when none of its rows is pinned; `pin_verdicts` pinning a mix of `in`
-and `out` rows with neither moving, changing nothing when every row is pinned
-already, and refusing an index past the end; an evaluation taking in an added row
-that clears the bars, turning out an unpinned row moved past the shift bar and
-taking it back in after a fit moves it within the bar, reading a track its own
-repaint marked without repainting it, leaving a point's pinned rows `in`
-whatever the bars say, and leaving rows pinned with `pin_verdicts` where they
-stood under bars no reading clears; a split taking exactly the named
-observations, handing the half it takes off back as a cluster, and refusing an
-empty list or all of them; a duplicate carrying every observation and all of the
-stage's data, dropping the origin so its commit creates a point rather than
-replacing the original's, taking the collision suffix on a second copy of the
-same track, reporting the label the copy took, and leaving the original exactly as it
-was; and every commit path -- appending, replacing,
-absorbing a pulled-from point, the map each of those reports, and each refusal
-naming why.
+builds, wrapped as an `embedded_patches` reconstruction whose stored keypoints
+are the exact projections, so what a commit should have written is known to the
+pixel.
 
-The normal steps have a slice of their own,
-[bench/tests/normal.rs](../../../crates/sfmtool-core/src/bench/tests/normal.rs),
-over the same plane seen by three views: a patch tilted 20 degrees off it is
-turned to less than half that by `fit_normal`, with the consensus ZNCC not
-falling, and by `finite_difference_normal` at two pieces with no overlap and at
-three with half, every piece fitting; both keep the centre and leave the track
-read and fused; and `normal_preconditions` and the piece and overlap bounds
-refuse what the track and the settings alone rule out. The piece layout, the
-line through the centres and the one-line fallback are unit-tested beside the
-code.
+### [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs)
 
-The commit that writes nothing has a slice of its own: ten presses after the one
-that wrote the point leave the value, the indexes and the point count where the
-first left them and report the same point each time; the same sightings in
-another order are the same track; a sighting turned out, a point taken back, a
-track with no origin and a sighting still to absorb each write again; every
-column the commit writes is moved in turn and each is seen; and the two columns a
-first commit of an untouched point rewrites -- its colour and its error -- are
-stated as what they are.
-[edited/tests.rs](../../../crates/sfmtool-core/src/reconstruction/edited/tests.rs)
-holds the comparison itself: a record agrees with itself, `NaN` columns
-included, and disagrees with every one-column move of it, each by the smallest
-step the stored representation holds.
+The module's sections, in file order. Labels, item IDs and the sharing between
+bench versions are listed in [`bench.md`](bench.md) § "Testing".
 
-The hand steps are tested for what makes them worth having. A **slide** is run
-under a pinhole and under a distorting lens: the centre lands under the pointer
-in the image it was dragged in (exactly, and within the lens's inverse-map
-tolerance), the offset lies in the patch's own plane with the normal, the axes
-and the size untouched, every sighting keeps its own in-plane offset from where
-the centre projects, nothing is pinned, and a slide to the place the
-patch already sits moves it nowhere. A single-keypoint move writes the keypoint,
-pins that observation and leaves nothing that was read at the old pixel, and
-moving a cluster sighting keeps the shape it is read at. A resize
-from an edge is checked **through a lens**, over the same fixture with its
-camera swapped for one with real radial distortion: the dragged edge reprojects
-onto the pixel the call named, the far edge reprojects onto the pixel it was
-already on, and the frame stays square -- exactly under a pinhole, and within
-the lens's own inverse-map tolerance under distortion, which is the only error
-there is, since the resize itself is arithmetic in the patch's plane. The same
-is asserted for a **bearing** (`w == 0`), whose centre is renormalized. A turn
-keeps both axes' lengths and the normal, moves no sighting, and lands the corner
-under the pixel a drag of that corner would have released on. At the cluster
-stage the edge drag scales the shape by one scalar -- so the detector's
-anisotropy survives -- moves the sighting by half the change, and holds the far
-edge of the parallelogram.
+**Geometry search.**
+- A matching third view is added at the exact patch projection, with
+  positive-chirality seed geometry, and the existing observations are
+  unchanged.
+- Repeating the search leaves an `out`, pinned row untouched.
+- An explicitly selected `out` row is still part of the reference basis.
+- The cluster stage is refused.
+- The real call reports all three phases and stops on cancellation without
+  returning a partial track.
 
-The **world-unit forms**, `translate_patch` with a `by` and `resize_patch`
-with a half-length, are tested for the claims that are theirs alone. A
-tangential `by` moves the centre by exactly that much along `u` and `v` and
-carries every sighting with it, and no displacement at all is not a move; a
-mixed `by` moves the centre by the sum of its parts, the same as its tangential
-and normal parts taken one call at a time. A resize with an edge named lands
-that edge at the length given with the far edge held and the frame square, one
-with no edge holds the centre and moves no sighting, and the size the patch
-already has is not a resize in either form. A bearing takes a tangential `by`
-and comes back on the unit sphere, refuses any `by` with a normal part as
-`AtInfinity`, and holds its far edge through an edge resize. Beside them the
-reduction itself: the same pointer, put through the pixel form and through the
-world-unit form with the displacement or the half-length it names, leaves the
-patch at one centre and at one half-length, which is what having a single
-implementation of each edit means. A displacement that is not a finite number, a
-size that is not a usable length and a cluster are each refused in their own words.
+**Putting a point on the bench.**
+- The track is at the track stage with every observation `in` and pinned, and
+  carries the stored numbers; the stored confidence is each row's leave-one-out
+  ZNCC.
+- A `sift_files` point can be put on the bench for inspection; a point that is
+  not live is refused.
 
-A **translation along the normal** is tested for the pair of claims that make
-it the move no pixel can name. The centre travels exactly the distance asked for along the outward
-normal while the axes, the half-length and the plane's orientation stay where
-they are; and, with every sighting first put somewhere of its own on the plane
-so the claim is not vacuous, each keeps its `(a_i, b_i)` and each keypoint comes
-back as the projection of `c' + a_i u + b_i v` -- computed in the test from the
-pair read *before* the move, so the step is held to the arithmetic rather than
-to its own. The sightings move by different amounts, which is the gesture: a
-step that read each ray against the plane it had already reached would preserve
-neither. Beside them: a patch pushed out past the cameras leaves every sighting
-with no keypoint and `NoProjection`; the bitmap and the measurements go and
-nothing is pinned; an offset inside the patch's own tolerance reports
-`changed: false` and hands the track back; and a distance that is not a finite
-number, a bearing and a cluster are each refused in their own words.
+**Verdicts.**
+- An observation added at the track stage carries its pixel as its keypoint and
+  commits without a fit; one added at the cluster stage carries a seed alone.
+- Two observations in one image are never both `in`.
+- A verdict set by hand is pinned and its report names what moved.
+- An observation past the end is refused.
 
-The **tilt** is tested for the three claims that make it a tilt rather than
-some other turn. It is the **least** rotation: the axis is perpendicular to
-both normals, so `u` and `v` keep their own components along it and no spin
-comes with the turn. The centre and both half-lengths are untouched. And, with
-every sighting first put somewhere of its own on the plane so the claim is not
-vacuous, each keeps its `(a_i, b_i)` and each keypoint comes back as the
-projection of `c + a_i u' + b_i v'` -- computed in the test from the pair read
-*before* the turn and the axes read after it, so the step is held to the
-arithmetic rather than to its own.
+**The threshold painting.**
+- The painting proposes verdicts from the stored measurements, leaves a pinned
+  verdict and an unmeasured row alone, and gives one image one `in`.
+- `bar_checks` passes and fails each bar, fails a `NaN`, and judges neither a
+  missing reading nor a bar at `0`; the projection bar reads the reprojection
+  error before the projection offset.
+- `verdicts_if_unpinned` gives an unpinned row the painting's verdict, and a
+  pinned one, `in` or `out`, with and without a competing sighting in its
+  image, exactly what unpinning it and applying the thresholds makes it.
+- `unpin_verdicts` hands rows back together, so of two rows of one image the
+  better-scoring one takes the image whichever is named first; it changes
+  nothing when none of its rows is pinned.
+- `pin_verdicts` pins a mix of `in` and `out` rows with neither moving, changes
+  nothing when every row is pinned already, and refuses an index past the end.
 
-The cap is tested from both sides. A turn asked 89 degrees over stops with its
-normal exactly `MAX_TILT_DEG` from the observation the report names, with no
-observation past the cap and the normal asked for still in the report; and a
-track built facing 85 degrees off one camera and 69 off the other -- so it
-starts outside one cap -- is turned back inside without being stopped at all,
-which is the rule that keeps the region reachable from outside it. Beside them:
-a sighting whose own piece of the patch swings out behind its camera is left
-with no keypoint and `NoProjection` while the centred one survives; the bitmap
-and the measurements go and nothing is pinned; a turn onto the normal the patch
-already shows reports `changed: false`; and a direction that is not one, a
-track at infinity and a cluster are each refused in their own words.
+**Splitting.**
+- A split takes exactly the named observations and hands the half it takes off
+  back as a cluster; a reference that moved to the other half is re-seated in
+  both.
+- A half whose every row is `out` still splits: it is a cluster cut around the
+  one row it has, and the verdicts travel with the rows.
+- An empty list, or all of the observations, is refused.
 
-The fit is tested against the kernels themselves: a track put on the bench from
-a point fits to what a direct call of the same two kernels on the same frame and
-seeds produces, keypoint for keypoint. The reading is tested as a reading: the
-position, the frame, the bitmap and every keypoint are the same values before
-and after, and every row comes back with both distances. Beside them: a
-downgrade re-seeding every sighting at its keypoint and an upgrade triangulating
-back to within a pixel's worth of where the point was; a candidate placed on the
-plane clearing the bar and one placed off every image coming back unmeasured
-with `OffSensor` and its sentence; a lone sighting read as `NoConsensus` rather
-than refused, while a fit of the same track is refused; a pinned `out` scored
-and left `out`; a cluster started from two pixels refining, upgrading and
-committing a point onto the planted surface; setting the current stage reporting
-`changed` false; each refusal naming what did not hold; and the three
-precondition functions giving their step's own answer when they are asked alone,
-which is what makes them safe to ask in front of a decode.
+**The commit.**
+- Every commit path writes what it should: appending, replacing, absorbing a
+  pulled-from point, and the map each of those reports. An origin that names a
+  deleted point creates instead, and an `out` row pulled from a point leaves
+  that point alone.
+- The `error` column is the mean of the measured reprojections and the colour is
+  the consensus bitmap's centre.
+- Each refusal names why: a cluster-stage track, a `sift_files` reconstruction,
+  one `in` observation, no position, no bitmap when the base carries the column,
+  and a kept observation with no keypoint.
+- A commit onto the point that already holds the track writes nothing: ten
+  presses after the one that wrote the point leave the value, the indexes and
+  the point count where the first left them and report the same point each time.
+  The same sightings in another order are the same track.
+- A sighting turned out, a point taken back, a track with no origin and a
+  sighting still to absorb each write again; every column the commit writes is
+  moved in turn and each is seen.
+- The two columns a first commit of an untouched point rewrites, its colour and
+  its error, are asserted as such.
 
-The two memory bounds are tested as the bounds they are: an observation seeded
-past `max_seed_offset_px` comes back named with `SeedTooFar`, carrying its own
-offset and the bound, while the rest of the round is read as it always was and
-raising the bound past that offset puts the row back in; and a budget nothing
-fits in refuses with `TooLarge` naming both numbers, where the same track reads
-at the default budget. The allocation itself is tested where it is made
-([keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)):
-a buffer of 256 TB comes back as `LocalizeError::OutOfMemory` rather than
-aborting the process, and the shift grids refuse a span no machine has the
-memory for.
+**The evaluation.**
+- A fit squares a rectangular frame and keeps its area.
+- A track put on the bench from a point fits to what a direct call of the same
+  two kernels on the same frame and seeds produces, keypoint for keypoint.
+- A reading moves nothing: the position, the frame, the bitmap and every
+  keypoint are the same values before and after, and every row comes back with
+  both distances.
+- An evaluation takes in an added row that clears the bars, turns out an
+  unpinned row moved past the shift bar and takes it back in after a fit moves
+  it within the bar, and reads a track its own repaint marked without
+  repainting it.
+- A point's pinned rows stay `in` whatever the bars say, rows pinned with
+  `pin_verdicts` stay where they stood under bars no reading clears, and a
+  pinned `out` is scored and left `out`.
+- A candidate placed on the plane clears the bar; one placed off every image
+  comes back unmeasured with `OffSensor` and its sentence.
+- A lone sighting is read as `NoConsensus` rather than refused.
+- A downgrade re-seeds every sighting at its keypoint and an upgrade
+  triangulates back to within a pixel's worth of where the point was; the round
+  trip keeps the patch's axes the same way round, and the stage report states
+  the stage once. Setting the current stage reports `changed: false`.
+- A cluster started from a pixel spans the radius it was asked for, and refines,
+  upgrades and commits a point onto the planted surface.
 
-The split of a half whose every row is `out` is tested too: it splits, the half
-that comes off is a cluster cut around the one row it has, and the verdicts
-travel with the rows.
+**The refusals.**
+- Each refusal names what did not hold: fewer views than images, a track-stage
+  fit of one sighting, an observation naming an image with no view, a track with
+  no frame.
+- The three precondition functions give their step's own answer when asked
+  alone, which is what makes them safe to ask in front of a decode.
+- An observation seeded past `max_seed_offset_px` comes back with `SeedTooFar`,
+  carrying its own offset and the bound, while the rest of the round is read as
+  it always was; raising the bound past that offset puts the row back in.
+- A budget nothing fits in refuses with `TooLarge` naming both numbers, where
+  the same track reads at the default budget.
 
-**The finite/infinity boundary is tested by turning the capture, not the
-picture.** The fixture's scene takes its camera centres and its plane depth as
-arguments, with the texture's frequency scaled by that depth so a plane two
-hundred units out photographs as the same detail a plane four units out does.
-Eight cameras stepping by five centimetres at that far plane give a third of a
-pixel of parallax over the whole run, and one ninth camera twenty units off to
-the side gives real baseline, so promotion and demotion are two settings of one
-dial. Over that: a bearing fits and stays a bearing, at the half-extents it had,
-with every sighting inside a pixel of where a *reading* of the same track put it
-and scoring what the reading scored -- which is the claim, since a fit that
-promoted the frame to a provisional depth re-warps every view and the consensus
-rounds then walk sightings onto some other facade detail; a bearing's per-row ray
-angle agrees with the direction to a thousandth of a degree, where measuring it
-against a phantom point one unit from the origin reads tens of degrees; the same
-sightings plus the offset camera's promote to a point on the plane with the frame
-grown by about the observing distance; the same eight sightings stored as a
-*finite* point demote to a bearing with the frame shrunk by about the distance it
-stood at; on a capture whose camera cloud is spread wide while the three cameras
-that see the point stand close to it, a bearing placed at the point looks within
-3% of its old size in each of those three images, a point taken to a bearing and
-back looks within 1% of its old size, and with nothing to measure in the extents
-fall back to the observing distance and then to the numbers they had; a
-sighting moved four pixels off with the bar at two grid px keeps its seed,
-carries `walked_px`, a `walked_to` within a pixel of where it was moved from and a
-`walked_zncc`, and is still scored there while the other seven move, and
-`sight_observation` at `walked_to` puts its keypoint there, pinned, with the
-walk fields gone; the bench's `max_shift_px` defaults to 6, the localizer's
-own search radius, while the cluster refinement's stays 3; a bearing taken
-down to the cluster stage and back up comes back a bearing at the size it was and
-commits as a `w = 0` row with a unit direction, a zero normal and a zero normal
-confidence, counted in the materialised value's `infinity_point_count`; and a
-slide, an edge drag, a centred resize and a turn each leave a bearing's
-coordinate on the unit sphere with the payload's coordinate following the frame's
-centre. The near scene's own track is asserted to come back **finite**, on the
-depth score, so the two answers are both pinned. Those fits classify at a stated
-0.5 px (`TEST_SIGMA_PX`): the fixtures' keypoints are the exact projections, so
-the level they measure is 0, and the tests state the noise a localizer has on
-the rendered photographs instead.
+**Duplicating.**
+- A duplicate carries every observation and all of the stage's data, drops the
+  origin, takes the collision suffix on a second copy of the same track,
+  reports the label it took, and leaves the original exactly as it was.
+- Its commit creates a point rather than replacing the original's.
 
-**Each outcome of the test has a test.** Eight sightings on the far scene,
-tilted across the run by 0.2 px per camera and thrown off that tilt by 1.5 px
-alternating, are a depth nothing supports that a z-score accepts: their
-inverse-depth z at a 1 px floor clears 4 (asserted, so the fixture stays the
-case it was built for), while the test, which fits both models, finds the
-bearing's cost over the threshold and the depth score and the midpoint bound
-under it, and writes the bearing (`ScoreBelowThreshold`), as the whole fit over
-the shape does at the frame size it arrived with. The far point's exact
-projections, a third of a pixel of parallax, are a point at a stated 0.02 px
-(`ScoreCleared`, about 200 units out) though their z is under 4, and a bearing
-at 0.5 px, so the verdict follows the noise level. Rays built by hand cover the
-rest: a ring of five cameras around a point at 0.04 rad, where the score is
-under the threshold and the bound far over it (`MidpointBoundCleared`);
-parallel rays (`BearingCostBelowThreshold`); a finite verdict with a minimum
-depth past the point (`NoUsablePoint`, written as the bearing, and
-`HeldPointKept` when a held place beyond that depth is usable); two cameras
-facing each other along one line, whose bearing fits both rays and is behind
-one of them (`BearingBehindCamera`, placed between them, and `LeftUnusable`
-with a minimum depth past both, keeping the held place, or taking the bearing
-with none held). The point fit starts from a held place and is exactly
-`fit_usable_point` from it, and a held bearing is no start.
+**Placing a sighting, and sizing and turning the patch (pixel forms).** Each
+claim is checked under a pinhole and under a distorting lens, where it holds
+exactly and within the lens's inverse-map tolerance respectively.
+- A slide lands the centre under the pointer in the image it was dragged in.
+  The displacement lies in the patch's own plane, with the normal, the axes and
+  the size untouched; every sighting keeps its own in-plane offset from where
+  the centre projects; nothing is pinned.
+- A pixel named in an image rather than through an observation is read against
+  the patch as it stands, and a cluster refuses it.
+- A single-keypoint move writes the keypoint, pins that observation and drops
+  what was read at the old pixel; moving a cluster sighting keeps the shape it
+  is read at.
+- An edge resize puts the dragged edge on the pixel the call named and keeps
+  the far edge on the pixel it was already on, with the frame square. The resize
+  is arithmetic in the patch's plane, so the lens tolerance is the only error.
+  The same holds for a bearing (`w == 0`), whose centre is renormalized. A
+  resize about the centre moves both edges and drops what was read over the old
+  square.
+- A turn keeps both axes' lengths and the normal, moves no sighting, and lands
+  the corner under the pixel a drag of that corner would have released on.
+- At the cluster stage the edge drag scales the shape by one scalar, so the
+  detector's anisotropy survives, moves the sighting by half the change and
+  holds the far edge of the parallelogram. A hand-set shape re-seeds the
+  sighting and does not pin its verdict.
+- Each patch step refuses the stage it does not belong to.
 
-**The noise level is the base's.** A fit with no `sigma_px` over a fixture
-whose keypoints sit a third of a pixel off alternately classifies at the level
-the base measures, a clone of the value reads the one cached measurement, and
-`min_depth` is the base's `min_point_depth`; the exact fixture measures the
-keypoint resolution, under 10⁻³ px, classifies at it and comes back finite; a
-reconstruction holding only a bearing has no level and a fit there without
-`sigma_px` is `NoNoiseLevel`, as is one given a level of 0. Two sightings of
-which one gives a ray are `TooFewRays`. Every reason's sentence is read back
-without `NaN`, with the noise level and the ray count, and with the distance
-only for a place.
+**The world-unit forms the 3D viewer names.**
+- `translate_patch` with a tangential `by` moves the centre by exactly that much
+  along `u` and `v` and carries every sighting with it; a mixed `by` moves the
+  centre by the sum of its parts, the same as its tangential and normal parts
+  taken one call at a time.
+- `resize_patch` with an edge named lands that edge at the length given with the
+  far edge held and the frame square; with no edge it holds the centre and moves
+  no sighting.
+- No displacement, and the size the patch already has, are no change in either
+  form.
+- A bearing takes a tangential `by` and stays on the unit sphere, refuses any
+  `by` with a normal part as `AtInfinity`, and holds its far edge through an
+  edge resize.
+- The pixel form and the world-unit form, given the same pointer and the
+  displacement or half-length it names, leave the patch at one centre and one
+  half-length.
+- A displacement that is not a finite number, a size that is not a usable
+  length and a cluster are each refused in their own words.
+- A translation along the normal moves the centre exactly the distance asked
+  along the outward normal and leaves the axes, the half-length and the plane's
+  orientation where they were. With every sighting first put somewhere of its
+  own on the plane, each keeps its `(a_i, b_i)` and each keypoint comes back as
+  the projection of `c' + a_i u + b_i v`, computed from the pair read before the
+  move; the sightings move by different amounts.
+- A patch pushed out past the cameras leaves every sighting with no keypoint and
+  `NoProjection`, drops the bitmap and the measurements and pins nothing; a
+  distance that is not a finite number, a bearing and a cluster are refused.
+- A tilt is the least rotation: its axis is perpendicular to both normals, so
+  `u` and `v` keep their components along it and no spin comes with the turn.
+  The centre and both half-lengths are untouched, and each sighting keeps its
+  `(a_i, b_i)`, its keypoint coming back as the projection of
+  `c + a_i u' + b_i v'` computed from the pair read before the turn and the axes
+  read after it.
+- A tilt asked 89 degrees over stops with its normal exactly `MAX_TILT_DEG`
+  from the observation the report names, with no observation past the cap and
+  the normal asked for still in the report. A track facing 85 degrees off one
+  camera and 69 off the other, so starting outside one cap, is turned back
+  inside without being stopped.
+- A sighting whose own piece of the patch swings behind its camera is left with
+  no keypoint and `NoProjection` while the centred one survives; the bitmap and
+  the measurements go and nothing is pinned. A direction that is not one, a
+  track at infinity and a cluster are refused.
 
-The search is tested over a corpus built in the test
-([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):
-a patch planted in three images under two warps the test states, written to a
-`.kdf` and reopened, so the seed an added row takes is a number the assertions
-can name rather than merely something that appeared. It covers the searched
-image never being added by its own search; the found image's row landing at the
-observation's pixel and shape under the planted warp, as an unpinned `out` with
-the search's own provenance and inlier count; an image the
-track already names being reported and left exactly as it was, pin and `out`
-verdict included; a bar no image reaches leaving the track untouched; and the
-three refusals -- an observation past the end, one with no place in its
-photograph, and a radius holding no indexed keypoint.
+**Finite points and bearings.** The fixture's scene takes its camera centres
+and its plane depth as arguments, with the texture's frequency scaled by the
+depth so a plane two hundred units out shows the same detail as one four units
+out. Eight cameras stepping by five centimetres at the far plane give a third
+of a pixel of parallax over the run, and a ninth camera twenty units to the
+side gives real baseline. These fits classify at a stated 0.5 px
+(`TEST_SIGMA_PX`), since the exact keypoints would measure a noise level of 0.
+- A bearing fits and stays a bearing at the half-extents it had, with every
+  sighting within a pixel of where a reading of the same track put it and
+  scoring what the reading scored.
+- A bearing's per-row ray angle agrees with the direction to a thousandth of a
+  degree.
+- The near scene's track fits finite and names the test that decided it.
+- The same sightings plus the offset camera's promote to a point on the plane,
+  with the frame grown by about the observing distance; the eight stored as a
+  finite point demote to a bearing, with the frame shrunk by about the distance
+  it stood at.
+- On a capture whose camera cloud is spread wide while the three cameras that
+  see the point stand close to it, a bearing placed at the point, and a point
+  moved in depth, look within 3% of their old size in each of those images; a
+  point taken to a bearing and back looks within 1% of its old size. With
+  nothing to measure in, the extents fall back to the observing distance and
+  then to the numbers they had.
+- A sighting moved four pixels off with the bar at two grid px keeps its seed,
+  carries `walked_px`, a `walked_to` within a pixel of where it was moved from
+  and a `walked_zncc`, and is still scored there while the other seven move;
+  `sight_observation` at `walked_to` puts its keypoint there, pinned, with the
+  walk fields gone.
+- The bench's `max_shift_px` defaults to 6, the localizer's own search radius,
+  while the cluster refinement's stays 3; the bench's ZNCC bars sit below the
+  refinement's, and its self-similarity bar sits under the largest radius
+  searched, with the refinement's own member gate off.
+- A bearing taken down to the cluster stage and back up comes back a bearing at
+  the size it was, and commits as a `w = 0` row with a unit direction, a zero
+  normal and a zero normal confidence, counted in `infinity_point_count`.
+- A slide, an edge drag, a centred resize and a turn each leave a bearing's
+  coordinate on the unit sphere, with the payload's coordinate following the
+  frame's centre.
 
-[tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
-covers the same surface through the bindings, over the 17-image seoul_bull solve
-converted to `embedded_patches`.
+**The outcomes of the test.**
+- Eight sightings on the far scene, tilted across the run by 0.2 px per camera
+  and thrown off that tilt by 1.5 px alternating, have an inverse-depth z above
+  4 at a 1 px floor (asserted, so the fixture stays the case it was built for),
+  yet the test finds the bearing's cost over the threshold with the depth score
+  and the midpoint bound under it, and writes the bearing
+  (`ScoreBelowThreshold`). The whole fit writes the bearing too, at the frame
+  size it arrived with.
+- The far point's exact projections are a point at a stated 0.02 px
+  (`ScoreCleared`, about 200 units out) though their z is under 4, and a bearing
+  at 0.5 px.
+- Rays built by hand cover the rest: a ring of five cameras at 0.04 rad
+  (`MidpointBoundCleared`); parallel rays (`BearingCostBelowThreshold`); a
+  minimum depth past the point (`NoUsablePoint`, written as the bearing, or
+  `HeldPointKept` when a held place beyond that depth is usable); and two
+  cameras facing each other along one line (`BearingBehindCamera`, placed
+  between them, and `LeftUnusable` with a minimum depth past both, keeping the
+  held place or taking the bearing when none is held).
+- The point fit starts from a held place and is exactly `fit_usable_point` from
+  it; a held bearing is no start.
+- A fit with no `sigma_px` over a fixture whose keypoints sit a third of a pixel
+  off alternately classifies at the level the base measures, a clone of the
+  value reads the one cached measurement, and `min_depth` is the base's
+  `min_point_depth`. The exact fixture measures the keypoint resolution, under
+  10⁻³ px, classifies at it and comes back finite.
+- A reconstruction holding only a bearing has no level, so a fit there without
+  `sigma_px` is `NoNoiseLevel`, as is one given a level of 0.
 
-The geometry search is covered in
-[bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) over the
-textured-plane scene: a matching third view lands at the exact patch
-projection with positive-chirality seed geometry; existing observations are
-unchanged; repeating the search leaves an `out`, pinned row untouched;
-an explicitly selected `out` row remains part of the reference basis; the
-cluster stage is refused; and the real call reports all three phases and stops
-on cancellation without returning a partial track.
+**A bearing that carries no patch.**
+- A `w = 0` point with no stored frame is put on the bench as a bearing with a
+  unit coordinate and commits back as one; the steps that need a patch refuse
+  it in their own words. A frameless `w = 1` point is a place.
 
-[bench/tests/delete_image.rs](../../../crates/sfmtool-core/src/bench/tests/delete_image.rs)
-covers `EditableTrack::delete_image`: observations in later images moving down
-by one at the same pixels while the one in the deleted image is dropped, the
-observation map that says so, a reference following its observation and keeping
-its template, a dropped reference re-seated on observation 0 with its template
-dropped, and a track that observes nothing at or past the image coming back as
-`None`.
+**No effect.**
+- A patch edit, a cluster edit or a painting that would change nothing reports
+  `changed: false` and hands the track back, even though a pixel's round trip
+  through a ray and back is not exact.
+
+**The photograph's own bounds.**
+- A pixel off the photograph is brought to the nearest pixel inside it, and the
+  report carries the pixel it was clamped from.
+
+**What a classification says.**
+- Every reason's sentence reads without `NaN`, with the noise level and the ray
+  count, and with the distance only for a place; extreme numbers print in
+  exponent notation.
+- Two sightings of which one gives a ray are `TooFewRays`.
+
+### [bench/tests/normal.rs](../../../crates/sfmtool-core/src/bench/tests/normal.rs)
+
+Over the plane seen by three views:
+- A patch tilted 20 degrees off the plane is turned to less than half that by
+  `fit_normal`, with the consensus ZNCC not falling, and by
+  `finite_difference_normal` at two pieces with no overlap and at three with
+  half, every piece fitting, both with `PieceLayout::Cross` and with
+  `PieceLayout::Grid`.
+- Both steps keep the centre and leave the track read and fused.
+- `normal_preconditions` and the piece and overlap bounds refuse what the track
+  and the settings alone rule out.
+
+The piece layout, the line through the centres and the one-line fallback are
+unit-tested in `normal.rs` itself.
+
+### [bench/tests/delete_image.rs](../../../crates/sfmtool-core/src/bench/tests/delete_image.rs)
+
+- `EditableTrack::delete_image` moves observations in later images down by one
+  at the same pixels, drops the one in the deleted image, and returns the
+  observation map that says so.
+- A reference follows its observation and keeps its template; a dropped
+  reference is re-seated on observation 0 with its template dropped.
+- A track that observes nothing at or past the image comes back as `None`.
+
+### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
+
+Over a corpus built in the test: a patch planted in three images under two
+stated warps, written to a `.kdf` and reopened, so the seed an added row takes
+is a number the assertions can name.
+- The searched image is never added by its own search.
+- The found image's row lands at the observation's pixel and shape under the
+  planted warp, as an unpinned `out` with the search's own provenance and inlier
+  count.
+- An image the track already names is reported and left exactly as it was, pin
+  and `out` verdict included.
+- A bar no image reaches leaves the track untouched.
+- An observation past the end, one with no place in its photograph, and a radius
+  holding no indexed keypoint are each refused.
+
+### Elsewhere
+
+- [edited/tests.rs](../../../crates/sfmtool-core/src/reconstruction/edited/tests.rs)
+  holds the comparison the no-write commit uses: a record agrees with itself,
+  `NaN` columns included, and disagrees with every one-column move of it, each
+  by the smallest step the stored representation holds.
+- [keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)
+  tests the allocation the memory bounds protect: a buffer of 256 TB comes back
+  as `LocalizeError::OutOfMemory` rather than aborting the process, and the
+  shift grids refuse a span no machine has the memory for.
+- [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
+  covers the same surface through the bindings, over the 17-image seoul_bull
+  solve converted to `embedded_patches`.
 
 ## Non-goals
 
