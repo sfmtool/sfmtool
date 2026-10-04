@@ -2,15 +2,23 @@
 
 ## Overview
 
-A `sift_files` reconstruction locates each observation by a reference into an
-external `.sift` file. An `embedded_patches` reconstruction instead carries each
-point's patch inline — a 3D patch frame (`(u, v)` half-vectors + normal) with a
-reference bitmap — plus a 2D keypoint per observation locating where each image
-sees that patch. This pipeline — the one behind `sfm embed-patches` — performs
-that change of representation on a loaded reconstruction (`feature_source`
+A `.sfmr` reconstruction records where each 3D point is seen in each image in
+one of two ways. In the `sift_files` mode an observation is an index into the
+`.sift` feature file of its image, so those files have to be kept with the
+reconstruction. In the `embedded_patches` mode the file stores each observation's
+2D image position (its keypoint) directly, gives each point a small flat patch
+oriented in 3D (`(u, v)` half-vectors + normal, with an RGBA image of the patch's
+appearance), and records each source image's hash itself, so it needs no `.sift`
+files. The pipeline in this spec, the one behind `sfm embed-patches`, converts a
+loaded reconstruction from the first mode to the second (`feature_source`
 `sift_files` → `embedded_patches`; the two modes are defined in
-[sfmr-file-format.md](../../formats/sfmr-file-format.md), "Observation source"):
-it builds an oriented
+[sfmr-file-format.md](../../formats/sfmr-file-format.md), "Observation source").
+Besides removing the dependency on the `.sift` files, the conversion places the
+keypoints by matching each point's patch across the images that see it, rather
+than keeping the SIFT detections, and it can add to a point's track the images
+that SIFT matching missed.
+
+In order, it builds an oriented
 patch per point (the `(u, v)` frame + normal), then for each point expands its
 track with the other vetted views that see the surfel and, over **`rounds`
 alternating passes** (default `rounds = 2`), refines the patch normal and then

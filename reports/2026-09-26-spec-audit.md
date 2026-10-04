@@ -208,6 +208,7 @@ who knows the subject needs to read it as a claim before it goes in.
    - Current: "A `sift_files` reconstruction locates each observation by a reference…"
    - Problem: it opens on a field value.
    - Proposed: *"`sfm embed-patches` converts a reconstruction whose observations point into per-image `.sift` files into a self-contained one that stores a small oriented patch per point and a 2D keypoint per observation."*
+   > _Status (2026-10-04): **Done** — the opening now defines the two observation modes in plain words (an index into each image's `.sift` file vs. an inline keypoint per observation, an oriented patch with an RGBA image per point and a direct image hash), names `sfm embed-patches` as the converter, and says why one converts (no `.sift` dependency; keypoints placed by matching the patch across images, tracks extended), branch `finding-fix-07-sift-to-patch-reconstruction-opening`._
 8. **`core/geometry/estimate-intrinsics.md`**
    - Current: "`estimate_intrinsics` is the high-level face of the structure-free focal vote…"
    - Proposed: *"Intrinsics estimation guesses a capture's shared focal length and camera-model family from cluster matches alone, before any reconstruction exists, and reports whether the guess is confirmed."*
