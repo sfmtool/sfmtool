@@ -3,8 +3,9 @@
 
 """Threshold and window constants for reconstruction discontinuity analysis.
 
-Shared by `recon_discontinuity.py` (which computes the signals) and `report.py`
-(which serializes the results).
+Shared by `recon_discontinuity.py` (which computes the signals),
+`_recon_console.py` (which prints the console table) and `report.py` (which
+serializes the results).
 
 Secondary discontinuity signals complement pose extrapolation — they catch
 discontinuities the pose-extrapolation test misses because polynomial
@@ -32,12 +33,12 @@ OBS_WINDOW = 24
 # Translation threshold = POSE_TRANS_FACTOR × the sequence's median successive
 # camera motion.  A factor of 1 is too tight: normal trajectory curvature
 # produces extrapolation errors on the order of the step size.  A factor of 3
-# leaves room for that while still catching real jumps.  Because the threshold
-# depends on the trajectory and not on error statistics, it does not change
-# when frames are pruned.
+# leaves room for that while still catching real jumps.  The threshold comes
+# from the camera steps, not from the extrapolation errors, and as a median it
+# is not raised by the few large jumps it is meant to catch.
 POSE_TRANS_FACTOR = 3.0
 # Rotation threshold, in degrees, fixed for every sequence.  How well rotation
 # extrapolates depends on how smooth the trajectory is, not on the rotation
-# rate: a quadratic extrapolation from 3 smooth neighbours should predict within a
-# few degrees however fast the camera rotates.
+# rate: a quadratic extrapolation from 3 smooth neighbours should predict within
+# a few degrees however fast the camera rotates.
 POSE_ROT_DEG = 15.0
