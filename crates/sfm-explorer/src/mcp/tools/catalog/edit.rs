@@ -338,7 +338,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           release_distortion are the defaults every camera takes, and cameras \
                           overrides them for the cameras it names. A camera with neither is held. \
                           The label says what each camera released, and the report names each \
-                          released camera's focal before and after.",
+                          released camera's focal before and after. By default every free point \
+                          is solved in inverse depth and stored as a position or a direction by \
+                          the point-or-bearing test at the end of the solve, and the report says \
+                          at what noise level and how many crossed each way; \
+                          free_points_cross: false keeps each point as it is.",
             kind: Write,
             schema: object(
                 &[
@@ -362,6 +366,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              the spline can change the scale at the centre of the image, and \
                              for a camera the posed images use whose model has no such \
                              distortion; hold such a camera through cameras. Defaults to false.",
+                        ),
+                    ),
+                    (
+                        "free_points_cross",
+                        flag(
+                            "Solve every free point in inverse depth and store it as a position \
+                             or a direction by the point-or-bearing test at the end of the \
+                             solve, so a point whose rays give no depth becomes a direction and \
+                             a direction whose rays give one a position. Defaults to true; false \
+                             keeps each point in the representation it has.",
                         ),
                     ),
                     (

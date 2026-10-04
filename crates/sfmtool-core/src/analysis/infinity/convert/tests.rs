@@ -96,6 +96,7 @@ fn classify_demotes_a_far_point_to_its_scored_bearing() {
     let pt = &classified.point_set.points[0];
     assert!(pt.is_at_infinity());
     assert_eq!(classified.point_set.infinity_point_count, 1);
+    assert_eq!(classified.metadata.infinity_point_count, 1);
     assert_eq!(summary.demoted, 1);
     assert_eq!(summary.kept, 49);
 
@@ -373,9 +374,12 @@ fn materialize_makes_every_point_finite() {
         pt.w = 0.0;
         pt.normal = Vector3::zeros();
     }
+    recon.rebuild_derived_fields();
+    recon.metadata.infinity_point_count = 50;
     let materialised = recon.materialize_points_at_infinity();
     assert!(materialised.point_set.points.iter().all(|p| p.w == 1.0));
     assert_eq!(materialised.point_set.infinity_point_count, 0);
+    assert_eq!(materialised.metadata.infinity_point_count, 0);
 }
 
 #[test]

@@ -127,7 +127,7 @@ const BOTH: CameraRelease = CameraRelease::FOCAL_AND_DISTORTION;
 const HELD: CameraRelease = CameraRelease::HELD;
 
 #[test]
-fn enter_runs_it_with_every_camera_held_which_is_the_default() {
+fn enter_runs_it_with_every_camera_held_and_the_points_crossing_which_is_the_default() {
     let mut prompt = BundleAdjustPrompt::default();
     let id = ReconId::next();
     prompt.ask(id, "kerry".to_string(), rig());
@@ -144,9 +144,17 @@ fn enter_runs_it_with_every_camera_held_which_is_the_default() {
         Some(BundleAdjustAnswer {
             recon: id,
             releases: vec![HELD; 4],
+            free_points: FreePointPolicy::CROSS,
         })
     );
     assert!(prompt.pending.is_none(), "the answered dialog stayed up");
+}
+
+#[test]
+fn clearing_the_crossing_checkbox_keeps_every_point_as_it_is() {
+    let answer = rig_answer(|p| p.free_points_cross = false);
+    assert_eq!(answer.free_points, FreePointPolicy::KEEP);
+    assert_eq!(answer.releases, vec![HELD; 4]);
 }
 
 #[test]

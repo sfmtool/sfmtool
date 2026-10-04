@@ -318,6 +318,7 @@ def _parse_camera_list(value: str) -> list[int]:
 # own the range checks.
 _BUNDLE_ADJUST_KEYS: dict[str, Callable[[str], object]] = {
     "cameras": _parse_camera_list,
+    "cross": _parse_bool,
 }
 
 
@@ -325,10 +326,14 @@ def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
     """Parse a ``--bundle-adjust`` comma-separated ``key=value`` string.
 
     An empty string is the bare option. ``cameras=0+1`` releases the lens of
-    those cameras only and holds the rest.
+    those cameras only and holds the rest. ``cross=off`` keeps every point in
+    the representation it has rather than letting the storage decision move it
+    between a position and a direction.
     """
     kwargs = _parse_kv_params(param, "--bundle-adjust", _BUNDLE_ADJUST_KEYS)
-    return BundleAdjustTransform(cameras=kwargs.get("cameras"))
+    return BundleAdjustTransform(
+        cameras=kwargs.get("cameras"), cross=kwargs.get("cross", True)
+    )
 
 
 # Each --to-embedded-patches key maps to a caster; the transform constructor owns

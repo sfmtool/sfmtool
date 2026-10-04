@@ -165,6 +165,32 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     }
 }
 
+/// The Action Log entry's free-point clause: what the storage decision did.
+///
+/// `, free points decided at 0.412 px: 3 to finite, 25 to directions`, with `
+/// before the final round converged` appended when it stopped on its iteration
+/// budget, since a level read from such a round still carries pose error and
+/// errs toward directions. `, free points not decided` when there was no
+/// level to decide at, and nothing when the adjustment kept every point's
+/// representation.
+fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision>) -> String {
+    let Some(d) = decision else {
+        return String::new();
+    };
+    let unconverged = if d.converged {
+        ""
+    } else {
+        " before the final round converged"
+    };
+    match d.sigma_px.filter(|_| d.decided) {
+        Some(sigma) => format!(
+            ", free points decided at {sigma:.3} px{unconverged}: {} to finite, {} to directions",
+            d.to_finite, d.to_direction
+        ),
+        None => ", free points not decided".to_string(),
+    }
+}
+
 /// The version label's release clause: what the solve released of each
 /// camera's lens.
 ///
@@ -1521,13 +1547,14 @@ impl AppState {
             let version_label =
                 format!("Bundle adjusted {label}{}", release_clause(&report.cameras));
             let focal = focal_changes(&report.cameras);
+            let free_points = free_point_clause(report.free_point_decision.as_ref());
             let deleted = if report.points_deleted > 0 {
                 format!(", {} points deleted", report.points_deleted)
             } else {
                 String::new()
             };
             let text = format!(
-                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{deleted}",
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{free_points}{deleted}",
                 report.images,
                 report.points,
                 report.observations,

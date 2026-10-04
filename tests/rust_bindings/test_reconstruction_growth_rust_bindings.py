@@ -29,6 +29,7 @@ GROW_KEYS = {
     "translations",
     "posed",
     "points",
+    "point_at_infinity",
     "focal",
     "residual_norms",
 }
@@ -167,8 +168,12 @@ def test_grow_dict_layout_and_full_registration():
     assert res["posed"].shape == (n_img,)
     assert res["posed"].dtype == np.bool_
     assert res["points"].shape == (n_cl, 3)
+    assert res["point_at_infinity"].shape == (n_cl,)
+    assert res["point_at_infinity"].dtype == np.bool_
     assert res["residual_norms"].shape == (len(sc["cluster"]),)
     assert isinstance(res["focal"], float)
+    # Every point of the orbit's cylinder is near, so none is a direction.
+    assert not res["point_at_infinity"].any()
 
     # A 3-image seed grows the whole orbit.
     assert res["posed"].all()
@@ -184,6 +189,54 @@ def test_grow_dict_layout_and_full_registration():
     finite = res["residual_norms"][np.isfinite(res["residual_norms"])]
     assert len(finite) >= 0.9 * len(sc["cluster"])
     assert np.median(finite) < 1.0
+
+
+def _add_far_clusters(sc, n, dist, seed, noise=0.2):
+    """Append ``n`` clusters ``dist`` from the origin, over every bearing in
+    the horizontal plane, each seen by every camera that images it (at least
+    two): a far field with no usable depth at the orbit's baseline."""
+    rng = np.random.default_rng(seed)
+    cluster, image, pos = list(sc["cluster"]), list(sc["image"]), list(sc["pos"])
+    cid = len(sc["world"])
+    first = cid
+    for _ in range(n):
+        phi = rng.uniform(0, 2 * np.pi)
+        x = dist * np.array([np.sin(phi), rng.uniform(-0.1, 0.1), np.cos(phi)])
+        members = []
+        for i, (rot, c) in enumerate(zip(sc["rots"], sc["centers"])):
+            pc = rot @ (x - c)
+            if pc[2] >= -1e-6:
+                continue
+            u = F0 * pc[0] / -pc[2] + W / 2.0
+            v = F0 * -pc[1] / -pc[2] + H / 2.0
+            if 0 <= u < W and 0 <= v < H:
+                members.append((i, [u, v]))
+        if len(members) < 2:
+            continue
+        for i, p in members:
+            cluster.append(cid)
+            image.append(i)
+            pos.append(np.asarray(p) + noise * rng.standard_normal(2))
+        cid += 1
+    sc = dict(sc)
+    sc["cluster"] = np.asarray(cluster, np.uint32)
+    sc["image"] = np.asarray(image, np.uint32)
+    sc["pos"] = np.asarray(pos, np.float64)
+    return sc, first, cid
+
+
+def test_grow_with_the_crossing_off_keeps_every_point_a_position():
+    # A far field 10^6 units out: by default the adjustments store it as
+    # directions; with the crossing off every point stays a position.
+    sc, first, end = _add_far_clusters(_orbit_scene(3), 150, 1.0e6, seed=5)
+    assert end - first >= 20
+    crossed = _grow(sc)
+    kept = _grow(sc, free_points_cross=False)
+    far = crossed["point_at_infinity"][first:end]
+    assert far.mean() >= 0.8, f"{far.sum()} of {len(far)} far clusters"
+    assert not crossed["point_at_infinity"][:first].any()
+    assert not kept["point_at_infinity"].any()
+    npt.assert_array_equal(kept["posed"], crossed["posed"])
 
 
 def test_grow_determinism():

@@ -424,20 +424,11 @@ impl SceneNode {
         self.history.current().is_deleted(index)
     }
 
-    /// How many of the node's points are at infinity, through the overlay.
-    ///
-    /// The base's metadata count less the deleted points that were at infinity,
-    /// which is O(deleted) rather than O(points).
+    /// How many of the node's points are at infinity, through the overlay:
+    /// [`EditedReconstruction::infinity_point_count`] of the version at the
+    /// cursor, which is O(edits) rather than O(points).
     pub fn infinity_point_count(&self) -> usize {
-        let edited = self.history.current();
-        let base = &edited.base;
-        let deleted_at_infinity = edited
-            .deleted_points
-            .iter()
-            .filter_map(|&i| base.point_set.points.get(i as usize))
-            .filter(|p| p.is_at_infinity())
-            .count();
-        (base.metadata.infinity_point_count as usize).saturating_sub(deleted_at_infinity)
+        self.history.current().infinity_point_count()
     }
 
     /// Whether this node carries everything the patch surfel pass needs: patch

@@ -1835,6 +1835,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_focal: true,
             release_distortion: false,
             cameras: Vec::new(),
+            free_points_cross: true,
         }
     );
     assert_eq!(
@@ -1851,6 +1852,20 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_focal: true,
             release_distortion: true,
             cameras: Vec::new(),
+            free_points_cross: true,
+        }
+    );
+    assert_eq!(
+        parse(
+            "bundle_adjust",
+            json!({ "reconstruction_label": "a", "free_points_cross": false })
+        ),
+        Command::BundleAdjust {
+            reconstruction_label: "a".to_string(),
+            release_focal: false,
+            release_distortion: false,
+            cameras: Vec::new(),
+            free_points_cross: false,
         }
     );
     assert_eq!(

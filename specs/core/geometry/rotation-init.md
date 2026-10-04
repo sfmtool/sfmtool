@@ -99,26 +99,30 @@ posed set and repeat until no image is added or the core reaches its size
 budget (`max_images`, default 14). Finish with one staged bundle
 adjustment (full default schedule) over the posed set at fixed `f0`.
 
-That adjustment models the far field at infinity, over a mask the kernel
+That adjustment starts the far field at infinity, over a mask the kernel
 builds itself as the deduplicated union of the H-inlier clusters of the
 component's validated edges. The mask is not optional and not the
-caller's to supply: with the far clusters left as finite points, a
+caller's to supply: with the far clusters started as finite points, a
 dominant far cloud rewards baseline collapse, and the LM walks the flat
 scale gauge downward until the near field crosses the adjustment's trim
 depth floor and the core degenerates to a panorama — each staged round is
-individually well behaved, and the walk compounds across them. Because
-the gauge is flat it can also wander harmlessly, so after the adjustment
-the posed translations and the finite points are rescaled to pin the seed
-baseline back to unit; the far rows are directions and are left alone.
+individually well behaved, and the walk compounds across them. Started as
+directions, the far clusters sit at zero inverse depth, where they carry no
+translation column. The adjustment runs with the default crossing
+([bundle-adjustment.md](bundle-adjustment.md) § "Free points: inverse depth
+and the storage decision"), so at its end every point, far-field or not, is
+stored as a position or a direction by what its rays support at the noise the
+adjustment measures. Because the gauge is flat it can also wander harmlessly,
+so after the adjustment the posed translations and the positions are rescaled
+to pin the seed baseline back to unit; the directions are left alone.
 
 ## Output
 
 Posed-image indices with rotations (WXYZ) and translations, the
-triangulated points (`NaN` where absent, and unit world-frame directions
-on the far-field rows the finishing adjustment modeled at infinity), and
-each posed image's surviving inlier fraction from the final adjustment.
-The far-field mask itself is internal: a caller that needs to know which
-clusters were held at infinity reads the unit rows off `points`.
+triangulated points (`NaN` where absent), `point_at_infinity` saying which
+rows are unit world-frame directions as the finishing adjustment stored them,
+and each posed image's surviving inlier fraction from the final adjustment.
+The far-field mask the adjustment starts from is internal.
 
 ## Binding
 
@@ -136,7 +140,7 @@ rotation_init(cluster_indexes, image_indexes, positions_xy,
               width, height, f0, *, seed=0,
               min_images=8, max_images=14)
     -> {"image_indexes", "quaternions_wxyz", "translations",
-        "points", "inlier_fractions"} | None
+        "points", "point_at_infinity", "inlier_fractions"} | None
 ```
 
 ## Testing requirements
@@ -150,6 +154,8 @@ rotation_init(cluster_indexes, image_indexes, positions_xy,
   `max_images`; a component below `min_images` returns `None`.
 - A capture with no valid rotation edges (all-parallax scene, every
   homography rejected by the orthogonality floor) returns `None`.
+- The rows `point_at_infinity` marks are unit rows, and at least 80% of them
+  are far-cloud clusters.
 - Determinism under a fixed seed; binding parity.
 
 ## Non-goals

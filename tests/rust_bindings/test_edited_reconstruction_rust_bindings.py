@@ -308,6 +308,36 @@ class TestBundleAdjust:
         )
         assert after.deleted_count == 0
 
+    def test_the_report_says_what_the_storage_decision_did(self, embedded):
+        before = embedded.materialize()[0]
+
+        after, report = embedded.bundle_adjust()
+
+        decision = report["free_point_decision"]
+        assert set(decision) == {
+            "sigma_px",
+            "observation_count",
+            "outlier_count",
+            "decided",
+            "converged",
+            "to_finite",
+            "to_direction",
+        }
+        assert decision["decided"] and decision["sigma_px"] > 0.0
+        # The counts are the points stored in the other representation, so
+        # with nothing deleted they move the infinity count by their difference.
+        value = after.materialize()[0]
+        if report["points_deleted"] == 0:
+            assert (
+                int(value.point_is_at_infinity.sum())
+                == int(before.point_is_at_infinity.sum())
+                + decision["to_direction"]
+                - decision["to_finite"]
+            )
+
+        _, kept = embedded.bundle_adjust(free_points_cross=False)
+        assert kept["free_point_decision"] is None
+
     def test_a_value_with_no_inline_keypoints_is_refused(self, base):
         # The stored reconstruction is sift_files, whose keypoints live in the
         # .sift companions rather than in the file.

@@ -2819,6 +2819,7 @@ The two bulk edits.
 //                 "release_distortion": true,
 //                 "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false,
 //                               "release_distortion": false }] }
+// bundle_adjust { "reconstruction_label": "seoul_bull", "free_points_cross": false }
 ```
 
 `resect_camera_image` is the resection landed as the node's next
@@ -2925,10 +2926,14 @@ naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
 report, and a field it leaves out taking the call's default. A camera with
 neither is held. An entry naming a camera the node does not have, or one camera
 twice, is refused before anything starts, and a camera no posed image uses is
-not in the solve, so what it is given is ignored. Everything else is the core
-function's defaults. A spline camera's coefficient count and domain end are not
-the adjustment's: they are a refit of that camera, `switch_camera_model`
-(below), made before the adjustment that refines the coefficients.
+not in the solve, so what it is given is ignored. `free_points_cross` is the
+dialog's crossing checkbox: by default every free point is solved in inverse
+depth and stored as a position or a direction by the storage decision at the end
+of the solve, and `false` keeps each point in the representation it has.
+Everything else is the core function's defaults. A spline camera's coefficient
+count and domain end are not the adjustment's: they are a refit of that camera,
+`switch_camera_model` (below), made before the adjustment that refines the
+coefficients.
 
 It needs inline keypoints and a posed image, and says which is missing when it
 refuses. Each camera's release is checked against its own model, and a release
@@ -2941,7 +2946,8 @@ version's label says what each camera released -- `, focal and lens distortion
 released` when every camera released the same, ` on every camera` added over
 several, and `, camera 0 focal and lens distortion released, camera 1 held`
 when they differ. The report's focal clause names each released camera's focal
-before and after.
+before and after, and its free-point clause what the storage decision did,
+`, free points decided at 0.412 px: 3 to finite, 25 to directions`.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -3912,7 +3918,7 @@ pub(crate) enum Command {
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
     BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
-                   cameras: Vec<CameraReleaseOverride> },
+                   cameras: Vec<CameraReleaseOverride>, free_points_cross: bool },
     SwitchCameraModel { reconstruction_label: String, request: SwitchCameraModelRequest },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere, and refuses `widgets: true` beside it.
@@ -4836,6 +4842,7 @@ Other candidates, in rough order of value:
 | `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
 | `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
+| `bundle_adjust` `free_points_cross` | `true`, free points cross | The core function's default, `FreePointPolicy::CROSS`; `false` is the dialog's crossing checkbox cleared. |
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
 | `switch_camera_model` `coeff_count` | the camera's own count for its own spline model, else `8` (`DEFAULT_COEFF_COUNT`) | A refit changes only what it names. |
 | `switch_camera_model` `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner | Kept exactly, not taken through degrees and back. |

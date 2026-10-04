@@ -67,7 +67,7 @@ behind it, not one a hand should be able to fire by accident.
 
 `Bundle Adjust...` opens a small window rather than running immediately, because
 there is one decision to take, camera by camera: how much of each lens may move,
-and in what form.
+and in what form. One more is about the points.
 
 - **One row per camera** the posed images use, in table order: `Camera 0
   SFMTOOL_FISHEYE  24 images`, then two checkboxes, both clear by default. A
@@ -97,6 +97,14 @@ and in what form.
   Intrinsics panel's `Refit spline…` ([`switch-camera-model.md`](switch-camera-model.md)),
   taken before the adjustment that fits the new coefficients to the
   observations.
+- **Store each point as a position or a direction by its rays**, one checkbox
+  under the camera rows, **ticked** by default: the core function's default
+  `free_points`, under which every free point is solved in inverse depth and
+  stored as the storage decision at the end of the solve says
+  ([`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)
+  § "Free points: inverse depth and the storage decision"). Cleared, every point
+  keeps the representation it has, `FreePointPolicy::KEEP`. Its hover text says
+  both.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
   a window to leave lying open.
@@ -115,11 +123,11 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The camera rows are the only option the dialog sets, as `releases`, which holds
-one `CameraRelease` per camera of the node's table: each row's two checkboxes
-for its camera, less anything its model cannot take, and held for a camera with
-no row. The schedule, the iteration budget and the two floors are the core
-function's defaults, which are the kernel's.
+The dialog sets two options. The camera rows are `releases`, which holds one
+`CameraRelease` per camera of the node's table: each row's two checkboxes for
+its camera, less anything its model cannot take, and held for a camera with no
+row. The crossing checkbox is `free_points`. The schedule, the iteration budget
+and the two floors are the core function's defaults, which are the kernel's.
 
 No images are decoded. The adjustment reprojects points through the poses and
 the lens the value already carries, so this edit reads nothing off disk.
@@ -167,8 +175,12 @@ One entry, of kind `Edit`, the label plus what the solve did:
 `Bundle adjusted bull: 17 images, 4210 points, 19882 observations, median
 residual 1.402 → 0.631 px (v3 → v4)`
 
-with each camera's focal change appended when the focal was released, and
-`, 12 points deleted` when the solve left points unsupported. A solve over one
+with each camera's focal change appended when the focal was released, what the
+storage decision did, `, free points decided at 0.412 px: 3 to finite, 25 to
+directions` (` before the final round converged` after the level when the final
+round stopped on its iteration budget, `, free points not decided` when there
+was no level, and nothing with the crossing off), and `, 12 points deleted`
+when the solve left points unsupported. A solve over one
 camera reads `, focal 2803.5 → 2794.1`; one over several names each camera by
 its table index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
 1399.8`, because a list of numbers alone would not say which lens moved. The
@@ -212,8 +224,11 @@ Explorer (`sfm-explorer` lib tests, headless):
   `on every camera`, the focal gate naming the camera that cannot release its
   focal, and the distortion gate closed on each camera with no spline and open,
   with the label naming each camera's release, once a camera is a spline model
-  or a `SIMPLE_RADIAL_FISHEYE`.
-- `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held),
+  or a `SIMPLE_RADIAL_FISHEYE`; the entry's free-point clause by default, and
+  none with the crossing off.
+- `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held
+  and the points crossing), the crossing checkbox cleared answering
+  `FreePointPolicy::KEEP`,
   one row per camera the posed images use, each row releasing its own camera
   and the rest held, a release the camera's model cannot take never answered,
   a row's distortion released only with its own focal and cleared when a drawn

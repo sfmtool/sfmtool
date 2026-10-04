@@ -91,12 +91,15 @@ pub struct RotationInit {
     /// World-to-camera translations, aligned with `image_indexes`. The seed
     /// pair's baseline defines unit scale.
     pub translations: Vec<[f64; 3]>,
-    /// World points indexed by cluster id (`NaN` where absent). The far-field
-    /// rows — the clusters a parallax-free conjugate homography explained —
-    /// are unit world-frame directions, because the final adjustment models
-    /// the far field at infinity; every other finite row is a triangulated
-    /// position.
+    /// World points indexed by cluster id (`NaN` where absent): a position, or
+    /// a unit world-frame direction where `point_at_infinity` says so.
     pub points: Vec<[f64; 3]>,
+    /// Per cluster, whether its `points` row is a direction. The far-field
+    /// clusters -- those a parallax-free conjugate homography explained --
+    /// enter the final adjustment as directions, and its storage decision then
+    /// stores every point, far-field or not, as a position or a direction by
+    /// what its rays support.
+    pub point_at_infinity: Vec<bool>,
     /// Per-posed-image fraction of its observations surviving the final
     /// adjustment's last trim gate, aligned with `image_indexes`.
     pub inlier_fractions: Vec<f64>,
@@ -740,10 +743,12 @@ pub fn rotation_init(
     }
 
     // Far-field clusters: union over the component's validated edges, and the
-    // finishing adjustment's points-at-infinity mask —
-    // left finite, a dominant far cloud rewards baseline collapse (the LM
+    // representation they enter the finishing adjustment in —
+    // started finite, a dominant far cloud rewards baseline collapse (the LM
     // walks the scale gauge until the near field crosses the trim depth
-    // floor and the core degenerates to a panorama).
+    // floor and the core degenerates to a panorama). As directions they start
+    // at zero inverse depth, which carries no translation column; the storage
+    // decision at the end of the adjustment then stores each by its rays.
     let mut far_mask = vec![false; n_pts];
     for e in &edges {
         if !in_comp[e.a] || !in_comp[e.b] {
@@ -795,8 +800,9 @@ pub fn rotation_init(
     );
 
     // The scale gauge is flat under the adjustment (it can wander); pin it
-    // back to the contract: the seed pair's baseline is unit. Directions
-    // (far rows) stay unit and are not rescaled.
+    // back to the contract: the seed pair's baseline is unit. Directions stay
+    // unit and are not rescaled.
+    let point_at_infinity = ba.point_at_infinity.clone();
     let center = |i: usize| -(quats[i].inverse() * trans[i]);
     let baseline = (center(seed_b) - center(seed_a)).norm();
     if baseline.is_finite() && baseline > 1e-12 {
@@ -807,7 +813,7 @@ pub fn rotation_init(
             }
         }
         for (cid, p) in points.iter_mut().enumerate() {
-            if !far_mask[cid] && p[0].is_finite() {
+            if !point_at_infinity[cid] && p[0].is_finite() {
                 for c in p.iter_mut() {
                     *c *= scale;
                 }
@@ -858,6 +864,7 @@ pub fn rotation_init(
         quaternions_wxyz,
         translations,
         points,
+        point_at_infinity,
         inlier_fractions,
     })
 }

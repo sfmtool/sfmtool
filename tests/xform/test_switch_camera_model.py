@@ -228,8 +228,44 @@ def test_bundle_adjust_after_a_switch_to_a_spline_releases_it(
     out = capsys.readouterr().out
     assert "sfmtool; a camera has a spline model" in out
     assert "released: focal, distortion" in out
+    # The storage decision of the free points, which cross by default.
+    assert "Free points decided at " in out
+    assert " to finite, " in out and " to directions" in out
     result = SfmrReconstruction.load(output_path)
     assert result.cameras[0].model == "SFMTOOL_PINHOLE"
+
+
+def test_bundle_adjust_cross_off_keeps_every_point_s_representation(
+    seoul_bull_ground_truth_sfmr, capsys
+):
+    """``cross=off`` runs sfmtool's adjustment with the crossing off: every
+    point comes back in the representation it went in with, and no decision is
+    printed."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    switched, _ = recon.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=4)
+    capsys.readouterr()
+
+    result = BundleAdjustTransform(cross=False).apply(switched)
+
+    out = capsys.readouterr().out
+    assert "Free points" not in out
+    np.testing.assert_array_equal(
+        result.point_is_at_infinity, switched.point_is_at_infinity
+    )
+
+
+def test_bundle_adjust_cross_off_is_refused_on_the_pycolmap_path(
+    seoul_bull_ground_truth_sfmr,
+):
+    """pycolmap's adjustment solves every point finite and reclassifies after,
+    so it has no way to keep each point's representation, and says so."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    with pytest.raises(click.UsageError, match="cross=off applies to sfmtool"):
+        BundleAdjustTransform(cross=False).apply(recon)
 
 
 def test_bundle_adjust_option_parses_bare_and_with_keys():
@@ -342,6 +378,21 @@ def test_bundle_adjust_option_takes_cameras():
     assert bare.cameras is None
     with pytest.raises(click.UsageError, match="not a valid"):
         parse_transform_args(["--bundle-adjust", "cameras=one"])
+
+
+def test_bundle_adjust_option_takes_cross():
+    from sfmtool.xform._arg_parser import parse_transform_args
+
+    (bare,) = parse_transform_args(["--bundle-adjust"])
+    assert bare.cross is True
+    assert "cross" not in bare.description()
+    (kept,) = parse_transform_args(["--bundle-adjust", "cameras=0,cross=off"])
+    assert kept.cross is False and kept.cameras == [0]
+    assert kept.description().endswith("cameras=0, cross=off)")
+    (crossed,) = parse_transform_args(["--bundle-adjust", "cross=on"])
+    assert crossed.cross is True
+    with pytest.raises(click.UsageError, match="not a valid"):
+        parse_transform_args(["--bundle-adjust", "cross=sometimes"])
 
 
 def test_bundle_adjust_cameras_releases_those_and_holds_the_rest(

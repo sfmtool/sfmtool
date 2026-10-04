@@ -89,6 +89,44 @@ fn new_record(seed: u32, image_count: u32) -> PointRecord {
     }
 }
 
+/// The overlay's count of points at infinity follows every kind of edit: an
+/// addition at infinity, a position replaced by a bearing, a bearing replaced
+/// by a position, a deleted base bearing, and a deleted addition at infinity.
+#[test]
+fn the_infinity_count_reads_through_the_overlay() {
+    let mut base = fixture(10);
+    for p in [2usize, 3, 4] {
+        let point = &mut base.point_set.points[p];
+        point.position = nalgebra::Point3::from(point.position.coords.normalize());
+        point.w = 0.0;
+    }
+    base.rebuild_derived_fields();
+    let images = base.image_count() as u32;
+    let mut edited = EditedReconstruction::new(Arc::new(base));
+    assert_eq!(edited.infinity_point_count(), 3);
+
+    let bearing = |seed| {
+        let mut record = new_record(seed, images);
+        record.point.position = nalgebra::Point3::new(0.0, 0.6, 0.8);
+        record.point.w = 0.0;
+        record
+    };
+    let added = edited.add_point(bearing(1)).unwrap();
+    assert_eq!(edited.infinity_point_count(), 4);
+    // A position replaced by a bearing.
+    edited.replace_point(0, bearing(2)).unwrap();
+    assert_eq!(edited.infinity_point_count(), 5);
+    // A bearing replaced by a position.
+    edited.replace_point(2, new_record(3, images)).unwrap();
+    assert_eq!(edited.infinity_point_count(), 4);
+    // A base bearing deleted, and an added one.
+    edited.delete_point(3).unwrap();
+    edited.delete_point(added).unwrap();
+    assert_eq!(edited.infinity_point_count(), 2);
+    let (materialised, _) = edited.materialize();
+    assert_eq!(materialised.point_set.infinity_point_count, 2);
+}
+
 /// The record comparison: exact on every stored column, with `NaN` agreeing
 /// with `NaN` so that a free point's distance -- or any other column a `NaN`
 /// reached -- cannot make a record differ from a copy of itself forever.

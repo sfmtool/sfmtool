@@ -4,6 +4,7 @@
 use super::*;
 use crate::camera::CameraModel;
 use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
+use crate::geometry::bundle_adjust::FreePointPolicy;
 use nalgebra::{Matrix3, Rotation3};
 
 const W: u32 = 800;
@@ -291,6 +292,7 @@ fn assert_growth_bits_eq(a: &ReconstructionGrowth, b: &ReconstructionGrowth) {
     }
     assert_eq!(bits3(&a.translations), bits3(&b.translations));
     assert_eq!(bits3(&a.points), bits3(&b.points));
+    assert_eq!(a.point_at_infinity, b.point_at_infinity);
     assert_eq!(a.focal.to_bits(), b.focal.to_bits());
     assert_eq!(
         a.residual_norms
@@ -339,7 +341,9 @@ fn orbit_grows_to_full_registration() {
     assert!(med < 1.0, "median residual {med} px");
 
     // Structure: triangulated points match the ground-truth cloud under a
-    // similarity fit.
+    // similarity fit. Every point of the cylinder is near, so none is stored
+    // as a direction.
+    assert!(!out.point_at_infinity.iter().any(|&d| d));
     let mut est_p = Vec::new();
     let mut gt_p = Vec::new();
     for (c, p) in out.points.iter().enumerate() {
@@ -351,6 +355,279 @@ fn orbit_grows_to_full_registration() {
     assert!(est_p.len() * 10 >= scene.world.len() * 9);
     let (res, spread) = similarity_residuals(&est_p, &gt_p);
     assert!(median(&res) < 0.02 * spread);
+}
+
+/// Append `n` clusters `dist` from the origin, spread over every bearing in the
+/// horizontal plane, each observed by every camera that images it: a far field
+/// whose rays carry no usable depth at the orbit's baseline.
+fn add_far_clusters(scene: &mut Scene, n: usize, dist: f64, noise: f64, rng: &mut Lcg) -> usize {
+    use std::f64::consts::TAU;
+    let cam = test_cam(F0);
+    let mut cid = scene.world.len() as u32;
+    let first = scene.world.len();
+    for _ in 0..n {
+        let phi = rng.uniform(0.0, TAU);
+        let x = Vector3::new(
+            dist * phi.sin(),
+            rng.uniform(-0.1, 0.1) * dist,
+            dist * phi.cos(),
+        );
+        let mut members: Vec<(u32, [f64; 2])> = Vec::new();
+        for i in 0..scene.quats.len() {
+            let pc = scene.quats[i] * (x - scene.centers[i]);
+            if pc.z >= -1e-6 {
+                continue;
+            }
+            let Some((u, v)) = cam.ray_to_pixel([pc.x, pc.y, pc.z]) else {
+                continue;
+            };
+            if !(0.0..W as f64).contains(&u) || !(0.0..H as f64).contains(&v) {
+                continue;
+            }
+            members.push((i as u32, [u, v]));
+        }
+        if members.len() < 3 {
+            continue;
+        }
+        for (i, p) in members {
+            scene.cluster.push(cid);
+            scene.image.push(i);
+            scene
+                .pos
+                .push([p[0] + noise * rng.gaussian(), p[1] + noise * rng.gaussian()]);
+        }
+        scene.world.push(x);
+        cid += 1;
+    }
+    scene.world.len() - first
+}
+
+#[test]
+fn far_clusters_are_stored_as_directions_and_growth_still_registers() {
+    // The orbit with a far field around it. By default the adjustments decide
+    // each point's representation, so the far clusters end as directions, the
+    // near ones as positions, and the registration is the one the crossing
+    // off gives. With the crossing off every point stays a position.
+    let mut rng = Lcg(7);
+    let mut scene = orbit_scene(16, 240, 0.2, 0.4, &mut rng);
+    let n_near = scene.world.len();
+    let n_far = add_far_clusters(&mut scene, 60, 1.0e6, 0.2, &mut rng);
+    assert!(n_far >= 30, "only {n_far} far clusters are seen");
+
+    let crossed = grow(&scene, &test_cam(F0), 3, &GrowOptions::default());
+    let kept = grow(
+        &scene,
+        &test_cam(F0),
+        3,
+        &GrowOptions {
+            free_points: FreePointPolicy::KEEP,
+            ..Default::default()
+        },
+    );
+    assert!(!kept.point_at_infinity.iter().any(|&d| d));
+    assert_representation_consistent(&crossed);
+    assert_representation_consistent(&kept);
+    assert!(
+        crossed.posed.iter().all(|&p| p),
+        "posed {:?}",
+        crossed.posed
+    );
+    assert_eq!(crossed.posed, kept.posed);
+
+    let near_dirs = crossed.point_at_infinity[..n_near]
+        .iter()
+        .filter(|&&d| d)
+        .count();
+    let far_dirs = crossed.point_at_infinity[n_near..]
+        .iter()
+        .filter(|&&d| d)
+        .count();
+    assert_eq!(near_dirs, 0, "near points stored as directions");
+    assert!(
+        far_dirs * 10 >= n_far * 8,
+        "{far_dirs} of {n_far} far clusters stored as directions"
+    );
+    // A direction comes back a unit row along its true bearing, and its
+    // observations reproject through the rotations alone.
+    let (max_c, max_r) = camera_errors(&scene, &crossed);
+    assert!(max_c < 0.02, "center error {max_c} of spread");
+    assert!(max_r < 0.5, "rotation error {max_r} deg");
+    for c in n_near..scene.world.len() {
+        if crossed.point_at_infinity[c] {
+            let row = crossed.points[c];
+            let norm = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
+            assert!((norm - 1.0).abs() < 1e-9, "direction {c} not unit: {norm}");
+        }
+    }
+    let far_residuals: Vec<f64> = (0..scene.cluster.len())
+        .filter(|&k| crossed.point_at_infinity[scene.cluster[k] as usize])
+        .map(|k| crossed.residual_norms[k])
+        .collect();
+    assert!(far_residuals.iter().all(|r| r.is_finite()));
+    let med = median(&far_residuals);
+    assert!(med < 1.0, "median direction residual {med} px");
+}
+
+#[test]
+fn an_image_that_sees_only_far_clusters_stored_as_directions_is_not_registered() {
+    // Image 16 keeps only its observations of the far field: once an
+    // adjustment stores those clusters as directions it has no position to
+    // resect against, and a direction says nothing of a camera centre, so it
+    // stays un-posed while every other image registers as before. Over several
+    // draws, since whether a resection would latch onto the unit rows, were
+    // they gathered, depends on the draw.
+    for seed in [7, 9, 11, 13, 21] {
+        far_only_image_is_not_registered(seed);
+    }
+}
+
+/// [`an_image_that_sees_only_far_clusters_stored_as_directions_is_not_registered`]
+/// on one draw.
+fn far_only_image_is_not_registered(seed: u64) {
+    let mut rng = Lcg(seed);
+    let mut scene = orbit_scene(17, 240, 0.2, 0.4, &mut rng);
+    let extra = 16u32;
+    let keep: Vec<bool> = scene.image.iter().map(|&i| i != extra).collect();
+    let mut it = keep.iter();
+    scene.cluster.retain(|_| *it.next().unwrap());
+    let mut it = keep.iter();
+    scene.pos.retain(|_| *it.next().unwrap());
+    scene.image.retain(|&i| i != extra);
+    let n_near = scene.world.len();
+    let n_far = add_far_clusters(&mut scene, 300, 1.0e6, 0.2, &mut rng);
+    let extra_far = (0..scene.image.len())
+        .filter(|&k| scene.image[k] == extra && scene.cluster[k] as usize >= n_near)
+        .count();
+    assert!(
+        n_far >= 30 && extra_far >= 20,
+        "seed {seed}: {n_far} far clusters, {extra_far} seen by the image"
+    );
+    assert!(
+        (0..scene.image.len())
+            .all(|k| scene.image[k] != extra || scene.cluster[k] as usize >= n_near),
+        "seed {seed}: the image still sees a near cluster"
+    );
+
+    let out = grow(&scene, &test_cam(F0), 3, &GrowOptions::default());
+    assert!(
+        !out.posed[extra as usize],
+        "seed {seed}: registered against directions"
+    );
+    assert_representation_consistent(&out);
+    assert_eq!(out.posed.iter().filter(|&&p| p).count(), 16, "seed {seed}");
+    let (max_c, max_r) = camera_errors(&scene, &out);
+    assert!(max_c < 0.02, "seed {seed}: center error {max_c} of spread");
+    assert!(max_r < 0.5, "seed {seed}: rotation error {max_r} deg");
+}
+
+#[test]
+fn a_position_is_usable_for_resection_and_a_direction_or_nan_is_not() {
+    assert!(usable_for_resection(&[1.0, 2.0, 3.0], false));
+    assert!(!usable_for_resection(&[0.0, 0.0, 1.0], true));
+    assert!(!usable_for_resection(&[f64::NAN; 3], false));
+}
+
+/// Cluster ids, image ids, keypoints, rows and the direction mask of a
+/// handful of observations.
+type Observed = (Vec<u32>, Vec<u32>, Vec<[f64; 2]>, Vec<[f64; 3]>, Vec<bool>);
+
+/// Three clusters seen by image 0 -- a position, a direction and a `NaN` row
+/// -- and the position also by image 1.
+fn three_kinds() -> Observed {
+    let cluster = vec![0, 0, 1, 2];
+    let image = vec![0, 1, 0, 0];
+    let pos = vec![
+        [400.0, 400.0],
+        [410.0, 400.0],
+        [100.0, 120.0],
+        [300.0, 300.0],
+    ];
+    let points = vec![[0.0, 0.0, -5.0], [0.6, 0.0, -0.8], [f64::NAN; 3]];
+    let is_dir = vec![false, true, false];
+    (cluster, image, pos, points, is_dir)
+}
+
+#[test]
+fn gathering_takes_only_positions() {
+    let (cluster, _image, pos, points, is_dir) = three_kinds();
+    let bearings = vec![Vector3::new(0.0, 0.0, -1.0); pos.len()];
+    let (rows, uv, world, brs) =
+        gather_correspondences(&[0, 2, 3], &cluster, &pos, &bearings, &points, &is_dir);
+    assert_eq!(rows, vec![0]);
+    assert_eq!(uv, vec![pos[0]]);
+    assert_eq!(world, vec![points[0]]);
+    assert_eq!(brs.len(), 1);
+}
+
+#[test]
+fn the_next_best_view_count_is_of_positions_in_un_posed_images() {
+    let (cluster, image, _pos, points, is_dir) = three_kinds();
+    let counts = next_best_view_counts(&cluster, &image, &[false, false], &points, &is_dir);
+    assert_eq!(counts, vec![1, 1]);
+    let counts = next_best_view_counts(&cluster, &image, &[false, true], &points, &is_dir);
+    assert_eq!(counts, vec![1, 0]);
+}
+
+#[test]
+fn the_inlier_fraction_is_over_positions_alone() {
+    // Image 0 at the origin looking along -Z: the position projects exactly
+    // onto its keypoint, and the direction's keypoint is where the direction
+    // projects. Read as a position under a translated camera it would be
+    // pixels off; as a direction it is not counted at all.
+    let cam = test_cam(F0);
+    let r = UnitQuaternion::identity();
+    let t = Vector3::new(0.3, 0.0, 0.0);
+    let x = [0.0, 0.0, -5.0];
+    let d = [0.6, 0.0, -0.8];
+    let c = Vector3::new(x[0], x[1], x[2]) + t;
+    let (u0, v0) = cam.ray_to_pixel([c.x, c.y, c.z]).unwrap();
+    let (u1, v1) = cam.ray_to_pixel(d).unwrap();
+    let cluster = vec![0, 1, 2];
+    let pos = vec![[u0, v0], [u1, v1], [10.0, 10.0]];
+    let points = vec![x, d, [f64::NAN; 3]];
+    let is_dir = vec![false, true, false];
+    let f = image_inlier_fraction(&cam, &r, &t, &[0, 1, 2], &cluster, &pos, &points, &is_dir);
+    assert_eq!(f, 1.0);
+    // With no position among its observations the fraction is 0.
+    let f = image_inlier_fraction(&cam, &r, &t, &[1, 2], &cluster, &pos, &points, &is_dir);
+    assert_eq!(f, 0.0);
+}
+
+#[test]
+fn a_rollback_restores_the_representation_with_the_rest() {
+    let quats = vec![UnitQuaternion::identity(); 2];
+    let trans = vec![Vector3::new(1.0, 2.0, 3.0); 2];
+    let points = vec![[0.0, 0.0, -5.0], [0.6, 0.0, -0.8], [f64::NAN; 3]];
+    let is_dir = vec![false, true, false];
+    let ba_mask = vec![true, false, true];
+    let saved = Rollback::take(&quats, &trans, &points, &is_dir, &ba_mask, 2);
+
+    // What a verification adjustment may change, all of it.
+    let (mut q, mut t, mut p, mut d, mut m) = (
+        quats.clone(),
+        trans.clone(),
+        points.clone(),
+        is_dir.clone(),
+        ba_mask.clone(),
+    );
+    q[1] = UnitQuaternion::from_scaled_axis(Vector3::new(0.1, 0.0, 0.0));
+    t[1] = Vector3::zeros();
+    p[0] = [0.0, 0.0, 1.0];
+    p[2] = [1.0, 1.0, 1.0];
+    d[0] = true;
+    d[1] = false;
+    m[1] = true;
+    let mut since = 0;
+
+    saved.restore(&mut q, &mut t, &mut p, &mut d, &mut m, &mut since);
+    assert_eq!(q, quats);
+    assert_eq!(t, trans);
+    assert_eq!(p[0], points[0]);
+    assert_eq!(p[1], points[1]);
+    assert!(p[2][0].is_nan());
+    assert_eq!(d, is_dir);
+    assert_eq!(m, ba_mask);
+    assert_eq!(since, 2);
 }
 
 #[test]
@@ -589,6 +866,75 @@ fn all_junk_image_is_force_rejected() {
     }
     // The rejected force-accept restored the prior state: the remaining
     // cameras are as accurate as a clean growth.
+    let (max_c, max_r) = camera_errors(&scene, &out);
+    assert!(max_c < 0.02, "center error {max_c} of spread");
+    assert!(max_r < 0.5, "rotation error {max_r} deg");
+}
+
+#[test]
+fn a_rejected_force_accept_among_directions_leaves_them_as_they_were() {
+    // The all-junk force-accept again, now with a far field the adjustments
+    // store as directions, so the state the rejection restores holds
+    // directions (the restore itself is `a_rollback_restores_the_
+    // representation_with_the_rest`). Every direction comes back a unit row
+    // of the far field and every near point a position.
+    let mut rng = Lcg(7);
+    let mut scene = orbit_scene(14, 240, 0.2, 0.4, &mut rng);
+    let n_near = scene.world.len();
+    let n_far = add_far_clusters(&mut scene, 60, 1.0e6, 0.2, &mut rng);
+    let victim = 7u32;
+    corrupt_image(&mut scene, victim, 1.0, &mut rng);
+
+    let out = grow(&scene, &test_cam(F0), 3, &GrowOptions::default());
+    assert!(!out.posed[victim as usize]);
+    assert_eq!(out.posed.iter().filter(|&&p| p).count(), 13);
+    let far_dirs = out.point_at_infinity[n_near..]
+        .iter()
+        .filter(|&&d| d)
+        .count();
+    assert!(
+        far_dirs * 10 >= n_far * 8,
+        "{far_dirs} of {n_far} far clusters"
+    );
+    assert!(!out.point_at_infinity[..n_near].iter().any(|&d| d));
+    assert_representation_consistent(&out);
+    let (max_c, max_r) = camera_errors(&scene, &out);
+    assert!(max_c < 0.02, "center error {max_c} of spread");
+    assert!(max_r < 0.5, "rotation error {max_r} deg");
+}
+
+/// Every row `point_at_infinity` marks is a unit direction, and no other row is
+/// one: the representation travels with the row through every adjustment,
+/// refill and restore. Returns the number of directions.
+fn assert_representation_consistent(out: &ReconstructionGrowth) -> usize {
+    let unit = |p: &[f64; 3]| ((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() - 1.0).abs() < 1e-9;
+    for (c, row) in out.points.iter().enumerate() {
+        assert_eq!(
+            unit(row),
+            out.point_at_infinity[c],
+            "cluster {c}: row {row:?}, point_at_infinity {}",
+            out.point_at_infinity[c]
+        );
+    }
+    out.point_at_infinity.iter().filter(|&&d| d).count()
+}
+
+#[test]
+fn the_finishing_adjustment_s_representation_is_the_one_returned() {
+    // A far field 10^5 units out, where the finishing adjustment, at the
+    // released focal and over its own observation set, stores a point in the
+    // other representation than the growth adjustments left it in; and a
+    // partly junk image. The result's rows and flags agree throughout.
+    let mut rng = Lcg(9);
+    let mut scene = orbit_scene(14, 240, 0.2, 0.4, &mut rng);
+    let n_near = scene.world.len();
+    let n_far = add_far_clusters(&mut scene, 120, 1.0e5, 0.5, &mut rng);
+    corrupt_image(&mut scene, 5, 0.6, &mut rng);
+
+    let out = grow(&scene, &test_cam(F0), 3, &GrowOptions::default());
+    let dirs = assert_representation_consistent(&out);
+    assert!(dirs >= 10, "{dirs} directions of {n_far} far clusters");
+    assert!(!out.point_at_infinity[..n_near].iter().any(|&d| d));
     let (max_c, max_r) = camera_errors(&scene, &out);
     assert!(max_c < 0.02, "center error {max_c} of spread");
     assert!(max_r < 0.5, "rotation error {max_r} deg");

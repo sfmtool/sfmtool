@@ -107,6 +107,10 @@ def test_find_decides_on_the_point_or_bearing_test(seoul_bull_workspace):
     assert summary["noise"]["observation_count"] > 0
     assert summary["bearings"] == result.point_count - n0 > 0
     assert summary["short_baseline"] <= summary["bearings"]
+    # The metadata states the count of points at infinity too, and follows
+    # the appended bearings.
+    assert result.metadata()["infinity_point_count"] == result.infinity_point_count
+    assert result.infinity_point_count >= summary["bearings"]
     dropped = summary["finite"] + summary["bearing_behind_camera"] + summary["unscored"]
     assert summary["bearings"] + dropped == summary["candidates"]
 

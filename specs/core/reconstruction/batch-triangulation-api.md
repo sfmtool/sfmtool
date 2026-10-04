@@ -1161,12 +1161,12 @@ point, clean and with keypoint noise of 0.5 and 2 px or pose noise of 0.05° and
 grows (`base_ba`: 886 at 0.20 px, 820 at 0.54, 397 at 2.0) and no step refuses
 or fails.
 
-**Bundle adjustment.** With `FreePointPolicy::cross`, the staged bundle
-adjustment solves every free point in inverse depth about the centroid of its
-observing cameras, `(u, ρ)` with `ρ ≥ 0` as in the point fit above, so a point
-moves between near and infinity within a round, and decides once, at the end of
-the solve, how it is stored: `observed_ray` through each observing image's
-camera as the solve ended, `bearing_score` and `is_finite` at
+**Bundle adjustment.** With `FreePointPolicy::cross`, the default, the staged
+bundle adjustment solves every free point in inverse depth about the centroid
+of its observing cameras, `(u, ρ)` with `ρ ≥ 0` as in the point fit above, so
+a point moves between near and infinity within a round, and decides once, at
+the end of the solve, how it is stored: `observed_ray` through each observing
+image's camera as the solve ended, `bearing_score` and `is_finite` at
 `DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`, a bearing verdict stored as the
 score's bearing, a finite one at the position the solve placed (or at
 `fit_point_and_bearing`'s point where the solve left it at `ρ = 0`). Its noise

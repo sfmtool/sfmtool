@@ -20,7 +20,7 @@ use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
 use crate::camera::{CameraIntrinsics, CameraModel};
 pub use crate::geometry::bundle_adjust::CameraRelease;
 use crate::geometry::bundle_adjust::{
-    BaCameras, BaSchedule, DistanceReference, FreePointPolicy, PointConstraints,
+    BaCameras, BaSchedule, DistanceReference, FreePointDecision, FreePointPolicy, PointConstraints,
     PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
 use crate::numeric::median_in_place;
@@ -85,6 +85,12 @@ pub struct BundleAdjustOptions {
     /// Trim survivors below which the round exits degenerate, which this call
     /// refuses.
     pub min_obs: usize,
+    /// Whether free points cross between a position and a direction. The
+    /// default, [`FreePointPolicy::CROSS`], solves every free point in inverse
+    /// depth and stores it as the storage decision at the end of the solve
+    /// says; [`FreePointPolicy::KEEP`] keeps each point in the representation
+    /// it has in the value. Ranged and held points keep theirs either way.
+    pub free_points: FreePointPolicy,
 }
 
 impl Default for BundleAdjustOptions {
@@ -95,6 +101,7 @@ impl Default for BundleAdjustOptions {
             max_iters: DEFAULT_MAX_ITERS,
             min_track: DEFAULT_MIN_TRACK,
             min_obs: DEFAULT_MIN_OBS,
+            free_points: FreePointPolicy::default(),
         }
     }
 }
@@ -262,6 +269,10 @@ pub struct BundleAdjustReport {
     pub median_residual_after: f64,
     /// One entry per camera in the solve, in camera-table order.
     pub cameras: Vec<CameraAdjustment>,
+    /// The storage decision of the free points: the noise level they were
+    /// decided at, whether the final round converged, and how many crossed in
+    /// each direction. `None` under [`FreePointPolicy::KEEP`].
+    pub free_point_decision: Option<FreePointDecision>,
 }
 
 /// What one adjustment did to one camera.
@@ -296,11 +307,14 @@ pub struct CameraAdjustment {
 /// against every observation that carries a pixel, by the staged robust solve in
 /// [`crate::geometry::bundle_adjust()`]. The posed images may be taken through
 /// any number of the table's cameras; each keeps its own lens in the solve, and a
-/// camera no posed image uses is not in it and comes back as it went in. A point
-/// at infinity goes in as the
-/// direction it is and comes back as one: the caller's representation is honoured
-/// for the whole solve, so no point crosses between a bearing and a position
-/// here. A point's constraint -- free, ranged or held -- is the one its
+/// camera no posed image uses is not in it and comes back as it went in. A free
+/// point goes in as the position or the direction it is and, under the default
+/// [`BundleAdjustOptions::free_points`], comes back as whichever the
+/// point-or-bearing test reads at the end of the solve, so a point can cross
+/// between a bearing and a position here; [`FreePointPolicy::KEEP`] honours
+/// the value's representation for the whole solve instead.
+/// [`BundleAdjustReport::free_point_decision`] says what the decision did. A
+/// point's constraint -- free, ranged or held -- is the one its
 /// [`PointConstraintColumns`](super::data::PointConstraintColumns) state, so a
 /// held point comes back exactly as it went in.
 ///
@@ -559,7 +573,9 @@ pub fn bundle_adjust(
         &obs_pt,
         Some(&is_dir),
         constraints.as_ref(),
-        FreePointPolicy::default(),
+        // An empty schedule runs no round and decides nothing; the policy is
+        // stated off so that this call only measures.
+        FreePointPolicy::KEEP,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
@@ -589,7 +605,7 @@ pub fn bundle_adjust(
         &obs_pt,
         Some(&is_dir),
         constraints.as_ref(),
-        FreePointPolicy::default(),
+        options.free_points,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
@@ -704,6 +720,9 @@ pub fn bundle_adjust(
         out
     };
     out.rebuild_derived_fields();
+    // A point that crossed changed the count of points at infinity, which the
+    // metadata states as well as the point set.
+    out.metadata.infinity_point_count = out.point_set.infinity_point_count as u32;
 
     let report = BundleAdjustReport {
         images: posed.len(),
@@ -713,6 +732,7 @@ pub fn bundle_adjust(
         median_residual_before: median_residual(&before.residual_norms, &obs_pt, &keep),
         median_residual_after: median_residual(&solved.residual_norms, &obs_pt, &keep),
         cameras: camera_reports,
+        free_point_decision: solved.free_point_decision,
     };
     Ok((out, report))
 }

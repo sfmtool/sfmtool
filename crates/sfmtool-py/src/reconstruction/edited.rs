@@ -21,7 +21,7 @@ use pyo3::types::{PyDict, PyDictMethods, PyList};
 
 use sfmtool_core::geometry::batch_resection::ResectOptions;
 use sfmtool_core::geometry::{
-    resect_image_in_place, BaSchedule, ResectImageOptions, ResectInPlaceError,
+    resect_image_in_place, BaSchedule, FreePointPolicy, ResectImageOptions, ResectInPlaceError,
     DEFAULT_MAX_CLUSTER_RESIDUAL_PX,
 };
 use sfmtool_core::progress::Progress;
@@ -756,9 +756,10 @@ impl PyEditedReconstruction {
     /// refined together against every observation that carries a pixel (see
     /// ``specs/core/reconstruction/bundle-adjust.md``). The posed images may be
     /// taken through any number of cameras, each solved through its own lens.
-    /// A point at infinity goes
-    /// in as the direction it is and comes back as one, a held point comes back
-    /// exactly as it went in, and a point the solve leaves unsupported is
+    /// A free point goes in as the position or direction it is and, unless
+    /// ``free_points_cross`` is ``False``, comes back as whichever the
+    /// point-or-bearing test reads at the end of the solve; a held point comes
+    /// back exactly as it went in, and a point the solve leaves unsupported is
     /// deleted from the value that comes back. A **bulk** edit, so that value is
     /// a whole new base with an empty overlay, and this object is not changed.
     ///
@@ -789,6 +790,10 @@ impl PyEditedReconstruction {
     ///     min_obs: Below this many trim survivors the round exits degenerate,
     ///         which this call raises on rather than handing back an unsolved
     ///         value (default 12).
+    ///     free_points_cross: Solve every free point in inverse depth and store
+    ///         it as a position or a direction by the storage decision at the
+    ///         end of the solve (default ``True``). ``False`` keeps each point
+    ///         in the representation it has.
     ///
     /// Returns:
     ///     ``(EditedReconstruction, report)``. The report carries ``images``,
@@ -800,7 +805,12 @@ impl PyEditedReconstruction {
     ///     ``focal_released``, ``distortion_released`` and
     ///     ``outermost_observed``, the camera's outermost
     ///     observation under the solved camera (a dict of ``radius_px``,
-    ///     ``theta_deg``, ``image`` and ``xy``, or ``None``).
+    ///     ``theta_deg``, ``image`` and ``xy``, or ``None``). It also carries
+    ///     ``free_point_decision``, the storage decision as
+    ///     ``geometry.bundle_adjust`` reports it (``sigma_px``,
+    ///     ``observation_count``, ``outlier_count``, ``decided``,
+    ///     ``converged``, ``to_finite``, ``to_direction``), or ``None`` with
+    ///     ``free_points_cross=False``.
     ///     Raises ``ValueError`` with the reason when the adjustment is
     ///     refused.
     ///
@@ -809,7 +819,7 @@ impl PyEditedReconstruction {
     /// camera, ``switch_camera_model`` to its own spline model with
     /// ``coeff_count`` and ``spline_domain_deg``.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
@@ -820,6 +830,7 @@ impl PyEditedReconstruction {
         max_iters: usize,
         min_track: usize,
         min_obs: usize,
+        free_points_cross: bool,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
         let value = materialised(&self.inner);
         let releases = match releases {
@@ -851,6 +862,9 @@ impl PyEditedReconstruction {
             max_iters,
             min_track,
             min_obs,
+            free_points: FreePointPolicy {
+                cross: free_points_cross,
+            },
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
@@ -879,6 +893,13 @@ impl PyEditedReconstruction {
             cameras.append(c)?;
         }
         d.set_item("cameras", cameras)?;
+        d.set_item(
+            "free_point_decision",
+            crate::geometry::bundle_adjust::free_point_decision_to_py(
+                py,
+                report.free_point_decision.as_ref(),
+            )?,
+        )?;
         Ok((
             PyEditedReconstruction {
                 inner: EditedReconstruction::new(Arc::new(next)),

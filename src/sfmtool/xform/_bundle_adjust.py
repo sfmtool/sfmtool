@@ -10,7 +10,13 @@ bundle adjustment with the focal and the lens distortion released (the spline,
 and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it).
 
 Either path releases every camera's lens by default. ``cameras=`` limits the
-release to the cameras it names and holds the rest. The adjustment refines the
+release to the cameras it names and holds the rest.
+
+sfmtool's adjustment solves every free point in inverse depth and stores it as a
+position or a direction by the point-or-bearing test at the end of the solve,
+so points cross between the two; ``cross=off`` keeps each point in the
+representation it has. The pycolmap path solves every point finite and
+reclassifies afterwards, and has no such switch. The adjustment refines the
 spline coefficients a camera has; a new coefficient count or spline domain is a
 refit of the camera, ``--camera-model SFMTOOL_FISHEYE,coeffs=N,spline_domain=DEG``.
 """
@@ -29,6 +35,30 @@ from ._switch_camera_model import format_outermost_keypoint
 SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
 
 
+def format_free_point_decision(decision: dict | None) -> str | None:
+    """One line saying what the storage decision of a bundle adjustment did,
+    or ``None`` when the adjustment kept every point's representation.
+
+    ``Free points decided at 0.412 px: 3 to finite, 25 to directions``, with
+    ``; the final round stopped on its iteration budget`` when it did not
+    converge, since a level read from such a round still carries pose error.
+    """
+    if decision is None:
+        return None
+    if not decision["decided"] or decision["sigma_px"] is None:
+        return (
+            "Free points not decided: the final round kept no observation of a "
+            "finite point"
+        )
+    line = (
+        f"Free points decided at {decision['sigma_px']:.3f} px: "
+        f"{decision['to_finite']} to finite, {decision['to_direction']} to directions"
+    )
+    if not decision["converged"]:
+        line += "; the final round stopped on its iteration budget"
+    return line
+
+
 class BundleAdjustTransform:
     """Apply bundle adjustment to refine camera poses and 3D points.
 
@@ -36,6 +66,10 @@ class BundleAdjustTransform:
         cameras: Camera-table indexes whose lens is released
             (``--bundle-adjust cameras=0+1``); every other camera is held, its
             intrinsics unchanged. ``None``, the default, releases every camera.
+        cross: Whether sfmtool's adjustment lets free points cross between a
+            position and a direction (``--bundle-adjust cross=off`` clears it).
+            The pycolmap path refuses ``cross=False``, since it has no way to
+            keep each point's representation.
     """
 
     def __init__(
@@ -44,11 +78,13 @@ class BundleAdjustTransform:
         refine_principal_point: bool = False,
         refine_extra_params: bool = True,
         cameras: list[int] | None = None,
+        cross: bool = True,
     ):
         self.refine_focal_length = refine_focal_length
         self.refine_principal_point = refine_principal_point
         self.refine_extra_params = refine_extra_params
         self.cameras = None if cameras is None else sorted(set(cameras))
+        self.cross = cross
 
     def _released(self, recon: SfmrReconstruction) -> list[bool]:
         """Whether each camera of the table has its lens released: all of them
@@ -69,6 +105,13 @@ class BundleAdjustTransform:
         self._released(recon)
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
+        if not self.cross:
+            raise click.UsageError(
+                "--bundle-adjust cross=off applies to sfmtool's adjustment, which "
+                "runs when a camera has a spline model; pycolmap's adjustment "
+                "solves every point finite and reclassifies the points at "
+                "infinity afterwards"
+            )
         return self._apply_pycolmap(recon)
 
     def _apply_sfmtool(self, recon: SfmrReconstruction) -> SfmrReconstruction:
@@ -96,13 +139,18 @@ class BundleAdjustTransform:
             }
             for camera, released in zip(recon.cameras, self._released(recon))
         ]
-        adjusted, report = EditedReconstruction(recon).bundle_adjust(releases=releases)
+        adjusted, report = EditedReconstruction(recon).bundle_adjust(
+            releases=releases, free_points_cross=self.cross
+        )
         print(
             f"    {report['images']} images, {report['points']} points, "
             f"{report['observations']} observations; median residual "
             f"{report['median_residual_before']:.3f} -> "
             f"{report['median_residual_after']:.3f} px"
         )
+        line = format_free_point_decision(report["free_point_decision"])
+        if line:
+            print(f"    {line}")
         if report["points_deleted"]:
             print(f"    Deleted {report['points_deleted']} unsupported point(s)")
         for camera in report["cameras"]:
@@ -360,4 +408,6 @@ class BundleAdjustTransform:
         params = ""
         if self.cameras is not None:
             params += ", cameras=" + "+".join(str(c) for c in self.cameras)
+        if not self.cross:
+            params += ", cross=off"
         return f"Bundle adjustment (refine: {opt_str}{params})"

@@ -407,12 +407,12 @@ later refit of the spline; the default domain of a switch stays the far corner.
 
 ### Optimization
 
-#### `--bundle-adjust [cameras=0+1]`
+#### `--bundle-adjust [cameras=0+1,cross=off]`
 
 Applies bundle adjustment via pycolmap to refine camera poses and 3D point positions.
 The value is optional, as for `--refine-normals`: bare `--bundle-adjust` takes no
-parameters, and `cameras=` (also `--bundle-adjust=cameras=0`) applies to both
-paths below.
+parameters, `cameras=` (also `--bundle-adjust=cameras=0`) applies to both
+paths below, and `cross=` to the sfmtool path alone.
 
 ```bash
 --remove-short-tracks 2 --bundle-adjust
@@ -429,12 +429,26 @@ camera whose model has some the solve can release: the spline, and `k1` on a
 for every posed image whose camera is released, and stops with the adjustment's
 own refusal, naming the camera, otherwise; a rig with one spline camera and one
 `OPENCV_FISHEYE` camera is refused bare rather than half-adjusted, and adjusts
-with `cameras=` naming the spline camera. It honours points at
-infinity as they are, deletes the points the solve leaves unsupported, and
-rescales patch frames with their depth, as the viewer's Bundle Adjust does. It
-prints the median residual before and after and each camera's focal change and
-what was released. A reconstruction whose cameras are all COLMAP models goes
-through pycolmap as described below, unchanged.
+with `cameras=` naming the spline camera. It solves every free point in inverse
+depth and stores it as a position or a direction by the storage decision at the
+end of the solve
+([`../../../core/geometry/bundle-adjustment.md`](../../../core/geometry/bundle-adjustment.md)
+§ "Free points: inverse depth and the storage decision"), so a point at infinity
+whose rays carry a depth comes back finite and a finite point whose rays carry
+none comes back at infinity; it deletes the points the solve leaves
+unsupported, and rescales patch frames with their depth, as the viewer's Bundle
+Adjust does. It prints the median residual before and after, each camera's
+focal change and what was released, and what the decision did: `Free points
+decided at 0.412 px: 3 to finite, 25 to directions`, with `; the final round
+stopped on its iteration budget` when it did not converge.
+
+`cross=off` (any of `off`, `false`, `0`, `no`; `on` is the default) keeps every
+point in the representation it has for the whole solve and prints no decision.
+It belongs to the sfmtool path: pycolmap's adjustment solves every point finite
+and reclassifies the points at infinity afterwards, so on a reconstruction whose
+cameras are all COLMAP models `cross=off` is a usage error rather than a
+setting that would be ignored. A reconstruction whose cameras are all COLMAP
+models goes through pycolmap as described below, unchanged.
 
 `cameras=0+1` releases the lens of the named cameras (camera-table indexes,
 joined by `+`) and holds every other camera's intrinsics exactly as they are,

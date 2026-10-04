@@ -494,12 +494,27 @@ fn the_patches_row_appears_only_for_a_node_that_carries_patch_data() {
     );
 }
 
+/// Store the first `n` points of `recon` as points at infinity, along the
+/// directions their positions lie in.
+fn store_as_bearings(recon: &mut SfmrReconstruction, n: usize) {
+    for point in recon.point_set.points.iter_mut().take(n) {
+        point.position = nalgebra::Point3::from(point.position.coords.normalize());
+        point.w = 0.0;
+    }
+    recon.rebuild_derived_fields();
+    recon.metadata.infinity_point_count = recon.point_set.infinity_point_count as u32;
+    assert_eq!(
+        recon.point_set.infinity_point_count, n,
+        "the fixture has too few points"
+    );
+}
+
 #[test]
 fn the_infinity_mini_toggle_appears_only_when_the_node_has_points_at_infinity() {
     let mut state = shared_shoot(2);
     let none = state.scene[0].id;
     let some = state.scene[1].id;
-    state.scene[1].recon_mut().metadata.infinity_point_count = 12;
+    store_as_bearings(state.scene[1].recon_mut(), 12);
     let (panel, _ctx) = settled(&mut state);
 
     assert!(panel.hit_rect(row_id(some, "points_infinity")).is_some());
@@ -1051,7 +1066,7 @@ fn the_group_eyes_drive_their_own_layers_only() {
 #[test]
 fn the_infinity_mini_toggle_drives_only_the_infinity_points() {
     let mut state = shared_shoot(1);
-    state.scene[0].recon_mut().metadata.infinity_point_count = 12;
+    store_as_bearings(state.scene[0].recon_mut(), 12);
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
 
@@ -2392,7 +2407,7 @@ fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
     use crate::viewer_3d::overlay::scene_stats_text;
 
     let mut state = shared_shoot(2);
-    state.scene[0].recon_mut().metadata.infinity_point_count = 3;
+    store_as_bearings(state.scene[0].recon_mut(), 3);
     let one_node_points = state.scene[0].recon().point_set.points.len();
     let one_node_images = state.scene[0].recon().image_table.images.len();
 

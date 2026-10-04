@@ -493,6 +493,9 @@ impl SfmrReconstruction {
         release_touched_constraints(&mut recon, &patch_fixes);
         apply_patch_fixes(&mut recon, patch_fixes);
         recon.point_set.infinity_point_count = count_points_at_infinity(&recon.point_set.points);
+        // The metadata states the count too, and a consumer that reads the
+        // value in memory (the viewer's counts) reads it there.
+        recon.metadata.infinity_point_count = recon.point_set.infinity_point_count as u32;
         Ok((recon, summary))
     }
 
@@ -660,6 +663,9 @@ impl SfmrReconstruction {
 
         apply_patch_fixes(&mut recon, patch_fixes);
         recon.point_set.infinity_point_count = count_points_at_infinity(&recon.point_set.points);
+        // The metadata states the count too, and a consumer that reads the
+        // value in memory (the viewer's counts) reads it there.
+        recon.metadata.infinity_point_count = recon.point_set.infinity_point_count as u32;
         recon
     }
 }

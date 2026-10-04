@@ -155,6 +155,28 @@ fn run_masked(
     schedule: &[BaSchedule],
     min_obs: usize,
 ) -> BundleAdjustment {
+    run_masked_with(
+        s,
+        mask,
+        FreePointPolicy::default(),
+        opt_f,
+        schedule,
+        min_obs,
+    )
+}
+
+/// [`run_masked`] under a stated [`FreePointPolicy`]: a test of what a marked
+/// direction does for the whole solve passes [`FreePointPolicy::KEEP`], since
+/// under the default crossing a marked free point is solved in inverse depth
+/// and decided at the end like any other.
+fn run_masked_with(
+    s: &mut Scene,
+    mask: &[bool],
+    free_points: FreePointPolicy,
+    opt_f: bool,
+    schedule: &[BaSchedule],
+    min_obs: usize,
+) -> BundleAdjustment {
     bundle_adjust(
         &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
@@ -165,7 +187,7 @@ fn run_masked(
         &s.obs_pt,
         Some(mask),
         None,
-        FreePointPolicy::default(),
+        free_points,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
@@ -258,12 +280,27 @@ fn recovers_from_perturbed_state() {
         r[r.len() / 2]
     };
     assert!(med < 0.05, "median residual {med} px");
-    // Gauge-pinned by camera 0, the other cameras should land near truth.
-    for i in 0..s.quats.len() {
-        let ang = s.quats[i].angle_to(&q_true[i]);
-        assert!(ang < 5e-3, "camera {i} rotation err {ang} rad");
-        let terr = (s.trans[i] - t_true[i]).norm();
-        assert!(terr < 5e-2, "camera {i} translation err {terr}");
+    // The similarity gauge is free, and how far it drifts depends on the path
+    // the solve takes (in inverse depth, the default, camera 0 turns by about
+    // 7e-3 rad), so the cameras are compared in camera 0's frame at the true
+    // baseline from camera 0 to camera 1: rotations relative to camera 0, and
+    // camera centres relative to its centre.
+    let centre = |q: &UnitQuaternion<f64>, t: &Vector3<f64>| -(q.inverse() * t);
+    let (c0, c0_true) = (
+        centre(&s.quats[0], &s.trans[0]),
+        centre(&q_true[0], &t_true[0]),
+    );
+    let scale = (centre(&q_true[1], &t_true[1]) - c0_true).norm()
+        / (centre(&s.quats[1], &s.trans[1]) - c0).norm();
+    for i in 1..s.quats.len() {
+        let rel = s.quats[i] * s.quats[0].inverse();
+        let rel_true = q_true[i] * q_true[0].inverse();
+        let ang = rel.angle_to(&rel_true);
+        assert!(ang < 5e-3, "camera {i} relative rotation err {ang} rad");
+        let off = s.quats[0] * (centre(&s.quats[i], &s.trans[i]) - c0) * scale;
+        let off_true = q_true[0] * (centre(&q_true[i], &t_true[i]) - c0_true);
+        let terr = (off - off_true).norm();
+        assert!(terr < 5e-2, "camera {i} relative centre err {terr}");
     }
 }
 
@@ -377,7 +414,27 @@ fn min_track_drops_starved_points() {
         trim_px: 25.0,
         loss_scale: 1.0,
     }];
-    let out = run_with_schedule(&mut s, &schedule);
+    // Under the default crossing the storage decision reads every free point
+    // after the solve, the starved one included, over its whole track: its
+    // rays disagree by hundreds of pixels, no depth explains them, and it is
+    // stored as a direction.
+    let mut crossed = s.clone();
+    let out_crossed = run_with_schedule(&mut crossed, &schedule);
+    assert!(
+        out_crossed.point_at_infinity[victim],
+        "the storage decision leaves the starved track a position"
+    );
+    // That the trim drops the track from the solve is seen with the crossing
+    // off, where nothing writes the row after the solve.
+    let no_dirs = vec![false; s.points.len()];
+    let out = run_masked_with(
+        &mut s,
+        &no_dirs,
+        FreePointPolicy::KEEP,
+        false,
+        &schedule,
+        12,
+    );
     assert_eq!(
         s.points[victim], victim_before,
         "starved track must be dropped from the solve (point untouched)"
@@ -755,7 +812,10 @@ fn perturbed_rotations_recover_against_directions() {
         trim_px: 50.0,
         loss_scale: 1.0,
     }];
-    let out = run_masked(&mut s, &mask, false, &schedule, 0);
+    // The frozen translation is a property of marked directions, which the
+    // crossing does not keep: under it a marked free point is solved in
+    // inverse depth, where a translation column is `ρ·J` rather than absent.
+    let out = run_masked_with(&mut s, &mask, FreePointPolicy::KEEP, false, &schedule, 0);
     // Translations are frozen: bit-identical pass-through.
     for (i, (t, t_orig)) in s.trans.iter().zip(&t0).enumerate() {
         for c in 0..3 {
@@ -899,7 +959,9 @@ fn all_direction_image_translation_frozen_rotation_refines() {
         trim_px: 50.0,
         loss_scale: 1.0,
     }];
-    let out = run_masked(&mut s, &mask, false, &schedule, 12);
+    // Marked directions held as directions (see
+    // `perturbed_rotations_recover_against_directions`).
+    let out = run_masked_with(&mut s, &mask, FreePointPolicy::KEEP, false, &schedule, 12);
     for c in 0..3 {
         assert_eq!(
             s.trans[extra][c].to_bits(),
@@ -1038,7 +1100,7 @@ fn directions_lock_rotations_for_focal_release() {
         &s.obs_pt,
         Some(&mask),
         None,
-        FreePointPolicy::default(),
+        FreePointPolicy::KEEP,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
@@ -1054,6 +1116,42 @@ fn directions_lock_rotations_for_focal_release() {
         (ba_focal(&out) - 500.0).abs() < 5.0,
         "focal {} with directions (want ~500; finite-only gave {})",
         ba_focal(&out),
+        ba_focal(&out_plain)
+    );
+    // Under the default crossing the far tracks are free points in inverse
+    // depth, which hold the rotations less firmly than marked directions do,
+    // since each can take a small depth: the focal lands about 8 px off rather
+    // than within the noise, still most of the way from the finite-only one.
+    let mut crossed = make_lowpar_scene(6, 80, 0.3);
+    let ids = add_direction_tracks(&mut crossed, 20, 700, 0.3);
+    let mask = dir_mask(&crossed, &ids);
+    crossed.cam = simple_pinhole(650.0);
+    let out_crossed = bundle_adjust(
+        &BaCameras::shared(&crossed.cam, crossed.quats.len()),
+        &mut crossed.quats,
+        &mut crossed.trans,
+        &mut crossed.points,
+        &crossed.uv,
+        &crossed.obs_img,
+        &crossed.obs_pt,
+        Some(&mask),
+        None,
+        FreePointPolicy::default(),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        true,
+        false,
+        false,
+        &schedule,
+        150,
+        2,
+        12,
+        &Progress::none(),
+    );
+    assert!(
+        (ba_focal(&out_crossed) - 500.0).abs() < 12.0,
+        "focal {} with far tracks crossing (want ~500; finite-only gave {})",
+        ba_focal(&out_crossed),
         ba_focal(&out_plain)
     );
 }
@@ -1321,10 +1419,20 @@ fn protected_counts_toward_min_track_survival() {
         trim_px: 25.0,
         loss_scale: 1.0,
     }];
-    // Unprotected: the whole track leaves the solve, point bit-identical.
+    // Unprotected: the whole track leaves the solve, point bit-identical. With
+    // the crossing off, so that the storage decision does not write the row
+    // after the solve (see `min_track_drops_starved_points`).
     let (mut plain, victim) = build();
     let before = plain.points[victim];
-    run(&mut plain, false, &schedule);
+    let no_dirs = vec![false; plain.points.len()];
+    run_masked_with(
+        &mut plain,
+        &no_dirs,
+        FreePointPolicy::KEEP,
+        false,
+        &schedule,
+        12,
+    );
     assert_eq!(plain.points[victim], before, "starved track not dropped");
     // Protected corrupted observations count toward min_track: the track
     // stays in the solve and its point moves.
@@ -1370,11 +1478,23 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         trim_px: 25.0,
         loss_scale: 1.0,
     }];
+    // Both runs hold the marked directions as directions. Under the default
+    // crossing the storage decision re-fits a bearing over every observation
+    // of its track, the trimmed one included, so the unprotected direction
+    // would carry the corrupted observation's pull too.
+    //
     // Unprotected: the corrupted observation is trimmed; the direction stays
     // at the truth its clean observations pin.
     let (mut plain, mask, victim, _k) = build();
     let d_true = plain.points[victim];
-    run_masked(&mut plain, &mask, false, &schedule, 12);
+    run_masked_with(
+        &mut plain,
+        &mask,
+        FreePointPolicy::KEEP,
+        false,
+        &schedule,
+        12,
+    );
     assert!(
         angle_between(plain.points[victim], d_true) < 1e-9,
         "unprotected corrupted direction obs must be trimmed"
@@ -1393,7 +1513,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         &s.obs_pt,
         Some(&mask),
         None,
-        FreePointPolicy::default(),
+        FreePointPolicy::KEEP,
         Some(&prot),
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
@@ -3858,7 +3978,7 @@ fn add_far_track(s: &mut Scene, distance: f64, noise: f64, salt: u64) -> usize {
 }
 
 /// Absent constraints and an all-free [`PointConstraints`] are the same solve to
-/// the bit, on a fixture that mixes finite points, directions and protected
+/// the bit with the crossing off, on a fixture that mixes finite points, directions and protected
 /// observations: the parity the switch's off position is stated against.
 #[test]
 fn constraints_off_reproduce_the_unconstrained_kernel() {
@@ -3890,7 +4010,7 @@ fn constraints_off_reproduce_the_unconstrained_kernel() {
         &mut a,
         Some(&mask_a),
         None,
-        FreePointPolicy::default(),
+        FreePointPolicy::KEEP,
         Some(&prot_a),
         true,
         &DEFAULT_SCHEDULE,
@@ -4944,7 +5064,10 @@ fn one_held_finite_point_unfreezes_a_translation() {
     );
 }
 
-/// A ranged point at an infinite distance is a marked direction, to the bit.
+/// A ranged point at an infinite distance is the same solve to the bit as a
+/// marked direction the solve keeps as one, which is a marked direction with
+/// the crossing off: under the default crossing a marked free point is solved
+/// in inverse depth and decided, where the ranged one stays a direction.
 #[test]
 fn an_infinite_distance_reproduces_a_marked_direction() {
     let build = || {
@@ -4965,7 +5088,7 @@ fn an_infinite_distance_reproduces_a_marked_direction() {
         &mut a,
         Some(&mask_a),
         None,
-        FreePointPolicy::default(),
+        FreePointPolicy::KEEP,
         None,
         false,
         &DEFAULT_SCHEDULE,
@@ -4979,7 +5102,7 @@ fn an_infinite_distance_reproduces_a_marked_direction() {
         &mut b,
         None,
         Some(&cons),
-        FreePointPolicy::default(),
+        FreePointPolicy::KEEP,
         None,
         false,
         &DEFAULT_SCHEDULE,
@@ -5841,7 +5964,7 @@ fn an_unconverged_round_keeps_points_with_depth() {
     }
 }
 
-/// The fixture of [`crossing_off_matches_the_kernel_before_inverse_depth`]:
+/// The fixture of [`crossing_off_matches_its_recorded_output`]:
 /// finite points, directions, a far track, pixel noise, perturbed poses,
 /// protected observations, a held point and a ranged one.
 fn crossing_off_fixture() -> (Scene, Vec<bool>, Vec<bool>, PointConstraints) {
@@ -5875,21 +5998,21 @@ fn crossing_off_fixture() -> (Scene, Vec<bool>, Vec<bool>, PointConstraints) {
     (s, mask, prot, cons)
 }
 
-/// With the crossing off, the solve is the kernel as it stood before free
-/// points could be solved in inverse depth. The sums below are that kernel's
-/// output on [`crossing_off_fixture`] (released focal, directions, protected,
-/// held and ranged points), recorded from it; they are compared to a relative
-/// `1e-12` rather than to the bit so that a platform's `libm` rounding a
-/// transcendental differently in its last place does not fail the test, which
-/// a change to the solve would do by many orders more.
+/// With the crossing off ([`FreePointPolicy::KEEP`]), the solve on
+/// [`crossing_off_fixture`] (released focal, directions, protected, held and
+/// ranged points) gives the sums below, recorded from it, so that any change to
+/// what the kernel computes with the crossing off shows here. They are compared
+/// to a relative `1e-12` rather than to the bit so that a platform's `libm`
+/// rounding a transcendental differently in its last place does not fail the
+/// test, which a change to the solve would do by many orders more.
 #[test]
-fn crossing_off_matches_the_kernel_before_inverse_depth() {
+fn crossing_off_matches_its_recorded_output() {
     let (mut s, mask, prot, cons) = crossing_off_fixture();
     let out = run_constrained(
         &mut s,
         Some(&mask),
         Some(&cons),
-        FreePointPolicy::default(),
+        FreePointPolicy::KEEP,
         Some(&prot),
         true,
         &DEFAULT_SCHEDULE,

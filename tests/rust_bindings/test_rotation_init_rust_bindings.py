@@ -29,6 +29,7 @@ EXPECTED_KEYS = {
     "quaternions_wxyz",
     "translations",
     "points",
+    "point_at_infinity",
     "inlier_fractions",
 }
 
@@ -140,6 +141,8 @@ def test_dict_layout_and_rotations():
     assert res["translations"].shape == (n_posed, 3)
     n_cl = int(sc["cluster"].max()) + 1
     assert res["points"].shape == (n_cl, 3)
+    assert res["point_at_infinity"].shape == (n_cl,)
+    assert res["point_at_infinity"].dtype == np.bool_
     assert res["inlier_fractions"].shape == (n_posed,)
 
     # Sub-degree rotations after averaging: canonical GT is S @ R_optical.
@@ -172,14 +175,13 @@ def test_translations_match_up_to_similarity():
     spread = np.sqrt((yc**2).sum(1).mean())
     assert resid.max() < 0.05 * spread, f"residuals {resid} vs spread {spread}"
 
-    # The rows the finishing adjustment modelled at infinity come back as unit
-    # directions, and they are dominated by the far cloud.
+    # The rows the finishing adjustment stored as directions come back as unit
+    # rows, and they are dominated by the far cloud.
     pts = res["points"]
-    finite = np.isfinite(pts[:, 0])
-    unit = np.zeros(len(pts), bool)
-    unit[finite] = np.abs(np.linalg.norm(pts[finite], axis=1) - 1.0) < 1e-9
-    assert unit.sum() > 0
-    assert (np.nonzero(unit)[0] >= sc["far_start"]).mean() > 0.8
+    dirs = res["point_at_infinity"]
+    assert dirs.sum() > 0
+    npt.assert_allclose(np.linalg.norm(pts[dirs], axis=1), 1.0, atol=1e-9)
+    assert (np.nonzero(dirs)[0] >= sc["far_start"]).mean() > 0.8
 
 
 # ── Failure modes and budgets ──────────────────────────────────────────────

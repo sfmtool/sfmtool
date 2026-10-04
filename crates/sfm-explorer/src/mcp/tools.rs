@@ -365,6 +365,7 @@ pub(crate) fn parse(
             release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             release_distortion: args.optional_bool("release_distortion")?.unwrap_or(false),
             cameras: args.camera_releases("cameras")?,
+            free_points_cross: args.optional_bool("free_points_cross")?.unwrap_or(true),
         },
         "switch_camera_model" => Command::SwitchCameraModel {
             reconstruction_label: args.required_string("reconstruction_label")?,

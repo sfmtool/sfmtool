@@ -298,12 +298,13 @@ pub(crate) enum Command {
     },
     /// Bundle-adjust one node. `release_focal` and `release_distortion` are
     /// the release every camera takes; `cameras` overrides them camera by
-    /// camera.
+    /// camera. `free_points_cross` is the adjustment's `free_points` switch.
     BundleAdjust {
         reconstruction_label: String,
         release_focal: bool,
         release_distortion: bool,
         cameras: Vec<CameraReleaseOverride>,
+        free_points_cross: bool,
     },
     /// Switch one camera of a node to a model fitted to it, as one version: a
     /// change of model, or, for a spline camera switched to its own model, a
@@ -1376,6 +1377,7 @@ pub(crate) fn apply_with_window(
             release_focal,
             release_distortion,
             cameras,
+            free_points_cross,
         } => edit::bundle_adjust(
             state,
             &reconstruction_label,
@@ -1384,7 +1386,12 @@ pub(crate) fn apply_with_window(
                 distortion: release_distortion,
             },
             &cameras,
-            sfmtool_core::BundleAdjustOptions::default(),
+            sfmtool_core::BundleAdjustOptions {
+                free_points: sfmtool_core::geometry::FreePointPolicy {
+                    cross: free_points_cross,
+                },
+                ..sfmtool_core::BundleAdjustOptions::default()
+            },
         ),
         Command::SwitchCameraModel {
             reconstruction_label,

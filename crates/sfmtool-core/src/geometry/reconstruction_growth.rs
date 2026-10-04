@@ -125,6 +125,12 @@ pub struct GrowOptions {
     pub accept_gate: f64,
     /// Seed for the P3P RANSAC; same inputs + seed give identical output.
     pub seed: u64,
+    /// Whether the adjustments' free points cross between a position and a
+    /// direction. The default, [`FreePointPolicy::CROSS`], lets each adjustment
+    /// store a point whose rays give no depth as a direction (and one it
+    /// stored so as a position again, when later rays give it one);
+    /// [`FreePointPolicy::KEEP`] keeps every triangulated point a position.
+    pub free_points: FreePointPolicy,
 }
 
 impl Default for GrowOptions {
@@ -136,6 +142,7 @@ impl Default for GrowOptions {
             min_obs: 8,
             accept_gate: 0.35,
             seed: 0,
+            free_points: FreePointPolicy::default(),
         }
     }
 }
@@ -150,8 +157,14 @@ pub struct ReconstructionGrowth {
     pub translations: Vec<[f64; 3]>,
     /// Which images are posed (seed and accepted growth).
     pub posed: Vec<bool>,
-    /// World points indexed by cluster id (`NaN` where never triangulated).
+    /// World points indexed by cluster id (`NaN` where never triangulated): a
+    /// position, or a unit world-frame direction where `point_at_infinity`
+    /// says so.
     pub points: Vec<[f64; 3]>,
+    /// Per cluster, whether its `points` row is a direction: a point an
+    /// adjustment's storage decision found no depth in. All `false` under
+    /// [`FreePointPolicy::KEEP`].
+    pub point_at_infinity: Vec<bool>,
     /// The shared focal after the finishing release (the input focal when
     /// growth was empty or the model is not SIMPLE_PINHOLE).
     pub focal: f64,
@@ -176,18 +189,21 @@ fn angular_threshold(cam: &CameraIntrinsics) -> f64 {
 }
 
 /// Reprojection residual norm of one observation under `(r, t)`; `None` when
-/// the point is non-finite or outside the model domain.
+/// the point is non-finite or outside the model domain. A direction (`dir`)
+/// projects by the rotation alone.
 fn residual_norm(
     cam: &CameraIntrinsics,
     r: &UnitQuaternion<f64>,
     t: &Vector3<f64>,
     x: &[f64; 3],
+    dir: bool,
     uv: &[f64; 2],
 ) -> Option<f64> {
     if !x[0].is_finite() || !x[1].is_finite() || !x[2].is_finite() {
         return None;
     }
-    let c = r * Vector3::new(x[0], x[1], x[2]) + t;
+    let rotated = r * Vector3::new(x[0], x[1], x[2]);
+    let c = if dir { rotated } else { rotated + t };
     let (u, v) = cam.ray_to_pixel([c.x, c.y, c.z])?;
     Some((u - uv[0]).hypot(v - uv[1]))
 }
@@ -206,7 +222,7 @@ fn inlier_fraction_of(
     let n_in = uv
         .iter()
         .zip(world)
-        .filter(|(o, x)| residual_norm(cam, r, t, x, o).is_some_and(|rn| rn < INLIER_PX))
+        .filter(|(o, x)| residual_norm(cam, r, t, x, false, o).is_some_and(|rn| rn < INLIER_PX))
         .count();
     n_in as f64 / uv.len() as f64
 }
@@ -313,9 +329,10 @@ pub(crate) fn resect_one(
 
 /// Triangulate every cluster that lacks a finite point but has posed
 /// observations (ray-midpoint batch triangulation; fewer than two posed
-/// observations leave the row `NaN`). Existing finite points are untouched —
-/// this is the post-adjustment refill: the adjustment re-triangulates only
-/// the observations it was given, wiping every other cluster's point.
+/// observations leave the row `NaN`). Existing finite rows, positions and
+/// directions alike, are untouched — this is the post-adjustment refill: the
+/// adjustment re-triangulates only the observations it was given, wiping every
+/// other cluster's point. A row it writes is a position.
 #[allow(clippy::too_many_arguments)]
 fn fill_new_points(
     cam: &CameraIntrinsics,
@@ -326,6 +343,7 @@ fn fill_new_points(
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
     points: &mut [[f64; 3]],
+    is_dir: &mut [bool],
 ) {
     let mut dirs = Vec::new();
     let mut centers = Vec::new();
@@ -356,6 +374,7 @@ fn fill_new_points(
     for (t, tri) in tris.iter().enumerate() {
         if offsets[t + 1] - offsets[t] >= 2 {
             points[track_cid[t]] = [tri.point.x, tri.point.y, tri.point.z];
+            is_dir[track_cid[t]] = false;
         }
     }
 }
@@ -420,6 +439,158 @@ fn ba_cluster_mask(
         .collect()
 }
 
+/// Whether a cluster's row can stand as a 2D-3D correspondence in a
+/// resection: a position. A `NaN` row has no point yet, and a direction has
+/// no position for a camera centre to be solved against, so neither is one.
+fn usable_for_resection(row: &[f64; 3], is_dir: bool) -> bool {
+    row[0].is_finite() && !is_dir
+}
+
+/// One image's gathered 2D-3D candidates: those of its observation `rows`
+/// whose cluster is [`usable_for_resection`].
+fn gather_correspondences(
+    rows: &[usize],
+    cluster_indexes: &[u32],
+    positions_xy: &[[f64; 2]],
+    bearings: &[Vector3<f64>],
+    points: &[[f64; 3]],
+    is_dir: &[bool],
+) -> Gathered {
+    let mut kept = Vec::new();
+    let mut uv = Vec::new();
+    let mut world = Vec::new();
+    let mut brs = Vec::new();
+    for &k in rows {
+        let c = cluster_indexes[k] as usize;
+        if usable_for_resection(&points[c], is_dir[c]) {
+            kept.push(k);
+            uv.push(positions_xy[k]);
+            world.push(points[c]);
+            brs.push(bearings[k]);
+        }
+    }
+    (kept, uv, world, brs)
+}
+
+/// The next-best-view count of every image: for an un-posed image, how many of
+/// its observations are of clusters [`usable_for_resection`]; 0 for a posed
+/// one.
+fn next_best_view_counts(
+    cluster_indexes: &[u32],
+    image_indexes: &[u32],
+    posed: &[bool],
+    points: &[[f64; 3]],
+    is_dir: &[bool],
+) -> Vec<usize> {
+    let mut counts = vec![0usize; posed.len()];
+    for (k, &i) in image_indexes.iter().enumerate() {
+        let i = i as usize;
+        let c = cluster_indexes[k] as usize;
+        if !posed[i] && usable_for_resection(&points[c], is_dir[c]) {
+            counts[i] += 1;
+        }
+    }
+    counts
+}
+
+/// The all-observation inlier fraction of one image under `(r, t)`: of its
+/// observation `rows` whose cluster is [`usable_for_resection`], the fraction
+/// within [`INLIER_PX`]. The denominator is the one a resection of the image
+/// would score against; 0 where there is none.
+#[allow(clippy::too_many_arguments)]
+fn image_inlier_fraction(
+    cam: &CameraIntrinsics,
+    r: &UnitQuaternion<f64>,
+    t: &Vector3<f64>,
+    rows: &[usize],
+    cluster_indexes: &[u32],
+    positions_xy: &[[f64; 2]],
+    points: &[[f64; 3]],
+    is_dir: &[bool],
+) -> f64 {
+    let mut n_tot = 0usize;
+    let mut n_in = 0usize;
+    for &k in rows {
+        let c = cluster_indexes[k] as usize;
+        if !usable_for_resection(&points[c], is_dir[c]) {
+            continue;
+        }
+        n_tot += 1;
+        if residual_norm(cam, r, t, &points[c], false, &positions_xy[k])
+            .is_some_and(|rn| rn < INLIER_PX)
+        {
+            n_in += 1;
+        }
+    }
+    if n_tot == 0 {
+        0.0
+    } else {
+        n_in as f64 / n_tot as f64
+    }
+}
+
+/// The growth state a force-accept's verification adjustment changes, saved
+/// before it so that a rejected force-accept leaves nothing behind: the poses,
+/// the structure and each cluster's representation, the adjustment-set mask,
+/// and the adjustment cadence.
+#[derive(Clone, Debug, PartialEq)]
+struct Rollback {
+    quats: Vec<UnitQuaternion<f64>>,
+    trans: Vec<Vector3<f64>>,
+    points: Vec<[f64; 3]>,
+    is_dir: Vec<bool>,
+    ba_mask: Vec<bool>,
+    since_ba: usize,
+}
+
+impl Rollback {
+    /// Save the state.
+    fn take(
+        quats: &[UnitQuaternion<f64>],
+        trans: &[Vector3<f64>],
+        points: &[[f64; 3]],
+        is_dir: &[bool],
+        ba_mask: &[bool],
+        since_ba: usize,
+    ) -> Self {
+        Rollback {
+            quats: quats.to_vec(),
+            trans: trans.to_vec(),
+            points: points.to_vec(),
+            is_dir: is_dir.to_vec(),
+            ba_mask: ba_mask.to_vec(),
+            since_ba,
+        }
+    }
+
+    /// Put the saved state back.
+    fn restore(
+        self,
+        quats: &mut Vec<UnitQuaternion<f64>>,
+        trans: &mut Vec<Vector3<f64>>,
+        points: &mut Vec<[f64; 3]>,
+        is_dir: &mut Vec<bool>,
+        ba_mask: &mut Vec<bool>,
+        since_ba: &mut usize,
+    ) {
+        *quats = self.quats;
+        *trans = self.trans;
+        *points = self.points;
+        *is_dir = self.is_dir;
+        *ba_mask = self.ba_mask;
+        *since_ba = self.since_ba;
+    }
+}
+
+/// Take each point's representation from an adjustment's result. A row the
+/// adjustment left non-finite (a cluster outside its observation set) is
+/// marked a position, which is what the refill that follows writes there.
+fn take_representation(is_dir: &mut [bool], point_at_infinity: &[bool], points: &[[f64; 3]]) {
+    for ((d, &at_infinity), row) in is_dir.iter_mut().zip(point_at_infinity).zip(points) {
+        *d = at_infinity && row[0].is_finite();
+    }
+}
+
 /// Pack the final state into the result struct, computing per-observation
 /// residual norms from the FULL observation set at the final camera.
 #[allow(clippy::too_many_arguments)]
@@ -432,6 +603,7 @@ fn build_result(
     trans: &[Vector3<f64>],
     posed: &[bool],
     points: Vec<[f64; 3]>,
+    is_dir: Vec<bool>,
     focal: f64,
 ) -> ReconstructionGrowth {
     let residual_norms: Vec<f64> = cluster_indexes
@@ -447,6 +619,7 @@ fn build_result(
                 &quats[img as usize],
                 &trans[img as usize],
                 &points[cid as usize],
+                is_dir[cid as usize],
                 uv,
             )
             .unwrap_or(f64::INFINITY)
@@ -465,6 +638,7 @@ fn build_result(
         translations,
         posed: posed.to_vec(),
         points,
+        point_at_infinity: is_dir,
         focal,
         residual_norms,
     }
@@ -563,8 +737,10 @@ pub fn grow_reconstruction(
         })
         .collect();
 
-    // Initial structure from the seed poses.
+    // Initial structure from the seed poses, every row a position until an
+    // adjustment decides otherwise.
     let mut points = vec![[f64::NAN; 3]; n_cl];
+    let mut is_dir = vec![false; n_cl];
     fill_new_points(
         camera,
         cluster_indexes,
@@ -574,6 +750,7 @@ pub fn grow_reconstruction(
         &quats,
         &trans,
         &mut points,
+        &mut is_dir,
     );
 
     // ── Growth loop ──────────────────────────────────────────────────────
@@ -598,6 +775,7 @@ pub fn grow_reconstruction(
         quats: &mut [UnitQuaternion<f64>],
         trans: &mut [Vector3<f64>],
         points: &mut [[f64; 3]],
+        is_dir: &mut [bool],
         posed: &[bool],
         posed_order: &[usize],
         ba_mask: &[bool],
@@ -648,7 +826,7 @@ pub fn grow_reconstruction(
             obs_pt.push(c as u32);
             uv.push(positions_xy[k]);
         }
-        bundle_adjust(
+        let ba = bundle_adjust(
             &BaCameras::shared(camera, quats.len()),
             quats,
             trans,
@@ -656,9 +834,9 @@ pub fn grow_reconstruction(
             &uv,
             &obs_img,
             &obs_pt,
+            Some(is_dir),
             None,
-            None,
-            FreePointPolicy::default(),
+            options.free_points,
             None,
             DEFAULT_PROTECTED_LOSS_SCALE,
             false,
@@ -670,6 +848,7 @@ pub fn grow_reconstruction(
             BA_MIN_OBS,
             &Progress::none(),
         );
+        take_representation(is_dir, &ba.point_at_infinity, points);
         // The adjustment re-triangulates only the observations it was given,
         // wiping every other cluster's point — refill from the full
         // observation set at the updated poses, or the next-best-view count
@@ -684,26 +863,9 @@ pub fn grow_reconstruction(
             quats,
             trans,
             points,
+            is_dir,
         );
     }
-
-    // Gathered 2D-3D candidates of one image (rows with a finite point).
-    let gather = |i: usize, image_obs: &[Vec<usize>], points: &[[f64; 3]]| -> Gathered {
-        let mut rows = Vec::new();
-        let mut uv = Vec::new();
-        let mut world = Vec::new();
-        let mut brs = Vec::new();
-        for &k in &image_obs[i] {
-            let c = cluster_indexes[k] as usize;
-            if points[c][0].is_finite() {
-                rows.push(k);
-                uv.push(positions_xy[k]);
-                world.push(points[c]);
-                brs.push(bearings[k]);
-            }
-        }
-        (rows, uv, world, brs)
-    };
 
     // Most-covisible posed neighbours' poses as fallback inits.
     let fallback_inits = |i: usize,
@@ -729,44 +891,11 @@ pub fn grow_reconstruction(
             .collect()
     };
 
-    // All-observation inlier fraction of one image at the current state
-    // (denominator: its observations of finite points).
-    let image_inl = |i: usize,
-                     quats: &[UnitQuaternion<f64>],
-                     trans: &[Vector3<f64>],
-                     points: &[[f64; 3]]|
-     -> f64 {
-        let mut n_tot = 0usize;
-        let mut n_in = 0usize;
-        for &k in &image_obs[i] {
-            let c = cluster_indexes[k] as usize;
-            if !points[c][0].is_finite() {
-                continue;
-            }
-            n_tot += 1;
-            if residual_norm(camera, &quats[i], &trans[i], &points[c], &positions_xy[k])
-                .is_some_and(|rn| rn < INLIER_PX)
-            {
-                n_in += 1;
-            }
-        }
-        if n_tot == 0 {
-            0.0
-        } else {
-            n_in as f64 / n_tot as f64
-        }
-    };
-
     if n_seed > 0 {
         loop {
             // Next-best-view: most observations of currently-valid points.
-            let mut cnt_all = vec![0usize; n_img];
-            for (k, &i) in image_indexes.iter().enumerate() {
-                let i = i as usize;
-                if !posed[i] && points[cluster_indexes[k] as usize][0].is_finite() {
-                    cnt_all[i] += 1;
-                }
-            }
+            let cnt_all =
+                next_best_view_counts(cluster_indexes, image_indexes, &posed, &points, &is_dir);
             if cnt_all.iter().all(|&c| c == 0) {
                 break;
             }
@@ -796,6 +925,7 @@ pub fn grow_reconstruction(
                         &mut quats,
                         &mut trans,
                         &mut points,
+                        &mut is_dir,
                         &posed,
                         &posed_order,
                         &ba_mask,
@@ -820,7 +950,14 @@ pub fn grow_reconstruction(
                 force_tried.insert(j);
                 blocked.remove(&j);
 
-                let (rows, uv_j, world_j, brs_j) = gather(j, &image_obs, &points);
+                let (rows, uv_j, world_j, brs_j) = gather_correspondences(
+                    &image_obs[j],
+                    cluster_indexes,
+                    positions_xy,
+                    &bearings,
+                    &points,
+                    &is_dir,
+                );
                 let inits = fallback_inits(j, GROW_FALLBACK_INITS, &posed, &quats, &trans);
                 let Some(outcome) = resect_one(
                     camera,
@@ -835,11 +972,7 @@ pub fn grow_reconstruction(
                 };
 
                 // Snapshot for the restore-on-reject contract.
-                let quats_saved = quats.clone();
-                let trans_saved = trans.clone();
-                let points_saved = points.clone();
-                let ba_mask_saved = ba_mask.clone();
-                let since_ba_saved = since_ba;
+                let saved = Rollback::take(&quats, &trans, &points, &is_dir, &ba_mask, since_ba);
 
                 quats[j] = outcome.rotation;
                 trans[j] = outcome.translation;
@@ -879,6 +1012,7 @@ pub fn grow_reconstruction(
                     &mut quats,
                     &mut trans,
                     &mut points,
+                    &mut is_dir,
                     &posed,
                     &posed_order,
                     &ba_mask,
@@ -888,7 +1022,16 @@ pub fn grow_reconstruction(
                 );
                 since_ba = 0;
 
-                let inl_after = image_inl(j, &quats, &trans, &points);
+                let inl_after = image_inlier_fraction(
+                    camera,
+                    &quats[j],
+                    &trans[j],
+                    &image_obs[j],
+                    cluster_indexes,
+                    positions_xy,
+                    &points,
+                    &is_dir,
+                );
                 let bar = if accepted_inl.is_empty() {
                     0.0
                 } else {
@@ -902,11 +1045,13 @@ pub fn grow_reconstruction(
                     let n_in = cons_rows
                         .iter()
                         .filter(|&&k| {
+                            let c = cluster_indexes[k] as usize;
                             residual_norm(
                                 camera,
                                 &quats[j],
                                 &trans[j],
-                                &points[cluster_indexes[k] as usize],
+                                &points[c],
+                                is_dir[c],
                                 &positions_xy[k],
                             )
                             .is_some_and(|rn| rn < INLIER_PX)
@@ -926,6 +1071,7 @@ pub fn grow_reconstruction(
                         &quats,
                         &trans,
                         &mut points,
+                        &mut is_dir,
                     );
                     ba_retry = true;
                     blocked.clear();
@@ -936,18 +1082,28 @@ pub fn grow_reconstruction(
                     if posed_order.last() == Some(&j) {
                         posed_order.pop();
                     }
-                    quats = quats_saved;
-                    trans = trans_saved;
-                    points = points_saved;
-                    ba_mask = ba_mask_saved;
-                    since_ba = since_ba_saved;
+                    saved.restore(
+                        &mut quats,
+                        &mut trans,
+                        &mut points,
+                        &mut is_dir,
+                        &mut ba_mask,
+                        &mut since_ba,
+                    );
                 }
                 continue;
             }
 
             // Normal candidate: estimate-then-refine, then the acceptance
             // gate against the accepted-so-far median.
-            let (_rows, uv_i, world_i, brs_i) = gather(i, &image_obs, &points);
+            let (_rows, uv_i, world_i, brs_i) = gather_correspondences(
+                &image_obs[i],
+                cluster_indexes,
+                positions_xy,
+                &bearings,
+                &points,
+                &is_dir,
+            );
             let inits = fallback_inits(i, GROW_FALLBACK_INITS, &posed, &quats, &trans);
             let Some(outcome) = resect_one(
                 camera,
@@ -985,6 +1141,7 @@ pub fn grow_reconstruction(
                 &quats,
                 &trans,
                 &mut points,
+                &mut is_dir,
             );
             since_ba += 1;
             if since_ba >= ba_every {
@@ -997,6 +1154,7 @@ pub fn grow_reconstruction(
                     &mut quats,
                     &mut trans,
                     &mut points,
+                    &mut is_dir,
                     &posed,
                     &posed_order,
                     &ba_mask,
@@ -1020,6 +1178,7 @@ pub fn grow_reconstruction(
             &trans,
             &posed,
             points,
+            is_dir,
             f0,
         );
     }
@@ -1057,9 +1216,9 @@ pub fn grow_reconstruction(
         &uv,
         &obs_img,
         &obs_pt,
+        Some(&is_dir),
         None,
-        None,
-        FreePointPolicy::default(),
+        options.free_points,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
@@ -1071,6 +1230,7 @@ pub fn grow_reconstruction(
         BA_MIN_OBS,
         &Progress::none(),
     );
+    take_representation(&mut is_dir, &ba.point_at_infinity, &points);
     let cam_final = ba.cameras[0].clone();
     let focal = cam_final.focal_lengths().0;
     // Re-triangulation at the released focal (the finishing adjustment wiped
@@ -1084,6 +1244,7 @@ pub fn grow_reconstruction(
         &quats,
         &trans,
         &mut points,
+        &mut is_dir,
     );
 
     build_result(
@@ -1095,6 +1256,7 @@ pub fn grow_reconstruction(
         &trans,
         &posed,
         points,
+        is_dir,
         focal,
     )
 }

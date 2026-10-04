@@ -41,11 +41,13 @@ use sfmtool_core::geometry::rotation_init as core_rotation_init;
 /// Returns:
 ///     A dict ``{"image_indexes" (n_posed,) uint32, "quaternions_wxyz"
 ///     (n_posed, 4), "translations" (n_posed, 3), "points" (n_clusters, 3)
-///     with NaN where absent, "inlier_fractions" (n_posed,)}``, or ``None``
-///     when no rotation edge validates, the component is too small, or the
-///     seed fails its cheirality floor. The far-field rows of ``points`` are
-///     unit world-frame directions (the finishing adjustment models them at
-///     infinity); other finite rows are triangulated positions.
+///     with NaN where absent, "point_at_infinity" (n_clusters,) bool,
+///     "inlier_fractions" (n_posed,)}``, or ``None`` when no rotation edge
+///     validates, the component is too small, or the seed fails its
+///     cheirality floor. A row of ``points`` that ``point_at_infinity`` marks
+///     is a unit world-frame direction; other finite rows are positions. The
+///     far-field clusters enter the finishing adjustment as directions, and
+///     its storage decision stores every point by what its rays support.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, f0, *, seed=0, min_images=8, max_images=14))]
@@ -119,6 +121,10 @@ pub fn rotation_init<'py>(
         "points",
         PyArray2::from_vec2(py, &p_rows)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+    )?;
+    d.set_item(
+        "point_at_infinity",
+        PyArray1::from_vec(py, out.point_at_infinity),
     )?;
     d.set_item(
         "inlier_fractions",

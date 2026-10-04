@@ -11,8 +11,8 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 use sfmtool_core::geometry::{
-    bundle_adjust as core_bundle_adjust, BaCameras, BaSchedule, DistanceReference, FreePointPolicy,
-    PointConstraints,
+    bundle_adjust as core_bundle_adjust, BaCameras, BaSchedule, DistanceReference,
+    FreePointDecision, FreePointPolicy, PointConstraints,
 };
 use sfmtool_core::progress::Progress;
 
@@ -188,8 +188,9 @@ fn check_releases(
 ///         (normalized on input and returned as a unit direction) whose
 ///         observations depend on rotation and camera model only; an image
 ///         whose surviving observations are all directions keeps its
-///         translation frozen. Absent or all-``False`` reproduces the
-///         finite-only kernel bit for bit.
+///         translation frozen. Absent and all-``False`` agree bit for bit;
+///         with ``free_points_cross=False`` they are the finite-only kernel,
+///         and by default a free point can still come back as a direction.
 ///     held: Optional (n_pt,) bool mask marking held points. A held point's
 ///         coordinate is the caller's for the whole solve: its observations
 ///         still form residuals and still drive the cameras and the lens, it
@@ -214,9 +215,10 @@ fn check_releases(
 ///         infinity within a round, and decide at the end of the solve how it
 ///         is stored, on the point-or-bearing test at the noise level the
 ///         final round's residuals measure: a track whose rays ask for a depth
-///         is a position, one whose rays do not is a direction. ``False``
-///         honours the caller's ``point_at_infinity`` mask for the whole solve,
-///         which reproduces the standing kernel bit for bit.
+///         is a position, one whose rays do not is a direction (default
+///         True). ``False`` turns the crossing off: the caller's
+///         ``point_at_infinity`` mask is honoured for the whole solve, and
+///         every free point keeps the representation it is handed in.
 ///     protected: Optional (n_obs,) bool mask marking protected
 ///         observations. A protected observation is never removed by the
 ///         inter-round trim gates — it stays in the solve set every round
@@ -267,7 +269,7 @@ fn check_releases(
 ///     mask unless ``free_points_cross`` solved it in inverse depth, a held
 ///     point's is its input value, and a ranged point's is whether its distance
 ///     is infinite.
-///     ``free_point_decision`` is ``None`` without ``free_points_cross`` (and
+///     ``free_point_decision`` is ``None`` with ``free_points_cross=False`` (and
 ///     when the solve exits degenerate), and otherwise a dict describing the
 ///     end-of-solve storage decision: ``sigma_px`` (the noise level measured
 ///     over the final round's kept observations of finite points, or ``None``
@@ -296,7 +298,7 @@ fn check_releases(
     held=None,
     distance=None,
     distance_from=None,
-    free_points_cross=false,
+    free_points_cross=true,
     protected=None,
     protected_loss_scale=3.0,
     opt_f=false,
@@ -555,21 +557,32 @@ pub fn bundle_adjust<'py>(
         "point_at_infinity",
         PyArray1::from_vec(py, out.point_at_infinity),
     )?;
-    match &out.free_point_decision {
-        Some(c) => {
-            let decision = PyDict::new(py);
-            decision.set_item("sigma_px", c.sigma_px)?;
-            decision.set_item("observation_count", c.observation_count)?;
-            decision.set_item("outlier_count", c.outlier_count)?;
-            decision.set_item("decided", c.decided)?;
-            decision.set_item("converged", c.converged)?;
-            decision.set_item("to_finite", c.to_finite)?;
-            decision.set_item("to_direction", c.to_direction)?;
-            d.set_item("free_point_decision", decision)?;
-        }
-        None => d.set_item("free_point_decision", py.None())?,
-    }
+    d.set_item(
+        "free_point_decision",
+        free_point_decision_to_py(py, out.free_point_decision.as_ref())?,
+    )?;
     Ok(d)
+}
+
+/// The storage decision as the dict both adjustment bindings report it in, or
+/// `None` where there was none: `sigma_px` (or `None`), `observation_count`,
+/// `outlier_count`, `decided`, `converged`, `to_finite` and `to_direction`.
+pub(crate) fn free_point_decision_to_py<'py>(
+    py: Python<'py>,
+    decision: Option<&FreePointDecision>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(c) = decision else {
+        return Ok(py.None().into_bound(py));
+    };
+    let d = PyDict::new(py);
+    d.set_item("sigma_px", c.sigma_px)?;
+    d.set_item("observation_count", c.observation_count)?;
+    d.set_item("outlier_count", c.outlier_count)?;
+    d.set_item("decided", c.decided)?;
+    d.set_item("converged", c.converged)?;
+    d.set_item("to_finite", c.to_finite)?;
+    d.set_item("to_direction", c.to_direction)?;
+    Ok(d.into_any())
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

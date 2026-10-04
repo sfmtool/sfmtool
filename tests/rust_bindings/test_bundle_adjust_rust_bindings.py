@@ -481,17 +481,37 @@ def test_directions_recover_focal_on_low_parallax_scene():
     out_plain = _run(plain, opt_f=True, schedule=[(300.0, 2.0)], max_iters=150)
     assert abs(_focal(out_plain) - 500.0) > 25.0, _focal(out_plain)
 
+    # Marked directions held as directions for the whole solve.
     s = _lowpar_scene()
     mask = _add_direction_tracks(s, 20, np.random.default_rng(17), noise=0.3)
     s["cam"] = _cam(650.0)
     out = _run(
         s,
         point_at_infinity=mask,
+        free_points_cross=False,
         opt_f=True,
         schedule=[(300.0, 2.0)],
         max_iters=150,
     )
     assert abs(_focal(out) - 500.0) < 5.0, (_focal(out), _focal(out_plain))
+
+    # By default the far tracks cross, solved in inverse depth: each can take a
+    # small depth, so they hold the rotations less firmly and the focal lands
+    # further off, still most of the way from the finite-only one.
+    s = _lowpar_scene()
+    mask = _add_direction_tracks(s, 20, np.random.default_rng(17), noise=0.3)
+    s["cam"] = _cam(650.0)
+    crossed = _run(
+        s,
+        point_at_infinity=mask,
+        opt_f=True,
+        schedule=[(300.0, 2.0)],
+        max_iters=150,
+    )
+    assert abs(_focal(crossed) - 500.0) < 0.5 * abs(_focal(out_plain) - 500.0), (
+        _focal(crossed),
+        _focal(out_plain),
+    )
 
 
 def test_translation_frozen_for_direction_only_image():
@@ -512,7 +532,11 @@ def test_translation_frozen_for_direction_only_image():
     s["trans"][extra] = s["trans"][extra] + np.array([0.3, -0.2, 0.1])
     t_frozen = s["trans"][extra].copy()
     r0_true = _quat_to_matrix(s["quats"][0])
-    out = _run(s, point_at_infinity=mask, schedule=[(50.0, 1.0)])
+    # The frozen translation is a property of marked directions held as
+    # directions; under the default crossing they are solved in inverse depth.
+    out = _run(
+        s, point_at_infinity=mask, free_points_cross=False, schedule=[(50.0, 1.0)]
+    )
     npt.assert_array_equal(out["translations"][extra], t_frozen)
     # The global rotation gauge is free (translations are invariant under a
     # world rotation about the origin), so compare the relative rotation
@@ -645,16 +669,27 @@ def test_protected_composes_with_point_at_infinity():
         s["uv"][k] += np.array([120.0, -90.0])
         return s, mask, victim, k
 
+    # Both runs hold the marked directions as directions: under the default
+    # crossing the storage decision re-fits a bearing over every observation
+    # of its track, the trimmed one included.
     schedule = [(25.0, 1.0)]
     s, mask, victim, _k = build()
     d_true = s["points"][victim].copy()
-    out_plain = _run(s, point_at_infinity=mask, schedule=schedule)
+    out_plain = _run(
+        s, point_at_infinity=mask, free_points_cross=False, schedule=schedule
+    )
     npt.assert_allclose(out_plain["points"][victim], d_true, atol=1e-9)
 
     s, mask, victim, k = build()
     protected = np.zeros(len(s["uv"]), dtype=bool)
     protected[k] = True
-    out = _run(s, point_at_infinity=mask, protected=protected, schedule=schedule)
+    out = _run(
+        s,
+        point_at_infinity=mask,
+        protected=protected,
+        free_points_cross=False,
+        schedule=schedule,
+    )
     d = out["points"][victim]
     npt.assert_allclose(np.linalg.norm(d), 1.0, atol=1e-9)
     ang = np.arccos(min(1.0, float(np.dot(d, d_true))))
@@ -1100,11 +1135,12 @@ def _perturbed_scene(seed=11, n_img=6, n_pt=30):
 
 
 def test_constraint_kwargs_at_their_off_position_change_nothing():
-    # The parity requirement: the off position of every new argument is the
-    # kernel as it stood, bit for bit.
+    # With the crossing off (it is on by default), the constraint arguments
+    # left out, passed as None, and passed at their off values are the same
+    # solve, bit for bit.
     runs = []
     for kw in (
-        {},
+        {"free_points_cross": False},
         {
             "held": None,
             "distance": None,
@@ -1115,6 +1151,7 @@ def test_constraint_kwargs_at_their_off_position_change_nothing():
             "held": np.zeros(30, dtype=bool),
             "distance": np.full(30, np.nan),
             "distance_from": np.full(30, -1, dtype=np.int64),
+            "free_points_cross": False,
         },
     ):
         s = _perturbed_scene()
@@ -1228,11 +1265,12 @@ def test_crossing_promotes_a_direction_whose_rays_carry_parallax():
     mask = np.zeros(len(s["points"]), dtype=bool)
     mask[7] = True
 
-    kept = _run(s, point_at_infinity=mask)
+    kept = _run(s, point_at_infinity=mask, free_points_cross=False)
     assert kept["point_at_infinity"][7]
     assert kept["free_point_decision"] is None
 
-    crossed = _run(s, point_at_infinity=mask, free_points_cross=True)
+    # The crossing is the default.
+    crossed = _run(s, point_at_infinity=mask)
     assert not crossed["point_at_infinity"][7]
     npt.assert_allclose(crossed["points"][7], s["points"][7], atol=1e-3)
     # One storage decision at the end of the solve, at the noise level the

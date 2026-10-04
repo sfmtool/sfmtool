@@ -7,15 +7,18 @@
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes its decisions
 //! about the lens from the user, camera by camera -- whether each camera's
 //! focal length is released, and whether with it the lens distortion the
-//! adjustment can free. That is the whole dialog: one row of two checkboxes
-//! per camera, `Run` and `Cancel`. Everything else about the solve is the core
-//! function's defaults. A spline camera's coefficient count and domain are not
-//! the adjustment's to change: they are a refit of that camera, the Camera
-//! Intrinsics panel's `Refit spline…` (`crate::refit_spline_prompt`).
+//! adjustment can free -- and one about the points: whether a point may cross
+//! between a position and a direction. That is the whole dialog: one row of
+//! two checkboxes per camera, the crossing checkbox, `Run` and `Cancel`.
+//! Everything else about the solve is the core function's defaults. A spline
+//! camera's coefficient count and domain are not the adjustment's to change:
+//! they are a refit of that camera, the Camera Intrinsics panel's
+//! `Refit spline…` (`crate::refit_spline_prompt`).
 //!
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.
 
+use sfmtool_core::geometry::FreePointPolicy;
 use sfmtool_core::reconstruction::bundle_adjust::{
     distortion_is_releasable, focal_is_releasable, CameraRelease,
 };
@@ -142,6 +145,9 @@ pub struct BundleAdjustAnswer {
     /// release the camera's row had greyed. A distortion release only ever
     /// comes with the focal of the same camera.
     pub releases: Vec<CameraRelease>,
+    /// Whether the free points cross between a position and a direction: the
+    /// core function's default unless the user cleared the checkbox.
+    pub free_points: FreePointPolicy,
 }
 
 /// The dialog, and what it remembers while it is up.
@@ -165,6 +171,9 @@ struct Pending {
     gates: BundleAdjustGates,
     /// One per [`BundleAdjustGates::cameras`], in its order.
     rows: Vec<RowState>,
+    /// The crossing checkbox, ticked to start with: the core function's
+    /// default.
+    free_points_cross: bool,
 }
 
 impl Pending {
@@ -208,6 +217,9 @@ impl BundleAdjustPrompt {
                 label,
                 gates,
                 rows,
+                free_points_cross: sfmtool_core::BundleAdjustOptions::default()
+                    .free_points
+                    .cross,
             });
         }
     }
@@ -236,6 +248,17 @@ impl BundleAdjustPrompt {
                 ui.add_space(8.0);
                 camera_rows(ui, pending);
                 ui.add_space(8.0);
+                ui.checkbox(
+                    &mut pending.free_points_cross,
+                    "Store each point as a position or a direction by its rays",
+                )
+                .on_hover_text(
+                    "Solve every point in inverse depth, and at the end store it as a \
+                     position where its rays give it a depth and as a direction where they \
+                     do not, so a point can cross between the two. Cleared, every point \
+                     keeps the representation it has.",
+                );
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Run").clicked() {
                         run = true;
@@ -251,6 +274,9 @@ impl BundleAdjustPrompt {
         let answer = run.then(|| BundleAdjustAnswer {
             recon: pending.recon,
             releases: pending.releases(),
+            free_points: FreePointPolicy {
+                cross: pending.free_points_cross,
+            },
         });
         if answer.is_some() || cancel || !still_open {
             self.pending = None;

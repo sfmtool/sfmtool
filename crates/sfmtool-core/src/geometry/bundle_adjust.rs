@@ -325,10 +325,12 @@ impl std::error::Error for PointConstraintsError {}
 
 /// How a free point's representation is decided.
 ///
-/// [`FreePointPolicy::default`] is the off position: the caller's
-/// `point_at_infinity` mask is honoured for the whole solve, which is the
-/// kernel the parity requirement is stated against.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// [`FreePointPolicy::default`] crosses: every caller in the crate passes it,
+/// so free points are solved in inverse depth and decided at the end of each
+/// solve unless a caller opts out. [`FreePointPolicy::KEEP`] is the opt-out,
+/// the crossing off: the caller's `point_at_infinity` mask is honoured for the
+/// whole solve, so every free point keeps the representation it is handed in.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FreePointPolicy {
     /// Solve every free point in inverse depth about a fixed anchor, so that it
     /// can move between near and infinity within a round, and decide at the end
@@ -337,6 +339,21 @@ pub struct FreePointPolicy {
     /// measure. See "Free points: inverse depth and the storage decision" in
     /// `specs/core/geometry/bundle-adjustment.md`.
     pub cross: bool,
+}
+
+impl FreePointPolicy {
+    /// Free points are solved in inverse depth and stored as the storage
+    /// decision says: the default.
+    pub const CROSS: FreePointPolicy = FreePointPolicy { cross: true };
+    /// Free points keep the representation the caller handed in, for the
+    /// whole solve: the opt-out.
+    pub const KEEP: FreePointPolicy = FreePointPolicy { cross: false };
+}
+
+impl Default for FreePointPolicy {
+    fn default() -> Self {
+        Self::CROSS
+    }
 }
 
 /// The end-of-solve storage decision under [`FreePointPolicy::cross`]: the
@@ -774,8 +791,10 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// its representation decided at the end of the solve, on the point-or-bearing
 /// test at the noise level the final round's residuals measure. See "Point
 /// constraints" in
-/// `specs/core/geometry/bundle-adjustment.md`. Absent constraints and a default
-/// [`FreePointPolicy`] reproduce the kernel without them bit for bit.
+/// `specs/core/geometry/bundle-adjustment.md`. The default policy crosses;
+/// under [`FreePointPolicy::KEEP`] every free point keeps the representation
+/// it is handed in. Absent constraints and all-free ones are the same solve to
+/// the bit.
 ///
 /// `protected` optionally marks per-observation protection (parallel to the
 /// observation arrays): a protected observation is never removed by the
@@ -3000,11 +3019,27 @@ fn bundle_adjust_staged(
                 _ => {}
             }
         }
-        if let Some(s) = sigma {
-            progress_info!(
-                progress,
-                "noise {s:.3} px; {to_finite} to finite, {to_direction} to directions"
-            );
+        // The decision in one line, said whenever there was a round to decide
+        // after: an empty schedule only measures residuals.
+        if !schedule.is_empty() {
+            let unconverged = if last_converged {
+                ""
+            } else {
+                "; the final round stopped on its iteration budget"
+            };
+            match sigma {
+                Some(s) => progress_info!(
+                    progress,
+                    "free points decided at noise {s:.3} px: {to_finite} to finite, \
+                     {to_direction} to directions{unconverged}"
+                ),
+                None if !progress.is_cancelled() => progress_info!(
+                    progress,
+                    "free points not decided: the final round kept no observation of a \
+                     finite point"
+                ),
+                None => {}
+            }
         }
         FreePointDecision {
             sigma_px: noise.sigma_px,

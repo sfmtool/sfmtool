@@ -57,6 +57,8 @@ pub struct BundleAdjustOptions {
     pub max_iters: usize,
     pub min_track: usize,
     pub min_obs: usize,
+    /// Default `FreePointPolicy::CROSS`; `FreePointPolicy::KEEP` opts out.
+    pub free_points: FreePointPolicy,
 }
 
 impl BundleAdjustOptions {
@@ -84,6 +86,8 @@ pub struct BundleAdjustReport {
     pub median_residual_before: f64,
     pub median_residual_after: f64,
     pub cameras: Vec<CameraAdjustment>, // one per camera in the solve
+    /// The kernel's storage decision; `None` under `FreePointPolicy::KEEP`.
+    pub free_point_decision: Option<FreePointDecision>,
 }
 
 pub struct CameraAdjustment {
@@ -289,11 +293,22 @@ not in the solve and comes back exactly as it went in.
 
 Every live point goes in at the coordinate it holds, with the representation it
 holds: a `w = 0` row is a world-frame direction and enters the kernel's
-`point_at_infinity` mask. That mask is honoured for the **whole** solve. No point
-crosses between a bearing and a position here, because a crossing is a claim
-about how much of the geometry a track can state, and deciding that is
-[`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md)'s job
-rather than a side effect of a refinement.
+`point_at_infinity` mask as the representation it starts in. Under the default
+`free_points`, `FreePointPolicy::CROSS`, every free point is solved in inverse
+depth and stored as the kernel's storage decision says at the end of the solve
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "Free points: inverse depth and the storage decision"), so a point can come
+back in the other representation: a bearing whose rays carry a depth at the
+noise the solve measures comes back a position, and a position whose rays do
+not comes back a bearing. Deciding that during the solve rather than in a pass
+after it is what lets the poses be fitted with no representation imposed on a
+far point. `report.free_point_decision` says at what level the points were
+decided, whether the final round converged, and how many crossed each way.
+Under `FreePointPolicy::KEEP` the mask is honoured for the **whole** solve, and
+re-deciding the representation is left to
+[`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md)
+and `--classify-points-at-infinity`. Ranged and held points keep their
+representation either way.
 
 A point's constraint is the one its constraint columns state, converted through
 `PointConstraints::from_arrays`, which is the same bridge the Python binding's
@@ -307,11 +322,12 @@ for a consumer that drops an image.
 ### 3. The two runs
 
 The kernel runs twice. The second is the adjustment. The **first** runs it over
-an **empty** schedule, which executes no round and reports the residuals at the
-state it was handed: the "before" median is then measured by the same projection
-the "after" one is, through the same camera model, rather than by a second
-spelling of the reprojection in this module. Both runs start from the cameras
-the value holds, so the "before" median describes the input value.
+an **empty** schedule, with the crossing off, which executes no round, decides
+nothing and reports the residuals at the state it was handed: the "before"
+median is then measured by the same projection the "after" one is, through the
+same camera model, rather than by a second spelling of the reprojection in this
+module. Both runs start from the cameras the value holds, so the "before"
+median describes the input value.
 
 Both medians are taken over the finite residuals of the points that survive, so
 the two numbers describe one population and their difference is the improvement
@@ -413,6 +429,7 @@ would leave the frame carrying the gauge drift of the solve.
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
 | `min_obs` | `12` | Trim survivors below which a round exits degenerate. |
+| `free_points` | `FreePointPolicy::CROSS` | Whether free points cross between a position and a direction by the storage decision; `KEEP` honours the value's representation. |
 
 The defaults after `releases` are the kernel's own
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)), stated
@@ -421,17 +438,22 @@ here so a caller sees what it is getting.
 ## Python bindings
 
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
-releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12)` returns
-`(EditedReconstruction, report)`. `opt_f` and `opt_distortion` are the release
-given to every camera of the table. `releases`, when given, replaces them: a
-list with one dict per camera in the table, in table order, each
-`{"focal": bool, "distortion": bool}`, a missing key meaning `False`; an
-unknown key or a value that is not a bool is a `ValueError`. It materialises the version's value when its
+releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12,
+free_points_cross=True)` returns `(EditedReconstruction, report)`.
+`free_points_cross=False` is `FreePointPolicy::KEEP`. `opt_f` and
+`opt_distortion` are the release given to every camera of the table.
+`releases`, when given, replaces them: a list with one dict per camera in the
+table, in table order, each `{"focal": bool, "distortion": bool}`, a missing
+key meaning `False`; an unknown key or a value that is not a bool is a
+`ValueError`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
 The report is the fields above as a dict, `cameras` a list with one dict per
 camera in the solve carrying the `CameraAdjustment` fields (`outermost_observed` a dict of
-`radius_px`, `theta_deg`, `image` and `xy`, or `None`), and every refusal is a
+`radius_px`, `theta_deg`, `image` and `xy`, or `None`), `free_point_decision`
+the dict the kernel binding reports (`sigma_px`, `observation_count`,
+`outlier_count`, `decided`, `converged`, `to_finite`, `to_direction`) or
+`None` with the crossing off, and every refusal is a
 `ValueError` carrying the sentence the error writes.
 
 ```python
@@ -483,7 +505,11 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   image uses) coming back untouched, left out of the report, and its entry in
   the release list ignored even where its model could not take it.
 - A point at infinity coming back a unit direction, and the infinity count with
-  it.
+  it, with the crossing off; and by default the same bearing, whose rays carry
+  plenty of parallax, coming back finite where its truth sits among the other
+  points, with the decision converged and reporting one point to finite.
+- The progress messages: the size of the problem, the two medians, the
+  schedule, and the storage decision's line between them.
 - A held point coming back at exactly the coordinate it went in at, with its
   constraint.
 - A point worn below `min_track` deleted, and `RowMap::by_scan` reporting the
@@ -503,8 +529,9 @@ untouched -- and the no-keypoints refusal.
   `OPENCV`, `OPENCV_FISHEYE`, …). The kernel has no rung exact for them; switch
   the camera to a spline model first
   ([`switch-camera-model.md`](switch-camera-model.md)).
-- Deciding which points are at infinity. The representation the value carries is
-  honoured for the whole solve; re-deciding it is
+- Finding new points at infinity. The storage decision re-decides the
+  representation of the points the value holds; appending bearings for tracks
+  the value does not hold is
   [`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md).
 - Adjusting a rig as a rig. Every image keeps its own free pose, whichever
   camera took it.

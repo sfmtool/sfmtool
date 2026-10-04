@@ -92,7 +92,7 @@ pub fn bundle_adjust(
     obs_pt: &[u32],                      // n_obs
     point_at_infinity: Option<&[bool]>,  // n_pt, the INITIAL representation
     constraints: Option<&PointConstraints>,  // n_pt constraints; None = all free
-    free_points: FreePointPolicy,        // whether free points are solved in inverse depth
+    free_points: FreePointPolicy,        // default: free points cross; KEEP opts out
     protected: Option<&[bool]>,          // n_obs
     protected_loss_scale: f64,
     opt_f: bool,
@@ -109,7 +109,7 @@ pub struct BundleAdjustment {
     pub cameras: Vec<CameraIntrinsics>,  // n_cam, the cameras after the solve
     pub residual_norms: Vec<f64>,        // n_obs
     pub point_at_infinity: Vec<bool>,    // n_pt, the representation each ended with
-    pub free_point_decision: Option<FreePointDecision>, // the storage decision; None: crossing off
+    pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under KEEP
 }
 ```
 
@@ -444,8 +444,9 @@ bundle_adjust(
     obs_image,                 # (n_obs,) uint32
     obs_point,                 # (n_obs,) uint32
     point_at_infinity=None,    # (n_pt,) bool; a marked row of `points` is a
-                               # world-frame direction. None/all-False
-                               # reproduces the finite-only kernel bit for bit
+                               # world-frame direction, the representation the
+                               # point starts in. None and all-False agree bit
+                               # for bit
     held=None,                 # (n_pt,) bool; a held point's coordinate is the
                                # caller's for the whole solve
     distance=None,             # (n_pt,) float64; a ranged point's distance,
@@ -453,9 +454,10 @@ bundle_adjust(
     distance_from=None,        # (n_pt,) image index, or a sequence of image
                                # indices to average, with -1 where there is
                                # none; a finite `distance` requires one
-    free_points_cross=False,   # solve free points in inverse depth and decide
+    free_points_cross=True,    # solve free points in inverse depth and decide
                                # each one's representation at the end, on the
-                               # point-or-bearing test at the measured noise
+                               # point-or-bearing test at the measured noise;
+                               # False keeps the caller's representation
     protected=None,            # (n_obs,) bool; protected observations survive
                                # every trim gate and take the wider loss scale.
                                # None/all-False reproduces the unprotected
@@ -521,7 +523,7 @@ the returned row is a direction, `False` where it is a position.
 `free_point_decision` is `BundleAdjustment::free_point_decision` as a dict with
 the `FreePointDecision` fields as keys (`sigma_px` or `None`,
 `observation_count`, `outlier_count`, `decided`, `converged`, `to_finite`,
-`to_direction`), and `None` without `free_points_cross`.
+`to_direction`), and `None` with `free_points_cross=False`.
 
 A reconstruction read from a `.sfmr` carries its constraints as the
 `point_constraints` column, a `uint8` array in the canonical numbering (`0`
@@ -793,9 +795,9 @@ bundle_adjust(&BaCameras::shared(&cam, quats.len()),
               true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none());
 ```
 
-An absent `constraints` is every point free, and with a default
-`FreePointPolicy` (`cross = false`) the kernel is the one the sections above
-describe, bit for bit. The Rust interface is
+An absent `constraints` is every point free, and with `FreePointPolicy::KEEP`
+(`cross = false`) every free point keeps the representation it is handed in,
+as the sections above describe. The Rust interface is
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
 (`PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`,
 `FreePointDecision`);
@@ -807,9 +809,13 @@ constraint triple (see
 ### Free points: inverse depth and the storage decision
 
 ```rust
-#[derive(Default)]
 pub struct FreePointPolicy {
-    pub cross: bool, // solve free points in inverse depth; off by default
+    pub cross: bool, // solve free points in inverse depth and decide them
+}
+
+impl FreePointPolicy {
+    pub const CROSS: FreePointPolicy; // the default
+    pub const KEEP: FreePointPolicy;  // the opt-out: the caller's representation stands
 }
 
 pub struct FreePointDecision {
@@ -832,9 +838,28 @@ by the point-or-bearing test
 `BundleAdjustment::free_point_decision` reports that decision; it is `None`
 with the crossing off. A free point that ends as a direction comes back as a
 unit row, as any direction does. Ranged and held points keep their own
-parametrisations and are not decided. Every production caller passes
-`FreePointPolicy::default()`, so none of this runs in `rotation_init`,
-`reconstruction_growth`, the reconstruction-level adjustment or the viewer.
+parametrisations and are not decided.
+
+The crossing is the default, `FreePointPolicy::default()` being
+`FreePointPolicy::CROSS`, so every caller in the crate crosses unless it states
+otherwise: `rotation_init`, `grow_reconstruction` (whose `GrowOptions::
+free_points` carries the switch), the reconstruction-level adjustment (whose
+`BundleAdjustOptions::free_points` carries it) and through that `sfm xform
+--bundle-adjust` and the viewer's Bundle Adjust. Each of those but
+`rotation_init` lets its own caller opt out with `FreePointPolicy::KEEP`:
+`--bundle-adjust cross=off`, the Bundle Adjust dialog's crossing checkbox, the
+`bundle_adjust` wire tool's `free_points_cross`, and the bindings'
+`free_points_cross=False`. The default is the module's rather than each
+caller's because the decision is the representation every consumer of a
+reconstruction should read: a caller that holds the representation it was
+handed is the one making a choice, and it says so.
+
+The kernel says what the decision did through its `progress`, after the
+rounds: `free points decided at 0.412 px: 3 to finite, 25 to directions`,
+with `; the final round stopped on its iteration budget` appended when it did
+not converge, or `free points not decided: the final round kept no
+observation of a finite point`. An empty schedule, which only measures, says
+nothing.
 
 #### The parametrisation
 
@@ -1057,8 +1082,9 @@ which leaves almost every far point finite (the "Not decided" column above: 125
 to 157 disagreements at the converged level where the decision leaves 1 to 112),
 and a decision on a point carried through the solve as a position or a
 direction reads the score that representation has pulled toward itself (the
-synthetic measurement above). With the switch off the kernel is unchanged,
-which every production caller relies on.
+synthetic measurement above). With the switch off every free point keeps the
+representation it is handed in, which is what a caller that opts out relies
+on.
 
 **The level is measured, not the loss scale.** `loss_scale` is a schedule
 constant, chosen before anything is measured, and one schedule runs over
@@ -1198,19 +1224,18 @@ directions keeps its translation live, which is what a surveyed landmark is for.
 ### Testing requirements (additional)
 
 - **Parity**: on a fixture mixing finite points, directions and protected
-  observations, an absent `constraints` and an all-free one under a default
-  policy agree on every output field to the bit (poses, points, focal,
-  residual norms and the reported representation), and neither reports a
-  storage decision.
-- **The crossing off is the kernel as it stood**: on a fixture with a released
-  focal, directions, a far track, pixel noise, perturbed poses, protected
-  observations, a held point and a ranged one, sums over the points, poses,
-  residual norms and focal match those recorded from the kernel before free
-  points could be solved in inverse depth, to `1e-12` relative (so that a
-  platform's `libm` rounding a transcendental differently in its last place
-  does not fail it). On the four inputs of the measurements above, clean and
-  degraded and at five iterations a round, the crossing-off result is bit for
-  bit the earlier kernel's.
+  observations, an absent `constraints` and an all-free one under
+  `FreePointPolicy::KEEP` agree on every output field to the bit (poses,
+  points, focal, residual norms and the reported representation), and neither
+  reports a storage decision.
+- **The crossing off**: under `FreePointPolicy::KEEP`, on a fixture with a
+  released focal, directions, a far track, pixel noise, perturbed poses,
+  protected observations, a held point and a ranged one, sums over the points,
+  poses, residual norms and focal match values recorded for the fixture, to
+  `1e-12` relative (so that a platform's `libm` rounding a transcendental
+  differently in its last place does not fail it), and every marked point comes
+  back in the representation it went in with. A change to what the kernel
+  computes with the crossing off is a change to those recorded values.
 - **The ranged Jacobian**: the analytic blocks of every observation, assembled
   into a dense Jacobian, match a central difference of the whole residual
   vector on a small ranged scene, with the reference image apart from the
@@ -1266,18 +1291,33 @@ directions keeps its translation live, which is what a surveyed landmark is for.
   move, and their observations still carry residuals; an image whose only
   finite evidence is one held point solves its translation, where the same
   landmark as a direction leaves the translation frozen to the bit.
-- **Ranged points**: an infinite distance reproduces a marked direction bit for
-  bit; a finite one comes back at exactly its distance from the reference read
-  at the final pose; and a landmark started at a wrong bearing but its true
-  distance recovers the bearing the reference image sees, where the same track
-  free converges to a wrong depth.
-- **The binding**: its off position (absent arguments, and explicitly-off ones)
-  agrees bit for bit; a held point comes back unchanged while a free one moves;
-  a ranged point lands at exactly its distance from the reference read at the
-  final pose, for a single image and for the mean of two; an infinite distance
-  is reported as a direction; the storage decision promotes a marked near
-  point and reports itself, and is `None` with the crossing off; and every
-  rejection above raises `ValueError`.
+- **Ranged points**: an infinite distance reproduces a marked direction held
+  as one (`FreePointPolicy::KEEP`) bit for bit; a finite one comes back at
+  exactly its distance from the reference read at the final pose; and a
+  landmark started at a wrong bearing but its true distance recovers the
+  bearing the reference image sees, where the same track free converges to a
+  wrong depth.
+- **The binding**: with `free_points_cross=False`, its off position (absent
+  arguments, and explicitly-off ones) agrees bit for bit; a held point comes
+  back unchanged while a free one moves; a ranged point lands at exactly its
+  distance from the reference read at the final pose, for a single image and
+  for the mean of two; an infinite distance is reported as a direction; the
+  storage decision promotes a marked near point and reports itself by default,
+  and is `None` with the crossing off;
+  and every rejection above raises `ValueError`.
+- **What the crossing changes in the kernel's other tests**: the tests of a
+  marked direction held for the whole solve (its frozen translation, the trim
+  and protection of its observations, a starved track left untouched by the
+  solve) state `FreePointPolicy::KEEP`, since under the default the storage
+  decision reads every free point after the solve, a track the trim dropped
+  included, over its whole track. Under the default, such a starved track
+  whose rays disagree by hundreds of pixels is stored as a direction. On the
+  noisy low-parallax scene where far direction tracks lock the rotations for a
+  focal release, marked directions recover the focal to within 5 px and the
+  same tracks crossing to about 8 px, against 76 px off with no far tracks. A
+  perturbed finite scene recovers its relative poses either way, and the
+  absolute gauge drifts further under the crossing (camera 0 turns by about
+  7e-3 rad), so that test reads poses relative to camera 0.
 
 ## Protected observations
 

@@ -592,6 +592,36 @@ impl EditedReconstruction {
         self.base.point_count() + self.added.point_count() - self.deleted_points.len()
     }
 
+    /// How many of this version's points are at infinity: the base's, plus the
+    /// additions at infinity, less the deleted or replaced points at infinity,
+    /// whether a deleted index is a base row or an addition. A replacement that
+    /// turns a position into a bearing, or a bearing into a position, is
+    /// counted by its new record. Linear in the additions and the deletions,
+    /// which are the number of hand edits a version stands on.
+    pub fn infinity_point_count(&self) -> usize {
+        let base_count = self.base.point_count();
+        let added_at_infinity = self
+            .added
+            .points
+            .iter()
+            .filter(|p| p.is_at_infinity())
+            .count();
+        let deleted_at_infinity = self
+            .deleted_points
+            .iter()
+            .filter(|&&index| {
+                let i = index as usize;
+                let point = if i < base_count {
+                    self.base.point_set.points.get(i)
+                } else {
+                    self.added.points.get(i - base_count)
+                };
+                point.is_some_and(|p| p.is_at_infinity())
+            })
+            .count();
+        self.base.point_set.infinity_point_count + added_at_infinity - deleted_at_infinity
+    }
+
     /// How many observations this version holds: the base's and the additions',
     /// less every observation of a point the version has deleted.
     ///

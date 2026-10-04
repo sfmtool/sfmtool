@@ -51,11 +51,11 @@ from ..xform._arg_parser import (
     help=(
         "Apply bundle adjustment to refine camera poses and 3D points. A "
         "reconstruction with a SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera is "
-        "adjusted by sfmtool with the focal and the lens distortion released; "
-        "the optional 'coeffs=N' refits every spline camera to N spline "
-        "coefficients, and 'domain=DEG' on a domain ending at DEG degrees, over "
-        "the whole domain before that solve (e.g. "
-        "'--bundle-adjust coeffs=12,domain=108')."
+        "adjusted by sfmtool with the focal and the lens distortion released, "
+        "and each point stored as a position or a direction by its rays at the "
+        "end; 'cameras=0+1' releases only those cameras' lenses, and "
+        "'cross=off' keeps every point in the representation it has (e.g. "
+        "'--bundle-adjust cameras=0,cross=off')."
     ),
 )
 @click.option(
@@ -351,7 +351,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
     Optimization:
-      --bundle-adjust [coeffs=N,domain=DEG]  Apply bundle adjustment (refits spline cameras first)
+      --bundle-adjust [cameras=0+1,cross=off]  Apply bundle adjustment
       --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
       --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)

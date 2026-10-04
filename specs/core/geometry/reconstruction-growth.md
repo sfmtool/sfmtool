@@ -53,6 +53,11 @@ index list), and options:
   below edits it.
 - `min_obs` (default 8), `accept_gate` (default 0.35), `seed` for the
   RANSAC.
+- `free_points` (default `FreePointPolicy::CROSS`): whether the adjustments'
+  storage decision may store a point as a direction, and a direction as a
+  position again ([bundle-adjustment.md](bundle-adjustment.md) § "Free points:
+  inverse depth and the storage decision"). `FreePointPolicy::KEEP` keeps every
+  triangulated point a position.
 
 ## Mechanism
 
@@ -122,6 +127,30 @@ observation set are re-triangulated from the full observation set at the
 updated poses (the adjustment re-triangulates only what it was given, and
 the next-best-view count must see full connectivity).
 
+Each cluster carries a representation beside its row, a position or a
+direction. Triangulation writes positions; an adjustment hands each point in
+its observation set in at the representation it holds, and under the default
+crossing its storage decision stores it as a direction where its rays give no
+depth at the noise the adjustment measures, and as a position again where a
+later adjustment finds one. A direction is a unit world-frame row: a
+resection reads positions only, so resection, the next-best-view count and the
+acceptance inlier fractions leave the directions out, while every adjustment
+keeps them, and the refill does not overwrite them. A residual of a direction
+is read through the rotation alone, as the kernel reads it. The crossing
+reaches only the clusters inside an adjustment's observation set: a direction
+outside it is wiped by the adjustment and refilled as a midpoint position, as
+under `FreePointPolicy::KEEP`. With a binding `ba_cluster_cap`, the crossing
+decides only the clusters the cap keeps, which are the ones seen by the most
+images; the far clusters it leaves out are triangulated as positions by the
+refill and never decided. With `ba_window` 4, `anchor_every` 2 and a cap of 150
+on a scene of about 280 clusters, the cap keeps no far cluster, so windowed
+growth stores no far point as a direction, as with the crossing off; with a cap
+of 280 it keeps nearly all of them and they are decided. With far points stored as directions, an image whose
+observations are mostly of the far field has fewer correspondences to resect
+against, which is what the crossing costs growth; on a synthetic orbit with a
+far field 10⁶ units out every image still registers, as many as with the
+crossing off.
+
 Everything covisibility-driven here rests on the dense cluster
 covisibility, which is only built up to `MAX_DENSE_IMAGES` (4096) images.
 Past that bound the kernel degrades instead of failing: neighbour ranking
@@ -143,8 +172,9 @@ positions it refined. Outputs are computed from the full observation set.
 ## Output
 
 `quaternions_wxyz`, `translations`, the posed mask, `points` (NaN rows
-for never-triangulated clusters), the released `focal`, and per-observation
-residual norms at the final state (inf where invalid). `resect_images_batch`
+for never-triangulated clusters), `point_at_infinity` (which rows are unit
+directions), the released `focal`, and per-observation residual norms at the
+final state (inf where invalid). `resect_images_batch`
 returns per-image poses, inlier fractions, and the accepted mask.
 
 ## Binding
@@ -165,13 +195,16 @@ and cluster covisibility
 `sfmtool._sfmtool.geometry.grow_reconstruction(cluster_indexes,
 image_indexes, positions_xy, camera, quaternions_wxyz, translations,
 posed_indexes, *, ba_window=0, anchor_every=0, ba_cluster_cap=0,
-min_obs=8, accept_gate=0.35, seed=0)` and
+min_obs=8, accept_gate=0.35, seed=0, free_points_cross=True)` (its dict
+carrying `point_at_infinity`) and
 `resect_images_batch(cluster_indexes, image_indexes, positions_xy,
 camera, points, image_list, *, posed_quaternions_wxyz=None,
 posed_translations=None, posed_indexes=None, min_obs=8,
 accept_gate=0.30, seed=0)`, NumPy in/out, following the geometry
 submodule's conventions. The three `posed_*` arguments are all-or-none:
-passing some but not all of them is a `ValueError`.
+passing some but not all of them is a `ValueError`. `resect_images_batch`
+reads every finite `points` row as a position, so a caller passing growth's
+`points` to it sets the rows `point_at_infinity` marks to `NaN` first.
 
 ## Testing requirements
 
@@ -197,6 +230,25 @@ passing some but not all of them is a `ValueError`.
   leaves poses, structure and the adjustment set unchanged.
 - Degenerate inputs (no seed poses, no triangulable clusters, all images
   below `min_obs`) return the input state with empty growth, not an error.
+- The crossing: on the synthetic orbit with a far field 10⁶ units out, every
+  image registers, as with the crossing off; at least 80% of the far clusters
+  come back unit directions with finite residuals under a pixel, and no near
+  point does; with the crossing off no point is a direction. On the orbit
+  alone no point is a direction.
+- Directions and resection: the one test of what a resection can use (a
+  position, not a direction or a `NaN` row) holds for the gathered
+  correspondences, the next-best-view count and the acceptance inlier
+  fraction, each checked on a position, a direction and a `NaN` row; an image
+  that sees only far clusters the adjustments stored as directions is not
+  registered while every other image is, over five draws; and a rejected
+  force-accept restores each cluster's representation with the poses, the
+  structure and the adjustment set, checked on the saved state directly and
+  through growth with a far field present.
+- The representation that comes back is the one the last adjustment left: on
+  a far field 10⁵ units out where the finishing adjustment stores a point in
+  the other representation than growth left it in, and on every far-field
+  test above, a row is a unit direction exactly where `point_at_infinity` is
+  set.
 
 ## Non-goals
 

@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::geometry::batch_resection::{resect_images_batch as core_resect, ResectOptions};
+use sfmtool_core::geometry::bundle_adjust::FreePointPolicy;
 use sfmtool_core::geometry::reconstruction_growth::{
     grow_reconstruction as core_grow, GrowOptions,
 };
@@ -104,17 +105,25 @@ pub(crate) fn read_observations(
 ///         (default 0.35).
 ///     seed: RANSAC seed; same inputs + seed give identical output
 ///         (default 0).
+///     free_points_cross: Let each adjustment's storage decision store a
+///         point whose rays give no depth as a direction, and one it stored so
+///         as a position again (default True). ``False`` keeps every
+///         triangulated point a position.
 ///
 /// Returns:
 ///     A dict ``{"quaternions_wxyz" (n_img, 4), "translations" (n_img, 3),
 ///     "posed" (n_img,) bool, "points" (n_clusters, 3) with NaN where never
-///     triangulated, "focal" float, "residual_norms" (n_obs,) with inf where
-///     invalid}``. Un-posed images carry the identity pose. Degenerate
-///     inputs (no seed poses, no triangulable clusters, every image below
-///     ``min_obs``) return the input state with empty growth, not an error.
+///     triangulated, "point_at_infinity" (n_clusters,) bool, "focal" float,
+///     "residual_norms" (n_obs,) with inf where invalid}``. A row of
+///     ``points`` that ``point_at_infinity`` marks is a unit world-frame
+///     direction; a resection reads positions only, so a caller passing
+///     ``points`` on to ``resect_images_batch`` sets those rows to NaN.
+///     Un-posed images carry the identity pose. Degenerate inputs (no seed
+///     poses, no triangulable clusters, every image below ``min_obs``) return
+///     the input state with empty growth, not an error.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, camera, quaternions_wxyz, translations, posed_indexes, *, ba_window=0, anchor_every=0, ba_cluster_cap=0, min_obs=8, accept_gate=0.35, seed=0))]
+#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, camera, quaternions_wxyz, translations, posed_indexes, *, ba_window=0, anchor_every=0, ba_cluster_cap=0, min_obs=8, accept_gate=0.35, seed=0, free_points_cross=true))]
 pub fn grow_reconstruction<'py>(
     py: Python<'py>,
     cluster_indexes: PyReadonlyArray1<'py, u32>,
@@ -130,6 +139,7 @@ pub fn grow_reconstruction<'py>(
     min_obs: usize,
     accept_gate: f64,
     seed: u64,
+    free_points_cross: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let (clusters, images, positions) =
         read_observations(&cluster_indexes, &image_indexes, &positions_xy)?;
@@ -150,6 +160,9 @@ pub fn grow_reconstruction<'py>(
         min_obs,
         accept_gate,
         seed,
+        free_points: FreePointPolicy {
+            cross: free_points_cross,
+        },
     };
     let out = py.detach(move || {
         core_grow(
@@ -177,6 +190,10 @@ pub fn grow_reconstruction<'py>(
         "points",
         PyArray2::from_vec2(py, &p_rows)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+    )?;
+    d.set_item(
+        "point_at_infinity",
+        PyArray1::from_vec(py, out.point_at_infinity),
     )?;
     d.set_item("focal", out.focal)?;
     d.set_item("residual_norms", PyArray1::from_vec(py, out.residual_norms))?;

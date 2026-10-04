@@ -746,6 +746,8 @@ impl SfmrReconstruction {
         }
 
         recon.rebuild_derived_fields();
+        // The appended bearings change the count the metadata states as well.
+        recon.metadata.infinity_point_count = recon.point_set.infinity_point_count as u32;
         Ok((recon, summary))
     }
 }

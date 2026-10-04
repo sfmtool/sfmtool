@@ -355,19 +355,31 @@ fn a_released_focal_is_found_and_reported() {
     );
 }
 
-#[test]
-fn a_point_at_infinity_comes_back_a_direction() {
+/// The fixture with point 0 stored as a bearing, though its rays, like every
+/// other point's, have plenty of parallax.
+fn with_a_bearing_that_has_a_depth() -> SfmrReconstruction {
     let mut source = perturbed();
-    // A bearing among the finite points: the adjustment honours the
-    // representation it was handed, so this one must not be given a depth.
     source.point_set.points[0].w = 0.0;
     source.point_set.points[0].position =
         Point3::from(source.point_set.points[0].position.coords.normalize());
     source.point_set.points[0].normal = Vector3::zeros();
     source.rebuild_derived_fields();
+    source.metadata.infinity_point_count = 1;
+    source
+}
 
-    let (out, report) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
-        .expect("well posed");
+#[test]
+fn a_point_at_infinity_comes_back_a_direction_with_the_crossing_off() {
+    // A bearing among the finite points: with the crossing off the adjustment
+    // honours the representation it was handed, so this one must not be given
+    // a depth.
+    let source = with_a_bearing_that_has_a_depth();
+    let options = BundleAdjustOptions {
+        free_points: FreePointPolicy::KEEP,
+        ..BundleAdjustOptions::default()
+    };
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    assert!(report.free_point_decision.is_none());
 
     assert_eq!(report.points_deleted, 0);
     let point = &out.point_set.points[0];
@@ -378,6 +390,44 @@ fn a_point_at_infinity_comes_back_a_direction() {
         point.position.coords.norm()
     );
     assert_eq!(out.point_set.infinity_point_count, 1);
+    assert_eq!(out.metadata.infinity_point_count, 1);
+}
+
+#[test]
+fn a_bearing_whose_rays_have_a_depth_crosses_to_finite() {
+    // By default the storage decision reads the bearing's rays at the end of
+    // the solve, finds the depth they have, and stores the point there.
+    let truth = truth();
+    let source = with_a_bearing_that_has_a_depth();
+    let (out, report) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("well posed");
+
+    let decision = report.free_point_decision.expect("the default crosses");
+    assert!(decision.decided && decision.converged, "{decision:?}");
+    assert_eq!((decision.to_finite, decision.to_direction), (1, 0));
+    assert_eq!(report.points_deleted, 0);
+    assert_eq!(out.point_set.infinity_point_count, 0);
+    assert_eq!(out.metadata.infinity_point_count, 0);
+    let point = &out.point_set.points[0];
+    assert_eq!(point.w, 1.0, "the bearing was not given its depth");
+    // The fixture's poses are perturbed and the gauge is free, so the point is
+    // compared with the others it was solved with: it lands where its truth
+    // sits among them, to within the solve's own spread.
+    let spread = |set: &SfmrReconstruction| {
+        let p = &set.point_set.points;
+        (p[0].position - p[1].position).norm() / (p[2].position - p[1].position).norm()
+    };
+    assert!(
+        (spread(&out) - spread(&truth)).abs() < 0.02 * spread(&truth),
+        "point 0 sits at {} of the 1-2 distance from point 1, against {}",
+        spread(&out),
+        spread(&truth)
+    );
+    assert!(
+        point.error.is_finite() && point.error < 0.1,
+        "{}",
+        point.error
+    );
 }
 
 #[test]
@@ -1010,12 +1060,13 @@ fn a_recorded_run_names_its_stages() {
     // inside one of them; the schedule under the solve that runs it and not
     // under the empty-schedule call that runs no round; and a median under
     // each of the two stages that measured one, so the pair reads as a before
-    // and an after over the same population.
+    // and an after over the same population. The solve also says what its
+    // storage decision did, after its rounds and before the after median.
     let obs = source.point_set.tracks.len();
     let said = collector.messages();
     assert_eq!(
         said.iter().map(|(_, depth, _)| *depth).collect::<Vec<_>>(),
-        [0, 1, 1, 1],
+        [0, 1, 1, 1, 1],
         "{said:?}"
     );
     assert_eq!(
@@ -1023,6 +1074,11 @@ fn a_recorded_run_names_its_stages() {
         format!("{IMAGES} images, {POINTS} points, {obs} observations")
     );
     assert_eq!(said[2].2, trims);
+    assert!(
+        said[3].2.starts_with("free points decided at noise ")
+            && said[3].2.ends_with(": 0 to finite, 0 to directions"),
+        "{said:?}"
+    );
     let median = |said: &str| {
         said.strip_prefix("median ")
             .and_then(|rest| rest.strip_suffix(&format!(" px over {obs} observations")))
@@ -1030,7 +1086,7 @@ fn a_recorded_run_names_its_stages() {
             .parse::<f64>()
             .expect("a median in px")
     };
-    let (before, after) = (median(&said[1].2), median(&said[3].2));
+    let (before, after) = (median(&said[1].2), median(&said[4].2));
     assert!(
         before > after,
         "the adjustment reported no improvement: {before} then {after}"
