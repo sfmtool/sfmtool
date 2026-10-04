@@ -58,6 +58,8 @@ impl<S: KdfScalar> KdForest<S> {
                              descriptor_order: Option<&[u32]>,
                              progress: &Progress<'_>)
         -> Result<(), KdfError>;
+    pub fn read_kdf(path: &Path, options: LazyKdForestOptions)
+        -> Result<Self, KdfError>;
 }
 impl<S: KdfScalar> LazyKdForest<S> {
     pub fn open(path: &Path, options: LazyKdForestOptions)
@@ -69,6 +71,19 @@ impl<S: KdfScalar> LazyKdForest<S> {
     pub fn search_batch_with_distances(&self, queries: &[S], n_queries: usize,
         k: usize, max_leaf_checks: usize, max_dist: Option<f32>)
         -> Result<(Vec<u32>, Vec<f32>), KdfError>;
+    pub fn search_batch_with_distances_ordered(&self, queries: &[S],
+        n_queries: usize, k: usize, max_leaf_checks: usize,
+        max_dist: Option<f32>, order: &[u32])
+        -> Result<(Vec<u32>, Vec<f32>), KdfError>;
+    pub fn search_batch_with_stats(&self, queries: &[S], n_queries: usize,
+        k: usize, max_leaf_checks: usize, max_dist: Option<f32>)
+        -> Result<(Vec<u32>, Vec<f32>, LazyQueryStats), KdfError>;
+    pub fn self_join_with_distances(&self, k: usize, max_leaf_checks: usize,
+        max_dist: Option<f32>) -> Result<(Vec<u32>, Vec<f32>), KdfError>;
+    pub fn self_join_with_distances_progress(&self, k: usize,
+        max_leaf_checks: usize, max_dist: Option<f32>, progress: &Progress<'_>)
+        -> Result<(Vec<u32>, Vec<f32>), KdfError>;
+    pub fn new_scratch(&self) -> LazySearchScratch<S>;
     pub fn len(&self) -> usize;
     pub fn dim(&self) -> usize;
     pub fn is_empty(&self) -> bool;
@@ -79,6 +94,8 @@ impl<S: KdfScalar> LazyKdForest<S> {
     pub fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
     pub fn image_table(&self) -> Result<Option<&KdfImageTable>, KdfError>;
     pub fn io_stats(&self) -> KdfIoStats;
+    pub fn reset_io_stats(&self);
+    pub fn content_xxh128(&self) -> &str;
 }
 ```
 
@@ -88,7 +105,29 @@ dropped. The counters exist because they are what the parity tests assert on:
 matching neighbor IDs alone would not catch a file-backed traversal that visits
 a different set of leaves and happens to agree. `io_stats` reports the cache and
 read counters of `KdfIoStats` for the whole file, which is how a test asserts
-that opening reads no chunk payload and that a warm hit causes no read.
+that opening reads no chunk payload and that a warm hit causes no read;
+`reset_io_stats` zeroes the cumulative counters so a benchmark can measure one
+phase at a time. `content_xxh128` returns the whole-content hash the writer
+recorded.
+
+`search_batch_with_distances_ordered` processes the queries in a caller-given
+order, which must be a permutation of `0..n_queries`, and still writes each
+result to its own row. Only the schedule changes: queries that are close in
+descriptor space tend to reach the same chunks and blocks, so the cache serves
+them. `search_batch_with_stats` is the batch call with the traversal counters
+summed over the batch, which is what read amplification is computed from.
+`self_join_with_distances` queries every stored descriptor against the forest,
+reading each query from the file rather than taking the corpus as a slice, so a
+whole-corpus self-join needs memory for the cache and the `n * k` result table,
+not for the corpus; the `_progress` variant reports a count of answered queries
+and stops with `KdfError::Cancelled`. `new_scratch` returns a
+`LazySearchScratch`, the per-worker queue, dedup sets and buffers that the batch
+calls allocate once per worker rather than once per query.
+
+`KdForest::read_kdf` rebuilds a full in-memory forest from the file without
+running a build: the file stores the exact topology, leaf membership and feature
+IDs, so this is decompression and reassembly. It is the third option beside
+querying the file lazily and rebuilding from the `.sift` corpus.
 
 A write of a few million descriptors is several hundred megabytes through zstd,
 which is seconds of work, so both carry a `Progress`
@@ -138,7 +177,14 @@ pub fn verify_kdf<S: KdfScalar>(path: &Path, options: LazyKdForestOptions)
     -> Result<Verification, KdfError>;
 pub fn verify_sift_sources(path: &Path, options: LazyKdForestOptions)
     -> Result<Verification, KdfError>;
+pub fn kdf_summary(path: &Path, max_metadata_bytes: usize)
+    -> Result<KdfSummary, KdfError>;
 ```
+
+`kdf_summary` accounts for a file's size by section from the ZIP central
+directory and the decoded metadata alone, without decoding any payload. It is
+not generic over the scalar type, so it can describe a file whose scalar type
+the caller does not yet know.
 
 `verify_kdf` checks the self-contained archive. `verify_sift_sources` is the
 explicit, separate audit against the live workspace recorded in its provenance.
@@ -352,14 +398,14 @@ is an explicit offline operation, never implicit at lazy open.
 
 [Beis & Lowe 1997](https://www.cs.ubc.ca/~lowe/papers/cvpr97.pdf) describes
 Best-Bin-First search with a bounded search effort.
-[Lowe 2004](https://www.cs.ubc.ca/~lowe/papers/ijcv04.pdf), ? 7.2, applies it to
+[Lowe 2004](https://www.cs.ubc.ca/~lowe/papers/ijcv04.pdf), § 7.2, applies it to
 SIFT matching with a cutoff of 200 candidate checks.
 [Muja & Lowe 2009](https://www.cs.ubc.ca/~lowe/papers/09muja.pdf) describes
 randomized kd-trees searched through a shared priority queue. These are the
 algorithmic references for this implementation; they do not evaluate its
 compressed, file-backed access path.
 
-[Muja & Lowe 2014](https://www.cs.ubc.ca/~lowe/papers/14mujaPAMI.pdf), ? 5,
+[Muja & Lowe 2014](https://www.cs.ubc.ca/~lowe/papers/14mujaPAMI.pdf), § 5,
 considers disk-backed data among the options for corpora larger than memory and
 implements distributed nearest-neighbor search across machines. The benchmarks
 below evaluate a different configuration: one machine, a local file, and a bounded
@@ -538,15 +584,15 @@ eager result is checked against the in-memory indices and distances.
 
 | Decoded cache | Before: later image seconds | After: later image seconds |
 |---|---:|---:|
-| 16 MiB | 4.72?5.23 | 3.13?3.16 |
-| 64 MiB | 1.49?1.51 | 1.23?1.23 |
-| 256 MiB | 0.37?0.38 | 0.10?0.13 |
+| 16 MiB | 4.72–5.23 | 3.13–3.16 |
+| 64 MiB | 1.49–1.51 | 1.23–1.23 |
+| 256 MiB | 0.37–0.38 | 0.10–0.13 |
 
 Each endpoint is a run's median over the second and third images, across two
 runs per implementation. The baseline is the preserved pre-review installed
 release extension, not a fresh rebuild of the PR head. The final runs bracket
 one baseline run. OS page cache was not flushed. First-image lazy times after the
-fix are 2.48?2.54 s, 1.04?1.12 s and 0.25?0.26 s respectively; ?cold? refers only
+fix are 2.48–2.54 s, 1.04–1.12 s and 0.25–0.26 s respectively; "cold" refers only
 to the decoded cache. [Raw measurements and command](kdf-review-2026-09-11.json)
 include all per-image times and available I/O counters.
 
@@ -590,9 +636,11 @@ sits just below image order's 76.96-76.98%, so the proxy was sound.
 resident key, making a cache hit O(resident entries) — 33.5 us per fully-cached
 access on a file holding ~23,000 descriptor blocks. That charged the shared
 layout hardest, because it holds many small blocks rather than a few large chunks
-and resolves each descriptor separately. Fixed in
-[`cache.rs`](../../../crates/sfmtool-kdf-format/src/cache.rs) by stamping entries
-with a counter; per-hit cost is now flat at ~0.19 us regardless of cache size.
+and resolves each descriptor separately. The fix measured here stamped entries
+with a counter, which made per-hit cost flat at ~0.19 us regardless of cache size.
+[`cache.rs`](../../../crates/sfmtool-kdf-format/src/cache.rs) now keeps an indexed
+doubly linked list per shard instead, which also makes a hit constant time (see
+[Current access path and performance diagnosis](#current-access-path-and-performance-diagnosis)).
 Every number below is post-fix, and the layout comparison inverted when it
 landed: read the pre-fix figures in this file's history as a measurement of that
 defect rather than of the layouts.
@@ -836,9 +884,9 @@ contended arms.
 
 The shard count is not free to choose. Admission is per shard, so a shard smaller
 than the largest item a caller may ask for could never admit it and the caller
-would block forever; the count is capped at `cache_bytes / max_chunk_bytes`. A
-cache only just large enough for one chunk collapses to a single shard, which is
-the unsharded cache.
+would block forever; the count is capped at `cache_bytes` divided by the
+largest validated item in the file. A cache only just large enough for that item
+collapses to a single shard, which is the unsharded cache.
 
 Keys are dense block and chunk indexes, so their low bits spread uniformly across
 shards with no hashing. Sharding on the cached *contents* instead — a descriptor's
@@ -1005,10 +1053,13 @@ index whose cache is close to its stored working set, **32 to 64** is the measur
 range. Leaf 64 is useful near that cache threshold; resident execution can favor
 leaf 16 or 32 once the check budget is calibrated to equal recall.
 
-For descriptor blocks the knee is around **4 to 8 KiB**, which is where most of
-the cold-query gain has been taken and the file has grown by well under 1%. Going
-to 2 KiB buys another 0.27 s on a cold batch for 2.8% more file and twice the open
-latency, which is the right trade only for a corpus queried once. A 1 MiB chunk
+For descriptor blocks the writer's default is **2 KiB**, chosen by the DinoLedge
+measurements in [What the measurements found](#what-the-measurements-found),
+where 2 KiB with 16-feature leaves gave the fastest whole-image queries under a
+pressured 256 MiB cache. Earlier cold-batch
+measurements on a smaller corpus put the knee at 4 to 8 KiB, where the file had
+grown by well under 1%; 2 KiB cost 2.8% more file and twice the open latency
+there. A 1 MiB chunk
 target remains reasonable. Query worker count is an execution setting and should
 be measured separately from the stored layout.
 
@@ -1192,8 +1243,8 @@ descriptors still spans many chunks: the traversal that matters is the one that
 crosses a chunk boundary, and a realistic target would put the whole fixture in
 one chunk and test nothing.
 
-[`persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
-holds three cases. The `u8` case exports a four-tree forest and
+[`persistent/tests.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent/tests.rs)
+holds six cases. The `u8` case exports a four-tree forest and
 compares eleven queries at leaf budgets of 0, 1, 7, 31 and 1000, plus a batch
 call. It asserts equal leaf-check counts as well as equal neighbors, because
 matching neighbor IDs alone would not catch a file-backed traversal that visits
@@ -1203,7 +1254,14 @@ covers signed-zero routing at a split plane, an infinite cutoff, and the two
 rejected queries (NaN coordinate, negative `max_dist`). The concurrency case
 gives eight threads one identical query against a cache smaller than the file,
 so every load races, evicts and is deduplicated; it asserts that opening a file
-reads no descriptor block at all.
+reads no descriptor block at all. The reload case writes a forest, reads it back
+with `KdForest::read_kdf`, and checks that the reloaded forest answers queries
+identically. The ordered-read case builds a forest of identical descriptors in a
+reversed storage order, checks that `search_batch_with_distances_ordered` returns
+the same ties as the in-memory batch, and checks that it rejects a schedule with
+a repeated or out-of-range query index. The last case checks that rebuilding a
+tree from the file rejects a node cycle and a feature that no leaf or more than
+one leaf covers.
 
 [`sfmtool-kdf-format/src/tests.rs`](../../../crates/sfmtool-kdf-format/src/tests.rs)
 covers the format in isolation: a round trip down to node
@@ -1289,6 +1347,6 @@ API. The Python bindings cover `uint8` only.
 
 The format and this query path both cover `u8` and `f32`, matching the scalar
 types the in-memory forest already supports. Measurements select the one-corpus
-layout and recommend 4–8 KiB descriptor blocks and a 1 MiB tree-chunk target for
-sparse queries. The unmeasured twenty-tree and `f32` cases do not require a
+layout and set 2 KiB descriptor blocks and a 1 MiB tree-chunk target as the
+writer defaults. The unmeasured twenty-tree and `f32` cases do not require a
 format change.
