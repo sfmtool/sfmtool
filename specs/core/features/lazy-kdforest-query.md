@@ -1056,10 +1056,9 @@ leaf 16 or 32 once the check budget is calibrated to equal recall.
 For descriptor blocks the writer's default is **2 KiB**, chosen by the DinoLedge
 measurements in [What the measurements found](#what-the-measurements-found),
 where 2 KiB with 16-feature leaves gave the fastest whole-image queries under a
-pressured 256 MiB cache. Earlier cold-batch
-measurements on a smaller corpus put the knee at 4 to 8 KiB, where the file had
-grown by well under 1%; 2 KiB cost 2.8% more file and twice the open latency
-there. A 1 MiB chunk
+pressured 256 MiB cache. The earlier cold-batch measurements on DinoLedge with a
+4 GiB budget put the knee at 4 to 8 KiB, where the file had grown by well under
+1%; 2 KiB cost 2.8% more file and twice the open latency there. A 1 MiB chunk
 target remains reasonable. Query worker count is an execution setting and should
 be measured separately from the stored layout.
 
