@@ -1,7 +1,16 @@
 # GUI Architecture
 
-This document describes the technology stack, crate structure, rendering
-pipeline architecture, and build system for the sfmtool 3D viewer.
+SfM Explorer, the sfmtool 3D viewer, is a native Rust application in the
+`sfm-explorer` crate. It opens a `winit` window, draws the 3D scene with `wgpu`,
+and draws its panels with `egui` inside the same frame, running its own event
+loop rather than eframe's. `pixi run gui` runs the crate's `sfm-explorer`
+binary; `sfm explorer` runs `launch-sfm-explorer`, a binary that the
+`sfmtool-py` crate builds and the Python wheel ships, as a subprocess. Both
+call `sfm_explorer::run`. `lib.rs` owns the window and the event loop, `app.rs`
+runs each frame, `dock.rs` routes the panels, `scene_renderer/` owns the GPU
+passes and `state.rs` holds the application state. This spec records why the
+viewer is built on this stack, what each module is responsible for, the order
+of the render passes, how it is built and launched, and how it is tested.
 
 For the user experience goals driving these choices, see
 [user-experience.md](user-experience.md).

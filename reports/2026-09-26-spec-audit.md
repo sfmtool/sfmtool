@@ -218,6 +218,7 @@ camera-models) are covered in their sections below.
 Eight specs open with "This document describes/specifies…":
 - gpu-optical-flow
 - gui/architecture
+  > _Status (2026-10-04): **Done** — the opening now says SfM Explorer is a native Rust app in `sfm-explorer` (winit window, wgpu scene, egui panels, its own event loop), that `pixi run gui` and `sfm explorer` reach `sfm_explorer::run` through the `sfm-explorer` and `launch-sfm-explorer` binaries, names the main modules, and says what the spec covers, branch `finding-fix-15-gui-architecture-opening`._
 - gui/camera-views
 - gui/point-cloud-rendering
 - gui/user-experience
