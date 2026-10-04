@@ -10,7 +10,8 @@ call `sfm_explorer::run`. `lib.rs` owns the window and the event loop, `app.rs`
 runs each frame, `dock.rs` routes the panels, `scene_renderer/` owns the GPU
 passes and `state.rs` holds the application state. This spec records why the
 viewer is built on this stack, what each module is responsible for, the order
-of the render passes, how it is built and launched, and how it is tested.
+of the render passes, how it is built and launched, its performance targets,
+what differs per platform, and how it is tested.
 
 For the user experience goals driving these choices, see
 [user-experience.md](user-experience.md).
