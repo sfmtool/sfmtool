@@ -234,25 +234,16 @@ def _extract_mem_budget_bytes() -> int:
 
 
 def _extract_workers(image_pixels: int | None = None) -> int:
-    """Number of images to decode+extract concurrently.
+    """Return how many images to decode and extract concurrently (at least 1).
 
-    The Rust extract releases the GIL and its internal rayon work funnels
-    through one shared global pool (sized to the core count), so running several
-    images at once never oversubscribes the CPU -- it just keeps that pool fed,
-    overlapping each image's serial floor (octave-0 build, setup) with another
-    image's parallel work. On a tiny image the per-image rayon cannot saturate a
-    high core count on its own, so this cross-image overlap is where the batch
-    speedup comes from -- and to fill a many-core host it must scale *with* the
-    core count, not sit at a small constant.
-
-    So the default is ``os.cpu_count()`` images in flight, bounded only by
-    memory: each carries a decoded frame + scale-space pyramid
-    (``_EXTRACT_BYTES_PER_SOURCE_PIXEL`` per source pixel), so the count is capped
-    to keep the in-flight set within ``_extract_mem_budget_bytes()``.
-    ``image_pixels`` (source width x height) drives that estimate; when it is
-    unknown the default stays at the historical conservative ``min(cores, 4)``
-    rather than guess memory blind. ``SFMTOOL_SIFT_EXTRACT_WORKERS`` overrides
-    everything (set 1 to disable concurrency).
+    The default is ``os.cpu_count()``, capped so that the in-flight images fit in
+    ``_extract_mem_budget_bytes()`` at ``_EXTRACT_BYTES_PER_SOURCE_PIXEL`` per
+    source pixel of ``image_pixels`` (width x height). When ``image_pixels`` is
+    unknown it is ``min(os.cpu_count(), 4)``. An integer in
+    ``SFMTOOL_SIFT_EXTRACT_WORKERS`` overrides both, raised to 1 if lower (``1``
+    disables concurrency); a non-integer value is ignored with a warning. Why the
+    count scales with the core count: ``specs/core/features/sift.md``
+    § Extraction-orchestration pipelining.
     """
     override = os.environ.get("SFMTOOL_SIFT_EXTRACT_WORKERS")
     if override:

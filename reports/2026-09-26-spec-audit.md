@@ -897,6 +897,7 @@ and the opening paragraphs listed in check 4.
 ### Code doc comments that repeat the spec (shrink to contract + link)
 
 - `sift/extract_sfmtool.py:238-256`, the `_extract_workers` docstring.
+  > _Status (2026-10-04): **Done** — the docstring now states the contract (the default count, the memory cap, the unknown-size fallback, the `SFMTOOL_SIFT_EXTRACT_WORKERS` override) and points at `sift.md` § Extraction-orchestration pipelining for the reasoning; that section now also says an override below 1 counts as 1 and a non-integer one is ignored with a warning, branch `finding-fix-20-sift-extract-workers-docstring`._
 - `sift/mod.rs:310-329`, the proof of the cap-aware walk.
 - `geometry/resect_translation.rs:95-116`, the `residual_norm` chirality argument.
 - `motion/recon_discontinuity.py:689-700`, the threshold rationale, which is already in `constants.py`.
