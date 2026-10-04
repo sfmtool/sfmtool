@@ -1,5 +1,17 @@
 # Photometric Patch-Normal Refinement
 
+Photometric patch-normal refinement estimates the orientation of the surface at
+a reconstructed 3D point from the images that see it. It models the surface near
+the point as a small flat patch, renders that patch from each of those images
+for a range of candidate normals, and keeps the normal whose renderings look most
+alike, narrowing the search around the best candidate over several passes. A
+patch usually starts with its normal along the mean viewing direction, so it
+faces the cameras rather than lying along the surface. `sfm embed-patches` and
+`sfm xform --refine-normals` run this refinement so that the patch stored with
+each point follows the surface, and the `--strips` views of `sfm compare` and
+`sfm inspect` can run it on the points they display before rendering their
+patches.
+
 ## Problem
 
 A reconstructed 3D point `X` is seen by cameras `{(Kᵢ, Tᵢ)}`. Its surface around
