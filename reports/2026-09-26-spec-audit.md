@@ -224,6 +224,7 @@ Eight specs open with "This document describes/specifies…":
 - gui/viewport-navigation
 - xform/scale-by-measurements
 - xform/select-by-distribution
+  > _Status (2026-10-04): **Done** — the opening now says what `--include-by-distribution COUNT` keeps, how it chooses, when to use it, and that rig frames are kept whole, branch `finding-fix-18-select-by-distribution-opening`._
 
 ### 5. Coverage both ways
 
