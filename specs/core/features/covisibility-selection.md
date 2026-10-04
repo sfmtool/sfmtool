@@ -142,9 +142,10 @@ no separate justification.
 
 The Python methods have the Rust names. `thin` and `thin_to` return `uint32`
 numpy arrays and `reach` returns a float; the two displacement getters return
-`(N, N)` numpy copies. Where Rust returns `None` or panics, Python raises
-`ValueError`: a displacement query on a matrix built without `positions_xy`, a
-non-finite `tau` passed to `thin`, and an out-of-range index passed to `reach`.
+`(N, N)` numpy copies. Python raises `ValueError` for a displacement query on
+a matrix built without `positions_xy` (where Rust returns `None`), for an
+out-of-range index passed to `reach` (where Rust panics), and for a non-finite
+`tau` passed to `thin`, which the binding rejects before calling Rust.
 
 ## Testing requirements
 
