@@ -2,21 +2,26 @@
 
 ## Purpose
 
-The staged robust bundle adjustment written for the cluster pinhole bootstrap
-experiments, whose scripts have since been removed: given
-images taken through one or more cameras, camera poses, world points, and pixel
-observations tying them together, jointly refine the poses and points (and
-optionally each camera's focal length and its distortion release, a radial
-coefficient or a spline) by minimizing
-robust pixel reprojection error over a trim schedule with inter-round retriangulation.
-Each camera keeps its own lens parameters in the solve, and every observation is
-read through the camera of its own image.
+Staged bundle adjustment jointly refines camera poses and 3D points, and
+optionally each camera's focal length and lens distortion (a radial coefficient
+or a spline), so that the points project as closely as possible onto the pixels
+where they were observed. It works in rounds. Each round first drops the
+observations whose reprojection error is above that round's threshold, then
+minimizes a robust (soft-L1) pixel reprojection error over what remains; every
+round after the first also re-triangulates the points from the current poses
+before it trims. The default schedule tightens the threshold from 50 px to
+12 px to 4 px, so gross outliers are removed before the fine fit. The images
+may be taken through one or more cameras: each camera keeps its own lens
+parameters in the solve, and every observation is read through the camera of
+its own image.
 
 This is the optimizer that the trimmed pose-only refinement
 (`crates/sfmtool-core/src/geometry/pose_refine.rs`) is the single-pose
-special case of. It replaces the experiment scripts'
-`scipy.optimize.least_squares` BA, whose Python-side residual and sparsity
-handling dominated the bootstrap's wall-clock.
+special case of. It runs inside [reconstruction growth](reconstruction-growth.md)
+and [far-field rotation initialization](rotation-init.md), and the
+[reconstruction-level adjustment](../reconstruction/bundle-adjust.md) calls it
+on a whole `.sfmr` for the viewer's Bundle Adjust command and for
+`sfm xform --bundle-adjust` on cameras with a spline model.
 
 ## Definitions
 
