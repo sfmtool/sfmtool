@@ -979,6 +979,7 @@ and the opening paragraphs listed in check 4.
 - `kernels/sfmtool_pinhole.rs:87-110`.
   > _Status (2026-10-04): **Done** — the `sfmtool_pinhole_radial_factor` doc comment keeps the formulas, the `(1, 0)` short-circuit and the warning about the second return, and points at `sfmtool-pinhole-kernels.md` § "Ray Jacobian" for the derivation and on-axis limit, which the spec already held in full, branch `finding-fix-24-pinhole-kernel-comment`._
 - `image_detail/intrinsics/field.rs:4-65`, a 62-line module doc.
+  > _Status (2026-10-04): **Done** — the `sfm-explorer` `image_detail/intrinsics/field.rs` module doc is now nine lines stating what the module draws (arrow direction, the auto-scaled exaggeration and its legend, the dot for nodes outside the trustworthy bound) and points at `specs/gui/camera-intrinsics.md` § "What is drawn", **Distortion field**, which already held every fact the old comment carried (the tail-on-the-real-pixel argument, the lattice benefit, the `kerry_park` 273 px fold, the arrow/dot split and the curve-versus-field comparison); `draw_arrow`'s pointer at the module docs was dropped, branch `report-fix-12-field-module-doc`._
 
 ### Opening paragraphs not covered by check 4
 

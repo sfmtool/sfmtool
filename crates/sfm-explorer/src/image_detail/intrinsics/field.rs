@@ -1,68 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The distortion displacement field: where the content under each pixel
-//! belongs, drawn as an arrow from the pixel the model actually projects a ray
-//! to — a real pixel of the photograph on screen — toward where the family's
-//! ideal map would have put that ray. Each arrow is what rectifying this image
-//! would do to the pixel at its tail.
-//!
-//! # Why the tail is the real pixel
-//!
-//! The other direction is just as true arithmetically, and was drawn first: an
-//! arrow from the ideal position to the actual one is a faithful picture of how
-//! a pixel moves from undistorted to distorted, and its sign is right (a
-//! positive `k1` puts the actual pixel further out, so those arrows pointed
-//! outward). It is still the wrong direction to draw *here*, because the field
-//! is painted **on the distorted photograph**. Every pixel on screen is an
-//! actual pixel, so an arrow tailed at an ideal position starts at a point that
-//! does not exist in the image being looked at — and a reader seeing an arrow
-//! on a photograph reads it as "*this* content moves *that* way", which is only
-//! true when the tail is on the real pixel.
-//!
-//! Tailing every arrow at its own grid node has a second benefit: the tails sit
-//! on an exact regular lattice instead of the slightly warped one the ideal
-//! positions form, so the field reads as a field.
-//!
-//! # The exaggeration, and why it is honest
-//!
-//! A real lens displaces a handful of pixels over a frame hundreds of pixels
-//! across, so an unexaggerated field is invisible. [`auto_scale`] picks the
-//! smallest multiplier from [`crate::state::IntrinsicsDisplaySettings::SCALE_LADDER`]
-//! that brings the largest displacement up to [`MIN_ARROW_PX`] on screen, capped
-//! so that no arrow outgrows its own grid cell. The legend states the true
-//! maximum and the multiplier on every frame: an exaggerated field that does not
-//! admit it is a lie, and this is a diagnostic tool.
-//!
-//! # Only the trustworthy half of the grid is drawn as arrows
-//!
-//! The auto scale fits the largest displacement in the grid, and on a circular
-//! fisheye the largest displacement in the grid is not a lens at all:
-//! `kerry_park`'s image rectangle has corners 150° off-axis, outside the lens's
-//! image circle, where the `k1..k4` polynomial folds and reports 273 px of
-//! "distortion" against the 13 px the lens actually applies. Fitting the scale
-//! to that picks ×1 and makes every real arrow invisible, and the legend's
-//! `max N px` would be quoting the artefact.
-//!
-//! So the field is split by [`super::Arrow::trusted`], the flag
-//! [`sfmtool_core::camera::report::trustworthy_max_theta_deg`] and
-//! `DistortionSample::theta_deg` exist to produce, and the two halves are drawn
-//! differently in kind rather than in degree:
-//!
-//! - **inside the bound** — an arrow, scaled and counted, and the maximum the
-//!   legend quotes;
-//! - **outside it** — a small open dot at the grid node and nothing else. The
-//!   node was sampled and there is no measurement there, which is a different
-//!   statement from "the lens displaces this ray by 240 pixels". Drawing those
-//!   arrows at the trustworthy scale would also throw a dozen frame-crossing
-//!   strokes across the picture.
-//!
-//! The plot solved the same problem for a curve by shading, dotting and
-//! excluding from the range. A field is not a curve: there is no continuous
-//! path to dot, and the region is a ring around the outside of the frame rather
-//! than a tail. What carries over is the principle — the extrapolated part is
-//! *visible*, *distinguished in kind*, and *out of every number* — and the
-//! boundary itself is drawn, by [`super::axes`], as a labelled dashed contour.
+//! The distortion displacement field. Each grid node gets an arrow from the
+//! pixel the model projects a ray to toward the pixel the family's ideal map
+//! would have put that ray at, exaggerated by the multiplier [`auto_scale`]
+//! picks, with the true maximum and that multiplier in the legend. Nodes
+//! outside the trustworthy bound ([`super::Arrow::trusted`] false) get a small
+//! open dot instead of an arrow and are left out of the scale and the legend's
+//! maximum. See `specs/gui/camera-intrinsics.md` § "What is drawn",
+//! **Distortion field**, for why the tail is the real pixel and why the
+//! untrusted nodes are drawn differently.
 
 use egui::{Color32, Pos2, Rect};
 
@@ -153,8 +100,7 @@ pub(super) fn draw(
 }
 
 /// One displacement arrow, from the model's pixel toward the ideal map's — the
-/// correction, drawn on the pixel it corrects. See this module's own docs for
-/// why the tail is the real pixel.
+/// correction, drawn on the pixel it corrects.
 fn draw_arrow(
     painter: &egui::Painter,
     arrow: &Arrow,
