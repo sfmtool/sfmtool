@@ -1,5 +1,19 @@
 # Cluster Match Census
 
+The cluster census checks a candidate reconstruction against the raw feature
+matches of its images, rather than against the tracks the solve kept. It
+splits the posed images into viewpoint groups (sets of images that see the
+same part of the scene), triangulates every raw multi-image feature cluster at
+the candidate's camera poses, and, for each pair of groups, counts the
+clusters spanning that pair whose triangulated point the candidate cannot
+reproject to within 2 px (median over the cluster's observations). Only
+clusters that pass a match-quality screen and see their point from directions
+at least 5° apart are counted; both thresholds are defaults. The score is a
+lower confidence bound on the unreproducible fraction for the worst group
+pair. A high score means a group of images is placed at the wrong relative
+pose, or the focal length is wrong: failures that the reconstruction's own
+reprojection error does not show.
+
 ## Problem
 
 A reconstruction can be internally consistent and wrong. Two failure shapes
@@ -83,7 +97,10 @@ the **last** maximal pair over communities scanned in ascending `(a, b)` with
 the positions of the communities in the live community list at the best-`Q`
 partition (first partition to attain the maximum wins). Because the edge
 weights are integer shared-cluster counts, the gains are exact and the whole
-merge path is bit reproducible.
+merge path is bit reproducible. The rest of the operation is deterministic in
+the same way: every reduction, and the § 6 solve (identity start, fixed-stride
+fit subsample), is a fixed function of the input arrays, so identical inputs
+give identical reports.
 
 Fewer than two groups ⇒ the capture has no group structure to census; the
 result is **unverifiable** (score 0 with `n_groups < 2`), which callers must
@@ -205,6 +222,8 @@ bridge is re-triangulated from its own observations alone, so perturbing
 one group's parameter block changes nothing for a bridge with no
 observation on that group's images: each finite difference re-evaluates
 only the bridges its block moves. The
+solve has to tell coherent disagreement from incoherent, not produce a pose
+to ship, so robustness matters more than tight convergence. The
 robust loss is what lets the fit run on the eligible bridges directly,
 false matches that survived the screen included; an observation the
 corrected placement pushes outside the camera model's domain is charged a
@@ -296,32 +315,22 @@ the operation applies to any model the projection supports.
    that maps this to "pass" silently certifies exactly the captures it cannot
    see.
 
-## Core promotion notes
+## Validation
 
-The operation composes existing native kernels — `ClusterCovisibility`
-counts, batch triangulation, per-image reprojection residuals — plus three
-small new pieces: CNM modularity grouping (n ≤ a few hundred posed images;
-O(n³) naive is acceptable, the Python prototype's per-merge recompute is
-not), segmented per-cluster medians, and the Wilson bound. The group
-consistency of § 6 adds a small robust LM solve (7 × (n_groups − 1)
-parameters) over re-triangulated bridge residuals. Home: `sfmtool-core`
-alongside the covisibility and triangulation kernels, exposed through
-`sfmtool-py` as `analysis.cluster_census(...)`.
-
-## Evidence
-
-Fleet prototype (37-dataset seed campaign, workspace-prep `census_one.py` /
-`echo-census-findings.md`): flags all five substantial human-confirmed echo
-seeds (one detectable **only** by the census — 92 % of its matches globally
-satisfied); passes 6 of 7 human-trusted good solves; exposed five stale
-"clean" labels later confirmed as hidden seed defects. Score tracked focal
-error monotonically on the approved DnDTabletop GT (0.301 at +36 % focal,
-0.254 at +10 %, 0.216 at +0.4 %), and as a dual-candidate arbiter in the seed
-finalization chose correctly on 10 of 12 flagged fleet datasets (the two
-misses: one junk-dominated capture inside the phantom blind spot, one
-0.03-margin tie). Pose-error validation (`seedval-report.tsv`): census ≥ 0.7
-on every "ok"-flagged seed with median center error > 9 % of scene radius,
-except the two phantom-seam captures (blind spot 1). The prototype's
-worst-pair variant of the group-consistency solve separated junk flags
-from genuine misregistrations across the fleet (explained fraction
-0–5 % vs 49–97 %).
+These results come from the Python prototype that the Rust code reproduces
+(the same CNM tie-breaking and percentile interpolation), run on a fleet of 37
+captures whose data and scripts are not in this repository. The census
+flagged all five reconstructions that people had confirmed as misregistered;
+for one of them it was the only signal, since 92 % of its matches were
+globally satisfied. It passed 6 of 7 reconstructions people had confirmed as
+good, and flagged five that had been labelled clean and on inspection were
+not. On a ground-truth capture the score fell monotonically as the focal
+error shrank (0.301 at +36 % focal, 0.254 at +10 %, 0.216 at +0.4 %). Asked to
+choose between two candidate solves on 12 flagged captures, it chose correctly
+on 10; one miss was a capture dominated by false matches (blind spot 1) and the
+other a tie with a 0.03 margin. Against measured pose error, the score was
+≥ 0.7 on every reconstruction whose median camera-center error exceeded 9 % of
+the scene radius, except the two captures whose seams were built from false
+matches (blind spot 1). A worst-pair variant of the § 6 solve separated
+false-match flags from genuine misregistrations across the fleet (explained
+fraction 0–5 % against 49–97 %).

@@ -595,6 +595,7 @@ most of the per-sentence findings.
   - § Evidence cites files that are not in the repo.
 **Recommendation:** update spec. Delete § Callers and the `flag_threshold` row, or move them to an amendment draft if the seed pipeline is going to merge.
 **Unclear / incorrect / suspicious:** The prior audit called `flag_threshold` "forward-looking, correctly labelled". That was wrong: the label was an inline "not yet" marker.
+> _Status (2026-10-04): **Done** — the remaining items: the spec opens with a paragraph saying what the census is and what it reports, and `TEMPLATE.md` now quotes that sentence as its example; § Core promotion notes is deleted; § Evidence is now § Validation, keeping the prototype results but no longer citing files outside the repo; the module docs of `cluster_census.rs` and `group_consistency.rs` and the binding docstring are cut to a contract plus the spec path, after moving the determinism statement and the reason robustness outranks convergence into the spec, branch `report-fix-14-cluster-census`._
 
 ### specs/core/features/track-cluster-matching.md (re-read; first read 2026-09-05)
 **Summary:** The algorithm sections (§§ 1-4, choosing `d`, limitations) match the code. The Production Implementation section (:457-968) is still a build brief from before `239ee24`. Of the prior audit's findings, only the `pycolmap.verify_matches` fix has landed.

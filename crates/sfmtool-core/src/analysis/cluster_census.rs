@@ -1,51 +1,21 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cluster match census: does a candidate solve agree with the raw
-//! correspondence evidence it did *not* consume?
+//! Cluster match census: scores a candidate solve against the raw
+//! correspondence clusters of its images, independent of the tracks the solve
+//! kept.
 //!
-//! A reconstruction can be internally consistent and wrong — a viewpoint group glued
-//! at the wrong relative pose, or poses and structure bent to absorb a wrong
-//! focal. Neither shows up in the solve's own reprojection error, because the
-//! solve chose the tracks it is measured on. What does discriminate is the raw
-//! cluster set the solve never used: eligible, high-parallax clusters whose
-//! members span distinct viewpoint groups constrain those groups' relative
-//! placement, and a misplaced (or focal-bent) solve necessarily leaves a
-//! fraction of them unsatisfiable.
+//! [`cluster_census`] returns a [`CensusReport`]: the worst group pair's
+//! Wilson lower bound on the fraction of eligible high-parallax bridge
+//! clusters the candidate cannot satisfy, plus the per-pair statistics and the
+//! global satisfaction. Fewer than two viewpoint groups means the result is
+//! unverifiable (`n_groups < 2`, score 0), which callers must read as "no
+//! evidence", not "clean". The opt-in group-consistency companion
+//! ([`GroupConsistency`]) lives in `group_consistency`. Identical inputs give
+//! identical reports.
 //!
-//! [`cluster_census`] measures that fraction:
-//!
-//! 1. Partition the posed images into **viewpoint groups** by greedy-modularity
-//!    (CNM) communities of the *raw* cluster-covisibility graph
-//!    ([`ClusterCovisibility`]) — never the solve's own track graph, which is
-//!    glued across a bad seam by construction.
-//! 2. Triangulate **every** raw cluster at the candidate poses
-//!    ([`triangulate_batch`]) and take each cluster's *median* reprojection
-//!    residual and its triangulation parallax.
-//! 3. Accept a cluster as a genuine correspondence when its matching-time
-//!    warp-consistency residual is within the **P95 of the residuals of the
-//!    clusters the candidate satisfies** — a data-derived bar, tight on a clean
-//!    capture and loose on a noisy one.
-//! 4. Census each group pair over its eligible, high-parallax bridges: the
-//!    Wilson lower bound of the unsatisfied fraction. The score is the maximum
-//!    over pairs, so a fine partition cannot dilute one bad seam with the
-//!    satisfied bridges of good seams.
-//!
-//! Fewer than two groups means the capture has no group structure to census: the
-//! result is *unverifiable* (`n_groups < 2`, score 0), which callers must read
-//! as "no evidence", not "clean".
-//!
-//! Deterministic: the community merge order, the tie-breaking rule, and every
-//! reduction below are fixed functions of the input arrays.
-//!
-//! The group-consistency companion ([`GroupConsistency`]) answers the follow-up
-//! question — is the unsatisfied evidence *coherent*, i.e. explainable by
-//! group-level pose error? It is analysis only, never touches the candidate,
-//! and costs a small robust solve, so it is opt-in via
-//! [`CensusParams::compute_group_consistency`]; off, the report's
-//! `group_consistency` is `None`. See `group_consistency`.
-//!
-//! See `specs/core/analysis/cluster-census.md` for the design.
+//! The algorithm, its parameters and its blind spots are specified in
+//! `specs/core/analysis/cluster-census.md`.
 
 mod group_consistency;
 

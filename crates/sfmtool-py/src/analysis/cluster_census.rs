@@ -20,24 +20,11 @@ use crate::geometry::PyCameraIntrinsics;
 /// Score a candidate solve against the raw correspondence evidence it did not
 /// consume (see ``specs/core/analysis/cluster-census.md``).
 ///
-/// A reconstruction can be internally consistent and wrong — a viewpoint group glued
-/// at the wrong relative pose, or poses and structure bent to absorb a wrong
-/// focal — and neither shows up in its own reprojection error. The census
-/// partitions the posed images into viewpoint groups by greedy-modularity
-/// communities of the *raw* cluster-covisibility graph, triangulates every raw
-/// cluster at the candidate poses, and reports, per group pair, the Wilson
-/// lower bound of the fraction of eligible high-parallax bridge clusters the
-/// candidate cannot satisfy. The score is the maximum over pairs, so a fine
-/// partition cannot dilute one bad seam. Trust is data-derived: a cluster
-/// counts as a genuine correspondence when its warp-consistency residual is
-/// within the P95 of the residuals of the clusters the candidate *does*
-/// satisfy.
-///
-/// Fewer than two groups means the capture has no group structure to census —
+/// Returns the worst viewpoint-group pair's Wilson lower bound on the
+/// fraction of eligible high-parallax bridge clusters the candidate cannot
+/// reproject within ``sat_px``, with the per-pair statistics behind it.
 /// ``n_groups < 2`` with score 0 is *unverifiable*, which callers must read as
-/// "no evidence", not "clean".
-///
-/// Deterministic: identical inputs give identical output.
+/// "no evidence", not "clean". Identical inputs give identical output.
 ///
 /// Args:
 ///     cluster_indexes: (n_obs,) uint32 raw cluster id per observation,
@@ -61,13 +48,11 @@ use crate::geometry::PyCameraIntrinsics;
 ///         threshold (default 95.0).
 ///     wilson_z: Wilson bound z (default 1.96, the 95 % bound).
 ///     compute_group_consistency: Also run the group-consistency companion
-///         (default False). It answers a different question from the score —
-///         whether the unsatisfied cross-group evidence is *coherent*,
-///         i.e. explainable by group-level pose error — by jointly estimating
-///         a 7-dof similarity per viewpoint group (the largest group holds the
-///         gauge with an identity correction) against the eligible bridges.
-///         Analysis only: it never modifies the candidate and leaves every
-///         other field of the report untouched.
+///         (default False), which estimates a 7-dof correction per viewpoint
+///         group (the largest group holds the identity) and reports how much
+///         of the unsatisfied cross-group evidence the corrections explain.
+///         It never modifies the candidate and leaves every other field of
+///         the report untouched.
 ///
 /// Returns:
 ///     A dict ``{"score": float, "n_groups": int, "group_of" (n_img,) int32

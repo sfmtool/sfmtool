@@ -1,48 +1,19 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Group consistency: is the census's cross-group disagreement *coherent*?
+//! Group consistency: the census companion that estimates one 7-dof
+//! similarity per viewpoint group (the largest group holds the identity) by a
+//! robust Levenberg–Marquardt solve over the eligible bridges, and reports how
+//! much of the cross-group disagreement those corrections explain.
 //!
-//! The census score says how much cross-group evidence a candidate leaves
-//! unsatisfied. This companion asks whether that disagreement is explainable by
-//! group-level pose error. Jointly over all viewpoint groups it estimates the
-//! per-group 7-dof similarity (rotation, translation, log scale) that best
-//! satisfies the eligible bridges, with the largest group holding the identity
-//! so the gauge is fixed, and reports how much of the disagreement the
-//! corrections explain.
+//! The descent touches only the fit bridges (at most [`MAX_FIT_BRIDGES`]), and
+//! a finite difference re-evaluates only the fit bridges with an observation
+//! on the perturbed group's images. The complete bridge population is
+//! evaluated twice, at the identity and at the solved corrections, for the net
+//! scoring.
 //!
-//! A correction `(Q, t, s)` acts on its group's content as the world similarity
-//! `W(x) = s·Q·x + t`; equivalently, on that group's cameras,
-//!
-//! ```text
-//! R' = R·Qᵀ        C' = s·Q·C + t
-//! ```
-//!
-//! which leaves the group's own projections untouched (its structure moves with
-//! it) and changes only where its rays meet the other groups'. Bridges are
-//! therefore **re-triangulated** at the corrected poses and re-scored; there is
-//! no fixed structure to hold on to.
-//!
-//! The estimate is a Levenberg–Marquardt descent on a soft-L1 cost over the
-//! bridges' per-observation pixel residuals — 7 × (n_groups − 1) parameters, so
-//! the dense normal equations are trivial and a central-difference Jacobian of
-//! the (smooth) triangulate-and-project chain is affordable. Robustness matters
-//! more than the last digit of convergence here: the fit population is the
-//! eligible bridges, which by construction include whatever false matches
-//! survived the census's eligibility screen, and the answer being extracted is
-//! coherent-or-not rather than a pose to ship.
-//!
-//! The descent only ever touches the **fit** bridges (§ [`MAX_FIT_BRIDGES`]),
-//! and within one finite difference only the fit bridges the perturbed
-//! parameter block actually moves: a bridge is re-triangulated from its own
-//! observations alone, so perturbing block `b` leaves every bridge without an
-//! observation on one of `b`'s images at exactly the residuals the base
-//! evaluation computed, and its Jacobian rows are zero. The whole bridge
-//! population is evaluated twice — at the identity and at the solved
-//! corrections — which is what the net scoring needs and all it needs.
-//!
-//! Deterministic: corrections start at the identity, the fit subsample is a
-//! fixed stride, and every reduction is a fixed function of the inputs.
+//! The cost, the correction parametrization and the reporting rules are
+//! specified in `specs/core/analysis/cluster-census.md` § 6.
 
 use nalgebra::{DMatrix, DVector, Point3, UnitQuaternion, Vector3};
 

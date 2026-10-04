@@ -85,8 +85,9 @@ to follow to parse the sentence — link freely, but the sentence has to work
 without the click. Don't open by describing a change ("the original
 implementation ran…", "there is no facility to…"): describe what the thing is.
 
-  Good — `analysis/cluster-census.md`: "A reconstruction can be internally
-  consistent and wrong."
+  Good — `analysis/cluster-census.md`: "The cluster census checks a candidate
+  reconstruction against the raw feature matches of its images, rather than
+  against the tracks the solve kept."
   Good — `analysis/image-pair-graph.md`: "Several pipelines need to know which
   image pairs see the same part of the scene."
   Not this — `analysis/source-clusters.md`: "A member observation and a selection
