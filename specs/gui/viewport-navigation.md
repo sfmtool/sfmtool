@@ -261,17 +261,15 @@ Pan follows a "grab and drag the scene" convention:
 
 This feels like grabbing the scene and dragging it around.
 
-### Implementation
+### Speed and the Target
 
-1. Calculate the right and up vectors of the view plane
-2. Move the camera position in the opposite direction of the drag
-3. The target point moves with the camera (target distance preserved)
-
-### Behavior
-
-- The target point moves with the camera during panning
-- The view direction and target distance are preserved
-- After panning, orbiting happens around the new target point location
+Pan moves the camera along the view plane's right and up axes. The orbit target
+is the point `target_distance` in front of the camera, so it moves with the
+camera: the view direction and the target distance do not change, and the next
+orbit turns about the new target. The speed is chosen so that a point at the
+target distance stays under the cursor: one pixel of drag moves the camera
+`2 · target_distance · tan(vfov/2) / viewport_height`, the world height one
+pixel covers at that depth.
 
 ## Zoom Behavior
 
@@ -446,23 +444,22 @@ keeps your orientation, rather than snapping to a fixed viewpoint.
 
 ### Algorithm
 
-1. Read all visible points on the camera's **right / up / forward axes**,
-   measured from one of the points rather than from the camera. Only the
-   camera's orientation enters the fit, and measuring from a camera far from
-   the points (one left framing a node drawn at a huge scale) would round away
-   the differences between them
-2. Sort each axis independently and compute a **percentile bounding box**
-   using the 20th–80th percentile range, which automatically ignores outliers
-3. Find the center of the percentile box in camera space (cx, cy, cz)
-4. Measure the view-plane extents `sx` and `sy`, the right and up widths of
-   the percentile box
-5. Calculate the required camera distance for each axis and take the larger:
-   `distance = max(sy * 1.2 / tan(vfov/2), sx * 1.2 / tan(hfov/2))`, where
-   `vfov` is the vertical FOV (see [FOV and Aspect Ratio](#fov-and-aspect-ratio))
-   and `tan(hfov/2) = tan(vfov/2) * aspect`. The distance has no lower clamp
-6. Convert the bounding box center back to world space
-7. Position the camera at `world_center - forward * distance`
-8. Set `target_distance` to the computed distance
+Zoom to Fit reads every visible point on the camera's right, up and forward
+axes and takes, on each axis separately, the range from the 20th to the 80th
+percentile, which leaves outliers out of the fit. The camera distance is the
+larger of the distances the right extent `sx` and the up extent `sy` of that
+box need:
+`distance = max(sy * 1.2 / tan(vfov/2), sx * 1.2 / tan(hfov/2))`, where `vfov`
+is the vertical FOV (see [FOV and Aspect Ratio](#fov-and-aspect-ratio)) and
+`tan(hfov/2) = tan(vfov/2) * aspect`. The distance has no lower clamp. The
+camera is placed `distance` behind the centre of the box along the view
+direction, and `target_distance` is set to `distance`, so the orbit target
+lands on that centre.
+
+The points are measured from one of the points rather than from the camera.
+Only the camera's orientation enters the fit, and measuring from a camera far
+from the points (one left framing a node drawn at a huge scale) would round
+away the differences between them.
 
 The 1.2× margin provides comfortable framing with some space around the points.
 
@@ -544,13 +541,10 @@ see [camera-views.md](camera-views.md#where-the-keys-are-handled).
 Grid lines and axis lines are clipped against the camera's near plane to prevent
 them from disappearing when one endpoint is behind the camera.
 
-When projecting a line segment:
-1. Transform both endpoints to view space
-2. Check if each point is in front of the near plane (z < -near in view space)
-3. If one point is behind the near plane, compute the intersection point
-4. Project the clipped line segment to screen coordinates
-
-This ensures grid lines remain visible when the camera is close to the ground plane.
+A segment with one endpoint behind the near plane is cut where it crosses the
+plane, and only the part in front is projected; a segment entirely behind it is
+not drawn. This keeps grid lines visible when the camera is close to the
+ground plane.
 
 ### FOV and Aspect Ratio
 
@@ -703,17 +697,15 @@ conflicts with OS-level shortcuts on some platforms.
 
 #### Nodal Pan Implementation
 
-The nodal pan reuses the existing spherical orbit math with swapped roles:
+Nodal pan is the dual of orbit. Orbit keeps the target fixed and moves the
+camera on the sphere of radius `target_distance` around it. Nodal pan keeps the
+camera fixed and turns the view direction, so the target, still
+`target_distance` in front of the camera, moves on the sphere of that radius
+around the camera. Both read the drag as a change of azimuth and polar angle
+about `world_up`, at the same sensitivity and with the same clamp away from the
+poles, and the target distance does not change.
 
-1. Current orbit computes camera position on a sphere centered at the target:
-   - `camera_pos = target_pos + sphere_to_cartesian(theta, phi, target_distance)`
-2. Nodal pan computes target position on a sphere centered at the camera:
-   - `target_pos = camera_pos + sphere_to_cartesian(theta', phi', target_distance)`
-   - where `theta'` and `phi'` are updated by the drag delta (same sensitivity)
-3. The camera orientation is updated to look at the new target position
-4. Target distance is preserved
-
-The drag direction convention should feel consistent: dragging right in normal mode
+The drag direction is the same in both modes: dragging right in normal mode
 swings the camera right around the target; dragging right in Alt mode swings the
 view direction right (target moves right relative to camera), which is the same
 screen-space direction. This maintains the "grab and move" metaphor in both modes.

@@ -3,19 +3,11 @@
 
 //! Turning the viewport's `world_up` back to +Z while **Maintain Z-up** is on.
 //!
-//! The only state carried from frame to frame is the turning speed. Each frame
-//! [`step`] reads the angle left between `world_up` and +Z and the speed it is
-//! turning at, and picks the next speed from those two numbers alone, with no
-//! planned trajectory. Whatever else moved the view in between is taken as it
-//! is found.
-//!
-//! The speed profile is a trapezoid: it rises at [`ACCELERATION`] up to
-//! [`MAX_SPEED`] and falls at the same rate so that it reaches zero where the
-//! angle does. The speed is continuous, so the turn starts and stops without a
-//! jump. The two constants set the timing: 180° takes about 1 s and 90° about
-//! 0.6 s. A turn that exactly doubled in time with the angle would need the
-//! speed to jump to its maximum at the start and drop from it at the end; the
-//! 0.2 s ramps at each end are the easing.
+//! [`step`] picks each frame's turning speed from the angle left and the last
+//! frame's speed, so the speed is the only state carried between frames. The
+//! speed profile, the timings [`MAX_SPEED`] and [`ACCELERATION`] give, and the
+//! two cases that need a choice of axis are in
+//! `specs/gui/viewport-navigation.md` § "Maintain Z-up".
 
 use nalgebra::{Unit, UnitQuaternion, Vector3};
 
