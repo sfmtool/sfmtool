@@ -19,7 +19,8 @@ sfmtool's data.
 
 ## Rust API
 
-The crate has two public modules, re-exported flat from each.
+The crate has two public modules, and each re-exports its items at the module
+root.
 
 [`colmap_io`](../../crates/sfmtool-colmap/src/colmap_io/mod.rs), the binary
 model:
@@ -29,7 +30,7 @@ model:
 | `read_colmap_binary(dir) -> ColmapReconstruction` | Reads the three required files, plus `rigs.bin` and `frames.bin` when present. |
 | `write_colmap_binary(dir, &ColmapWriteData)` | Writes all five files, creating `dir` if needed. |
 | `write_rigs_bin`, `write_frames_bin` | Write one of the two rig files on its own. |
-| `colmap_model_id`, `camera_params_to_array`, `claim_native_camera_model` | Camera-model translation, shared with the database writer. |
+| `colmap_model_id`, `camera_params_to_array`, `claim_native_camera_model`, `EQUIDISTANT_FISHEYE`, `EQUIDISTANT_FISHEYE_CARRIER` | Camera-model translation, shared with the database writer. |
 | `ColmapRig`, `ColmapFrame`, `ColmapSensor`, `ColmapRigSensor`, `ColmapDataId`, `ColmapSensorType`, `Keypoint2D` | The records the reader returns and the writer takes. |
 | `ColmapIoError` | Every failure: I/O, unknown model ID or name, truncated file, inconsistent data. |
 
@@ -43,12 +44,12 @@ database:
 | `write_colmap_db_matches(path, &MatchesData, &ImageIdMap)` | Adds the `matches` and `two_view_geometries` tables to a database made by `write_colmap_db_features`. |
 | `read_colmap_db_matches(path, include_tvg) -> MatchesData` | Reads the `matches` table, and the `two_view_geometries` table when asked, into a `.matches` structure. |
 | `PosePrior`, `TwoViewGeometry`, `TwoViewGeometryConfig`, `DbRig`, `DbRigSensor`, `DbSensor`, `DbSensorType`, `DbFrame`, `DbFrameDataId` | The rows these functions write. |
-| `ColmapDbError` | Every failure: SQLite, I/O, unknown camera model, missing parameter, invalid pair ID, inconsistent data. |
+| `ColmapDbError` | Every failure: SQLite, I/O, unknown camera model, invalid pair ID, inconsistent data (including a missing camera parameter). |
 
 The input structs (`ColmapWriteData`, `ColmapDbWriteData`,
-`ColmapDbFeatureData`) borrow parallel slices rather than owning a
-reconstruction type, so the bindings can pass NumPy-backed data without
-copying it into an intermediate model.
+`ColmapDbFeatureData`) borrow parallel slices rather than taking a
+reconstruction type, which keeps the crate independent of `sfmtool-core`: it
+depends only on the `.sfmr` and `.matches` format crates.
 
 ### Callers
 
@@ -79,7 +80,11 @@ not be contiguous. sfmtool uses 0-based indexes into arrays.
   `images.bin` is dropped. Rig sensor IDs and frame data IDs are remapped to
   camera and image indexes the same way.
 - **Writing a binary model.** Camera, image and point IDs are the index plus 1;
-  feature indexes inside a track stay 0-based, as COLMAP stores them.
+  feature indexes inside a track stay 0-based, as COLMAP stores them. Rigs and
+  frames passed in are written as given, so their sensor and data IDs must
+  already be COLMAP camera and image IDs (the Python binding adds 1); the
+  implicit rigs and frames the writer creates itself use the camera and image
+  IDs above.
 - **The database.** Camera and image IDs are assigned by SQLite in input order
   (so they are also index plus 1 in a fresh database). An image pair is stored
   under COLMAP's pair ID, `(2³¹ − 1) · smaller_id + larger_id`; the writer
@@ -118,10 +123,12 @@ their Python callers, in
 [`src/sfmtool/colmap/io.py`](../../src/sfmtool/colmap/io.py) and
 [`src/sfmtool/colmap/db_export.py`](../../src/sfmtool/colmap/db_export.py), via
 the helpers in [`src/sfmtool/colmap/convention.py`](../../src/sfmtool/colmap/convention.py).
-They own it because the same binary files are used for two purposes: an
-external import or export applies both the camera-frame flip and the world
+They own it because the same binary files are used for more than one purpose:
+an external import or export applies both the camera-frame flip and the world
 rotation, while a pipeline step that writes a model for COLMAP and reads the
 result back within one operation applies only the camera-frame flip.
+`sfm to-nerfstudio` also applies only the camera-frame flip to the COLMAP model
+it writes, so that the model shares the world frame of its `transforms.json`.
 
 The exception is the `.matches` path. A `MatchesData` structure always holds
 canonical relative poses, so `write_colmap_db_matches` and
@@ -154,5 +161,7 @@ and cross unchanged. Keypoint coordinates are also copied unchanged.
   missing from the `images` table, and refuses a match blob whose length does
   not equal `rows × 8` bytes. COLMAP does not store descriptor distances, SIFT
   hashes, image sizes or workspace metadata, so the returned `MatchesData` holds
-  zero distances, zero hashes, no image sizes and empty metadata strings; the
-  caller fills these in from the `.sift` files before writing a `.matches` file.
+  zero distances, zero hashes, no image sizes and placeholder metadata (mostly
+  empty strings; `matching_method` is `"unknown"` and `matching_tool` is
+  `"colmap"`); the caller fills these in from the `.sift` files before writing
+  a `.matches` file.
