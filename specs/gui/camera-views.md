@@ -1,9 +1,14 @@
 # Camera Views: Frustum Wireframes and Image Projection
 
-This document specifies how cameras from the SfM reconstruction are visualized
-in the 3D viewer. Each camera is rendered as a wireframe frustum pyramid showing
-its position and field of view, with the camera's photograph projected as a
-texture onto the frustum's far plane. Clicking on a frustum selects that camera.
+SfM Explorer's 3D viewer draws each registered camera of a reconstruction as a
+wireframe frustum pyramid at the camera's pose, sized to its field of view, with
+a thumbnail of the camera's photograph drawn on the frustum's far plane. This
+shows where each photograph was taken from and which way it faced, next to the
+point cloud. Clicking a frustum selects that image. Double-clicking it, or
+pressing Z with it selected, enters camera view: the viewport takes that
+camera's pose and field of view and draws the full-resolution photograph behind
+the scene, so the reconstructed points can be compared with what the camera
+actually saw. In camera view, `,` and `.` step to the previous and next camera.
 
 For the point cloud rendering pipeline that these integrate with, see
 [point-cloud-rendering.md](point-cloud-rendering.md). For navigation

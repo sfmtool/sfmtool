@@ -219,6 +219,7 @@ Eight specs open with "This document describes/specifies…":
 - gpu-optical-flow
 - gui/architecture
 - gui/camera-views
+  > _Status (2026-10-04): **Done** — the opening now says what camera views are (frustums with photograph thumbnails, click to select, camera view through a selected camera) and what they are for, branch `finding-fix-16-camera-views-opening`._
 - gui/point-cloud-rendering
 - gui/user-experience
 - gui/viewport-navigation
