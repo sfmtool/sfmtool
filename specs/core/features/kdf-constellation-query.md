@@ -704,7 +704,9 @@ survives both. The planted warp being exactly affine, it also survives all three
 their leaving every candidate and every inlier count where they were; what it
 tests about the mode itself is that a misspelling and a non-positive
 `refit_sigma` are `ValueError`s, and that the weighted mode without a `center`
-is the flat one.
+is the flat one. The same file checks the two argument errors that are not
+`ValueError`s: float64 `positions` raise `TypeError`, and a `sources` mapping
+without `affine_shapes` raises `KeyError`.
 
 ## Non-goals
 
