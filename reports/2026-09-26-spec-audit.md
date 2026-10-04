@@ -41,6 +41,7 @@ were checked**. 14 were stale:
 - **ray-grid-projection.md:** `pixel_to_ray_grid` is written as an inline proposal.
   > _Status (2026-10-04): **Done** — the `pixel_to_ray_grid` proposal is removed with § Impact, branch `report-fix-02-ray-grid-projection`._
 - **covisibility-selection.md:** the "any use of image ordering" non-goal.
+  > _Status (2026-10-04): **Done** — the non-goal is removed and the Thinning section says when the sweep depends on image order, branch `report-fix-04-covisibility-selection`._
 - **editable-track.md:** "Editing the patch's frame or normal by hand".
   > _Status (2026-10-03): **Done** — the non-goal is removed, PR #687._
 - **viewport-navigation.md:**
@@ -152,6 +153,7 @@ Treat these lists as a reading list, not as findings. In this sample,
 `baseline-direction` and `focal-vote` both confirmed failure 2: neither lists
 its Rust entry points. `covisibility-selection` lists names but no signatures.
 > _Status (2026-10-04): **Done** for baseline-direction.md — it now has a § Rust API with the signatures, a parameter table and an example call, branch `report-fix-03-baseline-direction`._
+> _Status (2026-10-04): **Done** for `covisibility-selection` — an Interface section gives the Rust signatures, branch `report-fix-04-covisibility-selection`._
 
 **Work-order residue:**
 - **Grep hits:**
@@ -411,6 +413,7 @@ most of the per-sentence findings.
   - **Missing:** Rust signatures, and any rationale for `tau/8` and `min_shared=8`.
 **Recommendation:** update spec.
 **Unclear / incorrect / suspicious:** The binary search in `thin_to` relies on "the kept count grows monotonically with tau". The `tau/8` floor also rises with `tau`, and the sweep is greedy, so monotonicity is not guaranteed and no test checks it beyond chain8.
+> _Status (2026-10-04): **Done** — the spec opens with what the queries are for (choosing images from match data alone, without camera poses, with `thin_to` choosing reconstruction growth's anchor and finishing bundle-adjustment cameras; the proposed "before a reconstruction exists" wording was wrong for that caller), adds an Interface section with the Rust signatures and both Python constructors including `from_matches`, says "Euclidean" and "two or more accepted members", drops the "order-free" claim and the image-ordering non-goal, describes the `thin_to` search range, its 25 iterations and the chain8 `thin_to(8)` = 4 cap, and says monotonicity is assumed, not guaranteed (also in the Rust and binding doc comments). The `tau/8` and `min_shared=8` constants are stated as having no recorded derivation, since none exists. The "Third copies" item was already resolved: the core and binding sampling text is now 6 and 11 lines. Branch `report-fix-04-covisibility-selection`._
 
 ### specs/core/geometry/focal-vote.md
 **Summary:** A thorough spec whose constants match the code almost everywhere, from the 30/16/6 pair counts through the fisheye 50°/110° bands. What is wrong: the list of environment flags, one precision claim, the rotation-image cap, and a buried interface.

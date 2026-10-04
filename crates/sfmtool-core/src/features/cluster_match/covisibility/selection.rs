@@ -71,10 +71,13 @@ impl ClusterCovisibility {
         self.thin_in_order(&self.sweep_order(), tau)
     }
 
-    /// Thin to approximately `target` images: binary-search `tau` (the kept
-    /// count grows monotonically with `tau`) over `[1, median row peak]` and
-    /// return the subset whose size lands closest to `target` (sorted
-    /// ascending; earlier iterations win exact-distance ties).
+    /// Thin to approximately `target` images: bisect `tau` over
+    /// `[1, median row peak]` for 25 iterations and return the subset whose
+    /// size lands closest to `target` among those computed (sorted
+    /// ascending; earlier iterations win exact-distance ties). The bisection
+    /// assumes a larger `tau` keeps more images, which the rising `tau/8`
+    /// floor does not guarantee, and it never produces sizes that need a
+    /// `tau` above the median peak.
     pub fn thin_to(&self, target: usize) -> Vec<u32> {
         let n = self.num_images;
         if n == 0 {

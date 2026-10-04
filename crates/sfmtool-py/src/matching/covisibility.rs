@@ -384,8 +384,10 @@ impl PyClusterCovisibility {
     }
 
     /// Thin to approximately ``target`` images (sorted uint32 numpy array):
-    /// binary-searches ``tau`` (the kept count grows monotonically with tau)
-    /// and returns the subset whose size lands closest to ``target``.
+    /// bisects ``tau`` over [1, median row peak] and returns the subset whose
+    /// size lands closest to ``target`` among those computed. Sizes that
+    /// need a larger ``tau`` are never returned; see
+    /// ``specs/core/features/covisibility-selection.md``.
     ///
     /// Args:
     ///     target: Requested subset size.
