@@ -1,7 +1,14 @@
 # Randomized KD-Tree Forest
 
-Forests can be persisted and searched under a bounded decoded-data cache as
-specified in [lazy-kdforest-query.md](lazy-kdforest-query.md).
+A randomized kd-tree forest finds the approximate nearest neighbors of a query
+vector among a large set of high-dimensional vectors, such as 128-dimension SIFT
+descriptors, much faster than comparing the query with every candidate. It
+builds several kd-trees whose split dimensions are chosen at random among the
+highest-variance axes, then searches all the trees together with one shared
+priority queue, stopping once a budget of distance computations is spent. This
+spec covers the in-memory forest; a forest can also be saved to a file and
+searched while only part of it is held in memory, as specified in
+[lazy-kdforest-query.md](lazy-kdforest-query.md).
 
 ## Motivation
 

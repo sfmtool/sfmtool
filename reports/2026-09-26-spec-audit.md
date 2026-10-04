@@ -200,6 +200,7 @@ who knows the subject needs to read it as a claim before it goes in.
    - Current: "Forests can be persisted and searched under a bounded decoded-data cache as specified in…"
    - Problem: it is a "see also" and never says what a forest is.
    - Proposed: *"A randomized kd-tree forest finds approximate nearest neighbours of SIFT descriptors much faster than an exhaustive scan, by searching several randomized trees with a shared priority queue."*
+   > _Status (2026-10-04): **Done** — replaced the opening with a paragraph based on the proposal, widened from "SIFT descriptors" to high-dimensional vectors such as SIFT descriptors (the forest is generic over `u8` and `f32`), adding that the queue search stops once a budget of distance computations is spent, and keeping the persistence pointer as the last sentence, branch `finding-fix-05-randomized-kdtree-forest-opening`._
 6. **`core/patch/patch-normal-refinement.md:5`**
    - Current: "A reconstructed 3D point `X` is seen by cameras `{(Kᵢ, Tᵢ)}`."
    - Problem: notation comes before any words.
