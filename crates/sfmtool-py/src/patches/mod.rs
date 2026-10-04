@@ -54,7 +54,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        self_similarity::zncc_self_similarity_parts_overlap_stack,
+        self_similarity::zncc_self_similarity_parts_stack,
         m
     )?)?;
     // The default bar on the ZNCC self-similarity radius, shared by the member

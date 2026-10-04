@@ -66,8 +66,8 @@ impl Phase {
 pub static TOTAL: Phase = Phase::new("cluster_total");
 
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
-/// Member self-similarity gate: per-member tile sample, the grid with its
-/// ring (`sample_member_self_similarity_tile`).
+/// Member self-similarity gate: per-member sample of its own `R×R` grid
+/// (`sample_member_grid`).
 pub static GATE_SAMPLE: Phase = Phase::new("gate_sample");
 /// Member self-similarity gate: per-member ZNCC self-similarity radius
 /// reading.

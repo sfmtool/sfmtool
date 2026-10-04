@@ -291,7 +291,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           agreement or a disagreement is; a cell is null where the patch is flat \
                           over it, and the grid is null where zncc is. \
                           zncc_self_similarity_radius is how far, in grid px, \
-                          the tile's core can slide over itself and still match itself as well \
+                          the tile can slide over itself and still match itself as well \
                           as a true match between two views would, read where its ZNCC against \
                           itself, interpolated linearly between whole-pixel shifts, falls through \
                           that level: under 1 on a corner or busy texture, and 3 meaning 3 or \
@@ -300,11 +300,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           cell of the same split the same way, and zncc_self_similarity_slide_grid \
                           gives per cell the [x, y] direction the matching shifts line up in, \
                           near 1 long along an edge and near 0 where they spread evenly or there \
-                          are none. zncc_self_similarity_surface is the core's ZNCC against \
+                          are none. zncc_self_similarity_surface is the tile's ZNCC against \
                           itself at every shift of the 7 x 7 square, seven rows of seven from \
-                          (dx, dy) = (-3, -3), 1 at the centre and null where the core is flat, \
+                          (dx, dy) = (-3, -3), 1 at the centre and null where the tile is flat, \
                           and \
-                          zncc_self_similarity_tolerance the ZNCC deficit the core was judged \
+                          zncc_self_similarity_tolerance the ZNCC deficit the tile was judged \
                           by, so the radius is read on the surface at 1 - tolerance. \
                           zncc_self_similarity_reach and zncc_self_similarity_reach_middle say \
                           how far the contour the radius is read from reaches, each length as \

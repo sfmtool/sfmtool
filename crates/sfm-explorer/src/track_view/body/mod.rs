@@ -1546,7 +1546,7 @@ pub(crate) struct RowGrids {
     pub radius_slide: Option<[[[f64; 2]; 3]; 3]>,
 }
 
-/// The whole core's self-similarity radius of `observation` at `stage`.
+/// The whole tile's self-similarity radius of `observation` at `stage`.
 fn row_radius(observation: &Observation, stage: StageKind) -> Option<f64> {
     match stage {
         StageKind::Cluster => observation.cluster.as_ref()?.zncc_self_similarity_radius,
@@ -1554,7 +1554,7 @@ fn row_radius(observation: &Observation, stage: StageKind) -> Option<f64> {
     }
 }
 
-/// The whole core's and the middle's self-similarity reach of `observation` at
+/// The whole tile's and the middle's self-similarity reach of `observation` at
 /// `stage`, or none while the evaluation is refused or failed, when the row's
 /// cells print `-` too.
 fn row_reach(
@@ -1581,7 +1581,7 @@ fn row_reach(
     }
 }
 
-/// The whole core's self-similarity surface of `observation` at `stage` and
+/// The whole tile's self-similarity surface of `observation` at `stage` and
 /// the tolerance it was judged by, or `None` when there is none, including
 /// while the evaluation is refused or failed.
 fn row_surface<'a>(

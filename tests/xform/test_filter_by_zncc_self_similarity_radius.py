@@ -9,7 +9,7 @@ import pytest
 
 from sfmtool._sfmtool.patches import (
     DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
-    zncc_self_similarity_parts_overlap_stack,
+    zncc_self_similarity_parts_stack,
 )
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
@@ -64,8 +64,8 @@ def test_the_default_bar_is_the_member_gates():
     assert FilterByZnccSelfSimilarityRadiusTransform().threshold == 2.5
 
 
-def test_the_overlap_stack_reads_each_kind():
-    out = zncc_self_similarity_parts_overlap_stack(synthetic_bitmaps(4))
+def test_the_stack_reads_each_kind():
+    out = zncc_self_similarity_parts_stack(synthetic_bitmaps(4))
     radius = np.asarray(out["radius"])
     assert radius[FLAT] == 3.0 and radius[EDGE] == 3.0
     assert radius[TEXTURE] < 1.0
@@ -78,13 +78,13 @@ def test_the_overlap_stack_reads_each_kind():
     assert abs(out["slide"][EDGE][1]) > 0.9
 
 
-def test_the_overlap_stack_refuses_a_bad_shape():
+def test_the_stack_refuses_a_bad_shape():
     with pytest.raises(ValueError, match="square"):
-        zncc_self_similarity_parts_overlap_stack(np.zeros((2, 12, 10, 4), np.uint8))
+        zncc_self_similarity_parts_stack(np.zeros((2, 12, 10, 4), np.uint8))
     with pytest.raises(ValueError, match=r"\(N, R, R, C\)"):
-        zncc_self_similarity_parts_overlap_stack(np.zeros((12, 12, 4), np.uint8))
+        zncc_self_similarity_parts_stack(np.zeros((12, 12, 4), np.uint8))
     with pytest.raises(ValueError, match="channels"):
-        zncc_self_similarity_parts_overlap_stack(np.zeros((2, 12, 12, 5), np.uint8))
+        zncc_self_similarity_parts_stack(np.zeros((2, 12, 12, 5), np.uint8))
 
 
 def test_pass_rule():

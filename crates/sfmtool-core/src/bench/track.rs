@@ -137,8 +137,9 @@ pub struct ClusterMeasurement {
     pub shift_px: Option<f64>,
     /// The ZNCC self-similarity radius of the observation's own tile, in
     /// template-grid px: the length of the furthest whole-pixel shift at which
-    /// the tile's core still matches itself within the tolerance a true match
-    /// between two views allows, `0 ..= r`, with `r` read as "`r` or more"
+    /// the `R×R` tile still matches itself within the tolerance a true match
+    /// between two views allows, `0 ..= r`, with `r` read as "`r` or more",
+    /// read the overlap way with no pixels from outside the tile
     /// (see `specs/core/patch/zncc-self-similarity-radius.md`). `None` wherever
     /// the tile could not be sampled.
     pub zncc_self_similarity_radius: Option<f64>,
@@ -157,19 +158,19 @@ pub struct ClusterMeasurement {
     /// they spread evenly or there are none. Its sign means nothing. `None`
     /// wherever `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
-    /// The whole core's ZNCC against itself at every shift of the `(2r + 1)²`
+    /// The whole tile's ZNCC against itself at every shift of the `(2r + 1)²`
     /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre, all
-    /// `NaN` when the core has no texture. `None` wherever
+    /// `NaN` when the tile has no texture. `None` wherever
     /// `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_surface: Option<Vec<f64>>,
-    /// The tolerance the core was judged by, `ε + mean_c (n / s_c)²`: a shift
+    /// The tolerance the tile was judged by, `ε + mean_c (n / s_c)²`: a shift
     /// whose ZNCC deficit is at or under it is indistinguishable from the
     /// true position, so `1 - tolerance` is the level of
     /// [`Self::zncc_self_similarity_surface`] the radius is read at. `None`
-    /// wherever `zncc_self_similarity_radius` is, and where the core has no
+    /// wherever `zncc_self_similarity_radius` is, and where the tile has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
-    /// How far the whole core's self-similarity contour reaches, in grid px
+    /// How far the whole tile's self-similarity contour reaches, in grid px
     /// (the radius and along each grid axis) and in source-image px, through
     /// the seed shape's map from the grid to the image
     /// ([`SelfSimilarityReach`]). A cluster member has no patch, so
@@ -348,8 +349,9 @@ pub struct TrackMeasurement {
     pub ray_angle_deg: Option<f64>,
     /// The ZNCC self-similarity radius of the observation's own tile, in
     /// grid px: the length of the furthest whole-pixel shift at which
-    /// the tile's core still matches itself within the tolerance a true match
-    /// between two views allows, `0 ..= r`, with `r` read as "`r` or more"
+    /// the `R×R` tile still matches itself within the tolerance a true match
+    /// between two views allows, `0 ..= r`, with `r` read as "`r` or more",
+    /// read the overlap way with no pixels from outside the tile
     /// (see `specs/core/patch/zncc-self-similarity-radius.md`). `None` wherever
     /// the tile could not be sampled.
     pub zncc_self_similarity_radius: Option<f64>,
@@ -368,19 +370,19 @@ pub struct TrackMeasurement {
     /// they spread evenly or there are none. Its sign means nothing. `None`
     /// wherever `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
-    /// The whole core's ZNCC against itself at every shift of the `(2r + 1)²`
+    /// The whole tile's ZNCC against itself at every shift of the `(2r + 1)²`
     /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre, all
-    /// `NaN` when the core has no texture. `None` wherever
+    /// `NaN` when the tile has no texture. `None` wherever
     /// `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_surface: Option<Vec<f64>>,
-    /// The tolerance the core was judged by, `ε + mean_c (n / s_c)²`: a shift
+    /// The tolerance the tile was judged by, `ε + mean_c (n / s_c)²`: a shift
     /// whose ZNCC deficit is at or under it is indistinguishable from the
     /// true position, so `1 - tolerance` is the level of
     /// [`Self::zncc_self_similarity_surface`] the radius is read at. `None`
-    /// wherever `zncc_self_similarity_radius` is, and where the core has no
+    /// wherever `zncc_self_similarity_radius` is, and where the tile has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
-    /// How far the whole core's self-similarity contour reaches
+    /// How far the whole tile's self-similarity contour reaches
     /// ([`SelfSimilarityReach`]): in grid px, in source-image px through the
     /// Jacobian of the tile's warp at its centre, and along the patch's `u`
     /// and `v` axes in the scene's world-space unit (degrees for a patch at

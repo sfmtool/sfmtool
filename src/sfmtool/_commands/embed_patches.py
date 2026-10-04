@@ -207,9 +207,9 @@ from .._cli_utils import timed_command
         "multi-round refinement: its ZNCC self-similarity radius, how far the "
         "bitmap can slide over itself and still match itself, is above this, in "
         "patch-grid pixels. It removes points on a straight edge or a flat "
-        "patch, which the agreement gate lets through. The bitmap has no ring "
-        "around it, so each shift is correlated over the samples the bitmap "
-        "holds on both sides. The radius reads at most 3, so 3 or more turns "
+        "patch, which the agreement gate lets through. Each shift is correlated "
+        "over the samples the bitmap holds on both sides, as the member gates "
+        "read their tiles. The radius reads at most 3, so 3 or more turns "
         "nothing out; 0 disables the cull. The default, 2.5, is the member "
         "gate's. See specs/core/patch/zncc-self-similarity-radius.md."
     ),

@@ -108,7 +108,10 @@ outliers, instead of a non-smooth median over pairs. The view *count* is gated b
 the robust *effective* view count `1/Σwᵢ² ≥ 2` — a pure degeneracy floor, since
 as weight concentrates on one view `Σwᵢ² → 1` and `ρ̄_w → 0/0`. (Don't reuse
 `min_views` for this: `1/Σwᵢ² ≤ V` with equality only for exactly uniform weights,
-so a clean `V == min_views` track would be falsely rejected.)
+so a clean `V == min_views` track would be falsely rejected.) The weights read
+each view's agreement with the consensus alone;
+[sharper-patch-consensus.md](../../drafts/sharper-patch-consensus.md) proposes
+weighting the views by their zoom and sharpness as well.
 
 **View obliquity priors (opt-in).** Two independent uses of the per-view cosine
 `cos θᵢ = v̂ᵢ·n` between a view's surface→camera direction `v̂ᵢ` and the candidate

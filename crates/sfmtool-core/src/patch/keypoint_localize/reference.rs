@@ -337,18 +337,8 @@ impl ReferenceConsensus {
             params.sampler,
         )?;
         let c0 = margin as usize;
-        out.zncc_self_similarity_radius = member_self_similarity_radius(
-            patch,
-            view,
-            &tile,
-            c0,
-            c0,
-            start,
-            self.wpp,
-            self.resolution,
-            params.sampler,
-            &mut Vec::new(),
-        )?;
+        out.zncc_self_similarity_radius =
+            member_self_similarity_radius(&tile, r, c0, c0, &mut Vec::new());
 
         let mask = &self.template_mask[..self.template_mask.len().min(tile.channels)];
         let kept = mask.iter().filter(|&&k| k).count();

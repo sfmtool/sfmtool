@@ -2436,6 +2436,56 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             SelfSimilarityReach::read(&whole, Some(jacobian), Some(&anchored), resolution),
             "image {image}"
         );
+        // The readings are the overlap readings of the `R×R` tile rendered
+        // through the anchored placement, the grid a stored patch bitmap is
+        // rendered on, so no pixel from outside that tile enters them.
+        let mut map = crate::camera::WarpMap::from_patch(
+            &anchored,
+            view.camera,
+            view.cam_from_world,
+            resolution as u32,
+        );
+        map.compute_svd();
+        let rendered = crate::camera::remap::remap_bilinear_mip(view.pyramid, &map);
+        let colour = (rendered.channels() as usize).min(3);
+        let mut planes = Vec::with_capacity(colour * resolution * resolution);
+        for c in 0..colour {
+            for row in 0..resolution {
+                for col in 0..resolution {
+                    planes.push(f32::from(
+                        rendered.get_pixel(col as u32, row as u32, c as u32),
+                    ));
+                }
+            }
+        }
+        let parts = crate::patch::self_similarity::zncc_self_similarity_parts(
+            &crate::patch::self_similarity::PatchTile {
+                values: &planes,
+                channels: colour,
+                width: resolution,
+                height: resolution,
+            },
+            None,
+            &crate::patch::self_similarity::SelfSimilarityParams::default(),
+        );
+        assert_eq!(m.zncc_self_similarity_radius, Some(parts.whole.radius));
+        assert_eq!(
+            m.zncc_self_similarity_radius_middle,
+            Some(parts.middle.radius)
+        );
+        assert_eq!(
+            m.zncc_self_similarity_radius_grid,
+            Some(
+                parts
+                    .grid
+                    .each_ref()
+                    .map(|row| row.each_ref().map(|c| c.radius))
+            )
+        );
+        assert_eq!(
+            m.zncc_self_similarity_surface.as_ref(),
+            Some(&parts.whole.surface)
+        );
     }
 
     // The track's own point is where its sightings say it is, and the frame
@@ -3125,6 +3175,22 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         let middle = m.zncc_self_similarity_reach_middle.expect("a middle reach");
         assert_eq!(middle.patch_axes, None);
         assert!(middle.image_radius.is_some());
+        // The radius is the overlap reading of the member's own `R×R` grid at
+        // its seed: the number cluster refinement's member gate judges.
+        let params = ClusterRefineParams {
+            radius: payload.radius,
+            ..EvaluateOptions::default().cluster
+        };
+        let views = scene.views();
+        assert_eq!(
+            m.zncc_self_similarity_radius,
+            crate::patch::cluster_refine::member_zncc_self_similarity_radius(
+                views[observation.image as usize].pyramid,
+                m.seed_position,
+                m.seed_shape,
+                &params,
+            )
+        );
     }
     assert_eq!(
         refined.observations[reference]

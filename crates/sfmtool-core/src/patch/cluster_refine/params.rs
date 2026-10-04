@@ -69,10 +69,11 @@ pub struct ClusterRefineParams {
     /// the patch can slide over itself and still match itself as well as a
     /// true match between two views would, is above this bar, in
     /// template-grid px. The patch is the member's `R×R` grid at its SIFT
-    /// seed geometry, read with the default
-    /// [`SelfSimilarityParams`](crate::patch::self_similarity::SelfSimilarityParams)
-    /// from a tile with `max_radius` px of ring around it
-    /// ([`sample_member_self_similarity_tile`](super::sample_member_self_similarity_tile)).
+    /// seed geometry ([`sample_member_grid`](super::sample_member_grid)), read
+    /// the overlap way with the default
+    /// [`SelfSimilarityParams`](crate::patch::self_similarity::SelfSimilarityParams),
+    /// so no pixel outside the grid enters it
+    /// ([`member_zncc_self_similarity_radius`](super::member_zncc_self_similarity_radius)).
     /// A flat or edge-only member matches itself along the edge or
     /// everywhere, so its ZNCC to the reference cannot place it.
     ///

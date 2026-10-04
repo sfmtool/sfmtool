@@ -484,7 +484,7 @@ fn the_cells_follow_the_stage_the_track_is_in() {
         rows[0].grids.radius_slide.is_some(),
         "no self-similarity slides"
     );
-    // And the core's surface plot.
+    // And the whole tile's surface plot.
     assert!(
         rows[0].self_similarity_plot,
         "no self-similarity surface plot"

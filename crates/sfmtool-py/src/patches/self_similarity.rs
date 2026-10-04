@@ -1,10 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `zncc_self_similarity_parts`: the ZNCC self-similarity radius of one tile,
-//! whole, over its middle and over each cell of the ZNCC grid's split; and
-//! `zncc_self_similarity_parts_overlap_stack`: the same reading of each bitmap
-//! of a stack that has no ring around it, read the overlap way.
+//! `zncc_self_similarity_parts`: the ZNCC self-similarity radius of
+//! one bitmap, whole, over its middle and over each cell of the ZNCC grid's
+//! split, read the overlap way; and `zncc_self_similarity_parts_stack`:
+//! the same reading of each bitmap of a stack.
 
 use numpy::ndarray::{Array1, Array2, Array3};
 use numpy::{IntoPyArray, PyReadonlyArrayDyn, PyUntypedArrayMethods};
@@ -14,71 +14,71 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 use sfmtool_core::patch::self_similarity::{
-    zncc_self_similarity_parts as core_parts,
-    zncc_self_similarity_parts_overlap as core_parts_overlap, PatchTile, SelfSimilarityParams,
-    SelfSimilarityParts,
+    zncc_self_similarity_parts as core_parts, PatchTile, SelfSimilarityParams, SelfSimilarityParts,
 };
 
-/// The ZNCC self-similarity radius of a tile's ``R x R`` core: how far, in
-/// tile pixels, the core can slide over itself by whole pixels and still
-/// match itself as well as a true match between two views would (see
+/// The ZNCC self-similarity radius of one ``R x R`` bitmap: how far, in
+/// bitmap pixels, it can slide over itself by whole pixels and still match
+/// itself as well as a true match between two views would (see
 /// ``specs/core/patch/zncc-self-similarity-radius.md``).
 ///
-/// For every shift ``d`` of the square ``|dx|, |dy| <= r``, the core is
-/// compared with the window of the same size moved by ``d`` by the per-channel
-/// ZNCC averaged over the core's textured channels. A shift is
-/// indistinguishable when ``1 - z(d) <= relative_tolerance + mean_c (noise /
-/// s_c)^2``, with ``s_c`` the core's own spread in channel ``c``. The radius is
-/// how far from the centre that ZNCC, interpolated linearly between
-/// neighbouring shifts, falls through the level ``1 - tolerance`` at its
-/// furthest, capped at ``r``, which reads as "``r`` or more".
+/// The bitmap is read as it is, the overlap way, with no pixels from outside
+/// it: for every shift ``d`` of the square ``|dx|, |dy| <= r``, the bitmap is
+/// compared with itself moved by ``d`` over only the samples both windows
+/// hold, and carry data on both sides, by the per-channel ZNCC averaged over
+/// the bitmap's textured channels. A shift is indistinguishable when ``1 -
+/// z(d) <= relative_tolerance + mean_c (noise / s_c)^2``, with ``s_c`` the
+/// bitmap's own spread in channel ``c``. The radius is how far from the centre
+/// that ZNCC, interpolated linearly between neighbouring shifts, falls through
+/// the level ``1 - tolerance`` at its furthest, capped at ``r``, which reads as
+/// "``r`` or more".
 ///
 /// Args:
-///     tile: An ``(R + 2r, R + 2r)`` single-channel tile or an ``(R + 2r, R +
-///         2r, C)`` patch, uint8 or float32, in grey levels. A fourth channel is
-///         read as alpha and dropped.
-///     resolution: ``R``, the side of the core centred in the tile.
-///     max_radius: ``r``, the length of the largest shift searched, in tile
+///     bitmap: An ``(R, R)`` single-channel bitmap or an ``(R, R, C)`` patch,
+///         uint8 or float32, in grey levels. A fourth channel is read as
+///         alpha: a sample whose alpha is 0 carries no data. Without one, every
+///         sample carries data.
+///     max_radius: ``r``, the length of the largest shift searched, in bitmap
 ///         pixels.
 ///     relative_tolerance: The ZNCC deficit two views of the same surface
 ///         show from warp, blur and lighting, as a fraction.
 ///     noise: The noise between two views, in grey levels.
 ///
-/// Returns a dict: ``radius`` (float, the whole core), ``radius_middle``
+/// Returns a dict: ``radius`` (float, the whole bitmap), ``radius_middle``
 /// (float, the middle square, rows and columns ``R/4 .. R - R/4``),
 /// ``radius_grid`` (``(3, 3)`` float64, each cell of the split at ``R/3`` and
 /// ``R - R/3``, from the top-left), ``slide`` (``(2,)`` float64, the direction
-/// the whole core's indistinguishable shifts line up in, ``[x, y]`` with ``x``
-/// column-right and ``y`` row-down, scaled by how strongly), ``slide_grid``
-/// (``(3, 3, 2)`` float64, the same per cell), ``tolerance`` (float, the whole
-/// core's tolerance; infinite for a core with no texture) and ``surface``
-/// (``(2r + 1, 2r + 1)`` float64, the whole core's ZNCC at every shift from
-/// ``(dx, dy) = (-r, -r)``, 1 at the centre).
+/// the whole bitmap's indistinguishable shifts line up in, ``[x, y]`` with
+/// ``x`` column-right and ``y`` row-down, scaled by how strongly),
+/// ``slide_grid`` (``(3, 3, 2)`` float64, the same per cell), ``tolerance``
+/// (float, the whole bitmap's tolerance; infinite for a bitmap with no
+/// texture) and ``surface`` (``(2r + 1, 2r + 1)`` float64, the whole bitmap's
+/// ZNCC at every shift from ``(dx, dy) = (-r, -r)``, 1 at the centre). A
+/// bitmap with no sample carrying data has no reading, and its values are NaN.
 ///
 /// Raises:
-///     ValueError: If the tile is not a 2-D or 3-D uint8 or float32 array, is
-///         not ``R + 2r`` square, or has more than four channels.
+///     ValueError: If the bitmap is not a 2-D or 3-D uint8 or float32 array, is
+///         not square and at least 3 x 3, or has more than four channels.
 #[pyfunction]
-#[pyo3(signature = (tile, resolution, *, max_radius=3, relative_tolerance=0.05, noise=2.0))]
+#[pyo3(signature = (bitmap, *, max_radius=3, relative_tolerance=0.05, noise=2.0))]
 pub fn zncc_self_similarity_parts<'py>(
     py: Python<'py>,
-    tile: &Bound<'py, PyAny>,
-    resolution: usize,
+    bitmap: &Bound<'py, PyAny>,
     max_radius: u32,
     relative_tolerance: f64,
     noise: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let (values, shape) = if let Ok(array) = tile.extract::<PyReadonlyArrayDyn<'py, u8>>() {
+    let (values, shape) = if let Ok(array) = bitmap.extract::<PyReadonlyArrayDyn<'py, u8>>() {
         let shape = array.shape().to_vec();
         let values: Vec<f32> = array.as_array().iter().map(|&v| f32::from(v)).collect();
         (values, shape)
-    } else if let Ok(array) = tile.extract::<PyReadonlyArrayDyn<'py, f32>>() {
+    } else if let Ok(array) = bitmap.extract::<PyReadonlyArrayDyn<'py, f32>>() {
         let shape = array.shape().to_vec();
         let values: Vec<f32> = array.as_array().iter().copied().collect();
         (values, shape)
     } else {
         return Err(PyValueError::new_err(
-            "tile must be a uint8 or float32 numpy array",
+            "bitmap must be a uint8 or float32 numpy array",
         ));
     };
     let (height, width, channels) = match shape.as_slice() {
@@ -86,20 +86,18 @@ pub fn zncc_self_similarity_parts<'py>(
         [h, w, c] => (*h, *w, *c),
         _ => {
             return Err(PyValueError::new_err(format!(
-                "tile must be (H, W) or (H, W, C), got shape {shape:?}"
+                "bitmap must be (R, R) or (R, R, C), got shape {shape:?}"
             )))
         }
     };
     if !(1..=4).contains(&channels) {
         return Err(PyValueError::new_err(format!(
-            "tile must have 1 to 4 channels, got {channels}"
+            "bitmap must have 1 to 4 channels, got {channels}"
         )));
     }
-    let side = resolution + 2 * max_radius as usize;
-    if resolution < 3 || width != side || height != side {
+    if height != width || width < 3 {
         return Err(PyValueError::new_err(format!(
-            "an R = {resolution} core with max_radius = {max_radius} needs a {side} x {side} \
-             tile and R >= 3, got {height} x {width}"
+            "bitmap must be square and at least 3 x 3, got {height} x {width}"
         )));
     }
     let params = SelfSimilarityParams {
@@ -109,15 +107,15 @@ pub fn zncc_self_similarity_parts<'py>(
     };
     let parts = py.detach(|| {
         let (planes, colour) = PatchTile::planes_from_interleaved(&values, width, height, channels);
+        let data = PatchTile::data_from_interleaved(&values, width, height, channels);
         let tile = PatchTile {
             values: &planes,
             channels: colour,
             width,
             height,
         };
-        core_parts(&tile, resolution, &params)
+        core_parts(&tile, data.as_deref(), &params)
     });
-
     let grid = |f: &dyn Fn(usize, usize) -> f64| Array2::from_shape_fn((3, 3), |(r, c)| f(r, c));
     let out = PyDict::new(py);
     out.set_item("radius", parts.whole.radius)?;
@@ -146,7 +144,7 @@ pub fn zncc_self_similarity_parts<'py>(
 }
 
 /// The ZNCC self-similarity radius of each bitmap of a stack, read the overlap
-/// way: a stored bitmap has no ring of pixels around it, so at each shift only
+/// way, as it is, with no pixels from outside it: at each shift only
 /// the samples that lie inside the bitmap on both sides, and carry data on both
 /// sides, are correlated, with the template's and the moved window's mean and
 /// spread taken over that overlap (see
@@ -179,7 +177,7 @@ pub fn zncc_self_similarity_parts<'py>(
 ///         bitmaps at least 3 on a side, with 1 to 4 channels.
 #[pyfunction]
 #[pyo3(signature = (bitmaps, *, max_radius=3, relative_tolerance=0.05, noise=2.0))]
-pub fn zncc_self_similarity_parts_overlap_stack<'py>(
+pub fn zncc_self_similarity_parts_stack<'py>(
     py: Python<'py>,
     bitmaps: &Bound<'py, PyAny>,
     max_radius: u32,
@@ -235,7 +233,7 @@ pub fn zncc_self_similarity_parts_overlap_stack<'py>(
                     width,
                     height,
                 };
-                core_parts_overlap(&tile, data.as_deref(), &params)
+                core_parts(&tile, data.as_deref(), &params)
             })
             .collect()
     });

@@ -257,7 +257,8 @@ impl SelfSimilarityContour {
     }
 
     /// How far the contour reaches along `placement`'s `u` and `v` axes, for a
-    /// reading of a tile whose `resolution × resolution` core is `placement`:
+    /// reading of a `resolution × resolution` bitmap rendered through
+    /// `placement`:
     /// one grid px along `x` is `2·half_extent[0] / resolution` along `u`, and
     /// along `y` is `2·half_extent[1] / resolution` along `−v`, so
     /// [`Self::grid_axes`] scales to `[u, v]` with its lower bounds kept.
@@ -461,8 +462,8 @@ impl SelfSimilarityReach {
     /// `jacobian` (image px per grid px,
     /// [`crate::camera::warp_map::patch_grid_jacobian`]) where there
     /// is one, and along `placement`'s axes where there is one. `placement`
-    /// and `resolution` describe the tile's `R × R` core, the placement the
-    /// tile was rendered through. `None` where the reading has no contour
+    /// and `resolution` describe the `R × R` bitmap read: the placement it was
+    /// rendered through, and `R`. `None` where the reading has no contour
     /// ([`SelfSimilarity::contour`]).
     ///
     /// ```
@@ -475,8 +476,8 @@ impl SelfSimilarityReach {
     /// };
     /// # fn bounds(reading: &SelfSimilarity, placement: &OrientedPatch,
     /// #           camera: &CameraIntrinsics, pose: &RigidTransform) {
-    /// // `reading` is the whole core of a tile rendered through `placement`
-    /// // with a 24 × 24 core.
+    /// // `reading` is the whole of a 24 × 24 bitmap rendered through
+    /// // `placement`.
     /// let jacobian = patch_grid_jacobian(placement, camera, pose, 24);
     /// if let Some(reach) = SelfSimilarityReach::read(reading, jacobian, Some(placement), 24) {
     ///     if let Some(PatchAxisReach::Length([u, v])) = reach.patch_axes {

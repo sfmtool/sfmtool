@@ -517,107 +517,68 @@ fn below_absolute_floor(loo: f64, floor: f64) -> bool {
     floor > 0.0 && loo.is_finite() && loo < floor
 }
 
-/// The ZNCC self-similarity radius of the `R×R` core sitting at window offset
-/// `(oy, ox)` of `tile`, in the tile's grid px, read with the default
-/// [`SelfSimilarityParams`]; `None` when the tile has fewer than
-/// `max_radius` px of ring around the core on some side, which the shifted
-/// windows need.
+/// One view's **own** core's ZNCC self-similarity radius, the number the
+/// member gate ([`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`])
+/// judges: the `R×R` core at window offset `(oy, ox)` of `tile`, the tile the
+/// caller already rendered for that view, in the core's grid px, read the
+/// overlap way with the default [`SelfSimilarityParams`].
 ///
-/// The ring is read from the tile as rendered: a pixel out of frame reads back
-/// as the black it was rendered, as it does for every other read of the tile.
-/// Only the leading three channels are read, as a patch tile's colour.
-fn core_self_similarity_radius(
+/// Only the core is read: at each shift the reading correlates the samples
+/// both windows hold inside the core, so no pixel of the tile around it enters
+/// the number, and it does not depend on how wide a tile the caller rendered.
+/// Every sample counts as data, a pixel out of frame as the black it was
+/// rendered, as it does for every other read of the tile. Only the leading
+/// three channels are read, as a patch tile's colour.
+///
+/// # Panics
+///
+/// Panics if the core does not lie inside the tile.
+fn member_self_similarity_radius(
     tile: &ContextTile,
     resolution: usize,
     oy: usize,
     ox: usize,
     scratch: &mut Vec<f32>,
-) -> Option<f64> {
-    let params = SelfSimilarityParams::default();
-    let ring = params.max_radius as usize;
-    if oy < ring
-        || ox < ring
-        || oy + resolution + ring > tile.res
-        || ox + resolution + ring > tile.res
-    {
-        return None;
-    }
-    let side = resolution + 2 * ring;
+) -> f64 {
+    assert!(
+        oy + resolution <= tile.res && ox + resolution <= tile.res,
+        "member_self_similarity_radius: the {resolution}×{resolution} core at ({ox}, {oy}) \
+         does not fit in the {}×{} tile",
+        tile.res,
+        tile.res
+    );
     let colour = tile.channels.min(3);
     if colour == 0 {
-        return Some(f64::NAN);
+        return f64::NAN;
     }
+    let n = resolution * resolution;
     scratch.clear();
-    scratch.resize(colour * side * side, 0.0);
+    scratch.resize(colour * n, 0.0);
     for (c, plane) in tile.planes.iter().take(colour).enumerate() {
-        for row in 0..side {
-            let src = (oy - ring + row) * tile.istride + (ox - ring);
-            let dst = c * side * side + row * side;
-            for col in 0..side {
+        for row in 0..resolution {
+            let src = &plane[(oy + row) * tile.istride + ox..][..resolution];
+            let dst = &mut scratch[c * n + row * resolution..][..resolution];
+            for (out, &v) in dst.iter_mut().zip(src) {
                 // The planes are centred; add the channel mean back so the
                 // reading sees the source values (its flat test is on spread,
                 // so this only keeps the numbers recognisable).
-                scratch[dst + col] = plane[src + col] + tile.means[c];
+                *out = v + tile.means[c];
             }
         }
     }
-    let patch_tile = PatchTile {
+    let core = PatchTile {
         values: scratch,
         channels: colour,
-        width: side,
-        height: side,
+        width: resolution,
+        height: resolution,
     };
-    Some(
-        zncc_self_similarity_radius(&patch_tile, [ring, ring, resolution, resolution], &params)
-            .radius,
+    zncc_self_similarity_radius(
+        &core,
+        None,
+        [0, 0, resolution, resolution],
+        &SelfSimilarityParams::default(),
     )
-}
-
-/// One view's **own** core's ZNCC self-similarity radius, the number the
-/// member gate ([`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`])
-/// judges: the core at window offset `(oy, ox)` of `tile`, which sits at in-plane
-/// offset `offset` (grid px, the `R`-grid of `resolution`) from the patch
-/// centre.
-///
-/// The tile a caller already rendered is read wherever it has the
-/// `max_radius` px of ring the reading needs, which the localizer's own tiles
-/// have at every search radius of 3 grid px or more (a cache is `R + 4·margin`
-/// with the core within `margin` of its centre, a search tile `R + 2·margin`
-/// with the core at its centre). Under that, a tile of `R + 2·max_radius` px is
-/// rendered centred on the same core, so the reading does not depend on the
-/// search radius.
-#[allow(clippy::too_many_arguments)]
-fn member_self_similarity_radius(
-    patch: &OrientedPatch,
-    view: &ProjectedImage<'_>,
-    tile: &ContextTile,
-    oy: usize,
-    ox: usize,
-    offset: [f64; 2],
-    wpp: [f64; 2],
-    resolution: u32,
-    sampler: Sampler,
-    scratch: &mut Vec<f32>,
-) -> Result<f64, LocalizeError> {
-    let r = resolution as usize;
-    if let Some(radius) = core_self_similarity_radius(tile, r, oy, ox, scratch) {
-        return Ok(radius);
-    }
-    let ring = SelfSimilarityParams::default().max_radius;
-    let own = render_context(
-        patch,
-        view,
-        offset[0],
-        offset[1],
-        wpp[0],
-        wpp[1],
-        resolution,
-        resolution + 2 * ring,
-        sampler,
-    )?;
-    let ring = ring as usize;
-    Ok(core_self_similarity_radius(&own, r, ring, ring, scratch)
-        .expect("a tile rendered with the ring around its core has it"))
+    .radius
 }
 
 /// z-normalize a raw core (`raw[channel * n + k]`) over the kept original
@@ -1256,18 +1217,7 @@ pub fn try_localize_patch_keypoints_with_basis(
         for (si, st) in states.iter().enumerate() {
             let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
             let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
-            let radius = member_self_similarity_radius(
-                patch,
-                &views[st.idx as usize],
-                &caches[si],
-                oy,
-                ox,
-                [st.iacc[0] as f64, st.iacc[1] as f64],
-                [wpp_u, wpp_v],
-                resolution,
-                params.sampler,
-                &mut scratch,
-            )?;
+            let radius = member_self_similarity_radius(&caches[si], r, oy, ox, &mut scratch);
             member_ok.push(params.admits_member_zncc_self_similarity_radius(radius));
         }
         prof::count(

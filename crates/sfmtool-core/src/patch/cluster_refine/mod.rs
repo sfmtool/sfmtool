@@ -286,9 +286,8 @@ fn warp_map(pos: [f64; 2], t: [f64; 2], b: &Mat2, step: f64, off: f64) -> Affine
 /// canonical unit frame onto that image's pixels) -- a seed's, or the
 /// refinement's answer for it. The grid, the mip rule and the border clamp are
 /// the kernel's own, so a caller that wants the reference's template to draw
-/// gets the tile the cascade registers against.
-/// [`sample_member_self_similarity_tile`] is the same grid with the ring
-/// around it that the member gate reads.
+/// gets the tile the cascade registers against. The member gate reads the
+/// same grid ([`member_zncc_self_similarity_radius`]).
 ///
 /// `None` for a degenerate shape, a non-finite coordinate, or a pyramid whose
 /// selected level is too small to bilinear-sample.
@@ -308,73 +307,50 @@ pub fn sample_member_grid(
     sample_patch_grid(pyramid, position, &affine_shape, resolution, step, off)
 }
 
-/// One member's own tile for its ZNCC self-similarity reading: the
-/// [`sample_member_grid`] grid with `max_radius` px of ring around it on every
-/// side, where `max_radius` is the default
-/// [`SelfSimilarityParams::max_radius`], so the shifted windows the reading
-/// compares have pixels to read. Interleaved `S×S×C` `f32`, with
-/// `S = R + 2·max_radius`; the `R×R` core at offset `(max_radius, max_radius)`
-/// is the member grid itself.
-///
-/// The tile is the member grid sampled with its half-width grown by `S / R`
-/// and its resolution set to `S`, so the grid spacing, and with it the mip
-/// level the sampler picks, is unchanged. A ring pixel outside the frame
-/// reads the nearest valid pixel, as the grid's own border samples do.
-/// Returns the samples and `S`; `None` where [`sample_member_grid`] would
-/// return `None`.
-pub fn sample_member_self_similarity_tile(
-    pyramid: &ImageU8Pyramid,
-    position: [f64; 2],
-    affine_shape: [[f64; 2]; 2],
-    params: &ClusterRefineParams,
-) -> Option<(Vec<f32>, usize)> {
-    let resolution = params.resolution.max(2) as usize;
-    let size = resolution + 2 * SelfSimilarityParams::default().max_radius as usize;
-    let wide = ClusterRefineParams {
-        radius: params.radius * size as f64 / resolution as f64,
-        resolution: size as u32,
-        ..params.clone()
-    };
-    let samples = sample_member_grid(pyramid, position, affine_shape, &wide)?;
-    Some((samples, size))
-}
-
-/// The ZNCC self-similarity radius of one member's own `R×R` grid at
-/// `position` and `affine_shape`, in template-grid px, read with the default
-/// [`SelfSimilarityParams`] from [`sample_member_self_similarity_tile`]: the
-/// number [`ClusterRefineParams::max_member_zncc_self_similarity_radius`]
-/// judges. Only the leading three channels are read, as a patch tile's colour.
-/// `None` where the tile cannot be sampled.
+/// The ZNCC self-similarity radius of one member's own `R×R` grid
+/// ([`sample_member_grid`]) at `position` and `affine_shape`, in template-grid
+/// px, read the overlap way with the default [`SelfSimilarityParams`]: at each
+/// shift only the samples both windows hold are correlated, so the reading
+/// depends on no pixel outside the grid. This is the number
+/// [`ClusterRefineParams::max_member_zncc_self_similarity_radius`] judges.
+/// Only the leading three channels are read, as a patch tile's colour. `None`
+/// where the grid cannot be sampled.
 pub fn member_zncc_self_similarity_radius(
     pyramid: &ImageU8Pyramid,
     position: [f64; 2],
     affine_shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
 ) -> Option<f64> {
-    let (samples, size) =
-        sample_member_self_similarity_tile(pyramid, position, affine_shape, params)?;
-    Some(tile_self_similarity_radius(&samples, size))
+    let samples = sample_member_grid(pyramid, position, affine_shape, params)?;
+    Some(grid_self_similarity_radius(
+        &samples,
+        params.resolution.max(2) as usize,
+    ))
 }
 
-/// The ZNCC self-similarity radius of the core of an interleaved `S×S×C`
-/// tile from [`sample_member_self_similarity_tile`]; `NaN` for a tile with no
+/// The overlap reading's ZNCC self-similarity radius of an interleaved
+/// `R×R×C` grid from [`sample_member_grid`]; `NaN` for a grid with no
 /// channels.
-fn tile_self_similarity_radius(samples: &[f32], size: usize) -> f64 {
-    let channels = samples.len() / (size * size);
+fn grid_self_similarity_radius(samples: &[f32], resolution: usize) -> f64 {
+    let channels = samples.len() / (resolution * resolution);
     if channels == 0 {
         return f64::NAN;
     }
-    let (planes, colour) = PatchTile::planes_from_interleaved(samples, size, size, channels);
+    let (planes, colour) =
+        PatchTile::planes_from_interleaved(samples, resolution, resolution, channels);
     let tile = PatchTile {
         values: &planes,
         channels: colour,
-        width: size,
-        height: size,
+        width: resolution,
+        height: resolution,
     };
-    let params = SelfSimilarityParams::default();
-    let ring = params.max_radius as usize;
-    let resolution = size - 2 * ring;
-    zncc_self_similarity_radius(&tile, [ring, ring, resolution, resolution], &params).radius
+    zncc_self_similarity_radius(
+        &tile,
+        None,
+        [0, 0, resolution, resolution],
+        &SelfSimilarityParams::default(),
+    )
+    .radius
 }
 
 /// Sample a member's own full `R×R` grid at its SIFT geometry (identity
@@ -795,13 +771,14 @@ fn refine_cluster(
             let Some(g) = slot.as_ref() else {
                 continue;
             };
-            let Some((tile, size)) = prof::GATE_SAMPLE
-                .time(|| sample_member_self_similarity_tile(pyramids[g.image], g.pos, g.a, params))
+            let Some(grid) = prof::GATE_SAMPLE
+                .time(|| sample_member_grid(pyramids[g.image], g.pos, g.a, params))
             else {
                 continue;
             };
             prof::count(&prof::N_GATED, 1);
-            let radius = prof::GATE_SCORE.time(|| tile_self_similarity_radius(&tile, size));
+            let radius =
+                prof::GATE_SCORE.time(|| grid_self_similarity_radius(&grid, resolution as usize));
             if !params.admits_member_zncc_self_similarity_radius(radius) {
                 prof::count(&prof::N_GATE_REJECTED, 1);
                 members[j].status = MemberStatus::RejectedUnlocalizable;

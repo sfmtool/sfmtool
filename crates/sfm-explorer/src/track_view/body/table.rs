@@ -188,7 +188,7 @@ impl ColumnLayout {
         let zncc = keep + KEEP_WIDTH + 6.0;
         // Room for `100% whole`, then the ZNCC grid.
         let zncc_grid = zncc + 80.0;
-        // The self-similarity column opens with the core's surface plot.
+        // The self-similarity column opens with the whole tile's surface plot.
         let self_similarity_plot = zncc_grid + GRID_SIDE + 10.0;
         // Room for `2.3 px whole`, then the self-similarity grid.
         let self_similarity = self_similarity_plot + PLOT_SIDE + 8.0;
@@ -1863,7 +1863,7 @@ impl TrackBody {
             });
         }
 
-        // The core's self-similarity surface, with the contour its radius is
+        // The whole tile's self-similarity surface, with the contour its radius is
         // read at, and a larger one on hover.
         let mut plotted = false;
         if let Some((surface, tolerance)) = row_surface(row, stage, &self.evaluation) {

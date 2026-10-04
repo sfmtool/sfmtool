@@ -7,17 +7,15 @@
   - the angle measures how sensitive the view is to errors in the patch model;
 - the sampler is chosen per view from the Jacobian's anisotropy, so an oblique or distorted view keeps the detail along its less compressed axis;
 - the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 5);
-- the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no ring of pixels from outside it (Part 1). That change is a prerequisite and ships first.
+- the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built.
 
 Not decided: the functional forms of the weights, the anisotropy at which the sampler switches, the blur used for matched-bandwidth scoring, and the order the consumers adopt it in. See [Open questions](#open-questions).
 
 Amends:
-- [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md): the bench reading
-- [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): the member gate and the congealing consensus
-- [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md): the member gate
+- [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): the congealing consensus
 - [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md): the representative fuse
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
-- [core/bench/editable-track.md](../core/bench/editable-track.md): the bench readings
+- [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the matched-bandwidth score
 - [core/camera/image-warping.md](../core/camera/image-warping.md): the per-view choice of sampler
 - [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
 
@@ -79,33 +77,9 @@ The template is the Tukey/MAD IRLS weighted mean of z-normalized cores (`irls_vi
 4. **The reweighting favours blur.** IRLS weights each view by its residual against the mean. A blurry view sits close to a blurry mean and gets a small residual. A sharp view carries detail the mean lacks, so it gets a larger residual and a smaller weight. Each reweight moves the template further toward the blurry views.
 5. **Normalized correlation charges for unmatched detail.** Detail in a view that the template lacks adds to that view's variance but not to its covariance with the template. So a sharp, well-aligned view reads a lower ZNCC than a blurry one.
 
-## Part 1 (prerequisite): self-similarity of exactly the R×R tile
+## Part 1 (prerequisite, built): self-similarity of exactly the R×R tile
 
-**Today.** The bench and both member gates read the ZNCC self-similarity radius on a tile grown by `(R + 2r)/R` and rendered at `R + 2r`. The ring of `r` pixels around the `R×R` core supplies the windows the shifted template reads:
-- the bench: `patch_tile_readings` in [bench/evaluate.rs](../../crates/sfmtool-core/src/bench/evaluate.rs);
-- the localizer's member gate: `member_self_similarity_radius` in [keypoint_localize.rs](../../crates/sfmtool-core/src/patch/keypoint_localize.rs);
-- cluster refinement's member gate: `sample_member_self_similarity_tile` in [cluster_refine/mod.rs](../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs).
-
-The stored-bitmap culls already read an exact `R×R` bitmap with the overlap reading (`embed-patches --max-zncc-self-similarity-radius`, `xform --filter-by-zncc-self-similarity-radius`).
-
-**Change.** All three read the overlap reading of exactly the `R×R` tile:
-- The bench reads the tile it renders for its ZNCC readings. That is the same grid as the stored bitmap.
-- The localizer's gate reads the core of the tile congealing already rendered for that view.
-- Cluster refinement's gate reads the member's own `R×R` grid.
-
-At each shift the overlap reading correlates only the samples that both windows hold. The radius is then the self-similarity *of the bitmap*: it depends on no pixel outside it, and it is the same number whichever of the bench, the gates and the culls computes it.
-
-**Consequences:**
-- **One render fewer.** Each reading no longer needs a second render of the wider tile, so self-similarity costs only its shift search: `(2r + 1)²` windowed correlations over the template, about 85k multiply-adds at `R = 24`, `r = 3` with three channels, for the whole tile.
-- **The reach gets simpler.** Its conversions no longer have to use the half-extent from before the ring growth, because there is no growth. The anchored placement at `R` is the tile.
-- **The parts.** The middle square and the centre cell read exactly what they read today, since their shifted windows stay inside the tile. The edge and corner cells lose the rows and columns past the tile, as the overlap reading already specifies.
-- **The default bar.** The overlap reading measured slightly shorter than the ringed one on embed-patches runs over seoul_bull and kerry_park:
-  - correlation 0.98–0.99, mean −0.05 grid px;
-  - about 3% of verdicts at 2.5 differed, nearly all ringed-fails/overlap-passes.
-
-  Those figures predate the radius reading the outer ring of shifts at their own distance, which removed the main source of disagreement. The 2.5 bar (bench, localizer and cluster refinement defaults) is re-measured on both datasets, and its new value is stated with the measurement.
-
-Part 1 is a behaviour change on its own. It ships and is re-measured before Parts 2–4 depend on it.
+The bench, both member gates and the culls read the ZNCC self-similarity radius of exactly the `R×R` tile or bitmap they judge, with no pixels from outside it, as [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md) § "The overlap reading" describes; the 2.5 bar was re-measured there and kept.
 
 ## Part 2: what each view can contribute
 
@@ -167,7 +141,7 @@ So the weights read obliquity only from `θ_v`, never from the Jacobian's anisot
 
 ### The view's sharpness, from its self-similarity
 
-The overlap reading of the view's own `R×R` tile (Part 1) gives the radius `ρ_v`, in grid px. It measures the detail the tile actually holds after sampling, focus and motion, and it is the only per-view number that sees a photograph out of focus. It also depends on the texture: a straight edge or grain reads long along itself. So it is compared only within one track, as the ratio to the track's sharpest view:
+The [overlap reading](../core/patch/zncc-self-similarity-radius.md#the-overlap-reading) of the view's own `R×R` tile gives the radius `ρ_v`, in grid px. It measures the detail the tile actually holds after sampling, focus and motion, and it is the only per-view number that sees a photograph out of focus. It also depends on the texture: a straight edge or grain reads long along itself. So it is compared only within one track, as the ratio to the track's sharpest view:
 
 ```
 s_v = ρ_min / ρ_v ∈ (0, 1],   ρ_min = min over the track's views of ρ
@@ -308,13 +282,13 @@ Which one is part of this work. The radius columns do not depend on the choice.
   - the fisheye points should gain from the sampler rule and lose nothing to `h`;
   - the oblique points should gain from the sampler rule and be down-weighted by `h`.
 
-**Measures, for each configuration** (current, Part 1, Parts 1+3 fuse only, Parts 1+3+4, then each further consumer):
+**Measures, for each configuration** (current, Part 3 fuse only, Parts 3+4, then each further consumer):
 
 1. **Sharpness of the stored bitmap**: its own overlap-reading radius and its gradient energy, per point.
 2. **ZNCC of each view against the consensus, by footprint and by sharpness.** The current pattern, sharp views below blurry ones at equal zoom, should go away.
 3. **Keypoint error against ground truth**: reprojection of the ground-truth point, per view, split by footprint.
 4. **Drift along a directional texture.** On the wood-grain track, how far Fit moves observations along the grain, and their ZNCC after.
-5. **Verdict changes at the current bars**, to size the re-tuning in Parts 1 and 4.
+5. **Verdict changes at the current bars**, to size the re-tuning in Part 4.
 6. **Time per point** for embed-patches on kerry_park, and the share of views the sampler rule moves to `Anisotropic`.
 7. **Sharpness and ZNCC of the views the sampler rule moves**, rendered both ways, to set the threshold `a`.
 

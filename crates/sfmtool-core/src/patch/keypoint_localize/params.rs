@@ -103,9 +103,10 @@ pub struct KeypointLocalizeParams {
     /// grid the search runs on (patch-grid px at the default
     /// [`search_resolution_multiplier`](Self::search_resolution_multiplier) of
     /// `1`). A flat or edge-only member matches itself along the edge or
-    /// everywhere, so its ZNCC to anything cannot place it. Read once per view on
-    /// the tile at its seed offset, before any ZNCC, and never undone by the
-    /// two-view floor.
+    /// everywhere, so its ZNCC to anything cannot place it. Read once per view,
+    /// before any ZNCC, on the `R×R` core of the tile already rendered for that
+    /// view at its seed offset, the overlap way: no pixel of the tile around the
+    /// core enters it. Never undone by the two-view floor.
     ///
     /// A view passes when its radius is at or below the bar; a `NaN` radius
     /// fails. The radius reads at most the default

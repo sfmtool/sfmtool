@@ -104,7 +104,9 @@ than the round's, and no later step restores it. The bar is 2.5 by default
    search can slide without running off the edge.
 2. **Consensus.** Build the robust (IRLS) z-normalized weighted-mean template
    over the stack — the same robust photometric consensus used by [patch-normal
-   refinement](patch-normal-refinement.md).
+   refinement](patch-normal-refinement.md). Its weights come from each view's
+   agreement with the mean alone; [sharper-patch-consensus.md](../../drafts/sharper-patch-consensus.md)
+   proposes weighting the views by their zoom and sharpness as well.
 3. **Per-view shift.** For each view `v`, search the residual in-plane shift that
    maximizes windowed ZNCC against the **leave-one-out** consensus of the *other*
    views (so a view is never aligned to a template its own pixels polluted): a
@@ -280,15 +282,14 @@ half-vectors).
 
 The member gate reads each view's own `R×R` core, at its seed offset, with the
 default `SelfSimilarityParams` (`max_radius` `r = 3`), on the grid the search
-runs on (`R_s`, which is `R` at the default multiplier). The reading needs `r`
-px of tile around the core for its shifted windows. The localizer's own tiles
-have them whenever `search` is at least 3 grid px: a round-loop cache is
-`R_s + 4·margin` with the core within `margin` of its centre, a tail view's or a
-reference search's tile `R_s + 2·margin` with the core at its centre, and
-`margin = ⌈search⌉`. Under that, the gate renders a tile of `R_s + 2r` centred on
-the same core, so the reading does not depend on the search radius. Pixels out
-of frame read as the black they were rendered as, as every other read of the
-tile does.
+runs on (`R_s`, which is `R` at the default multiplier). The core is cut from the
+tile the localizer already rendered for that view (a round-loop cache, a tail
+view's tile or a reference search's tile) and read
+[the overlap way](zncc-self-similarity-radius.md#the-overlap-reading): at each
+shift only the samples both windows hold inside the core are correlated, so no
+pixel of the tile around the core enters the reading, and the radius does not
+depend on the search radius. Every sample counts as data; a pixel out of frame
+reads as the black it was rendered as, as every other read of the tile does.
 
 A view passes when its radius is at or below the bar
 (`KeypointLocalizeParams::admits_member_zncc_self_similarity_radius`). A `NaN`
@@ -304,6 +305,13 @@ The default, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, is `2.5` patch-gr
 px, the same bar as the bench's `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The
 user chose it from a sweep on the seoul_bull and kerry_park ground truths: two
 measurements run with the gate off and with the gate at bars from 1 to 2.9.
+
+The sweeps read the radius of a tile rendered `r` px wider than the core, with
+the core as the template. The overlap reading the gate uses reads a few
+hundredths of a grid px shorter on average and gives a different verdict on 1%
+to 3% of views at 2.5, nearly all a pass where the wider tile's reading fails,
+so the bar means nearly the same on it
+([zncc-self-similarity-radius.md](zncc-self-similarity-radius.md#why-only-the-bitmap-is-read)).
 
 The [add-image-to-tracks harness](../../../scripts/add_image_to_tracks/README.md),
 default rule, resected pose, summed over every image. *Recall* is the known

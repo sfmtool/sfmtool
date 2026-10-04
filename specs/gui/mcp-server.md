@@ -3400,15 +3400,15 @@ for the whole grid where `zncc` is null; the `track` block carries
 of the patch, corners included. **Both blocks also carry the ZNCC
 self-similarity radius** (§ "The
 ZNCC self-similarity radius" of the same spec): `zncc_self_similarity_radius`
-and `zncc_self_similarity_radius_middle`, how far in grid px the tile's core
+and `zncc_self_similarity_radius_middle`, how far in grid px the tile
 and its middle square slide over themselves and still match themselves, `3`
 meaning 3 or more; `zncc_self_similarity_radius_grid`, the same for each
 ninth, as three rows of three; `zncc_self_similarity_slide_grid`, per ninth the
 `[x, y]` direction its matching shifts line up in, as three rows of three
-pairs; and `zncc_self_similarity_surface`, the core's ZNCC against itself at
+pairs; and `zncc_self_similarity_surface`, the tile's ZNCC against itself at
 every shift of the `(2r + 1)²` square as rows of numbers from `(dx, dy) = (-r,
--r)`, with null where the core is flat, beside
-`zncc_self_similarity_tolerance`, the deficit the core was judged by, so the
+-r)`, with null where the tile is flat, beside
+`zncc_self_similarity_tolerance`, the deficit the tile was judged by, so the
 radius is read on the surface at `1 -` that value; and
 `zncc_self_similarity_reach` and `zncc_self_similarity_reach_middle`, how far
 the contour the whole and middle radii are read from reaches, each length as

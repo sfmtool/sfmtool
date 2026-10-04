@@ -36,8 +36,8 @@ use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
-    refine_cluster_patches_borrowed, sample_member_grid, sample_member_self_similarity_tile,
-    ClusterRefineParams, FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
+    refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
+    MemberStatus, REFERENCE_UNREFINABLE,
 };
 use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
@@ -841,39 +841,37 @@ struct TileSelfSimilarity {
 
 /// What a tile's grid is, for converting its self-similarity readings out of
 /// grid px: the image px per grid px at the tile's centre, and the placement
-/// whose `R×R` core the tile is, where there is one.
+/// the `R×R` tile was rendered through, where there is one.
 struct TileGeometry<'a> {
     jacobian: Option<[[f64; 2]; 2]>,
     placement: Option<&'a OrientedPatch>,
 }
 
-/// The pixels of tile the self-similarity readings need around the `R×R`
-/// core on every side: the default parameters' `max_radius`.
-fn self_similarity_margin() -> usize {
-    SelfSimilarityParams::default().max_radius as usize
-}
-
-/// Read an interleaved `(R + 2r) × (R + 2r) × C` tile's self-similarity over
-/// its `R×R` core, with the default parameters, and measure the whole core's
-/// and the middle's contours through `geometry`.
+/// Read an interleaved `R × R × C` tile's self-similarity the overlap way,
+/// with the default parameters, and measure the whole tile's and the middle's
+/// contours through `geometry`.
+///
+/// The tile is read as it is, every sample as data, with no pixels from
+/// outside it: at each shift only the samples both windows hold are
+/// correlated, as the culls read a stored bitmap.
 fn score_self_similarity(
     samples: &[f32],
-    size: usize,
     channels: usize,
     resolution: usize,
     geometry: &TileGeometry<'_>,
 ) -> TileSelfSimilarity {
-    if channels == 0 || samples.len() != size * size * channels {
+    if channels == 0 || resolution < 3 || samples.len() != resolution * resolution * channels {
         return TileSelfSimilarity::default();
     }
-    let (planes, colour) = PatchTile::planes_from_interleaved(samples, size, size, channels);
+    let (planes, colour) =
+        PatchTile::planes_from_interleaved(samples, resolution, resolution, channels);
     let tile = PatchTile {
         values: &planes,
         channels: colour,
-        width: size,
-        height: size,
+        width: resolution,
+        height: resolution,
     };
-    let parts = zncc_self_similarity_parts(&tile, resolution, &SelfSimilarityParams::default());
+    let parts = zncc_self_similarity_parts(&tile, None, &SelfSimilarityParams::default());
     let reach = |reading| {
         SelfSimilarityReach::read(reading, geometry.jacobian, geometry.placement, resolution)
     };
@@ -899,24 +897,22 @@ fn score_self_similarity(
     }
 }
 
-/// One observation's own tile self-similarity, at its seed geometry: the tile
-/// cluster refinement's member gate reads
-/// ([`sample_member_self_similarity_tile`]), the member grid with the ring
-/// around it that the shifted windows read, so the whole radius here is the
-/// number that gate judges. All `None` when the geometry is degenerate or the
-/// tile leaves the pyramid.
+/// One observation's own tile self-similarity, at its seed geometry: the
+/// member's `R×R` grid ([`sample_member_grid`]), which cluster refinement's
+/// member gate reads, so the whole radius here is the number that gate
+/// judges. All `None` when the geometry is degenerate or the tile leaves the
+/// pyramid.
 fn tile_self_similarity(
     pyramid: &ImageU8Pyramid,
     position: [f64; 2],
     shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
 ) -> TileSelfSimilarity {
-    let Some((tile, size)) = sample_member_self_similarity_tile(pyramid, position, shape, params)
-    else {
+    let Some(tile) = sample_member_grid(pyramid, position, shape, params) else {
         return TileSelfSimilarity::default();
     };
     let resolution = params.resolution.max(2) as usize;
-    let channels = tile.len() / (size * size);
+    let channels = tile.len() / (resolution * resolution);
     // The grid is the seed shape's affine map: one grid px is
     // `2 · radius / R` keypoint-frame units, which the shape carries to image
     // px, columns along the shape's first column.
@@ -925,7 +921,7 @@ fn tile_self_similarity(
         jacobian: Some(shape.map(|row| row.map(|v| v * step))),
         placement: None,
     };
-    score_self_similarity(&tile, size, channels, resolution, &geometry)
+    score_self_similarity(&tile, channels, resolution, &geometry)
 }
 
 // ---- The track stage -------------------------------------------------------
@@ -1478,11 +1474,10 @@ pub(super) fn observation_metrics(
 
 /// The self-similarity of what one view shows of the patch at its keypoint.
 ///
-/// It reads the patch through the keypoint-anchored frame, rendered with its
-/// half-extent grown by `(R + 2r) / R` at resolution `R + 2r`, so its core is
-/// the same `R×R` patch and the ring around it is what the shifted windows
-/// read. The contours are measured through the same anchored placement at
-/// resolution `R`, whose grid step is the rendered tile's: the image px per
+/// It reads the `R×R` tile rendered through the keypoint-anchored frame
+/// ([`render_bitmap`], the grid every stored patch bitmap is rendered on), the
+/// overlap way, with no pixels from outside it. The contours are measured
+/// through the same anchored placement at resolution `R`: the image px per
 /// grid px at its centre ([`patch_grid_jacobian`]) and its half-extents.
 fn patch_tile_readings(
     patch: &OrientedPatch,
@@ -1494,16 +1489,12 @@ fn patch_tile_readings(
     let frame = anchored.as_ref().unwrap_or(patch);
     let channels = view.pyramid.level(0).channels() as usize;
     let to_f32 = |tile: Array3<u8>| tile.iter().map(|&v| f32::from(v)).collect::<Vec<f32>>();
-    let size = resolution + 2 * self_similarity_margin();
-    let grow = size as f64 / resolution as f64;
-    let mut wide = frame.clone();
-    wide.half_extent = [frame.half_extent[0] * grow, frame.half_extent[1] * grow];
-    let samples = to_f32(render_bitmap(&wide, view, size, channels));
+    let samples = to_f32(render_bitmap(frame, view, resolution, channels));
     let geometry = TileGeometry {
         jacobian: patch_grid_jacobian(frame, view.camera, view.cam_from_world, resolution),
         placement: Some(frame),
     };
-    score_self_similarity(&samples, size, channels, resolution, &geometry)
+    score_self_similarity(&samples, channels, resolution, &geometry)
 }
 
 /// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame, the

@@ -5,23 +5,20 @@
 //! whole pixels, and still look as much like itself as a true match between
 //! two views would.
 //!
-//! See `specs/core/patch/zncc-self-similarity-radius.md`. For a template
-//! rectangle inside a tile, [`zncc_self_similarity_radius`] computes the
+//! See `specs/core/patch/zncc-self-similarity-radius.md`. A reading is of a
+//! bitmap as it is, with no pixels from outside it: for a template rectangle
+//! inside a tile, [`zncc_self_similarity_radius`] computes the
 //! channel-averaged ZNCC of the template against the window of the same size
-//! moved by every shift `d` of the square `|dx|, |dy| ≤ r`, counts a shift as
-//! indistinguishable when `1 − z(d) ≤ ε + mean_c (n / s_c)²`, and reports how
-//! far from the centre the surface crosses that level at its furthest
-//! (interpolated linearly along the grid edges between neighbouring shifts,
-//! and capped at `r`) and the direction the indistinguishable shifts line up
-//! in. [`zncc_self_similarity_parts`] reads a whole `R×R` core, its middle
-//! square and the nine cells of the ZNCC grid's split from one tile, sharing
-//! the cross sums between them.
-//!
-//! A stored bitmap has no ring of pixels around it for the shifted windows to
-//! read. [`zncc_self_similarity_radius_overlap`] and
-//! [`zncc_self_similarity_parts_overlap`] read one the overlap way: at each
-//! shift, only the samples inside the bitmap on both sides, and carrying data
-//! on both sides, are correlated.
+//! moved by every shift `d` of the square `|dx|, |dy| ≤ r`, over only the
+//! samples inside the tile, and carrying data, on both sides (the overlap
+//! reading); counts a shift as indistinguishable when
+//! `1 − z(d) ≤ ε + mean_c (n / s_c)²`; and reports how far from the centre the
+//! surface crosses that level at its furthest (interpolated linearly along the
+//! grid edges between neighbouring shifts, and capped at `r`) and the
+//! direction the indistinguishable shifts line up in.
+//! [`zncc_self_similarity_parts`] reads a whole `R×R` bitmap, its
+//! middle square and the nine cells of the ZNCC grid's split, sharing the
+//! cross sums between them.
 //!
 //! [`SelfSimilarity::contour`] gives the points the radius is read from, and
 //! [`SelfSimilarityReach::read`] measures their reach: along each grid axis,
@@ -29,10 +26,12 @@
 //! [`crate::camera::warp_map::patch_grid_jacobian`], and along the patch's
 //! own axes in the scene's world-space unit.
 //!
-//! The tile is centred by its own mean per channel before the kernels run, so
-//! the `f32` cross sums keep their precision; the window moments come from
-//! per-channel summed-area tables in `f64`, and the combine, the tolerance
-//! test and the slide run in `f64`.
+//! Where every sample carries data (the dense route), each template is centred
+//! by its own mean per channel before the `f32` cross-sum kernel runs, so the
+//! products stay on the scale of the template's own spread, and the moments
+//! come from per-channel summed-area tables in `f64`. Where some sample carries
+//! no data (the masked route), every sum is taken in `f64` sample by sample.
+//! The combine, the tolerance test and the slide run in `f64` on both routes.
 
 mod contour;
 mod kernels;
@@ -46,7 +45,7 @@ use crate::patch::normal_refine::{grid_bounds, middle_span, FLAT_NORM_SQ_EPS};
 pub use contour::{
     BoundedLength, ContourPoint, PatchAxisReach, SelfSimilarityContour, SelfSimilarityReach,
 };
-pub use overlap::{zncc_self_similarity_parts_overlap, zncc_self_similarity_radius_overlap};
+pub use overlap::{zncc_self_similarity_parts, zncc_self_similarity_radius};
 
 /// The template spread, in grey levels, under which a channel carries no
 /// texture: it is left out of the channel average, and a template with no
@@ -107,15 +106,15 @@ pub struct SelfSimilarity {
     pub surface: Vec<f64>,
 }
 
-/// A tile's whole core, its middle square and the nine cells of the ZNCC
-/// grid's split, each read as its own template.
+/// A bitmap whole, its middle square and the nine cells of the ZNCC grid's
+/// split, each read as its own template.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfSimilarityParts {
-    /// The whole `R×R` core.
+    /// The whole `R×R` bitmap.
     pub whole: SelfSimilarity,
-    /// The middle square, the core's rows and columns `R/4 .. R − R/4`.
+    /// The middle square, the bitmap's rows and columns `R/4 .. R − R/4`.
     pub middle: SelfSimilarity,
-    /// Each cell of the core's split at `R/3` and `R − R/3`, `grid[row][col]`
+    /// Each cell of the bitmap's split at `R/3` and `R − R/3`, `grid[row][col]`
     /// from the top-left cell.
     pub grid: [[SelfSimilarity; 3]; 3],
 }
@@ -218,308 +217,13 @@ impl<'a> PatchTile<'a> {
     }
 }
 
-/// One template `Ω = (x, y, w, h)` inside `tile`, with `max_radius` pixels of
-/// tile around it on every side.
-///
-/// # Panics
-///
-/// Panics if the tile is malformed, the template is empty, or the template has
-/// less than `max_radius` pixels of tile on some side; the message names the
-/// sizes.
-pub fn zncc_self_similarity_radius(
-    tile: &PatchTile<'_>,
-    template: [usize; 4],
-    params: &SelfSimilarityParams,
-) -> SelfSimilarity {
-    radius_with(tile, template, params, Kernel::Dispatch)
-}
-
-/// The core `R×R` square centred in a `(R + 2r)²` tile, read whole, over its
-/// middle `R/4 .. R − R/4` and over each cell of the `R/3`, `R − R/3` split.
-///
-/// # Panics
-///
-/// Panics if the tile is malformed, `resolution < 3`, or the tile is not
-/// `(resolution + 2·max_radius)` square; the message names the sizes.
-pub fn zncc_self_similarity_parts(
-    tile: &PatchTile<'_>,
-    resolution: usize,
-    params: &SelfSimilarityParams,
-) -> SelfSimilarityParts {
-    parts_with(tile, resolution, params, Kernel::Dispatch)
-}
-
-/// Which cross-sum kernel to run: the dispatching one, or the scalar reference
-/// (for the equivalence test).
+/// Which cross-sum kernel the dense route runs: the dispatching one, or the
+/// scalar reference (for the equivalence test).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kernel {
     Dispatch,
     #[cfg_attr(not(test), allow(dead_code))]
     Scalar,
-}
-
-fn radius_with(
-    tile: &PatchTile<'_>,
-    template: [usize; 4],
-    params: &SelfSimilarityParams,
-    kernel: Kernel,
-) -> SelfSimilarity {
-    tile.validate();
-    let r = params.max_radius as usize;
-    let [x, y, w, h] = template;
-    assert!(
-        w > 0 && h > 0,
-        "zncc_self_similarity_radius: the template is {w}×{h}, it needs at least one pixel"
-    );
-    assert!(
-        x >= r && y >= r && x + w + r <= tile.width && y + h + r <= tile.height,
-        "zncc_self_similarity_radius: the {w}×{h} template at ({x}, {y}) needs {r} px of tile \
-         on every side, but the tile is {}×{}",
-        tile.width,
-        tile.height
-    );
-    let prepared = Prepared::new(tile);
-    let cross = prepared.cross_sums(template, r, kernel);
-    prepared.judge(template, r, &cross, params)
-}
-
-fn parts_with(
-    tile: &PatchTile<'_>,
-    resolution: usize,
-    params: &SelfSimilarityParams,
-    kernel: Kernel,
-) -> SelfSimilarityParts {
-    tile.validate();
-    let r = params.max_radius as usize;
-    assert!(
-        resolution >= 3,
-        "zncc_self_similarity_parts: resolution {resolution} is too small to split in three"
-    );
-    let side = resolution + 2 * r;
-    assert!(
-        tile.width == side && tile.height == side,
-        "zncc_self_similarity_parts: an R = {resolution} core with r = {r} needs a {side}×{side} \
-         tile, but the tile is {}×{}",
-        tile.width,
-        tile.height
-    );
-    let prepared = Prepared::new(tile);
-    let bounds = grid_bounds(resolution as u32);
-    let cell_rect = |row: usize, col: usize| {
-        [
-            r + bounds[col],
-            r + bounds[row],
-            bounds[col + 1] - bounds[col],
-            bounds[row + 1] - bounds[row],
-        ]
-    };
-    // The nine cells tile the core, so the core's cross sums are theirs added.
-    let cell_sums: [[Vec<f64>; 3]; 3] = std::array::from_fn(|row| {
-        std::array::from_fn(|col| prepared.cross_sums(cell_rect(row, col), r, kernel))
-    });
-    let mut whole_sums = vec![0.0f64; cell_sums[0][0].len()];
-    for sums in cell_sums.iter().flatten() {
-        for (total, value) in whole_sums.iter_mut().zip(sums) {
-            *total += value;
-        }
-    }
-    let middle = middle_span(resolution as u32);
-    let middle_rect = [
-        r + middle.start,
-        r + middle.start,
-        middle.len(),
-        middle.len(),
-    ];
-    let middle_sums = prepared.cross_sums(middle_rect, r, kernel);
-    SelfSimilarityParts {
-        whole: prepared.judge([r, r, resolution, resolution], r, &whole_sums, params),
-        middle: prepared.judge(middle_rect, r, &middle_sums, params),
-        grid: std::array::from_fn(|row| {
-            std::array::from_fn(|col| {
-                prepared.judge(cell_rect(row, col), r, &cell_sums[row][col], params)
-            })
-        }),
-    }
-}
-
-/// The most template rows one `f32` kernel call accumulates before its sums
-/// are added into the `f64` totals, which bounds the `f32` rounding a large
-/// template accumulates.
-const BAND_ROWS: usize = 8;
-
-/// A tile ready to score: each channel centred by its own mean and copied into
-/// a plane with 8 zero columns of padding per row, and the summed-area tables
-/// of the centred values and their squares.
-struct Prepared {
-    /// `channels` planes of `stride × height`, centred.
-    planes: Vec<f32>,
-    stride: usize,
-    channels: usize,
-    width: usize,
-    height: usize,
-    /// Per channel, the `(width + 1) × (height + 1)` summed-area table of the
-    /// centred values, and of their squares.
-    sat1: Vec<f64>,
-    sat2: Vec<f64>,
-}
-
-impl Prepared {
-    fn new(tile: &PatchTile<'_>) -> Self {
-        let (width, height, channels) = (tile.width, tile.height, tile.channels);
-        let n = width * height;
-        let stride = width + 8;
-        let sat_side = (width + 1) * (height + 1);
-        let mut planes = vec![0.0f32; channels * stride * height];
-        let mut sat1 = vec![0.0f64; channels * sat_side];
-        let mut sat2 = vec![0.0f64; channels * sat_side];
-        for c in 0..channels {
-            let values = &tile.values[c * n..][..n];
-            let mean = if n == 0 {
-                0.0
-            } else {
-                values.iter().map(|&v| f64::from(v)).sum::<f64>() / n as f64
-            };
-            let plane = &mut planes[c * stride * height..][..stride * height];
-            let s1 = &mut sat1[c * sat_side..][..sat_side];
-            let s2 = &mut sat2[c * sat_side..][..sat_side];
-            for y in 0..height {
-                let (mut row1, mut row2) = (0.0f64, 0.0f64);
-                for x in 0..width {
-                    let v = (f64::from(values[y * width + x]) - mean) as f32;
-                    plane[y * stride + x] = v;
-                    let v = f64::from(v);
-                    row1 += v;
-                    row2 += v * v;
-                    let at = (y + 1) * (width + 1) + x + 1;
-                    s1[at] = s1[at - (width + 1)] + row1;
-                    s2[at] = s2[at - (width + 1)] + row2;
-                }
-            }
-        }
-        Self {
-            planes,
-            stride,
-            channels,
-            width,
-            height,
-            sat1,
-            sat2,
-        }
-    }
-
-    fn plane(&self, c: usize) -> &[f32] {
-        &self.planes[c * self.stride * self.height..][..self.stride * self.height]
-    }
-
-    /// `Σ v` and `Σ v²` of channel `c`'s centred values over the rectangle
-    /// `[x, y, w, h]`.
-    fn rect_sums(&self, c: usize, x: usize, y: usize, w: usize, h: usize) -> (f64, f64) {
-        let side = (self.width + 1) * (self.height + 1);
-        let at = |sat: &[f64], xx: usize, yy: usize| sat[c * side + yy * (self.width + 1) + xx];
-        let sum = |sat: &[f64]| {
-            at(sat, x + w, y + h) - at(sat, x, y + h) - at(sat, x + w, y) + at(sat, x, y)
-        };
-        (sum(&self.sat1), sum(&self.sat2))
-    }
-
-    /// The raw cross sums of a template rectangle, per channel, `(2r + 1)²`
-    /// shifts each: channel `c`'s block at `c·(2r + 1)²`, in `f64`, the kernel
-    /// run over bands of at most [`BAND_ROWS`] template rows.
-    fn cross_sums(&self, rect: [usize; 4], r: usize, kernel: Kernel) -> Vec<f64> {
-        let [x, y, w, h] = rect;
-        let shifts = (2 * r + 1) * (2 * r + 1);
-        let mut totals = vec![0.0f64; self.channels * shifts];
-        let mut band = vec![0.0f32; shifts];
-        for c in 0..self.channels {
-            let plane = self.plane(c);
-            let mut top = y;
-            while top < y + h {
-                let rows = BAND_ROWS.min(y + h - top);
-                let band_rect = [x, top, w, rows];
-                match kernel {
-                    Kernel::Dispatch => {
-                        kernels::cross_sums(plane, self.stride, band_rect, r, &mut band)
-                    }
-                    Kernel::Scalar => {
-                        kernels::cross_sums_scalar(plane, self.stride, band_rect, r, &mut band)
-                    }
-                }
-                for (total, &value) in totals[c * shifts..][..shifts].iter_mut().zip(&band) {
-                    *total += f64::from(value);
-                }
-                top += rows;
-            }
-        }
-        totals
-    }
-
-    /// Judge one template rectangle from its raw cross sums: its ZNCC surface,
-    /// the tolerance, the radius and the slide.
-    fn judge(
-        &self,
-        rect: [usize; 4],
-        r: usize,
-        cross: &[f64],
-        params: &SelfSimilarityParams,
-    ) -> SelfSimilarity {
-        let [x, y, w, h] = rect;
-        let side = 2 * r + 1;
-        let shifts = side * side;
-        let count = (w * h) as f64;
-        // The textured channels: (channel, template mean, template Σ t̃²).
-        let textured: Vec<(usize, f64, f64)> = (0..self.channels)
-            .filter_map(|c| {
-                let (s1, s2) = self.rect_sums(c, x, y, w, h);
-                let mean = s1 / count;
-                let norm = (s2 - s1 * mean).max(0.0);
-                ((norm / count).sqrt() >= FLAT_FLOOR).then_some((c, mean, norm))
-            })
-            .collect();
-        if textured.is_empty() {
-            return SelfSimilarity {
-                radius: r as f64,
-                slide: [0.0; 2],
-                tolerance: f64::INFINITY,
-                surface: vec![f64::NAN; shifts],
-            };
-        }
-        let noise_term = textured
-            .iter()
-            .map(|&(_, _, norm)| params.noise * params.noise * count / norm)
-            .sum::<f64>()
-            / textured.len() as f64;
-        let tolerance = params.relative_tolerance + noise_term;
-
-        let ri = r as i64;
-        let mut surface = vec![f64::NAN; shifts];
-        for dy in -ri..=ri {
-            for dx in -ri..=ri {
-                let index = ((dy + ri) as usize) * side + (dx + ri) as usize;
-                if dx == 0 && dy == 0 {
-                    surface[index] = 1.0;
-                    continue;
-                }
-                let (wx, wy) = ((x as i64 + dx) as usize, (y as i64 + dy) as usize);
-                let z = textured
-                    .iter()
-                    .map(|&(c, mean, norm)| {
-                        let (s1, s2) = self.rect_sums(c, wx, wy, w, h);
-                        let window_norm = s2 - s1 * s1 / count;
-                        if window_norm < FLAT_NORM_SQ_EPS {
-                            // A flat window is plainly different from a
-                            // textured template.
-                            0.0
-                        } else {
-                            (cross[c * shifts + index] - mean * s1) / (norm * window_norm).sqrt()
-                        }
-                    })
-                    .sum::<f64>()
-                    / textured.len() as f64;
-                surface[index] = z;
-            }
-        }
-        read_surface(surface, r, tolerance)
-    }
 }
 
 /// The reading of a filled surface judged by `tolerance`: the radius, where

@@ -1128,10 +1128,10 @@ fn the_member_gate_judges_the_self_similarity_radius() {
 }
 
 #[test]
-fn the_member_gate_reads_the_same_radius_at_a_search_too_narrow_for_its_ring() {
-    // With `search = 1` the tiles the localizer renders have one grid px
-    // around the core where the reading needs three, so the gate renders a
-    // tile of its own; its verdicts are the wide search's.
+fn the_member_gate_reads_the_same_radius_at_any_search() {
+    // The gate reads the view's `R×R` core alone, so a search of 1 grid px,
+    // whose tiles have one grid px around the core, gives the verdicts a wide
+    // search gives.
     let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]];
     let offs = [[0.0; 2]; 3];
     let texs: Vec<fn(f64, f64) -> f64> = vec![texture, texture, edge_texture];
@@ -1147,6 +1147,48 @@ fn the_member_gate_reads_the_same_radius_at_a_search_too_narrow_for_its_ring() {
         };
         let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
         assert_eq!(res.views, vec![0, 1], "search {search}");
+    }
+}
+
+/// The member gate reads the `R×R` core and no pixel of the tile around it: a
+/// straight edge whose ring is filled with noise reads the same radius as the
+/// edge with a clean ring, the largest the reading searches, at every core
+/// offset in the tile. A reading that took its shifted windows from the ring
+/// would see the noise there and read the edge shorter.
+#[test]
+fn the_member_gate_reads_no_pixel_outside_the_core() {
+    let (resolution, margin, channels) = (24usize, 6usize, 3usize);
+    let cr = resolution + 2 * margin;
+    let edge = |col: usize| if col < cr / 2 { 60.0f32 } else { 190.0 };
+    let mut rng = 0x2545_f491_4f6c_dd1du64;
+    let mut noise = || {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((rng >> 40) as f32) / (1u64 << 24) as f32 * 255.0
+    };
+    for (oy, ox) in [(margin, margin), (margin - 2, margin + 3)] {
+        let mut clean = vec![0f32; cr * cr * channels];
+        let mut noisy = clean.clone();
+        for row in 0..cr {
+            for col in 0..cr {
+                let inside =
+                    (oy..oy + resolution).contains(&row) && (ox..ox + resolution).contains(&col);
+                for c in 0..channels {
+                    let i = (row * cr + col) * channels + c;
+                    clean[i] = edge(col) + 10.0 * c as f32;
+                    noisy[i] = if inside { clean[i] } else { noise() };
+                }
+            }
+        }
+        let valid = vec![true; cr * cr];
+        let read = |raw: &[f32]| {
+            let tile = build_tile_from_interleaved(raw, cr, channels, &valid);
+            member_self_similarity_radius(&tile, resolution, oy, ox, &mut Vec::new())
+        };
+        let (clean, noisy) = (read(&clean), read(&noisy));
+        assert_eq!(clean, 3.0, "core at ({ox}, {oy})");
+        assert_eq!(clean.to_bits(), noisy.to_bits(), "core at ({ox}, {oy})");
     }
 }
 

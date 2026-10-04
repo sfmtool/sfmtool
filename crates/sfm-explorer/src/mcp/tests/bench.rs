@@ -2406,7 +2406,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     assert!(reach["grid_radius"]["value"].is_number(), "{track}");
     assert!(reach["image_radius"]["value"].is_number(), "{track}");
     assert!(reach["patch_axes"].is_null(), "{track}");
-    // The core's ZNCC against itself, seven rows of seven, 1 at the centre
+    // The tile's ZNCC against itself, seven rows of seven, 1 at the centre
     // and a number in the corners outside the disk.
     let surface = cluster["zncc_self_similarity_surface"]
         .as_array()

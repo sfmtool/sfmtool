@@ -75,17 +75,13 @@ pub fn refine_cluster_patches(
     progress: Option<&AtomicUsize>,     // one tick per finished cluster
 ) -> ClusterRefineResult;
 
-/// One member's own `R×R` grid at a position and affine shape, and the same
-/// grid with `max_radius` px of ring around it: what the member gate reads.
+/// One member's own `R×R` grid at a position and affine shape: what the
+/// member gate reads.
 pub fn sample_member_grid(
     pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
 ) -> Option<Vec<f32>>;
-pub fn sample_member_self_similarity_tile(
-    pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
-    params: &ClusterRefineParams,
-) -> Option<(Vec<f32>, usize)>;             // (samples, R + 2·max_radius)
-/// The number the member gate judges.
+/// The number the member gate judges: the overlap reading of that grid.
 pub fn member_zncc_self_similarity_radius(
     pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
@@ -119,7 +115,7 @@ boundary. Nothing returns a `Result` — a member that cannot be evaluated is
 remain are caller bugs (non-parallel inputs, malformed CSR), which assert.
 `warp_consistency_residuals` stands apart from the result because it is a fit
 over a whole refined cluster set, and a caller that only wants warps should not
-pay for it. The member-grid samplers and the radius are public so the bench
+pay for it. The member-grid sampler and the radius are public so the bench
 ([editable-track.md](../bench/editable-track.md)) reads a cluster-stage
 sighting's self-similarity from the same tile the gate reads, rather than from a
 second copy of the sampling.
@@ -264,10 +260,10 @@ Before anything is refined, each member's own patch is read for its
 template-grid px, the member's full `resolution²` grid at its own SIFT geometry
 can slide over itself and still match itself as well as a true match between two
 views would. The reading uses the default `SelfSimilarityParams` (shifts up to
-`max_radius = 3` px) on `sample_member_self_similarity_tile`, the member grid
-sampled with its half-width grown by `(R + 6) / R` at resolution `R + 6`, so the
-core is the member grid itself, the grid spacing and mip level are unchanged,
-and the 3 px ring around it is what the shifted windows read. A member whose
+`max_radius = 3` px) on the member grid itself (`sample_member_grid`), read
+[the overlap way](zncc-self-similarity-radius.md#the-overlap-reading): at each
+shift only the samples both windows hold are correlated, so no pixel outside the
+grid enters the reading. A member whose
 radius is above `max_member_zncc_self_similarity_radius` becomes
 `RejectedUnlocalizable` and takes no further part: a flat wash or a straight
 edge can neither anchor a cluster nor honestly join one, since it matches itself
@@ -471,18 +467,18 @@ setting at its default.
 | gate | dataset | refused | refinable clusters | clusters keeping a member | reference + kept | gate CPU per member |
 |---|---|---|---|---|---|---|
 | off | seoul_bull | 0 | 4,942 | 2,183 | 8,169 | 0 |
-| radius ≤ 2.5 | seoul_bull | 1,466 (11.7%) | 4,360 | 1,747 | 6,851 | 66 µs |
+| radius ≤ 2.5 | seoul_bull | 1,201 (9.6%) | 4,500 | 1,823 | 7,096 | 53 µs |
 | off | kerry_park | 0 | 14,288 | 9,294 | 31,091 | 0 |
-| radius ≤ 2.5 | kerry_park | 6,457 (15.5%) | 12,026 | 7,706 | 25,585 | 70 µs |
+| radius ≤ 2.5 | kerry_park | 5,335 (12.8%) | 12,434 | 7,929 | 26,543 | 52 µs |
 
-The radius at `2.5` refuses about one member in eight. Reading it costs 66 to
-70 µs per member (the tile is `(R + 6)²` and the reading correlates 29 shifts),
-but the members it refuses are never refined. Against the member gate it
-replaced, which refused almost nothing (0 and 52 members) at about half the cost
-per member, the kernel as a whole spends less CPU (seoul_bull 5.7 → 5.5 CPU-s, kerry_park 22.7 → 20.0) and a full
-`sfm cluster-patches` run is no slower (0.39 → 0.37 s and 1.08 → 1.01 s wall,
-i9-14900HX, 32 threads). The resections the add-image-to-tracks harness runs
-over these files move little: at the resected pose its default rule recovers
+The radius at `2.5` refuses about one member in nine. Reading it costs about
+52 µs of CPU per member, summed over threads, split about evenly between
+sampling the `R × R` grid and reading it, but the members it refuses are never
+refined, so the kernel as a whole spends less CPU with the gate on than off
+(seoul_bull 5.6 → 5.3 CPU-s, kerry_park 20.3 → 19.6; 0.17 and 0.68 s wall,
+i9-14900HX, 32 threads). Measured with the gate reading a tile with a ring of
+`r` px around the member grid, the resections the add-image-to-tracks harness
+runs over these files move little: at the resected pose its default rule recovers
 80.4% → 80.6% of the known observations on seoul_bull and 71.5% → 70.7% on
 kerry_park, and the recovery at the ground-truth pose is unchanged.
 
@@ -581,7 +577,8 @@ read through the clamped sampling; every reference candidate out of frame →
 unrefinable; a degenerate cluster → not evaluated; two members in one image →
 exactly one `Kept`); the **member gate** (a textured patch reads well under the
 bar while a flat patch, a straight edge and a texture smooth on the template
-grid read over it; the tile's core is the member grid; at the default a flat
+grid read over it; an edge surrounded past the grid by the same edge inverted reads as the edge
+alone, while a reading with a ring around the grid reads it under 3; at the default a flat
 and an edge member are refused and a textured one kept, `0` refuses nobody and
 `3` turns nothing out; the pass rule at, over and under the bar and for `NaN`);
 **determinism**, two runs bit-identical; and a **dual-path**

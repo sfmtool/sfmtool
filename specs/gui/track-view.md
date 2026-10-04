@@ -1089,12 +1089,12 @@ percent, in the same layout.
 [`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
 and § "The ZNCC self-similarity radius" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)): how far,
-in patch-grid pixels, the tile's core can slide over itself and still match
+in patch-grid pixels, the tile can slide over itself and still match
 itself as well as a true match between two views would, read where its ZNCC
 against itself, interpolated between whole-pixel shifts, falls through that
-level. `whole` is the whole core's and `mid` its middle square's, each to one
+level. `whole` is the whole tile's and `mid` its middle square's, each to one
 decimal (`0.4 px`, `1.4 px`), and `3+ px` for the largest radius searched,
-which reads "3 or more". Beside them is the grid of each ninth of the core read
+which reads "3 or more". Beside them is the grid of each ninth of the tile read
 alone: a box is green under `1`, yellow from `1` to `2`, orange from `2` to
 `3` and red at `3` or more, and carries a dark
 line along its slide where the slide is at least `0.5` long, so the ninth's
@@ -1160,8 +1160,8 @@ has no reading, has no hover. The hover adds to the cell and changes nothing
 about it: its text, its colours, its bar and the column's ordering are the
 radius's.
 
-**The column opens with the core's surface plot**, before the two readings:
-the whole core's ZNCC against
+**The column opens with the tile's surface plot**, before the two readings:
+the whole tile's ZNCC against
 itself at every whole-pixel shift the radius searches, interpolated between
 the shifts (Catmull-Rom, repeating the edge value past the square's edge)
 and drawn over the whole square of shifts, with the contour at `1 - τ`, the

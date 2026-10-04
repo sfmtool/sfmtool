@@ -208,9 +208,9 @@ reads under 1; a straight edge, which slides along itself, and a flat patch read
 That is the case the reprojection and agreement gates cannot see: an edge-like
 patch slides along the edge while every view keeps agreeing.
 
-The threshold is in **patch-grid px**, from 0 to 3. A stored bitmap has no ring of
-pixels around it, so the radius is read
-[the overlap way](../../../core/patch/zncc-self-similarity-radius.md#the-overlap-reading):
+The threshold is in **patch-grid px**, from 0 to 3. The radius is read
+[the overlap way](../../../core/patch/zncc-self-similarity-radius.md#the-overlap-reading),
+as the bench and the member gates read their tiles:
 at each shift, only the samples inside the bitmap on both sides, and whose alpha is
 above 0 on both sides, are correlated. A point passes when its radius is at or below
 the threshold and fails when the radius is `NaN`; a point whose bitmap has no sample

@@ -117,7 +117,7 @@ pub struct TrackMeasurement {
     pub zncc_self_similarity_radius_middle: Option<f64>, // its middle square's
     pub zncc_self_similarity_radius_grid: Option<[[f64; 3]; 3]>, // each ninth's
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>, // each ninth's slide
-    pub zncc_self_similarity_surface: Option<Vec<f64>>, // the whole core's ZNCC at every shift
+    pub zncc_self_similarity_surface: Option<Vec<f64>>, // the whole tile's ZNCC at every shift
     pub zncc_self_similarity_tolerance: Option<f64>, // the deficit it was judged by
     pub zncc_self_similarity_reach: Option<SelfSimilarityReach>, // how far its contour reaches, three units
     pub zncc_self_similarity_reach_middle: Option<SelfSimilarityReach>, // its middle square's
@@ -1299,33 +1299,32 @@ of the frame or off the image.
 At both stages, every observation with a pixel carries its own tile's **ZNCC
 self-similarity radius** (see
 [`zncc-self-similarity-radius.md`](../patch/zncc-self-similarity-radius.md)):
-how far, in patch-grid pixels, the tile's `R×R` core can slide over itself and
+how far, in patch-grid pixels, the tile's `R×R` grid can slide over itself and
 still match itself as well as a true match between two views would, read where
 its ZNCC against itself, interpolated between whole-pixel shifts, falls through
 that level, `0 ..= 3` with `3` read as "3 or more", under the default
-`SelfSimilarityParams`. The tile is read over the frame the stage reads the
-observation through, grown so the shifted windows have pixels to read: at the
-track stage the frame anchored at the observation's keypoint is rendered with
-its half-extent grown by `(R + 2r) / R` at resolution `R + 2r`, and at the
-cluster stage the member grid is sampled at its seed geometry with its radius
-grown by the same factor and its resolution set to `R + 2r`, by cluster
-refinement's own `sample_member_self_similarity_tile`, the tile its member gate
-reads. Either way the core
-is the `R×R` tile of the observation at that geometry, and the ring of `r`
-pixels around it is what the shifted windows read.
+`SelfSimilarityParams`. The tile is exactly the `R×R` grid of the observation in
+the frame the stage reads it through: at the track stage the frame anchored at
+the observation's keypoint, rendered at resolution `R` as a stored patch bitmap
+is, and at the cluster stage the member grid sampled at its seed geometry by
+cluster refinement's own `sample_member_grid`, the grid its member gate reads.
+It is read [the overlap way](../patch/zncc-self-similarity-radius.md#the-overlap-reading),
+every sample as data: at each shift only the samples both windows hold are
+correlated, so no pixel from outside the tile enters a reading, and a reading is
+the same number the member gates and the culls on a stored bitmap compute.
 
-`zncc_self_similarity_radius` is the whole core's radius,
+`zncc_self_similarity_radius` is the whole tile's radius,
 `zncc_self_similarity_radius_middle` its middle square's, and
 `zncc_self_similarity_radius_grid` each cell's of the ZNCC grid's split.
 `zncc_self_similarity_slide_grid` is, per cell, the direction the cell's
 indistinguishable shifts line up in, in the grid frame, near unit length along
 a straight edge and near zero where they spread evenly or there are none.
-`zncc_self_similarity_surface` is the whole core's ZNCC against itself at every
+`zncc_self_similarity_surface` is the whole tile's ZNCC against itself at every
 shift of the `(2r + 1)²` square, row-major from `(dx, dy) = (-r, -r)`, `1` at the
-centre and `NaN` where the core is flat.
-`zncc_self_similarity_tolerance` is the deficit `ε + mean_c (n / s_c)²` the core
+centre and `NaN` where the tile is flat.
+`zncc_self_similarity_tolerance` is the deficit `ε + mean_c (n / s_c)²` the tile
 was judged by, so the radius is read on the surface at `1 -` that value; it is
-`None` where the core is flat. `zncc_self_similarity_reach` and
+`None` where the tile is flat. `zncc_self_similarity_reach` and
 `zncc_self_similarity_reach_middle` measure how far the contour the whole and
 middle radii are read from reaches: in grid px, in source-image px, and along
 the patch's `u` and `v` in the scene's world-space unit, or degrees for a patch
@@ -1335,9 +1334,9 @@ through (§ "The contour and its reach" of
 at the cluster stage, through the seed shape, with no patch axes. All are `None`
 where the tile could not be rendered or sampled.
 
-`max_zncc_self_similarity_radius` judges the whole core's radius, and no bar
+`max_zncc_self_similarity_radius` judges the whole tile's radius, and no bar
 judges the middle, the grid, the slide, the surface or the tolerance. A tile
-whose core slides over itself further than the bar and still matches, such as a
+that slides over itself further than the bar and still matches, such as a
 straight edge or a flat patch, is one whose position a match cannot pin, and
 the painting turns it out. The radius reads at most `r`, `3` by default, which
 stands for "that far or further", so a bar of `3` or more turns nothing out. The
@@ -2017,7 +2016,7 @@ reading. What lands in each slot is:
 | `seed_shift_px` | How far that peak sits from the observation's own keypoint, in patch-grid px on the patch's plane, both ends through the unprojection the localizer seeds from. The **sighting's** own evidence, and what `max_shift_px` paints on. In the unit of the self-similarity radius, so a shift inside the radius is within what the patch cannot tell apart. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. What `max_projection_error_px` paints on before the track is triangulated. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. The px is what `max_projection_error_px` paints on once the track is triangulated. |
-| `zncc_self_similarity_radius` and its middle, grid, slide and surface | How far the observation's own tile's core, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
+| `zncc_self_similarity_radius` and its middle, grid, slide and surface | How far the observation's own tile, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
 The projection offset, the residual and the self-similarity rows are filled for

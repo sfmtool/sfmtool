@@ -241,17 +241,12 @@ pub(super) fn register_tail(
         // template.
         let ok = !params.member_self_similarity_gate_is_on() || {
             let radius = member_self_similarity_radius(
-                patch,
-                view,
                 &cache,
+                geom.resolution as usize,
                 tail_c0,
                 tail_c0,
-                [st.iacc[0] as f64, st.iacc[1] as f64],
-                [geom.wpp_u, geom.wpp_v],
-                geom.resolution,
-                params.sampler,
                 &mut grid_scratch,
-            )?;
+            );
             params.admits_member_zncc_self_similarity_radius(radius)
         };
         member_ok.push(ok);

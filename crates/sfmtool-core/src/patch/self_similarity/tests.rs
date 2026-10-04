@@ -1,6 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use super::overlap::{parts_with, radius_with, Route};
 use super::*;
 
 /// A small deterministic generator, so the random tiles are the same on every
@@ -47,11 +48,12 @@ fn params(r: u32) -> SelfSimilarityParams {
 }
 
 /// The reading of the `core × core` template centred in a tile with `r` px
-/// around it.
+/// around it, so its overlap is the whole template at every shift.
 fn centred(values: &[f32], channels: usize, core: usize, r: u32) -> SelfSimilarity {
     let size = core + 2 * r as usize;
     zncc_self_similarity_radius(
         &tile(values, channels, size),
+        None,
         [r as usize, r as usize, core, core],
         &params(r),
     )
@@ -124,37 +126,43 @@ fn avx2_matches_scalar() {
                         };
                         let t = tile(&values, channels, size);
                         // Off-centre, so the template does not sit flush with
-                        // the padding on every side.
-                        let template = [r as usize + 1, r as usize + 2, core, core];
-                        let simd = radius_with(&t, template, &params(r), Kernel::Dispatch);
-                        let scalar = radius_with(&t, template, &params(r), Kernel::Scalar);
-                        for (a, b) in simd.surface.iter().zip(&scalar.surface) {
-                            assert_eq!(a.is_nan(), b.is_nan());
-                            if !a.is_nan() {
-                                assert!(
-                                    (a - b).abs() < 1e-4,
-                                    "r={r} core={core} c={channels}: {a} vs {b}"
-                                );
+                        // the padding on every side; and in the corner, where
+                        // the moved windows run off the tile.
+                        for template in [
+                            [r as usize + 1, r as usize + 2, core, core],
+                            [0, 0, core, core],
+                        ] {
+                            let simd = radius_with(&t, None, template, &params(r), Route::Auto);
+                            let scalar =
+                                radius_with(&t, None, template, &params(r), Route::DenseScalar);
+                            for (a, b) in simd.surface.iter().zip(&scalar.surface) {
+                                assert_eq!(a.is_nan(), b.is_nan());
+                                if !a.is_nan() {
+                                    assert!(
+                                        (a - b).abs() < 1e-4,
+                                        "r={r} core={core} c={channels}: {a} vs {b}"
+                                    );
+                                }
                             }
+                            // The radius is interpolated from the surface, so it
+                            // carries the kernels' f32 rounding too, amplified
+                            // where the ZNCC either side of a crossing is close;
+                            // it is shown to one decimal.
+                            assert!(
+                                (simd.radius - scalar.radius).abs() < 1e-3,
+                                "r={r} core={core} c={channels}: {} against {}",
+                                simd.radius,
+                                scalar.radius
+                            );
+                            assert_eq!(simd.slide, scalar.slide, "r={r} core={core} c={channels}");
+                            assert_eq!(simd.tolerance, scalar.tolerance);
+                            cases += 1;
                         }
-                        // The radius is interpolated from the surface, so it
-                        // carries the kernels' f32 rounding too, amplified
-                        // where the ZNCC either side of a crossing is close;
-                        // it is shown to one decimal.
-                        assert!(
-                            (simd.radius - scalar.radius).abs() < 1e-3,
-                            "r={r} core={core} c={channels}: {} against {}",
-                            simd.radius,
-                            scalar.radius
-                        );
-                        assert_eq!(simd.slide, scalar.slide, "r={r} core={core} c={channels}");
-                        assert_eq!(simd.tolerance, scalar.tolerance);
-                        cases += 1;
                     }
                 }
             }
         }
-        assert_eq!(cases, 3 * 7 * 3 * 2);
+        assert_eq!(cases, 3 * 7 * 3 * 2 * 2);
     }
 }
 
@@ -464,8 +472,8 @@ fn a_shift_beside_a_missing_reading_counts_its_own_distance() {
 #[test]
 fn parts_agree_with_separate_calls() {
     let mut rng = Lcg(9);
-    let (resolution, r) = (24usize, 3usize);
-    let size = resolution + 2 * r;
+    let resolution = 24usize;
+    let size = resolution;
     let noise: Vec<f32> = (0..3 * size * size).map(|_| rng.next_f32()).collect();
     let values = tile_of(size, 3, |c, x, y| {
         // An edge in one part, texture in another, near-flat elsewhere.
@@ -478,10 +486,10 @@ fn parts_agree_with_separate_calls() {
         80.0 + edge + texture + 3.0 * f64::from(noise[(c * size + y as usize) * size + x as usize])
     });
     let t = tile(&values, 3, size);
-    let p = params(r as u32);
-    let parts = zncc_self_similarity_parts(&t, resolution, &p);
+    let p = params(3);
+    let parts = zncc_self_similarity_parts(&t, None, &p);
     let check = |part: &SelfSimilarity, rect: [usize; 4]| {
-        let alone = zncc_self_similarity_radius(&t, rect, &p);
+        let alone = zncc_self_similarity_radius(&t, None, rect, &p);
         assert!(
             (part.radius - alone.radius).abs() < 1e-3,
             "{rect:?}: {} against {}",
@@ -500,11 +508,11 @@ fn parts_agree_with_separate_calls() {
             );
         }
     };
-    check(&parts.whole, [r, r, resolution, resolution]);
-    check(&parts.middle, [r + 6, r + 6, 12, 12]);
+    check(&parts.whole, [0, 0, resolution, resolution]);
+    check(&parts.middle, [6, 6, 12, 12]);
     for row in 0..3 {
         for col in 0..3 {
-            check(&parts.grid[row][col], [r + 8 * col, r + 8 * row, 8, 8]);
+            check(&parts.grid[row][col], [8 * col, 8 * row, 8, 8]);
         }
     }
 }
@@ -518,17 +526,23 @@ fn the_surface_is_one_at_the_centre_and_covers_the_whole_square() {
 }
 
 #[test]
-#[should_panic(expected = "needs 3 px of tile on every side, but the tile is 16×16")]
-fn too_little_margin_is_refused() {
+#[should_panic(expected = "the 10×10 template at (8, 3) does not fit in the 16×16 tile")]
+fn a_template_outside_the_tile_is_refused() {
     let values = vec![0.0f32; 16 * 16];
-    zncc_self_similarity_radius(&tile(&values, 1, 16), [2, 3, 10, 10], &params(3));
+    zncc_self_similarity_radius(&tile(&values, 1, 16), None, [8, 3, 10, 10], &params(3));
 }
 
 #[test]
-#[should_panic(expected = "needs a 30×30 tile, but the tile is 28×28")]
-fn parts_refuse_a_tile_of_the_wrong_size() {
-    let values = vec![0.0f32; 28 * 28];
-    zncc_self_similarity_parts(&tile(&values, 1, 28), 24, &params(3));
+#[should_panic(expected = "the bitmap is 28×24, it needs to be square")]
+fn parts_refuse_a_bitmap_that_is_not_square() {
+    let values = vec![0.0f32; 28 * 24];
+    let bitmap = PatchTile {
+        values: &values,
+        channels: 1,
+        width: 28,
+        height: 24,
+    };
+    zncc_self_similarity_parts(&bitmap, None, &params(3));
 }
 
 #[test]
@@ -551,7 +565,7 @@ fn overlap_whole(
     size: usize,
     data: Option<&[bool]>,
 ) -> SelfSimilarity {
-    zncc_self_similarity_radius_overlap(
+    zncc_self_similarity_radius(
         &tile(values, channels, size),
         data,
         [0, 0, size, size],
@@ -650,7 +664,8 @@ fn overlap_samples_without_data_drop_out() {
     assert!(same_reading(&a, &b), "{a:?} vs {b:?}");
     assert!(a.radius < 1.0, "{a:?}");
     // The reading is the one of the covered columns cut out as a bitmap of
-    // their own.
+    // their own, which takes the dense route: equal to within the kernel's
+    // `f32` rounding.
     let covered: Vec<f32> = (0..3 * size)
         .flat_map(|row| texture[row * size + 8..(row + 1) * size].iter().copied())
         .collect();
@@ -660,18 +675,13 @@ fn overlap_samples_without_data_drop_out() {
         width: size - 8,
         height: size,
     };
-    let c = zncc_self_similarity_radius_overlap(
-        &covered_tile,
-        None,
-        [0, 0, size - 8, size],
-        &params(3),
-    );
-    assert!((a.radius - c.radius).abs() < 1e-9, "{a:?} vs {c:?}");
+    let c = zncc_self_similarity_radius(&covered_tile, None, [0, 0, size - 8, size], &params(3));
+    assert!((a.radius - c.radius).abs() < 1e-3, "{a:?} vs {c:?}");
     for (x, y) in a.surface.iter().zip(&c.surface) {
-        assert!(x.is_nan() && y.is_nan() || (x - y).abs() < 1e-9);
+        assert!(x.is_nan() && y.is_nan() || (x - y).abs() < 1e-5);
     }
-    let pa = zncc_self_similarity_parts_overlap(&tile(&zeroed, 3, size), Some(&data), &params(3));
-    let pb = zncc_self_similarity_parts_overlap(&tile(&junk, 3, size), Some(&data), &params(3));
+    let pa = zncc_self_similarity_parts(&tile(&zeroed, 3, size), Some(&data), &params(3));
+    let pb = zncc_self_similarity_parts(&tile(&junk, 3, size), Some(&data), &params(3));
     assert!(same_reading(&pa.whole, &pb.whole) && same_reading(&pa.middle, &pb.middle));
     for (row_a, row_b) in pa.grid.iter().zip(&pb.grid) {
         for (a, b) in row_a.iter().zip(row_b) {
@@ -694,17 +704,17 @@ fn overlap_a_bitmap_with_no_data_has_no_reading() {
     let data = vec![false; size * size];
     let s = overlap_whole(&texture, 3, size, Some(&data));
     assert!(s.radius.is_nan() && s.tolerance.is_nan());
-    let parts =
-        zncc_self_similarity_parts_overlap(&tile(&texture, 3, size), Some(&data), &params(3));
+    let parts = zncc_self_similarity_parts(&tile(&texture, 3, size), Some(&data), &params(3));
     assert!(parts.whole.radius.is_nan() && parts.middle.radius.is_nan());
 }
 
 /// On a bitmap cut from a larger textured image, the middle and the centre
-/// cell have ring from the rest of the bitmap and read exactly as the ringed
-/// reading of the larger image does; the whole bitmap, whose shifted windows
-/// lose up to `r` rows and columns, reads close to it.
+/// cell take their shifted windows from the rest of the bitmap and read
+/// exactly as the same templates read inside the larger image; the whole
+/// bitmap, whose shifted windows lose up to `r` rows and columns, reads close
+/// to the same template inside the larger image.
 #[test]
-fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
+fn a_cut_patch_reads_its_middle_as_the_larger_image_does() {
     let (resolution, r) = (24usize, 3usize);
     let wide = resolution + 2 * r;
     for seed in [1u64, 2, 3] {
@@ -716,7 +726,14 @@ fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
             let fine = if x > 15.0 { 0.4 } else { 0.05 };
             120.0 + smooth + fine * f64::from(rough[k] - 128.0)
         });
-        let ringed = zncc_self_similarity_parts(&tile(&values, 3, wide), resolution, &params(3));
+        let wide_tile = tile(&values, 3, wide);
+        let inside =
+            |rect: [usize; 4]| zncc_self_similarity_radius(&wide_tile, None, rect, &params(3));
+        let (inside_whole, inside_middle, inside_centre) = (
+            inside([r, r, resolution, resolution]),
+            inside([r + 6, r + 6, 12, 12]),
+            inside([r + 8, r + 8, 8, 8]),
+        );
         let mut core = Vec::with_capacity(3 * resolution * resolution);
         for c in 0..3 {
             for y in 0..resolution {
@@ -724,8 +741,7 @@ fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
                 core.extend_from_slice(&values[row..row + resolution]);
             }
         }
-        let overlap =
-            zncc_self_similarity_parts_overlap(&tile(&core, 3, resolution), None, &params(3));
+        let overlap = zncc_self_similarity_parts(&tile(&core, 3, resolution), None, &params(3));
         let same = |a: &SelfSimilarity, b: &SelfSimilarity, what: &str| {
             assert!(
                 (a.radius - b.radius).abs() < 1e-4 && (a.tolerance - b.tolerance).abs() < 1e-9,
@@ -741,16 +757,16 @@ fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
                 );
             }
         };
-        same(&ringed.middle, &overlap.middle, "middle");
-        same(&ringed.grid[1][1], &overlap.grid[1][1], "centre cell");
+        same(&inside_middle, &overlap.middle, "middle");
+        same(&inside_centre, &overlap.grid[1][1], "centre cell");
         assert!(
-            (ringed.whole.tolerance - overlap.whole.tolerance).abs() < 1e-9,
+            (inside_whole.tolerance - overlap.whole.tolerance).abs() < 1e-9,
             "the tolerance is the whole template's either way"
         );
         assert!(
-            (ringed.whole.radius - overlap.whole.radius).abs() < 0.25,
+            (inside_whole.radius - overlap.whole.radius).abs() < 0.25,
             "seed {seed}: whole {} vs {}",
-            ringed.whole.radius,
+            inside_whole.radius,
             overlap.whole.radius
         );
     }
@@ -763,9 +779,9 @@ fn overlap_parts_agree_with_separate_calls() {
     let data: Vec<bool> = (0..size * size).map(|k| (k * 7) % 11 != 0).collect();
     let t = tile(&values, 3, size);
     let p = params(3);
-    let parts = zncc_self_similarity_parts_overlap(&t, Some(&data), &p);
+    let parts = zncc_self_similarity_parts(&t, Some(&data), &p);
     let check = |part: &SelfSimilarity, rect: [usize; 4]| {
-        let alone = zncc_self_similarity_radius_overlap(&t, Some(&data), rect, &p);
+        let alone = zncc_self_similarity_radius(&t, Some(&data), rect, &p);
         assert!((part.radius - alone.radius).abs() < 1e-9, "{rect:?}");
         assert!((part.tolerance - alone.tolerance).abs() < 1e-9, "{rect:?}");
         for (a, b) in part.surface.iter().zip(&alone.surface) {
@@ -777,6 +793,163 @@ fn overlap_parts_agree_with_separate_calls() {
     for row in 0..3 {
         for col in 0..3 {
             check(&parts.grid[row][col], [8 * col, 8 * row, 8, 8]);
+        }
+    }
+}
+
+/// Where every sample carries data, the dense route reads what the masked
+/// route reads, at the bitmap's edges and corners too, for the whole bitmap,
+/// its middle and every cell; and data flags that are all set take the dense
+/// route.
+#[test]
+fn the_dense_and_masked_routes_agree() {
+    for (size, seed) in [(12usize, 5u64), (24, 6), (25, 7)] {
+        let values = rough_texture(size, seed);
+        let t = tile(&values, 3, size);
+        let p = params(3);
+        let close = |a: &SelfSimilarity, b: &SelfSimilarity, what: &str| {
+            assert!(
+                (a.radius - b.radius).abs() < 1e-3 && (a.tolerance - b.tolerance).abs() < 1e-9,
+                "{size} {what}: {a:?} vs {b:?}"
+            );
+            for (x, y) in a.surface.iter().zip(&b.surface) {
+                assert!((x - y).abs() < 1e-5, "{size} {what}: {x} vs {y}");
+            }
+        };
+        let dense = parts_with(&t, None, &p, Route::Auto);
+        let masked = parts_with(&t, None, &p, Route::Masked);
+        close(&dense.whole, &masked.whole, "whole");
+        close(&dense.middle, &masked.middle, "middle");
+        for (row_a, row_b) in dense.grid.iter().zip(&masked.grid) {
+            for (a, b) in row_a.iter().zip(row_b) {
+                close(a, b, "cell");
+            }
+        }
+        for rect in [[0, 0, size, size], [0, 0, 5, 7], [size - 4, 2, 4, 6]] {
+            close(
+                &radius_with(&t, None, rect, &p, Route::Auto),
+                &radius_with(&t, None, rect, &p, Route::Masked),
+                "template",
+            );
+        }
+        let all = vec![true; size * size];
+        let flagged = zncc_self_similarity_parts(&t, Some(&all), &p);
+        assert!(same_reading(&flagged.whole, &dense.whole));
+    }
+}
+
+/// On a 24×24 bitmap whose halves stand far apart in level, each with a fine
+/// texture of its own, the dense route's surface matches the masked route's,
+/// which works in `f64` throughout, to `1e-5` for the cells and templates that
+/// lie within one half: each template is centred by its own mean before the
+/// `f32` kernel runs, so the far level of the other half does not swamp the
+/// products of a template's texture. Steps of 1000 grey levels and of 60000 (a
+/// float bitmap) are both read. A part that holds both halves is held to
+/// `1e-5` at a step of 1000 and to `1e-3` at 60000, since it carries the step
+/// in its own `f32` values, which at a level of 30000 keep steps of 0.002, the
+/// scale of the bitmap's own `f32` resolution there.
+#[test]
+fn the_dense_route_keeps_its_precision_across_a_large_step() {
+    let size = 24;
+    let texture = rough_texture(size, 11);
+    for step in [1000.0f64, 60000.0] {
+        let values = tile_of(size, 3, |c, x, y| {
+            let k = (c * size + y as usize) * size + x as usize;
+            let level = if x >= 12.0 { step } else { 0.0 };
+            level + 0.1 * f64::from(texture[k])
+        });
+        let t = tile(&values, 3, size);
+        let p = params(3);
+        let close = |a: &SelfSimilarity, b: &SelfSimilarity, both_halves: bool, what: &str| {
+            let bound = if both_halves && step > 1000.0 {
+                1e-3
+            } else {
+                1e-5
+            };
+            assert!(
+                (a.radius - b.radius).abs() < 10.0 * bound
+                    && (a.tolerance - b.tolerance).abs() <= 1e-6 * b.tolerance.abs(),
+                "step {step} {what}: {a:?} vs {b:?}"
+            );
+            for (x, y) in a.surface.iter().zip(&b.surface) {
+                assert!(
+                    x.is_nan() && y.is_nan() || (x - y).abs() < bound,
+                    "step {step} {what}: {x} vs {y}"
+                );
+            }
+        };
+        let dense = parts_with(&t, None, &p, Route::Auto);
+        let masked = parts_with(&t, None, &p, Route::Masked);
+        close(&dense.whole, &masked.whole, true, "whole");
+        close(&dense.middle, &masked.middle, true, "middle");
+        for (row_a, row_b) in dense.grid.iter().zip(&masked.grid) {
+            for (col, (a, b)) in row_a.iter().zip(row_b).enumerate() {
+                close(a, b, col == 1, "cell");
+            }
+        }
+        for (rect, both_halves) in [
+            ([0, 0, size, size], true),
+            ([10, 10, 4, 4], true),
+            ([0, 0, 8, 8], false),
+            ([16, 4, 8, 8], false),
+        ] {
+            close(
+                &radius_with(&t, None, rect, &p, Route::Auto),
+                &radius_with(&t, None, rect, &p, Route::Masked),
+                both_halves,
+                "template",
+            );
+        }
+        // The cells within one half read their texture: they lock.
+        assert!(
+            dense.grid[1][0].radius < 1.5,
+            "step {step}: {:?}",
+            dense.grid[1][0]
+        );
+        assert!(
+            dense.grid[1][2].radius < 1.5,
+            "step {step}: {:?}",
+            dense.grid[1][2]
+        );
+    }
+}
+
+/// A moved window that is constant at a high level reads as flat by the dense
+/// route as it does by the masked route. The dense route takes the window's
+/// spread from summed-area tables, whose cancellation at a level of 60000
+/// leaves a residue of about `1e-5` that an absolute flat test would take for
+/// texture; the test scales with the tables' own size. A float bitmap with a
+/// texture of 0 to 25 left of `x = 12` and a constant 60000 right of it is
+/// read with a template that straddles the step, whose windows moved right lie
+/// wholly on the constant half, and with a 2×2 template just left of the step,
+/// whose windows moved 2 or 3 px right do.
+#[test]
+fn a_window_constant_at_a_high_level_reads_flat_by_both_routes() {
+    let size = 24;
+    let texture = rough_texture(size, 13);
+    let values = tile_of(size, 3, |c, x, y| {
+        if x >= 12.0 {
+            60000.0
+        } else {
+            0.1 * f64::from(texture[(c * size + y as usize) * size + x as usize])
+        }
+    });
+    let t = tile(&values, 3, size);
+    let p = params(3);
+    for rect in [[9, 1, 14, 14], [10, 4, 2, 2]] {
+        let dense = radius_with(&t, None, rect, &p, Route::Auto);
+        let masked = radius_with(&t, None, rect, &p, Route::Masked);
+        assert!(
+            (dense.radius - masked.radius).abs() < 1e-4
+                && dense.slide == masked.slide
+                && (dense.tolerance - masked.tolerance).abs() <= 1e-5 * masked.tolerance.abs(),
+            "{rect:?}: {dense:?} vs {masked:?}"
+        );
+        for (x, y) in dense.surface.iter().zip(&masked.surface) {
+            assert!(
+                x.is_nan() && y.is_nan() || (x - y).abs() < 1e-4,
+                "{rect:?}: {x} vs {y}"
+            );
         }
     }
 }
@@ -800,8 +973,8 @@ fn data_from_interleaved_reads_alpha() {
 
 // ---- The contour and its reach ---------------------------------------------
 
-/// Readings of the kinds the tests above build, and a few more, ringed and
-/// overlap.
+/// Readings of the kinds the tests above build, and a few more, of templates
+/// with tile around them and of whole bitmaps.
 fn fixture_readings() -> Vec<SelfSimilarity> {
     let mut out = Vec::new();
     let corner = tile_of(
@@ -845,7 +1018,7 @@ fn fixture_readings() -> Vec<SelfSimilarity> {
                 sum / n
             })
             .collect();
-        let parts = zncc_self_similarity_parts(&tile(&smooth, 3, size), resolution, &params(3));
+        let parts = zncc_self_similarity_parts(&tile(&smooth, 3, size), None, &params(3));
         out.push(parts.whole);
         out.push(parts.middle);
         out.extend(parts.grid.into_iter().flatten());
@@ -857,8 +1030,7 @@ fn fixture_readings() -> Vec<SelfSimilarity> {
                 }
             }
         }
-        let parts =
-            zncc_self_similarity_parts_overlap(&tile(&cut, 3, resolution), None, &params(3));
+        let parts = zncc_self_similarity_parts(&tile(&cut, 3, resolution), None, &params(3));
         out.push(parts.whole);
         out.push(parts.middle);
         out.extend(parts.grid.into_iter().flatten());
@@ -1275,7 +1447,7 @@ fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_further() {
 fn no_reading_has_no_contour() {
     let bitmap = tile_of(12, 1, |_, x, y| 10.0 * x + y);
     let data = vec![false; 144];
-    let s = zncc_self_similarity_radius_overlap(
+    let s = zncc_self_similarity_radius(
         &tile(&bitmap, 1, 12),
         Some(&data),
         [0, 0, 12, 12],

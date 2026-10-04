@@ -7,7 +7,7 @@ import numpy as np
 
 from .._sfmtool.patches import (
     DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
-    zncc_self_similarity_parts_overlap_stack,
+    zncc_self_similarity_parts_stack,
 )
 from .._sfmtool.reconstruction import SfmrReconstruction
 
@@ -22,9 +22,9 @@ def points_passing_zncc_self_similarity_radius(
     """Which points' consensus bitmaps pass a bar on the ZNCC self-similarity radius.
 
     Each ``(R, R, C)`` bitmap of the ``(N, R, R, C)`` stack is read the overlap
-    way (``zncc_self_similarity_parts_overlap_stack``; see
-    ``specs/core/patch/zncc-self-similarity-radius.md``): a stored bitmap has no
-    ring of pixels around it, so at each shift only the samples inside the
+    way (``zncc_self_similarity_parts_stack``; see
+    ``specs/core/patch/zncc-self-similarity-radius.md``), as the bench and the
+    member gates read their tiles: at each shift only the samples inside the
     bitmap on both sides, and whose alpha is above 0 on both sides, are
     correlated. A point passes when its whole bitmap's radius is at or below
     ``bar``; a ``NaN`` radius fails. A bitmap with no sample carrying data (a
@@ -36,7 +36,7 @@ def points_passing_zncc_self_similarity_radius(
     Returns ``(passes, radius)``, both of length ``N``: the boolean mask and the
     whole bitmap's radius in patch-grid px (``NaN`` where there is no reading).
     """
-    result = zncc_self_similarity_parts_overlap_stack(bitmaps)
+    result = zncc_self_similarity_parts_stack(bitmaps)
     radius = np.asarray(result["radius"], dtype=float)
     if not bar > 0:
         return np.ones(len(radius), dtype=bool), radius

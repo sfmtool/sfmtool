@@ -480,19 +480,81 @@ fn the_member_gate_reads_the_zncc_self_similarity_radius() {
     let smooth = radius(smooth_texture);
     assert!(smooth > 2.5, "smooth: {smooth}");
 
-    // The same number the bench reads: the tile the gate reads is the member
-    // grid with the ring around it, and its core is the member grid itself.
+    // The same number the bench reads: the overlap reading of the member grid
+    // itself.
     let pyr = pyramid(&make_image(128, 128, texture));
-    let (tile, size) = sample_member_self_similarity_tile(&pyr, [64.0, 64.0], a, &params).unwrap();
     let grid = sample_member_grid(&pyr, [64.0, 64.0], a, &params).unwrap();
-    let (r, ring) = (params.resolution as usize, 3);
-    assert_eq!(size, r + 2 * ring);
-    for row in 0..r {
-        for col in 0..r {
-            let (got, want) = (tile[(row + ring) * size + col + ring], grid[row * r + col]);
-            assert!((got - want).abs() < 1e-3, "({row}, {col}): {got} vs {want}");
+    let r = params.resolution as usize;
+    let (planes, colour) = PatchTile::planes_from_interleaved(&grid, r, r, grid.len() / (r * r));
+    let tile = PatchTile {
+        values: &planes,
+        channels: colour,
+        width: r,
+        height: r,
+    };
+    let want =
+        zncc_self_similarity_radius(&tile, None, [0, 0, r, r], &SelfSimilarityParams::default())
+            .radius;
+    assert_eq!(textured.to_bits(), want.to_bits());
+}
+
+/// The gate reads the member's own `R×R` grid and no pixel past it: an edge
+/// whose surroundings past the grid's footprint hold the same edge inverted
+/// reads the same radius as the edge alone, the largest the reading searches.
+/// A reading that took its shifted windows from a ring of `r` samples around
+/// the grid would see the inverted edge there and read the edge shorter; the
+/// test reads the surrounded image that way too, to show it would.
+#[test]
+fn the_member_gate_reads_no_pixel_outside_the_member_grid() {
+    let params = ClusterRefineParams::default();
+    // At `a = 2.5` the grid spans `±radius · 2.5 = ±15` image px around the
+    // keypoint, and the bilinear samples read at most a pixel further.
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    let clean = make_image(128, 128, edge);
+    let surrounded = make_image(128, 128, |x, y| {
+        if (x - 64.0).abs() > 17.0 || (y - 64.0).abs() > 17.0 {
+            254.0 - edge(x, y)
+        } else {
+            edge(x, y)
         }
-    }
+    });
+    let read = |img: &ImageU8| {
+        member_zncc_self_similarity_radius(&pyramid(img), [64.0, 64.0], a, &params)
+            .expect("an interior member's grid can be sampled")
+    };
+    let (clean_radius, surrounded_radius) = (read(&clean), read(&surrounded));
+    assert_eq!(clean_radius, 3.0);
+    assert_eq!(clean_radius.to_bits(), surrounded_radius.to_bits());
+
+    // The same grid read with a ring: sampled `r` samples wider at the same
+    // step, and read on the `R×R` template in its middle, which is the member
+    // grid. The inverted edge in the ring pulls that reading under 3.
+    let r = SelfSimilarityParams::default().max_radius as usize;
+    let resolution = params.resolution as usize;
+    let wide = resolution + 2 * r;
+    let wide_params = ClusterRefineParams {
+        radius: params.radius * wide as f64 / resolution as f64,
+        resolution: wide as u32,
+        ..params.clone()
+    };
+    let grid = sample_member_grid(&pyramid(&surrounded), [64.0, 64.0], a, &wide_params)
+        .expect("the wider grid can be sampled");
+    let (planes, colour) =
+        PatchTile::planes_from_interleaved(&grid, wide, wide, grid.len() / (wide * wide));
+    let tile = PatchTile {
+        values: &planes,
+        channels: colour,
+        width: wide,
+        height: wide,
+    };
+    let ringed = zncc_self_similarity_radius(
+        &tile,
+        None,
+        [r, r, resolution, resolution],
+        &SelfSimilarityParams::default(),
+    )
+    .radius;
+    assert!(ringed < 3.0, "a ringed reading: {ringed}");
 }
 
 #[test]

@@ -500,8 +500,8 @@ def embed_patches(
             bitmap can slide over itself further than this, in **patch-grid px**,
             **early** — right after round 1's localize + sub-pixel refine, before
             the multi-round refinement. The reading is the ZNCC self-similarity
-            radius of the bitmap, read the overlap way since it has no ring around
-            it (see ``specs/core/patch/zncc-self-similarity-radius.md``): under 1
+            radius of the bitmap, read the overlap way, as the member gates read
+            their tiles (see ``specs/core/patch/zncc-self-similarity-radius.md``): under 1
             for a corner or a texture, 3 for a straight edge or a flat patch, which
             the cross-view agreement gate lets through. At or below the bar
             passes; a point with no consensus is kept. Enabling it forces the

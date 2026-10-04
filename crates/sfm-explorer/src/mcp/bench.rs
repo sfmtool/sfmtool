@@ -1686,9 +1686,9 @@ fn cluster_measurement(observation: &Observation) -> Value {
         // And over each ninth of the patch, rows from the top.
         "zncc_grid": grid(measured.zncc_grid),
         "shift_px": finite(measured.shift_px),
-        // How far the tile's core can slide over itself and still match
+        // How far the tile can slide over itself and still match
         // itself, in grid px, 3 meaning 3 or more; over the middle and each
-        // ninth too, with each ninth's slide direction, and the core's ZNCC
+        // ninth too, with each ninth's slide direction, and the tile's ZNCC
         // against itself at every shift of the 7 x 7 square.
         "zncc_self_similarity_radius": finite(measured.zncc_self_similarity_radius),
         "zncc_self_similarity_radius_middle": finite(measured.zncc_self_similarity_radius_middle),
@@ -1730,9 +1730,9 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
         "ray_angle_deg": finite(measured.ray_angle_deg),
-        // How far the tile's core can slide over itself and still match
+        // How far the tile can slide over itself and still match
         // itself, in grid px, 3 meaning 3 or more; over the middle and each
-        // ninth too, with each ninth's slide direction, and the core's ZNCC
+        // ninth too, with each ninth's slide direction, and the tile's ZNCC
         // against itself at every shift of the 7 x 7 square.
         "zncc_self_similarity_radius": finite(measured.zncc_self_similarity_radius),
         "zncc_self_similarity_radius_middle": finite(measured.zncc_self_similarity_radius_middle),
