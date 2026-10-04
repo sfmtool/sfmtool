@@ -212,7 +212,7 @@ let mut archive = ZipArchive::new(std::io::Cursor::new(buf))?;
 let read: Vec<f64> = read_binary_array(&mut archive, "points/positions_xy.2.2.float64.zst", 4)?;
 ```
 
-Note the entry names: the container treats them as opaque strings, so the
+Note the entry names: the crate treats them as opaque strings, so the
 `{field}.{dims…}.{dtype}.zst` convention is enforced by each format crate
 building its own names (`sfmtool-sfmr-format`'s and `sfmtool-matches-format`'s
 `entries` modules do this from the counts in the metadata), and by the reader

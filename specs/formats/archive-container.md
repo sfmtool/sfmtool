@@ -33,9 +33,10 @@ recipes in the format specs work.
 ### Every entry is a zstandard frame
 
 Each entry's stored bytes are a single zstd frame, and by convention every entry
-name ends in `.zst`. The one exception among the five formats is `.kdf`'s shared
-descriptor corpus, which concatenates one frame per block into a single entry and
-is named `.frames` to say so; `.kdf` explains why under
+name ends in `.zst`. The exceptions among the five formats are `.kdf`'s
+descriptor corpus and its optional geometry corpus, each of which concatenates one
+frame per block into a single entry and is named `.frames` to say so; `.kdf`
+explains why under
 [Where this format departs from the container conventions](kdf-file-format.md#where-this-format-departs-from-the-container-conventions).
 A reader of any other format may assume one frame per entry. zstd is chosen over the ZIP-native deflate for the ratio and
 for decompression speed on the large numeric columns. The compression level is

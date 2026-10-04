@@ -11,7 +11,8 @@
 //! Each format crate owns its own schema, validation rules and error type;
 //! this crate owns only the container primitives they share.
 //!
-//! See `specs/formats/archive-container.md` for the container contract.
+//! See `specs/formats/archive-container.md` for the container contract and
+//! `specs/formats/archive-io-crate.md` for this crate's interface.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(
@@ -238,7 +239,7 @@ fn bytes_to_uint128(
 /// values and the same errors — including an [`ArchiveIoError::Zip`]
 /// `FileNotFound` for an entry the archive does not hold.
 ///
-/// See `specs/formats/archive-container.md` § "Reading a whole archive".
+/// See `specs/formats/archive-io-crate.md` § "Reading a whole archive".
 pub struct DecodedEntries {
     entries: HashMap<String, Vec<u8>>,
 }

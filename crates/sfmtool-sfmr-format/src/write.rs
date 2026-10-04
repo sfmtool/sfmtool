@@ -239,7 +239,7 @@ pub fn write_sfmr_with_options(
     // file it is replacing would otherwise truncate that file at the moment it
     // opened it, and a failure anywhere in the write would leave a partial
     // archive where the only copy was. See `sfmtool_archive_io::write_atomically`
-    // and `specs/formats/archive-container.md`.
+    // and `specs/formats/archive-io-crate.md`.
     sfmtool_archive_io::write_atomically(path, |file| {
         write_sfmr_into(data, options, || {
             Ok(ArchiveSink {
