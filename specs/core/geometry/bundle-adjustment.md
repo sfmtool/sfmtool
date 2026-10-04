@@ -21,7 +21,8 @@ special case of. It runs inside [reconstruction growth](reconstruction-growth.md
 and [far-field rotation initialization](rotation-init.md), and the
 [reconstruction-level adjustment](../reconstruction/bundle-adjust.md) calls it
 on a whole `.sfmr` for the viewer's Bundle Adjust command and for
-`sfm xform --bundle-adjust` on cameras with a spline model.
+`sfm xform --bundle-adjust` when any camera of the reconstruction has a spline
+model (otherwise that command uses pycolmap).
 
 ## Definitions
 
