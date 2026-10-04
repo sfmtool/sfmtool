@@ -5,29 +5,29 @@
 A `.sfmr` reconstruction records where each 3D point is seen in each image in
 one of two ways. In the `sift_files` mode an observation is an index into the
 `.sift` feature file of its image, so those files have to be kept with the
-reconstruction. In the `embedded_patches` mode the file stores each observation's
-2D image position (its keypoint) directly, gives each point a small flat patch
-oriented in 3D (`(u, v)` half-vectors + normal, with an RGBA image of the patch's
-appearance), and records each source image's hash itself, so it needs no `.sift`
-files. The pipeline in this spec, the one behind `sfm embed-patches`, converts a
-loaded reconstruction from the first mode to the second (`feature_source`
-`sift_files` → `embedded_patches`; the two modes are defined in
-[sfmr-file-format.md](../../formats/sfmr-file-format.md), "Observation source").
-Besides removing the dependency on the `.sift` files, the conversion places the
-keypoints by matching each point's patch across the images that see it, rather
-than keeping the SIFT detections, and it can add to a point's track the images
-that SIFT matching missed.
+reconstruction, even when the file also keeps an inline copy of each
+observation's 2D position. In the `embedded_patches` mode the file stores each
+observation's 2D image position (its keypoint) with no index, gives each point a
+small flat patch oriented in 3D (`(u, v)` half-vectors + normal, optionally with
+an RGBA image of the patch's appearance), and records each source image's hash
+itself, so it needs no `.sift` files. The pipeline in this spec, the one behind
+`sfm embed-patches`, converts a loaded reconstruction from the first mode to the
+second (`feature_source` `sift_files` → `embedded_patches`; the two modes are
+defined in [sfmr-file-format.md](../../formats/sfmr-file-format.md),
+"Observation source"). Besides removing the dependency on the `.sift` files, the
+conversion places the keypoints by matching each point's patch across the images
+that see it, rather than keeping the SIFT detections, and it can add to a
+point's track the images that SIFT matching missed.
 
-In order, it builds an oriented
-patch per point (the `(u, v)` frame + normal), then for each point expands its
-track with the other vetted views that see the surfel and, over **`rounds`
-alternating passes** (default `rounds = 2`), refines the patch normal and then
-re-localizes each observation's keypoint — dropping the views that won't
-register — before compacting the result into a valid `embedded_patches`
-reconstruction. The photometric normal refinement **down-weights oblique views**
-(and hard-drops grazing ones) and carries a **fronto (front-facing) prior** that
-keeps a low-parallax normal from drifting to a tilted, photometrically-equivalent
-pose.
+In order, it builds an oriented patch per point (the `(u, v)` frame + normal),
+then for each point expands its track with the other vetted views that see the
+surfel and, over **`rounds` alternating passes** (default `rounds = 2`), refines
+the patch normal and then re-localizes each observation's keypoint — dropping
+the views that won't register — before compacting the result into a valid
+`embedded_patches` reconstruction that carries an RGBA image per point. The
+photometric normal refinement **down-weights oblique views** (and hard-drops
+grazing ones) and carries a **fronto (front-facing) prior** that keeps a
+low-parallax normal from drifting to a tilted, photometrically-equivalent pose.
 
 This is a reconstruction-in / reconstruction-out transform at the
 `SfmrReconstruction` (API) level.
