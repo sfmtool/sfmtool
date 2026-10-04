@@ -1,8 +1,13 @@
 # Viewport Navigation
 
-This document specifies the viewport navigation behavior for the sfmtool 3D
-viewer — the orbit camera model, input controls, and the Alt-mode target
-control system.
+Viewport navigation is how the user moves the camera of SfM Explorer's 3D
+viewport to look at a reconstruction from any position. The camera orbits a
+target point in front of it: mouse drags orbit around the target, pan, and zoom
+toward it; W/A/S/D/R/F fly the camera and Q/E roll the horizon; holding Alt
+makes the same inputs move the target instead of the camera; and Z frames all
+visible points. This spec covers the camera model, the mouse, trackpad and
+keyboard bindings, Maintain Z-up, zoom to fit, and Windows precision touchpad
+input.
 
 For the visual rendering of the target indicator and supernova effect, see
 [point-cloud-rendering.md](point-cloud-rendering.md#target-indicator).
@@ -640,7 +645,8 @@ useful when you want to keep the target visible while navigating normally.
   falloff that reveals the local 3D structure of the point cloud around the target.
 - The effect uses an inverse-square falloff: `r² / (dist² + r²)` where `r` is
   the target indicator radius (derived from `length_scale`). This creates a
-  localized "lantern" illumination that naturally adapts to the scene scale.
+  localized illumination that falls off with distance from the target and
+  scales with the scene.
 - Implementation: pass the target's view-space position (3 floats), plus
   `tan_half_fov` and `aspect` ratio to the EDL shader as additional uniforms.
   The fragment shader reconstructs view-space XY from UV + depth to compute
@@ -668,8 +674,8 @@ pan") — the camera pivots in place while the view direction sweeps across the 
 The target slides to wherever the camera is now looking, at the current target distance.
 
 **Why this pairing is powerful for navigation:**
-- Switching between the two modes lets you fluidly explore a 3D scene without
-  ever losing your bearings
+- Switching between the two modes lets you explore a 3D scene while keeping
+  track of where the camera is
 - Normal orbit: "I've found something interesting, let me circle around it"
 - Alt orbit: "I want to stay here and look around to find something interesting"
 - The transition is seamless — release Alt and you're orbiting around wherever

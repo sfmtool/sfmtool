@@ -222,6 +222,7 @@ Eight specs open with "This document describes/specifies…":
 - gui/point-cloud-rendering
 - gui/user-experience
 - gui/viewport-navigation
+  > _Status (2026-10-04): **Done** — it now opens by saying what viewport navigation is (moving the 3D viewport's camera around a target point: orbit, pan, zoom, fly, roll, Alt to move the target, Z to frame) and what the spec covers, branch `finding-fix-12-viewport-navigation-opening`._
 - xform/scale-by-measurements
 - xform/select-by-distribution
 
@@ -540,6 +541,7 @@ most of the per-sentence findings.
   - **Mannered prose:**
     - "without ever losing your bearings" → "while keeping track of where the camera is".
     - "lantern illumination" → "illumination that falls off with distance from the target".
+  > _Status (2026-10-04): **Done** for the opening and the two mannered-prose items — the opening says what viewport navigation is and what it is for, "without ever losing your bearings" became "while keeping track of where the camera is", and "lantern" illumination became illumination "that falls off with distance from the target", branch `finding-fix-12-viewport-navigation-opening`. The Failure 4 step lists are still open._
 **Recommendation:** update spec. **Fix the misplaced section first**; the Maintain Z-up change (#614) caused it.
 **Unclear / incorrect / suspicious:** The Windows DirectManipulation section (:792-1017) is a third of the file and might be better as its own `gui/` spec.
 
