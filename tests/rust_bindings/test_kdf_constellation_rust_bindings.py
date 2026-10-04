@@ -353,6 +353,25 @@ def test_bad_arguments_and_a_sourceless_file_are_value_errors(
         )
 
 
+def test_a_wrong_dtype_and_a_missing_source_key_follow_python_conventions(
+    duplicated_capture,
+):
+    """Positions that are not float32 are a TypeError; a missing key a KeyError."""
+    centre, radius, inside = _patch(duplicated_capture)
+    positions = duplicated_capture["positions"][inside]
+    ids = inside.astype(np.uint32).tolist()
+    with pytest.raises(TypeError, match="float32"):
+        duplicated_capture["lazy"].constellation_query(
+            positions.astype(np.float64), feature_ids=ids, image_index=0
+        )
+    sources = dict(duplicated_capture["sources"])
+    del sources["affine_shapes"]
+    with pytest.raises(KeyError, match="affine_shapes"):
+        duplicated_capture["forest"].constellation_query(
+            positions, sources, feature_ids=ids, image_index=0
+        )
+
+
 def test_the_radius_rule_sizes_a_constellation(duplicated_capture):
     """The radius helper picks a disc that holds about the features asked for."""
     positions = duplicated_capture["positions"]

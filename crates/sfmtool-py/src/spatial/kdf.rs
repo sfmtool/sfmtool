@@ -539,6 +539,7 @@ impl PyLazyKdForest {
     ///     `affine_shape`.
     ///
     /// Raises:
+    ///     TypeError: `positions` is not a float32 array.
     ///     ValueError: The arrays disagree, or the file carries no SIFT
     ///         sources, so its features have no image or geometry.
     #[pyo3(signature = (positions, *, descriptors=None, feature_ids=None, image_index=None,

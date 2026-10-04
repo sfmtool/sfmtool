@@ -287,6 +287,10 @@ impl PyKdForest {
     ///
     /// Returns:
     ///     The same list of dicts `LazyKdForest.constellation_query` returns.
+    ///
+    /// Raises:
+    ///     KeyError: `sources` lacks one of the four keys above.
+    ///     Otherwise as `LazyKdForest.constellation_query`.
     #[pyo3(signature = (positions, sources, *, descriptors=None, feature_ids=None,
                         image_index=None, center=None, k=DEFAULTS.k,
                         max_leaf_checks=DEFAULTS.max_leaf_checks,

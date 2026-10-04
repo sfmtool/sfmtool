@@ -178,7 +178,7 @@ without anyone having chosen that.
 
 **Why the refit is an enum and not a bare `sigma`.** Off, unweighted and
 weighted are three behaviours, and encoding two of them as `0.0` and infinity
-would put a correctness condition on a float comparison. `None` earns its place
+would put a correctness condition on a float comparison. `None` is kept
 because the resident/file-backed parity tests and anyone diagnosing RANSAC
 itself want the model as it was drawn.
 
@@ -193,9 +193,13 @@ found images whose warp is trustworthy falls monotonically, because the affine
 is the first-order approximation of a homography about the patch centre and the
 term it drops grows with the patch; across five captures the two curves cross
 around fifty, and past two hundred features the warp is wrong more often than
-right. Keypoints cluster on texture and a patch is usually centred on one, so
-the radius this predicts held 70 to 100% of the features asked for in
-measurement.
+right. Across those five captures the share of found images whose warp places
+the ground truth's own correspondences within 3 px is 0.76 / 0.75 / 0.65 / 0.89
+/ 0.33 at fifty features, 0.54 / 0.33 / 0.28 / 0.37 / 0.06 at two hundred and
+0.23 / 0.06 / 0.04 / 0.07 / 0.01 at eight hundred, while image recall rises only
+0.03 to 0.40 over that whole range. Keypoints cluster on texture and a patch is
+usually centred on one, so the radius this predicts held 70 to 100% of the
+features asked for in measurement.
 
 **There is one size and no schedule.** Asking the nearest ten features first and
 widening only when nothing matched would be the cheaper query if a small prefix
@@ -353,8 +357,8 @@ managed 0.22 to 0.72. Candidates whose scale left `[0.5, 2]`
 were 28 to 75% of the candidates at fifty features, with a correctness rate of
 0.00 to 0.50 against 0.58 to 0.89 for the rest. A video walk shows almost none of
 either, because consecutive frames differ by a few percent of scale; the guards
-bite where a small corpus lets chaff dominate a candidate image's correspondence
-list.
+take effect where a small corpus lets wrong correspondences dominate a candidate
+image's correspondence list.
 
 ### Why `k` is larger than the matcher's
 
@@ -456,8 +460,12 @@ rather than unconsidered. Origins are stored by corpus feature ID, nothing index
 them by image, and a corpus may hold any subset of any image, so recovering one
 image's feature IDs is a pass over the whole origin table. The pass is chunked at
 65,536 IDs so it costs a bounded amount of memory and reads each origin block
-once. It is paid once per `constellation_at_pixel` call against an indexed image,
-in exchange for never decompressing that image's descriptors.
+once. It is paid on every `constellation_from_keypoints` call, and so on every
+`constellation_at_pixel` call against an indexed image, which goes through it;
+nothing caches the result between calls. The bench's descriptor search calls
+`constellation_from_keypoints` once per search, so each search pays it. In
+exchange, the query image's descriptors are never decompressed from its `.sift`
+file.
 
 A feature inside the radius that the corpus does not index is dropped from the
 constellation rather than failing the call, so an index built over a subset of a
@@ -495,8 +503,8 @@ where the budget was swept directly it carries 78% of them, against 90% at 512
 and 97% at 2048, and end to end the move to 512 is +0.14 to +0.18 correspondence
 recall on four of five captures and +0.04 to +0.20 image recall on all five, for
 1.7 to 2.3 times the wall time, with residual medians and the correspondence
-count per candidate unchanged -- unlike a larger `k`, the budget replaces chaff
-rather than adding it.
+count per candidate unchanged -- unlike a larger `k`, the budget replaces wrong
+correspondences rather than adding them.
 
 `one_hit_per_image` is on because the hits it drops cannot be right: a point of
 the patch's surface appears once per photograph of it, so at most one hit of a
@@ -592,8 +600,11 @@ handed the same one.
 
 A budget too small for what was asked raises `MemoryError`, a damaged file
 raises `OSError`, and a bad argument raises `ValueError`, matching the rest of
-the `.kdf` surface. A corpus carrying no SIFT sources is a `ValueError`: its
-features have no image to be grouped by.
+the `.kdf` surface. Two argument errors follow Python's own conventions instead:
+`positions` that cannot be read as a float32 array raise `TypeError`, and a
+`sources` mapping without one of the keys it needs raises `KeyError`. A corpus
+carrying no SIFT sources is a `ValueError`: its features have no image to be
+grouped by.
 
 [`scripts/kdf_patch_localize.py`](../../../scripts/kdf_patch_localize.py)
 localizes patches through both paths and asserts they agree, which is where the

@@ -388,6 +388,7 @@ most of the per-sentence findings.
   - "earns its place" → "is kept".
 **Recommendation:** update code. Map the length mismatch to `ValueError` and add a test, then shrink the doc comments.
 **Unclear / incorrect / suspicious:** The per-gesture `image_feature_ids` pass is probably the largest cost in interactive latency at DinoLedge scale (9.7M origins). Measure it.
+> _Status (2026-10-04): **Partially done** — the spec now says the origin-table pass is paid on every `constellation_from_keypoints` call, uncached, including each bench search; it documents the `TypeError` (positions not float32) and `KeyError` (missing `sources` key) cases, which a new binding test pins, and the bindings' docstrings list them; the `AffineRefit`, seeding, `radius_for_feature_count` and `NeighborIndex` doc comments are cut to a contract plus a pointer at the spec, with the per-capture radius numbers moved into the spec; the three mannered phrases are replaced. Not done: measuring the `image_feature_ids` pass at DinoLedge scale. Branch `report-fix-10-kdf-constellation-remaining`._
 
 ### specs/core/features/covisibility-selection.md
 **Summary:** Three queries on `ClusterCovisibility`: sampled pair displacement, banded thinning (`thin`, `thin_to`) and `reach`. The behaviour largely matches the code.

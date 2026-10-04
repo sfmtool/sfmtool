@@ -8,6 +8,9 @@
 //! image they came from, and keeps the images whose correspondences agree on a
 //! single affine warp. The answer is per image: the warp, how many
 //! correspondences voted for it, and which ones they were.
+//!
+//! `specs/core/features/kdf-constellation-query.md` is the design, and holds the
+//! reasons and measurements behind the choices summarised here.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -35,18 +38,11 @@ const ORIGIN_SCAN_CHUNK: usize = 1 << 16;
 
 /// How the affine a candidate image is reported with is fitted to its consensus.
 ///
-/// Three points are how a model is *found* -- the sample size is what RANSAC's
-/// cost is exponential in -- and a poor way to report one, because a model
-/// passing exactly through three keypoints carries all three keypoints'
-/// localisation noise. Once the consensus is chosen the whole of it can be
-/// fitted, at the cost of one 3x3 solve per reported image, and which images are
-/// found does not change.
-///
-/// Off, unweighted and weighted are three behaviours rather than one number:
-/// encoding the first two as a sigma of zero and of infinity would put a
-/// correctness condition on a float comparison. [`AffineRefit::None`] is kept
-/// because the two forests' parity test and anyone diagnosing RANSAC itself want
-/// the model as it was drawn.
+/// RANSAC finds the model from three points; this chooses what is reported once
+/// the consensus is known. It changes no image's inclusion and no inlier set.
+/// The spec's "Three points find a model; the consensus reports one" says why
+/// the reported model is refitted, its Rust API section why this is an enum
+/// rather than a bare `sigma`, and its Parameters section why `sigma` is 0.5.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AffineRefit {
     /// Report the best three-point model as drawn.
@@ -56,20 +52,12 @@ pub enum AffineRefit {
     /// Least squares with a Gaussian weight in the distance of an inlier's
     /// constellation position from [`Constellation::center`], the standard
     /// deviation being `sigma` times the constellation's radius about that
-    /// centre -- the largest distance from it to any constellation position.
-    ///
-    /// The radius is measured rather than taken from the caller because the
-    /// radius a caller *asked* for can be much larger than the disc its features
-    /// actually fill, and a sigma proportional to an empty rim would flatten the
-    /// weights towards [`AffineRefit::LeastSquares`] without anyone having
-    /// chosen that. A constellation with no centre is fitted as
-    /// `LeastSquares`, which is the honest reading of "no point matters more
-    /// than another".
+    /// centre -- the largest distance from it to any constellation position,
+    /// not the radius the caller asked for. A constellation with no centre is
+    /// fitted as [`AffineRefit::LeastSquares`].
     CenterWeighted {
-        /// Weight scale as a fraction of the constellation radius. At 0.5 the
-        /// rim still weighs `exp(-2)`, about an eighth, so it constrains the
-        /// linear part; at 0.25 it is all but discarded, which is the best warp
-        /// at the centre and the worst over the disc.
+        /// Weight scale as a fraction of the constellation radius. A value that
+        /// is not finite and positive fits as `LeastSquares`.
         sigma: f64,
     },
 }
@@ -261,7 +249,8 @@ pub trait FeatureSources {
     /// it costs a pass over the whole origin table because nothing indexes it
     /// by image: origins are stored in corpus feature-ID order, and a subset
     /// corpus may hold any part of any image. The pass is chunked and reads
-    /// each origin block once.
+    /// each origin block once, and nothing caches its result, so every call
+    /// pays it.
     fn image_feature_ids(&self, image_index: u32) -> Result<HashMap<u32, u32>, KdfError> {
         let total = self.feature_count();
         let mut map = HashMap::new();
@@ -389,17 +378,11 @@ fn out_of_range(id: u32) -> KdfError {
 /// [`ConstellationMatch::inlier_correspondences`] remain that model's own
 /// consensus, which is the set the fit was computed from.
 ///
-/// Determinism is a requirement rather than a nicety here, because this is the
-/// function a `.kdf`'s two access paths are compared through: given the same
-/// neighbours, the resident and file-backed forests must produce identical
-/// warps and identical inlier sets. So candidate images are fitted in ascending
-/// index order, and **each one seeds its own generator from
-/// `params.seed + image_index`** rather than drawing from one generator
-/// threaded through the run. A shared generator would make each image's samples
-/// depend on how many images preceded it, so adding, dropping or reordering a
-/// candidate would silently change every later fit, and two paths handed
-/// identical neighbours could still disagree. That disagreement would read as
-/// an index bug.
+/// The result is deterministic: candidate images are fitted in ascending index
+/// order and each seeds its own generator from `params.seed + image_index`, so
+/// the resident and file-backed forests, given the same neighbours, return
+/// identical warps and inlier sets. The spec's "Seeding per candidate image"
+/// section says why the generator is per image.
 pub fn constellation_query<S, I, F>(
     index: &I,
     sources: &F,
@@ -929,18 +912,10 @@ pub struct PatchConstellation {
 /// image: a disc of that radius is `target / K` of the frame, so a uniform
 /// scattering of `K` keypoints leaves `target` of them inside it.
 ///
-/// Fifty is the size to ask for. Across five captures the share of found images
-/// whose warp places the ground truth's own correspondences within 3 px is
-/// 0.76 / 0.75 / 0.65 / 0.89 / 0.33 at fifty features against 0.54 / 0.33 /
-/// 0.28 / 0.37 / 0.06 at two hundred and 0.23 / 0.06 / 0.04 / 0.07 / 0.01 at
-/// eight hundred, while image recall climbs only 0.03 to 0.40 over that whole
-/// range, because the affine is the first-order approximation of a homography
-/// about the patch centre and the term it drops grows with the patch.
-///
-/// Keypoints cluster where there is texture and a patch is usually centred on
-/// one, so the radius measured at fifty features ran 70 to 100% of what this
-/// predicts; it is a starting point, not a count. An image with no keypoints
-/// has no such radius, and the answer is then zero.
+/// Fifty is the size to ask for; the spec's "Choosing the constellation size"
+/// gives the measurements. Keypoints are not uniform, so the result is a
+/// starting point, not a count. An image with no keypoints has no such radius,
+/// and the answer is then zero.
 pub fn radius_for_feature_count(
     image_width: u32,
     image_height: u32,

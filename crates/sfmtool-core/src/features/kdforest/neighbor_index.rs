@@ -11,19 +11,13 @@ use super::{KdForest, KdfError, LazyKdForest};
 /// Batched approximate k-NN with distances, plus read-back of the corpus
 /// vectors behind a feature ID.
 ///
-/// The resident [`KdForest`] and the file-backed [`LazyKdForest`] already have
-/// both operations and, for the same forest, answer them identically: the file
-/// stores the topology, leaf order and feature IDs rather than a seed, so a
-/// query against the file visits the same leaves in the same order as the
-/// forest it was written from. This trait is what lets an algorithm over those
-/// two operations be written once, and it is also what makes their agreement
-/// testable end to end: the same function, given the same forest through both
-/// paths, must return the same answer rather than merely the same neighbours.
-///
-/// It is deliberately small. Anything a caller wants that only one of the two
-/// can supply -- I/O counters, the cache budget, the in-memory point array --
-/// stays on the concrete type, so adding a method here means both paths really
-/// do have it.
+/// Implemented by the resident [`KdForest`] and the file-backed
+/// [`LazyKdForest`], which for one forest answer both operations identically,
+/// so an algorithm written against this trait returns the same result through
+/// either. Only operations both forests have belong here; anything one of them
+/// alone supplies stays on the concrete type.
+/// `specs/core/features/kdf-constellation-query.md` ("Why an index trait rather
+/// than two functions") gives the reasoning.
 pub trait NeighborIndex<S: ForestScalar> {
     /// Dimensionality of the indexed vectors.
     fn dim(&self) -> usize;
