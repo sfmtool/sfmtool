@@ -141,24 +141,31 @@ condition number, being purely geometric, looks normal.
 Both parts are cheap: the score is closed-form per track, and the only fits are
 the listed rows.
 
-On the Kerry Park ground-truth candidate `tk117` (12 of 387 points at
-infinity), the measured noise is 0.2156 px over 3,510 observations with none
-left out (0.2155 and 0.2157 px for the two lenses), no finite point is called a
-bearing, 12 finite points are finite on the midpoint bound alone, and three
-points at infinity are called finite:
+On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+(391 points, 9 at infinity) the report lists no disagreement: the measured
+noise is 0.2142 px over 3,571 observations with none left out (0.2142 px for
+each of the two lenses), every one of the 382 finite points is called finite,
+12 of them on the midpoint bound alone, and all 9 points at infinity are called
+bearings. Its points 298, 294 and 295 are finite points 480 to 1,070 m from
+their observing cameras. Storing those three as bearings, each at the bearing
+the score fits (`w = 0`, the normal zeroed and the error recomputed, as a
+demotion would store it), and running the report on that copy gives a noise of
+0.2149 px over 3,522 observations, no finite point called a bearing, the same
+12 finite points on the midpoint bound alone, and the three stored bearings
+called finite:
 
 ```
     Points at infinity the test calls finite: 3
       Point              Views        Score        Bound       Lambda       z    Distance
-      pt3d_a9665942_298     10        132.5        132.1        132.5    2.18       511.1
-      pt3d_a9665942_294     21         83.6         77.9         83.6    1.82     1,076.5
-      pt3d_a9665942_295     18         31.1         13.2         31.0    1.10     1,160.3
+      pt3d_4ddeabf6_298     10        155.8        155.5        155.9    2.36       482.0
+      pt3d_4ddeabf6_294     21        102.2         98.2        102.2    2.01       994.6
+      pt3d_4ddeabf6_295     18         38.1         24.7         38.0    1.21     1,071.6
     Reclassification would promote 3 and demote 0
 ```
 
 The `z` at each fitted point is under 4, so the retired z rule called all
-three bearings. After `sfm xform --classify-points-at-infinity` the report on the
-result lists no disagreement (the noise level is then 0.2149 px over 3,559
+three bearings. After `classify_points_at_infinity` on that copy, the report on
+the result lists no disagreement (the noise level is then 0.2142 px over 3,571
 observations, the promoted points' among them). On the in-repo seoul bull
 ground truth (0.4677 px over 1,229 observations, four mismatched keypoints of
 7 to 16 px left out as outliers) the test agrees with every stored point; with

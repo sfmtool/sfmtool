@@ -213,15 +213,20 @@ The default output is a compact label/value block. The fields per type:
   and the default threshold, compared with how each point is stored. Nothing
   is fitted and nothing in the file changes; the disagreements are what
   `sfm xform --classify-points-at-infinity` would change, less the points it
-  declines to (see [analyze-command.md](analyze-command.md)). On the Kerry
-  Park ground-truth candidate `tk117`:
+  declines to (see [analyze-command.md](analyze-command.md)). On the
+  [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+  with its finite points 298, 294 and 295 stored as bearings, the copy
+  described in [analyze-command.md](analyze-command.md) § "The point-or-bearing test":
 
   ```
     Point or bearing (likelihood-ratio test, threshold 25):
-      Noise level: 0.2156 px, measured over 3,510 observations of finite points, 0 excluded as outliers
-      Finite points called bearings: 0 of 375 scored
+      Noise level: 0.2149 px, measured over 3,522 observations of finite points, 0 excluded as outliers
+      Finite points called bearings: 0 of 379 scored
       Points at infinity called finite: 3 of 12 scored (points 298, 294, 295)
   ```
+
+  On the file as stored the last two lines read `0 of 382 scored` and `0 of 9
+  scored`, at 0.2142 px over 3,571 observations.
 
   The counts are out of the scored points; a point with fewer than two usable
   rays is in neither. The promoted points are named by index, highest depth

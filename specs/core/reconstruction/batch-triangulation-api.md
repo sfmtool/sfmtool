@@ -440,7 +440,8 @@ calling a true bearing finite.
   `Λ ≥ bearing_cost − cost(X)`, so the cost at the weighted linear midpoint
   `(Σ AᵢᵀAᵢ)⁻¹ Σ AᵢᵀAᵢ cᵢ` (the point minimising `Σ ‖Aᵢ (X − cᵢ)‖²`), when it
   lies in front of every camera, gives a rigorous lower bound on `Λ`. On the
-  Kerry Park ground truth it is what calls 12 of the 375 finite points finite.
+  [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+  it is what calls 12 of the 382 finite points finite.
   For near-parallel rays the midpoint is a poor point and the bound is small,
   and the score decides.
 - **Exact exits both ways.** `Λ ≤ bearing_cost`, so `bearing_cost < threshold`
@@ -455,35 +456,38 @@ calling a true bearing finite.
   their linearisation is accurate. Wald linearises at the fitted depth, which
   for a far point is mostly noise and has a lopsided uncertainty; the score
   linearises at `ρ = 0`, where the inverse-depth model is close to linear and
-  where the verdict is in question. On the Kerry Park ground truth `tk117` at
-  `σ = 0.216` px, the score from `bearing_score` (sine residuals, weights from
-  `observed_ray`) against `Λ` from fits of both models to the pixel residuals
-  through the camera model:
+  where the verdict is in question. On the Kerry Park ground truth at its
+  measured `σ = 0.2142` px, the score from `bearing_score` (sine residuals,
+  weights from `observed_ray`) against `Λ` from fits of both models to the
+  pixel residuals through the camera model, for its nine points at infinity
+  and its three farthest finite points (295, 294 and 298):
 
   | Point | Views | `depth_score` | `Λ` (pixel residuals) |
   |---|---|---|---|
-  | 154 | 26 | 1.33 | 1.32 |
-  | 153, 155 | 25 | 4.19, 4.21 | 4.19, 4.21 |
-  | 157 | 25 | 6.76 | 6.76 |
-  | 268 | 26 | 7.94 | 7.95 |
-  | 176 | 21 | 8.27 | 8.27 |
-  | 156 | 24 | 9.47 | 9.46 |
-  | 270 | 17 | 11.63 | 11.62 |
-  | 269 | 7 | 14.34 | 14.34 |
-  | 295 | 18 | 30.98 | 30.93 |
-  | 294 | 21 | 83.30 | 83.23 |
-  | 298 | 10 | 131.97 | 132.04 |
-  | 10 (finite, 81 units) | 9 | 2,732 | 2,762 |
-  | 50 (finite) | 13 | 79,711 | 85,331 |
+  | 154 | 26 | 2.34 | 2.34 |
+  | 153 | 25 | 5.73 | 5.73 |
+  | 155 | 25 | 6.49 | 6.50 |
+  | 157 | 25 | 8.53 | 8.53 |
+  | 176 | 21 | 9.69 | 9.69 |
+  | 156 | 24 | 11.59 | 11.58 |
+  | 268 | 26 | 11.62 | 11.62 |
+  | 270 | 17 | 12.95 | 12.94 |
+  | 269 | 7 | 15.69 | 15.68 |
+  | 295 | 18 | 38.32 | 38.25 |
+  | 294 | 21 | 102.84 | 102.75 |
+  | 298 | 10 | 156.87 | 156.94 |
+  | 10 (finite, 79 m) | 9 | 2,807 | 2,837 |
+  | 50 (finite) | 13 | 81,130 | 86,782 |
 
-  The twelve bearings stored in that file are the first eleven rows. The two
+  The nine bearings stored in that file are the first nine rows. The two
   forms agree to the first decimal wherever the verdict is in question and part
   only where both are thousands of times the threshold, or where the rays
   spread so wide that the bound decides (point 91, 4 views over 105°: score 0,
-  `Λ` 635,749). Point 298 is the case that motivated the test: its finite point
-  explains all ten views to a third of a pixel (0.16 px mean, against 0.62 px
-  for the bearing), while the z rule, at its 1 px per-ray noise floor, gave it
-  `z = 2.23`, under its cutoff of 4.
+  `Λ` 646,436 from `fit_point_and_bearing`). Point 298 is the case that
+  motivated the test: its finite point explains all ten views to a fifth of a
+  pixel (0.20 px mean, against 0.68 px for the bearing the score fits), while
+  the z rule, at its 1 px per-ray noise floor, gives it `z = 2.36`, under its
+  cutoff of 4.
 - **Why a 2×3 weight per ray.** The Kerry Park fisheyes stretch pixels per
   radian by up to 2.1 to 1 between the radial and tangential directions, and
   one scalar angular noise per ray misplaces the statistic: for point 298,
@@ -562,7 +566,7 @@ that is behind a camera on the strength of a bearing verdict; it treats the
 track as it treats a finite point behind a camera, pruning the sightings the
 bearing is behind or dropping the track. The flag is often false on finite
 tracks whose rays spread over a wide angle (63 of the Kerry Park ground
-truth's 387 tracks), where the bearing describes nothing and the verdict is
+truth's 391 tracks), where the bearing describes nothing and the verdict is
 finite.
 
 Camera centres that coincide to round-off are one centre. A track's centres
@@ -595,9 +599,9 @@ camera; no case of it has been measured), both costs are robust, and the
 normal equations use
 the second-order (Triggs) scaling bundle adjustment uses. The robust `Λ` is
 smaller than the plain one wherever a residual is past the loss's scale (on the
-Kerry Park ground truth, finite point 10 has `Λ` 2,745.9 plain and 661.8
-robust, from bearing costs 2,753.0 and 668.8 and point costs 7.18 and 7.00;
-point 50 has 85,424 and 5,892), so a report that sets `Λ` beside `depth_score` fits with
+Kerry Park ground truth at its measured 0.2142 px, finite point 10 has `Λ`
+2,819.9 plain and 672.8 robust, from bearing costs 2,826.7 and 679.4 and point
+costs 6.81 and 6.66; point 50 has 86,897 and 5,950), so a report that sets `Λ` beside `depth_score` fits with
 `soft_l1_scale: None`.
 
 ### The measured noise level
@@ -653,8 +657,8 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
 - **An RMS, gated by a robust spread.** `σ_px` has to cover pose, lens-model
   and keypoint error together, and those are heavier-tailed than a Gaussian,
   so it is an RMS rather than a robust spread. On the Kerry Park ground truth
-  the robust spread is 0.137 px against an RMS of 0.216 px, and at 0.137 px
-  even its 13,000-unit bearings score up to 35. A few gross residuals,
+  the robust spread is 0.136 px against an RMS of 0.214 px, and at 0.136 px
+  its bearings score up to 39 and four of its nine are called finite. A few gross residuals,
   mismatched keypoints rather than noise, can still dominate an RMS, so each
   camera's robust spread `s = 1.4826 · median |r|` over the per-axis
   components of its residuals sets a gate, and an observation whose residual
@@ -662,40 +666,41 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   The gate is per camera so that a noisier camera keeps its own tail.
 - **Why the gate is 30 spreads.** The residuals of real solves are not
   Gaussian, and a gate set for a Gaussian (4 to 6 spreads) cuts into the tail
-  `σ` is meant to cover. Measured on the Kerry Park ground truth `tk117`, the
-  in-repo seoul bull ground truth, and `inf2`, a 17-image seoul bull
-  `sift_files` solve with 365 discovered points at infinity, each estimator's
-  `σ` (with the observations a gate leaves out) and the stored points whose
-  verdict at the default threshold disagrees with their storage (points at
-  infinity called finite / finite points called bearings):
+  `σ` is meant to cover. Measured on the Kerry Park ground truth, the in-repo
+  seoul bull ground truth, and `inf2`, a 17-image seoul bull `sift_files` solve
+  with 365 discovered points at infinity, each estimator's `σ` (with the
+  observations a gate leaves out) and the stored points whose verdict at the
+  default threshold disagrees with their storage (points at infinity called
+  finite / finite points called bearings):
 
-  | Estimator | `tk117` | seoul bull ground truth | `inf2` |
+  | Estimator | Kerry Park ground truth | seoul bull ground truth | `inf2` |
   |---|---|---|---|
-  | Plain RMS | 0.2156 (3 / 0) | 0.6461 (0 / 0) | 0.3593 (34 / 0) |
-  | Gate at 5 spreads | 0.1652, 129 out (3 / 0) | 0.2461, 80 out (1 / 0) | 0.2858, 101 out (48 / 0) |
-  | Gate at 10 | 0.2014, 14 out (3 / 0) | 0.3133, 35 out (0 / 0) | 0.3445, 9 out (36 / 0) |
-  | Gate at 20 | 0.2156, 0 out (3 / 0) | 0.4239, 8 out (0 / 0) | 0.3593, 0 out (34 / 0) |
-  | **Gate at 30** | **0.2156, 0 out (3 / 0)** | **0.4677, 4 out (0 / 0)** | **0.3593, 0 out (34 / 0)** |
-  | RMS less the top 1% | 0.1905 (3 / 0) | 0.4002 (0 / 0) | 0.3237 (42 / 0) |
-  | RMS less the top 2% | 0.1783 (3 / 0) | 0.3446 (0 / 0) | 0.3038 (45 / 0) |
-  | Robust spread (MAD) | 0.1370 (5 / 0) | 0.2046 (1 / 0) | 0.2363 (61 / 0) |
+  | Plain RMS | 0.2142 (0 / 0) | 0.6461 (0 / 0) | 0.3593 (34 / 0) |
+  | Gate at 5 spreads | 0.1645, 129 out (1 / 0) | 0.2461, 80 out (1 / 0) | 0.2858, 101 out (48 / 0) |
+  | Gate at 10 | 0.2015, 12 out (0 / 0) | 0.3133, 35 out (0 / 0) | 0.3445, 9 out (36 / 0) |
+  | Gate at 20 | 0.2142, 0 out (0 / 0) | 0.4239, 8 out (0 / 0) | 0.3593, 0 out (34 / 0) |
+  | **Gate at 30** | **0.2142, 0 out (0 / 0)** | **0.4677, 4 out (0 / 0)** | **0.3593, 0 out (34 / 0)** |
+  | RMS less the top 1% | 0.1889 (0 / 0) | 0.4002 (0 / 0) | 0.3237 (42 / 0) |
+  | RMS less the top 2% | 0.1771 (0 / 0) | 0.3446 (0 / 0) | 0.3038 (45 / 0) |
+  | Robust spread (MAD) | 0.1359 (4 / 0) | 0.2046 (1 / 0) | 0.2363 (61 / 0) |
 
-  The two bundle-adjusted solves have their largest residuals at 18.8 and
-  13.1 spreads; a gate at 5 leaves out 3.7% and 3.3% of their observations
+  The Kerry Park ground truth and `inf2` have their largest residuals at 19.1
+  and 13.1 spreads; a gate at 5 leaves out 3.6% and 3.3% of their observations
   and lowers `σ` by 23% and 20%, and trimming a fixed fraction lowers it
-  whether or not anything is gross. On the ground truth the largest four
-  residuals, 7 to 16 px at 34 to 79 spreads, stand apart from the rest of its
-  tail (27 spreads and under) and carry about half of `Σ e²`. A gate at 30 is
-  the one in the table that leaves both solves' tails whole and removes
-  exactly those four. Its `σ` gives the same verdicts as the plain RMS on all
-  three files; on the ground truth it moves bearing 188's score from 3.6 to
+  whether or not anything is gross. On the seoul bull ground truth the largest
+  four residuals, 7 to 16 px at 34 to 79 spreads, stand apart from the rest of
+  its tail (27 spreads and under) and carry about half of `Σ e²`. A gate at 30
+  is the one in the table that leaves the tails of the Kerry Park ground truth
+  and `inf2` whole and removes exactly those four. Its `σ` gives the same
+  verdicts as the plain RMS on all three files; on the seoul bull ground truth
+  it moves bearing 188's score from 3.6 to
   6.9, and that point turns finite only below 0.246 px.
 - **No degrees-of-freedom correction.** The RMS divides by the `2n` residual
   components and takes no account of the parameters fitted to them, so for a
   least-squares fit with Gaussian noise it understates `σ`; the textbook
   correction `2n − 3P − 6I + 7` (`P` finite points, `I` images, less the 7 of
-  the similarity gauge) would raise it by 1.118 on `tk117` and 1.25 on the
-  seoul bull. It is not applied. The parameter count is not something a file
+  the similarity gauge) would raise it by 1.118 on the Kerry Park ground truth
+  and 1.25 on the seoul bull. It is not applied. The parameter count is not something a file
   records: rigs share poses, intrinsics are released or held per camera, and a
   ground truth or a hand-edited file was not fitted as one least-squares
   problem at all. And the correction is one factor on `σ` for the whole
@@ -705,7 +710,7 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
 - **One value, and one per camera beside it.** The default everywhere is the
   overall value. The per-camera values cost one more accumulator per camera
   and are what a caller reads to decide whether one value is enough: the two
-  Kerry Park lenses measure 0.2155 and 0.2157 px. Whether a capture whose
+  lenses of the Kerry Park ground truth both measure 0.2142 px. Whether a capture whose
   cameras differ should weight each camera's rays by its own value is open
   (see "Open questions").
 - **Where the pixel comes from.** An observation's pixel is the inline
@@ -728,16 +733,15 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   parallax a point; because it is in the measure, reclassification, discovery
   and the bench read one level there too. It is a bound of representation and
   not a noise floor (see the glossary).
-- **Rough inputs: a known limitation.** Measured by perturbing converged
-  solves (the seoul bull `sift_files` solve and `tk117`) without
-  re-adjusting them: added Gaussian keypoint noise is followed closely, the
-  measured `σ` matching `√(σ₀² + σ²)` (0.437 against 0.438, 1.061 against
-  1.063, 3.969 against 4.016 px), and with 1% of observations moved 10 to
-  50 px at converged noise the gate leaves out every moved one. Once pose
-  error dominates the residuals, though, the robust spread grows with it and
-  the gate stops catching such outliers (0 of 31 on the seoul bull solve, 0 of
-  35 on `tk117`), which raises `σ` by about 13 to 15% on the seoul bull solve
-  and 5% on `tk117` (over different random draws). The verdicts degrade the way
+- **Rough inputs: a known limitation.** Measured by perturbing a converged
+  solve (the seoul bull `sift_files` solve) without re-adjusting it: added
+  Gaussian keypoint noise is followed closely, the measured `σ` matching
+  `√(σ₀² + σ²)` (0.437 against 0.438, 1.061 against 1.063, 3.969 against
+  4.016 px), and with 1% of observations moved 10 to 50 px at converged noise
+  the gate leaves out every moved one. Once pose error dominates the
+  residuals, though, the robust spread grows with it and the gate stops
+  catching such outliers (0 of 31), which raises `σ` by about 13 to 15% (over
+  different random draws). The verdicts degrade the way
   a larger `σ` makes them: more tracks get bearing verdicts. The measure is
   for a reconstruction that has been bundle-adjusted; on a rough one it
   overstates the noise. Bundle adjustment reads the same estimator on its final
@@ -746,8 +750,8 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   ([bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
   inverse depth and the storage decision").
 
-On the Kerry Park ground truth `tk117` it is 0.2156 px over 3,510
-observations with none left out; on the in-repo seoul bull ground truth,
+On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+it is 0.2142 px over 3,571 observations with none left out; on the in-repo seoul bull ground truth,
 0.4677 px over 1,229, four left out as outliers.
 
 ### Over a reconstruction
@@ -863,12 +867,13 @@ for (k, &point) in result.point_indexes.iter().enumerate() {
   `sift_files` reconstruction without the inline column reads each `.sift`
   file once.
 
-On `tk117` the method reproduces the table of "Score against `Λ`" under
-"Theory": at the measured 0.2156 px, points 298, 294 and 295 score 132.48,
-83.62 and 31.10 and are finite, 269 and 270 score 14.40 and 11.67, and none of
-the 375 finite points gets a bearing verdict (12 of them are finite on the
-midpoint bound alone). At the table's 0.216 px the scores are its 131.97,
-83.30, 30.98, 14.34 and 11.63; the scores scale as `1/σ²`. On the seoul bull
+On the Kerry Park ground truth the method reproduces the `depth_score` column
+of "Score against `Λ`" under "Theory": at the measured 0.2142 px, points 298,
+294 and 295 score 156.87, 102.84 and 38.32 and are finite, the stored bearings
+269 and 270 score 15.69 and 12.95, none of its nine bearings gets a finite
+verdict, and none of the 382 finite points gets a bearing verdict (12 of them
+are finite on the midpoint bound alone). At 0.216 px the five scores are
+154.31, 101.16, 37.69, 15.43 and 12.74; the scores scale as `1/σ²`. On the seoul bull
 ground truth no finite point gets a bearing verdict and none of its 14 bearings
 gets a finite one.
 
@@ -1029,8 +1034,9 @@ pixel gives, and no closer to any of their centres than the minimum depth.
   counted in `no_usable_point`. This is the consumer rule of "Fitting" for a
   caller holding no position. The fit's own `Λ` must also reach the threshold:
   the score is a linear prediction at `ρ = 0` and can exceed `Λ` where the
-  geometry is degenerate, and the point stored is the fit's. On `tk117`, the
-  seoul bull ground truth and `inf2` no promotion fails it.
+  geometry is degenerate, and the point stored is the fit's. On the copy of the
+  Kerry Park ground truth described below, the seoul bull ground truth and
+  `inf2` no promotion fails it.
 - **A finite point stored where no point can be.** A finite verdict on a
   finite point whose stored position is not usable (behind a camera, or on
   top of one) gets the same rule with the position it holds: the fit runs from
@@ -1060,8 +1066,8 @@ pixel gives, and no closer to any of their centres than the minimum depth.
   position on a camera) is cleared.
 - **The minimum depth** is `DEFAULT_MIN_DEPTH_FRACTION` of the median distance
   from a finite point to the centre of a camera observing it (the camera
-  extents when no finite point is observed). On `tk117`, the seoul bull ground
-  truth and `inf2` the stored finite point nearest a camera sits at 13%, 42%
+  extents when no finite point is observed). On the Kerry Park ground truth,
+  the seoul bull ground truth and `inf2` the stored finite point nearest a camera sits at 13%, 42%
   and 39% of that median, so 1% is an order of magnitude below any stored
   point and well above the near-zero depths of the fit's degenerate results.
 - **No noise level, no decision.** Without `sigma_px` and with no observation
@@ -1070,10 +1076,12 @@ pixel gives, and no closer to any of their centres than the minimum depth.
   finite and positive is `InvalidNoiseLevel`, and pixels that cannot be read
   (a `sift_files` file without its `.sift` files) are `Reconstruction`.
 
-On `tk117` it promotes points 298,
-294 and 295 to 511, 1,077 and 1,160 units from their observing cameras
-(errors 0.16, 0.19 and 0.22 px, from 0.81, 0.48 and 0.38 as bearings) and
-demotes nothing; on the seoul bull ground truth it changes nothing; on `inf2`
+On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+it changes nothing. On a copy of it with its finite points 298, 294 and 295
+stored as bearings, each at the bearing the score fits (`w = 0`, the normal
+zeroed and the error recomputed), it promotes those three to 482, 995 and
+1,072 m from their observing cameras (errors 0.17, 0.19 and 0.22 px, from
+0.68, 0.46 and 0.33 as bearings) and demotes nothing; on the seoul bull ground truth it changes nothing; on `inf2`
 it promotes 34 discovered points, at 94 to 400 units (the capture's camera
 extent is 11), and demotes nothing. `sfm analyze --depth-reliability` on each
 result lists no disagreement.
@@ -1235,12 +1243,13 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
 
 - Whether to compute the precise per-track perpendicular baseline `B⊥` for
   the short-baseline diagnostic, or accept the scalar camera-extent upper bound.
-- **The threshold.** `25` puts `tk117`'s points 298, 294 and 295 finite and
-  keeps 269 (`Λ` 14) and 270 (`Λ` 12) as bearings; `10.8` makes those two finite
-  as well, at 2,800 and 4,800 units. Both are defensible on `tk117`; a larger
+- **The threshold.** On the Kerry Park ground truth `25` calls its points
+  298, 294 and 295 finite and keeps its nine bearings, among them 269 (`Λ` 16),
+  270 (`Λ` 13), 268 (`Λ` 12) and 156 (`Λ` 12); `10.8` makes those four finite
+  as well, at 2,800 to 5,000 m. Both are defensible on that file; a larger
   capture with a known far field (KerryPark360) should decide it.
 - **Per-camera σ.** One level per reconstruction, or one per camera when the
-  cameras differ (the two Kerry Park lenses are close, 0.2155 and 0.2157 px;
+  cameras differ (the two lenses of the Kerry Park ground truth are close, both 0.2142 px;
   other rigs may not be).
 - **Finite candidates in discovery.** Discovery appends only bearings (see
   "Consumers"). On the seoul bull `sift_files` solve the finite candidates it

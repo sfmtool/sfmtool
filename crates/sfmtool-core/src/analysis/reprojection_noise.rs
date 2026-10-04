@@ -28,10 +28,11 @@ use crate::reconstruction::{ReconstructionError, SfmrReconstruction};
 /// The gate is far wider than a Gaussian needs because real residuals are
 /// not Gaussian: pose, lens-model and keypoint error give a long tail, and
 /// that tail is noise the test has to allow for. On the Kerry Park ground
-/// truth `tk117` and a seoul bull `sift_files` solve, both bundle adjusted,
-/// the largest residuals sit at 18.8 and 13.1 robust spreads, and a gate of
-/// 5 would leave out 3.7% and 3.3% of their observations and lower `σ` by
-/// 23% and 20%. At 30 neither loses an observation. What the gate removes is
+/// truth (`test-data/images/kerry_park/kerry_park_ground_truth.sfmr`) and a
+/// seoul bull `sift_files` solve, the largest residuals sit at 19.1 and 13.1
+/// robust spreads, and a gate of 5 would leave out 3.6% and 3.3% of their
+/// observations and lower `σ` by 23% and 20%. At 30 neither loses an
+/// observation. What the gate removes is
 /// a residual no noise model explains, a mismatched keypoint: on the seoul
 /// bull ground truth, four residuals at 34 to 79 spreads (7 to 16 px), apart
 /// from the rest of its tail (27 spreads and under), which carried about half

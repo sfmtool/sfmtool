@@ -922,11 +922,12 @@ other representation than the caller handed in.
 
 The decision changes representations without refitting the poses. A point the
 solve left at `ρ > 0` and the decision stores as a bearing leaves poses that
-were fitted to it as a finite point: re-solving the clean `tk117` result with
-the crossing off, every point held in the representation the decision stored,
-lowers its cost by 16.6 noise units and takes the scores of the six far points
-the decision made finite (see the table below) back under the threshold of
-25. No refit follows the decision, because a solve
+were fitted to it as a finite point: re-solving the result of the clean
+[Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+with the crossing off, every point held in the representation the decision
+stored, lowers its cost by 17.3 noise units and takes the scores of the six
+far points the decision made finite (see the table below) back under the
+threshold of 25, to 18.8 to 24.2. No refit follows the decision, because a solve
 that carries a point in the representation just chosen is the direction bias
 described below ("Why inverse depth"), which pulls each score toward the side
 it was put on; the poses the inverse-depth solve leaves are the ones fitted with
@@ -978,7 +979,7 @@ round, where both parametrisations read the same state, the translation blocks
 of the reduced system agree to the printed digits for the images observing the
 most far points (on the Kerry Park solve with 1 px of keypoint noise up to 30%
 of an image's observations on points more than fifty times farther from their
-anchor than the camera is, and on `tk117` up to 28%), with smallest-to-largest eigenvalue
+anchor than the camera is), with smallest-to-largest eigenvalue
 ratios of 0.09 to 0.65. Only `ρ = 0` exactly makes the column zero, and that is
 the case the existing pin covers; no damping that reads the column's size is
 needed.
@@ -990,8 +991,8 @@ can sit away from cameras a rough start has moved. Because the re-estimation
 reads a position between rounds anyway, `ρ` keeping its meaning across rounds
 buys nothing. Measured on the default schedule, the two choices store the same
 representation for every point, and agree on the median residual to 0.001 px,
-on every start up to 1° and 5% on `tk117`, the seoul bull ground truth, the
-Kerry Park solve and the seoul bull `sift_files` solve. From 4° and 20% on the
+on every start up to 1° and 5% on the seoul bull ground truth, the Kerry Park
+solve and the seoul bull `sift_files` solve. From 4° and 20% on the
 Kerry Park solve, at 200 iterations a round, where both converge, the anchor at
 the input poses stops the second round after 17 iterations and the result keeps
 3,002 observations under 4 px, with 165 directions and 9 points disagreeing with
@@ -1074,10 +1075,10 @@ out. Every default-iteration run converges.
 
 | Input | Start | Between rounds: dirs, disagree, median (px) | Inverse depth: dirs, disagree, median (px) |
 |---|---|---|---|
-| `tk117` | clean | 12 → 9, 0, 0.168 | 12 → 3, 0, 0.166 |
-| `tk117` | 1 px keypoints | 12 → 12, 0, 1.018 | 12 → 12, 0, 1.021 |
-| `tk117` | 0.2° and 1%, 1 px | 12 → 13, 0, 1.019 | 12 → 12, 1, 1.017 |
-| `tk117` | 1° and 5%, 1 px | 12 → 12, 0, 1.015 | 12 → 12, 1, 1.016 |
+| Kerry Park ground truth | clean | 9 → 9, 0, 0.167 | 9 → 3, 0, 0.165 |
+| Kerry Park ground truth | 1 px keypoints | 9 → 12, 0, 1.016 | 9 → 12, 0, 1.022 |
+| Kerry Park ground truth | 0.2° and 1%, 1 px | 9 → 12, 1, 1.018 | 9 → 12, 1, 1.014 |
+| Kerry Park ground truth | 1° and 5%, 1 px | 9 → 12, 1, 1.018 | 9 → 12, 1, 1.018 |
 | seoul bull ground truth | clean | 14 → 14, 0, 0.256 | 14 → 13, 0, 0.254 |
 | seoul bull ground truth | 1 px keypoints | 14 → 14, 0, 0.913 | 14 → 14, 0, 0.914 |
 | seoul bull ground truth | 0.2° and 1%, 1 px | 14 → 14, 0, 0.911 | 14 → 14, 0, 0.915 |
@@ -1087,7 +1088,7 @@ out. Every default-iteration run converges.
 | Kerry Park solve | 0.2° and 1%, 1 px | 0 → 213, 34, 0.892 | 0 → 156, 4, 0.898 |
 | Kerry Park solve | 1° and 5%, 1 px | 0 → 218, 33, 0.897 | 0 → 158, 4, 0.902 |
 | seoul bull `sift_files` solve | every start | 0 → 0, 0 | 0 → 0, 0, medians equal |
-| `tk117` | 1° and 5%, 5 iterations | 12 → 44, 67, 3.52 | 12 → 24, 67, 2.54 |
+| Kerry Park ground truth | 1° and 5%, 5 iterations | 9 → 43, 78, 3.75 | 9 → 21, 49, 2.47 |
 | seoul bull ground truth | 1° and 5%, 5 iterations | 14 → 24, 114, 4.29 | 14 → 10, 129, 4.48 |
 | Kerry Park solve | 1° and 5%, 5 iterations | 0 → 658, 58, 2.03 | 0 → 243, 311, 1.38 |
 | seoul bull `sift_files` solve | 1° and 5%, 5 iterations | 0 → 75, 228, 6.29 | 0 → 8, 272, 4.64 |
@@ -1096,32 +1097,34 @@ On the converged Kerry Park runs the disagreements fall from 27 to 34 to 4 or
 5, and the directions from 174 to 218 to 135 to 158: the crossing between
 rounds left marginal far points still settling as directions when the three
 rounds ended, and inverse depth settles them within the rounds. The one
-disagreement on the degraded `tk117` runs and on the seoul bull ground truth from
-1° and 5% is read at the result's own level, a little above the level the
-decision read; at the decision's level every converged run agrees with the
-test on every point. On the clean `tk117` the solve makes 9 of its 12 bearings
-finite where the crossing between rounds made 3 (298, 294 and 295, which
-reclassification of the input promotes). The six others score 7 to 14 at the
-input, 8 to 16 after the solve that carries them as directions, and 28 to 34
-after the one that carries them in inverse depth. They are depth the capture
-supports. Rebuilt synthetically on `tk117`'s own geometry -- its poses, lenses
-and finite points, with the observation patterns of its 12 bearings repeated
-five times (60 far tracks) and 0.21 px of noise, over four draws -- tracks that
-are truly at infinity are made finite by the inverse-depth solve in 0 of 600
-cases (mean score 0.9 to 1.0, against 0.4 to 0.5 at the true poses). Tracks
-truly 2,500 units out score about 28.6 to 31.7 at the true poses and 27.0 to
-32.6 after the inverse-depth solve, which makes 164 of 240 finite, but about
-3.5 to 4.1 when carried as directions: the crossing between rounds makes 1 of
-240 finite and the crossing off 0. At 5,000 units 4 of 240 are finite at the
-true poses and 11 of 240 after the inverse-depth solve. A lens error moves the
+disagreement on the Kerry Park ground truth from 0.2° and 1% and from 1° and
+5%, and on the seoul bull ground truth from 1° and 5%, is read at the result's
+own level, a little above the level the decision read; at the decision's level
+every converged run agrees with the test on every point. On the clean Kerry
+Park ground truth the solve makes 6 of its 9 bearings finite (156, 157, 176,
+268, 269 and 270), where the crossing between rounds makes none. The six score
+9 to 16 at the input, 9 to 16 after the solve that carries them as directions,
+and 28 to 34 after the one that carries them in inverse depth. They are depth
+the capture supports. Rebuilt synthetically on the Kerry Park ground truth's
+own geometry -- its poses, lenses and finite points, with the observation
+patterns of its 9 bearings repeated five times (45 far tracks) and 0.21 px of
+noise, over four draws (ten for the tracks truly at infinity) -- tracks that
+are truly at infinity are made finite by the inverse-depth solve in 0 of 450
+cases (mean score 0.5 to 1.8, against 0.2 to 1.1 at the true poses). Tracks
+truly 2,500 m out score about 37.9 to 42.8 at the true poses and 41.3 to 46.1
+after the inverse-depth solve, which makes 166 of 180 finite, but about 3.8 to
+4.6 when carried as directions: the crossing between rounds makes 2 of 180
+finite and the crossing off 0. At 5,000 m 9 of 180 are finite at the true
+poses and 26 of 180 after the inverse-depth solve. A lens error moves the
 scores of true bearings further in inverse depth than when they are carried as
 directions: with the focal 1% off, the mean score of the truly infinite tracks
-is about 42 to 49 against about 21 to 23 under the crossing between rounds, and
-2 of 240 are made finite; with it 0.3% off, none are. The five-iteration disagreements are read at
-the result's own level, which unconverged poses put at 8 to 11 px on the three
-inputs other than the Kerry Park solve, a level at which the test calls most
-points bearings; the decision's level, read over the observations the final
-round kept, is 1.2 to 1.6 px there. No input produced a `NaN` point.
+is about 60 to 70 against about 35 under the crossing between rounds, and 1 of
+180 is made finite; with it 0.3% off, the mean score is about 7 to 9 against
+about 4, and 1 of 180 is made finite. The five-iteration disagreements are
+read at the result's own level, which unconverged poses put at 7 to 11 px on
+the three inputs other than the Kerry Park solve, a level at which the test
+calls most points bearings; the decision's level, read over the observations
+the final round kept, is 1.2 to 1.6 px there. No input produced a `NaN` point.
 
 ### Ranged points: a direction at a distance
 
