@@ -71,6 +71,9 @@ specced under [../gui/](../gui/README.md).
 
 ## COLMAP Interop
 
+The COLMAP file reading and writing these commands share is described in
+[../formats/colmap-interop.md](../formats/colmap-interop.md).
+
 | Command | Spec |
 |---------|------|
 | `sfm to-colmap-bin` | [to-colmap-bin-command.md](colmap-interop/to-colmap-bin-command.md) |

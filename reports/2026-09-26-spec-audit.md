@@ -874,6 +874,8 @@ most of the per-sentence findings.
 **Why it matters:** It is internal but load-bearing for four CLI commands.
 **Recommendation:** Acceptable without a spec for now. Add a paragraph to `cli/colmap-interop/README.md` covering ID and coordinate conventions.
 
+> _Status (2026-10-04): **Done** — added `specs/formats/colmap-interop.md` (the crate's public interface, its callers, ID and ordering rules, supported camera models, which side does the coordinate conversion, and what each direction stores, drops and refuses), indexed it in `specs/formats/README.md` and linked it from the COLMAP Interop section of `specs/cli/README.md` (there is no `cli/colmap-interop/README.md`), branch `report-fix-23-sfmtool-colmap-spec`._
+
 ---
 
 ## Carried forward from the 2026-09-05 audit

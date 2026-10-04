@@ -16,6 +16,10 @@ spec is [archive-io-crate.md](archive-io-crate.md), which describes the Rust
 crate behind the container and is kept beside the container spec it
 implements.
 
+[colmap-interop.md](colmap-interop.md) is the exception: COLMAP defines its own
+formats, so that spec describes how the `sfmtool-colmap` crate maps them onto
+sfmtool's data rather than defining a format.
+
 | Document | Crate | Description |
 |----------|-------|-------------|
 | [archive-container.md](archive-container.md) | — | The container the formats are built on: ZIP with STORE, per-entry zstd, columnar binary entries, and the XXH128 section and whole-file hashes. |
@@ -27,3 +31,4 @@ implements.
 | [camrig-file-format.md](camrig-file-format.md) | `sfmtool-camrig-format` | The `.camrig` camera-rig description and its pattern matching. |
 | [sfmtool-camera-models.md](sfmtool-camera-models.md) | — | The `SFMTOOL_PINHOLE` and `SFMTOOL_FISHEYE` camera models as they appear on disk. Kernels in [../core/camera/](../core/camera/README.md). |
 | [cluster-selection.md](cluster-selection.md) | `sfmtool-matches-format` | `MatchesData::select_clusters`: deriving a smaller, self-contained `.matches` working set. |
+| [colmap-interop.md](colmap-interop.md) | `sfmtool-colmap` | Reading and writing COLMAP's binary model and SQLite database: ID remapping, the camera models it translates, and where the coordinate conversion happens. |
