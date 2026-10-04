@@ -803,9 +803,12 @@ about which track is focused or what its dot does.
 
 #### Feature Filtering
 
-Features in `.sift` files are sorted by decreasing size (largest first). The Image Detail
+Extracted `.sift` files list features by decreasing size (largest first); a derived file,
+such as one `sfm undistort` writes, keeps its source order and may not be exactly sorted
+(see [Feature ordering](../formats/sift-file-format.md#feature-ordering)). The Image Detail
 panel provides scene-level filtering controls to limit which features are displayed. Both
-filters produce a prefix of the sorted array, so they compose naturally.
+filters produce a prefix of the array, so they compose naturally; on a file that is not
+exactly sorted, that prefix is close to, but not exactly, the set the filters describe.
 
 **Scene-level settings** (in `AppState`):
 
