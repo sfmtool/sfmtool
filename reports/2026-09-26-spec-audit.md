@@ -196,6 +196,7 @@ who knows the subject needs to read it as a claim before it goes in.
    - Current: "A reconstruction member is drawn from a cluster selection…"
    - Problem: TEMPLATE.md already cites this as a "Not this" example, and it is still unfixed.
    - Proposed: *"A reconstruction built from a few large feature clusters leaves smaller, better-localized clusters unused; this kernel lists them, grouped by feature radius, so a caller can add them back one band at a time."*
+   > _Status (2026-10-04): **Done** — rewrote the opening paragraph from the proposal, checked against `source_clusters.rs` and `cluster_radii.rs`: it says what a cluster is, that only left-out clusters seen by at least two placed images are returned, that the bands are measured from the smallest radius the reconstruction already holds (the top band can be open above it, so the candidates are not all smaller), and it defines member, admission and selection for the sections below. `TEMPLATE.md`'s "Not this" quote is from the § "The join is exact" paragraph, not the old opening, and is left as is, branch `finding-fix-04-source-clusters-opening`._
 5. **`core/features/randomized-kdtree-forest.md:3`**
    - Current: "Forests can be persisted and searched under a bounded decoded-data cache as specified in…"
    - Problem: it is a "see also" and never says what a forest is.
