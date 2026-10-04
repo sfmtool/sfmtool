@@ -14,10 +14,13 @@ itself, so it needs no `.sift` files. The pipeline in this spec, the one behind
 `sfm embed-patches`, converts a loaded reconstruction from the first mode to the
 second (`feature_source` `sift_files` → `embedded_patches`; the two modes are
 defined in [sfmr-file-format.md](../../formats/sfmr-file-format.md),
-"Observation source"). Besides removing the dependency on the `.sift` files, the
-conversion places the keypoints by matching each point's patch across the images
-that see it, rather than keeping the SIFT detections, and it can add to a
-point's track the images that SIFT matching missed.
+"Observation source"). The purpose of the conversion is to make photometric
+patch matching, in place of SIFT descriptor matching, decide each point's track
+and keypoints: an image joins the track when the point's patch rendered in it
+agrees with the other images' renders, an observation whose render does not
+agree is dropped, and each kept keypoint is placed by registering the patch
+across the track's images rather than kept at the SIFT detection. The `.sift`
+files seed this and are not read afterwards.
 
 In order, it builds an oriented patch per point (the `(u, v)` frame + normal),
 then for each point expands its track with the other vetted views that see the
