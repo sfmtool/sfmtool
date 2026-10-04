@@ -204,7 +204,7 @@ who knows the subject needs to read it as a claim before it goes in.
    - Current: "A reconstructed 3D point `X` is seen by cameras `{(Kᵢ, Tᵢ)}`."
    - Problem: notation comes before any words.
    - Proposed: *"Photometric patch-normal refinement finds the surface orientation at a reconstructed point by trying candidate normals and keeping the one whose rendered patches look most alike across the images that see it."*
-   > _Status (2026-10-04): **Done** — `patch-normal-refinement.md` now opens with a plain-language paragraph built on the proposed sentence ("renders that patch from each of those images", the narrowing multi-pass search) that also names its callers: `sfm embed-patches`, `sfm xform --refine-normals`, and the `--strips` views of `sfm compare` and `sfm inspect`; the notation paragraph follows under § Problem, branch `finding-fix-06-patch-normal-refinement-opening`._
+   > _Status (2026-10-04): **Done** — `patch-normal-refinement.md` now opens with a plain-language paragraph built on the proposed sentence ("renders that patch from each of those images", the coarse-to-fine grid search) that also names its callers: `sfm embed-patches`, `sfm xform --refine-normals`, and the `--strips` views of `sfm compare` and `sfm inspect`; the notation paragraph follows under § Problem, branch `finding-fix-06-patch-normal-refinement-opening`._
 7. **`core/patch/sift-to-patch-reconstruction.md:5`**
    - Current: "A `sift_files` reconstruction locates each observation by a reference…"
    - Problem: it opens on a field value.
