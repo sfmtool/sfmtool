@@ -2682,7 +2682,7 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
 - The painting proposes verdicts from the stored measurements, leaves a pinned
   verdict and an unmeasured row alone, and gives one image one `in`.
 - `bar_checks` passes and fails each bar, fails a `NaN`, and judges neither a
-  missing reading nor a bar at `0`; the projection bar reads the reprojection
+  missing reading nor the middle bar at `0`; the projection bar reads the reprojection
   error before the projection offset.
 - `verdicts_if_unpinned` gives an unpinned row the painting's verdict, and a
   pinned one, `in` or `out`, with and without a competing sighting in its
@@ -2699,7 +2699,7 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   both.
 - A half whose every row is `out` still splits: it is a cluster cut around the
   one row it has, and the verdicts travel with the rows.
-- An empty list, or all of the observations, is refused.
+- An empty list, all of the observations, or an index past the end is refused.
 
 **The commit.**
 - Every commit path writes what it should: appending, replacing, absorbing a
@@ -2742,8 +2742,9 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   triangulates back to within a pixel's worth of where the point was; the round
   trip keeps the patch's axes the same way round, and the stage report states
   the stage once. Setting the current stage reports `changed: false`.
-- A cluster started from a pixel spans the radius it was asked for, and refines,
-  upgrades and commits a point onto the planted surface.
+- A cluster started from a pixel spans the radius it was asked for; one started
+  from two pixels refines, upgrades and commits a point onto the planted
+  surface.
 
 **The refusals.**
 - Each refusal names what did not hold: fewer views than images, a track-stage
@@ -2763,9 +2764,10 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   reports the label it took, and leaves the original exactly as it was.
 - Its commit creates a point rather than replacing the original's.
 
-**Placing a sighting, and sizing and turning the patch (pixel forms).** Each
-claim is checked under a pinhole and under a distorting lens, where it holds
-exactly and within the lens's inverse-map tolerance respectively.
+**Placing a sighting, and sizing and turning the patch (pixel forms).** The
+slide and the edge resize are each run under a pinhole and under a distorting
+lens, where they hold exactly and within the lens's inverse-map tolerance
+respectively; the bearing's edge resize and the turn are run under the lens.
 - A slide lands the centre under the pointer in the image it was dragged in.
   The displacement lies in the patch's own plane, with the normal, the axes and
   the size untouched; every sighting keeps its own in-plane offset from where
@@ -2815,6 +2817,7 @@ exactly and within the lens's inverse-map tolerance respectively.
   move; the sightings move by different amounts.
 - A patch pushed out past the cameras leaves every sighting with no keypoint and
   `NoProjection`, drops the bitmap and the measurements and pins nothing; a
+  translation inside the patch's own tolerance reports `changed: false`; a
   distance that is not a finite number, a bearing and a cluster are refused.
 - A tilt is the least rotation: its axis is perpendicular to both normals, so
   `u` and `v` keep their components along it and no spin comes with the turn.
@@ -2830,7 +2833,8 @@ exactly and within the lens's inverse-map tolerance respectively.
 - A sighting whose own piece of the patch swings behind its camera is left with
   no keypoint and `NoProjection` while the centred one survives; the bitmap and
   the measurements go and nothing is pinned. A direction that is not one, a
-  track at infinity and a cluster are refused.
+  track at infinity and a cluster are refused, and a tilt onto the normal the
+  patch already shows reports `changed: false`.
 
 **Finite points and bearings.** The fixture's scene takes its camera centres
 and its plane depth as arguments, with the texture's frequency scaled by the
@@ -2882,7 +2886,8 @@ side gives real baseline. These fits classify at a stated 0.5 px
 - The far point's exact projections are a point at a stated 0.02 px
   (`ScoreCleared`, about 200 units out) though their z is under 4, and a bearing
   at 0.5 px.
-- Rays built by hand cover the rest: a ring of five cameras at 0.04 rad
+- Rays built by hand cover the rest: a ring of five cameras at 0.04 rad,
+  where the score is under the threshold and the bound far over it
   (`MidpointBoundCleared`); parallel rays (`BearingCostBelowThreshold`); a
   minimum depth past the point (`NoUsablePoint`, written as the bearing, or
   `HeldPointKept` when a held place beyond that depth is usable); and two
