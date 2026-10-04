@@ -4,9 +4,6 @@ One spec per `sfm` subcommand, in the directory matching the category the
 command is registered under in `src/sfmtool/cli.py` — the same grouping
 `sfm --help` prints. Implementations live in `src/sfmtool/_commands/`.
 
-`sfm explorer` is the only command without a spec; the viewer it launches is
-specced under [../gui/](../gui/README.md).
-
 ## Workspace
 
 | Command | Spec |
@@ -57,6 +54,7 @@ specced under [../gui/](../gui/README.md).
 | Command | Spec |
 |---------|------|
 | `sfm epipolar` | [epipolar-command.md](visualization/epipolar-command.md) |
+| `sfm explorer` | [explorer-command.md](visualization/explorer-command.md) — launches the viewer specced under [../gui/](../gui/README.md) |
 | `sfm heatmap` | [heatmap-command.md](visualization/heatmap-command.md) |
 | `sfm render-patches` | [render-patches-command.md](visualization/render-patches-command.md) |
 | `sfm panorama` | [panorama-command.md](visualization/panorama-command.md) |

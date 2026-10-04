@@ -4,11 +4,11 @@ SfM Explorer, the sfmtool 3D viewer, is a native Rust application in the
 `sfm-explorer` crate. It opens a `winit` window, draws the 3D scene with `wgpu`,
 and draws its panels with `egui` inside the same frame, running its own event
 loop rather than eframe's. `pixi run gui` runs the crate's `sfm-explorer`
-binary; `sfm explorer` runs `launch-sfm-explorer`, a binary that the
-`sfmtool-py` crate builds and the Python wheel ships, as a subprocess. Both
-call `sfm_explorer::run`. `lib.rs` owns the window and the event loop, `app.rs`
-runs each frame, `dock.rs` routes the panels, `scene_renderer/` owns the GPU
-passes and `state.rs` holds the application state. This spec records why the
+binary; `sfm explorer` runs `launch-sfm-explorer`, a binary target of the
+`sfmtool-py` crate, as a subprocess found on `PATH`. Both call
+`sfm_explorer::run`. `lib.rs` owns the window and the event loop, `app.rs` runs
+each frame, `dock.rs` routes the panels, `scene_renderer/` owns the GPU passes
+and `state.rs` holds the application state. This spec records why the
 viewer is built on this stack, what each module is responsible for, the order
 of the render passes, how it is built and launched, its performance targets,
 what differs per platform, and how it is tested.
@@ -391,8 +391,10 @@ pixi run cargo-check
 
 The GUI runs as a standalone binary (`sfm-explorer`). It can be launched via
 `pixi run gui` or `sfm explorer` from the CLI. The `sfmtool-py` crate includes
-a `launch-sfm-explorer` binary that the Python wheel ships, and the
-`sfm explorer` CLI command runs it as a subprocess.
+a `launch-sfm-explorer` binary, and the `sfm explorer` CLI command runs it as a
+subprocess, found on `PATH`. maturin builds only the extension module, so the
+wheel does not contain that binary; see
+[explorer-command.md](../cli/visualization/explorer-command.md).
 
 ---
 

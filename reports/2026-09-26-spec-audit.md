@@ -863,6 +863,7 @@ most of the per-sentence findings.
 **Why it matters:** It is user-facing. docs/index.md shows the GUI but cannot point to a command.
 **Recommendation:** Write `specs/cli/visualization/explorer-command.md`, a short spec that covers the flags and links to `gui/architecture.md`.
 > _Status (2026-10-04): **Partially done** — `docs/index.md` now names the command (`sfm explorer <file>.sfmr`). The command spec is not written yet. Branch `report-fix-06-docs-index`._
+> _Status (2026-10-04): **Done** — wrote `specs/cli/visualization/explorer-command.md` (arguments and options, the `--mcp FILE` Click pitfall, how `launch-sfm-explorer` is found on `PATH` and run as a subprocess calling `sfm_explorer::run`, the viewer options it does not forward, links to `specs/gui/`) and added its row to `specs/cli/README.md`. Building a wheel with maturin 1.15 showed `launch-sfm-explorer` is not in the wheel or the editable install, so the "Python wheel ships" claim in `gui/architecture.md` and the AGENTS.md line saying `sfm explorer` runs the same binary as `pixi run gui` were corrected, branch `report-fix-22-explorer-command-spec`._
 
 ### crates/sfmtool-py (binding surface)
 **What it does:** It is the whole Python API (`sfmtool._sfmtool.*`). It is cited only piecemeal from individual core specs.

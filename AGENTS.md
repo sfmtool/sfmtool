@@ -300,8 +300,13 @@ backlog and keep them honest as findings get addressed:
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.
-- `sfm explorer` launches the same binary as `pixi run gui`, just via the
-  Python CLI through the bindings.
+- `sfm explorer` does not run the same binary as `pixi run gui`. It runs
+  `launch-sfm-explorer`, a binary target of `sfmtool-py`, as a subprocess
+  found on `PATH`; `pixi run gui` runs the `sfm-explorer` crate's own
+  `sfm-explorer` binary. Both call `sfm_explorer::run`, so the viewer is the
+  same. maturin does not put `launch-sfm-explorer` in the wheel or the editable
+  install: build it with `pixi run cargo build --release -p sfmtool-py` and put
+  `target/release` on `PATH`. See `specs/cli/visualization/explorer-command.md`.
 - **The viewer can be driven over MCP, and an agent may own its lifecycle.**
   `pixi run gui-mcp <file>.sfmr` hosts a Model Context Protocol endpoint on
   `127.0.0.1:8787` for reading the scene graph, moving the selection and the 3D
@@ -332,8 +337,8 @@ backlog and keep them honest as findings get addressed:
   with `--scope project` would point every contributor's session at a loopback
   port that is usually not listening, and hand them a failed server on every
   start.
-- Not every CLI command has a spec yet. The `xform` sub-commands are specced
-  under `specs/cli/reconstruction/xform/` rather than as top-level commands.
+- The `xform` sub-commands are specced under
+  `specs/cli/reconstruction/xform/` rather than as top-level commands.
 - Python 3.14 and Rust 1.98 are pinned in `pixi.toml`. That is the *development*
   toolchain, and it is deliberately not the same thing as the MSRV: the workspace
   declares `rust-version = "1.97"` in `[workspace.package]` (inherited by every
