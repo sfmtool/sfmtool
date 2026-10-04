@@ -3,11 +3,13 @@
 Image warping resamples a whole image from one camera into another through a
 precomputed per-pixel map: for each output pixel, the map holds the position in
 the input image to sample. `sfm undistort` uses it to convert each photograph
-from its own camera model (fisheye or another distorted model) to a pinhole
-camera with square pixels. The same map, built from a rotation, a pose or an
-oriented patch instead of from the two cameras' intrinsics alone, renders the
-small image patches that the patch-refinement, strip-montage, viewer and
-panorama-tile code compare.
+from its own distorted perspective camera model (such as OPENCV; fisheye and
+equirectangular cameras are rejected) to a pinhole camera with square pixels.
+The same map, built from the rotation between two cameras or from an oriented
+patch instead of from the two cameras' intrinsics alone, renders the panorama
+tiles and the small image patches that patch refinement and strip montages
+compare and the viewer displays. A third constructor builds it from two poses
+and a depth.
 
 This spec describes the two building blocks in the Rust `sfmtool-core` crate:
 
@@ -168,8 +170,12 @@ output camera model and project through the input camera model:
 #### Output Camera Construction
 
 For undistortion, the caller constructs a PINHOLE `CameraIntrinsics` as the
-destination camera. Typically this preserves the original focal lengths, principal
-point, and image dimensions — just with all distortion coefficients removed.
+destination camera. `sfm undistort` gets it from
+`CameraIntrinsics::best_fit_inside_pinhole` or `best_fit_outside_pinhole`
+([pinhole_fit.rs](../../../crates/sfmtool-core/src/camera/distortion/pinhole_fit.rs)):
+the principal point is the image centre, `fx = fy`, and the focal length is
+found by binary search so that the pinhole frame fits inside, or encloses, the
+distorted image. Both return an error for fisheye and equirectangular cameras.
 
 ### Parallelization
 

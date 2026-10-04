@@ -188,7 +188,7 @@ who knows the subject needs to read it as a claim before it goes in.
    - Current: "The Rust codebase has complete implementations of `distort()` and `undistort()`…"
    - Problem: it describes a change, and the claim about pycolmap is stale.
    - Proposed: *"Image warping resamples a whole photograph from one camera model into another (for example, undistorting a fisheye image into a pinhole one) through a precomputed per-pixel map."*
-   > _Status (2026-10-04): **Done** — replaced the "Motivation" section's change narrative with an opening paragraph under the title: it says what the warp map is, that `sfm undistort` uses it to convert photographs to a square-pixel pinhole camera (it no longer calls pycolmap, so the stale claim is gone), and that the rotation-, pose- and patch-built maps render the patches used by patch refinement, strip montages, the viewer and panorama tiles, branch `finding-fix-02-image-warping-opening`._
+   > _Status (2026-10-04): **Done** — replaced the "Motivation" section's change narrative with an opening paragraph under the title: it says what the warp map is, that `sfm undistort` uses it to convert photographs to a square-pixel pinhole camera (it no longer calls pycolmap, so the stale claim is gone), and that the rotation- and patch-built maps render the panorama tiles and the patches used by patch refinement, strip montages and the viewer, branch `finding-fix-02-image-warping-opening`._
 3. **`core/spherical/photometric-subsets-ransac.md:3`**
    - Current: the first prose is a link-reference definition, followed by "The input is a [`PerSphericalTileSourceStack`]…".
    - Problem: it never says what the algorithm is for.
