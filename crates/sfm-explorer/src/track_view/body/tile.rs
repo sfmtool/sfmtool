@@ -37,12 +37,20 @@
 //! the track stage, where the track's point projects, which is the other end of
 //! the row's reprojection error.
 //!
-//! **The *Zoom* column reads the tile's warp without drawing it**
-//! ([`tile_jacobian`]): the Jacobian at the centre of the same warp, from the
+//! **The *Zoom* column reads the patch's warp without drawing it**
+//! ([`patch_jacobian`]): the Jacobian at the centre of the same warp, from the
 //! same patch re-anchored on the same place, camera and pose, read by core's
-//! `patch_grid_jacobian` with no photograph in it. So the column and
+//! `patch_grid_jacobian` with no photograph in it, on the patch grid at the
+//! reconstruction's patch resolution `R` ([`crate::bench::patch_resolution`])
+//! rather than at the tile's display resolution. So the column and
 //! `get_bench_track` give the same numbers whether or not the photograph has
-//! been decoded, and whether or not the tile's middle is on it.
+//! been decoded, and whether or not the tile's middle is on it, in the grid
+//! px the shift and the self-similarity reach are stated in.
+//!
+//! The tile and its hover view are rendered at display resolutions
+//! ([`super::patch::PATCH_RES`], and [`CONTEXT_FACTOR`] times it), which only
+//! decide how many texels are drawn: no number in a cell, a caption or a
+//! report is read from them.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::remap::ImageU8Pyramid;
@@ -53,7 +61,7 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
 use sfmtool_core::SfmrReconstruction;
 
-use super::patch::TileJacobian;
+use super::patch::PatchJacobian;
 
 /// The tile for one observation, uploaded, or `None` when [`image()`] had
 /// nothing to render.
@@ -69,12 +77,15 @@ pub(super) fn render(
     Some(ctx.load_texture(name, tile, egui::TextureOptions::NEAREST))
 }
 
-/// The Jacobian at the centre of one observation's track-stage tile, of the
-/// warp [`image()`] renders the tile through, without the photograph: core's
+/// The Jacobian at the centre of one observation's track-stage tile, in
+/// photograph pixels per patch-grid px, without the photograph: core's
 /// `patch_grid_jacobian` of the patch re-anchored where the observation sits
-/// ([`super::patch::render_frame`]), at [`super::patch::PATCH_RES`] texels a
-/// side. What the *Zoom* cell prints the zoom of and the *Zoom* column orders
-/// by, and what `get_bench_track` reports for the row.
+/// ([`super::patch::render_frame`]), the frame [`image()`] renders the tile
+/// through, on a grid of `recon`'s patch resolution `R`
+/// ([`crate::bench::patch_resolution`]). What the *Zoom* cell prints the zoom
+/// of and the *Zoom* column orders by, and what `get_bench_track` reports for
+/// the row as `patch_jacobian`. The tile's display resolution
+/// [`super::patch::PATCH_RES`] does not enter it.
 ///
 /// Geometry alone: a tile whose middle is off the photograph still has one.
 /// `None` in each case where there is no warp: a row at the cluster stage,
@@ -82,14 +93,15 @@ pub(super) fn render(
 /// track-stage track with no patch yet; an observation with nothing saying
 /// where it sits; and a patch whose centre does not project, behind the
 /// camera or outside the camera model's domain.
-pub(crate) fn tile_jacobian(
+pub(crate) fn patch_jacobian(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-) -> Option<TileJacobian> {
+) -> Option<PatchJacobian> {
     let (placement, camera, pose, keypoint) = track_tile_geometry(recon, track, observation)?;
     let frame = super::patch::render_frame(placement, camera, &pose, Some(keypoint));
-    patch_grid_jacobian(&frame, camera, &pose, super::patch::PATCH_RES as usize).map(TileJacobian)
+    let resolution = crate::bench::patch_resolution(recon) as usize;
+    patch_grid_jacobian(&frame, camera, &pose, resolution).map(PatchJacobian)
 }
 
 /// What a track-stage row's tile is warped through: the track's patch, the
@@ -171,7 +183,9 @@ pub(super) fn image(
     }
 }
 
-/// How many times the patch's width the hover view of a tile shows.
+/// How many times the patch's width the hover view of a tile shows. For
+/// display only: the hover view is rendered at this many times
+/// [`super::patch::PATCH_RES`], and no number is read from it.
 ///
 /// Odd, so that the patch sits in the middle with whole patch widths of the
 /// photograph on every side and its box falls on texel boundaries whatever the

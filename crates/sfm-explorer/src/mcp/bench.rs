@@ -154,7 +154,7 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
             "in": kept,
             "out": out,
         },
-        "stage_data": stage_data(track),
+        "stage_data": stage_data(track, state.node(id).map(|node| node.recon())),
         "evaluation": evaluation(state, id, &item),
         "observations": observations,
     }))
@@ -162,8 +162,9 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
 
 /// One object per observation of `track` on `id`, as `get_bench_track`
 /// reports them: its image, provenance, verdict, pin, pixel and the
-/// measurements of each stage, and the Jacobian and zoom of its Track View
-/// tile (the *Zoom* column prints the zoom; the Jacobian it is read from is
+/// measurements of each stage, and the Jacobian and zoom of its patch in its
+/// photograph, per patch-grid px at the reconstruction's patch resolution
+/// (the *Zoom* column prints the zoom; the Jacobian it is read from is
 /// reported as a diagnostic). `get_point`'s evaluation block reports the
 /// viewed track's rows in the same shape.
 pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTrack) -> Vec<Value> {
@@ -176,14 +177,15 @@ pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTr
         .map(|(index, observation)| {
             let image = crate::scene::ImageRef::new(id, observation.image as usize);
             // The Jacobian the *Zoom* column's number is read from, of the
-            // warp the row's tile is rendered through, computed without the
-            // photograph exactly as the table computes it. Both are null at
+            // warp from the patch grid at the reconstruction's patch
+            // resolution to the photograph, computed without the photograph
+            // exactly as the table computes it. Both are null at
             // the cluster stage, on a track with no patch yet, for an
             // observation with nothing saying where it sits, and for a patch
             // whose centre is behind the camera or outside the camera model's
-            // domain; `tile_zoom` is null as well for a patch seen edge on.
-            let jacobian =
-                recon.and_then(|recon| crate::track_view::body::tile_jacobian(recon, track, index));
+            // domain; `patch_zoom` is null as well for a patch seen edge on.
+            let jacobian = recon
+                .and_then(|recon| crate::track_view::body::patch_jacobian(recon, track, index));
             json!({
                 "observation": index,
                 "camera_image": observation.image,
@@ -194,8 +196,8 @@ pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTr
                 "pixel": observation_pixel(observation),
                 "cluster": cluster_measurement(observation),
                 "track": track_measurement(observation, world_unit),
-                "tile_jacobian": jacobian.map(|jacobian| jacobian.0),
-                "tile_zoom": jacobian.and_then(|jacobian| jacobian.zoom_range()),
+                "patch_jacobian": jacobian.map(|jacobian| jacobian.0),
+                "patch_zoom": jacobian.and_then(|jacobian| jacobian.zoom_range()),
             })
         })
         .collect()
@@ -1599,8 +1601,11 @@ pub(super) fn thresholds(bars: &Thresholds) -> Value {
 ///
 /// The template's samples and the consensus bitmap are reported as present or
 /// absent rather than sent: they are pictures, and this surface is not a data
-/// channel.
-fn stage_data(track: &EditableTrack) -> Value {
+/// channel. At the track stage `patch_resolution` is the patch-grid
+/// resolution `R` of `recon` ([`crate::bench::patch_resolution`]), the grid
+/// every observation's `patch_jacobian`, `patch_zoom`, shift and
+/// self-similarity grid px are in.
+fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruction>) -> Value {
     match &track.stage {
         Stage::Cluster(payload) => json!({
             "reference": payload.reference,
@@ -1628,6 +1633,7 @@ fn stage_data(track: &EditableTrack) -> Value {
                 "normal_confidence": payload.normal_confidence,
                 "placement": super::render::placement(payload.placement.as_ref()),
                 "bitmap_fused": payload.bitmap.is_some(),
+                "patch_resolution": recon.map(crate::bench::patch_resolution),
             })
         }
     }

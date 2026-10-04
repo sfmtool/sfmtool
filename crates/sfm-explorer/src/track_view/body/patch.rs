@@ -10,8 +10,10 @@
 //! which the tile's hover view renders a wider frame through. The tile and its
 //! hover view are each a single bilinear sample per texel from the mip level
 //! the warp's compression picks at that texel (`remap_bilinear_mip`).
-//! [`TileJacobian`] holds the warp's Jacobian at the tile's centre, which the
-//! table's *Zoom* column prints the zoom of.
+//! [`PatchJacobian`] holds the Jacobian at the tile's centre of the warp from
+//! the patch grid at the reconstruction's patch resolution `R` -- not the
+//! tile's display resolution -- which the table's *Zoom* column prints the
+//! zoom of.
 //! [`stored_patch_image`] turns a patch bitmap into an opaque picture, which
 //! is what the header's patch slot draws at the track stage, and
 //! [`track_patch_image`] picks the picture of a track's own patch for its
@@ -26,6 +28,10 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 
 /// Render resolution of a row's patch tile, in texels a side. The tile is
 /// rendered crisp at this resolution and drawn scaled to the row's tile cell.
+///
+/// For display only: no reading, zoom, sort key or reported number depends
+/// on it. Those are in patch-grid px at the reconstruction's patch resolution
+/// (`crate::bench::patch_resolution`), or in photograph px or scene units.
 pub(crate) const PATCH_RES: u32 = 64;
 
 /// One observation's patch tile, as an RGBA picture: `src` warped through
@@ -82,27 +88,30 @@ pub(crate) fn frame_color_image(
     egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
 }
 
-/// The ratio of a tile Jacobian's smaller singular value to its larger at or
-/// under which the tile has no zoom: the patch is seen edge on. A real
+/// The ratio of a patch Jacobian's smaller singular value to its larger at or
+/// under which the patch has no zoom: the patch is seen edge on. A real
 /// oblique view stays many orders of magnitude above it (a patch at 89.9° to
 /// the line of sight reads about 2e-3), while an edge-on patch's finite
 /// difference leaves a rounding residue near 1e-14 of the larger value, which
 /// would otherwise print as a zoom of 10¹³.
 const EDGE_ON_RATIO: f64 = 1e-9;
 
-/// The 2x2 Jacobian of a tile's warp at the tile's centre, in source pixels
-/// per tile texel: `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`, the layout
-/// `WarpMap::get_jacobian` uses. Core's `patch_grid_jacobian` reads it at
-/// [`PATCH_RES`] texels a side ([`super::tile::tile_jacobian`]).
+/// The 2x2 Jacobian, at the centre of a row's tile, of the warp from the
+/// patch grid to the photograph, in photograph pixels per patch-grid px:
+/// `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`, the layout
+/// `WarpMap::get_jacobian` uses. Core's `patch_grid_jacobian` reads it at the
+/// reconstruction's patch resolution `R` ([`super::tile::patch_jacobian`]),
+/// the grid the bench's shift and self-similarity reach are stated in, never
+/// at the display tile's [`PATCH_RES`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct TileJacobian(pub(crate) [[f64; 2]; 2]);
+pub(crate) struct PatchJacobian(pub(crate) [[f64; 2]; 2]);
 
-impl TileJacobian {
-    /// How much the tile magnifies the photograph, in tile texels per source
-    /// pixel: the least, along the direction the warp stretches most, then the
+impl PatchJacobian {
+    /// How much the patch magnifies the photograph, in patch-grid px at `R`
+    /// per photograph pixel: the least, along the direction the warp stretches most, then the
     /// most, `[1 / s_major, 1 / s_minor]` for the singular values
-    /// (`singular_values_2x2`). Over 1 the tile magnifies the photograph and
-    /// under 1 it shrinks it. `None` where either is not finite or the
+    /// (`singular_values_2x2`). Over 1 the patch grid is finer than the
+    /// photograph's pixels there and under 1 it is coarser. `None` where either is not finite or the
     /// smaller is at most [`EDGE_ON_RATIO`] of the larger, as for a patch seen
     /// edge on, whose finite difference leaves a rounding residue across the
     /// collapsed axis rather than an exact zero.

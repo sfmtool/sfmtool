@@ -61,8 +61,8 @@ use std::sync::Arc;
 pub use classify::{classify_track_rays, ClassificationReason, TrackClassification, TrackRays};
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{
-    evaluate, evaluate_preconditions, open_localizer, EvaluateError, EvaluateOptions,
-    EvaluateReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_MAX_SEED_OFFSET_PX,
+    evaluate, evaluate_preconditions, open_localizer, stored_patch_resolution, EvaluateError,
+    EvaluateOptions, EvaluateReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_MAX_SEED_OFFSET_PX,
 };
 pub use fit::{fit, fit_preconditions, fuse_bitmap_in_place, FitError, FitOptions, FitReport};
 pub use geometry_search::{

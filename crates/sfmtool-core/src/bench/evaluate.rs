@@ -50,6 +50,7 @@ use crate::patch::self_similarity::{
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
+use crate::SfmrReconstruction;
 
 use super::steps::apply_thresholds;
 use super::track::{
@@ -111,6 +112,12 @@ pub struct EvaluateOptions {
     /// round: a reading registers nothing, so the congealing loop that would
     /// walk every view towards a shared optimum is run once, over the
     /// observations where they already sit.
+    ///
+    /// Its [`resolution`](KeypointLocalizeParams::resolution) applies only to
+    /// a reconstruction that stores no patch bitmaps. Otherwise the track
+    /// stage reads at the reconstruction's own patch resolution
+    /// ([`Self::patch_resolution`]), so every patch-grid px it reports is a
+    /// px of the patch the reconstruction holds.
     pub localize: KeypointLocalizeParams,
     /// How far from the projection a seed may sit and still be read, in
     /// **patch-grid px**.
@@ -167,6 +174,49 @@ impl Default for EvaluateOptions {
             max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
         }
     }
+}
+
+impl EvaluateOptions {
+    /// The patch-grid resolution `R`, in grid px a side, that a track-stage
+    /// reading of a track on `recon` is stated in: the edge of `recon`'s patch
+    /// bitmaps where it stores them ([`stored_patch_resolution`]), else
+    /// [`Self::localize`]'s resolution.
+    ///
+    /// Every patch-grid px the track stage reports is one `R`-th of the
+    /// patch's side: the shift, the self-similarity radius and its reach. A
+    /// caller that states a patch's zoom in grid px per photograph pixel uses
+    /// the same `R`, so the zoom and the reach are in one unit.
+    ///
+    /// ```no_run
+    /// # use sfmtool_core::bench::EvaluateOptions;
+    /// # fn run(recon: &sfmtool_core::SfmrReconstruction) {
+    /// let r = EvaluateOptions::default().patch_resolution(recon); // 24 unless the file says otherwise
+    /// # let _ = r;
+    /// # }
+    /// ```
+    pub fn patch_resolution(&self, recon: &SfmrReconstruction) -> u32 {
+        stored_patch_resolution(recon)
+            .unwrap_or(self.localize.resolution)
+            .max(2)
+    }
+
+    /// These options with the track stage's localizer at `resolution`.
+    pub(super) fn at_resolution(&self, resolution: u32) -> Self {
+        let mut options = self.clone();
+        options.localize.resolution = resolution;
+        options
+    }
+}
+
+/// The edge `R` of `recon`'s `(P, R, R, 4)` patch bitmaps, which an `.sfmr`
+/// declares as `patch_bitmap_resolution`, or `None` where it stores none.
+///
+/// A column the viewer rendered for display because the file had none counts
+/// as well, as it does for the fit's fuse: the bench reads it as it would the
+/// file's own.
+pub fn stored_patch_resolution(recon: &SfmrReconstruction) -> Option<u32> {
+    let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_deref()?;
+    u32::try_from(bitmaps.shape()[1]).ok().filter(|&r| r > 0)
 }
 
 /// Why an evaluation was refused. Every variant names what did not hold,
@@ -448,7 +498,10 @@ pub fn evaluate(
     evaluate_preconditions(track)?;
     let (read, mut report) = match &track.stage {
         Stage::Cluster(payload) => evaluate_cluster(track, payload, images, options, progress)?,
-        Stage::Track(payload) => evaluate_track(track, images, payload, options, progress)?,
+        Stage::Track(payload) => {
+            let options = options.at_resolution(options.patch_resolution(&edited.base));
+            evaluate_track(track, images, payload, &options, progress)?
+        }
     };
     if track.repainted() {
         return Ok((read, report));

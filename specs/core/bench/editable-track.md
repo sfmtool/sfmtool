@@ -2047,6 +2047,22 @@ decided before any correlation, from the observation and the geometry, which is
 what lets the row carry the reason instead of simply going missing from the
 kernel's answer.
 
+**The track stage reads on the reconstruction's own patch grid.** Its patch-grid
+px are one `R`-th of the patch's side, `R` being
+`EvaluateOptions::patch_resolution` of the reconstruction: the edge of its patch
+bitmaps where it stores them (an `.sfmr` declares it as
+`patch_bitmap_resolution`; a column the viewer rendered for display counts too,
+as it does for the fit's fuse), and the localizer's own `resolution`, 24 by
+default, where it stores none. [`evaluate`](../../../crates/sfmtool-core/src/bench/evaluate.rs)
+runs the track stage's localizer and self-similarity reading at that `R`, and
+[`fit`](../../../crates/sfmtool-core/src/bench/fit.rs) runs its localizer and
+sub-pixel kernel at it too, so the shift, the self-similarity radius and its
+reach, the fused bitmap and the bars that judge them are all in the grid of the
+patch the reconstruction holds, and a caller that states a patch's zoom per
+grid px (Track View's *Zoom* column) uses the same `R`. The two option fields
+named `resolution` apply only to a reconstruction with no patch bitmaps. The
+cluster stage has no patch yet and keeps the refinement kernel's own grid.
+
 **The search radius is the track's shift bar.** How far from a sighting the
 reading looks for its peak and how far a peak may sit before the bar refuses it
 are one question, so they are one number, `max_shift_px`, in patch-grid px:

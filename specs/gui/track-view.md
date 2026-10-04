@@ -985,7 +985,7 @@ beside it is that patch warped square, so the eye reads from the raw pixels to
 the picture the numbers are read from. The two photometric columns come
 straight after the verdict, *ZNCC* and then *Self-similarity*, since they are
 the readings the verdict is most often decided by; the reprojection error, the
-shift, the tile's zoom, the status and, in Edited mode, the provenance follow
+shift, the patch's zoom, the status and, in Edited mode, the provenance follow
 them. The image's name is the last column, 220 points wide: hovering it or the
 *Img* cell shows the name whole, so the room in the middle of the table goes to
 the readings. The columns stand at the same offsets in both modes, and Viewed
@@ -1048,7 +1048,7 @@ that is not there prints a bare `-`, with no unit.
 | Self-similarity | the surface plot, then the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid | the same |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane |
-| Zoom | `-` | tile texels per photograph pixel at the tile's centre, the reciprocals of the two singular values of the tile warp's Jacobian there, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.51/0.51×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
+| Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
@@ -1126,8 +1126,9 @@ reaches, not the text.
   and `v` (the grid's `y` runs down `v`). `u` and `v` are named rather than
   separated by a bare `/`, which the *Zoom* cell uses for least over most.
 - **image px** is the radius in the photograph's pixels, through the Jacobian of
-  the tile's grid at its centre at the evaluation's resolution `R` (24 by
-  default), not the 64-texel display tile.
+  the patch grid at its centre at the reconstruction's patch resolution `R`
+  (the edge of its patch bitmaps, else the evaluation's 24), the grid the
+  reading was taken on, not the 64-texel display tile.
 - **world** is the reach along `u` and `v` in world space, in the
   reconstruction's `metadata.world_space_unit`, printed after each value and not
   converted. Where the file names no unit the row is labelled **scene units**
@@ -1206,18 +1207,29 @@ would get wrong, so the walk comes first among a scored row's answers. The
 row's own *ZNCC* cell beside it is the evaluation's, taken with the sighting at its
 seed, so the two numbers a person weighs the walk by sit on one row.
 
-**The *Zoom* column says how much the tile magnifies the photograph.** It sits
-after *Shift*. A tile that magnifies a few photograph pixels many times over
-shows interpolation rather than detail, and one that shrinks a large stretch of
-the photograph hides detail the photograph has, so the zoom says how much of
-what the tile shows is the photograph's own detail. It is the Jacobian of the
-warp the row's tile is rendered through, the patch re-anchored where the
-observation sits (`patch::render_frame`) at 64 texels a side, so it describes
-the warp the tile shows and not a separately derived placement.
+**The *Zoom* column says how much the patch magnifies the photograph.** It
+sits after *Shift*. A patch that samples a few photograph pixels many times
+over reads interpolation rather than detail, and one that spans a large
+stretch of the photograph with few samples averages away detail the
+photograph has, so the zoom says how much of what the patch holds is the
+photograph's own detail. It is the Jacobian of the warp from the patch grid to
+the photograph, through the placement the row's tile is rendered through, the
+patch re-anchored where the observation sits (`patch::render_frame`), so it
+describes the warp the tile shows and not a separately derived placement.
+
+**The zoom is in patch-grid px at the reconstruction's patch resolution `R`**,
+per photograph pixel: the grid the bench's shift and self-similarity readings
+are in, so the zoom, the shift and the reach beside it are in one unit. `R` is
+`crate::bench::patch_resolution`, core's `EvaluateOptions::patch_resolution`:
+the edge of the reconstruction's patch bitmaps, which an `.sfmr` declares as
+`patch_bitmap_resolution`, and where it stores none the evaluation's own
+resolution, 24. The tile is drawn at 64 texels a side (`patch::PATCH_RES`) only
+so that it looks crisp in its cell; no number in the table, a hover or a reply
+is read at that resolution.
 
 The zoom is pure geometry: the patch, the observation's camera and pose, and
-where the observation sits. `tile::tile_jacobian` reads it with core's
-`camera::warp_map::patch_grid_jacobian` at 64 texels a side, with no photograph,
+where the observation sits. `tile::patch_jacobian` reads it with core's
+`camera::warp_map::patch_grid_jacobian` at `R` grid px a side, with no photograph,
 and the body caches the answer per row beside the tiles, dropping it whenever it
 drops them (a step on the track, or the reconstruction leaving the scene). So a
 row whose photograph is still decoding, or cannot be read, prints its zoom all
@@ -1227,10 +1239,10 @@ patch whose centre projects has a zoom even where the middle of its tile is off
 the photograph: what the zoom describes is the warp, which extends past the
 photograph's edge.
 
-The tile's side is even, so its centre is the corner the four middle texels
-share rather than a texel. `patch_grid_jacobian` reads the Jacobian there as the
-finite difference across the four points half a texel either side of the centre,
-the four middle texel centres, each projected with no test against the image's
+When `R` is even the grid's centre is the corner the four middle grid px
+share rather than a grid px. `patch_grid_jacobian` reads the Jacobian there as
+the finite difference across the four points half a grid px either side of the
+centre, the four middle grid px centres, each projected with no test against the image's
 bounds (`CameraIntrinsics::project_homogeneous`): each of its columns is the
 mean of the two differences along that axis, which is the derivative at the
 centre of the bilinear interpolation through the four. The per-texel Jacobians
@@ -1251,10 +1263,11 @@ would print as a zoom of about `10¹³`. A real oblique view stays far above tha
 ratio; a patch at 89.9 degrees to the line of sight reads about `2e-3`.
 
 *Zoom* is `1 / s` for each singular value `s` of the Jacobian, the least zoom
-over the most, so over `1×` the tile enlarges the photograph and under `1×` it
-shrinks it, and two different numbers say the warp stretches one direction more
-than the other, as on a patch seen at a slant. The cell prints both numbers even
-where they print the same, `0.51/0.51×`, so every row reads in one format. Each
+over the most, so over `1×` the patch samples the photograph more finely than
+its pixels and under `1×` more coarsely, and two different numbers say the warp
+stretches one direction more than the other, as on a patch seen at a slant. The
+cell prints both numbers even where they print the same, `0.19/0.19×`, so every
+row reads in one format. Each
 number carries two significant digits, judged after rounding, as the
 self-similarity hover's do: `0.031` prints `0.031`, `9.96` prints `10`, `0.996`
 prints `1.0`, and a zoom of 10 or more prints whole, keeping every whole digit
@@ -1264,15 +1277,18 @@ evaluation stands at, as the tile is, and no bar judges it. Ordering by *Zoom*
 orders by the geometric mean of the two zooms, `1 / sqrt(abs(det J))`; a row
 with no zoom sorts last either way, as a row with no key does in any column.
 `get_bench_track` and `get_point`'s evaluation block report the zoom for each
-row as `tile_zoom`, and the Jacobian it is read from as `tile_jacobian`, a
-diagnostic the table does not print.
+row as `patch_zoom`, and the Jacobian it is read from as `patch_jacobian`, a
+diagnostic the table does not print; `get_bench_track`'s `stage_data` reports
+`R` as `patch_resolution`.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its
 stage registers, through the code that registers it: at the track stage the
 patch warped into this view and re-anchored where the observation sits
 (`patch::patch_color_image`, `WarpMap::from_patch` and `remap_bilinear_mip` at
-64 by 64, shown at 48 points with nearest filtering); at the cluster stage the
+64 by 64, shown at 48 points with nearest filtering; the 64 is a display
+resolution, `patch::PATCH_RES`, and no reading is taken from the tile); at the
+cluster stage the
 grid the refinement kernel samples
 (`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that place and
 shape, over the cluster's own radius
@@ -1871,12 +1887,16 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   and kept as stored with no keypoint and where the keypoint's ray cannot meet
   the patch; a shrinking tile read from mip level 2 throughout and one that
   shrinks nothing plain bilinear to the bit; the centre Jacobian of a
-  fronto-parallel patch diagonal at its width over 64, of a patch turned 30
+  fronto-parallel patch diagonal at its width over the fallback `R` of 24, and
+  not over the tile's 64 texels, of a patch turned 30
   degrees in its plane carrying the turn with its signs, and of a slanted patch
   giving a range of zooms; a zoom for a tile whose middle is off the photograph,
   the same as on it, none for a patch behind the camera, and none for a patch
   seen edge on; a zoom read from the patch re-anchored on a keypoint moved a few
-  px off the projection, exactly that placement's Jacobian; each row's *Zoom*
+  px off the projection, exactly that placement's Jacobian; a reconstruction
+  with no patch bitmaps giving every row the Jacobian at 24, and the same rows
+  with 48 px patch bitmaps a Jacobian half the size and zooms twice as large;
+  each row's *Zoom*
   cell printing the zoom of its tile's Jacobian, and the same with no photograph
   decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
   with no zoom last either way; the *Zoom* cell's two significant digits chosen

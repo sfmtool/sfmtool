@@ -2479,6 +2479,19 @@ impl SplitSettings {
     }
 }
 
+/// The patch-grid resolution `R` the bench's track-stage readings of `recon`
+/// are in: the edge of its patch bitmaps where it stores them, else the
+/// evaluation's own (`EvaluateOptions::patch_resolution`, under the options
+/// [`evaluate_job`] runs with).
+///
+/// A row's patch zoom is stated per grid px at this `R`
+/// (`crate::track_view::body::patch_jacobian`), so it is in the unit of the
+/// shift and the self-similarity reach beside it. The Track View's display
+/// tile is rendered at its own resolution, which no number depends on.
+pub(crate) fn patch_resolution(recon: &sfmtool_core::SfmrReconstruction) -> u32 {
+    EvaluateOptions::default().patch_resolution(recon)
+}
+
 /// The evaluation of `track` as a function of the `Progress` it polls its
 /// cancellation through: what [`AppState::bench_evaluate_job`] hands the live
 /// evaluation for a bench track, and what the viewed track's evaluation runs

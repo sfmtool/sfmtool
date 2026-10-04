@@ -59,6 +59,13 @@ use super::track::{EditableTrack, Stage, StageKind, TrackPayload};
 #[derive(Debug, Clone)]
 pub struct FitOptions {
     /// The discrete localization kernel.
+    ///
+    /// Its [`resolution`](KeypointLocalizeParams::resolution), and
+    /// [`Self::refine`]'s, apply only to a reconstruction that stores no patch
+    /// bitmaps. Otherwise a track-stage fit runs both kernels at the
+    /// reconstruction's own patch resolution
+    /// ([`stored_patch_resolution`](super::evaluate::stored_patch_resolution)),
+    /// the grid the evaluation it ends with reads at.
     pub localize: KeypointLocalizeParams,
     /// The sub-pixel kernel, chained after the discrete one, and the fuse that
     /// renders the consensus bitmap.
@@ -93,6 +100,23 @@ impl Default for FitOptions {
             sigma_px: None,
             depth_likelihood_ratio_threshold: DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
         }
+    }
+}
+
+impl FitOptions {
+    /// These options with every track-stage kernel at `recon`'s patch
+    /// resolution where it stores patch bitmaps: the localizer, the sub-pixel
+    /// kernel and the evaluation the fit ends with, so the fit and its reading
+    /// are stated in one grid.
+    fn at_patch_resolution(&self, recon: &crate::SfmrReconstruction) -> Self {
+        let mut options = self.clone();
+        if let Some(resolution) = super::evaluate::stored_patch_resolution(recon) {
+            let resolution = resolution.max(2);
+            options.localize.resolution = resolution;
+            options.refine.resolution = resolution;
+            options.evaluate.localize.resolution = resolution;
+        }
+        options
     }
 }
 
@@ -384,7 +408,8 @@ pub fn fit(
             // Which representation the track leaves with is the
             // re-triangulation's to say, not the frame it arrived on.
             let frame = payload.placement.clone().ok_or(FitError::NoFrame)?;
-            fit_track(track, edited, images, &frame, options, progress)
+            let options = options.at_patch_resolution(&edited.base);
+            fit_track(track, edited, images, &frame, &options, progress)
         }
     }
 }

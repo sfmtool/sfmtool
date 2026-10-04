@@ -42,7 +42,9 @@ pub(super) const CROP_MARGIN_PX: f64 = 1.0;
 /// The most texels the longer side of a row's crop is sampled at. A crop wider
 /// than this many photograph pixels is read from the pyramid level whose
 /// pixels are nearest the step, rather than uploaded whole, so a patch that
-/// spans half a photograph costs a small texture like any other.
+/// spans half a photograph costs a small texture like any other. For display
+/// only: the crop's caption reads the patch's axes from the geometry in the
+/// photograph's own pixels, not from these texels.
 const CROP_MAX_TEXELS: f64 = 128.0;
 
 /// Where a patch lands in one photograph: its outline, how long its two axes

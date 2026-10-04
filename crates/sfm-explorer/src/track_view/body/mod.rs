@@ -67,7 +67,7 @@ mod tests;
 
 pub(crate) use patch::track_patch_image;
 pub(crate) use table::RowSummary;
-pub(crate) use tile::tile_jacobian;
+pub(crate) use tile::patch_jacobian;
 
 /// Display size of the track's own patch, left of the toolbar.
 const STORED_PATCH_SIZE: f32 = 64.0;
@@ -269,13 +269,13 @@ pub struct TrackBody {
     tiles: HashMap<usize, Option<egui::TextureHandle>>,
     /// The Jacobian at the centre of each observation's tile, by observation
     /// index, that the *Zoom* cell prints its zoom from and the *Zoom* column
-    /// orders by ([`tile::tile_jacobian`]). Kept and dropped with
+    /// orders by ([`tile::patch_jacobian`]). Kept and dropped with
     /// [`TrackBody::tiles`], since it is the Jacobian of the warp the tile is
     /// drawn through, but filled without the photograph: a row whose photograph is
     /// still decoding, or cannot be read, has its numbers all the same, and
     /// they are the numbers `get_bench_track` reports. `None` is cached as the
     /// tile's is.
-    jacobians: HashMap<usize, Option<patch::TileJacobian>>,
+    jacobians: HashMap<usize, Option<patch::PatchJacobian>>,
     /// The track and the exact track value [`TrackBody::tiles`] was rendered
     /// from: the label, and the address of the track's `Arc`. Any step on the
     /// track gives it a new `Arc`, and every step that moves a tile is one.
@@ -981,11 +981,11 @@ impl TrackBody {
         recon: &SfmrReconstruction,
         track: &EditableTrack,
         observation: usize,
-    ) -> Option<patch::TileJacobian> {
+    ) -> Option<patch::PatchJacobian> {
         *self
             .jacobians
             .entry(observation)
-            .or_insert_with(|| tile::tile_jacobian(recon, track, observation))
+            .or_insert_with(|| tile::patch_jacobian(recon, track, observation))
     }
 
     /// The hover view of one row's tile, rendering it if this is the first

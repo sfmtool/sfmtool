@@ -1291,11 +1291,12 @@ fn every_observation_reports_where_it_sits_read_or_not() {
 /// Every track-stage row carries the Jacobian Track View's *Zoom* column reads
 /// and the zoom it prints, and they are the patch's own geometry: each is
 /// checked against the patch re-anchored on the row's pixel, the placement its
-/// tile is rendered through, projected through the row's camera half a texel
-/// either side of its centre along each tile axis, worked out here from the
-/// camera and the pose rather than through the viewer's warp map.
+/// tile is rendered through, projected through the row's camera half a grid
+/// px either side of its centre along each patch axis, at the patch resolution
+/// `stage_data` reports, worked out here from the camera and the pose rather
+/// than through the viewer's warp map.
 #[test]
-fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
+fn every_track_stage_row_reports_its_patch_jacobian_and_zoom() {
     use nalgebra::Point3;
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
@@ -1312,6 +1313,14 @@ fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
     };
     let patch = payload.placement.clone().expect("a patch");
     let recon = state.scene[0].recon();
+    // The reconstruction's patch resolution, which is not the 64 texels the
+    // tiles are drawn at.
+    let r = track["stage_data"]["patch_resolution"]
+        .as_u64()
+        .expect("a patch resolution") as u32;
+    assert_eq!(r, crate::bench::patch_resolution(recon), "{track}");
+    assert_ne!(r, 64, "this would prove less");
+    let r = f64::from(r);
     let rows = track["observations"].as_array().expect("the observations");
     assert_eq!(rows.len(), 3, "{track}");
     for row in rows {
@@ -1330,10 +1339,11 @@ fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
                 .expect("the camera sees the patch");
             [x, y]
         };
-        // One texel of the tile's 64 along each axis, in scene units: a column
-        // steps along `u`, and a row along `-v`, since rows count downward.
-        let col_step = anchored.u_axis * (2.0 * anchored.half_extent[0] / 64.0);
-        let row_step = -anchored.v_axis * (2.0 * anchored.half_extent[1] / 64.0);
+        // One grid px of the patch's `R` along each axis, in scene units: a
+        // column steps along `u`, and a row along `-v`, since rows count
+        // downward.
+        let col_step = anchored.u_axis * (2.0 * anchored.half_extent[0] / r);
+        let row_step = -anchored.v_axis * (2.0 * anchored.half_extent[1] / r);
         let across = |step: nalgebra::Vector3<f64>| {
             let (ahead, behind) = (
                 project(anchored.center + step * 0.5),
@@ -1345,7 +1355,7 @@ fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
         let want = [[by_col[0], by_row[0]], [by_col[1], by_row[1]]];
 
         let got: [[f64; 2]; 2] =
-            serde_json::from_value(row["tile_jacobian"].clone()).expect("a Jacobian");
+            serde_json::from_value(row["patch_jacobian"].clone()).expect("a Jacobian");
         let scale = want.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
         assert!(scale > 0.0, "{row}");
         for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
@@ -1357,10 +1367,10 @@ fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
             );
         }
 
-        // The zoom is texels per pixel: the reciprocals of the singular values,
+        // The zoom is grid px per pixel: the reciprocals of the singular values,
         // least first, so their product is `1 / |det J|`.
         let [low, high]: [f64; 2] =
-            serde_json::from_value(row["tile_zoom"].clone()).expect("a zoom");
+            serde_json::from_value(row["patch_zoom"].clone()).expect("a zoom");
         let det = (want[0][0] * want[1][1] - want[0][1] * want[1][0]).abs();
         assert!(low <= high, "{row}");
         assert!(
@@ -1371,9 +1381,9 @@ fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
 }
 
 /// A cluster-stage row's tile is the refinement kernel's grid, not a warp of
-/// the patch, so it reports no Jacobian and no zoom.
+/// a patch, so it reports no patch Jacobian and no zoom.
 #[test]
-fn a_cluster_stage_row_reports_no_tile_jacobian_or_zoom() {
+fn a_cluster_stage_row_reports_no_patch_jacobian_or_zoom() {
     let (mut state, mut viewer) = benchable();
     call(
         &mut state,
@@ -1396,8 +1406,8 @@ fn a_cluster_stage_row_reports_no_tile_jacobian_or_zoom() {
     let rows = track["observations"].as_array().expect("the observations");
     assert!(!rows.is_empty(), "{track}");
     for row in rows {
-        assert_eq!(row["tile_jacobian"], Value::Null, "{row}");
-        assert_eq!(row["tile_zoom"], Value::Null, "{row}");
+        assert_eq!(row["patch_jacobian"], Value::Null, "{row}");
+        assert_eq!(row["patch_zoom"], Value::Null, "{row}");
     }
 }
 

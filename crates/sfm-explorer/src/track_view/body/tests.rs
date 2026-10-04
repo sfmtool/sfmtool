@@ -4294,7 +4294,7 @@ fn facing_patch(center: [f64; 3]) -> sfmtool_core::patch::cloud::OrientedPatch {
 
 /// Each entry of `got` within `tolerance` of the same entry of `want`.
 #[track_caller]
-fn assert_jacobian_near(got: super::patch::TileJacobian, want: [[f64; 2]; 2], tolerance: f64) {
+fn assert_jacobian_near(got: super::patch::PatchJacobian, want: [[f64; 2]; 2], tolerance: f64) {
     for (r, c, name) in [
         (0, 0, "dx/dcol"),
         (0, 1, "dx/drow"),
@@ -4310,24 +4310,32 @@ fn assert_jacobian_near(got: super::patch::TileJacobian, want: [[f64; 2]; 2], to
     }
 }
 
-/// The Jacobian at the centre of a tile rendered through `patch` with no
-/// keypoint to anchor on, as [`super::tile_jacobian`] computes it for a row.
-fn tile_centre_jacobian(
+/// The patch resolution `R` of a reconstruction that stores no patch
+/// bitmaps: the bench evaluation's own, 24, and not the 64 texels a tile is
+/// drawn at.
+fn fallback_resolution() -> usize {
+    let r = sfmtool_core::bench::EvaluateOptions::default()
+        .localize
+        .resolution as usize;
+    assert_eq!(r, 24);
+    assert_ne!(r, super::patch::PATCH_RES as usize, "this would prove less");
+    r
+}
+
+/// The Jacobian at the centre of a patch with no keypoint to anchor on, per
+/// grid px at [`fallback_resolution`], as [`super::patch_jacobian`] computes
+/// it for a row of a reconstruction with no patch bitmaps.
+fn patch_centre_jacobian(
     patch: &sfmtool_core::patch::cloud::OrientedPatch,
     camera: &sfmtool_core::camera::CameraIntrinsics,
     pose: &sfmtool_core::geometry::RigidTransform,
-) -> Option<super::patch::TileJacobian> {
-    sfmtool_core::camera::warp_map::patch_grid_jacobian(
-        patch,
-        camera,
-        pose,
-        super::patch::PATCH_RES as usize,
-    )
-    .map(super::patch::TileJacobian)
+) -> Option<super::patch::PatchJacobian> {
+    sfmtool_core::camera::warp_map::patch_grid_jacobian(patch, camera, pose, fallback_resolution())
+        .map(super::patch::PatchJacobian)
 }
 
 /// The warp map a tile rendered through `patch` with no keypoint is drawn
-/// through.
+/// through, at the tile's display resolution.
 fn tile_map(
     patch: &sfmtool_core::patch::cloud::OrientedPatch,
     camera: &sfmtool_core::camera::CameraIntrinsics,
@@ -4337,19 +4345,21 @@ fn tile_map(
 }
 
 /// A patch facing a pinhole camera square on is a pure scaling in the
-/// photograph, so the Jacobian at the tile's centre is diagonal, and its scale
-/// is the patch's width in pixels over the tile's 64 texels: 1 unit at depth 4
-/// under a 500 px focal length is 125 px, 125 / 64 source pixels per texel, and
-/// the zoom is the reciprocal, 64 / 125, the same in both directions.
+/// photograph, so the Jacobian at the patch's centre is diagonal, and its
+/// scale is the patch's width in pixels over the `R` grid px of its side: 1
+/// unit at depth 4 under a 500 px focal length is 125 px, 125 / 24 photograph
+/// pixels per grid px at the fallback `R` of 24, and the zoom is the
+/// reciprocal, 24 / 125, the same in both directions. The 64 texels the tile
+/// is drawn at do not enter it.
 #[test]
-fn a_fronto_parallel_tile_has_a_diagonal_jacobian_of_its_width_over_64() {
-    use super::patch::PATCH_RES;
+fn a_fronto_parallel_patch_has_a_diagonal_jacobian_of_its_width_over_r() {
     let (camera, pose) = pinhole_at_origin();
     let patch = facing_patch([0.0, 0.0, -4.0]);
-    let map = tile_map(&patch, &camera, &pose);
-    let jacobian = tile_centre_jacobian(&patch, &camera, &pose).expect("in front of the camera");
+    let r = fallback_resolution();
+    let map = sfmtool_core::camera::WarpMap::from_patch(&patch, &camera, &pose, r as u32);
+    let jacobian = patch_centre_jacobian(&patch, &camera, &pose).expect("in front of the camera");
 
-    let scale = 125.0 / f64::from(PATCH_RES);
+    let scale = 125.0 / r as f64;
     assert_jacobian_near(jacobian, [[scale, 0.0], [0.0, scale]], 1e-3);
     let [low, high] = jacobian.zoom_range().expect("a zoom");
     let zoom = 1.0 / scale;
@@ -4359,15 +4369,16 @@ fn a_fronto_parallel_tile_has_a_diagonal_jacobian_of_its_width_over_64() {
 
     // Printed as the cell prints it: both zooms, even where the two
     // directions agree.
-    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.51/0.51\u{d7}");
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.19/0.19\u{d7}");
 
-    // The straddling difference agrees with the per-texel Jacobians the mip
-    // selection reads, averaged over the four middle texels, where the warp
-    // is smooth.
+    // The straddling difference agrees with the per-px Jacobians of the
+    // R-grid's warp, averaged over the four middle grid px, where the warp is
+    // smooth.
     let mut map = map;
     map.compute_svd();
     let mut mean = [[0.0f64; 2]; 2];
-    for (col, row) in [(31, 31), (32, 31), (31, 32), (32, 32)] {
+    let (lo, hi) = (r as u32 / 2 - 1, r as u32 / 2);
+    for (col, row) in [(lo, lo), (hi, lo), (lo, hi), (hi, hi)] {
         let j = map.get_jacobian(col, row);
         for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
             mean[r][c] += f64::from(j[r][c]) / 4.0;
@@ -4379,14 +4390,13 @@ fn a_fronto_parallel_tile_has_a_diagonal_jacobian_of_its_width_over_64() {
 /// A patch turned within its own plane by a known angle has a Jacobian with
 /// that turn in it, signs included. The patch faces the camera with its `u`
 /// axis turned 30 degrees from `+X` towards `+Y`, which is up and to the right
-/// in the photograph, whose `y` runs down. So one texel right along a row of
-/// the tile moves the photograph's `y` up (`dy/dcol` negative), and one texel
-/// down a column of the tile moves its `x` right (`dx/drow` positive):
+/// in the photograph, whose `y` runs down. So one grid px right along a row of
+/// the patch moves the photograph's `y` up (`dy/dcol` negative), and one grid
+/// px down a column of the patch moves its `x` right (`dx/drow` positive):
 /// `J = k [[cos, sin], [-sin, cos]]`, `k` being the fronto-parallel scale
-/// of 125 / 64.
+/// of 125 / 24 per grid px.
 #[test]
 fn a_patch_turned_in_its_plane_has_off_diagonal_entries_of_the_turn() {
-    use super::patch::PATCH_RES;
     use nalgebra::{Point3, Vector3};
     let (camera, pose) = pinhole_at_origin();
     let (s, c) = 30f64.to_radians().sin_cos();
@@ -4400,8 +4410,8 @@ fn a_patch_turned_in_its_plane_has_off_diagonal_entries_of_the_turn() {
     );
     assert!((patch.u_axis - Vector3::new(c, s, 0.0)).norm() < 1e-12);
 
-    let jacobian = tile_centre_jacobian(&patch, &camera, &pose).expect("a Jacobian");
-    let k = 125.0 / f64::from(PATCH_RES);
+    let jacobian = patch_centre_jacobian(&patch, &camera, &pose).expect("a Jacobian");
+    let k = 125.0 / fallback_resolution() as f64;
     assert_jacobian_near(jacobian, [[k * c, k * s], [-k * s, k * c]], 1e-3);
     assert!(jacobian.0[0][1] > 0.0 && jacobian.0[1][0] < 0.0);
 
@@ -4502,7 +4512,7 @@ fn a_tile_reads_the_mip_level_its_warp_shrinks_the_photograph_to() {
 /// the two singular directions give two zooms, and the cell prints the range,
 /// least first.
 #[test]
-fn a_tilted_tile_prints_a_range_of_zooms() {
+fn a_tilted_patch_prints_a_range_of_zooms() {
     use nalgebra::{Point3, Vector3};
     let (camera, pose) = pinhole_at_origin();
     // Turned 60 degrees about the vertical, so it is half as wide in the
@@ -4514,14 +4524,14 @@ fn a_tilted_tile_prints_a_range_of_zooms() {
         Vector3::new(0.0, 1.0, 0.0),
         [0.5, 0.5],
     );
-    let jacobian = tile_centre_jacobian(&patch, &camera, &pose).expect("a Jacobian");
+    let jacobian = patch_centre_jacobian(&patch, &camera, &pose).expect("a Jacobian");
     let [low, high] = jacobian.zoom_range().expect("a zoom");
     assert!(
         (high / low - 2.0).abs() < 0.01,
         "the zooms {low} and {high} are not one twice the other"
     );
-    // 125 px over 64 texels up the patch, and half that across it.
-    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.51/1.0\u{d7}");
+    // 125 px over 24 grid px up the patch, and half that across it.
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.19/0.38\u{d7}");
     let mean = jacobian.mean_zoom().expect("a mean zoom");
     assert!(((low * high).sqrt() - mean).abs() < 1e-9);
 }
@@ -4541,15 +4551,15 @@ fn a_tile_whose_middle_is_off_the_photograph_still_has_a_zoom() {
         !map.is_valid(map.width() / 2, map.height() / 2),
         "the middle of the tile is on the photograph, so this proves less"
     );
-    let jacobian = tile_centre_jacobian(&off_the_side, &camera, &pose).expect("a Jacobian");
+    let jacobian = patch_centre_jacobian(&off_the_side, &camera, &pose).expect("a Jacobian");
     // A fronto-parallel patch under a pinhole is a pure scaling wherever it
-    // sits: 125 px across 64 texels.
-    let k = 125.0 / f64::from(super::patch::PATCH_RES);
+    // sits: 125 px across 24 grid px.
+    let k = 125.0 / fallback_resolution() as f64;
     assert_jacobian_near(jacobian, [[k, 0.0], [0.0, k]], 1e-3);
-    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.51/0.51\u{d7}");
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.19/0.19\u{d7}");
 
     let behind = facing_patch([0.0, 0.0, 4.0]);
-    assert_eq!(tile_centre_jacobian(&behind, &camera, &pose), None);
+    assert_eq!(patch_centre_jacobian(&behind, &camera, &pose), None);
 
     assert_eq!(super::table::zoom_text(None), "-");
 }
@@ -4559,7 +4569,7 @@ fn a_tile_whose_middle_is_off_the_photograph_still_has_a_zoom() {
 /// finite difference leaves only a rounding residue across it, a smaller
 /// singular value near 1e-14 of the larger, which would otherwise print as a
 /// zoom of 10¹³. The cell prints `-` for it, as `get_bench_track` reports
-/// `tile_zoom` as null.
+/// `patch_zoom` as null.
 #[test]
 fn a_patch_seen_edge_on_has_no_zoom() {
     use nalgebra::{Point3, Vector3};
@@ -4575,7 +4585,7 @@ fn a_patch_seen_edge_on_has_no_zoom() {
         Vector3::y(),
         [0.5, 0.5],
     );
-    let jacobian = tile_centre_jacobian(&edge_on, &camera, &pose).expect("the centre projects");
+    let jacobian = patch_centre_jacobian(&edge_on, &camera, &pose).expect("the centre projects");
     let [major, minor] = singular_values_2x2(jacobian.0);
     assert!(major > 0.1, "{jacobian:?}");
     assert!(minor <= major * 1e-9, "not edge on: {major} {minor}");
@@ -4614,7 +4624,9 @@ fn the_zoom_reads_the_patch_reanchored_on_the_keypoint() {
     });
     let site = track.observations[row].site().expect("a site");
 
-    let resolution = super::patch::PATCH_RES as usize;
+    // The reconstruction stores no patch bitmaps, so `R` is the fallback.
+    let resolution = crate::bench::patch_resolution(recon) as usize;
+    assert_eq!(resolution, fallback_resolution());
     let anchored = patch
         .anchored_at_keypoint(camera, &pose, site)
         .expect("the keypoint's ray meets the patch");
@@ -4625,22 +4637,100 @@ fn the_zoom_reads_the_patch_reanchored_on_the_keypoint() {
         "re-anchoring changes nothing here, so this proves less: {want:?} {stored:?}"
     );
 
-    let got = super::tile_jacobian(recon, &track, row).expect("a Jacobian");
+    let got = super::patch_jacobian(recon, &track, row).expect("a Jacobian");
     assert_eq!(got.0, want);
 }
 
-/// Each row of the table prints the zoom read from the Jacobian of the warp
-/// its tile is rendered through: the same Jacobian `get_bench_track` reports
-/// for the row.
+/// A reconstruction that stores no patch bitmaps has the bench evaluation's
+/// resolution, 24, and every row's Jacobian is the patch-grid Jacobian at 24,
+/// not at the 64 texels its tile is drawn at.
 #[test]
-fn each_row_prints_the_jacobian_and_zoom_of_its_own_tile() {
+fn with_no_patch_bitmaps_the_zoom_is_per_grid_px_of_the_evaluation() {
+    use sfmtool_core::camera::warp_map::patch_grid_jacobian;
+    let (state, id, label, _panel, _ctx) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let recon = state.node(id).expect("loaded").recon();
+    assert!(recon.point_set.patch_bitmaps_y_x_rgba.is_none());
+    assert_eq!(
+        crate::bench::patch_resolution(recon) as usize,
+        fallback_resolution()
+    );
+    let sfmtool_core::bench::Stage::Track(payload) = &track.stage else {
+        panic!("a track made from a point is at the track stage");
+    };
+    let patch = payload.placement.as_ref().expect("a patch");
+    for row in 0..track.observations.len() {
+        let image = &recon.image_table.images[track.observations[row].image as usize];
+        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let pose = crate::scene::cam_from_world(image);
+        let site = track.observations[row].site().expect("a site");
+        let anchored = patch
+            .anchored_at_keypoint(camera, &pose, site)
+            .unwrap_or_else(|| patch.clone());
+        let at = |r: usize| patch_grid_jacobian(&anchored, camera, &pose, r).expect("projects");
+        let got = super::patch_jacobian(recon, &track, row).expect("a Jacobian");
+        assert_eq!(got.0, at(fallback_resolution()), "row {row}");
+        assert_ne!(
+            got.0,
+            at(super::patch::PATCH_RES as usize),
+            "row {row} is at the display resolution"
+        );
+    }
+}
+
+/// The zoom is per grid px at the reconstruction's own patch resolution, the
+/// `patch_bitmap_resolution` an `.sfmr` declares: the same rows on the same
+/// reconstruction with patch bitmaps 48 px a side have Jacobians half the
+/// size, and so zooms twice as large, as they have at the fallback 24.
+#[test]
+fn the_zoom_is_per_grid_px_of_the_stored_patch_bitmaps() {
+    let (state, id, label, _panel, _ctx) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let recon = state.node(id).expect("loaded").recon();
+    let mut at_48 = recon.clone();
+    let points = at_48.point_set.points.len();
+    at_48.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(ndarray::Array4::zeros((
+        points, 48, 48, 4,
+    ))));
+    assert_eq!(crate::bench::patch_resolution(&at_48), 48);
+
+    for row in 0..track.observations.len() {
+        let at_24 = super::patch_jacobian(recon, &track, row).expect("a Jacobian");
+        let got = super::patch_jacobian(&at_48, &track, row).expect("a Jacobian");
+        let scale = at_24.0.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
+        for r in 0..2 {
+            for c in 0..2 {
+                assert!(
+                    (got.0[r][c] - at_24.0[r][c] / 2.0).abs() < 1e-3 * scale,
+                    "row {row}: {got:?} is not half of {at_24:?}"
+                );
+            }
+        }
+        let [low_24, high_24] = at_24.zoom_range().expect("a zoom");
+        let [low, high] = got.zoom_range().expect("a zoom");
+        assert!(
+            (low / low_24 - 2.0).abs() < 1e-3,
+            "row {row}: {low} {low_24}"
+        );
+        assert!(
+            (high / high_24 - 2.0).abs() < 1e-3,
+            "row {row}: {high} {high_24}"
+        );
+    }
+}
+
+/// Each row of the table prints the zoom read from the Jacobian of its patch
+/// as its tile is re-anchored: the same Jacobian `get_bench_track` reports for
+/// the row.
+#[test]
+fn each_row_prints_the_jacobian_and_zoom_of_its_own_patch() {
     let (state, id, label, panel, _ctx) = on_the_bench();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let recon = state.node(id).expect("loaded").recon();
     assert_eq!(panel.rows().len(), 3);
     for row in panel.rows() {
         assert!(row.tile, "row {} drew no tile", row.observation);
-        let jacobian = super::tile_jacobian(recon, &track, row.observation);
+        let jacobian = super::patch_jacobian(recon, &track, row.observation);
         assert!(
             jacobian.is_some(),
             "row {} has no Jacobian",
@@ -4765,10 +4855,10 @@ fn a_row_with_no_zoom_sorts_last_both_ways() {
 /// digits, and one of 100 or more prints whole.
 #[test]
 fn the_zoom_cell_picks_its_format_after_rounding() {
-    use super::patch::TileJacobian;
+    use super::patch::PatchJacobian;
     use super::table::zoom_text;
     // A diagonal Jacobian of `1 / zoom` along each axis.
-    let zooms = |a: f64, b: f64| zoom_text(Some(TileJacobian([[1.0 / a, 0.0], [0.0, 1.0 / b]])));
+    let zooms = |a: f64, b: f64| zoom_text(Some(PatchJacobian([[1.0 / a, 0.0], [0.0, 1.0 / b]])));
     assert_eq!(zooms(9.96, 9.96), "10/10\u{d7}");
     assert_eq!(zooms(9.94, 9.94), "9.9/9.9\u{d7}");
     assert_eq!(zooms(0.996, 0.996), "1.0/1.0\u{d7}");

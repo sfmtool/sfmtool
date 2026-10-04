@@ -49,7 +49,7 @@ use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Thresholds, Verdic
 use sfmtool_core::patch::self_similarity::SelfSimilarityReach;
 use sfmtool_core::SfmrReconstruction;
 
-use super::patch::TileJacobian;
+use super::patch::PatchJacobian;
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
     row_grids, row_radius, row_reach, row_surface, self_similarity_cell_color,
@@ -136,10 +136,11 @@ pub(crate) struct RowSummary {
     /// ([`super::self_similarity_reach_text`], built only while the cell is
     /// hovered). Both `None` where the cell has no hover.
     pub self_similarity_reach: [Option<SelfSimilarityReach>; 2],
-    /// The Jacobian at the centre of the row's tile, computed without the
-    /// photograph ([`super::tile::tile_jacobian`], which lists where there is
-    /// none).
-    pub jacobian: Option<TileJacobian>,
+    /// The Jacobian at the centre of the row's tile, in photograph pixels per
+    /// patch-grid px at the reconstruction's patch resolution, computed
+    /// without the photograph ([`super::tile::patch_jacobian`], which lists
+    /// where there is none).
+    pub jacobian: Option<PatchJacobian>,
     /// The *Zoom* cell as printed, `3.1/4.8×`, or `-`.
     pub zoom_text: String,
     /// What each line of each cell was coloured by, indexed as
@@ -488,13 +489,14 @@ pub(super) fn verdict_text(judged: Option<&Judgement>) -> String {
     }
 }
 
-/// The *Zoom* cell's text: the range of tile texels per source pixel over the
-/// two singular directions, least over most, `3.1/4.8×`, both numbers even
+/// The *Zoom* cell's text: the range of patch-grid px, at the
+/// reconstruction's patch resolution, per photograph pixel over the two
+/// singular directions, least over most, `3.1/4.8×`, both numbers even
 /// where the two print the same, `0.51/0.51×`, or `-` where there is no
 /// reading. Each number carries two significant digits, judged after rounding
 /// ([`super::significant`]), so `0.031` prints `0.031`, `9.96` prints `10` and
 /// `0.996` prints `1.0`; a zoom of 100 or more prints whole.
-pub(super) fn zoom_text(jacobian: Option<TileJacobian>) -> String {
+pub(super) fn zoom_text(jacobian: Option<PatchJacobian>) -> String {
     let Some([low, high]) = jacobian.and_then(|j| j.zoom_range()) else {
         return "-".to_string();
     };
@@ -570,12 +572,15 @@ pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where
     The box under this heading is the shift bar, which judges it.";
 
 /// The *Zoom* heading's hover text.
-pub(super) const ZOOM_TIP: &str = "How much the patch tile magnifies the photograph at its \
-    centre: tile texels per pixel of the photograph, read from the Jacobian of the warp the \
-    tile is rendered through. Over 1\u{d7} the tile is the photograph enlarged, and under \
-    1\u{d7} it is the photograph shrunk. It is geometry alone, read from the patch, the camera, \
-    the image's pose and where the observation sits, so it does not wait for the photograph, \
-    and a tile whose middle is off the photograph still has one.\n\n\
+pub(super) const ZOOM_TIP: &str = "How much the patch magnifies the photograph at its \
+    centre: patch-grid px per pixel of the photograph, read from the Jacobian of the warp \
+    from the patch to the photograph. The grid is the reconstruction's own patch resolution, \
+    the one its patch bitmaps are stored at (24 px a side unless the file says otherwise), \
+    and the unit of the shift and the self-similarity reach; it is not the resolution the \
+    tile here is drawn at. Over 1\u{d7} the patch samples the photograph more finely than \
+    its pixels, and under 1\u{d7} more coarsely. It is geometry alone, read from the patch, \
+    the camera, the image's pose and where the observation sits, so it does not wait for the \
+    photograph, and a tile whose middle is off the photograph still has one.\n\n\
     The warp can stretch one direction more than another, so the cell gives the least zoom \
     over the most, 0.71/1.3\u{d7}, and gives both even where the two agree, \
     0.51/0.51\u{d7}. Each carries two significant digits.\n\n\
