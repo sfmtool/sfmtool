@@ -2,19 +2,23 @@
 
 ## Overview
 
-`sfm embed-patches` rewrites a reconstruction so that it no longer needs the
-`.sift` feature files it was solved from. Its input is a `sift_files` `.sfmr`,
-in which each observation is an index into its image's `.sift` file. Its output
-is a new `embedded_patches` `.sfmr`, in which each point carries a small
-oriented patch with an image of its appearance, each observation carries its 2D
-keypoint inline, and each image's hash is stored in the file itself. The
-keypoints are not copied from the SIFT detections: the command reads the source
-images and places each keypoint by matching the point's patch across the images
-that see it, and it adds to a point's track other images that see the point and
-pass a photometric check. Observations that do not match well are dropped, so
-the point and observation counts usually differ from the input. The `.sift`
-files are read once during the conversion, so they must still be present; the
-input file is never modified.
+`sfm embed-patches` makes photometric patch matching, in place of SIFT
+descriptor matching, decide a reconstruction's tracks and keypoints. Its input
+is a `sift_files` `.sfmr`, typically straight from `sfm solve`, whose
+observations are SIFT detections joined into tracks by descriptor matching. The
+command gives each point a small oriented patch, renders the patch in every
+image that geometrically sees the point, and compares the renders by ZNCC to
+decide both which images belong to the point's track and where in each image
+the point lies. An image that SIFT matching missed joins the track when its
+render agrees with the others, an observation whose render does not agree is
+dropped, and each kept keypoint is placed by registering the patch across the
+track's images rather than copied from the SIFT detection. The point and
+observation counts therefore usually differ from the input. The output is a new
+`embedded_patches` `.sfmr`, in which each point carries its patch and an image
+of its appearance and each observation carries its keypoint inline. The `.sift`
+files are read in one step, which sizes each patch from the SIFT feature scale,
+seeds the keypoints at the SIFT detections and reads the image hashes, so they
+must be present for the run; the input file is never modified.
 
 The conversion:
 
