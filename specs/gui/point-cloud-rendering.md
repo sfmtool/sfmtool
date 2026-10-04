@@ -1,8 +1,17 @@
 # Point Cloud Rendering
 
-This document specifies the point cloud rendering pipeline for the sfmtool 3D
-viewer, including point splat rendering, Eye-Dome Lighting (EDL) post-processing,
-and the target indicator with its supernova lighting effect.
+The SfM Explorer's 3D viewer draws each reconstructed point as a small round
+splat that always faces the camera, using GPU instancing so that millions of
+points draw at interactive rates. A point has no surface normal to shade by, so
+a full-screen Eye-Dome Lighting (EDL) pass then darkens each point pixel whose
+neighboring pixels hold nearer points or no point at all. That outlines surfaces
+and depth edges and makes the 3D shape of a sparse cloud readable. While Alt is
+held, or after Alt is double-tapped, a rotating compass glyph marks the orbit
+camera's target point: cyan where it is in front of the scene, a faded orange
+where scene geometry hides it. The EDL pass also brightens points near the
+target, with pulses moving outward from it, so the points around the pivot
+stand out even when the glyph itself is hidden. The code calls this brightening
+the supernova effect.
 
 For navigation controls that interact with the target (Alt-mode), see
 [viewport-navigation.md](viewport-navigation.md#target-control-alt-mode).

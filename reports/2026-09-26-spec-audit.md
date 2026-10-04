@@ -220,6 +220,7 @@ Eight specs open with "This document describes/specifies…":
 - gui/architecture
 - gui/camera-views
 - gui/point-cloud-rendering
+  > _Status (2026-10-04): **Done** — the opening now says what the viewer draws (round camera-facing splats), what the EDL pass does and why, and what the target indicator and its nearby-point brightening (the code's "supernova" effect) show, checked against `shaders/points.wgsl`, `shaders/edl.wgsl` and `viewer_3d/mod.rs`, branch `finding-fix-14-point-cloud-rendering-opening`._
 - gui/user-experience
 - gui/viewport-navigation
 - xform/scale-by-measurements
