@@ -19,18 +19,14 @@ use crate::camera::CameraIntrinsics;
 /// Sub-grid spacing (in destination grid pixels) for the non-perspective path of
 /// [`CameraIntrinsics::ray_to_pixel_grid`]: the exact projection is evaluated
 /// every `COARSE_GRID_STRIDE` pixels and the interior is bilinearly interpolated.
-/// A larger stride speeds smooth (low-curvature) tiles but is bounded for free:
-/// every cell is probe-checked against the exact projection and demoted to exact
-/// when it would exceed [`COARSE_GRID_TOL_PX`], so accuracy never depends on this
-/// value — only the speedup does. See `specs/core/camera/ray-grid-projection.md` and the
-/// `coarse_grid_error_*` tests.
+/// It sets only the speedup; the error bound comes from [`COARSE_GRID_TOL_PX`].
 pub(super) const COARSE_GRID_STRIDE: u32 = 8;
 
 /// Per-cell source-pixel error tolerance for the coarse-grid path of
 /// [`CameraIntrinsics::ray_to_pixel_grid`]. A cell is interpolated only if its
 /// center and edge-midpoints match the exact projection to within this many
-/// source pixels; otherwise it is projected exactly. Set an order of magnitude
-/// below the localizer's sub-pixel needs.
+/// source pixels; otherwise it is projected exactly. See
+/// `specs/core/camera/ray-grid-projection.md` for why this value.
 pub(super) const COARSE_GRID_TOL_PX: f32 = 0.02;
 
 /// Linear interpolation `a + (b − a)·f`.
@@ -204,13 +200,9 @@ impl CameraIntrinsics {
     /// Returns `(interpolated_cells, total_cells)` for diagnostics/tests — the
     /// hit rate of the fast (interpolated) path on this tile.
     ///
-    /// The error is bounded **by construction**: each sub-grid cell is accepted
-    /// for bilinear interpolation only after its center and edge-midpoints — the
-    /// points where bilinear is least accurate — are projected exactly and agree
-    /// with the interpolant to within [`COARSE_GRID_TOL_PX`]. Cells that fail the
-    /// probe (high curvature, or an invalid corner) are projected exactly per
-    /// pixel, so the worst-case deviation from the exact map stays at the
-    /// tolerance regardless of geometry.
+    /// A cell is interpolated only when its center and edge-midpoints agree with
+    /// the exact projection to within [`COARSE_GRID_TOL_PX`] and its four corners
+    /// are valid; any other cell is projected exactly per pixel.
     pub(super) fn ray_to_pixel_grid_coarse(
         &self,
         origin: [f64; 3],

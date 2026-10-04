@@ -39,6 +39,7 @@ The sampled specs contain **102 Non-goals bullets and deferral phrases, and all
 were checked**. 14 were stale:
 
 - **ray-grid-projection.md:** `pixel_to_ray_grid` is written as an inline proposal.
+  > _Status (2026-10-04): **Done** — the `pixel_to_ray_grid` proposal is removed with § Impact, branch `report-fix-02-ray-grid-projection`._
 - **covisibility-selection.md:** the "any use of image ordering" non-goal.
 - **editable-track.md:** "Editing the patch's frame or normal by hand".
   > _Status (2026-10-03): **Done** — the non-goal is removed, PR #687._
@@ -154,6 +155,7 @@ its Rust entry points. `covisibility-selection` lists names but no signatures.
 **Work-order residue:**
 - **Grep hits:**
   - `ray-grid-projection.md:163` "After this change…"
+    > _Status (2026-10-04): **Done** — the paragraph is removed with § Impact, branch `report-fix-02-ray-grid-projection`._
   - `candidate-track-spawning.md:134` "As part of this change…"
     > _Status (2026-10-03): **Done** — rewritten in the present tense, PR #689._
   - `patch-normal-refine-view-subset.md:228`, which is a draft in shape: § Motivation and a test plan.
@@ -319,6 +321,8 @@ most of the per-sentence findings.
   - The measured figures (18×, 0.0197 px) are quoted as if current.
   - :87-103 transcribe `GridProj` and its index arithmetic.
   - The opening is good.
+
+> _Status (2026-10-04): **Done** — § Problem's measurements and § Impact are cut, and § The seam now opens with what `from_patch` builds and why the pose is applied once per patch. The channel-batched gather section is removed; `image-warping.md` already described it, and now names its bit-exactness tests instead of pointing at the measurements. The stale names (`warp_from_patch`, `pixel_to_ray_grid`, `_rectification`) and the `--subpixel lk` usage went with the cut sections. The spec now says grids under `2·COARSE_GRID_STRIDE` take the exact path, writes `V = −h_v·v_axis` and `T` for the translation, states the tolerance rationale (removed from `ray_grid.rs`), replaces the measured figures with what the two coarse-grid tests require, and gives the implementation notes as invariants rather than a transcription of `GridProj`. The two repeated stride/accuracy statements in `ray_grid.rs` are shortened to one line each, branch `report-fix-02-ray-grid-projection`._
 
 ### specs/core/geometry/baseline-direction.md
 **Summary:** A batched solve for the unit direction between two camera centres whose rotations are known, from ray-coplanarity normals. It covers angular-bound row selection, trimmed refits, the cheirality sign and per-edge diagnostics. The algorithm text matches `baseline_direction.rs`.
