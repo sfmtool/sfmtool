@@ -277,32 +277,67 @@ fn test_write_validation_all_wrong_shapes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn test_read_rejects_future_version() {
+/// Write `data` with `metadata.version` set to `version`, bypassing the
+/// writer's own version check, and return the file's directory and path.
+fn write_with_version(version: u32, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let mut data = make_test_data();
-    data.metadata.version = SIFT_FORMAT_VERSION + 1;
-
-    let dir = std::env::temp_dir().join("sift_test_future_version");
+    data.metadata.version = version;
+    let dir = std::env::temp_dir().join(name);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("test.sift");
+    crate::write::write_sift_any_version(&path, &data, 3).unwrap();
+    (dir, path)
+}
 
-    write_sift(&path, &data, 3).unwrap();
-
-    for result in [
-        read_sift(&path).err(),
-        read_sift_partial(&path, 2).err(),
-        read_sift_positions(&path, 2).err(),
-        read_sift_metadata(&path).err(),
+#[test]
+fn test_read_rejects_unsupported_versions() {
+    for (version, name) in [
+        (0, "sift_test_version_zero"),
+        (SIFT_FORMAT_VERSION + 1, "sift_test_future_version"),
     ] {
-        let err = result.expect("future-version file must be rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("unsupported .sift format version"),
-            "unexpected error: {msg}"
-        );
-    }
+        let (dir, path) = write_with_version(version, name);
+        for result in [
+            read_sift(&path).err(),
+            read_sift_partial(&path, 2).err(),
+            read_sift_positions(&path, 2).err(),
+            read_sift_keypoints(&path, 2).err(),
+            read_sift_features(&path).err(),
+            read_sift_thumbnail(&path).err(),
+            read_sift_metadata(&path).err(),
+        ] {
+            let err = result.unwrap_or_else(|| panic!("version {version} must be rejected"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains("unsupported .sift format version"),
+                "unexpected error: {msg}"
+            );
+        }
 
-    std::fs::remove_dir_all(&dir).unwrap();
+        // The hashes are consistent, so the version is the only error.
+        let (ok, errors) = verify_sift(&path).unwrap();
+        assert!(!ok, "version {version} must fail verification");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("unsupported .sift format version"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn test_write_rejects_unsupported_versions() {
+    for version in [0, SIFT_FORMAT_VERSION + 1] {
+        let mut data = make_test_data();
+        data.metadata.version = version;
+        let dir = std::env::temp_dir().join(format!("sift_test_write_version_{version}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sift");
+
+        let err = write_sift(&path, &data, 3).expect_err("unsupported version must be rejected");
+        assert!(err.to_string().contains("unsupported .sift format version"));
+        assert!(!path.exists(), "a rejected write must leave no file");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[test]

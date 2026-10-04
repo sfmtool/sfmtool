@@ -21,12 +21,13 @@ fn open_file(path: &Path) -> Result<std::fs::File, SiftError> {
     })
 }
 
-/// Reject versions newer than this build understands; their layout is unknown
-/// so reading with current-version assumptions would misparse silently.
-fn check_version(metadata: &SiftMetadata) -> Result<(), SiftError> {
-    if metadata.version > SIFT_FORMAT_VERSION {
+/// Reject a version this build cannot read: 0, which no writer has ever
+/// produced, or one newer than [`SIFT_FORMAT_VERSION`], whose layout is unknown
+/// so reading it with current-version assumptions would misparse silently.
+pub(crate) fn check_version(metadata: &SiftMetadata) -> Result<(), SiftError> {
+    if metadata.version == 0 || metadata.version > SIFT_FORMAT_VERSION {
         return Err(SiftError::InvalidFormat(format!(
-            "unsupported .sift format version {} (this build supports up to \
+            "unsupported .sift format version {} (this build reads versions 1 to \
              {SIFT_FORMAT_VERSION})",
             metadata.version
         )));

@@ -25,11 +25,11 @@ uses that container are its own:
    use the hash stored inside it — the file carries a hash summarizing just the
    feature tool.
 
-SIFT features are always derived from an image, and if an image is unchanged from when
-they were calculated before, it's nice to avoid re-computing the features. The `sfmtool`
-command uses last-modified timestamps to do this, but it's nice to have stronger verifiability,
-so we also put the XXH128 hash of the source image file in the metadata. While XXH128 is
-not a cryptographic hash, it is fast to compute and has strong collision resistance.
+The features are derived from one image file, so the metadata records the XXH128 hash and
+the size of that file. A tool can compare them with the image on disk to decide whether the
+features are still current and extraction can be skipped, which a last-modified timestamp
+alone does not establish. XXH128 is not a cryptographic hash, but it is fast to compute and
+has strong collision resistance.
 
 This format will produce files larger than necessary due to a few choices made for simplicity.
 The affine_shape could be quantized to 16-bit floating point with no expected degradation,
@@ -37,11 +37,10 @@ and bit/byte shuffling could be applied [like in blosc](https://www.blosc.org/po
 
 ## Format versions
 
-`metadata.version` records the format version. There is one version, `1`: the
-`sfmtool-sift-format` crate always writes `metadata.version = 1`
-([`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs)) and its
-reader rejects any file whose version is newer. Everything below describes
-version 1.
+`metadata.version` records the format version. There is one version, `1`. A
+conforming writer writes `1`. A reader rejects a file whose version is `0`, which
+no version of the format has used, or is newer than the newest version it reads,
+because it cannot know that layout. Everything below describes version 1.
 
 A version 2 layout is proposed but not implemented: it would store descriptors as
 append-only range chunks so a keypoint pool can be detected once and described
@@ -98,8 +97,8 @@ JSON. It contains the following fields (ignore additional fields for future back
   The image-to-gray conversion belongs in here, because SIFT operates on a single-channel
   float image and several of its parameters — notably the contrast threshold — are defined
   in that value domain, so the mapping changes both the features and the meaning of the
-  thresholds. The format does not prescribe how it is spelled; the `sfmtool` backend records
-  it as a `gray_formula` string (`"0.2126*R + 0.7152*G + 0.0722*B"`, BT.709 luma, matching
+  thresholds. The format does not prescribe how it is spelled; files whose `feature_tool` is
+  `"sfmtool"` record it as a `gray_formula` string (`"0.2126*R + 0.7152*G + 0.0722*B"`, BT.709 luma, matching
   COLMAP's `Bitmap::CloneAsGrey`). A structured, reader-evaluable `image_to_gray` object with
   its own formula grammar is part of the proposed version 2; see
   [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).
@@ -160,10 +159,21 @@ and `orientation = atan2(a21, a11)`.
 
 ### Feature ordering
 
-Features — the parallel rows of `positions_xy`, `affine_shapes`, and the descriptors — are
-ordered by **descending feature size**, largest first. Feature size is the average of the
-two affine-shape column norms,
-`0.5 * (sqrt(a11² + a21²) + sqrt(a12² + a22²))` (the `scale` formula above).
+A writer that extracts features from an image writes them — the parallel rows of
+`positions_xy`, `affine_shapes`, and the descriptors — in **descending feature size**,
+largest first. Feature size is the average of the two affine-shape column norms,
+`0.5 * (sqrt(a11² + a21²) + sqrt(a12² + a22²))` (the `scale` formula above). The first `k`
+rows are then the `k` largest features, so a consumer that wants at most `k` features per
+image reads only that prefix of each entry.
+
+The order is a convention for writers, not a condition of validity. A file whose features
+are derived from another `.sift` file keeps the source rows in their source order, so that a
+feature index means the same feature in both files, even when the derivation changes the
+sizes: undistortion maps each affine shape through the Jacobian of the undistortion, which
+can reorder the sizes (see [`sfm undistort`](../cli/image-processing/undistort-command.md)).
+A reader or verifier does not reject a file whose rows are out of size order, and a consumer
+that reads a prefix gets the first `k` rows, which in such a file are not exactly the `k`
+largest.
 
 ### Descriptor entries
 
@@ -176,10 +186,7 @@ All `feature_count` descriptors live in one entry,
 `features/descriptors.{feature_count}.128.uint8.zst`, in the same row order as
 `positions_xy` and `affine_shapes`. The width is part of the entry's name, so a
 reader is never told how wide a descriptor is and a consumer laying several
-files' descriptors out end to end can size the buffer before it opens one. In
-this repository that width has a single declaration,
-`sfmtool_sift_format::DESCRIPTOR_DIM`, from which the entry name above, the read
-path, the write path and the shape check are all derived.
+files' descriptors out end to end can size the buffer before it opens one.
 
 ### `thumbnail_y_x_rgb.128.128.3.uint8.zst`
 
@@ -193,20 +200,13 @@ consumers (`.sfmr` files, viewers) can display previews without re-reading the s
 * **Size**: Fixed 128×128 square, regardless of the source image aspect ratio. The source image is
   resized to fill the square (stretching if non-square). Consumers restore the correct aspect ratio
   at display time using the image dimensions from `metadata.json.zst`
-* **Resize method**: Area-averaging (OpenCV `INTER_AREA`), which antialiases better than
-  bilinear when downscaling. All three extraction backends (colmap, opencv, sfmtool) use it.
+* **Resize method**: Area-averaging (as OpenCV's `INTER_AREA` does), which antialiases
+  better than bilinear when downscaling.
 
 When writing a `.sfmr` file, the thumbnail is copied directly from the `.sift` file rather than
 re-reading and re-downscaling the source image. Because it is copied rather than regenerated, the
 `.sfmr` thumbnail edge must equal this one; see the `images/thumbnails_y_x_rgb` section of
 [`sfmr-file-format.md`](sfmr-file-format.md).
-
-In this repository the edge has a single declaration,
-`sfmtool_sift_format::THUMBNAIL_SIZE`, from which the entry name above, the read
-path, the write path and the shape check are all derived. Its equality with
-`sfmtool_sfmr_format::THUMBNAIL_SIZE` is enforced by a compile-time assertion in
-`sfmtool-core`, and the value is exported to Python as `sfmtool.THUMBNAIL_SIZE`
-for the extractors that produce the pixels.
 
 ## Feature tool hash computation
 
@@ -229,6 +229,38 @@ computed from the extraction options at extraction time. It is never computed fr
 file; see
 [Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). The two hashes
 do not in general agree, and a reader must not compare one with the other.
+
+## Implementations
+
+The code that reads, writes and verifies `.sift` files is:
+
+- Rust: `read_sift`, `read_sift_metadata`, `write_sift` and `verify_sift` in
+  [`sfmtool-sift-format`](../../crates/sfmtool-sift-format/src/lib.rs), with
+  readers for part of a file: `read_sift_partial` (the first `k` features),
+  `read_sift_positions`, `read_sift_keypoints`, `read_sift_features` (the three
+  feature columns only) and `read_sift_thumbnail`. Every reader rejects an
+  unsupported `metadata.version`; `write_sift` refuses to write one; and
+  `verify_sift`, which returns `(is_valid, error_messages)`, reports it as an
+  error. None of them checks the feature order.
+- Python: `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`
+  and `verify_sift` in `sfmtool._sfmtool.io`, which take and return a dict of
+  NumPy arrays and metadata ([bindings](../../crates/sfmtool-py/src/io/sift.rs)),
+  and `SiftReader` and `write_sift` in
+  [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py), which most of the
+  Python package uses.
+
+`SIFT_FORMAT_VERSION` in
+[`types.rs`](../../crates/sfmtool-sift-format/src/types.rs) is the newest
+version the crate reads and writes. The descriptor width and the thumbnail edge
+each have a single declaration there, `DESCRIPTOR_DIM` and `THUMBNAIL_SIZE`,
+from which the entry names, the read path, the write path and the shape checks
+are derived. A compile-time assertion in `sfmtool-core` keeps `THUMBNAIL_SIZE`
+equal to `sfmtool_sfmr_format::THUMBNAIL_SIZE`, and the value is exported to
+Python as `sfmtool.THUMBNAIL_SIZE` for the extractors that produce the pixels.
+
+The three extraction backends of [`sfm sift`](../cli/image-feature/sift-command.md)
+(`colmap`, `opencv` and `sfmtool`) sort their features by descending size and
+resize the thumbnail with OpenCV's `INTER_AREA`.
 
 ## Using CLI commands to pull apart a .sift file
 

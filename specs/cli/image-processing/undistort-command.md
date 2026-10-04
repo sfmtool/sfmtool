@@ -134,6 +134,12 @@ distorted-to-pinhole mapping, computed by central differences with
 `eps = 0.5` pixels. This is the same approach used by `WarpMap.compute_svd()`
 and works for every camera model without per-model analytic derivatives.
 
+**Order.** Kept keypoints keep their order from the source `.sift` file, and
+the output `.sfmr`'s feature indices are remapped to their new row numbers.
+Because `J` differs from keypoint to keypoint, the rows are in general no longer
+in exact descending size; the format allows that (see
+[Feature ordering](../../formats/sift-file-format.md#feature-ordering)).
+
 **Descriptors.** SIFT descriptors are copied through unchanged. The
 undistortion-induced resampling produces only small local geometric changes,
 which SIFT is designed to tolerate; re-extracting from the undistorted pixels

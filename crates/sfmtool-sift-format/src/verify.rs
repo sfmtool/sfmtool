@@ -11,6 +11,9 @@ use crate::types::*;
 
 /// Verify integrity of a `.sift` file using content hashes.
 ///
+/// Also reports a `metadata.version` the readers reject (0, or newer than
+/// [`SIFT_FORMAT_VERSION`]) as an error.
+///
 /// Returns `Ok((true, []))` if all hashes match, `Ok((false, errors))` with
 /// details if verification fails. Returns `Err` only for I/O errors.
 pub fn verify_sift(path: &Path) -> Result<(bool, Vec<String>), SiftError> {
@@ -30,6 +33,9 @@ pub fn verify_sift(path: &Path) -> Result<(bool, Vec<String>), SiftError> {
     let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
     let metadata: SiftMetadata = serde_json::from_slice(&metadata_raw)?;
     let feature_count = metadata.feature_count as usize;
+    if let Err(e) = crate::read::check_version(&metadata) {
+        errors.push(e.to_string());
+    }
 
     // Read feature tool metadata (raw bytes for hashing)
     let feature_tool_raw = read_zst_entry(&mut archive, "feature_tool_metadata.json.zst")?;

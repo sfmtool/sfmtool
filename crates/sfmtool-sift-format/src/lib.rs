@@ -7,7 +7,7 @@
 //! It is a ZIP archive with zstandard-compressed JSON metadata and binary
 //! feature arrays (positions_xy, affine_shapes, descriptors, thumbnail_y_x_rgb).
 //!
-//! See `docs/sift-file-format.md` for the specification.
+//! See `specs/formats/sift-file-format.md` for the specification.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(

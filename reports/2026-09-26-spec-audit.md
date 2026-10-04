@@ -294,6 +294,7 @@ Eight specs open with "This document describes/specifies…":
 
 > _Status (2026-10-04): **Done** for `sfmtool-camera-models.md` — its code names now sit in an Implementations section; see that spec's section below, branch `report-fix-07-camera-models-contradiction`._
 > _Status (2026-10-04): **Done** for archive-container.md — the crate API, implementation notes and tests moved to `specs/formats/archive-io-crate.md`, and the container spec now names code only in a short Implementations section, branch `report-fix-08-archive-container`._
+> _Status (2026-10-04): **Done** for sift-file-format.md — it now has an Implementations section and the normative text names no crate, constant or extraction backend (it links `sfm undistort` as the example of a derived file); see its section below. Branch `report-fix-17-sift-format-checks`._
 
 **Structural result:** six of seven format specs with hits have no
 *Implementations* section, so crate, type, function and CLI names are spread
@@ -777,13 +778,16 @@ most of the per-sentence findings.
     - So :56-57 equate two different values.
     > _Status (2026-10-03): **Done** — the spec defines `feature_tool_xxh128` as the XXH128 of the stored `feature_tool_metadata.json` bytes, enforced by the verifier; the path convention calls the directory component the workspace's feature-cache hash and says it is a different value; § Feature tool hash computation now separates the two and states that `.sfmr` and `.matches` copy the `.sift` field per image (checked: `colmap/io.py`, `feature_match/_db_populate.py`, `_undistort_images.py`), which answers the **Check** in the recommendation. The example's hash no longer reuses the directory hash from `matches-file-format.md`. PR #678._
   - :160-163 say features are ordered by descending size. Neither the writer nor the verifier checks this; only the extractors sort.
+    > _Status (2026-10-04): **Done** by correcting the spec — the order cannot be a validity rule, because `sfm undistort` keeps each kept keypoint's source row order (its `.sfmr` feature indices are remapped through that order) while `A' = J·A` changes the sizes. § Feature ordering now says extracting writers write descending size so a prefix is the largest `k`, that derived files keep source order, and that readers and verifiers do not reject out-of-order rows; `undistort-command.md` says the same from its side. Branch `report-fix-17-sift-format-checks`._
 **Format independence:**
   - :40-42 name the crate and `SIFT_FORMAT_VERSION` → "a conforming writer writes 1; a reader rejects newer versions".
   - :177-179 and :201-206 "In this repository…" → Implementations.
   - The `sfmtool` command and backends are named at :29-30, :97-99, :193-194 and :214-215.
   - Informal prose: "it's nice to avoid re-computing" (:28-31).
+  > _Status (2026-10-04): **Done** — a new Implementations section holds the Rust and Python read, write and verify functions, `SIFT_FORMAT_VERSION`, `DESCRIPTOR_DIM`, `THUMBNAIL_SIZE` with its compile-time assertion, and what the three extraction backends do; § Format versions, Descriptor entries and the thumbnail section no longer name code; the `gray_formula` sentence names the `feature_tool` value rather than a backend; the informal paragraph is rewritten in plain words. Branch `report-fix-17-sift-format-checks`._
 **Recommendation:** update spec. Define the field as XXH128 over the stored metadata bytes and separate it from the directory hash. **Check** whether `.sfmr` and `.matches` propagate the directory hash or the `.sift` field.
 **Unclear / incorrect / suspicious:** Version 0 is accepted without a check.
+> _Status (2026-10-04): **Done** — every reader rejects version 0 as well as a newer version, `write_sift` refuses to write either, and `verify_sift` reports either as an error; the spec says a reader rejects 0. Every writer in the tree (the three extractors, `sfm undistort`, the Rust test helpers) writes 1, so no file this project wrote becomes unreadable. Tests in `sfmtool-sift-format/src/tests.rs`. Branch `report-fix-17-sift-format-checks`._
 
 ### specs/formats/sfmtool-camera-models.md
 **Summary:** The mathematics (knots, gauge, linear tail, fold gate) and serialization rules match the code, and the parameter names and order match `spline_parameter_names`. There is one internal contradiction, and the spec is heavily tied to the implementation.

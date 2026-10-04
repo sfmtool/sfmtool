@@ -14,8 +14,21 @@ use crate::types::*;
 /// Write columnar data to a `.sift` file.
 ///
 /// Computes content hashes automatically. The `content_hash` field in `data`
-/// is ignored on write (recomputed from the actual data).
+/// is ignored on write (recomputed from the actual data). Rejects a
+/// `metadata.version` that [`crate::read_sift`] would reject, so a write never
+/// produces a file this crate cannot read back.
 pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), SiftError> {
+    crate::read::check_version(&data.metadata)?;
+    write_sift_any_version(path, data, zstd_level)
+}
+
+/// [`write_sift`] without the version check, so the tests can produce the
+/// files a reader must reject.
+pub(crate) fn write_sift_any_version(
+    path: &Path,
+    data: &SiftData,
+    zstd_level: i32,
+) -> Result<(), SiftError> {
     let feature_count = data.metadata.feature_count as usize;
 
     // Validate dimensions before opening anything, so a rejected write leaves
