@@ -97,14 +97,12 @@ impl GpuFlowContext {
         })
     }
 
-    /// Run DIS and variational refinement as a single GPU submission.
+    /// Run DIS and variational refinement for one pyramid level as a single GPU
+    /// submission, updating `flow` in place.
     ///
-    /// This eliminates redundant per-level CPU↔GPU transfers: images are uploaded
-    /// once, DIS output flow is copied to variational input via GPU-side buffer
-    /// copy (no CPU round-trip), and only the final refined flow is read back.
-    /// Compared to calling `run_dis_level` + `variational_refine` separately,
-    /// this saves 2 image uploads, 1 flow readback, 1 flow upload, and 1
-    /// device.poll synchronization point per level.
+    /// `flow` is left unchanged when the level is smaller than one patch or
+    /// than 3 pixels on a side. See "Minimizing CPU↔GPU Transfers" in
+    /// `specs/core/features/gpu-optical-flow.md`.
     pub(crate) fn run_dis_and_variational(
         &self,
         ref_image: &super::GrayImage,

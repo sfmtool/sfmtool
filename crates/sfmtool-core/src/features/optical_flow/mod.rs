@@ -111,8 +111,10 @@ pub mod bench {
 /// Input images are single-channel grayscale f32 normalized to [0, 1].
 /// Returns a FlowField the same size as the input images.
 ///
-/// Pass a [`gpu::GpuFlowContext`] to run variational refinement on the GPU,
-/// or `None` for the CPU path.
+/// Pass a [`gpu::GpuFlowContext`] to run the pyramid levels with at least
+/// `gpu_min_pixels` pixels on the GPU, or `None` for the CPU path. Those levels
+/// run DIS on the GPU; when variational refinement is on, the GPU also builds the
+/// pyramid and runs the refinement and the flow upsampling.
 pub fn compute_optical_flow(
     img_a: &GrayImage,
     img_b: &GrayImage,

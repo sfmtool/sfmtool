@@ -92,7 +92,10 @@ Several architectural decisions minimize data movement:
 
 - **Merged DIS+variational submission.** Within a level, DIS and variational share
   a single GPU submission. Flow moves between them via `copy_buffer_to_buffer` (no
-  CPU round-trip).
+  CPU round-trip). When a level runs on its own through `refine_flow_at_level`
+  (`GpuFlowContext::run_dis_and_variational`), the two images and the initial flow
+  are uploaded once, there is one `device.poll` wait, and only the refined flow is
+  read back.
 
 - **GPU inter-level upsampling.** Between consecutive GPU levels, `upsample_flow.wgsl`
   keeps flow on GPU. Only the transition from the last CPU level to the first GPU

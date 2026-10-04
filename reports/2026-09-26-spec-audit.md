@@ -901,6 +901,7 @@ and the opening paragraphs listed in check 4.
 - `geometry/resect_translation.rs:95-116`, the `residual_norm` chirality argument.
 - `motion/recon_discontinuity.py:689-700`, the threshold rationale, which is already in `constants.py`.
 - `optical_flow/gpu/mod.rs:98-103`.
+  > _Status (2026-10-04): **Done** — the `run_dis_and_variational` doc comment now states its contract (one level, one submission, `flow` updated in place, the early returns) and points at § Minimizing CPU↔GPU Transfers; the transfer facts it alone held moved into that section, and the "saves 2 image uploads …" comparison was dropped because the standalone GPU `variational_refine` it compared against no longer exists. The `compute_optical_flow` doc comment now says the GPU runs DIS on the levels above `gpu_min_pixels`, and also the pyramid, variational refinement and upsampling when refinement is on, branch `finding-fix-25-gpu-flow-module-comment`._
 - `kernels/sfmtool_pinhole.rs:87-110`.
 - `image_detail/intrinsics/field.rs:4-65`, a 62-line module doc.
 
