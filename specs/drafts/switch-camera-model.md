@@ -29,14 +29,15 @@ Decided in outline:
 
 Not decided: see [Open questions](#open-questions).
 
-Depends on: `retriangulate_points`
-([`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md))
-returning a status for every point it read, which another change is adding in
-place. The status says what happened to the point: a finite position, a
-direction and the rule that made it one, kept because its observations could
-not answer, held, or a position solved after observations were pruned. It is
-indexed consistently with the call's `PointMap`. This draft reads gains and
-losses of a position off those statuses and adds no verdict logic of its own.
+Builds on: `retriangulate_points`
+([`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
+§ "The report"), whose report carries a `RetriangulatedPoint` for every point
+the call was asked about: its `index` in the value passed in, its `new_index`
+in the value returned, consistent with the call's `PointMap`, and a
+`RetriangulateOutcome`. The outcome is `Held`, `Kept` (fewer than two usable
+rays, so the stored geometry stays), or `Solved` with the `PointVerdict` that
+decided it. This draft reads gains and losses of a position off those outcomes
+and adds no verdict logic of its own.
 
 Amends:
 
@@ -295,10 +296,14 @@ carries the preview's counts: the proposal's tracks, how many moved by the
 difference rule, how many gained a position, how many lost one, and the median
 and 90th-percentile displacement of the moving finite points, in the
 reconstruction's units. The count that lost a position is broken down by the
-reason the proposed run's status gives, largest first, for example "37 lose
-their position: 31 behind a camera, 6 too few usable rays", and is drawn in
-the failure colour when it is not zero. While the job has no answer for the
-current generation the second line reads "Triangulating…".
+proposed run's outcome, largest first: `Kept`, or the `PointVerdict` of a
+`Solved` direction. For example: "37 lose their position: 31 behind a camera,
+6 too few usable rays". The line is drawn in the failure colour when the count
+is not zero. The reasons are worded as the Retriangulate edits' Action Log
+words them, from `PointVerdict::label` and the sentence for a kept point, so
+the banner, the point info and the wire say the same thing about one point.
+While the job has no answer for the current generation the second line reads
+"Triangulating…".
 
 ### The 3D view
 
@@ -331,11 +336,14 @@ same rows, and the materialisation's own row map takes each row back to the
 point the 3D view draws: a row of the base's point buffer for a base point and
 a row of the additions buffer for an added one.
 
-**What each point does.** The statuses of the two runs decide it. A finite
-position includes one solved after observations were pruned. Under the default
-options the floor is off, so no point is called thin, and a point stored as a
-direction carries its own `w` as the incoming mark and is answered as a
-direction under both models.
+**What each point does.** The outcomes of the two runs decide it, looked up by
+index with `RetriangulateReport::point`. An outcome is a finite position when
+it is `Solved` with `PointVerdict::Finite`, `FinitePruned`, or `Ranged` at a
+finite distance; it is a direction when it is `Solved` with `Marked`, `Thin`,
+`NoDepth`, `Behind`, `OverBar`, or `Ranged` at an infinite distance. Under the
+default options the floor and the likelihood rule are off, so no point is
+called `Thin` or `NoDepth`, and a point stored as a direction carries its own
+`w` as the incoming mark and is answered as a direction under both models.
 
 - **Both finite: the difference rule.** The point moves from its stored
   position by the difference between the two answers:
@@ -353,14 +361,14 @@ direction under both models.
   usable ray. There is no current answer to take a difference from, so the
   point moves from its stored position straight to the proposed answer.
 - **Loses its position**: the current status is a finite position and the
-  proposed one is a direction or kept. There is no proposed answer to move
+  proposed one is a direction or `Kept`. There is no proposed answer to move
   toward, so the point stays where it is and its colour moves to the
   **failure colour** as the motion runs (§ "The motion"). These are the points
   the reviewer most needs to find: a track the current model triangulates and
   the proposed one cannot is the plainest sign that the proposed model is wrong
   somewhere, so the preview makes them stand out rather than recede. The point
   info of a selected point in the failure colour gives the reason from the
-  proposed run's status.
+  proposed run's outcome.
 - **Neither finite** (a stored finite point that both runs answer as a
   direction, or keep): there is no position under either model to take a
   difference between, and the point does not move.
@@ -608,9 +616,9 @@ for, `pending` while the job has no answer for the current generation, `ready`
 with the counts the banner shows (the proposal's tracks, moved by the
 difference rule, gained a position, lost one, and the median and 90th
 percentile of the displacement, in the reconstruction's units, plus
-`lost_points`: each point that lost its position, by index, with the reason
-from the proposed run's status, so an agent can select one and screenshot
-it), or `refused`
+`lost_points`: each point that lost its position, by index, with its reason as
+`kept` or the verdict's wire code and label, so an agent can select one and
+screenshot it), or `refused`
 with `retriangulate_points`' sentence.
 
 `propose_camera_model` replies before the job has run, so its `triangulation`
@@ -693,11 +701,10 @@ without waiting out the motion.
    plots, the change plot and the rug. Apply as the shipped edit. The endings,
    including undo and the greyed entries.
 2. The Image Detail change field and observation layer.
-3. Preview retriangulation. It needs the per-point status from
-   `retriangulate_points`, which another change is adding, and the two core
-   additions in Amends: the outermost-keypoint option on `switch_camera_model`
-   and the placement distance from a centroid computed once. Then the job, the
-   generalised step, the preview buffers and the banner.
+3. Preview retriangulation. It needs the two core additions in Amends: the
+   outermost-keypoint option on `switch_camera_model` and the placement
+   distance from a centroid computed once. Then the job, the generalised step,
+   the preview buffers and the banner.
 4. `propose_camera_model`, `cancel_camera_model_proposal`, the proposal form of
    `switch_camera_model` and the `proposed` block.
 
