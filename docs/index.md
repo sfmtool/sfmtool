@@ -92,8 +92,9 @@ output in SfM tool or using them as part of SfM would be interesting to explore.
 pip install sfmtool
 ```
 
-Wheels are published for Linux and Windows. On other platforms, including macOS, pip builds
-sfmtool from the source distribution, which needs a Rust toolchain at version 1.97 or newer.
+Wheels are published for Python 3.13 and 3.14 on x86-64 Linux and Windows. Anywhere else,
+including macOS, pip builds sfmtool from the source distribution, which needs a Rust toolchain at
+version 1.97 or newer.
 
 See the [getting started tutorial](tutorials/getting-started.md) for a full
 walkthrough.
