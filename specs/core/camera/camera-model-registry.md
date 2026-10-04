@@ -2,10 +2,17 @@
 
 ## Purpose
 
-Two types describe a camera in this workspace, and there is exactly one place
-where they meet. This spec says what each is for, why they are not merged, and
-the invariant that lets the boundary between them be generated rather than
-written twice.
+sfmtool holds a camera's intrinsics (its projection model, image size, and
+parameters such as focal length and distortion coefficients) in two forms. One
+is a loosely-typed record, a model name plus a map from parameter name to value,
+which matches how cameras are stored in a `.sfmr` reconstruction file and is what
+the file I/O crates read and write. The other is a closed Rust enum with one
+variant per camera model, which the projection and distortion code computes
+with. This spec says why the two are kept separate, and how the conversion
+between them is generated from a single table of models that the compiler checks
+against the enum, so that a model or parameter added on one side and not the
+other fails to build. Two models with variable-length parameter lists are the
+exception: their conversion is written by hand.
 
 ## The two types
 

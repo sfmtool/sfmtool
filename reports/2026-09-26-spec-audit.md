@@ -909,6 +909,7 @@ and the opening paragraphs listed in check 4.
 Fix one spec per PR.
 
 - `core/camera/camera-model-registry.md`. Proposed: *"A camera is represented two ways in sfmtool, a loosely-typed record mirroring the on-disk reconstruction and a closed enum the algorithms compute with; this spec says why the split is kept and how the conversion stays exhaustive and generated in one place."*
+  > _Status (2026-10-04): **Done** — replaced the opening paragraph with one based on the proposal that names what the two forms hold, says the conversion is generated from one compiler-checked table, and notes that the two variable-length spline models are converted by hand. Branch `finding-fix-09-camera-model-registry-opening`._
 - `core/patch/cluster-patches.md`. Proposed: *"A patch cluster is a group of matched features fitted to the actual image content: one member is the reference, and every other member carries a photometrically refined affine warp mapping the reference's patch into its image."*
   > _Status (2026-10-03): **Done** — added an opening paragraph based on the proposal, saying "every other kept member" (rejected members are stored too) and naming what the spec covers. PR #699._
 - `cli/reconstruction/embed-patches-command.md`. Proposed: *"Rewrites a reconstruction so it no longer depends on the .sift files it was solved from: each observation's pointer into a .sift file becomes an image patch and keypoint stored inline, producing a self-contained .sfmr."*
