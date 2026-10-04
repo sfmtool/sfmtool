@@ -1,7 +1,10 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -112,6 +115,67 @@ def _largest_recon(output_sfm_file: Path):
     return best_path, best_count
 
 
+# Runs one solve in a child interpreter. Exit 10 is the solver's own report of a
+# degenerate solve (a ``RuntimeError``); any other Python exception exits 1.
+_CHILD_SOLVE = """
+import json, sys, traceback
+args = json.loads(sys.argv[1])
+if args.pop("solver") == "global":
+    from sfmtool._global_sfm import run_global_sfm as solve
+else:
+    from sfmtool._incremental_sfm import run_incremental_sfm as solve
+try:
+    solve(args.pop("image_paths"), args.pop("workspace_dir"), args.pop("colmap_dir"), **args)
+except RuntimeError:
+    traceback.print_exc()
+    sys.exit(10)
+"""
+
+
+def _solve_in_child(
+    solver: str,
+    image_paths: list[Path],
+    workspace_dir: Path,
+    colmap_dir: Path,
+    **kwargs,
+) -> None:
+    """Run ``run_global_sfm`` or ``run_incremental_sfm`` in a child process.
+
+    COLMAP reports some failures by aborting the process (CI has seen
+    ``homography_matrix.cc:167 Check failed: cam_rays1.size() >= 4`` on the
+    kerry_park rig), and an abort in the test process takes the whole pytest
+    worker down with it, which no retry loop can catch. Run in a child, the same
+    abort is an exit code. ``solver`` is ``"global"`` or ``"incremental"``; the
+    other arguments are passed through, with paths as strings.
+
+    Raises ``RuntimeError`` when the attempt is worth retrying -- the solver
+    reported a degenerate solve, or the child died without a Python exception --
+    and ``ChildProcessError`` for any other Python exception, which is a defect
+    rather than bad luck.
+    """
+    args = {
+        "solver": solver,
+        "image_paths": [str(p) for p in image_paths],
+        "workspace_dir": str(workspace_dir),
+        "colmap_dir": str(colmap_dir),
+        **{k: str(v) if isinstance(v, Path) else v for k, v in kwargs.items()},
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", _CHILD_SOLVE, json.dumps(args)], check=False
+    )
+    if result.returncode == 0:
+        return
+    if result.returncode == 1:
+        raise ChildProcessError(
+            f"the {solver} solve raised an unexpected error (see its traceback above)"
+        )
+    if result.returncode == 10:
+        raise RuntimeError(f"the {solver} solve was degenerate")
+    raise RuntimeError(
+        f"the {solver} solve process died with exit code {result.returncode}"
+    )
+
+
 def _solve_with_retries(
     solve_fn: Callable[[int | None], Path],
     *,
@@ -126,8 +190,9 @@ def _solve_with_retries(
     """Re-roll ``solve_fn`` until it yields an acceptable solve, keeping the best.
 
     GLOMAP is not seed-deterministic, so a solve can come back degenerate — every
-    image registered but few or no points triangulated, or a ``RuntimeError``
-    ("No 3D points found") in the extreme. The session-scoped fixtures re-roll
+    image registered but few or no points triangulated, a ``RuntimeError``
+    ("No 3D points found"), or a COLMAP abort, which :func:`_solve_in_child`
+    turns into a ``RuntimeError``. The session-scoped fixtures re-roll
     rather than flake the suite. Each attempt starts from a removed ``colmap_dir``
     and no stale ``{stem}*.sfmr`` siblings; the first attempt uses ``random_seed``
     for a reproducible result and the retries let the solver randomize.
@@ -289,7 +354,6 @@ def build_cluster_reconstruction(
     expected_image_count: int | None = None,
     min_point_count: int = 0,
     max_attempts: int = 6,
-    accept: Callable[["SfmrReconstruction"], str | None] | None = None,
 ) -> Path:
     """Solve a ``.sfmr`` the way the dataset scripts now do.
 
@@ -307,16 +371,6 @@ def build_cluster_reconstruction(
     solve — all images registered but few points — is a degenerate result, so
     ``min_point_count`` lets a caller insist on a substantive point cloud rather
     than accepting the first attempt that merely registers every image.
-
-    ``accept`` is the general form of that insistence, for guarantees no scalar
-    floor can express. It is called with the attempt's chosen reconstruction once
-    the image and point checks pass; returning a string rejects the attempt (the
-    string is the reason, and the loop re-randomizes), returning ``None`` accepts
-    it and stops. Attempts are still ranked as above, so a rejected attempt can
-    still be the best one seen — but a caller that asks for a guarantee gets it or
-    a ``RuntimeError``: if no attempt is ever accepted the fixture fails naming the
-    last rejection reason, which beats handing the tests a reconstruction that
-    quietly lacks the property they assert.
     """
     from sfmtool.feature_match._derive_pairs import _run_derive_pairs
 
@@ -333,43 +387,29 @@ def build_cluster_reconstruction(
     _run_derive_pairs(clusters_file, output_path=str(matches_file))
 
     colmap_dir = workspace_dir / "colmap"
-    if incremental:
-        from sfmtool._incremental_sfm import run_incremental_sfm as _solve
-    else:
-        from sfmtool._global_sfm import run_global_sfm as _solve
-
     output_sfm_file = Path(output_sfm_file)
-    last_rejection = "no attempt met the image / point-count floors"
 
     def _attempt(seed: int | None) -> Path:
-        _solve(
+        _solve_in_child(
+            "incremental" if incremental else "global",
             [],
             workspace_dir,
             colmap_dir,
             matches_file=matches_file,
             random_seed=seed,
-            output_sfm_file=str(output_sfm_file),
+            output_sfm_file=output_sfm_file,
         )
         # A solve can split; the most complete sub-reconstruction is the attempt.
         path, _count = _largest_recon(output_sfm_file)
         return path
 
     def _accept(recon: "SfmrReconstruction") -> bool:
-        nonlocal last_rejection
         images_ok = (
             expected_image_count is None or recon.image_count >= expected_image_count
         )
-        if not (images_ok and recon.point_count >= min_point_count):
-            return False
-        if accept is None:
-            return True
-        reason = accept(recon)
-        if reason is None:
-            return True
-        last_rejection = reason
-        return False
+        return images_ok and recon.point_count >= min_point_count
 
-    best_path, _best_key, accepted = _solve_with_retries(
+    best_path, _best_key, _accepted = _solve_with_retries(
         _attempt,
         colmap_dir=colmap_dir,
         output_sfm_file=output_sfm_file,
@@ -388,17 +428,36 @@ def build_cluster_reconstruction(
             f"every one of {max_attempts} solve attempts on {workspace_dir} was "
             "degenerate (the solver raised each time); no reconstruction to keep."
         )
-    if accept is not None and not accepted:
-        raise RuntimeError(
-            f"none of {max_attempts} solve attempts on {workspace_dir} was accepted; "
-            f"last rejection: {last_rejection}."
-        )
     # Canonicalize: the chosen reconstruction lives at output_sfm_file alone.
     _canonicalize_best(best_path, output_sfm_file)
     # Strip the occasional degenerate point that collapsed onto its cameras, so
     # FeatureSize patch sizing (and any other ray-distance consumer) is robust.
     _drop_camera_coincident_points(output_sfm_file)
     return output_sfm_file
+
+
+def _reference_image_for(workspace_name: str, reference_names: list[str]) -> int:
+    """The index of the reference image that ``workspace_name`` is a copy of.
+
+    A reference's image names are relative to its own workspace, and a fixture
+    workspace may nest the same files one level deeper (seoul_bull's
+    ``seoul_bull_sculpture_01.jpg`` is ``test_17_image/seoul_bull_sculpture_01.jpg``
+    in the fixture). So the match is the reference name that ``workspace_name``
+    ends with, path component by component; a bare basename would not do, since
+    kerry_park's two sensors share theirs (``fisheye_left/frame_01.jpg`` and
+    ``fisheye_right/frame_01.jpg``). Raises ``KeyError`` unless exactly one matches.
+    """
+    parts = Path(workspace_name).parts
+    found = [
+        i
+        for i, name in enumerate(reference_names)
+        if parts[-len(Path(name).parts) :] == Path(name).parts
+    ]
+    if len(found) != 1:
+        raise KeyError(
+            f"{workspace_name!r} matches {len(found)} reference images, not one"
+        )
+    return found[0]
 
 
 def _triangulate_clusters_at_poses(
@@ -413,10 +472,10 @@ def _triangulate_clusters_at_poses(
     """Triangulate a clusters ``.matches`` dict at ``reference``'s fixed geometry.
 
     Each cluster is a candidate track. Its members are mapped onto
-    ``reference``'s images by basename (a reference written beside its images
-    stores bare names, a workspace's matches store workspace-relative ones), and
-    the tracks are solved with ``triangulate_points`` at the reference's one
-    camera and its poses, under the angular floor and the cheirality rule. Each
+    ``reference``'s images by name (see :func:`_reference_image_for`), and the
+    tracks are solved with ``triangulate_points`` from each member's world ray
+    through its own image's camera and pose, under the angular floor and the
+    cheirality rule. Each
     round then keeps, per track, the members that reproject within ``bar_px``
     of the solved point, at most one per image (the closest), and drops any
     track left with fewer than ``min_views`` images; the survivors are solved
@@ -431,15 +490,15 @@ def _triangulate_clusters_at_poses(
     from sfmtool._sfmtool.reconstruction import VERDICT_CODES, triangulate_points
 
     cameras = reference.cameras
-    if len(cameras) != 1:
-        raise ValueError(f"expected a one-camera reference, got {len(cameras)}")
-    camera = cameras[0]
+    camera_of_image = np.asarray(reference.camera_indexes, dtype=np.int64)
     quats = np.asarray(reference.quaternions_wxyz, dtype=np.float64)
     trans = np.asarray(reference.translations, dtype=np.float64)
 
-    reference_index = {Path(n).name: i for i, n in enumerate(reference.image_names)}
     matches_to_reference = np.array(
-        [reference_index[Path(n).name] for n in clusters["image_names"]],
+        [
+            _reference_image_for(n, reference.image_names)
+            for n in clusters["image_names"]
+        ],
         dtype=np.int64,
     )
 
@@ -450,17 +509,33 @@ def _triangulate_clusters_at_poses(
     member_feature = np.asarray(clusters["member_features"], dtype=np.int64)
     member_uv = np.asarray(clusters["member_positions"], dtype=np.float64)
 
+    # Every member's world ray and camera centre, through its own image's camera.
+    member_camera = camera_of_image[member_image]
+    member_ray = np.empty((len(member_uv), 3))
+    for c, camera in enumerate(cameras):
+        sel = np.flatnonzero(member_camera == c)
+        if len(sel):
+            member_ray[sel] = np.asarray(
+                camera.pixel_to_ray_batch(np.ascontiguousarray(member_uv[sel]))
+            )
+    member_ray = _rotate_by_quaternion(quats[member_image], member_ray, inverse=True)
+    member_centre = -_rotate_by_quaternion(
+        quats[member_image], trans[member_image], inverse=True
+    )
+
     finite_code = VERDICT_CODES["finite"]
     active = np.ones(len(member_cluster), dtype=bool)
     for _round in range(max_rounds):
+        # Members are stored grouped by cluster, so the active ones are CSR-ready.
+        offsets = np.zeros(cluster_count + 1, dtype=np.int64)
+        np.cumsum(
+            np.bincount(member_cluster[active], minlength=cluster_count),
+            out=offsets[1:],
+        )
         out = triangulate_points(
-            uv=np.ascontiguousarray(member_uv[active]),
-            obs_image=member_image[active].astype(np.uint32),
-            obs_point=member_cluster[active].astype(np.uint32),
-            camera=camera,
-            quaternions_wxyz=quats,
-            translations=trans,
-            n_points=cluster_count,
+            dirs=np.ascontiguousarray(member_ray[active]),
+            centres=np.ascontiguousarray(member_centre[active]),
+            offsets=offsets,
             floor_rad=np.deg2rad(min_angle_deg),
             cheirality=True,
         )
@@ -476,7 +551,13 @@ def _triangulate_clusters_at_poses(
         # Canonical cameras look down -Z: a member at z >= 0 is behind its camera.
         in_front = cam_pt[:, 2] < 0.0
         rays = cam_pt / np.linalg.norm(cam_pt, axis=1, keepdims=True)
-        pred = np.asarray(camera.ray_to_pixel_batch(np.ascontiguousarray(rays)))
+        pred = np.full((len(idx), 2), np.nan)
+        for c, camera in enumerate(cameras):
+            sel = np.flatnonzero(member_camera[idx] == c)
+            if len(sel):
+                pred[sel] = np.asarray(
+                    camera.ray_to_pixel_batch(np.ascontiguousarray(rays[sel]))
+                )
         err = np.linalg.norm(pred - member_uv[idx], axis=1)
         ok = in_front & np.isfinite(err) & (err <= bar_px)
         idx, err = idx[ok], err[ok]
@@ -555,11 +636,13 @@ def build_reconstruction_at_poses(
     same reconstruction every time.
 
     The output is an ordinary ``sift_files`` reconstruction: its observations
-    index the workspace's ``.sift`` files, its images are the reference's in the
-    reference's order (matched by basename), its camera and pose columns are the
-    reference's verbatim, and it carries the reference's ``world_space_unit``.
-    Only finite points are written; a track too thin to place is dropped rather
-    than kept as a point at infinity.
+    index the workspace's ``.sift`` files, and its images are those of
+    ``image_paths``, in the reference's order (matched by name, see
+    :func:`_reference_image_for`). Its cameras, camera indexes, poses and rig
+    are the reference's verbatim, cut down to those images when ``image_paths``
+    is a subset of the reference, and it carries the reference's
+    ``world_space_unit``. Only finite points are written; a track too thin to
+    place is dropped rather than kept as a point at infinity.
 
     ``min_views`` defaults to 3 because two-view tracks are most of what the
     cluster matches triangulate at fixed poses and the least checked: any pair
@@ -581,6 +664,17 @@ def build_reconstruction_at_poses(
     )
 
     reference = SfmrReconstruction.load(reference_sfmr)
+    # The reference cut down to the images this workspace holds.
+    workspace_dir = Path(workspace_dir)
+    used = sorted(
+        _reference_image_for(
+            Path(p).resolve().relative_to(workspace_dir.resolve()).as_posix(),
+            reference.image_names,
+        )
+        for p in image_paths
+    )
+    if len(used) != reference.image_count:
+        reference = reference.subset_by_image_indices(np.asarray(used, dtype=np.uint32))
     clusters_file = _cluster_match_workspace(
         workspace_dir, image_paths, cluster_d=cluster_d
     )
@@ -600,8 +694,11 @@ def build_reconstruction_at_poses(
 
     # The reference's image order, spelled as the workspace-relative names the
     # matches file records.
-    by_basename = {Path(n).name: n for n in clusters["image_names"]}
-    workspace_names = [by_basename[Path(n).name] for n in reference.image_names]
+    by_reference_image = {
+        _reference_image_for(n, reference.image_names): n
+        for n in clusters["image_names"]
+    }
+    workspace_names = [by_reference_image[i] for i in range(reference.image_count)]
     (
         workspace_dir,
         _contents,
@@ -656,6 +753,7 @@ def build_reconstruction_at_poses(
         sift_content_hashes=sift_content_hashes,
         thumbnails=thumbnails,
         metadata=metadata,
+        rig_frame_data=reference.rig_frame_data,
     )
     recon = SfmrReconstruction.from_data(workspace_dir, data)
     recon.save(output_sfm_file)
@@ -751,29 +849,28 @@ def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
 
 
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
+KERRY_PARK_GROUND_TRUTH = KERRY_PARK_DIR / "kerry_park_ground_truth.sfmr"
 KERRY_PARK_FRAME_COUNT = 24
 KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
-# The solve fixtures don't need all 24 frames. The kerry_park capture is from a
-# video, so a contiguous prefix preserves the frame-to-frame
+# The reconstruction fixtures don't need all 24 frames. The kerry_park capture is
+# from a video, so a contiguous prefix preserves the frame-to-frame
 # covisibility chain (adjacent same-sensor frames share ~28 points on average,
 # decaying past a gap of ~3) while the two back-to-back fisheyes stay tied
 # together by their cross-sensor-at-different-frames overlap. An 8-frame prefix
 # (16 images) still solves complete and well-conditioned (all images
 # registered, both cameras, ~300 points, sub-pixel error) at a fraction of the
 # matching/solve cost. Disk-parsing/resolution fixtures still see all 24 frames.
-KERRY_PARK_SOLVE_FRAME_COUNT = 8
+KERRY_PARK_PREFIX_FRAME_COUNT = 8
 
-# GLOMAP is not seed-deterministic, so "16 images and >= 200 points" does not pin
-# down *which* reconstruction the session gets, and two patch tests assert a
-# property of it that a legitimate solve can lack. Each floor below is a
-# guarantee the fixture holds out for, so those tests measure the algorithm
-# rather than the luck of the solve; the counts behind them are read off the
-# reconstruction's own arrays, with no patch cloud and no images.
+# Two patch tests assert a property of the kerry_park reconstruction that a
+# legitimate reconstruction can lack. Each floor below is a guarantee that
+# kerry_park_workspace_once checks, so those tests measure the algorithm rather
+# than what the fixture happened to hold; the counts behind them are read off
+# the reconstruction's own arrays, with no patch cloud and no images. The
+# fixture is built at the ground truth's poses and is the same every time, so a
+# floor fails only when matching or triangulation changes.
 #
-# (The solve's import reclassifies its points with the point-or-bearing test,
-# under which this capture's points are all finite: the weakest point of a
-# solve scores several times the threshold of 25 (62 and 73 in two solves). A
-# test that needs points at
+# (The fixture writes finite points only. A test that needs points at
 # infinity makes them itself; see
 # test_patch_view_selection.py::test_select_views_infinity_admitted_are_in_front.)
 #
@@ -787,10 +884,9 @@ MIN_PAST_90_CANDIDATE_POINTS = 40
 # Points whose track spans a real range of viewing angles, for
 # test_patch_keypoint_localization.py::test_localize_keypoints_grazing_cutoff_drops_views:
 # a strict min_grazing_cos can only drop a view that is oblique to the patch
-# normal, and on an all-narrow-baseline solve there is none to drop. These are
-# scarce -- a survey of 20 builds gave 7 to 14 of ~300 points -- which is exactly
-# why that test cannot sample the cloud at large. One of those 20 solves had a
-# single oblique point, and that is the one this floor sends back.
+# normal, and on an all-narrow-baseline reconstruction there is none to drop.
+# These are scarce -- a survey of 20 solves gave 7 to 14 of ~300 points -- which
+# is exactly why that test cannot sample the cloud at large.
 MIN_OBLIQUE_POINTS = 5
 # "Oblique" = an observation ray more than this far from the point's mean viewing
 # direction. min_grazing_cos = 0.99 in the grazing test cuts at ~8.1 deg, so 10
@@ -879,13 +975,10 @@ def points_with_oblique_view(
     return {int(p) for p in point_idx[oblique]}
 
 
-def _kerry_park_reject_reason(recon) -> str | None:
-    """Why this kerry_park solve is unfit for the patch tests, or ``None`` if it is.
+def kerry_park_missing_guarantee(recon) -> str | None:
+    """Which ``MIN_*`` guarantee above ``recon`` falls short of, or ``None``.
 
-    The ``accept`` hook of :func:`build_cluster_reconstruction`, holding the
-    reconstruction to the two ``MIN_*`` guarantees above. Each check is a count
-    over the reconstruction's own arrays, so the whole hook costs a fraction of
-    the solve attempt it vets.
+    Each check is a count over the reconstruction's own arrays.
     """
     past_90 = len(points_with_past_90_candidate(recon))
     if past_90 < MIN_PAST_90_CANDIDATE_POINTS:
@@ -967,15 +1060,37 @@ def isolated_kerry_park_camrig(tmp_path_factory) -> Path:
     return workspace_dir
 
 
+@pytest.fixture
+def kerry_park_ground_truth_sfmr(tmp_path_factory) -> Path:
+    """Per-test copy of the checked-in kerry_park ground-truth ``.sfmr``.
+
+    The reference reconstruction of all 48 images (24 rig frames, two
+    SFMTOOL_FISHEYE cameras, metres, some points at infinity), copied with its
+    ``.sfm-workspace.json`` marker into a fresh tmp dir so it loads as-is and
+    resolves its workspace there. Its features are embedded patches (no
+    ``.sift`` files) and it sits beside no images. For a SIFT-backed workspace
+    at the same poses use :func:`kerry_park_workspace`.
+    """
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_ground_truth")
+    shutil.copy(KERRY_PARK_GROUND_TRUTH, workspace_dir / KERRY_PARK_GROUND_TRUTH.name)
+    marker = KERRY_PARK_DIR / ".sfm-workspace.json"
+    shutil.copy(marker, workspace_dir / marker.name)
+    return workspace_dir / KERRY_PARK_GROUND_TRUTH.name
+
+
 @pytest.fixture(scope="session")
 def kerry_park_workspace_once(tmp_path_factory) -> Path:
-    """Session-scoped: build a .sfmr reconstruction from the kerry_park rig.
+    """Session-scoped: a SIFT-backed kerry_park workspace at ground-truth poses.
 
-    Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
-    matching + global SfM (GLOMAP) with a fixed seed. Solves an 8-frame prefix
-    of the dataset (``KERRY_PARK_SOLVE_FRAME_COUNT`` × 2 sensors = 16 images); the
-    solver reliably registers all of them. The fixture fails fast if it doesn't,
-    rather than handing a partial reconstruction to the tests.
+    All 48 images and ``rig_config.json`` are copied in, and the reconstruction
+    covers the 8-frame prefix (``KERRY_PARK_PREFIX_FRAME_COUNT`` x 2 sensors = 16
+    images). There is no solve: sfmtool SIFT and cluster matching run on those
+    images and the tracks are triangulated at the checked-in ground truth's
+    cameras and poses (:func:`build_reconstruction_at_poses`), so every build
+    gives the same reconstruction. It carries the ground truth's rig, both
+    SFMTOOL_FISHEYE cameras and finite points seen in at least three images, in
+    metres, and the fixture checks the ``MIN_*`` guarantees the patch tests
+    depend on.
     """
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
@@ -985,18 +1100,58 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
     image_paths: list[Path] = []
     for sensor in KERRY_PARK_SENSORS:
         frames = sorted((workspace_dir / sensor).glob("frame_*.jpg"))
-        image_paths.extend(frames[:KERRY_PARK_SOLVE_FRAME_COUNT])
+        image_paths.extend(frames[:KERRY_PARK_PREFIX_FRAME_COUNT])
 
-    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_SOLVE_FRAME_COUNT
+    sfmr_path = build_reconstruction_at_poses(
+        workspace_dir,
+        image_paths,
+        KERRY_PARK_GROUND_TRUTH,
+        workspace_dir / "kerry_park.sfmr",
+    )
+    shortfall = kerry_park_missing_guarantee(SfmrReconstruction.load(sfmr_path))
+    if shortfall is not None:
+        raise RuntimeError(f"the kerry_park fixture lacks {shortfall}")
+    return sfmr_path
+
+
+@pytest.fixture
+def kerry_park_workspace(kerry_park_workspace_once: Path, tmp_path_factory) -> Path:
+    """Per-test isolation of :func:`kerry_park_workspace_once`'s whole workspace."""
+    source_workspace_dir = kerry_park_workspace_once.parent
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
+    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / kerry_park_workspace_once.name
+
+
+@pytest.fixture(scope="session")
+def kerry_park_solve_once(tmp_path_factory) -> Path:
+    """Session-scoped: a global solve of the kerry_park rig described by
+    ``rig_config.json``. Read it; do not modify it.
+
+    Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
+    matching + global SfM (GLOMAP) with a fixed seed, on the 8-frame prefix
+    (``KERRY_PARK_PREFIX_FRAME_COUNT`` x 2 sensors = 16 images). Only the tests
+    of the solve itself use this; everything else uses
+    :func:`kerry_park_workspace`, which needs no solve. The fixture fails fast
+    rather than handing a partial reconstruction to the tests.
+    """
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_solve")
+    _copy_kerry_park_into(workspace_dir)
+
+    image_paths: list[Path] = []
+    for sensor in KERRY_PARK_SENSORS:
+        frames = sorted((workspace_dir / sensor).glob("frame_*.jpg"))
+        image_paths.extend(frames[:KERRY_PARK_PREFIX_FRAME_COUNT])
+
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_PREFIX_FRAME_COUNT
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
     # The 8-frame back-to-back fisheye solve is sparse and non-deterministic: a
     # single attempt can register all 16 images yet triangulate very few points
     # (CI has seen ~80). Insist on a substantive point cloud (well above the
     # test's >= 150 floor, leaving margin for the trailing camera-coincident
     # point drop) and retry hard for it, keeping the densest complete attempt.
-    # ``accept`` adds the structural guarantees the patch tests assert --
-    # past-90-deg observations and obliquely-viewed points -- which no point
-    # count implies.
     sfmr_path = build_cluster_reconstruction(
         workspace_dir,
         image_paths,
@@ -1006,7 +1161,6 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
         expected_image_count=expected_count,
         min_point_count=200,
         max_attempts=10,
-        accept=_kerry_park_reject_reason,
     )
 
     recon = SfmrReconstruction.load(sfmr_path)
@@ -1024,21 +1178,12 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
     return sfmr_path
 
 
-@pytest.fixture
-def kerry_park_workspace(kerry_park_workspace_once: Path, tmp_path_factory) -> Path:
-    """Per-test isolation of the kerry_park .sfmr reconstruction."""
-    source_workspace_dir = kerry_park_workspace_once.parent
-    workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
-    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
-    return workspace_dir / kerry_park_workspace_once.name
-
-
 @pytest.fixture(scope="session")
 def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig,
     with the rig described by a multi-sensor ``kerry_park.camrig``.
 
-    Unlike :func:`kerry_park_workspace_once`, this fixture solves
+    Unlike :func:`kerry_park_solve_once`, this fixture solves
     straight from the images through the ``_setup_for_sfm`` rig-aware path
     (``run_global_sfm(matching_mode="cluster")``), which sets up the multi-sensor
     ``.camrig`` and then runs the background-floor cluster matcher with the same
@@ -1048,8 +1193,6 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     degenerating the solve, while retaining coverage of the from-images rig-aware
     solve path.
     """
-    from sfmtool._global_sfm import run_global_sfm
-
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
     _copy_kerry_park_camrig_into(workspace_dir)
     init_workspace(workspace_dir, feature_tool="sfmtool", max_num_features=2000)
@@ -1057,11 +1200,11 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     image_paths: list[Path] = []
     for sensor in KERRY_PARK_SENSORS:
         frames = sorted((workspace_dir / sensor).glob("frame_*.jpg"))
-        image_paths.extend(frames[:KERRY_PARK_SOLVE_FRAME_COUNT])
+        image_paths.extend(frames[:KERRY_PARK_PREFIX_FRAME_COUNT])
 
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
     colmap_dir = workspace_dir / "colmap"
-    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_SOLVE_FRAME_COUNT
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_PREFIX_FRAME_COUNT
 
     # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
     # occasionally yields a degenerate solve — all frames register but few/no
@@ -1072,14 +1215,17 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     max_attempts = 10
 
     def _attempt(seed: int | None) -> Path:
-        return run_global_sfm(
+        _solve_in_child(
+            "global",
             image_paths,
             workspace_dir,
             colmap_dir,
-            output_sfm_file=str(output_sfm_file),
+            output_sfm_file=output_sfm_file,
             random_seed=seed,
             matching_mode="cluster",
         )
+        # The primary reconstruction claims the requested output path.
+        return output_sfm_file
 
     best_stash, best_points, _accepted = _solve_with_retries(
         _attempt,

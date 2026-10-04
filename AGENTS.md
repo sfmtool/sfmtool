@@ -160,9 +160,15 @@ empty-handed". Name the thing and say what it does.
   so it opens in place (`pixi run gui --
   test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr`).
   It is a minimal file with embedded patches, so it needs no `.sift` files; its
-  scale comes from three GPS fixes. Don't run
-  `sfm sift` or a solve in that directory: the marker would put their output
-  in `test-data`.
+  scale comes from three GPS fixes. `kerry_park` likewise holds
+  `kerry_park_ground_truth.sfmr`, all 48 images with the rig, in metres with X
+  east and Y north from eight GPS fixes, and its own marker. The
+  `seoul_bull_workspace` and `kerry_park_workspace` fixtures triangulate at
+  these poses rather than solving; only the tests of a solve itself use
+  `kerry_park_solve_once` / `kerry_park_camrig_workspace`, which run COLMAP in a
+  child process so an abort is a retried attempt rather than a dead pytest
+  worker. Don't run `sfm sift` or a solve in either directory: the marker would
+  put their output in `test-data`.
 - `docs/` — Zensical site, deployed to GitHub Pages.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). See "Quality reports"

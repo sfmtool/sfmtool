@@ -83,17 +83,24 @@ Four datasets are checked in under `test-data/images/`:
 Bootstrap a workspace with `scripts/init_dataset_*.sh`. Reuse these in bug
 reports and reproductions where possible.
 
-`seoul_bull_sculpture` also carries a reference reconstruction,
-`seoul_bull_sculpture_ground_truth.sfmr`, in metres. Its directory has a
-`.sfm-workspace.json`, so the file opens in place:
+Two datasets also carry a reference reconstruction, in metres:
+
+- `seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr` — all 17
+  images; the scale comes from three GPS fixes.
+- `kerry_park/kerry_park_ground_truth.sfmr` — all 48 images, with the rig; the
+  scale and orientation come from eight GPS fixes (X east, Y north).
+
+Each directory has a `.sfm-workspace.json`, so the file opens in place:
 
 ```bash
 pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr
+pixi run gui -- test-data/images/kerry_park/kerry_park_ground_truth.sfmr
 ```
 
-It is a minimal file with embedded patches and needs no `.sift` files. The
-scale comes from three GPS fixes. Work in a
-bootstrapped workspace rather than running `sfm sift` or a solve in that
+They are minimal files with embedded patches and need no `.sift` files. The
+test fixtures for these datasets triangulate at the reference poses rather than
+solving, so they build the same reconstruction every time. Work in a
+bootstrapped workspace rather than running `sfm sift` or a solve in either
 directory, which would write their output into `test-data`.
 
 ## Commit style

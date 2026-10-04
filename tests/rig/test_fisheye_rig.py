@@ -186,14 +186,14 @@ def _rotation_angle_deg(R: np.ndarray) -> float:
 
 
 def test_kerry_park_solve_registers_all_frames(
-    kerry_park_workspace: Path,
+    kerry_park_solve_once: Path,
 ) -> None:
     """The global solve should register every image of the 8-frame prefix
     subset (16 images) and produce a substantive point cloud. Bounds are
     forgiving: GLOMAP output drifts slightly across pycolmap versions and isn't
     seed-deterministic.
     """
-    recon = SfmrReconstruction.load(kerry_park_workspace)
+    recon = SfmrReconstruction.load(kerry_park_solve_once)
     assert recon.image_count == 16
     assert recon.camera_count == 2  # one camera per sensor
     assert recon.point_count >= 150
@@ -204,7 +204,7 @@ def test_kerry_park_solve_registers_all_frames(
 
 
 def test_kerry_park_rig_rotation_recovered(
-    kerry_park_workspace: Path,
+    kerry_park_solve_once: Path,
 ) -> None:
     """For every rig frame in which both sensors are registered, the
     recovered right-from-left rotation should be a ~180° flip — the rig's
@@ -216,7 +216,7 @@ def test_kerry_park_rig_rotation_recovered(
     the rig's ~3 cm baseline is too small relative to the solved scene
     scale to be meaningful.
     """
-    recon = SfmrReconstruction.load(kerry_park_workspace)
+    recon = SfmrReconstruction.load(kerry_park_solve_once)
     names = recon.image_names
     qs = recon.quaternions_wxyz  # cam_from_world per image, (N, 4)
 
