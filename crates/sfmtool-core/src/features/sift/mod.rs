@@ -308,37 +308,13 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
     let mut scale_space = ScaleSpace::build_chain(image, params);
     let t_build = t.elapsed();
 
-    // Stages 3–5 interleaved per octave, coarse→fine, with a cap-aware early
-    // stop. Octave scale ranges are disjoint and ordered — octave o's
-    // localized candidates span σ·k^[0.5, s+0.5]·2^o strictly (the localizer
-    // clamps the integer layer to 1..=s and requires |offset| < 0.5) — so the
-    // running top-`cap` candidate pool built coarse-to-fine equals the global
-    // top-`cap` of a full scan (COLMAP `max_num_features`: keep the
-    // largest-scale candidates, under a *total* order — scale, then response,
-    // then octave/layer/y/x — so the retained set is deterministic when
-    // scales tie; see the reproducible-`.sift` contract in
-    // `specs/core/features/sift.md`). Each octave's surviving candidates are oriented
-    // as soon as they are admitted (orientation preserves scale, so the
-    // final keypoint ranking follows the candidate ranking), which lets two
-    // guards stop the walk with output identical to scanning everything:
-    //
-    // 1. **Output-fixed:** ≥ `cap` keypoints exist and the cap-th largest
-    //    keypoint scale strictly clears the next octave's `max_scale_bound` —
-    //    every later keypoint would be cut by the final sort+truncate.
-    // 2. **Candidate-set-fixed:** the candidate pool is full and its minimum
-    //    scale strictly clears the bound — every later candidate would be cut
-    //    before orientation (this also covers the corner where orientation
-    //    yields no peak for some candidates, matching the full scan's
-    //    behavior of orienting only the top-`cap` candidates).
-    //
-    // The bound carries a rounding margin; in the (never observed) event an
-    // f32 seam collision makes a fine candidate tie the pool's minimum, the
-    // slow path re-selects over the merged pool and re-orients it, so the
-    // result is *always* the full scan's, not merely almost-always. On a
-    // large image with the default cap the walk stops above the finest
-    // octaves, which hold most of the pixels (with `double_image`, octaves 0
-    // and 1 are ~94% of the pyramid) — skipping their detection scan and
-    // their last two Gaussian levels.
+    // Stages 3–5 run per octave, coarse→fine. With a cap set, the walk keeps
+    // a running top-`cap` candidate pool under a total order (scale, response,
+    // octave, layer, y, x), orients each octave's admitted candidates, and stops
+    // early once no finer octave can change the output. The output is always
+    // identical to scanning every octave. The argument for that, and the two
+    // stop guards, are in `specs/core/features/sift.md`, § "7. Feature-count
+    // cap".
     let t = std::time::Instant::now();
     let mut t_orient = std::time::Duration::ZERO;
     let mut pool: Vec<detect::LocalizedKeypoint> = Vec::new();
@@ -386,14 +362,9 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
         scale_space.extend_octave(o);
         let mut new = detect::detect_octave(&scale_space, params, o);
         detected_octaves += 1;
-        // Dropping candidates from `new` (never orienting them) is sound only
-        // when every pooled (coarser) candidate strictly outranks every new
-        // one — verified by the same margin-guarded bound the break guards
-        // use. If an f32 seam tie makes that uncertain (the pool is full and
-        // guard 2 did not break, or a crossing octave overflows the cap while
-        // the pool minimum does not clear the bound), fall back to a merged
-        // re-selection and a from-scratch re-orientation, which reproduces
-        // the full scan's single global cap exactly.
+        // Dropping candidates from `new` without orienting them is sound only
+        // when every pooled candidate strictly outranks them. When the bound
+        // cannot show that, merge, re-select and re-orient from scratch.
         let seam_merge = match params.max_num_features {
             Some(cap) if pool.len() >= cap => true,
             Some(cap) if pool.len() + new.len() > cap => {

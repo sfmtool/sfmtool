@@ -213,16 +213,41 @@ than `max_num_features` candidates the cap is a no-op.
 semantics make fine-octave detection provably dead work once the coarser octaves
 have filled it. Octave scale ranges are disjoint and ordered — octave `o`'s
 localized candidates span `σ·k^[0.5, s+0.5]·2^o` strictly, by the localizer's
-layer clamp and its `|offset| < 0.5` bound — so `detect_keypoints` builds only
-the pyramid *chain* up front (levels `0..=s` per octave, the decimation
-skeleton), then walks octaves coarse→fine, lazily extending each octave to its
-full `s+3` levels right before scanning it, orienting each octave's surviving
-candidates as they are admitted, and stopping when either the cap-th largest
-keypoint scale or the full candidate pool's minimum scale strictly clears the
-next octave's `max_scale_bound` — a margin-guarded strict upper bound, whose
-theoretical f32 seam collision falls back to a merged re-selection and
-re-orientation, so the output is always the full scan's. A skipped octave saves
-its whole detection scan **and its last two Gaussian levels**. On 4K images with
+layer clamp and its `|offset| < 0.5` bound — so a running top-`cap` candidate
+pool built coarse-to-fine equals the top-`cap` of a full scan.
+`detect_keypoints` builds only the pyramid *chain* up front (levels `0..=s` per
+octave, the decimation skeleton), then walks octaves coarse→fine, lazily
+extending each octave to its full `s+3` levels right before scanning it.
+
+The selection uses a *total* order — scale descending, then response
+descending, then octave, layer, `y`, `x` ascending — so the retained set is the
+same on every run even when scales tie. The octave that crosses the cap admits
+only its top `cap − len` candidates under that order. Each octave's admitted
+candidates are oriented as soon as they are admitted; orientation does not
+change a candidate's scale, so the final keypoint ranking follows the candidate
+ranking. Before scanning octave `o`, the walk stops if either guard holds:
+
+1. **Output fixed:** at least `cap` keypoints exist and the cap-th largest
+   keypoint scale is strictly above `max_scale_bound(o)`. Every later keypoint
+   would be removed by the final sort and truncation.
+2. **Candidate set fixed:** the candidate pool holds `cap` candidates and its
+   smallest scale is strictly above `max_scale_bound(o)`. Every later candidate
+   would be dropped before orientation. This guard covers the case where
+   orientation finds no peak for some candidates, so fewer than `cap` keypoints
+   exist: the full scan also orients only its top `cap` candidates.
+
+`max_scale_bound(o)` is octave `o`'s scale at layer `s + 0.5`, raised by a
+relative margin of `1e-5` to absorb f32 rounding. Dropping a fine octave's
+candidates without orienting them is correct only when every pooled candidate
+strictly outranks them. When that is not certain — the pool is already full and
+guard 2 did not stop the walk, or the octave overflows the cap while the pool's
+smallest scale does not clear the bound — the walk merges the new candidates
+into the pool, re-selects the top `cap`, and orients the whole pool again. This
+path has never been observed to run, but it makes the output always equal to
+the full scan's. A cap of 0 detects nothing.
+
+A skipped octave saves its whole detection scan **and its last two Gaussian
+levels**. On 4K images with
 the default cap this skips octaves 0 and 1, about 94% of the pyramid's detection
 pixels with `double_image`, with byte-identical output (validated over 1196
 DinoLedge frames); small images that never fill the cap detect every octave.

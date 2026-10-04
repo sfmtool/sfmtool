@@ -898,6 +898,7 @@ and the opening paragraphs listed in check 4.
 
 - `sift/extract_sfmtool.py:238-256`, the `_extract_workers` docstring.
 - `sift/mod.rs:310-329`, the proof of the cap-aware walk.
+  > _Status (2026-10-04): **Done** — the comment above the walk in `detect_keypoints` now states what the walk guarantees and points at `specs/core/features/sift.md` § 7, and the slow-path comment is three lines. § 7 now carries the facts that were only in the comment: the total order and the crossing octave's top `cap − len` admission, that orientation keeps scale, each guard with the no-peak case, the bound's `1e-5` margin, the slow path's two triggers, and that a cap of 0 detects nothing. Branch `finding-fix-21-sift-cap-walk-comment`._
 - `geometry/resect_translation.rs:95-116`, the `residual_norm` chirality argument.
 - `motion/recon_discontinuity.py:689-700`, the threshold rationale, which is already in `constants.py`.
 - `optical_flow/gpu/mod.rs:98-103`.
