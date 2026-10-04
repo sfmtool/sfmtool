@@ -277,3 +277,31 @@ fn analytic_and_central_difference_jacobians_converge_together() {
     assert!(b.rotation.angle_to(&legacy.1) < 1e-6);
     assert!((b.translation - legacy.2).norm() < 1e-6);
 }
+
+/// The central-difference fallback is as accurate at every world scale: at a
+/// point scaled by `k` its Jacobian is the unscaled one divided by `k`, and at
+/// each scale it agrees with the analytic Jacobian of the same map. A point on
+/// the camera centre has no derivative and comes back `None`.
+#[test]
+fn the_central_difference_step_scales_with_the_point() {
+    let legacy = equidistant_legacy();
+    let native = equidistant_native();
+    let p = Vector3::new(0.7, -0.4, -1.3);
+    for k in [1e-4, 1.0, 1e4] {
+        let (uv_d, jd) = project_with_jac(&legacy, p * k, false).expect("in the domain");
+        let (uv_a, ja) = project_with_jac(&native, p * k, true).expect("in the domain");
+        assert!((uv_d.0 - uv_a.0).abs() < 1e-9 && (uv_d.1 - uv_a.1).abs() < 1e-9);
+        for r in 0..2 {
+            for c in 0..3 {
+                let scale = ja[r][c].abs().max(1.0 / k);
+                assert!(
+                    (jd[r][c] - ja[r][c]).abs() <= 1e-6 * scale,
+                    "x{k}: [{r}][{c}] {} against {}",
+                    jd[r][c],
+                    ja[r][c]
+                );
+            }
+        }
+    }
+    assert!(project_with_jac(&legacy, Vector3::zeros(), false).is_none());
+}

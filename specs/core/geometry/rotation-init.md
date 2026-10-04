@@ -104,9 +104,9 @@ builds itself as the deduplicated union of the H-inlier clusters of the
 component's validated edges. The mask is not optional and not the
 caller's to supply: with the far clusters started as finite points, a
 dominant far cloud rewards baseline collapse, and the LM walks the flat
-scale gauge downward until the near field crosses the adjustment's trim
-depth floor and the core degenerates to a panorama — each staged round is
-individually well behaved, and the walk compounds across them. Started as
+scale gauge downward toward a zero baseline, where the core degenerates to a
+panorama — each staged round is individually well behaved, and the walk
+compounds across them. Started as
 directions, the far clusters sit at zero inverse depth, where they carry no
 translation column. The adjustment runs with the default crossing
 ([bundle-adjustment.md](bundle-adjustment.md) § "Free points: inverse depth

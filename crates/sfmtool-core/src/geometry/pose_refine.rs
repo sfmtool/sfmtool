@@ -90,6 +90,13 @@ fn cost(
 /// difference of `ray_to_pixel` for fisheye / equirectangular models, which
 /// have no analytic Jacobian yet. `None` when the point is outside the model
 /// domain (behind the camera / non-invertible).
+///
+/// The difference step is `1e-6` of the point's range. The projection is
+/// homogeneous of degree zero in the point, so its Jacobian scales as one over
+/// the range, and a step that scales with the range keeps the quotient's
+/// relative accuracy the same at every world scale. A point on the camera
+/// centre has no range to step along and no projection derivative, and is
+/// `None` like any other point outside the domain.
 pub(crate) fn project_with_jac(
     cam: &CameraIntrinsics,
     p_cam: Vector3<f64>,
@@ -99,7 +106,10 @@ pub(crate) fn project_with_jac(
         return cam.ray_to_pixel_with_jacobian([p_cam.x, p_cam.y, p_cam.z]);
     }
     let uv = cam.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z])?;
-    let h = 1e-6;
+    let h = 1e-6 * p_cam.norm();
+    if !(h > 0.0 && h.is_finite()) {
+        return None;
+    }
     let mut j = [[0.0f64; 3]; 2];
     for c in 0..3 {
         let mut pp = p_cam;

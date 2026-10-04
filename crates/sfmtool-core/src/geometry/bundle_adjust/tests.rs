@@ -1841,7 +1841,7 @@ fn untouched_images_pass_through() {
 //     equidistant closed form), with `RadialFisheye` standing in below for
 //     the central-difference fallback the rest of the family still takes;
 //   * the inter-round in-front gate. Until the model-aware measure landed it
-//     compared the canonical depth `−z_cam` against the `1e-3·f` floor, which
+//     compared the canonical depth `−z_cam` against a positive floor, which
 //     DISCARDS every observation at `θ ≥ 90°` — the whole periphery of a
 //     >180° capture, i.e. exactly the part that carries the model
 //     information.
@@ -1994,9 +1994,10 @@ fn fixed_fisheye_intrinsics_keep_observations_past_ninety_degrees() {
         &s.obs_img,
         &s.obs_pt,
     );
-    let f = s.cam.focal_lengths().0;
+    let is_dir = vec![false; s.points.len()];
+    let floor = in_front_floor(&depths, &is_dir, &s.obs_pt);
     let kept = (0..s.uv.len())
-        .filter(|&k| norms[k] < 50.0 && depths[k] > 1e-3 * f)
+        .filter(|&k| norms[k] < 50.0 && depths[k] > floor)
         .count();
     assert_eq!(
         kept,
@@ -2013,7 +2014,7 @@ fn fixed_fisheye_intrinsics_keep_observations_past_ninety_degrees() {
         let x = s.points[s.obs_pt[k] as usize];
         let i = s.obs_img[k] as usize;
         let c = s.quats[i] * Vector3::new(x[0], x[1], x[2]) + s.trans[i];
-        if -c.z <= 1e-3 * f {
+        if -c.z <= floor {
             dropped_by_z += 1;
         }
     }
@@ -6041,4 +6042,290 @@ fn crossing_off_matches_its_recorded_output() {
     }
     assert_eq!(out.point_at_infinity, mask);
     assert!(out.free_point_decision.is_none());
+}
+
+// ── The in-front floor and the world's scale ───────────────────────────────
+
+/// `s` with the world scaled by `k`: every finite point and every translation
+/// times `k`, so each camera centre and each camera-frame point is `k` times
+/// what it was and every projection is unchanged. Directions keep their rows.
+fn scaled_scene(s: &Scene, mask: &[bool], k: f64) -> Scene {
+    let mut out = s.clone();
+    for (p, row) in out.points.iter_mut().enumerate() {
+        if !mask[p] {
+            *row = [k * row[0], k * row[1], k * row[2]];
+        }
+    }
+    for t in &mut out.trans {
+        *t *= k;
+    }
+    out
+}
+
+/// The fixture of [`the_adjustment_does_not_depend_on_the_world_scale`]: the
+/// arc scene with pixel noise, perturbed poses, a few directions and a far
+/// track, so the trim, the retriangulation and, under the crossing, the
+/// storage decision all have work to do.
+fn scale_fixture() -> (Scene, Vec<bool>) {
+    let mut s = make_scene(6, 40);
+    let ids = add_direction_tracks(&mut s, 6, 91, 0.2);
+    add_far_track(&mut s, 1500.0, 0.0, 92);
+    add_noise(&mut s, 0.3, 93);
+    let mask = dir_mask(&s, &ids);
+    for i in 1..s.quats.len() {
+        let d = Vector3::new(
+            0.01 * jitter(i, 501),
+            0.01 * jitter(i, 502),
+            0.01 * jitter(i, 503),
+        );
+        s.quats[i] = UnitQuaternion::from_scaled_axis(d) * s.quats[i];
+        s.trans[i] += Vector3::new(
+            0.03 * jitter(i, 504),
+            0.03 * jitter(i, 505),
+            0.03 * jitter(i, 506),
+        );
+    }
+    (s, mask)
+}
+
+/// Scaling the world changes nothing the adjustment reports, under either
+/// policy: the same observations survive (the same residuals, to round-off),
+/// the same focal, the same representations and the same storage decision,
+/// and poses and points that are the unscaled answer times the scale. At
+/// `×0.01` the scene's depths are about `0.08`, under the `0.5` that an
+/// in-front floor of `1e-3·f` at `f = 500` would put under them: that floor
+/// trimmed every finite observation and left the solve at its degenerate exit.
+#[test]
+fn the_adjustment_does_not_depend_on_the_world_scale() {
+    let (base, mask) = scale_fixture();
+    for policy in [CROSS, FreePointPolicy::KEEP] {
+        let mut reference = base.clone();
+        let want = run_constrained(
+            &mut reference,
+            Some(&mask),
+            None,
+            policy,
+            None,
+            true,
+            &DEFAULT_SCHEDULE,
+        );
+        assert!(
+            want.residual_norms.iter().all(|r| r.is_finite()),
+            "{policy:?}: the unscaled solve lost an observation"
+        );
+        for k in [0.01, 10.0, 1000.0] {
+            let mut s = scaled_scene(&base, &mask, k);
+            let got = run_constrained(
+                &mut s,
+                Some(&mask),
+                None,
+                policy,
+                None,
+                true,
+                &DEFAULT_SCHEDULE,
+            );
+            let tag = format!("{policy:?} at x{k}");
+            assert_eq!(got.point_at_infinity, want.point_at_infinity, "{tag}");
+            match (&got.free_point_decision, &want.free_point_decision) {
+                (Some(g), Some(w)) => {
+                    assert_eq!(
+                        (g.to_finite, g.to_direction, g.decided),
+                        (w.to_finite, w.to_direction, w.decided),
+                        "{tag}"
+                    );
+                }
+                (None, None) => {}
+                (g, w) => panic!("{tag}: decision {g:?} against {w:?}"),
+            }
+            let (fg, fw) = (ba_focal(&got), ba_focal(&want));
+            assert!(
+                (fg - fw).abs() <= 1e-7 * fw,
+                "{tag}: focal {fg} against {fw}"
+            );
+            for (r, (g, w)) in got
+                .residual_norms
+                .iter()
+                .zip(&want.residual_norms)
+                .enumerate()
+            {
+                assert!(
+                    (g - w).abs() <= 1e-6,
+                    "{tag}: residual {r}: {g} against {w}"
+                );
+            }
+            // Poses and points are compared in camera 0's frame, which takes
+            // out the rotation and translation of the world: the adjustment
+            // leaves those free, and the solve's stopping point along them
+            // moves with round-off, which scaling the world changes. The
+            // scale of the world is free too, and it is compared, against `k`,
+            // to the same tolerance as everything else.
+            let frame =
+                |q: &[UnitQuaternion<f64>], t: &[Vector3<f64>], x: Vector3<f64>| q[0] * x + t[0];
+            let mut worst_rot = 0.0f64;
+            let mut worst_pos = 0.0f64;
+            for i in 0..s.quats.len() {
+                let g = s.quats[i] * s.quats[0].inverse();
+                let w = reference.quats[i] * reference.quats[0].inverse();
+                worst_rot = worst_rot.max(g.angle_to(&w));
+                let g = frame(&s.quats, &s.trans, camera_centre(&s.quats[i], &s.trans[i])) / k;
+                let w = frame(
+                    &reference.quats,
+                    &reference.trans,
+                    camera_centre(&reference.quats[i], &reference.trans[i]),
+                );
+                worst_pos = worst_pos.max((g - w).norm() / w.norm().max(1.0));
+            }
+            for (p, (g, w)) in s.points.iter().zip(&reference.points).enumerate() {
+                let g = Vector3::new(g[0], g[1], g[2]);
+                let w = Vector3::new(w[0], w[1], w[2]);
+                let (g, w) = if got.point_at_infinity[p] {
+                    (s.quats[0] * g, reference.quats[0] * w)
+                } else {
+                    (
+                        frame(&s.quats, &s.trans, g) / k,
+                        frame(&reference.quats, &reference.trans, w),
+                    )
+                };
+                worst_pos = worst_pos.max((g - w).norm() / w.norm().max(1.0));
+            }
+            // Positions get the looser bound: the far track's depth is the
+            // least constrained coordinate in the scene, and where the solve
+            // stops along it moves by a few parts in 1e7 at `x1000`.
+            assert!(worst_rot <= 1e-9, "{tag}: rotation {worst_rot:e}");
+            assert!(worst_pos <= 1e-6, "{tag}: position {worst_pos:e}");
+        }
+    }
+}
+
+/// One camera-0 observation of each of `points`, at its exact projection,
+/// read through the trim's gate at the scene's own state: whether the gate
+/// keeps each. The scene's own observations set the scale.
+fn in_front_gate(s: &Scene, points: &[Vector3<f64>]) -> Vec<bool> {
+    let mut all_points = s.points.clone();
+    let mut uv = s.uv.clone();
+    let mut obs_img = s.obs_img.clone();
+    let mut obs_pt = s.obs_pt.clone();
+    let mut probe = Vec::new();
+    for x in points {
+        let c = s.quats[0] * x + s.trans[0];
+        // The exact projection where the model has one; the principal point
+        // for a point behind the camera, which has none.
+        let px = s
+            .cam
+            .ray_to_pixel([c.x, c.y, c.z])
+            .map_or([320.0, 240.0], |(u, v)| [u, v]);
+        probe.push(uv.len());
+        all_points.push([x.x, x.y, x.z]);
+        uv.push(px);
+        obs_img.push(0);
+        obs_pt.push(all_points.len() as u32 - 1);
+    }
+    let is_dir = vec![false; all_points.len()];
+    let (norms, depths) = residual_norms_depths(
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
+        &s.quats,
+        &s.trans,
+        &all_points,
+        &is_dir,
+        &uv,
+        &obs_img,
+        &obs_pt,
+    );
+    let floor = in_front_floor(&depths, &is_dir, &obs_pt);
+    probe
+        .iter()
+        .map(|&k| norms[k] < 1.0 && depths[k] > floor)
+        .collect()
+}
+
+/// The floor still does its job: a point on a camera's centre, a billionth of
+/// the scene's median depth in front of it, is trimmed, and so is one behind
+/// it; a point a thousandth of the median depth in front, which is a position
+/// and not a singularity, is kept. The verdicts are the same at every world
+/// scale.
+#[test]
+fn the_in_front_floor_trims_a_camera_centre_and_keeps_a_near_point() {
+    let base = make_scene(6, 40);
+    let mask = vec![false; base.points.len()];
+    for k in [0.01, 1.0, 10.0, 1000.0] {
+        let s = scaled_scene(&base, &mask, k);
+        let centre = camera_centre(&s.quats[0], &s.trans[0]);
+        // Camera 0's viewing direction in the world, a little off its axis so
+        // the probes are not all on the principal point.
+        let ahead = s.quats[0].inverse() * Vector3::new(0.05, -0.03, -1.0).normalize();
+        // The arc scene's median depth is about 8, the cameras' radius.
+        let median = 8.0 * k;
+        let gate = in_front_gate(
+            &s,
+            &[
+                centre + ahead * (1e-9 * median),
+                centre - ahead * (1e-3 * median),
+                centre + ahead * (1e-3 * median),
+            ],
+        );
+        assert_eq!(gate, [false, false, true], "at x{k}");
+    }
+}
+
+/// The arc scene at its exact state plus one point at `range` along a ray of
+/// camera 0, observed by cameras 0 and 1 at its exact projections, camera 1's
+/// moved 2 px so that solving the point moves it. Run with the crossing off
+/// over one round (no re-estimation): the point as it went in and as it came
+/// back, and the result's residual for its camera-1 observation.
+fn solve_with_a_point_near_camera_0(range: f64) -> ([f64; 3], [f64; 3], f64) {
+    let mut s = make_scene(6, 40);
+    let centre = camera_centre(&s.quats[0], &s.trans[0]);
+    let ahead = s.quats[0].inverse() * Vector3::new(0.05, -0.03, -1.0).normalize();
+    let x = centre + ahead * range;
+    let p = s.points.len();
+    s.points.push([x.x, x.y, x.z]);
+    let mut k1 = 0;
+    for i in [0usize, 1] {
+        let c = s.quats[i] * x + s.trans[i];
+        let (u, v) = s
+            .cam
+            .ray_to_pixel([c.x, c.y, c.z])
+            .expect("the point is in front of cameras 0 and 1");
+        let shift = if i == 1 { 2.0 } else { 0.0 };
+        k1 = s.uv.len();
+        s.uv.push([u + shift, v]);
+        s.obs_img.push(i as u32);
+        s.obs_pt.push(p as u32);
+    }
+    let out = run_constrained(
+        &mut s,
+        None,
+        None,
+        FreePointPolicy::KEEP,
+        None,
+        false,
+        &[BaSchedule {
+            trim_px: 8.0,
+            loss_scale: 1.0,
+        }],
+    );
+    (s.points[p], [x.x, x.y, x.z], out.residual_norms[k1])
+}
+
+/// Through the whole adjustment: a point a billionth of the scene's median
+/// depth (about 8) in front of camera 0's centre has that observation trimmed,
+/// which leaves it one survivor, under `min_track`, so it is not solved: it
+/// comes back exactly as it went in and its camera-1 residual keeps its 2 px.
+/// The same point a thousandth of the median depth out is solved, which takes
+/// that residual to nothing.
+#[test]
+fn the_trim_drops_a_point_on_a_camera_centre_from_the_solve() {
+    let (came_back, went_in, residual) = solve_with_a_point_near_camera_0(1e-9 * 8.0);
+    assert_eq!(came_back, went_in, "the point on the centre was solved");
+    assert!(
+        residual > 1.5,
+        "the point on the centre was solved: camera-1 residual {residual}"
+    );
+    let (came_back, went_in, residual) = solve_with_a_point_near_camera_0(1e-3 * 8.0);
+    assert_ne!(came_back, went_in, "the near point was not solved");
+    assert!(
+        residual < 0.1,
+        "the near point was not solved: camera-1 residual {residual}"
+    );
 }

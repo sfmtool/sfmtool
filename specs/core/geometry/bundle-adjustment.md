@@ -184,9 +184,8 @@ Per schedule round, mirroring the experiment scripts exactly:
    point: observations a bad init lost re-enter once the refined cameras
    explain them.
 2. **Trim.** Keep observations with residual norm `< trim_px`, an in-front
-   measure `> 1e-3 · f`, and a finite point; then drop observations of points
-   with fewer than `min_track` survivors. `f` is the focal of the observation's
-   own camera at the round's state (the model's first where it carries two). The
+   measure over the round's in-front floor (below), and a finite point; then
+   drop observations of points with fewer than `min_track` survivors. The
    in-front measure is model-aware: the canonical depth `−z_cam` for the
    perspective family, whose projection is defined only for `z_cam < 0`, and the
    range `‖p_cam‖` for a ray-path model (fisheye, equirectangular), which images
@@ -204,6 +203,69 @@ After the last round, `residual_norms` is the unweighted reprojection
 residual norm of **every supplied observation** at the final state (`+∞`
 where invalid), so callers tally inlier fractions against denominators of
 their own choosing.
+
+### The in-front floor
+
+A finite observation survives the trim when its in-front measure is greater
+than
+
+```
+floor = 1e-6 · s,   s = median in-front measure over the round's
+                        observations of finite points whose measure is positive
+```
+
+(`in_front_floor`, `IN_FRONT_FLOOR_FRACTION`), and a direction's observation
+when its measure is greater than zero. With no finite observation in front at
+all, the floor is zero.
+
+**What the floor protects against.** The projection is singular at the camera
+centre: the direction from the centre to a point there is undefined, and the
+projection's derivative with respect to the point grows as one over the
+point's range. The other place a perspective projection breaks, the image
+plane (`z_cam → 0` at a finite range), needs no floor: a point there projects
+far outside any image, and its residual is trimmed by `trim_px` before its
+depth is read. Past the sign of the measure, which is the projection's own
+domain test, the floor's one job is to reject a point at, or numerically at,
+its camera's centre. Such a point comes from a triangulation that failed
+(rays that cross at the camera that took one of them), and an observation of
+it would hand that camera's translation a derivative orders of magnitude
+larger than any other in the solve.
+
+**Why a fraction of the scene.** Range is a length, and a reconstruction's
+world unit is arbitrary: a solver's gauge, metres after a GPS fit, or anything
+an `xform --scale` makes of it. A floor stated in any fixed unit trims a
+different set of observations when the same scene is stated in another, so the
+floor is a fraction of a length the scene states. The median in-front measure
+is that length: it is positive whenever anything is in front, it is not moved
+by a minority of far or near points, and, unlike the spread of the camera
+centres, it does not vanish for a capture that rotates about one point. It is a
+selection, not a sum, so it does not depend on the order of the observations.
+It is read every round, at that round's state, from the same measures the trim
+reads.
+
+**Why `1e-6`.** A legitimately near point sits at a percent-level fraction of
+the median: in a GLOMAP solve of `seoul_bull_sculpture`'s 17 images, whose
+median depth is 1.44 world units, the nearest observation is at 8% of it before
+the adjustment and at 6% after, and a quarter of the observations end within a
+tenth of it. The fraction leaves four orders of magnitude between those and the
+floor, and a point at the floor has a projection derivative a million times its
+scene's typical one, which is the camera centre for every purpose the solve
+has. The verdicts do not depend on the scale: scaling the world by any factor
+scales the floor with it.
+
+A floor stated through the focal compares pixels with world units and is not
+scale invariant: `1e-3 · f` on that same solve (`f` = 341) would sit at 0.24
+of the median depth, over 959 of its 2921 observations.
+
+**Inverse depth.** A free point solved in inverse depth (`p̃ = ρ·p_cam`, see
+"The parametrisation") is trimmed on the same measure, read from the position
+the round handed back. In `(u, ρ)` the measure of the point is the measure of
+`p̃` divided by `ρ`, so the test reads `measure(p̃) > 1e-6 · s · ρ`. A point
+pulled onto its anchor (large `ρ`) meets the floor only where the anchor is
+itself on a camera centre, which is the case of a track whose observing images
+share one centre. As `ρ` goes to zero the bound goes to zero with it, and at `ρ = 0`
+it is the direction's test, `measure(R_i · u) > 0`: the direction's floor of
+zero is the same rule at zero inverse depth, not a separate one.
 
 ## The solve
 
@@ -312,7 +374,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   through `θ_d = θ·(1 + k1·θ²)` is closed-form) and `SFMTOOL_FISHEYE`
   (the same chain at `θ_d = θ + δ(θ)`), a central difference of
   `ray_to_pixel` for the remaining polynomial fisheye models and
-  equirectangular, which have no analytic form — composed with
+  equirectangular, which have no analytic form, with a step of `1e-6` of the
+  camera-frame point's range (the projection is homogeneous of degree zero, so
+  its derivative scales as one over the range and a step that scales with it
+  is equally accurate at every world scale) — composed with
   `−[R·X]ₓ` (rotation), `I₃` (translation), and `R` (point) blocks,
   exactly as in `pose_refine.rs` (including the fallback). An observation
   whose point is behind the camera / outside the model domain contributes
@@ -412,8 +477,9 @@ Every rule the single block follows applies to each block separately:
 
 Everything that reads a camera reads the camera of the observation's image,
 `cameras[image_camera[obs_img[k]]]`: the projection, its Jacobian and the lens
-columns; the trim's in-front measure and its `1e-3 · f` floor; and
-`pixel_to_ray` in the inter-round re-estimation.
+columns; the trim's in-front measure; and `pixel_to_ray` in the inter-round
+re-estimation. The in-front floor is the scene's, not a camera's, so it reads
+no camera.
 
 Under `FreePointPolicy::cross` the storage decision reads each camera twice
 more. The noise level pools every camera's residuals and gates each camera's
@@ -555,6 +621,17 @@ Python's point of view).
   the state passed through.
 - **Retriangulation re-admission**: a `NaN` point with ≥ 2 observations is
   reborn in round 2 and its observations participate thereafter.
+- **World scale**: a scene with noise, perturbed poses, directions and a far
+  track, scaled by `×0.01`, `×10` and `×1000`, gives under either policy the
+  same representations, storage decision, focal and residuals as at `×1`, and
+  poses and points (in camera 0's frame, which takes out the free rotation
+  and translation of the world) that are the unscaled ones times the scale.
+- **In-front floor**: at every one of those scales, a point a billionth of the
+  median depth in front of a camera's centre and a point behind it are
+  trimmed, and a point a thousandth of the median depth in front is kept.
+  Through the whole adjustment, a two-view point on a camera's centre is left
+  out of a one-round solve and comes back unchanged, while the same point a
+  thousandth of the median depth out is solved.
 - **Pass-through**: images not referenced by any observation are returned
   bit-identical; so are unreferenced points under a single-round schedule
   (multi-round schedules retriangulate them to `NaN` by design).
@@ -718,7 +795,8 @@ contributes the standard `(1e6, 0)` penalized residual with a zero Jacobian row.
 
 - **Trim** treats direction observations exactly like finite ones (pixel
   threshold, `min_track` survivors per point); the in-front check is the
-  model-aware test above, against a floor of zero instead of `1e-3 · f`.
+  model-aware test above, against a floor of zero, the in-front floor's
+  value at zero inverse depth.
 - **Re-estimation (rounds after the first).** Where finite points
   retriangulate, a direction re-estimates in closed form as the
   normalized mean of its observations' back-rotated rays

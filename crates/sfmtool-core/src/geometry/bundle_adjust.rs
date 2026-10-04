@@ -33,7 +33,8 @@ use crate::camera::distortion::bspline::{
     basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
 use crate::camera::intrinsics::SplineRadial;
-use crate::camera::{CameraModel, PixelJacobian};
+use crate::camera::CameraModel;
+use crate::geometry::pose_refine::project_with_jac;
 use crate::progress::Progress;
 use crate::progress_info;
 use crate::reconstruction::triangulation::points::{
@@ -50,6 +51,13 @@ use crate::CameraIntrinsics;
 /// residual per component — large enough to be trimmed, finite so the robust
 /// cost stays well-posed (matches `reprojection_residuals` / `pose_refine`).
 const INVALID_RESIDUAL: f64 = 1e6;
+
+/// The trim's in-front floor for a finite observation, as a fraction of the
+/// round's scene scale ([`in_front_floor`]). A point whose in-front measure is
+/// at or under it sits on its camera's centre, where the projection is
+/// singular; nothing a camera can image in focus is a millionth of the scene's
+/// median depth away from it.
+const IN_FRONT_FLOOR_FRACTION: f64 = 1e-6;
 
 /// One round of the trim schedule.
 #[derive(Clone, Copy, Debug)]
@@ -540,35 +548,6 @@ fn robust_scales(z: f64) -> (f64, f64) {
     let js = (1.0 + z).powf(-0.75);
     let rs = (1.0 + z).powf(0.25);
     (js, rs)
-}
-
-/// Projected pixel and the 2×3 projection Jacobian `∂(u, v)/∂p_cam` at a
-/// camera-frame point. Analytic for the perspective family; a central
-/// difference of `ray_to_pixel` for fisheye / equirectangular models, which
-/// have no analytic Jacobian yet (same fallback as `pose_refine`). `None`
-/// when the point is outside the model domain.
-fn project_with_jac(
-    cam: &CameraIntrinsics,
-    p_cam: Vector3<f64>,
-    analytic: bool,
-) -> Option<PixelJacobian> {
-    if analytic {
-        return cam.ray_to_pixel_with_jacobian([p_cam.x, p_cam.y, p_cam.z]);
-    }
-    let uv = cam.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z])?;
-    let h = 1e-6;
-    let mut j = [[0.0f64; 3]; 2];
-    for c in 0..3 {
-        let mut pp = p_cam;
-        let mut pm = p_cam;
-        pp[c] += h;
-        pm[c] -= h;
-        let (up, vp) = cam.ray_to_pixel([pp.x, pp.y, pp.z])?;
-        let (um, vm) = cam.ray_to_pixel([pm.x, pm.y, pm.z])?;
-        j[0][c] = (up - um) / (2.0 * h);
-        j[1][c] = (vp - vm) / (2.0 * h);
-    }
-    Some((uv, j))
 }
 
 /// Linearization of one observation: weighted residual, the weighted
@@ -1082,7 +1061,8 @@ fn normalized_dir(p: [f64; 3]) -> [f64; 3] {
 /// can still do there (reject a point sitting on the camera centre, where the
 /// direction is undefined) and leaves the domain test to `ray_to_pixel`.
 ///
-/// Finite observations are checked against the `1e-3·f` floor by the caller.
+/// Finite observations are checked against the scene-scale floor of
+/// [`in_front_floor`] by the caller.
 /// A direction observation reports the same measure at `R·d` and is checked
 /// against zero: for the perspective family that is `(R·d)_z < 0`, and for a
 /// ray-path model, whose range of a unit direction is one, it passes and the
@@ -1120,6 +1100,31 @@ fn residual_norms_depths(
         }
     }
     (norms, depths)
+}
+
+/// The trim's in-front floor for finite observations at one round's state:
+/// [`IN_FRONT_FLOOR_FRACTION`] of the scene scale, the median in-front measure
+/// over the observations of finite points that are in front at all. Zero when
+/// no such observation exists, which leaves the sign test.
+///
+/// The floor is a length, as the measure is, and it is a fraction of a length
+/// the scene states, so scaling the world scales the floor with it and the
+/// trim keeps exactly the observations it kept before. The median is a
+/// selection, not a sum, so it is the same value whatever order the
+/// observations come in.
+fn in_front_floor(depths: &[f64], is_dir: &[bool], obs_pt: &[u32]) -> f64 {
+    let mut front: Vec<f64> = depths
+        .iter()
+        .zip(obs_pt)
+        .filter(|&(&d, &p)| !is_dir[p as usize] && d > 0.0 && d.is_finite())
+        .map(|(&d, _)| d)
+        .collect();
+    if front.is_empty() {
+        return 0.0;
+    }
+    let mid = front.len() / 2;
+    let (_, median, _) = front.select_nth_unstable_by(mid, f64::total_cmp);
+    IN_FRONT_FLOOR_FRACTION * *median
 }
 
 /// Re-estimation (rounds after the first): the shared retriangulation
@@ -2803,11 +2808,6 @@ fn bundle_adjust_staged(
         })
         .collect();
     let spline_cols = lenses.iter().any(|l| l.opt_bspline);
-    // The camera of each observation.
-    let obs_cam: Vec<usize> = obs_img
-        .iter()
-        .map(|&i| image_camera[i as usize] as usize)
-        .collect();
 
     // A share of the range per round. Even shares, because the rounds run the
     // same solve over a tightening trim and none of them is predictably the
@@ -2885,15 +2885,16 @@ fn bundle_adjust_staged(
         );
         // In-front: the model-aware measure from `residual_norms_depths`
         // (canonical depth for the perspective family, range for a ray-path
-        // model) over the `1e-3·f` floor of the observation's own camera for
-        // finite observations, and over zero for directions. Protected
-        // observations bypass the trim gates entirely.
+        // model) over the scene-scale floor for finite observations, and over
+        // zero for directions, the floor's limit at zero inverse depth.
+        // Protected observations bypass the trim gates entirely.
+        let finite_floor = in_front_floor(&depths, is_dir, obs_pt);
         let mut keep: Vec<bool> = (0..n_obs)
             .map(|k| {
                 let floor = if is_dir[obs_pt[k] as usize] {
                     0.0
                 } else {
-                    1e-3 * lenses[obs_cam[k]].f
+                    finite_floor
                 };
                 is_prot(k) || (norms[k] < stage.trim_px && depths[k] > floor)
             })
