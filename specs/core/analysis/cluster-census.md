@@ -8,11 +8,11 @@ the candidate's camera poses, and, for each pair of groups, counts the
 clusters spanning that pair whose triangulated point the candidate cannot
 reproject to within 2 px (median over the cluster's observations). Only
 clusters that pass a match-quality screen and see their point from directions
-at least 5° apart are counted; both thresholds are defaults. The score is a
-lower confidence bound on the unreproducible fraction for the worst group
-pair. A high score means a group of images is placed at the wrong relative
-pose, or the focal length is wrong: failures that the reconstruction's own
-reprojection error does not show.
+at least 5° apart are counted; the 2 px and 5° thresholds are defaults. The
+score is a lower confidence bound on the unreproducible fraction for the worst
+group pair. A high score means a group of images is placed at the wrong
+relative pose, or the focal length is wrong: failures that the
+reconstruction's own reprojection error does not show.
 
 ## Problem
 
@@ -319,18 +319,18 @@ the operation applies to any model the projection supports.
 
 These results come from the Python prototype that the Rust code reproduces
 (the same CNM tie-breaking and percentile interpolation), run on a fleet of 37
-captures whose data and scripts are not in this repository. The census
-flagged all five reconstructions that people had confirmed as misregistered;
-for one of them it was the only signal, since 92 % of its matches were
-globally satisfied. It passed 6 of 7 reconstructions people had confirmed as
-good, and flagged five that had been labelled clean and on inspection were
-not. On a ground-truth capture the score fell monotonically as the focal
-error shrank (0.301 at +36 % focal, 0.254 at +10 %, 0.216 at +0.4 %). Asked to
-choose between two candidate solves on 12 flagged captures, it chose correctly
-on 10; one miss was a capture dominated by false matches (blind spot 1) and the
-other a tie with a 0.03 margin. Against measured pose error, the score was
-≥ 0.7 on every reconstruction whose median camera-center error exceeded 9 % of
-the scene radius, except the two captures whose seams were built from false
-matches (blind spot 1). A worst-pair variant of the § 6 solve separated
-false-match flags from genuine misregistrations across the fleet (explained
-fraction 0–5 % against 49–97 %).
+captures whose data and scripts are not in this repository. The census flagged
+all five reconstructions that people had confirmed as substantially
+misregistered; for one of them it was the only signal, since 92 % of its
+matches were globally satisfied. It passed 6 of 7 reconstructions people had
+confirmed as good, and flagged five that had been labelled clean and on
+inspection were not. On a ground-truth capture the score fell monotonically as
+the focal error shrank (0.301 at +36 % focal, 0.254 at +10 %, 0.216 at
++0.4 %). Asked to choose between two candidate solves on 12 flagged captures,
+it chose correctly on 10; one miss was a capture dominated by false matches
+(blind spot 1) and the other a tie with a 0.03 margin. Against measured pose
+error, the score was ≥ 0.7 on every reconstruction labelled "ok" whose median
+camera-center error exceeded 9 % of the scene radius, except the two captures
+whose seams were built from false matches (blind spot 1). A worst-pair variant
+of the § 6 solve separated false-match flags from genuine misregistrations
+across the fleet (explained fraction 0–5 % against 49–97 %).
