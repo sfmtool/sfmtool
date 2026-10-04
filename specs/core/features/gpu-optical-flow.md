@@ -1,8 +1,14 @@
 # GPU Compute Shaders for DIS Optical Flow
 
-This document describes the wgpu compute shader implementation of the DIS optical
-flow pipeline in `sfmtool-core`. The CPU implementation is documented in
-[optical-flow.md](optical-flow.md); this spec covers the GPU-specific architecture.
+The DIS optical flow in `sfmtool-core` ([optical-flow.md](optical-flow.md)) can run
+its per-level stages (Gaussian pyramid, DIS inverse search, densification,
+variational refinement and 2x flow upsampling) as wgpu compute shaders on a GPU.
+This makes flow on large images several times faster than the CPU path. Small
+pyramid levels gain nothing from the GPU, so the coarse levels below
+`gpu_min_pixels` (50,000 pixels by default) run on the CPU, and the first level at
+or above that size and every finer level run on the GPU. A caller turns the GPU path
+on by passing a `GpuFlowContext` to `compute_optical_flow`; it is used only when
+variational refinement is enabled. This spec covers the GPU-specific architecture.
 
 ## Performance
 
