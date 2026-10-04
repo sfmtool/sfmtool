@@ -6,11 +6,11 @@ camera-frame ray to a pixel through a distortion-free base projection with one
 focal length and square pixels (equidistant for the fisheye, pinhole for the
 pinhole), plus a radially symmetric cubic B-spline correction whose number of
 coefficients each camera chooses. They let a reconstruction describe a lens's
-radial distortion with a spline instead of a fixed set of
-polynomial coefficients, while the distorted radius stays strictly increasing
-so the projection can be inverted exactly. This spec defines the projection, the parameters and how a
-camera stores them. COLMAP has no equivalent model, so a camera of either model
-cannot be exported to COLMAP.
+radial distortion with a spline instead of a fixed set of polynomial
+coefficients, while the distorted radius stays strictly increasing so the
+projection can be inverted exactly. This spec defines the projection, the
+parameters and how a camera stores them. COLMAP has no equivalent model, so a
+camera of either model cannot be exported to COLMAP.
 
 **Beta:** the parameterization may still change: the basis, the knot
 layout, and the parameter names. A `.sfmr` file carrying these models may
