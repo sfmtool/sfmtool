@@ -1,11 +1,11 @@
 # `sfm inspect` Command
 
-## Overview
-
-Inspects a single sfmtool file or image and prints a summary. The file type is
-determined by extension; one summary printer handles each type. Without
-`--verbose`, prints a compact label/value block; with `--verbose`, prints the
-full detail available for that type.
+`sfm inspect` prints a summary of one sfmtool file (`.sfmr`, `.sift`,
+`.matches`, `.camrig`) or image, explains a single 3D point given its `pt3d_`
+id, or renders chosen points as a patch-strip image for judging their quality.
+The file type is determined by extension. Without `--verbose` it prints a
+compact label/value block; with `--verbose` it prints the full detail available
+for that type.
 
 For deep-analysis reports on a `.sfmr` reconstruction (covisibility graph,
 frustum intersection, depth ranges, per-image metrics), use `sfm analyze`
@@ -19,26 +19,29 @@ sfm inspect <POINT_ID> [WORKSPACE] [--verbose / -v]
 sfm inspect --strips <FILE.sfmr> [POINT ...] [-o OUT.png] [--strips-views N] [--context FRACTION]
 ```
 
-`PATH` is a single file. Directories and multiple paths are not accepted.
+`PATH` is a single file. A second path is taken as `WORKSPACE` and rejected
+(see below), and a directory is rejected with the same `file not found` error
+as a missing path.
 
 `POINT_ID` is a 3D point reference of the form `pt3d_<hash>_<index>` (as shown
 by the GUI and by verbose reconstruction reports — see the [Point ID section in
 the sfmr format spec](../../formats/sfmr-file-format.md#point-id-portable-3d-point-references)).
 The optional second argument `WORKSPACE` is a directory used to locate the
-source `.sfmr`; it (or its nearest ancestor containing `.sfm-workspace.json`) is
-the workspace searched. `WORKSPACE` defaults to the current directory, and is
-only valid with a point ID (an error with a file `PATH`).
+source `.sfmr`; its nearest ancestor containing `.sfm-workspace.json` (itself
+included) is the workspace searched, and when there is none the directory itself
+is searched. `WORKSPACE` defaults to the current directory, and is only valid
+with a point ID (an error with a file `PATH`).
 
 ## Supported File Types
 
-| Extension | Type | Inspected with |
-|-----------|------|----------------|
-| `.sfmr` | Reconstruction | `read_sfmr_metadata` / `verify_sfmr` (default), full load (verbose) |
-| `.sift` | Feature file | `read_sift_metadata` / `verify_sift` |
-| `.matches` | Feature matches | `read_matches_metadata` / `verify_matches` (default), `read_matches` (verbose) |
-| `.camrig` | Camera rig | `read_camrig_metadata` / `verify_camrig` (default), `read_camrig` (verbose) |
-| `.png` `.jpg` `.jpeg` | Image | Image dimensions; pycolmap EXIF inference (verbose) |
-| `pt3d_<hash>_<index>` | 3D point | `read_sfmr_content_hash` to resolve the `.sfmr`, then `SfmrReconstruction.load` / `inspect_point` (verbose) |
+| Extension | Type | What is read |
+|-----------|------|--------------|
+| `.sfmr` | Reconstruction | Metadata and the integrity check (default); the full reconstruction (verbose) |
+| `.sift` | Feature file | Metadata and the integrity check |
+| `.matches` | Feature matches | Metadata and the integrity check (default); the full match data (verbose) |
+| `.camrig` | Camera rig | Metadata and the integrity check (default); the full rig (verbose) |
+| `.png` `.jpg` `.jpeg` | Image | Image dimensions; the camera pycolmap infers from EXIF (verbose) |
+| `pt3d_<hash>_<index>` | 3D point | The content hashes of the workspace's `.sfmr` files, then the matching reconstruction (see below) |
 
 An unsupported extension is rejected with a message listing the supported
 types.
@@ -57,7 +60,7 @@ A missing match, or an index beyond the file's point count, is a clear error.
 - **Default summary** — point ID, source file, finite (`w = 1`) vs at-infinity
   (`w = 0`), position/direction, color, reprojection error, observation count.
   Uses only the loaded reconstruction (no `.sift` needed).
-- **Verbose** — the full triangulation analysis from `inspect_point`, which
+- **Verbose** — the full triangulation analysis, which
   re-derives the point's observation rays from its observed pixels (the
   inline keypoints of an `embedded_patches` file, or of a `sift_files` one
   that carries them; otherwise the workspace `.sift` files, which must then be
@@ -72,14 +75,11 @@ A missing match, or an index beyond the file's point count, is a clear error.
   incidence angle off the optical axis (flagging the near-fisheye-edge
   observations) and, for a `sift_files` file, its feature index.
 
-  The implementing module is
-  `crates/sfmtool-core/src/analysis/point_inspect.rs` (bound as
-  `SfmrReconstruction.inspect_point`): it un-projects each member keypoint
-  through its camera to rebuild the observation rays and runs
-  `triangulate_batch` / `depth_uncertainty_batch` over them for the
-  diagnostics, and `point_or_bearing_scores` (with the plain least-squares
-  fit) on the point for the verdict, the test reclassification, discovery and
-  the bench decide with (see
+  The analysis is `SfmrReconstruction::inspect_point` in
+  [`point_inspect.rs`](../../../crates/sfmtool-core/src/analysis/point_inspect.rs),
+  bound to Python as `SfmrReconstruction.inspect_point`. Its verdict is the
+  point-or-bearing test that reclassification, discovery and the bench decide
+  with (see
   [`specs/core/reconstruction/batch-triangulation-api.md`](../../core/reconstruction/batch-triangulation-api.md)
   § "Point or bearing").
 
@@ -157,7 +157,12 @@ is produced).
   renders tight, borderless tiles. The reference patch always renders tight (no
   context), sized to match the boxed patch region in the observation tiles.
 
-`-o` / `--strips-views` / `--context` are rejected unless `--strips` is given.
+`-o` / `--strips-views` / `--context` are rejected unless `--strips` is given,
+even when the value given equals the default.
+
+A listed point with no observations is skipped, and a line says how many were.
+When none of the listed points can be rendered, no PNG is written, a line says
+so, and the command still exits 0.
 
 ## Integrity
 
@@ -182,9 +187,11 @@ The default output is a compact label/value block. The fields per type:
   them, so nothing is decompressed.
 - **`.sift`** — image name and dimensions, feature count, feature tool,
   integrity.
-- **`.matches`** — format version, matching method (tool + version), image /
-  image-pair / match counts, whether two-view geometries are present,
-  integrity.
+- **`.matches`** — format version, matching method (tool + version), image
+  count, then for a pairwise file the image-pair and match counts, or for a
+  file whose backbone is clusters a `Backbone` line reading `clusters`, the
+  cluster and cluster-member counts and whether cluster patches are stored;
+  then whether two-view geometries are present, and integrity.
 - **`.camrig`** — format version, name, rig type, sensor / camera counts,
   integrity.
 - **image** — format, dimensions, file size.
@@ -236,8 +243,12 @@ The default output is a compact label/value block. The fields per type:
 
 - **`.sift`** — adds image file size and hashes, feature tool and content
   hashes, feature tool options, and the top 5 features by size.
-- **`.matches`** — adds timestamp, workspace, matching options, matches-per-pair
-  and descriptor-distance histograms, and two-view-geometry inlier statistics.
+- **`.matches`** — adds timestamp, workspace, matching options, a cluster-size
+  histogram (cluster backbone only), matches-per-pair and descriptor-distance
+  histograms, and two-view-geometry inlier statistics. For a cluster backbone
+  the pairs are derived from the clusters and labeled `Matches per pair
+  (derived)`; they carry no descriptor distances, so that histogram is
+  omitted.
 - **`.camrig`** — adds `rig_attributes`, content hash, and per-camera details.
 - **image** — adds the pycolmap EXIF-inferred camera (model, dimensions,
   focal length).
@@ -266,3 +277,13 @@ sfm inspect photo.jpg -v
 # Render chosen points as a patch-strip montage
 sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
 ```
+
+## Testing
+
+- [`tests/test_inspect.py`](../../../tests/test_inspect.py) — the default and
+  verbose summaries of each file type, the point-ID summary and its verbose
+  triangulation analysis (on a `sift_files` and an `embedded_patches` file),
+  the point-or-bearing counts, and the argument errors.
+- [`tests/test_cli_inspect_strips.py`](../../../tests/test_cli_inspect_strips.py)
+  — point-spec parsing, the `--strips` montage, the rejection of the strips
+  options without `--strips`, and the obliquity marker geometry.

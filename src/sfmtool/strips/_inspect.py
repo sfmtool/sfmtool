@@ -9,11 +9,9 @@ out as one montage row: ``labels | reference patch | per-view observation
 strip``, for visually evaluating point quality.
 
 The surfel rendering and NCC scoring reuse the ``compare --strips`` engine
-(``_SolveStrips``); the montage layout lives in ``_montage``. A
-``sift_files`` reconstruction is first given the minimal ``embedded_patches``
-conversion plus a light normal refinement over only the listed points (the
-default keypoint-preserving conversion makes these good); an ``embedded_patches``
-reconstruction is rendered as stored.
+(``_SolveStrips``); the montage layout lives in ``_montage``. How each feature
+source is prepared is described in ``specs/cli/reconstruction/inspect-command.md``
+§ "Feature source".
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ from ._montage import PointRow, assemble_point_strips
 # Render constants shared with the comparison montage (not user-facing knobs).
 _PATCH = 32  # surfel patch render resolution (px)
 _EXTENT_FACTOR = 2.5  # PatchCloud half-extent as a multiple of feature size
-_DISP = 72  # tile size shown when no wider --strips-context is requested
+_DISP = 72  # tile size shown when --context is 0
 
 # A 3D point ID: pt3d_<8 hex chars of the .sfmr content hash>_<point index>.
 _POINT_ID_RE = re.compile(r"^pt3d_([0-9a-fA-F]{8})_(\d+)$")

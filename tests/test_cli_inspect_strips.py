@@ -155,6 +155,17 @@ def test_strips_options_rejected_without_flag(seoul_bull_sfmr_only):
     assert "only valid with --strips" in result.output
 
 
+@pytest.mark.parametrize(
+    "option", [["--strips-views", "8"], ["--context", "1.0"], ["--context", "0"]]
+)
+def test_strips_option_at_its_default_rejected_without_flag(
+    seoul_bull_sfmr_only, option
+):
+    result = CliRunner().invoke(main, ["inspect", str(seoul_bull_sfmr_only), *option])
+    assert result.exit_code != 0
+    assert "only valid with --strips" in result.output
+
+
 def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
     """The per-view obliquity offset is the tangential part of the unit vector
     toward the camera: 0 fronto-parallel, sin(theta) at angle theta, 1 grazing;

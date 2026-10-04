@@ -483,6 +483,7 @@ most of the per-sentence findings.
   - There is no Testing section.
 **Recommendation:** update spec, and update the three docstrings.
 **Unclear / incorrect / suspicious:** The `embedded_patches` rejection may now be unnecessary. `strips/_inspect.py:34` refers to `compare`'s `--strips-context` flag.
+> _Status (2026-10-04): **Done** — the `.sift` claim and its three copies (PyO3 docstring, `summary.py`, Click help) already read "inline keypoints, otherwise the `.sift` files", and the `embedded_patches` rejection is gone, both from #709; the spec now opens with the proposed sentence, describes the `.matches` cluster-backbone fields and histogram, the `WORKSPACE` fallback, the directory error and the no-PNG exit-0 case, names no internal functions in the type table or the point-analysis paragraph, and has a Testing section. `--strips-views` / `--context` now default to unset so any explicit value is rejected without `--strips` (with a test); the `strips/_inspect.py` module docstring links to the spec's "Feature source" instead of repeating it, and its `--strips-context` comment now says `--context`, branch `report-fix-05-inspect-sift-claim`._
 
 ### docs/index.md
 **Summary:** The commands, `ws init` output, GLOMAP messages, `.sfmr` naming, PyPI name and tutorial link all match. The gaps are for readers.
