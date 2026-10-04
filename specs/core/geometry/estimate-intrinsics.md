@@ -2,6 +2,17 @@
 
 ## Purpose
 
+Intrinsics estimation guesses the focal length and the camera model
+(pinhole or equidistant fisheye) of the one camera that took a set of
+images, from their cluster matches alone, before any reconstruction exists.
+It assumes every image comes from that single camera, with no distortion and
+its principal point at the image centre. A fisheye verdict also comes with
+whether it is confirmed, meaning backed by pure-rotation evidence that a
+wrong camera model cannot produce; for an unconfirmed one the estimate's
+camera is the pinhole one instead. `sfm estimate-intrinsics` reports the
+estimate and can write it as a one-sensor `.camrig` (it refuses an
+unconfirmed fisheye), which `sfm solve` then uses as its intrinsics prior.
+
 `estimate_intrinsics` is the high-level face of the structure-free focal
 vote ([focal-vote.md](focal-vote.md)): it takes the same cluster-track
 observation arrays the vote takes, runs the camera-model columns, and

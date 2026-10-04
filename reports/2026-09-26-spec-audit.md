@@ -211,6 +211,7 @@ who knows the subject needs to read it as a claim before it goes in.
 8. **`core/geometry/estimate-intrinsics.md`**
    - Current: "`estimate_intrinsics` is the high-level face of the structure-free focal vote…"
    - Proposed: *"Intrinsics estimation guesses a capture's shared focal length and camera-model family from cluster matches alone, before any reconstruction exists, and reports whether the guess is confirmed."*
+   > _Status (2026-10-04): **Done** — added a plain-language opening paragraph above the old one, based on the proposal but corrected against the code: only a fisheye verdict is ever confirmed or not (a pinhole verdict carries no confirmation), an unconfirmed fisheye gives the pinhole camera (and the command refuses to write an unconfirmed fisheye to a `.camrig`), the single-camera / centred-principal-point / no-distortion assumptions are stated, and it says the result becomes a `.camrig` that `sfm solve` uses as its intrinsics prior, branch `finding-fix-08-estimate-intrinsics-opening`._
 
 The format-spec openings (kdf, matches, cluster-selection, archive-container,
 camera-models) are covered in their sections below.
