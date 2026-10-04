@@ -4,16 +4,11 @@
 """sfmtool SIFT extraction backend (the toolkit's own Rust implementation).
 
 Wraps the ``sfmtool._sfmtool.sift.extract_sift`` PyO3 binding so it plugs into the
-same extraction pipeline as the COLMAP and OpenCV backends. The Rust core
-parallelizes within each image (rayon), but on small images that per-image
-parallelism cannot saturate a many-core host on its own, and each image carries
-a serial floor (octave-0 build, setup) that leaves cores idle. The backend
-therefore decodes and extracts several images concurrently (``cv2.imread`` and
-the Rust extract both release the GIL; rayon's shared global pool caps total CPU
-threads so this never oversubscribes), which overlaps one image's serial floor
-with another's parallel work. Results are still yielded one image at a time in
-input order so the caller can stream ``.sift`` writes instead of buffering a
-whole chunk in memory. See ``_extract_workers`` for the concurrency knob.
+same extraction pipeline as the COLMAP and OpenCV backends.
+``extract_sift_with_sfmtool`` decodes and extracts several images concurrently
+and yields one result per image in input order. Why the backend runs images
+concurrently and how many it runs at once: ``specs/core/features/sift.md``
+§ Extraction-orchestration pipelining.
 """
 
 import collections
@@ -169,7 +164,7 @@ def extract_sift_with_sfmtool(
     """Extract SIFT features from image files using the sfmtool Rust backend.
 
     Yields one result per image, in input order, decoding and extracting several
-    images concurrently (see the module docstring and ``_extract_workers``).
+    images concurrently (see ``_extract_workers``).
     Yielding incrementally lets the caller stream ``.sift`` writes rather than
     buffering a whole chunk in memory.
 
