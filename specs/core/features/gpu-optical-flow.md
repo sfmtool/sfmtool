@@ -3,12 +3,16 @@
 The DIS optical flow in `sfmtool-core` ([optical-flow.md](optical-flow.md)) can run
 its per-level stages (Gaussian pyramid, DIS inverse search, densification,
 variational refinement and 2x flow upsampling) as wgpu compute shaders on a GPU.
-This makes flow on large images several times faster than the CPU path. Small
+With the `high_quality` preset this makes flow on large images several times
+faster than the CPU path (5.0x at 2040×1536, 7.9x at 3840×3840); with the default
+preset every level is below the GPU threshold, so the speed is unchanged. Small
 pyramid levels gain nothing from the GPU, so the coarse levels below
 `gpu_min_pixels` (50,000 pixels by default) run on the CPU, and the first level at
 or above that size and every finer level run on the GPU. A caller turns the GPU path
-on by passing a `GpuFlowContext` to `compute_optical_flow`; it is used only when
-variational refinement is enabled. This spec covers the GPU-specific architecture.
+on by passing a `GpuFlowContext` to `compute_optical_flow`. With variational
+refinement on, the GPU levels run as one batch through all five stages; with it off
+(the `fast` preset), only DIS inverse search and densification run on the GPU, one
+level at a time. This spec covers the GPU-specific architecture.
 
 ## Performance
 

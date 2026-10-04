@@ -217,7 +217,7 @@ camera-models) are covered in their sections below.
 
 Eight specs open with "This document describes/specifies…":
 - gpu-optical-flow
-  > _Status (2026-10-04): **Done** — the opening now says what the GPU path runs (pyramid, DIS inverse search, densification, variational refinement, upsampling as wgpu compute shaders), why (speed on large images), and how levels are split between CPU and GPU by `gpu_min_pixels`, branch `finding-fix-19-gpu-optical-flow-opening`._
+  > _Status (2026-10-04): **Done** — the opening now says what the GPU path runs (pyramid, DIS inverse search, densification, variational refinement, upsampling as wgpu compute shaders), when it is faster (large images under `high_quality`), how levels are split between CPU and GPU by `gpu_min_pixels`, and which stages run on the GPU with variational refinement on and off, branch `finding-fix-19-gpu-optical-flow-opening`._
 - gui/architecture
 - gui/camera-views
 - gui/point-cloud-rendering
