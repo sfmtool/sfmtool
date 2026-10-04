@@ -166,6 +166,21 @@ def test_strips_option_at_its_default_rejected_without_flag(
     assert "only valid with --strips" in result.output
 
 
+def test_strips_options_default_with_flag(seoul_bull_sfmr_only, monkeypatch, tmp_path):
+    """--strips with no explicit options renders with 8 views and context 1.0."""
+    import sfmtool.strips as strips_pkg
+
+    seen = {}
+
+    def fake_render(recon, point_indexes, out_path, *, max_views, context):
+        seen.update(max_views=max_views, context=context)
+
+    monkeypatch.setattr(strips_pkg, "render_inspect_strips", fake_render)
+    result = _invoke([str(seoul_bull_sfmr_only), "0", "-o", str(tmp_path / "s.png")])
+    assert result.exit_code == 0, result.output
+    assert seen == {"max_views": 8, "context": 1.0}
+
+
 def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
     """The per-view obliquity offset is the tangential part of the unit vector
     toward the camera: 0 fronto-parallel, sin(theta) at angle theta, 1 grazing;

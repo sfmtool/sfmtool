@@ -58,15 +58,15 @@ _POINT_ID_RE = re.compile(r"^pt3d_([0-9a-fA-F]{8})_(\d+)$")
 @click.option(
     "--strips-views",
     type=click.IntRange(min=0),
-    default=None,
-    show_default="8",
+    default=8,
+    show_default=True,
     help="Cap observation tiles (views) per point with --strips (0 = all).",
 )
 @click.option(
     "--context",
     type=click.FloatRange(min=0),
-    default=None,
-    show_default="1.0",
+    default=1.0,
+    show_default=True,
     help="With --strips, pad each per-observation patch with this fraction of "
     "extra context around it (1.0 = +100%), drawing a border at the patch extent. "
     "0 = tight patches with no border. The reference patch always renders tight.",
@@ -123,18 +123,18 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
         sfm inspect --strips reconstruction.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
     """
     if strips:
-        _inspect_strips_cmd(
-            target,
-            list(rest),
-            output,
-            8 if strips_views is None else strips_views,
-            1.0 if context is None else context,
-        )
+        _inspect_strips_cmd(target, list(rest), output, strips_views, context)
         return
 
-    # The strips options default to None so that any value given on the
-    # command line, including one equal to the default, is caught here.
-    if output is not None or strips_views is not None or context is not None:
+    # Ask Click where each strips option came from, so that a value given on
+    # the command line is rejected even when it equals the default.
+    ctx = click.get_current_context()
+    given = [
+        name
+        for name in ("output", "strips_views", "context")
+        if ctx.get_parameter_source(name) != click.core.ParameterSource.DEFAULT
+    ]
+    if given:
         raise click.UsageError(
             "--output / --strips-views / --context are only valid with --strips"
         )
