@@ -1111,11 +1111,11 @@ sfmtool-core
 `whole` and one for `mid`:
 
 ```
-           whole                    mid
-grid px    0.42                     3+
-  along    u 0.31  v 0.40           u 3+  v 0.80
-image px   0.85                     5.6+
-world      u 0.0031 m  v 0.0040 m   u 0.029+ m  v 0.0078 m
+           whole                mid
+grid px    0.42                 3+
+  along    u 0.31  v 0.40       u 3+  v 0.80
+image px   0.85                 5.6+
+world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm
 ```
 
 The table is built only while the cell is hovered; the row keeps the two
@@ -1129,11 +1129,22 @@ reaches, not the text.
   the patch grid at its centre at the reconstruction's patch resolution `R`
   (the edge of its patch bitmaps, else the evaluation's 24), the grid the
   reading was taken on, not the 64-texel display tile.
-- **world** is the reach along `u` and `v` in world space, in the
-  reconstruction's `metadata.world_space_unit`, printed after each value and not
-  converted. Where the file names no unit the row is labelled **scene units**
-  and the numbers are bare. A patch at infinity has no length, so the row is
-  labelled **angle** and reads in degrees.
+- **world** is the reach along `u` and `v` in world space, from the
+  reconstruction's `metadata.world_space_unit`, with the unit after each value.
+  Every length in the row, `u` and `v` for both parts, prints in one unit,
+  chosen from the largest of them so they compare directly. A metric scene
+  (`mm`, `cm`, `m`) keeps its own unit where that puts the largest in
+  [1, 1000), and otherwise takes whichever of `µm`, `mm` and `m` does, so
+  `0.0031 m` prints `3.1 mm` and `cm` appears only in a scene in `cm`; a length
+  over 1000 m or under 1 µm takes the nearer end, `m` or `µm`. A scene in
+  `ft` prints in `in` while the largest is under 1 ft, and a scene in `in`
+  stays in `in`. Where the file names no unit the row is labelled **scene
+  units** and the numbers are bare and not converted; where the largest is
+  under 0.001, every number prints in scientific form to two significant
+  digits (`5.4e-4`). Only the hover text is scaled: the reach the table row
+  keeps, and the MCP and Python readings, stay in the scene's own unit. A patch
+  at infinity has no length, so the row is labelled **angle** and reads in
+  degrees.
 
 Numbers carry two significant digits, chosen after rounding. A `+` after a
 number marks a lower bound, as the cell's `3+` does: the region at the level ran
@@ -1902,12 +1913,14 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   with no zoom last either way; the *Zoom* cell's two significant digits chosen
   after rounding, with both numbers printed where they agree; the
   *Self-similarity* hover's table in grid px, image px and world space with `u`
-  and `v` named and `+` on a lower bound, bare numbers under *scene units* with
-  no unit on the file, the whole table for a patch at infinity in degrees, and
-  for the cluster stage with `-` in the world row, and an evaluated row carrying
-  exactly the reach its measurement carries at both stages; and a long image
-  name cut in its middle, keeping the start of the path and the end of the file
-  name.
+  and `v` named and `+` on a lower bound, every world length scaled to the one
+  unit its largest picks (metres to mm and µm, cm kept, feet to inches) with
+  the `+` kept, bare numbers under *scene units* with no unit on the file, in
+  scientific form under 0.001 and plain from there up, the whole table for a
+  patch at infinity in degrees, and for the cluster stage with `-` in the world
+  row, and an evaluated row carrying exactly the reach its measurement carries
+  at both stages; and a long image name cut in its middle, keeping the start of
+  the path and the end of the file name.
 - **The Scene tree**,
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
   single click on a Bench row selects its node and pushes no version; a

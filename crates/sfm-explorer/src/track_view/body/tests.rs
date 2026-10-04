@@ -4884,11 +4884,11 @@ fn the_self_similarity_hover_shows_the_reach_in_three_units() {
     assert_eq!(
         text,
         [
-            "           whole                    mid",
-            "grid px    0.42                     3+",
-            "  along    u 0.31  v 0.40           u 3+  v 0.80",
-            "image px   0.85                     5.6+",
-            "world      u 0.0031 m  v 0.0040 m   u 0.029+ m  v 0.0078 m",
+            "           whole                mid",
+            "grid px    0.42                 3+",
+            "  along    u 0.31  v 0.40       u 3+  v 0.80",
+            "image px   0.85                 5.6+",
+            "world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm",
         ]
         .join("\n")
     );
@@ -4934,6 +4934,115 @@ fn hover_reaches() -> (
         patch_axes: Some(PatchAxisReach::Length([at_least(0.0291), exact(0.00781)])),
     };
     (whole, middle)
+}
+
+/// The world row of the self-similarity hover for a whole reach of `whole`
+/// and a middle one of `middle` along `u` and `v`, in a scene whose unit is
+/// `unit`. A `true` beside a value marks it a lower bound.
+fn hover_world_row(
+    unit: Option<&str>,
+    whole: [(f64, bool); 2],
+    middle: [(f64, bool); 2],
+) -> String {
+    use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach};
+    let lengths = |values: [(f64, bool); 2]| {
+        Some(PatchAxisReach::Length(
+            values.map(|(value, at_least)| BoundedLength { value, at_least }),
+        ))
+    };
+    let (w, m) = hover_reaches();
+    let w = sfmtool_core::patch::self_similarity::SelfSimilarityReach {
+        patch_axes: lengths(whole),
+        ..w
+    };
+    let m = sfmtool_core::patch::self_similarity::SelfSimilarityReach {
+        patch_axes: lengths(middle),
+        ..m
+    };
+    let text = super::self_similarity_reach_text(Some(&w), Some(&m), unit).expect("a reach");
+    text.lines().last().expect("a world row").to_string()
+}
+
+/// The world row prints every length in one unit, chosen from the largest of
+/// them: a metric scene's in whichever of µm, mm, cm and m puts it in
+/// [1, 1000) (its own unit where that does), a scene in feet in inches under
+/// a foot, and bare scene units in scientific form under 0.001. The `+` on a
+/// lower bound and the two significant digits survive the conversion.
+#[test]
+fn the_self_similarity_hover_scales_the_world_lengths_to_one_unit() {
+    let (x, at_least) = (false, true);
+    // A metres scene prints in mm, the largest value setting the unit.
+    assert_eq!(
+        hover_world_row(
+            Some("m"),
+            [(0.0031, x), (0.004, x)],
+            [(0.0291, at_least), (0.00781, x)]
+        ),
+        "world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm"
+    );
+    // Under a millimetre, the lengths print in micrometres.
+    assert_eq!(
+        hover_world_row(
+            Some("m"),
+            [(0.00054, x), (0.00012, x)],
+            [(0.00031, x), (0.00002, at_least)]
+        ),
+        "world      u 540 \u{b5}m  v 120 \u{b5}m   u 310 \u{b5}m  v 20+ \u{b5}m"
+    );
+    // A centimetre scene whose lengths fit in centimetres stays in them.
+    assert_eq!(
+        hover_world_row(
+            Some("cm"),
+            [(0.31, x), (0.4, x)],
+            [(2.9, at_least), (0.78, x)]
+        ),
+        "world      u 0.31 cm  v 0.40 cm   u 2.9+ cm  v 0.78 cm"
+    );
+    // Lengths past a kilometre take the nearer end of the list, m.
+    assert_eq!(
+        hover_world_row(
+            Some("mm"),
+            [(3.1e6, x), (4.0e6, x)],
+            [(2.9e5, x), (7.8e5, x)]
+        ),
+        "world      u 3100 m  v 4000 m   u 290 m  v 780 m"
+    );
+    // A scene in feet prints in inches while its largest length is under a
+    // foot, and a scene in inches stays in inches.
+    assert_eq!(
+        hover_world_row(
+            Some("ft"),
+            [(0.25, x), (0.5, at_least)],
+            [(0.1, x), (0.05, x)]
+        ),
+        "world      u 3.0 in  v 6.0+ in   u 1.2 in  v 0.60 in"
+    );
+    assert_eq!(
+        hover_world_row(Some("ft"), [(1.5, x), (0.5, x)], [(0.1, x), (0.05, x)]),
+        "world      u 1.5 ft  v 0.50 ft   u 0.10 ft  v 0.050 ft"
+    );
+    assert_eq!(
+        hover_world_row(Some("in"), [(25.0, x), (0.5, x)], [(0.1, x), (0.05, x)]),
+        "world      u 25 in  v 0.50 in   u 0.10 in  v 0.050 in"
+    );
+    // Bare scene units under 0.001 print in scientific form, every value.
+    assert_eq!(
+        hover_world_row(
+            None,
+            [(0.00054, x), (0.000123, at_least)],
+            [(0.0009, x), (0.0000071, x)]
+        ),
+        "scene units   u 5.4e-4  v 1.2e-4+   u 9.0e-4  v 7.1e-6"
+    );
+    // From 0.001 up they stay plain.
+    assert_eq!(
+        hover_world_row(
+            None,
+            [(0.0031, x), (0.0004, x)],
+            [(0.0012, at_least), (0.0078, x)]
+        ),
+        "scene units   u 0.0031  v 0.00040   u 0.0012+  v 0.0078"
+    );
 }
 
 /// A patch at infinity reads its reach along `u` and `v` as an angle: the
