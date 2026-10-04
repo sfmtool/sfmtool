@@ -1,5 +1,16 @@
 # The Matches File Format
 
+A `.matches` file records feature correspondences among a set of images, the
+data a Structure-from-Motion solve starts from. It holds them in one of two
+forms: matches grouped per image pair, or clusters of features across several
+images that are likely observations of the same surface point. A pairwise file
+can also hold the result of geometric verification for each pair (the inlier
+matches and the estimated relative pose); a cluster file can also hold the
+photometric vetting of each cluster member. Feature indexes point into the
+per-image `.sift` files; the file locates them through its image paths and
+the feature directory it records, and stores their content hashes so a reader
+can tell whether they have changed since.
+
 ## Motivation
 
 The `.sift` format lets us extract features once and experiment with subsets. The `.sfmr` format
@@ -123,7 +134,7 @@ match-output-file.matches (ZIP archive)
 ├── cluster_patches/                               # (Optional section, requires clusters/)
 │   ├── metadata.json.zst                          # Refinement options + summary counts
 │   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
-│   ├── member_status.{K}.uint8.zst                # ClusterMemberStatus enum per member
+│   ├── member_status.{K}.uint8.zst                # Status code per member (0..=6, listed below)
 │   ├── member_consistency_residual.{K}.float32.zst # Warp-consistency residual (NaN if not fitted)
 │   ├── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
 │   └── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
@@ -418,16 +429,18 @@ images that are likely co-observations of one surface point, in CSR layout. Clus
 `c` owns members `cluster_starts[c]..cluster_starts[c+1]` of the member-parallel
 arrays, which name each member's image and feature index and state its geometry.
 
-**Pairs are a derived view.** The canonical expansion is `clusters_to_pair_matches`
-(every within-cluster cross-image member pair, grouped and sorted per the
-`image_pairs/` ordering rules). Because `two_view_geometries/` arrays are keyed per
-stored pair, a cluster file cannot carry TVGs directly; materializing the expansion is
-a separate on-demand run,
-[`sfm match --derive-pairs`](../cli/image-feature/match-command.md), which reads a
-clusters-bearing file and writes a new pairwise `.matches` with `image_pairs/` +
-`two_view_geometries/`. Each file is still written once. Pair
-descriptor distances, which the stored pairwise form carries, are recomputed from the
-referenced `.sift` files when a consumer needs them. See
+**Pairs are a derived view.** The pairwise view of a cluster file is its
+expansion: every pair of members of one cluster that lie on different images,
+grouped and sorted per the `image_pairs/` ordering rules. Because
+`two_view_geometries/` arrays are keyed per stored pair, a cluster file cannot
+carry TVGs directly; they belong in a separate pairwise `.matches` file
+written from the expansion, with `image_pairs/` + `two_view_geometries/`. Each
+file is still written once. Pair descriptor distances, which the stored
+pairwise form carries, are recomputed from the referenced `.sift` files when a
+consumer needs them.
+
+In sfmtool, [`sfm match --derive-pairs`](../cli/image-feature/match-command.md)
+is the command that reads a cluster file and writes that pairwise file. See
 [`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the design
 rationale.
 
@@ -483,19 +496,23 @@ A cluster file holds exactly **one** keypoint position and **one** affine
 shape per member, in the two arrays below. They are mandatory: every version 6
 cluster file carries them, and a cluster file below version 6 is refused (see
 [Versioning and Migration](#versioning-and-migration)). What they *mean* is the
-stage the file is at:
+stage the file is at, and the presence of `cluster_patches/` tells the two
+apart:
 
-- A **matcher output** (`sfm match --cluster`) is at the detection stage: the
+- A file **without** `cluster_patches/` is at the detection stage: the
   arrays hold the detector's own values, copied verbatim — the same `float32`
   bits, gathered rather than converted — from row `member_features[k]` of the
   `.sift` `features/positions_xy` and `features/affine_shapes` arrays of image
   `member_images[k]`. See the [.sift file format](sift-file-format.md).
-- A **cluster-patches output** (`sfm cluster-patches`) is at the refinement
-  stage: for every member the refinement's cascade **measured** the arrays hold
+- A file **with** `cluster_patches/` is at the refinement stage: for every
+  member the refinement **measured** (status `0`-`3`, below) the arrays hold
   its answer, and for every member it never fitted they hold the detection the
   input carried, untouched. The refinement writes a **new** file (the
-  write-once workflow), so the matcher's own file keeps its detections beside
+  write-once workflow), so the detection-stage file it read is kept beside
   it.
+
+In sfmtool, `sfm match --cluster` writes detection-stage files and
+`sfm cluster-patches` writes refinement-stage files.
 
 **No value is ever `NaN`, and `member_status` is the sole authority.** Every
 row holds a real position and a real shape, so a consumer that only wants
@@ -593,10 +610,9 @@ refinement measured and which members stand.
 - `refine_options`: The refinement parameters used. The patch extent appears
   under one of two keys across writer generations: `patch_size` (the full
   patch edge in pixels, current) or the legacy `radius` (a half-width).
-  Consumers needing the half-width normalize via the reader's
-  `refine_radius` accessor (`patch_size / 2`, or `radius` as-is). The other
-  keys record the settings for a reader to see and are not read back:
-  `sfm cluster-patches` also writes `min_zncc`, `max_shift_px` and
+  A consumer that needs the half-width uses `patch_size / 2`, or `radius`
+  as-is. The other keys record the settings for a reader to see and are not
+  read back: current files also carry `min_zncc`, `max_shift_px` and
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
 
@@ -604,7 +620,7 @@ refinement measured and which members stand.
 
 - **Shape**: `(C,)` where C = cluster_count
 - **Data type**: `uint32` (little-endian)
-- Global member index of each cluster's reference member; `0xFFFFFFFF` (`u32::MAX`)
+- Global member index of each cluster's reference member; `0xFFFFFFFF`
   when no reference member is present — the cluster could not be refined (no
   usable reference). Only in a derived file (one carrying the
   `matching_options["cluster_selection"]` provenance record) can the sentinel
@@ -658,11 +674,17 @@ refinement measured and which members stand.
 
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `float32` (little-endian)
-- Warp-consistency residual: the member warp's relative misfit
-  `‖M_k·T_c − J‖_F / ‖J‖_F` against a joint weak-perspective factorization
-  of all cluster warps (one scaled-orthographic camera per image, one
-  planar tangent frame per cluster; see
-  [`cluster-warp-consistency.md`](../core/patch/cluster-warp-consistency.md)).
+- Warp-consistency residual: how far the member's warp is from a joint
+  weak-perspective factorization of all cluster warps in the file. The
+  factorization models each image `k` as a scaled-orthographic camera, a
+  2×3 matrix `M_k`, and each cluster `c` as a planar patch with a 3×2
+  tangent frame `T_c`, fitted by least squares over all clusters at once.
+  For a member of cluster `c` on image `k`, `J` is its measured
+  reference→member warp `S · S_ref⁻¹` (a 2×2 matrix; the identity for the
+  reference member), and the residual is the relative misfit
+  `‖M_k·T_c − J‖_F / ‖J‖_F`. See
+  [`cluster-warp-consistency.md`](../core/patch/cluster-warp-consistency.md)
+  for the fit.
   Lower = more consistent, 0 = perfect; `NaN` where the member did not
   enter the fit (non-reference/kept status, degenerate warp, or a cluster
   with fewer than 2 fitted members)
@@ -908,8 +930,21 @@ top-level metadata under `matching_options["cluster_selection"]`:
 ```
 
 `source_content_xxh128` names the source file (its whole-file
-`content_xxh128`); the remaining keys record the selection predicate and are
-defined by the operation. All other metadata — including the timestamp — is
+`content_xxh128`). The remaining keys record the selection predicate:
+
+- `min_span` — the least number of distinct selected images a cluster's kept
+  members had to span for the cluster to be kept (at least 2)
+- `restrict_images` — the image names the selection was restricted to, or
+  `null` when it was not restricted by image
+- `accepted_statuses` — the `member_status` names (`reference`, `kept`, …)
+  whose members were kept; when the source has no `cluster_patches/`, every
+  member was a candidate regardless
+- `restrict_cluster_ids` — present only when the selection was restricted by
+  cluster: the requested cluster ids of the source, sorted and without
+  duplicates
+
+[cluster-selection.md](cluster-selection.md) defines how the operation applies
+them. All other metadata — including the timestamp — is
 inherited from the source; the derived file's content hashes are its own,
 computed at write time. The source file is never modified.
 
@@ -969,7 +1004,7 @@ This means you can:
 ### Why is the cluster backbone exclusive with stored pairs?
 
 A cluster-bearing file stores clusters **instead of** the pairwise expansion. The
-expansion is deterministic and cheap (`clusters_to_pair_matches`), while storing both
+expansion is deterministic and cheap, while storing both
 roughly doubles the correspondence payload with derived values: per-pair data grows as
 Σ C(k,2) over cluster sizes versus the Σ k the clusters themselves cost. Consumers
 that need pairs obtain them by calling the expansion at read time; the cluster file
@@ -1072,6 +1107,14 @@ The code that reads, writes and verifies `.matches` files is:
   ([bindings](../../crates/sfmtool-py/src/io/matches.rs)), and
   `sfmtool._sfmtool.io.MatchesFile`, which opens a file for the cluster
   queries ([bindings](../../crates/sfmtool-py/src/io/matches_file.rs)).
+
+The member status codes are the `ClusterMemberStatus` enum and the
+`0xFFFFFFFF` reference sentinel is `CLUSTER_REFERENCE_UNREFINABLE`, both in
+[`types.rs`](../../crates/sfmtool-matches-format/src/types.rs).
+`ClusterPatchData::refine_radius` (and `MatchesFile.refine_radius` in Python)
+returns the patch half-width from either `refine_options` key. The expansion of
+clusters into pairs is `clusters_to_pair_matches` in
+[`cluster_match`](../../crates/sfmtool-core/src/features/cluster_match/mod.rs).
 
 `verify_matches` returns `(is_valid, error_messages)`.
 

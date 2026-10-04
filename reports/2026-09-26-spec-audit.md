@@ -697,17 +697,25 @@ most of the per-sentence findings.
     > _Status (2026-10-03): **Done** — the version-3 history note on `member_consistency_residual` is removed (cluster files below version 6 are refused), and status `0 reference` now says its reference→member warp is the identity and its geometry is its detection, PR #681._
 **Format independence:** No Implementations section. Findings, with replacements:
   - `ClusterMemberStatus` (:126), `clusters_to_pair_matches` (:417, :961), `u32::MAX` (:599) and the API list at :1010-1019 → Implementations.
+    > _Status (2026-10-04): **Done** — the file tree and the reference sentinel no longer name `ClusterMemberStatus` or `u32::MAX`, the Design Rationale no longer names `clusters_to_pair_matches`, and § Implementations now names the status enum, the sentinel constant, `refine_radius` and `clusters_to_pair_matches` with links, branch `report-fix-19-matches-format-definitions`._
   - :592 "the reader's `refine_radius` accessor" → "a consumer uses `patch_size / 2`".
+    > _Status (2026-10-04): **Done** — the `refine_options` description says a consumer uses `patch_size / 2`, or `radius` as-is, and no longer names the command that writes the other keys, branch `report-fix-19-matches-format-definitions`._
   - :484-494 define the stage by the command that wrote it → "without `cluster_patches/` a file holds detections; with it, rows with status 0-3 are measured".
+    > _Status (2026-10-04): **Done** — the stage is now defined by whether `cluster_patches/` is present, with measured rows given as status `0`-`3`; the commands that write each stage follow as one background sentence, branch `report-fix-19-matches-format-definitions`._
   - :418-422 describe expansion as the CLI command → keep the rule and move the CLI sentence to background.
+    > _Status (2026-10-04): **Done** — the expansion is stated as a rule (every cross-image member pair within a cluster, ordered per the `image_pairs/` rules) and `sfm match --derive-pairs` moved to a separate background sentence, branch `report-fix-19-matches-format-definitions`._
   - **Definitions carried by links:**
     - Status 6 (:620-624) → restate as "uncertainty above `refine_options.max_keypoint_uncertainty`".
       > _Status (2026-10-03): **Done** — status 6 is now defined inline as a ZNCC self-similarity radius above the member gate's bar (:625-627), and the link is kept only for details, commits `086f8e1` (#651) and `c4a9db8` (#654)._
     - :650-653 `M_k`, `T_c`, `J` are defined only in `core/patch/cluster-warp-consistency.md`.
+      > _Status (2026-10-04): **Done** — the `member_consistency_residual` entry now defines `M_k` (2×3 weak-perspective camera per image), `T_c` (3×2 tangent frame per cluster) and `J` (the member's reference→member warp `S · S_ref⁻¹`) inline, and keeps the link for the fit, branch `report-fix-19-matches-format-definitions`._
     - :901 provenance keys are undefined here.
+      > _Status (2026-10-04): **Done** — § Cluster Selection now defines `min_span`, `restrict_images`, `accepted_statuses` and `restrict_cluster_ids`, checked against `select.rs`, branch `report-fix-19-matches-format-definitions`._
   - **Opening**, proposed: *"A `.matches` file records feature correspondences among a set of images — pairwise per image pair, or clusters across images — with optional verification or vetting results, and names the `.sift` files whose indexes it uses."*
+  > _Status (2026-10-04): **Done** — the spec now opens with a plain paragraph under the title saying what the file holds (pairwise matches or clusters, optional verification or vetting results) and how it refers to the `.sift` files, branch `report-fix-19-matches-format-definitions`._
 **Third copies:** The provenance example and the `refine_radius` rule also appear in `cluster-selection.md` and `select.rs`.
 **Recommendation:** update spec. **Update code** so the writer and verifier enforce NaN-free geometry and the verifier bounds-checks config indices.
+> _Status (2026-10-04): **Partially done** — every inconsistency and format-independence item above is done, branch `report-fix-19-matches-format-definitions` for the last of them. Not done: the third copies (the provenance example in `cluster-selection.md` and the `refine_radius` rule in `select.rs`), and the check-6 question of whether `member_status` codes need a legend stored in the file, which is a format decision for a maintainer._
 
 ### specs/formats/cluster-selection.md
 **Summary:** The options, semantics, errors and provenance match `select.rs`. The document specifies an *operation and reader API*, not an on-disk format, so it is filed in the wrong place.
