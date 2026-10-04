@@ -132,7 +132,7 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
     given = [
         name
         for name in ("output", "strips_views", "context")
-        if ctx.get_parameter_source(name) != click.core.ParameterSource.DEFAULT
+        if ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
     ]
     if given:
         raise click.UsageError(

@@ -158,9 +158,7 @@ def test_strips_options_rejected_without_flag(seoul_bull_sfmr_only):
 @pytest.mark.parametrize(
     "option", [["--strips-views", "8"], ["--context", "1.0"], ["--context", "0"]]
 )
-def test_strips_option_at_its_default_rejected_without_flag(
-    seoul_bull_sfmr_only, option
-):
+def test_explicit_strips_option_rejected_without_flag(seoul_bull_sfmr_only, option):
     result = CliRunner().invoke(main, ["inspect", str(seoul_bull_sfmr_only), *option])
     assert result.exit_code != 0
     assert "only valid with --strips" in result.output
