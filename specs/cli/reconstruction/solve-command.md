@@ -36,11 +36,11 @@ transform definitions.
 ## Command Syntax
 
 ```bash
-sfm solve [PATHS...] --incremental | --global [OPTIONS...]
+sfm solve PATHS... --incremental | --global [OPTIONS...]
 ```
 
-`PATHS` can be image files/directories (matching is run internally) or a single `.matches`
-file (pre-computed matches are used directly).
+`PATHS` is required. It can be image files/directories (matching is run internally) or a
+single `.matches` file (pre-computed matches are used directly).
 
 ## Solver Selection
 
@@ -94,9 +94,10 @@ file the mapper reads (see
 
 `--seq-overlap WINDOW,OVERLAP` solves the sequence in overlapping windows of `WINDOW`
 images, consecutive windows sharing `OVERLAP` images, and writes each window's
-reconstruction to its own `.sfmr` file. It does not align or merge the windows; run
-`sfm align` and `sfm merge` on the outputs for that. Useful for long sequences that fail
-with a single solve. The input must contain exactly one numbered image sequence.
+reconstruction to its own `.sfmr` file. The last window holds the images that remain and
+can be shorter than `WINDOW`. It does not align or merge the windows; run `sfm align` and
+`sfm merge` on the outputs for that. Useful for long sequences that fail with a single
+solve. The input must contain exactly one numbered image sequence.
 
 `--seq-overlap` cannot be combined with `--output` (each window writes its own
 automatically-named output) or with a `.matches` input file (the windows drive
