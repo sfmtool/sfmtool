@@ -247,8 +247,9 @@ the observer-thinning gate should be one knob or two.
 - `SelectByDistributionFilter(count, verbose=False)` in
   `src/sfmtool/xform/_select_by_distribution.py`, exported from `src/sfmtool/xform/__init__.py`, and
   wired into `src/sfmtool/_commands/xform.py` (a `@click.option`, the help text, and the "at least
-  one transform" error list) plus a branch in `parse_transform_args`
-  (`src/sfmtool/xform/_arg_parser.py`) that splits the arg on `,` — `COUNT` then optional `verbose`.
+  one transform" error list) plus an entry in the `_TRANSFORM_OPTIONS` table of
+  `src/sfmtool/xform/_arg_parser.py`, whose parser `_parse_include_by_distribution` splits the arg
+  on `,` — `COUNT` then optional `verbose`.
   A `COUNT` that is not an integer or is below 2 surfaces as a `click.UsageError`, and so does any
   modifier other than `verbose`.
   `description()` returns `"Select N cameras by distribution"`.
