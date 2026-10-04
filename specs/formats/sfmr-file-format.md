@@ -696,7 +696,15 @@ exist and their relative poses. This section is optional; when absent, every cam
 a trivial single-sensor rig with identity `sensor_from_rig` pose (see "Implicit Rig and Frame
 Values" below).
 
-The `rigs/` and `frames/` sections must both be present or both be absent.
+The `rigs/` and `frames/` sections must both be present or both be absent. A
+reader and a verifier refuse a file that has a `frames/` section and no `rigs/`
+section.
+
+Both sections have been part of the format since version 1, so a file of any
+version may carry them. Their entry names, shapes and data types are the same in
+every version. Like every other pose in the file, the sensor poses of a version 4
+or earlier file are in the COLMAP convention and are converted on load (see
+[Versioning and Migration](#versioning-and-migration)).
 
 #### `rigs/metadata.json.zst`
 

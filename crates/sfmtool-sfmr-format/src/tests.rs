@@ -2253,8 +2253,8 @@ fn test_read_nonexistent_file() {
     }
 }
 
-#[test]
-fn test_round_trip_with_rigs() {
+/// `make_test_data` with a stereo rig: two sensors, two frames.
+fn make_rig_test_data() -> SfmrData {
     let mut data = make_test_data();
 
     // Add rig and frame data: a stereo rig with 2 sensors
@@ -2297,6 +2297,12 @@ fn test_round_trip_with_rigs() {
         image_sensor_indexes: Array1::from_vec(vec![0, 1, 0]),
         image_frame_indexes: Array1::from_vec(vec![0, 0, 1]),
     });
+    data
+}
+
+#[test]
+fn test_round_trip_with_rigs() {
+    let mut data = make_rig_test_data();
 
     let dir = std::env::temp_dir().join("sfmr_test_rigs_round_trip");
     std::fs::create_dir_all(&dir).unwrap();
@@ -2345,6 +2351,63 @@ fn test_round_trip_with_rigs() {
     // Verify integrity
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "Rig round-trip verification failed: {:?}", errors);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// The spec requires `rigs/` and `frames/` to be present together. The reader
+// keys rig data on `rigs/`, so a file that keeps `frames/` and drops `rigs/`
+// must be refused rather than read as a file without rigs.
+#[test]
+fn test_frames_without_rigs_rejected() {
+    use std::io::{Read, Write};
+
+    let mut data = make_rig_test_data();
+    let dir = std::env::temp_dir().join("sfmr_test_frames_without_rigs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rigs.sfmr");
+    let options = WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    write_sfmr_with_options(&path, &mut data, &options).unwrap();
+
+    // Copy the archive without its `rigs/` entries.
+    let stripped = dir.join("frames_only.sfmr");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&stripped).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in names.iter().filter(|n| !n.starts_with("rigs/")) {
+        let mut bytes = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        zip.start_file(name, stored).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.finish().unwrap();
+
+    let Err(err) = read_sfmr(&stripped) else {
+        panic!("a frames/ section without rigs/ was read");
+    };
+    assert!(
+        err.to_string()
+            .contains("frames/ section is present without a rigs/"),
+        "unexpected error: {err}"
+    );
+
+    let (valid, errors) = verify_sfmr(&stripped).unwrap();
+    assert!(!valid);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("frames/ section is present without a rigs/")),
+        "unexpected errors: {errors:?}"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -2629,6 +2692,7 @@ fn entry_names_are_pinned() {
     // Fixed-name JSON sections.
     assert_eq!(e::cameras_metadata(), "cameras/metadata.json.zst");
     assert_eq!(e::rigs_metadata(), "rigs/metadata.json.zst");
+    assert_eq!(e::frames_section_prefix(), "frames/");
     assert_eq!(e::frames_metadata(), "frames/metadata.json.zst");
     assert_eq!(e::images_metadata(), "images/metadata.json.zst");
     assert_eq!(e::images_names(), "images/names.json.zst");

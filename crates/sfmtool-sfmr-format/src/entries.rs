@@ -98,6 +98,14 @@ pub(crate) fn rigs_sensor_translations_xyz(sensor_count: impl std::fmt::Display)
     format!("rigs/sensor_translations_xyz.{sensor_count}.3.float64.zst")
 }
 
+/// `frames/` — the directory every frame-section entry sits under.
+///
+/// The reader and verifier look for any entry with this prefix, not only
+/// [`frames_metadata`], to refuse a `frames/` section that has no `rigs/`.
+pub(crate) fn frames_section_prefix() -> &'static str {
+    "frames/"
+}
+
 /// `frames/metadata.json.zst` — frame-section metadata (optional section).
 pub(crate) fn frames_metadata() -> &'static str {
     "frames/metadata.json.zst"

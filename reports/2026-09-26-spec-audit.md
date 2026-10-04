@@ -303,6 +303,7 @@ most of the per-sentence findings.
 **Other failure-6 checks:**
 - **Per-element code column with no legend in the file:** one, matches `member_status`. The spec does name all seven codes, so this is discussion-grade.
 - **Optional entries with no stated introducing version:** sfmr Rigs and Frames.
+  > _Status (2026-10-04): **Done** — § Rigs says both sections have been in the format since version 1 (they are in the first spec and the first crate commit) with unchanged entry names, shapes and types, and that version ≤ 4 sensor poses are converted on load, branch `report-fix-16-sfmr-frames-without-rigs`._
 - **Version-history gaps:**
   - sfmr: no v10 entry, no 7→8 migration, and the example still says v7.
     > _Status (2026-10-03): **Done** — v10 history entry, 7→8 migration and a version 11 example added, PR #677._
@@ -651,6 +652,7 @@ most of the per-sentence findings.
     - confidence ⇒ normals (:1483)
     - `embedded_patches` ⇒ patch frame (:1690)
   - **Rigs and frames:** they must appear together (:698), but only `rigs/` is checked, so a `frames/` without `rigs/` passes.
+    > _Status (2026-10-04): **Done** — `read_sfmr` refuses a file with `frames/` entries and no `rigs/`, and `verify_sfmr` reports it, with a test; the spec says both refuse it, branch `report-fix-16-sfmr-frames-without-rigs`._
   - **Keypoint bounds:** the writer does not check them (:1572), so it can write a file its own reader rejects.
     > _Status (2026-10-02): **Done** — the writer runs `validate_keypoints`, with tests, commit `b19c676` (#670)._
   - **Usage Examples** (:1812-1897) use `SfmrFileReader`, `write_sfm` and `verify_sfm`, none of which exist.

@@ -73,6 +73,12 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
             &stored,
             &mut errors,
         )?);
+    } else if crate::read::has_frames_entry(archive.file_names()) {
+        errors.push(
+            "the frames/ section is present without a rigs/ section; the two must be \
+             present together"
+                .to_string(),
+        );
     }
     let (depth_stats_raw, histogram_raw) =
         verify_derived_section(&mut archive, &metadata, &stored, &mut errors)?;

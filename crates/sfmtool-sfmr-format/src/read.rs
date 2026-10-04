@@ -788,11 +788,22 @@ fn read_rig_frames(
             image_sensor_indexes,
             image_frame_indexes,
         })
+    } else if has_frames_entry(archive.file_names()) {
+        return Err(SfmrError::InvalidFormat(
+            "the frames/ section is present without a rigs/ section; the two must be \
+             present together"
+                .into(),
+        ));
     } else {
         None
     };
 
     Ok(rig_frame_data)
+}
+
+/// Whether any archive entry belongs to the `frames/` section.
+pub(crate) fn has_frames_entry<'a>(mut names: impl Iterator<Item = &'a str>) -> bool {
+    names.any(|name| name.starts_with(entries::frames_section_prefix()))
 }
 
 /// Whether `images/metadata.json` says the thumbnail entry is present.
