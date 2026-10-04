@@ -192,6 +192,7 @@ who knows the subject needs to read it as a claim before it goes in.
    - Current: the first prose is a link-reference definition, followed by "The input is a [`PerSphericalTileSourceStack`]…".
    - Problem: it never says what the algorithm is for.
    - Proposed: *"Stitching a panorama needs, for each direction, the colour most source images agree on; this finds, per tile, the largest group of sources whose patches agree and marks the rest as occluders or parallax."*
+   > _Status (2026-10-04): **Done** — added an opening paragraph saying the algorithm picks each panorama tile's colour (`sfm panorama`) from the largest agreeing group of sources, plus a secondary group; it does not use "marks the rest as occluders or parallax", since the code leaves rejected sources unlabelled. Branch `finding-fix-03-photometric-subsets-ransac-opening`._
 4. **`core/analysis/source-clusters.md:3`**
    - Current: "A reconstruction member is drawn from a cluster selection…"
    - Problem: TEMPLATE.md already cites this as a "Not this" example, and it is still unfixed.

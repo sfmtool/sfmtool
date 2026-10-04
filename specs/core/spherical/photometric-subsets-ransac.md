@@ -1,5 +1,18 @@
 # Photometric refinement via per-tile RANSAC subset partition
 
+To render a panorama from a reconstruction (`sfm panorama`), sfmtool
+needs one colour for each direction on the sphere, but the source
+images that see a direction do not always agree: a nearby object can
+block the view in some of them, and the cameras' different positions
+can make them show different things. This algorithm makes that choice
+one tile of directions at a time. For each tile it uses RANSAC to find
+the largest group of source images whose patches agree (the primary
+cluster), and then the largest agreeing group among the remaining
+sources (the secondary cluster). The panorama is built from the
+per-pixel median of each tile's primary cluster; the sources outside
+it are left out of the colour, and the algorithm does not label why
+they disagreed.
+
 [`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
 [`SphericalTileRig`]: spherical-tiles-rig.md
 
