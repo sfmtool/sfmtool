@@ -1,27 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The direction between two camera centres, read off ray coplanarity with the
-//! rotations held.
+//! The unit direction between two camera centres whose rotations are known,
+//! read off the coplanarity of each shared point's two world rays, for every
+//! edge of an image-pair graph in one call.
 //!
-//! With both rotations known, the baseline `b = c_j - c_i` is coplanar with
-//! every point's two world rays: `b . (u_i x u_j) = 0`. So `b` is the null
-//! space of the matrix whose rows are those normals. The normal
-//! `u_i x u_j` has norm `sin(parallax angle)`, which is literally how much
-//! baseline that point saw, so a row inside an angular bound carries no
-//! information at all: inside the bound the two rays are the same ray and the
-//! cross product is noise. Those rows are DROPPED rather than down-weighted,
-//! and the rest are normalized to unit length so no single wide pair carries
-//! the fit.
-//!
-//! The null space is refit on its own best fraction for a fixed number of
-//! rounds, and its sign is fixed by cheirality: with one centre at the origin
-//! and the other at `+d`, the direction that puts more points in front of both
-//! cameras is the one kept.
-//!
-//! Edges are flattened CSR-style, so a whole covisibility graph is one call.
-//!
-//! See `specs/core/geometry/baseline-direction.md` for the design.
+//! See `specs/core/geometry/baseline-direction.md` for the derivation, the row
+//! selection and trim, the cheirality sign and the determinism rules.
 
 use nalgebra::{MatrixXx3, Vector3};
 use rayon::prelude::*;
@@ -48,17 +33,23 @@ pub struct BaselineDirection {
     /// Widest parallax over ALL the edge's rows, in degrees, including the ones
     /// the bound dropped.
     pub parallax_max_deg: f64,
-    /// Fraction of the used rows that triangulate in front of both cameras at
-    /// the sign kept.
+    /// Of the used rows that triangulate in front of both cameras at one sign
+    /// or the other, the fraction that do so at the sign kept. A row in front
+    /// at neither sign is not counted; `0.0` when no row is in front at
+    /// either.
     pub cheiral_fraction: f64,
-    /// Median absolute coplanarity residual of the used rows, in radians.
+    /// Median of `|n . d|` over the used rows, where `n` is a row's unit
+    /// normal and `d` the direction. That is the sine of the angle between
+    /// `d` and the row's ray plane, which equals the angle in radians to first
+    /// order for the small residuals a good edge has.
     pub residual_median_rad: f64,
 }
 
 /// How the null space is trimmed.
 #[derive(Debug, Clone, Copy)]
 pub struct BaselineTrim {
-    /// Rows below which an edge states no direction at all.
+    /// Parallax angle, in radians, at or below which a row is dropped before
+    /// the fit.
     pub tol_rad: f64,
     /// Refit rounds, each keeping the best fraction of the rows past the bound.
     pub rounds: usize,
@@ -72,6 +63,12 @@ pub struct BaselineTrim {
 /// per row, one row per shared point, with all edges concatenated; `offsets`
 /// (length `n_edge + 1`) delimits the edges CSR-style. An edge with fewer than
 /// three rows past the bound states no direction and comes back `None`.
+///
+/// # Panics
+///
+/// If `rays_i` and `rays_j` differ in length, their length is not a multiple
+/// of three, `offsets` decreases anywhere, or its last entry exceeds the
+/// number of rows.
 pub fn baseline_directions(
     rays_i: &[f64],
     rays_j: &[f64],
@@ -86,6 +83,15 @@ pub fn baseline_directions(
     assert!(
         rays_i.len().is_multiple_of(3),
         "rays must be three components per row"
+    );
+    let n_row = rays_i.len() / 3;
+    assert!(
+        offsets.windows(2).all(|w| w[0] <= w[1]),
+        "offsets must be non-decreasing"
+    );
+    assert!(
+        offsets.last().is_none_or(|&last| last <= n_row),
+        "offsets exceed the number of rows"
     );
     let n_edge = offsets.len().saturating_sub(1);
     (0..n_edge)

@@ -180,3 +180,19 @@ fn the_trim_count_rounds_half_to_even() {
     assert_eq!(round_half_even(2.4), 2.0);
     assert_eq!(round_half_even(2.6), 3.0);
 }
+
+#[test]
+#[should_panic(expected = "non-decreasing")]
+fn decreasing_offsets_are_refused() {
+    let pts = cloud(8);
+    let (ui, uj) = edge([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &pts);
+    baseline_directions(&ui, &uj, &[0, 6, 4], trim(0.05));
+}
+
+#[test]
+#[should_panic(expected = "exceed the number of rows")]
+fn offsets_past_the_rows_are_refused() {
+    let pts = cloud(8);
+    let (ui, uj) = edge([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], &pts);
+    baseline_directions(&ui, &uj, &[0, 99], trim(0.05));
+}

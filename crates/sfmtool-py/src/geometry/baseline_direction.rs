@@ -13,14 +13,9 @@ use sfmtool_core::geometry::baseline_direction::{
     baseline_directions as core_baseline_directions, BaselineTrim,
 };
 
-/// The baseline direction of every edge of a graph, from ray coplanarity.
-///
-/// With both rotations held, the baseline ``b = c_j - c_i`` is coplanar with
-/// every point's two world rays: ``b . (u_i x u_j) = 0``, so ``b`` is the null
-/// space of the matrix whose rows are those unit normals. A row whose parallax
-/// is inside ``tol_rad`` carries no baseline and is DROPPED, not down-weighted.
-/// The null space is refit on its own best fraction for ``rounds`` rounds, and
-/// its sign is fixed by cheirality.
+/// The unit direction between the two camera centres of every edge of a graph,
+/// with the rotations known, from the coplanarity of each shared point's two
+/// world rays. See ``specs/core/geometry/baseline-direction.md``.
 ///
 /// Edges are flattened CSR-style: edge ``e`` owns rows
 /// ``offsets[e]:offsets[e+1]`` of ``rays_i`` and ``rays_j``.
@@ -29,18 +24,19 @@ use sfmtool_core::geometry::baseline_direction::{
 ///     rays_i: (n_row, 3) float64 unit world rays of the first frame.
 ///     rays_j: (n_row, 3) float64 unit world rays of the second frame.
 ///     offsets: (n_edge + 1,) int64 CSR edge boundaries.
-///     tol_rad: The angular bound below which a row states no baseline.
+///     tol_rad: Parallax angle, in radians, at or below which a row is dropped.
 ///     rounds: Refit rounds over the retained rows.
 ///     keep_fraction: The fraction of retained rows each round keeps, never
 ///         fewer than three.
 ///
 /// Returns:
 ///     A dict of arrays, one entry per edge: ``stated`` (n_edge,) bool, False
-///     where fewer than three rows cleared the bound and every other field is
-///     meaningless; ``direction`` (n_edge, 3) float64; ``n_rows`` and
-///     ``n_used`` (n_edge,) int64; ``condition``, ``parallax_median_deg``,
+///     where fewer than three rows cleared the bound; ``direction`` (n_edge, 3)
+///     float64; ``n_rows`` and ``n_used`` (n_edge,) int64, where ``n_rows`` is
+///     the edge's row count whether or not it is stated and ``n_used`` is 0 on
+///     an edge that is not stated; ``condition``, ``parallax_median_deg``,
 ///     ``parallax_max_deg``, ``cheiral_fraction`` and ``residual_median_rad``
-///     (n_edge,) float64.
+///     (n_edge,) float64, NaN on an edge that is not stated.
 #[pyfunction]
 #[pyo3(signature = (rays_i, rays_j, offsets, tol_rad, rounds, keep_fraction))]
 pub fn baseline_directions<'py>(
@@ -106,12 +102,12 @@ pub fn baseline_directions<'py>(
     let mut par_max = Vec::with_capacity(n);
     let mut cheiral = Vec::with_capacity(n);
     let mut resid = Vec::with_capacity(n);
-    for edge in &out {
+    for (e, edge) in out.iter().enumerate() {
         match edge {
             None => {
                 stated.push(false);
                 direction.extend_from_slice(&[f64::NAN; 3]);
-                n_rows.push(0i64);
+                n_rows.push((bounds[e + 1] - bounds[e]) as i64);
                 n_used.push(0i64);
                 condition.push(f64::NAN);
                 par_med.push(f64::NAN);

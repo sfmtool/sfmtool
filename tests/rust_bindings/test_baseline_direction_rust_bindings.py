@@ -85,6 +85,20 @@ def test_an_edge_with_no_parallax_states_nothing():
     assert not bool(out["stated"][0])
     assert np.isnan(out["direction"][0]).all()
     assert out["n_used"][0] == 0
+    # The row count is the edge's own, so "no rows" and "no rows past the
+    # bound" stay apart.
+    assert out["n_rows"][0] == 60
+
+
+def test_an_edge_with_no_rows_reports_zero_rows():
+    world = _cloud(20)
+    pairs = [
+        _edge(np.zeros(3), np.array([1.0, 0.0, 0.0]), world),
+        (np.zeros((0, 3)), np.zeros((0, 3))),
+    ]
+    out = _call(pairs)
+    npt.assert_array_equal(out["stated"], [True, False])
+    npt.assert_array_equal(out["n_rows"], [20, 0])
 
 
 def test_rows_inside_the_bound_are_dropped():

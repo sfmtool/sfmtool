@@ -150,6 +150,7 @@ Of 75 `specs/core/` specs, 45 have a ` ```rust ` block and 30 do not.
 Treat these lists as a reading list, not as findings. In this sample,
 `baseline-direction` and `focal-vote` both confirmed failure 2: neither lists
 its Rust entry points. `covisibility-selection` lists names but no signatures.
+> _Status (2026-10-04): **Done** for baseline-direction.md — it now has a § Rust API with the signatures, a parameter table and an example call, branch `report-fix-03-baseline-direction`._
 
 **Work-order residue:**
 - **Grep hits:**
@@ -340,6 +341,7 @@ most of the per-sentence findings.
   - **Other:** :79-80 "the implementation this was ported from" refers to an origin the reader cannot see.
 **Recommendation:** update spec, and fix the `tol_rad` doc comment in the code.
 **Unclear / incorrect / suspicious:** `baseline_directions` has no production caller; only tests use it. Say in the spec whether a global-SfM pipeline is expected to use it.
+> _Status (2026-10-04): **Done** — the spec opens with a purpose paragraph (saying what the direction is for global SfM and translation averaging) and states that no `sfm` command calls the operation; it gains a § Rust API (signatures, why the graph is flattened, example), a parameter table saying the three `BaselineTrim` fields have no defaults, a § Python binding and a § Testing; the cheirality fraction is defined as `pos/(pos+neg)` over the rows in front at either sign, the residual is described as a sine, the mannered headings and phrases are replaced and the "ported from" reference is gone. In the code, the `tol_rad` doc describes the parallax bound, the `cheiral_fraction` and `residual_median_rad` docs are made exact, the module doc and the PyO3 doc are cut to a contract plus the spec link, `baseline_directions` asserts that `offsets` is non-decreasing and in range (with tests), and the binding reports an unstated edge's real `n_rows` instead of 0 (with a test). Branch `report-fix-03-baseline-direction`._
 
 ### specs/core/features/lazy-kdforest-query.md
 **Summary:** Approximate nearest-neighbour queries against a `.kdf` file directly through a bounded decoded-data cache, returning the same results as the in-memory forest. The interface, parity rules and option defaults match the code. About 850 of its 1,292 lines are version-1 benchmark history and planning from before implementation.
