@@ -6,8 +6,7 @@
 //!
 //! The exact projection is evaluated on a sub-grid and cell interiors are
 //! bilinearly interpolated, with every cell probe-checked against the exact
-//! projection and demoted when it would exceed the tolerance — so accuracy
-//! never depends on the stride, only the speedup does. This is a caching /
+//! projection and demoted when it would exceed the tolerance. This is a caching /
 //! interpolation strategy rather than a lens model; it lives here rather
 //! than in `distortion.rs` for that reason. See
 //! `specs/core/camera/ray-grid-projection.md`.
@@ -169,8 +168,8 @@ impl CameraIntrinsics {
     ///   expensive (`atan2`/`asin`) but spatially smooth, evaluate the exact
     ///   projection only on a coarse sub-grid (stride `COARSE_GRID_STRIDE`)
     ///   and bilinearly interpolate the interior, falling back to exact
-    ///   projection wherever a bracketing sub-grid node is invalid. The
-    ///   interpolation error is bounded; see
+    ///   projection wherever a bracketing sub-grid node is invalid or the
+    ///   per-cell probe fails. The interpolation error is bounded; see
     ///   `specs/core/camera/ray-grid-projection.md`.
     pub fn ray_to_pixel_grid(
         &self,

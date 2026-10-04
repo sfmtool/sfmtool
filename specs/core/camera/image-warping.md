@@ -290,8 +290,9 @@ measured under those rules, so it stays separate rather than calling this one.
 
 `WarpMap::from_patch` builds its grid through `ray_to_pixel_grid`: it forms the
 affine ray basis from the patch plane + pose (model-free, infinity-aware) and the
-camera owns the projection. This is the dominant cost in `sfm embed-patches`; see
-[ray-grid-projection.md](ray-grid-projection.md) for the seam and measured impact.
+camera owns the projection. See
+[ray-grid-projection.md](ray-grid-projection.md) for the seam and the bound on the
+coarse-grid path.
 
 For perspective models, `ray_to_pixel` maps the canonical ray through `S`
 into the optical frame, divides by the (positive) forward component and

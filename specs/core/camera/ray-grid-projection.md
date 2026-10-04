@@ -16,7 +16,9 @@ the expensive camera models take.
 `WarpMap::from_patch` builds, for one (patch, view), the `r×r` grid of
 source-image coordinates where the patch's `(s, t) ∈ [-1, 1]²` samples project.
 Running the whole chain per sample — build the homogeneous corner, apply the
-pose, then `ray_to_pixel` — costs one pose multiply per output pixel. The split
+pose, then `ray_to_pixel` — costs one pose multiply per output pixel, and
+`RigidTransform::transform_point_homogeneous` also rebuilds the rotation matrix
+from the quaternion on every call. The split
 below removes that: the pose is applied to three vectors once per patch, and
 only the camera projection runs per pixel.
 
@@ -107,8 +109,9 @@ The tolerance is set an order of magnitude below the sub-pixel accuracy the
 keypoint localizer needs, so a coarse-grid warp is indistinguishable from the
 exact one at that scale.
 
-The test `coarse_grid_error_within_bound` checks the bound over a fisheye sweep
-(SimpleRadialFisheye, RadialFisheye, OpenCVFisheye) that mixes realistic small
+The test `coarse_grid_error_within_bound` checks the bound over a sweep of the
+`needs_ray_path` models (SimpleRadialFisheye, RadialFisheye, OpenCVFisheye,
+Equirectangular) that mixes realistic small
 tiles with wide-angle, depth-tilted ones. It requires that some cells take the
 interpolated path, that the worst error against the exact map stays below
 `2·COARSE_GRID_TOL_PX` (pixels inside an accepted cell but away from its probe
@@ -118,7 +121,7 @@ disagree on validity.
 The probe bounds the warp *position*, not its derivative, so a second test
 (`coarse_grid_jacobian_degradation`) guards the central-difference Jacobian that
 `compute_svd`/`compute_jacobians` feed to the anisotropic sampler and the GN
-gradient. Over the same kind of sweep it requires a worst-case relative Jacobian
+gradient. Over a sweep of the three fisheye models it requires a worst-case relative Jacobian
 error below 1%, a relative RMS error below 0.5%, a major-axis direction error
 below 1°, and no pixel crossing the `MAX_ANISOTROPY` clamp. The piecewise-bilinear
 seams at stride boundaries do not degrade the Jacobian: central differencing
