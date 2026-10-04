@@ -569,6 +569,12 @@ gradient twin returns `(∂I/∂x, ∂I/∂y)` rescaled to full-resolution sourc
 coords (a level-`l` bilinear gradient is per level-pixel, so it is divided by
 `2^l`).
 
+Each patch consumer picks one sampler for every view through its `sampler`
+parameter. Choosing it per view instead, `remap_aniso` where the Jacobian's
+anisotropy makes the single tap over-blur the minor axis and this path
+elsewhere, is proposed in
+[sharper-patch-consensus.md](../../drafts/sharper-patch-consensus.md).
+
 #### Pyramid Construction
 
 The Gaussian pyramid for `ImageU8` is built by repeated box-filter or Gaussian
