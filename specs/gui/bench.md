@@ -1396,14 +1396,30 @@ beside `zncc` (the same samples read over the middle square of the patch and
 over each ninth of it, § "The middle ZNCC" and § "The ZNCC grid" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and the ZNCC
 self-similarity radius `zncc_self_similarity_radius` with its `_middle` and
-`_grid`, `zncc_self_similarity_slide_grid`, `zncc_self_similarity_surface` and
-`zncc_self_similarity_tolerance`
+`_grid`, `zncc_self_similarity_slide_grid`, `zncc_self_similarity_surface`,
+`zncc_self_similarity_tolerance`, and `zncc_self_similarity_reach` with its
+`_middle`, how far the contour the radius is read from reaches in grid px, image
+px and along the patch's axes
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 ZNCC self-similarity radius"), at the track stage
 the two distances
 (`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to`, `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid` for a row the last fit
 refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the evaluation could
-not score, the `reason` sentence in place of a ZNCC. The track stage's own data
+not score, the `reason` sentence in place of a ZNCC. Each row also carries
+`tile_zoom`, the zoom Track View's *Zoom* column prints
+([`track-view.md`](track-view.md) § "The observation table"), as `[least, most]`
+display tile texels per photograph pixel, and `tile_jacobian`, the Jacobian it
+is read from: the Jacobian of the warp the row's tile is rendered through, at
+the tile's centre, as `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]` in photograph
+pixels per display tile texel (64 across), core's
+`camera::warp_map::patch_grid_jacobian` of the patch re-anchored where the row
+sits. The table does not print the Jacobian; it is reported as a diagnostic.
+Both are geometry alone, read from the patch, the camera, the pose and where the
+observation sits, so neither waits for a photograph, and a tile whose middle is
+off the photograph has both. Both are null at the cluster stage, on a track with
+no patch yet, for an observation with nothing saying where it sits, and for a
+patch whose centre is behind the camera or outside the camera model's domain;
+`tile_zoom` is null as well for a patch seen edge on. The track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the
 other null, for the reason Track View's edit header carries a word in front of it:
 the same three numbers are a place or a bearing depending on `w`, and an agent

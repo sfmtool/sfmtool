@@ -875,3 +875,261 @@ fn serial_and_parallel_paths_are_bit_identical() {
     assert_eq!(par.4, ser.4, "jacobians (via compute_svd)");
     assert_eq!(par.5, ser.5, "jacobians (via compute_jacobians)");
 }
+
+/// A patch facing a pinhole camera square on: one grid px of a 24-px core of
+/// a 1-unit patch at depth 4 under a 500 px focal length is 125 / 24 image px
+/// along each axis. On a slanted patch the Jacobian agrees with the finite
+/// difference across the four middle texels of the warp map the tile is
+/// rendered through.
+#[test]
+fn the_grid_jacobian_is_the_warps_at_the_tile_centre() {
+    use nalgebra::Point3;
+    let camera = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: 500.0,
+            focal_length_y: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+        },
+        width: 640,
+        height: 480,
+    };
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let square = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::z(),
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    let j = patch_grid_jacobian(&square, &camera, &pose, 24).expect("in front of the camera");
+    let s = 125.0 / 24.0;
+    assert!(
+        (j[0][0] - s).abs() < 1e-9 && (j[1][1] - s).abs() < 1e-9,
+        "{j:?}"
+    );
+    assert!(j[0][1].abs() < 1e-9 && j[1][0].abs() < 1e-9, "{j:?}");
+
+    let slanted = OrientedPatch::from_center_normal(
+        Point3::new(0.2, -0.1, -4.0),
+        Vector3::new(0.3, 0.0, 1.0),
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    let j = patch_grid_jacobian(&slanted, &camera, &pose, 24).expect("in front of the camera");
+    let map = WarpMap::from_patch(&slanted, &camera, &pose, 24);
+    let at = |col: u32, row: u32| {
+        let (x, y) = map.get(col, row);
+        [f64::from(x), f64::from(y)]
+    };
+    let (p00, p10, p01, p11) = (at(11, 11), at(12, 11), at(11, 12), at(12, 12));
+    for k in 0..2 {
+        let by_col = ((p10[k] - p00[k]) + (p11[k] - p01[k])) / 2.0;
+        let by_row = ((p01[k] - p00[k]) + (p11[k] - p10[k])) / 2.0;
+        assert!((j[k][0] - by_col).abs() < 1e-3, "{j:?}");
+        assert!((j[k][1] - by_row).abs() < 1e-3, "{j:?}");
+    }
+
+    // Behind the camera, nothing projects.
+    let behind = OrientedPatch {
+        center: Point3::new(0.0, 0.0, 4.0),
+        ..square
+    };
+    assert_eq!(patch_grid_jacobian(&behind, &camera, &pose, 24), None);
+}
+
+/// An equirectangular camera's `x` wraps at the longitude `±π`. A patch
+/// directly behind a 2000 × 1000 panorama straddles that seam: its left middle
+/// texels land near `x = 2000` and its right ones near `x = 0`. Each `x`
+/// difference is brought into `±π·fx`, so its Jacobian is the one the same
+/// patch has turned to face the camera from in front, about 3.3 image px per
+/// grid px, not the width of the panorama.
+#[test]
+fn the_grid_jacobian_wraps_across_the_equirectangular_seam() {
+    use nalgebra::Point3;
+    use std::f64::consts::PI;
+    let camera = CameraIntrinsics {
+        model: CameraModel::Equirectangular {
+            focal_length_x: 2000.0 / (2.0 * PI),
+            focal_length_y: 1000.0 / PI,
+            principal_point_x: 1000.0,
+            principal_point_y: 500.0,
+        },
+        width: 2000,
+        height: 1000,
+    };
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let front = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::z(),
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    let behind = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, 4.0),
+        -Vector3::z(),
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    // The seam does run between the middle texels.
+    let (left, w) = behind.corner_homogeneous(-1.0 / 24.0, 0.0);
+    let (right, _) = behind.corner_homogeneous(1.0 / 24.0, 0.0);
+    let [xl, _] = camera.project_homogeneous(&pose, left, w).unwrap();
+    let [xr, _] = camera.project_homogeneous(&pose, right, w).unwrap();
+    assert!((xl - xr).abs() > 1000.0, "{xl} {xr}");
+
+    let j_front = patch_grid_jacobian(&front, &camera, &pose, 24).expect("projects");
+    let j_behind = patch_grid_jacobian(&behind, &camera, &pose, 24).expect("projects");
+    let expected = camera.focal_lengths().0 / 24.0 / 4.0;
+    assert!(
+        (j_front[0][0].abs() - expected).abs() < 1e-3 * expected,
+        "{j_front:?}"
+    );
+    for k in 0..2 {
+        for l in 0..2 {
+            assert!(
+                (j_behind[k][l] - j_front[k][l]).abs() < 1e-9,
+                "{j_behind:?} {j_front:?}"
+            );
+        }
+    }
+}
+
+/// A front-facing and a seam-straddling square at depth 4 before a
+/// 2000 × 1000 panorama, and the camera's pose: the same square seen ahead of
+/// the camera and directly behind it, where its middle texels land either side
+/// of the `±180°` seam.
+fn seam_fixture() -> (
+    CameraIntrinsics,
+    RigidTransform,
+    OrientedPatch,
+    OrientedPatch,
+) {
+    use nalgebra::Point3;
+    let camera = equirectangular(2000, 1000);
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let front = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::z(),
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    let behind = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, 4.0),
+        -Vector3::z(),
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    (camera, pose, front, behind)
+}
+
+/// A `from_patch` map whose texels straddle an equirectangular camera's seam
+/// takes each `x` difference the short way round, so the texels either side
+/// of the seam have the same Jacobian and SVD as their neighbours, about
+/// `fx / 24 / 4 ≈ 3.3` image px per grid px, and the same as the square has
+/// ahead of the camera.
+#[test]
+fn from_patch_svd_wraps_across_the_equirectangular_seam() {
+    let (camera, pose, front, behind) = seam_fixture();
+    let mut map = WarpMap::from_patch(&behind, &camera, &pose, 24);
+    // The seam does run between the middle columns.
+    let (xl, _) = map.get(11, 12);
+    let (xr, _) = map.get(12, 12);
+    assert!((xl - xr).abs() > 1000.0, "{xl} {xr}");
+
+    map.compute_svd();
+    let mut ahead = WarpMap::from_patch(&front, &camera, &pose, 24);
+    ahead.compute_svd();
+    let expected = (camera.focal_lengths().0 / 24.0 / 4.0) as f32;
+    for row in 1..23 {
+        for col in 10..14 {
+            let j = map.get_jacobian(col, row);
+            let neighbour = map.get_jacobian(7, row);
+            let j_ahead = ahead.get_jacobian(col, row);
+            for k in 0..2 {
+                for l in 0..2 {
+                    assert!(
+                        (j[k][l] - neighbour[k][l]).abs() < 0.05 * expected,
+                        "({col}, {row}) {j:?} vs {neighbour:?}"
+                    );
+                    assert!(
+                        (j[k][l] - j_ahead[k][l]).abs() < 0.05 * expected,
+                        "({col}, {row}) {j:?} vs ahead {j_ahead:?}"
+                    );
+                }
+            }
+            let (s_major, s_minor, _, _) = map.get_svd(col, row);
+            let (n_major, n_minor, _, _) = map.get_svd(7, row);
+            assert!(
+                (s_major - n_major).abs() < 0.05 * expected
+                    && (s_minor - n_minor).abs() < 0.05 * expected,
+                "({col}, {row}) {s_major} {s_minor} vs {n_major} {n_minor}"
+            );
+            assert!((s_major - expected).abs() < 0.1 * expected, "{s_major}");
+        }
+    }
+
+    // `compute_jacobians` goes through the same per-pixel difference.
+    let mut jac_only = WarpMap::from_patch(&behind, &camera, &pose, 24);
+    jac_only.compute_jacobians();
+    assert_eq!(jac_only.get_jacobian(11, 12), map.get_jacobian(11, 12));
+}
+
+/// A tile mip-sampled at about one image px per texel reads pyramid level 0
+/// throughout, whether it straddles the equirectangular seam or not: the
+/// texels beside the seam do not read the coarsest level.
+#[test]
+fn a_tile_straddling_the_seam_picks_the_same_mip_level_as_one_ahead() {
+    use crate::camera::remap::mip_level_for_sigma;
+    let (camera, pose, front, behind) = seam_fixture();
+    // fx / 96 / 4 ≈ 0.83 image px per texel: level 0.
+    let num_levels = 11;
+    for patch in [&front, &behind] {
+        let mut map = WarpMap::from_patch(patch, &camera, &pose, 96);
+        map.compute_svd();
+        for row in 0..96 {
+            for col in 0..96 {
+                let (s_major, _, _, _) = map.get_svd(col, row);
+                assert_eq!(
+                    mip_level_for_sigma(s_major, num_levels),
+                    0,
+                    "({col}, {row}) sigma {s_major}"
+                );
+            }
+        }
+    }
+}
+
+/// Only an equirectangular source wraps; a map built from raw data, or with a
+/// perspective source, keeps the plain difference, so a jump of a panorama's
+/// width between texels still reads as one.
+#[test]
+fn only_an_equirectangular_source_wraps_x_differences() {
+    let mut raw = WarpMap::new(2, 2, vec![1999.0, 0.0, 1.0, 0.0, 1999.0, 1.0, 1.0, 1.0]);
+    raw.compute_jacobians();
+    assert_eq!(raw.get_jacobian(0, 0)[0][0], -1998.0);
+
+    let (camera, pose, _, behind) = seam_fixture();
+    let map = WarpMap::from_patch(&behind, &camera, &pose, 24);
+    assert!(map.x_period.is_some());
+    let map = WarpMap::from_cameras(&camera, &pinhole(64, 48, 50.0));
+    assert!(map.x_period.is_some());
+    let map = WarpMap::from_cameras(&pinhole(64, 48, 50.0), &camera);
+    assert!(map.x_period.is_none());
+}
+
+/// The singular values of a 2×2 matrix: a rotation keeps both at 1, a scaling
+/// gives its two factors larger first, and a matrix of rank 1 has a smallest
+/// of 0.
+#[test]
+fn singular_values_of_a_2x2_matrix() {
+    let close = |got: [f64; 2], want: [f64; 2]| {
+        assert!(
+            (got[0] - want[0]).abs() < 1e-12 && (got[1] - want[1]).abs() < 1e-12,
+            "{got:?}"
+        );
+    };
+    let (s, c) = 0.3f64.sin_cos();
+    close(singular_values_2x2([[c, -s], [s, c]]), [1.0, 1.0]);
+    close(singular_values_2x2([[2.0, 0.0], [0.0, -5.0]]), [5.0, 2.0]);
+    close(singular_values_2x2([[3.0, 4.0], [0.0, 0.0]]), [5.0, 0.0]);
+}

@@ -7,14 +7,19 @@
 //! [`patch_color_image`] warps a photograph through a surfel's frame,
 //! re-anchored on the observation's keypoint first ([`render_frame`]), and
 //! [`frame_color_image`] is its body for a frame already where it should be,
-//! which the tile's hover view renders a wider frame through.
+//! which the tile's hover view renders a wider frame through. The tile and its
+//! hover view are each a single bilinear sample per texel from the mip level
+//! the warp's compression picks at that texel (`remap_bilinear_mip`).
+//! [`TileJacobian`] holds the warp's Jacobian at the tile's centre, which the
+//! table's *Zoom* column prints the zoom of.
 //! [`stored_patch_image`] turns a patch bitmap into an opaque picture, which
 //! is what the header's patch slot draws at the track stage, and
 //! [`track_patch_image`] picks the picture of a track's own patch for its
 //! stage, for the header and the recent items strip alike.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
+use sfmtool_core::camera::remap::{remap_bilinear_mip, ImageU8Pyramid};
+use sfmtool_core::camera::warp_map::singular_values_2x2;
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
@@ -24,9 +29,9 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 pub(crate) const PATCH_RES: u32 = 64;
 
 /// One observation's patch tile, as an RGBA picture: `src` warped through
-/// `frame` re-anchored on `keypoint` ([`render_frame`]), so the tile shows the
-/// surface as *this* sighting sees it rather than as the point's residual
-/// leaves it.
+/// `frame` re-anchored on `keypoint` ([`render_frame`]) at [`PATCH_RES`]
+/// texels a side, so the tile shows the surface as *this* sighting sees it
+/// rather than as the point's residual leaves it.
 ///
 /// The warp itself, with no `egui::Context` in it, so what a tile shows is
 /// testable without a texture manager -- which is what lets a headless test
@@ -36,7 +41,7 @@ pub(crate) fn patch_color_image(
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     keypoint: Option<[f64; 2]>,
-    src: &ImageU8,
+    src: &ImageU8Pyramid,
 ) -> egui::ColorImage {
     let frame = render_frame(frame, camera, cam_from_world, keypoint);
     frame_color_image(&frame, camera, cam_from_world, src, PATCH_RES)
@@ -49,15 +54,25 @@ pub(crate) fn patch_color_image(
 /// Separate so that a wider frame can be rendered at the same sampling as the
 /// tile -- a frame `k` times as wide at `k` times the resolution -- which is
 /// what the tile shows in its hover view.
+///
+/// Each texel is one bilinear sample from the pyramid level the warp's local
+/// compression picks, `round(log2(s_major))` for the larger singular value
+/// `s_major` of the warp's Jacobian at that texel (`remap_bilinear_mip`), so
+/// the level is chosen texel by texel. Where a texel shrinks the photograph by
+/// more than about 1.4 times (`s_major` of `sqrt(2)` or more), it reads a
+/// level averaged down towards its own sampling rather than aliasing the
+/// full-resolution pixels. Where no texel does, every texel reads level 0 and
+/// the picture is exactly plain bilinear.
 pub(crate) fn frame_color_image(
     frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
-    src: &ImageU8,
+    src: &ImageU8Pyramid,
     resolution: u32,
 ) -> egui::ColorImage {
-    let map = WarpMap::from_patch(frame, camera, cam_from_world, resolution);
-    let tile = remap_bilinear(src, &map);
+    let mut map = WarpMap::from_patch(frame, camera, cam_from_world, resolution);
+    map.compute_svd();
+    let tile = remap_bilinear_mip(src, &map);
     // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
     let (w, h) = (tile.width() as usize, tile.height() as usize);
     let mut rgba = Vec::with_capacity(w * h * 4);
@@ -65,6 +80,44 @@ pub(crate) fn frame_color_image(
         rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
     }
     egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
+}
+
+/// The ratio of a tile Jacobian's smaller singular value to its larger at or
+/// under which the tile has no zoom: the patch is seen edge on. A real
+/// oblique view stays many orders of magnitude above it (a patch at 89.9° to
+/// the line of sight reads about 2e-3), while an edge-on patch's finite
+/// difference leaves a rounding residue near 1e-14 of the larger value, which
+/// would otherwise print as a zoom of 10¹³.
+const EDGE_ON_RATIO: f64 = 1e-9;
+
+/// The 2x2 Jacobian of a tile's warp at the tile's centre, in source pixels
+/// per tile texel: `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`, the layout
+/// `WarpMap::get_jacobian` uses. Core's `patch_grid_jacobian` reads it at
+/// [`PATCH_RES`] texels a side ([`super::tile::tile_jacobian`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TileJacobian(pub(crate) [[f64; 2]; 2]);
+
+impl TileJacobian {
+    /// How much the tile magnifies the photograph, in tile texels per source
+    /// pixel: the least, along the direction the warp stretches most, then the
+    /// most, `[1 / s_major, 1 / s_minor]` for the singular values
+    /// (`singular_values_2x2`). Over 1 the tile magnifies the photograph and
+    /// under 1 it shrinks it. `None` where either is not finite or the
+    /// smaller is at most [`EDGE_ON_RATIO`] of the larger, as for a patch seen
+    /// edge on, whose finite difference leaves a rounding residue across the
+    /// collapsed axis rather than an exact zero.
+    pub(crate) fn zoom_range(&self) -> Option<[f64; 2]> {
+        let [major, minor] = singular_values_2x2(self.0);
+        (major.is_finite() && major > 0.0 && minor > major * EDGE_ON_RATIO)
+            .then(|| [1.0 / major, 1.0 / minor])
+    }
+
+    /// The geometric mean of [`Self::zoom_range`], which is `1 / sqrt(|det J|)`
+    /// and what the *Zoom* column orders the rows by. `None` where
+    /// [`Self::zoom_range`] is.
+    pub(crate) fn mean_zoom(&self) -> Option<f64> {
+        self.zoom_range().map(|[low, high]| (low * high).sqrt())
+    }
 }
 
 /// The frame one observation's tile is rendered through: the point's patch

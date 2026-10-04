@@ -902,6 +902,37 @@ impl CameraIntrinsics {
         Some((fx * x_d + cx, fy * y_d + cy))
     }
 
+    /// Project the homogeneous world point `(xyz, w)` into this camera at
+    /// `cam_from_world`, as a pixel `[x, y]`, with no test against the image's
+    /// bounds.
+    ///
+    /// `w = 1` is a finite point. `w = 0` is a direction, a point at infinity:
+    /// it is rotated into the camera frame without the translation and
+    /// projected as a ray.
+    ///
+    /// The camera looks along `−Z`, so a point in front of a perspective camera
+    /// has `z < 0` in the camera frame, and one at `z >= 0` returns `None`. A
+    /// ray-path model ([`CameraModel::needs_ray_path`]: fisheye and
+    /// equirectangular) images past 90° off the axis, where a real sighting has
+    /// `z >= 0`, so for those the model's own domain, whatever
+    /// [`Self::ray_to_pixel`] accepts, is the only test.
+    ///
+    /// A pixel outside the frame is returned as it is: a residual a pixel past
+    /// the border is a small error, not a missing measurement, and a tile partly
+    /// off the photograph still has a geometry.
+    pub fn project_homogeneous(
+        &self,
+        cam_from_world: &crate::geometry::RigidTransform,
+        xyz: nalgebra::Vector3<f64>,
+        w: f64,
+    ) -> Option<[f64; 2]> {
+        let pc = cam_from_world.transform_point_homogeneous(xyz, w);
+        if !self.model.needs_ray_path() && pc.z >= 0.0 {
+            return None;
+        }
+        self.ray_to_pixel([pc.x, pc.y, pc.z]).map(|(x, y)| [x, y])
+    }
+
     /// [`Self::ray_to_pixel`] plus the analytic Jacobian `∂(u, v)/∂ray` of the pixel
     /// with respect to the camera-frame ray direction, row-major
     /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.

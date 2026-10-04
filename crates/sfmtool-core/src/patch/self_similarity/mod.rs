@@ -23,11 +23,18 @@
 //! shift, only the samples inside the bitmap on both sides, and carrying data
 //! on both sides, are correlated.
 //!
+//! [`SelfSimilarity::contour`] gives the points the radius is read from, and
+//! [`SelfSimilarityReach::read`] measures their reach: along each grid axis,
+//! in source-image px through
+//! [`crate::camera::warp_map::patch_grid_jacobian`], and along the patch's
+//! own axes in the scene's world-space unit.
+//!
 //! The tile is centred by its own mean per channel before the kernels run, so
 //! the `f32` cross sums keep their precision; the window moments come from
 //! per-channel summed-area tables in `f64`, and the combine, the tolerance
 //! test and the slide run in `f64`.
 
+mod contour;
 mod kernels;
 mod overlap;
 
@@ -36,6 +43,9 @@ mod tests;
 
 use crate::patch::normal_refine::{grid_bounds, middle_span, FLAT_NORM_SQ_EPS};
 
+pub use contour::{
+    BoundedLength, ContourPoint, PatchAxisReach, SelfSimilarityContour, SelfSimilarityReach,
+};
 pub use overlap::{zncc_self_similarity_parts_overlap, zncc_self_similarity_radius_overlap};
 
 /// The template spread, in grey levels, under which a channel carries no
@@ -558,6 +568,31 @@ fn read_surface(surface: Vec<f64>, r: usize, tolerance: f64) -> SelfSimilarity {
 /// the level, so a patch that locks reads the fraction of a pixel its peak
 /// takes to fall through it.
 fn crossing_radius(surface: &[f64], r: usize, level: f64) -> f64 {
+    radius_of_points(&crossing_points(surface, r, level), r)
+}
+
+/// The largest distance of `points` from the centre, capped at `r`: the
+/// radius [`crossing_radius`] reads. Tracked as a squared length, with one
+/// square root at the end.
+fn radius_of_points(points: &[ContourPoint], r: usize) -> f64 {
+    let mut furthest = 0.0f64;
+    for point in points {
+        let [px, py] = point.offset;
+        furthest = furthest.max(px * px + py * py);
+    }
+    furthest.sqrt().min(r as f64)
+}
+
+/// The points of the contour where `surface` falls through `level`, the
+/// points [`crossing_radius`] reads its radius from: over every grid edge of
+/// the `(2r + 1)²` square between a shift at or above the level and a
+/// neighbour below it, the point where the ZNCC, interpolated linearly along
+/// the edge, equals the level; and for a shift at or above the level whose
+/// neighbour was not read (past the square's border, or not finite), the
+/// shift itself, open towards that neighbour. Each shift contributes its edges
+/// in the order `+x`, `−x`, `+y`, `−y`, and the shifts are visited row-major
+/// from `(−r, −r)`.
+fn crossing_points(surface: &[f64], r: usize, level: f64) -> Vec<ContourPoint> {
     let side = 2 * r + 1;
     let ri = r as i64;
     let at = |dx: i64, dy: i64| -> Option<f64> {
@@ -567,28 +602,34 @@ fn crossing_radius(surface: &[f64], r: usize, level: f64) -> f64 {
         let z = surface[((dy + ri) as usize) * side + (dx + ri) as usize];
         z.is_finite().then_some(z)
     };
-    let mut furthest = 0.0f64;
+    let mut points = Vec::new();
     for dy in -ri..=ri {
         for dx in -ri..=ri {
             let Some(z) = at(dx, dy) else { continue };
             if z < level {
                 continue;
             }
-            for (ex, ey) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let (px, py) = match at(dx + ex, dy + ey) {
+            for (ex, ey) in [(1i8, 0i8), (-1, 0), (0, 1), (0, -1)] {
+                let point = match at(dx + i64::from(ex), dy + i64::from(ey)) {
                     Some(zn) if zn >= level => continue,
                     Some(zn) => {
                         let t = (z - level) / (z - zn);
-                        (dx as f64 + t * ex as f64, dy as f64 + t * ey as f64)
+                        ContourPoint {
+                            offset: [dx as f64 + t * f64::from(ex), dy as f64 + t * f64::from(ey)],
+                            open_towards: None,
+                        }
                     }
                     // Not read: the shift itself is as far as is known.
-                    None => (dx as f64, dy as f64),
+                    None => ContourPoint {
+                        offset: [dx as f64, dy as f64],
+                        open_towards: Some([ex, ey]),
+                    },
                 };
-                furthest = furthest.max(px * px + py * py);
+                points.push(point);
             }
         }
     }
-    furthest.sqrt().min(r as f64)
+    points
 }
 
 /// The slide of a set of shifts from the sums of their second moments: the

@@ -644,6 +644,8 @@ one at the cursor, and this block reports it.
                         "verdict": "in", "pinned": true,
                         "pixel": [131.4, 208.9], "cluster": null,
                         "track": { /* get_bench_track's track measurement */ },
+                        "tile_jacobian": [[1.95, 0.0], [0.0, 1.95]],
+                        "tile_zoom": [0.51, 0.51],
                         "verdict_by_bars": "out" } ] } }
 ```
 
@@ -3407,8 +3409,33 @@ pairs; and `zncc_self_similarity_surface`, the core's ZNCC against itself at
 every shift of the `(2r + 1)²` square as rows of numbers from `(dx, dy) = (-r,
 -r)`, with null where the core is flat, beside
 `zncc_self_similarity_tolerance`, the deficit the core was judged by, so the
-radius is read on the surface at `1 -` that value. Each is null where the tile
-could not be read. The
+radius is read on the surface at `1 -` that value; and
+`zncc_self_similarity_reach` and `zncc_self_similarity_reach_middle`, how far
+the contour the whole and middle radii are read from reaches, each length as
+`{"value", "at_least"}` with `at_least` true where the true length may be
+larger, because the region at the level runs off the square searched along that
+axis, runs off along the other axis without holding its width, borders a gap (a
+neighbour with no reading), or reaches the largest radius searched (the cap):
+`grid_radius` and `grid_axes` (`[x, y]`) in the evaluation's grid px,
+`image_radius` in the photograph's px, null where the tile's centre does not
+project, and `patch_axes`, `{"kind", "unit", "along"}` with `along` the reach
+along the patch's `u` and `v`, `[u, v]`, and either `kind` `"length"` with
+`unit` the reconstruction's `world_space_unit` (null for scene units, where the
+file names none) or `kind` `"angle"` with `unit` `"degrees"` for a patch at
+infinity; `patch_axes` is null at the cluster stage, which has no patch
+([`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
+§ "The contour and its reach"). Each is null where the tile could not be read.
+Each track-stage row also carries the geometry of its Track View tile, which
+needs no photograph and is reported whatever the evaluation says:
+`tile_jacobian`, the Jacobian of the warp the tile is rendered through at the
+tile's centre, `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]` in photograph px per
+display tile texel (64 across), read from the patch re-anchored where the row
+sits; and `tile_zoom`, `[least, most]` display tile texels per photograph px,
+the reciprocals of its two singular values, which Track View's *Zoom* column
+prints. Both are null at the cluster stage, on a track with no patch yet, for a
+row with nothing saying where it sits, and for a patch whose centre is behind
+the camera or outside the camera model's domain; `tile_zoom` is null as well for
+a patch seen edge on ([`bench.md`](bench.md) § "The wire"). The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a

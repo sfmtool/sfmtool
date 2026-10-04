@@ -42,6 +42,7 @@ use sfmtool_core::bench::{
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach, SelfSimilarityReach};
 use sfmtool_core::patch::view_selection::ViewSelectParams;
 use sfmtool_core::progress::Progress;
 
@@ -162,6 +163,50 @@ fn surface_array(surface: &[f64]) -> Array2<f64> {
     Array2::from_shape_vec((side, side), surface.to_vec()).expect("a square surface")
 }
 
+/// A self-similarity reading's reach as the nested dict Python reads, in the
+/// shape `get_bench_track` reports it except that `patch_axes` carries no
+/// `unit`, since the dict does not carry the reconstruction: each length as `{"value", "at_least"}`,
+/// `at_least` true where the true length may be larger; `grid_radius` and
+/// `grid_axes` (`[x, y]`) in grid px; `image_radius` in the photograph's px,
+/// `None` without a Jacobian; and `patch_axes`, `None` without a placement,
+/// as `{"kind", "along"}` with `along` holding `[u, v]`: `kind` `"length"` in
+/// the reconstruction's `world_space_unit`, or `"angle"` in degrees for a
+/// patch at infinity.
+fn reach_to_dict<'py>(
+    py: Python<'py>,
+    reach: &SelfSimilarityReach,
+) -> PyResult<Bound<'py, PyDict>> {
+    let length = |r: BoundedLength| -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        d.set_item("value", r.value)?;
+        d.set_item("at_least", r.at_least)?;
+        Ok(d)
+    };
+    let d = PyDict::new(py);
+    d.set_item("grid_radius", length(reach.grid_radius)?)?;
+    d.set_item(
+        "grid_axes",
+        vec![length(reach.grid_axes[0])?, length(reach.grid_axes[1])?],
+    )?;
+    d.set_item("image_radius", reach.image_radius.map(length).transpose()?)?;
+    let patch_axes = match reach.patch_axes {
+        None => None,
+        Some(axes) => {
+            let a = PyDict::new(py);
+            let kind = match axes {
+                PatchAxisReach::Length(_) => "length",
+                PatchAxisReach::Angle(_) => "angle",
+            };
+            let [u, v] = axes.values();
+            a.set_item("kind", kind)?;
+            a.set_item("along", vec![length(u)?, length(v)?])?;
+            Some(a)
+        }
+    };
+    d.set_item("patch_axes", patch_axes)?;
+    Ok(d)
+}
+
 /// Put the ZNCC self-similarity readings a measurement carries into its dict,
 /// each where it is present.
 #[allow(clippy::too_many_arguments)]
@@ -174,7 +219,16 @@ fn set_self_similarity<'py>(
     slide: Option<[[[f64; 2]; 3]; 3]>,
     surface: Option<&[f64]>,
     tolerance: Option<f64>,
+    reach: [Option<SelfSimilarityReach>; 2],
 ) -> PyResult<()> {
+    for (key, reach) in [
+        ("zncc_self_similarity_reach", reach[0]),
+        ("zncc_self_similarity_reach_middle", reach[1]),
+    ] {
+        if let Some(reach) = reach {
+            d.set_item(key, reach_to_dict(py, &reach)?)?;
+        }
+    }
     if let Some(v) = tolerance {
         d.set_item("zncc_self_similarity_tolerance", v)?;
     }
@@ -247,6 +301,10 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             m.zncc_self_similarity_slide_grid,
             m.zncc_self_similarity_surface.as_deref(),
             m.zncc_self_similarity_tolerance,
+            [
+                m.zncc_self_similarity_reach,
+                m.zncc_self_similarity_reach_middle,
+            ],
         )?;
         if let Some(s) = m.status {
             c.set_item("status", format!("{s:?}"))?;
@@ -295,6 +353,10 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             m.zncc_self_similarity_slide_grid,
             m.zncc_self_similarity_surface.as_deref(),
             m.zncc_self_similarity_tolerance,
+            [
+                m.zncc_self_similarity_reach,
+                m.zncc_self_similarity_reach_middle,
+            ],
         )?;
         // The pixel that walk would have reached: `sight_observation` there
         // accepts it.

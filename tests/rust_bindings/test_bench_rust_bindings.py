@@ -430,6 +430,65 @@ class TestEvaluating:
                 if not np.isnan(surface).all():
                     assert 0.0 < entry["zncc_self_similarity_tolerance"] < 1.0
 
+    def test_an_evaluation_reports_the_self_similarity_reach(
+        self, edited, images, long_track_point
+    ):
+        """Beside each self-similarity radius is its reach: the radius again in
+        grid px, the reach along the grid's x and y, the radius in the
+        photograph's px, and the reach along the patch's u and v, each length
+        a value and whether it is only a lower bound."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        measured, _ = evaluate(track, edited, images)
+
+        def check_length(length):
+            assert set(length) == {"value", "at_least"}
+            assert length["value"] >= 0.0
+            assert isinstance(length["at_least"], bool)
+
+        read = [
+            o["track"]
+            for o in measured.observations
+            if "zncc_self_similarity_radius" in o["track"]
+        ]
+        assert read
+        for entry in read:
+            for key, radius in [
+                ("zncc_self_similarity_reach", "zncc_self_similarity_radius"),
+                (
+                    "zncc_self_similarity_reach_middle",
+                    "zncc_self_similarity_radius_middle",
+                ),
+            ]:
+                reach = entry[key]
+                assert set(reach) == {
+                    "grid_radius",
+                    "grid_axes",
+                    "image_radius",
+                    "patch_axes",
+                }
+                # The grid radius is the radius itself, to the bit.
+                assert reach["grid_radius"]["value"] == entry[radius]
+                check_length(reach["grid_radius"])
+                assert len(reach["grid_axes"]) == 2
+                for length in reach["grid_axes"]:
+                    check_length(length)
+                # Every contour point lies inside the square of shifts and no
+                # further from the centre than the radius reads, so neither
+                # axis reaches further than the radius, even where the radius
+                # is capped at the largest radius searched.
+                for length in reach["grid_axes"]:
+                    assert length["value"] <= reach["grid_radius"]["value"] + 1e-12
+                check_length(reach["image_radius"])
+                # A finite point's patch reads lengths along u and v, scaled
+                # from the grid axes, and lower bounds where they are.
+                axes = reach["patch_axes"]
+                assert axes["kind"] == "length"
+                assert len(axes["along"]) == 2
+                for along, grid in zip(axes["along"], reach["grid_axes"]):
+                    check_length(along)
+                    assert along["at_least"] == grid["at_least"]
+                    assert (along["value"] == 0.0) == (grid["value"] == 0.0)
+
     def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
         self, edited, images, long_track_point
     ):

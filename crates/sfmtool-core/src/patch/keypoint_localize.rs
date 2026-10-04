@@ -305,16 +305,9 @@ pub(crate) fn project_unclipped(
     p: &Point3<f64>,
     w: f64,
 ) -> Option<(f64, f64)> {
-    let pc = view.cam_from_world.transform_point_homogeneous(p.coords, w);
-    // Cheirality: a point in front of a *perspective* camera has z < 0. A
-    // ray-path model (fisheye / equirectangular) images past 90° off axis,
-    // where a legitimate observation has `z >= 0`; there the model's own
-    // domain — whatever `ray_to_pixel` accepts — is the only oracle, and this
-    // test would discard the whole periphery a >180° capture exists to carry.
-    if !view.camera.model.needs_ray_path() && pc.z >= 0.0 {
-        return None;
-    }
-    view.camera.ray_to_pixel([pc.x, pc.y, pc.z])
+    view.camera
+        .project_homogeneous(view.cam_from_world, p.coords, w)
+        .map(|[x, y]| (x, y))
 }
 
 /// Project a homogeneous world point `(p, w)` into a view; `None` when it falls

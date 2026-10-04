@@ -423,7 +423,8 @@ fn a_pixels_ray_leaves_the_camera_centre_and_projects_back_onto_the_pixel() {
         );
         assert!((direction.norm() - 1.0).abs() < 1e-12);
         for depth in [0.5, 7.0] {
-            let back = project(&camera, &pose, (origin + direction * depth).coords, 1.0)
+            let back = camera
+                .project_homogeneous(&pose, (origin + direction * depth).coords, 1.0)
                 .expect("in front of the camera");
             assert!(
                 (back[0] - pixel[0]).abs() < 1e-6 && (back[1] - pixel[1]).abs() < 1e-6,

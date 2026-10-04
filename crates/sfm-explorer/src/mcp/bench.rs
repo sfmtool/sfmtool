@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 use sfmtool_core::bench::{
     Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Viewpoint,
 };
+use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach, SelfSimilarityReach};
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
@@ -161,15 +162,28 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
 
 /// One object per observation of `track` on `id`, as `get_bench_track`
 /// reports them: its image, provenance, verdict, pin, pixel and the
-/// measurements of each stage. `get_point`'s evaluation block reports the
+/// measurements of each stage, and the Jacobian and zoom of its Track View
+/// tile (the *Zoom* column prints the zoom; the Jacobian it is read from is
+/// reported as a diagnostic). `get_point`'s evaluation block reports the
 /// viewed track's rows in the same shape.
 pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTrack) -> Vec<Value> {
+    let recon = state.node(id).map(|node| node.recon());
+    let world_unit = recon.and_then(|recon| recon.metadata.world_space_unit.as_deref());
     track
         .observations
         .iter()
         .enumerate()
         .map(|(index, observation)| {
             let image = crate::scene::ImageRef::new(id, observation.image as usize);
+            // The Jacobian the *Zoom* column's number is read from, of the
+            // warp the row's tile is rendered through, computed without the
+            // photograph exactly as the table computes it. Both are null at
+            // the cluster stage, on a track with no patch yet, for an
+            // observation with nothing saying where it sits, and for a patch
+            // whose centre is behind the camera or outside the camera model's
+            // domain; `tile_zoom` is null as well for a patch seen edge on.
+            let jacobian =
+                recon.and_then(|recon| crate::track_view::body::tile_jacobian(recon, track, index));
             json!({
                 "observation": index,
                 "camera_image": observation.image,
@@ -179,7 +193,9 @@ pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTr
                 "pinned": observation.pinned,
                 "pixel": observation_pixel(observation),
                 "cluster": cluster_measurement(observation),
-                "track": track_measurement(observation),
+                "track": track_measurement(observation, world_unit),
+                "tile_jacobian": jacobian.map(|jacobian| jacobian.0),
+                "tile_zoom": jacobian.and_then(|jacobian| jacobian.zoom_range()),
             })
         })
         .collect()
@@ -1676,6 +1692,10 @@ fn cluster_measurement(observation: &Observation) -> Value {
         // The deficit the core was judged by: the radius is read on the
         // surface at 1 - tolerance.
         "zncc_self_similarity_tolerance": finite(measured.zncc_self_similarity_tolerance),
+        // How far the contour the radius is read from reaches, whole and
+        // middle: in grid px, in image px, and along the patch's u and v.
+        "zncc_self_similarity_reach": reach(measured.zncc_self_similarity_reach, None),
+        "zncc_self_similarity_reach_middle": reach(measured.zncc_self_similarity_reach_middle, None),
         "status": measured.status.map(|status| format!("{status:?}")),
     })
 }
@@ -1689,7 +1709,7 @@ fn cluster_measurement(observation: &Observation) -> Value {
 /// far the observation sits from the point's projection, which is a statement
 /// about the point. A track whose position is wrong shows large offsets beside
 /// zero shifts.
-fn track_measurement(observation: &Observation) -> Value {
+fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Value {
     let Some(measured) = observation.track.as_ref() else {
         return Value::Null;
     };
@@ -1716,6 +1736,10 @@ fn track_measurement(observation: &Observation) -> Value {
         // The deficit the core was judged by: the radius is read on the
         // surface at 1 - tolerance.
         "zncc_self_similarity_tolerance": finite(measured.zncc_self_similarity_tolerance),
+        // How far the contour the radius is read from reaches, whole and
+        // middle: in grid px, in image px, and along the patch's u and v.
+        "zncc_self_similarity_reach": reach(measured.zncc_self_similarity_reach, world_unit),
+        "zncc_self_similarity_reach_middle": reach(measured.zncc_self_similarity_reach_middle, world_unit),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the ZNCC the localizer scored there. Accepting the walk is
@@ -1748,6 +1772,49 @@ fn grid(value: Option<[[f64; 3]; 3]>) -> Option<[[Option<f64>; 3]; 3]> {
 /// first, with null in place of a cell that has no reading; or null for none.
 fn slides(value: Option<[[[f64; 2]; 3]; 3]>) -> Option<[[Option<[f64; 2]>; 3]; 3]> {
     value.map(|rows| rows.map(|row| row.map(|v| v.iter().all(|x| x.is_finite()).then_some(v))))
+}
+
+/// How far a self-similarity contour reaches, or null for none: each length as
+/// `{ "value", "at_least" }`, `at_least` true where the true length may be
+/// larger, because the region at the level runs off the square of shifts
+/// searched along that axis, runs off along the other axis without holding
+/// its width, borders a gap (a neighbour of a shift at the level with no
+/// reading), or reaches the largest radius searched (the cap). `grid_radius` is the radius in grid px and
+/// `grid_axes` the reach along the grid's `x` and `y`; `image_radius` is in the
+/// photograph's px, null where the tile's centre does not project;
+/// `patch_axes` is the reach along the patch's `u` and `v` axes, `[u, v]` in
+/// `along`, with `kind` `"length"` and `unit` the reconstruction's
+/// `world_space_unit` (`world_unit`; null for scene units), or `kind`
+/// `"angle"` and `unit` `"degrees"` for a patch at infinity. `patch_axes` is
+/// null at the cluster stage, which has no patch.
+fn reach(value: Option<SelfSimilarityReach>, world_unit: Option<&str>) -> Value {
+    let Some(reach) = value else {
+        return Value::Null;
+    };
+    let length = |r: BoundedLength| match finite(Some(r.value)) {
+        Some(value) => json!({ "value": value, "at_least": r.at_least }),
+        None => Value::Null,
+    };
+    let patch_axes = match reach.patch_axes {
+        None => Value::Null,
+        Some(axes) => {
+            let (kind, unit) = match axes {
+                PatchAxisReach::Length(_) => ("length", world_unit),
+                PatchAxisReach::Angle(_) => ("angle", Some("degrees")),
+            };
+            json!({
+                "kind": kind,
+                "unit": unit,
+                "along": axes.values().map(length),
+            })
+        }
+    };
+    json!({
+        "grid_radius": length(reach.grid_radius),
+        "grid_axes": reach.grid_axes.map(length),
+        "image_radius": reach.image_radius.map_or(Value::Null, length),
+        "patch_axes": patch_axes,
+    })
 }
 
 /// A square ZNCC surface, stored row-major, as rows of numbers from the top

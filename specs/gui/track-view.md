@@ -815,7 +815,7 @@ row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
-Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Status  ...  Name
+Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Status  ...  Name
 Thresholds              [70]% whole         [2.5] px whole      [3.0] px   [6.0] px
                         [70]% mid
 ```
@@ -927,12 +927,13 @@ Clicking a heading orders the rows by that column, worst first where a bar
 judges the column and increasing where none does, and clicking the same
 heading again reverses the order. Worst first is decreasing for *Keep* and
 *Verdict* (the most bars failed), *Self-similarity*, *Proj. err* and *Shift*,
-and increasing for *ZNCC*; *Img*, *Status* and *Name* start increasing. The heading the rows are
-ordered by carries a small triangle after its word, pointing up for increasing
-and down for decreasing, and a heading that orders the rows is drawn in the
-plain text colour under the pointer. Its hover text ends by saying what a click
-does with the order as it stands, and its accessible name is *Sort by …*. The
-keys are what the rows print:
+and increasing for *ZNCC*; *Img*, *Zoom*, *Status* and *Name* start increasing.
+*Zoom* is among them because no bar says one zoom is worse than another. The
+heading the rows are ordered by carries a small triangle after its word,
+pointing up for increasing and down for decreasing, and a heading that orders
+the rows is drawn in the plain text colour under the pointer. Its hover text
+ends by saying what a click does with the order as it stands, and its accessible
+name is *Sort by …*. The keys are what the rows print:
 
 | Heading | Ordered by |
 |---|---|
@@ -942,6 +943,7 @@ keys are what the rows print:
 | Self-similarity | the whole tile's radius |
 | Proj. err | the reprojection error in px |
 | Shift | the shift in px |
+| Zoom | the geometric mean of the two zooms, `1 / sqrt(abs(det J))` |
 | Status | the Status cell's text, compared character by character |
 | Name | the image's file name, compared character by character |
 
@@ -983,14 +985,14 @@ beside it is that patch warped square, so the eye reads from the raw pixels to
 the picture the numbers are read from. The two photometric columns come
 straight after the verdict, *ZNCC* and then *Self-similarity*, since they are
 the readings the verdict is most often decided by; the reprojection error, the
-shift, the status and, in Edited mode, the provenance follow them. The image's
-name is the last column, 220 points wide: hovering it or the *Img* cell shows
-the name whole, so the room in the middle of the table goes to the readings.
-The columns stand at the same offsets in both modes, and Viewed mode has no
-*From* column, since every row of a committed point came from the point;
-*Name* moves left into the room *From* leaves.
-The headings are drawn at the cells' own body size, in the weak text colour so
-they still read as headings. Each heading has hover text over the width of its
+shift, the tile's zoom, the status and, in Edited mode, the provenance follow
+them. The image's name is the last column, 220 points wide: hovering it or the
+*Img* cell shows the name whole, so the room in the middle of the table goes to
+the readings. The columns stand at the same offsets in both modes, and Viewed
+mode has no *From* column, since every row of a committed point came from the
+point; *Name* moves left into the room *From* leaves. The headings are drawn at
+the cells' own body size, in the weak text colour so they still read as
+headings. Each heading has hover text over the width of its
 column, running to where the next heading starts, saying what the column holds:
 the *Crop* heading's says what the crop shows and what its hover view adds, the
 *Patch* heading's what the tile is at each stage and that the numbers are read
@@ -1023,6 +1025,9 @@ the whole tile's radius. The *Proj. err* heading's says what the error is measur
 after the track is triangulated, and that the degrees are the same residual as
 an angle, and ends by saying that the box under the heading is the bar that
 judges the px.
+The *Zoom* heading's says which side of `1×` enlarges, that the zoom does not
+wait for the photograph, what the two numbers of a range are, when the cell
+prints `-` and what the column orders by.
 
 **A cell with two readings prints them on two lines**, each with its unit, and
 the whole patch's and the middle's each with its name: `93% whole` over
@@ -1042,7 +1047,8 @@ that is not there prints a bare `-`, with no unit.
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within the shift bar of the observation, over the middle ZNCC, then the ZNCC grid |
 | Self-similarity | the surface plot, then the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid | the same |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
-| Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
+| Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane |
+| Zoom | `-` | tile texels per photograph pixel at the tile's centre, the reciprocals of the two singular values of the tile warp's Jacobian there, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.51/0.51×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
@@ -1095,6 +1101,52 @@ line along its slide where the slide is at least `0.5` long, so the ninth's
 matching shifts line up along one direction, as on an edge. Hovering it shows
 its nine numbers as the cell prints them. The self-similarity bar judges
 `whole`; the middle and the grid are shown and judged by no bar.
+
+**Hovering the two numbers shows how far the contour they are read from
+reaches**, in three units, under a sentence saying what the table is. The
+measurement's `zncc_self_similarity_reach` and `_middle` carry it, measured in
+sfmtool-core
+([`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
+§ "The contour and its reach"), and the hover only prints it, a column for
+`whole` and one for `mid`:
+
+```
+           whole                    mid
+grid px    0.42                     3+
+  along    u 0.31  v 0.40           u 3+  v 0.80
+image px   0.85                     5.6+
+world      u 0.0031 m  v 0.0040 m   u 0.029+ m  v 0.0078 m
+```
+
+The table is built only while the cell is hovered; the row keeps the two
+reaches, not the text.
+
+- **grid px** is the radius, which the cell prints, and **along** its reach
+  along the grid's `x` and `y`, labelled with the patch axes they run along, `u`
+  and `v` (the grid's `y` runs down `v`). `u` and `v` are named rather than
+  separated by a bare `/`, which the *Zoom* cell uses for least over most.
+- **image px** is the radius in the photograph's pixels, through the Jacobian of
+  the tile's grid at its centre at the evaluation's resolution `R` (24 by
+  default), not the 64-texel display tile.
+- **world** is the reach along `u` and `v` in world space, in the
+  reconstruction's `metadata.world_space_unit`, printed after each value and not
+  converted. Where the file names no unit the row is labelled **scene units**
+  and the numbers are bare. A patch at infinity has no length, so the row is
+  labelled **angle** and reads in degrees.
+
+Numbers carry two significant digits, chosen after rounding. A `+` after a
+number marks a lower bound, as the cell's `3+` does: the region at the level ran
+off the square the reading searched along that axis, ran off along the other
+axis without holding its width, borders a gap (a neighbour with no reading), or
+reached the largest radius searched, so the true reach may be larger (the rule
+is § "Lower bounds" of the self-similarity spec). A grid value at the largest
+radius prints `3+` as the cell does. A value that cannot be computed prints `-`:
+the world row at the cluster stage, which has no patch (its image row is read
+through the seed shape), and the image row where a point beside the tile's
+centre does not project. A row whose evaluation is refused or failed, or that
+has no reading, has no hover. The hover adds to the cell and changes nothing
+about it: its text, its colours, its bar and the column's ordering are the
+radius's.
 
 **The column opens with the core's surface plot**, before the two readings:
 the whole core's ZNCC against
@@ -1154,13 +1206,74 @@ would get wrong, so the walk comes first among a scored row's answers. The
 row's own *ZNCC* cell beside it is the evaluation's, taken with the sighting at its
 seed, so the two numbers a person weighs the walk by sit on one row.
 
+**The *Zoom* column says how much the tile magnifies the photograph.** It sits
+after *Shift*. A tile that magnifies a few photograph pixels many times over
+shows interpolation rather than detail, and one that shrinks a large stretch of
+the photograph hides detail the photograph has, so the zoom says how much of
+what the tile shows is the photograph's own detail. It is the Jacobian of the
+warp the row's tile is rendered through, the patch re-anchored where the
+observation sits (`patch::render_frame`) at 64 texels a side, so it describes
+the warp the tile shows and not a separately derived placement.
+
+The zoom is pure geometry: the patch, the observation's camera and pose, and
+where the observation sits. `tile::tile_jacobian` reads it with core's
+`camera::warp_map::patch_grid_jacobian` at 64 texels a side, with no photograph,
+and the body caches the answer per row beside the tiles, dropping it whenever it
+drops them (a step on the track, or the reconstruction leaving the scene). So a
+row whose photograph is still decoding, or cannot be read, prints its zoom all
+the same and keeps its place when the rows are ordered by *Zoom*, and the table
+and the wire, which has no photograph to warp, always give the same numbers. A
+patch whose centre projects has a zoom even where the middle of its tile is off
+the photograph: what the zoom describes is the warp, which extends past the
+photograph's edge.
+
+The tile's side is even, so its centre is the corner the four middle texels
+share rather than a texel. `patch_grid_jacobian` reads the Jacobian there as the
+finite difference across the four points half a texel either side of the centre,
+the four middle texel centres, each projected with no test against the image's
+bounds (`CameraIntrinsics::project_homogeneous`): each of its columns is the
+mean of the two differences along that axis, which is the derivative at the
+centre of the bilinear interpolation through the four. The per-texel Jacobians
+`WarpMap::compute_svd` stores for the mip selection are not used, for two
+reasons: they are central differences about a texel, so none of them is at the
+centre, which lies between texels; and they fall back to the identity where a
+neighbour has no source pixel, which would print as a `1×` zoom.
+
+There is no Jacobian, and the cell prints `-`, in each case where there is no
+warp: a row at the cluster stage, whose tile is the refinement kernel's grid
+rather than a warp map; a track-stage track with no patch yet; an observation
+with nothing saying where it sits; and a patch whose centre is behind the camera
+or outside the camera model's domain. A Jacobian whose smaller singular value is
+at most `1e-9` of the larger, a patch seen edge on, has no zoom either: its
+plane holds the camera, so the four points project onto one line and the finite
+difference leaves a rounding residue across it rather than an exact zero, which
+would print as a zoom of about `10¹³`. A real oblique view stays far above that
+ratio; a patch at 89.9 degrees to the line of sight reads about `2e-3`.
+
+*Zoom* is `1 / s` for each singular value `s` of the Jacobian, the least zoom
+over the most, so over `1×` the tile enlarges the photograph and under `1×` it
+shrinks it, and two different numbers say the warp stretches one direction more
+than the other, as on a patch seen at a slant. The cell prints both numbers even
+where they print the same, `0.51/0.51×`, so every row reads in one format. Each
+number carries two significant digits, judged after rounding, as the
+self-similarity hover's do: `0.031` prints `0.031`, `9.96` prints `10`, `0.996`
+prints `1.0`, and a zoom of 10 or more prints whole, keeping every whole digit
+from 100 up, so `123.4` prints `123`. The cell is geometry rather than a reading
+of the evaluation, so it is drawn in the plain text colour whatever the
+evaluation stands at, as the tile is, and no bar judges it. Ordering by *Zoom*
+orders by the geometric mean of the two zooms, `1 / sqrt(abs(det J))`; a row
+with no zoom sorts last either way, as a row with no key does in any column.
+`get_bench_track` and `get_point`'s evaluation block report the zoom for each
+row as `tile_zoom`, and the Jacobian it is read from as `tile_jacobian`, a
+diagnostic the table does not print.
+
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its
 stage registers, through the code that registers it: at the track stage the
 patch warped into this view and re-anchored where the observation sits
-(`patch::patch_color_image`, `WarpMap::from_patch` and `remap_bilinear` at 64 by
-64, shown at 48 points with nearest filtering); at the cluster stage the grid the
-refinement kernel samples
+(`patch::patch_color_image`, `WarpMap::from_patch` and `remap_bilinear_mip` at
+64 by 64, shown at 48 points with nearest filtering); at the cluster stage the
+grid the refinement kernel samples
 (`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that place and
 shape, over the cluster's own radius
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
@@ -1168,6 +1281,22 @@ cluster stage's units"), on the template's resolution once one has been cut. A
 row with nothing to render draws an empty frame of the same size, so the columns
 beside it never shift. A patch not visible in a view warps to an all-black tile,
 which is drawn as such.
+
+**A track-stage tile is one bilinear sample per texel from the mip level the
+warp picks there.** The warp map's SVD is computed (`WarpMap::compute_svd`), and
+each texel reads the level `round(log2(s_major))` of the photograph's pyramid,
+`s_major` being the larger singular value of the warp's Jacobian at that texel,
+clamped to the pyramid's levels (`remap_bilinear_mip`). The pyramid is the one
+the photograph cache builds at the decode. The level is chosen texel by texel,
+and it is above 0 only where a texel shrinks the photograph by more than about
+1.4 times (`s_major` of `sqrt(2)` or more). Such a texel reads a level averaged
+down towards its own sampling instead of picking scattered full-resolution
+pixels, which would alias a fine texture into a pattern the photograph does not
+have. Where no texel spans more than about 1.4 photograph pixels every texel
+reads level 0, and the tile is exactly plain bilinear. The hover view renders
+its wider patch the same way, at the tile's sampling, so each texel picks the
+level the tile's own texel there does and the tile is still the middle of the
+picture texel for texel.
 
 **The track-stage frame is re-anchored on the observation's keypoint**
 (`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
@@ -1195,7 +1324,8 @@ cache ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md))
 shared with the Image Detail panel and read by the evaluations, so no image is
 decoded more than once while the cache holds it. An entry is the
 `ImageU8Pyramid` built when the image was decoded, whose level 0 is the
-photograph: the photometric readers sample the lower levels. A failed decode is
+photograph: the tiles, their hover views and the photometric readers sample the
+lower levels where a warp shrinks the photograph. A failed decode is
 remembered so a missing file is not reopened every frame. Before the body
 draws, the dock asks for every image the drawn track observes: the focused
 item's in Edited mode, and in Viewed mode the selected point's, when the
@@ -1739,8 +1869,25 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   gesture reported, and the box drawn greyed at the cluster stage, where a click
   leaves it as it was; the tile's frame re-anchored on each observation's own keypoint
   and kept as stored with no keypoint and where the keypoint's ray cannot meet
-  the patch; and a long image name cut in its middle, keeping the start of the
-  path and the end of the file name.
+  the patch; a shrinking tile read from mip level 2 throughout and one that
+  shrinks nothing plain bilinear to the bit; the centre Jacobian of a
+  fronto-parallel patch diagonal at its width over 64, of a patch turned 30
+  degrees in its plane carrying the turn with its signs, and of a slanted patch
+  giving a range of zooms; a zoom for a tile whose middle is off the photograph,
+  the same as on it, none for a patch behind the camera, and none for a patch
+  seen edge on; a zoom read from the patch re-anchored on a keypoint moved a few
+  px off the projection, exactly that placement's Jacobian; each row's *Zoom*
+  cell printing the zoom of its tile's Jacobian, and the same with no photograph
+  decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
+  with no zoom last either way; the *Zoom* cell's two significant digits chosen
+  after rounding, with both numbers printed where they agree; the
+  *Self-similarity* hover's table in grid px, image px and world space with `u`
+  and `v` named and `+` on a lower bound, bare numbers under *scene units* with
+  no unit on the file, the whole table for a patch at infinity in degrees, and
+  for the cluster stage with `-` in the world row, and an evaluated row carrying
+  exactly the reach its measurement carries at both stages; and a long image
+  name cut in its middle, keeping the start of the path and the end of the file
+  name.
 - **The Scene tree**,
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
   single click on a Bench row selects its node and pushes no version; a

@@ -426,11 +426,11 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
     let cam_from_world = crate::scene::cam_from_world(sfmr_image);
     let at_the_seed =
-        super::patch::patch_color_image(&frame, camera, &cam_from_world, Some(site), src.level(0));
+        super::patch::patch_color_image(&frame, camera, &cam_from_world, Some(site), &src);
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
     let at_the_projection =
-        super::patch::patch_color_image(&frame, camera, &cam_from_world, None, src.level(0));
+        super::patch::patch_color_image(&frame, camera, &cam_from_world, None, &src);
     assert_ne!(
         drawn, at_the_projection,
         "the tile is the point's own projection rather than the sighting's place"
@@ -1061,7 +1061,7 @@ fn each_threshold_box_stands_under_the_heading_of_what_it_judges() {
         .collect();
     px.sort_by(|a, b| a.left().total_cmp(&b.left()));
     assert_eq!(px.len(), 2, "{px:?}");
-    for (label, under, before) in [(px[0], "Proj. err", "Shift"), (px[1], "Shift", "Status")] {
+    for (label, under, before) in [(px[0], "Proj. err", "Shift"), (px[1], "Shift", "Zoom")] {
         assert!(
             heading(under) <= label.left() && label.right() <= heading(before),
             "a px box is not in the {under:?} column"
@@ -2719,7 +2719,8 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
     let recon = state.node(id).expect("loaded").recon();
     let (camera, pose) =
         crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
-    let projected = crate::bench::geometry::project(&camera, &pose, position.coords, frame.w)
+    let projected = camera
+        .project_homogeneous(&pose, position.coords, frame.w)
         .expect("the demo cameras see every point");
     let off = [4.0, -3.0];
     state
@@ -2775,7 +2776,9 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
         let s = 2.0 * f64::from(at.x) / side - 1.0;
         let t = 1.0 - 2.0 * f64::from(at.y) / side;
         let (xyz, w) = wide.corner_homogeneous(s, t);
-        crate::bench::geometry::project(&camera, &pose, xyz, w).expect("on the plane")
+        camera
+            .project_homogeneous(&pose, xyz, w)
+            .expect("on the plane")
     };
     let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     assert!(
@@ -3613,7 +3616,7 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
     let frame = crate::bench::geometry::anchored_frame(&patch, &camera, &pose, row);
     let across = |s: f64, t: f64| {
         let (xyz, w) = frame.corner_homogeneous(s, t);
-        crate::bench::geometry::project(&camera, &pose, xyz, w).expect("projects")
+        camera.project_homogeneous(&pose, xyz, w).expect("projects")
     };
     let chord = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let want = [
@@ -3720,7 +3723,8 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     let recon = state.node(id).expect("loaded").recon();
     let (camera, pose) =
         crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
-    let projected = crate::bench::geometry::project(&camera, &pose, position.coords, frame.w)
+    let projected = camera
+        .project_homogeneous(&pose, position.coords, frame.w)
         .expect("the demo cameras see every point");
     let keypoint = [projected[0] + 4.0, projected[1] - 3.0];
     state
@@ -3808,7 +3812,8 @@ fn the_tile_frame_is_anchored_on_the_observation_s_own_keypoint() {
         // Displaced from the projection, so the two anchors differ.
         let keypoint = [f64::from(stored[0]) + 6.0, f64::from(stored[1]) - 4.0];
         let centre = |frame: &sfmtool_core::patch::cloud::OrientedPatch| {
-            crate::bench::geometry::project(&camera, &pose, frame.center.coords, frame.w)
+            camera
+                .project_homogeneous(&pose, frame.center.coords, frame.w)
                 .expect("the centre projects")
         };
         let geometric = centre(&frame);
@@ -4146,6 +4151,7 @@ fn a_heading_click_starts_worst_first_and_a_second_reverses() {
         (SortColumn::SelfSimilarity, true),
         (SortColumn::ProjectionError, true),
         (SortColumn::Shift, true),
+        (SortColumn::Zoom, false),
         (SortColumn::Status, false),
         (SortColumn::Name, false),
     ] {
@@ -4248,6 +4254,728 @@ fn the_verdict_text_counts_the_bars_an_out_row_fails() {
     assert_eq!(verdict_text(Some(&judged(2, Verdict::Out))), "out (2)");
 }
 
+// ── The tile's Jacobian and zoom ────────────────────────────────────────────
+
+/// A pinhole camera at the origin, looking down `-Z` with `+Y` up, 640 by 480
+/// with a focal length of 500 px and its principal point in the middle.
+fn pinhole_at_origin() -> (
+    sfmtool_core::camera::CameraIntrinsics,
+    sfmtool_core::geometry::RigidTransform,
+) {
+    use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
+    let camera = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: 500.0,
+            focal_length_y: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+        },
+        width: 640,
+        height: 480,
+    };
+    let pose = sfmtool_core::geometry::RigidTransform::from_wxyz_translation(
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    );
+    (camera, pose)
+}
+
+/// A square patch 1 unit wide, centred at `center`, facing the camera at the
+/// origin and upright in it.
+fn facing_patch(center: [f64; 3]) -> sfmtool_core::patch::cloud::OrientedPatch {
+    use nalgebra::{Point3, Vector3};
+    sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        Point3::new(center[0], center[1], center[2]),
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.5, 0.5],
+    )
+}
+
+/// Each entry of `got` within `tolerance` of the same entry of `want`.
+#[track_caller]
+fn assert_jacobian_near(got: super::patch::TileJacobian, want: [[f64; 2]; 2], tolerance: f64) {
+    for (r, c, name) in [
+        (0, 0, "dx/dcol"),
+        (0, 1, "dx/drow"),
+        (1, 0, "dy/dcol"),
+        (1, 1, "dy/drow"),
+    ] {
+        assert!(
+            (got.0[r][c] - want[r][c]).abs() < tolerance,
+            "{name} is {}, not {}: {got:?}",
+            got.0[r][c],
+            want[r][c]
+        );
+    }
+}
+
+/// The Jacobian at the centre of a tile rendered through `patch` with no
+/// keypoint to anchor on, as [`super::tile_jacobian`] computes it for a row.
+fn tile_centre_jacobian(
+    patch: &sfmtool_core::patch::cloud::OrientedPatch,
+    camera: &sfmtool_core::camera::CameraIntrinsics,
+    pose: &sfmtool_core::geometry::RigidTransform,
+) -> Option<super::patch::TileJacobian> {
+    sfmtool_core::camera::warp_map::patch_grid_jacobian(
+        patch,
+        camera,
+        pose,
+        super::patch::PATCH_RES as usize,
+    )
+    .map(super::patch::TileJacobian)
+}
+
+/// The warp map a tile rendered through `patch` with no keypoint is drawn
+/// through.
+fn tile_map(
+    patch: &sfmtool_core::patch::cloud::OrientedPatch,
+    camera: &sfmtool_core::camera::CameraIntrinsics,
+    pose: &sfmtool_core::geometry::RigidTransform,
+) -> sfmtool_core::camera::WarpMap {
+    sfmtool_core::camera::WarpMap::from_patch(patch, camera, pose, super::patch::PATCH_RES)
+}
+
+/// A patch facing a pinhole camera square on is a pure scaling in the
+/// photograph, so the Jacobian at the tile's centre is diagonal, and its scale
+/// is the patch's width in pixels over the tile's 64 texels: 1 unit at depth 4
+/// under a 500 px focal length is 125 px, 125 / 64 source pixels per texel, and
+/// the zoom is the reciprocal, 64 / 125, the same in both directions.
+#[test]
+fn a_fronto_parallel_tile_has_a_diagonal_jacobian_of_its_width_over_64() {
+    use super::patch::PATCH_RES;
+    let (camera, pose) = pinhole_at_origin();
+    let patch = facing_patch([0.0, 0.0, -4.0]);
+    let map = tile_map(&patch, &camera, &pose);
+    let jacobian = tile_centre_jacobian(&patch, &camera, &pose).expect("in front of the camera");
+
+    let scale = 125.0 / f64::from(PATCH_RES);
+    assert_jacobian_near(jacobian, [[scale, 0.0], [0.0, scale]], 1e-3);
+    let [low, high] = jacobian.zoom_range().expect("a zoom");
+    let zoom = 1.0 / scale;
+    assert!((low - zoom).abs() < 1e-3 && (high - zoom).abs() < 1e-3);
+    let mean = jacobian.mean_zoom().expect("a mean zoom");
+    assert!((mean - zoom).abs() < 1e-3, "{mean}");
+
+    // Printed as the cell prints it: both zooms, even where the two
+    // directions agree.
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.51/0.51\u{d7}");
+
+    // The straddling difference agrees with the per-texel Jacobians the mip
+    // selection reads, averaged over the four middle texels, where the warp
+    // is smooth.
+    let mut map = map;
+    map.compute_svd();
+    let mut mean = [[0.0f64; 2]; 2];
+    for (col, row) in [(31, 31), (32, 31), (31, 32), (32, 32)] {
+        let j = map.get_jacobian(col, row);
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            mean[r][c] += f64::from(j[r][c]) / 4.0;
+        }
+    }
+    assert_jacobian_near(jacobian, mean, 1e-3);
+}
+
+/// A patch turned within its own plane by a known angle has a Jacobian with
+/// that turn in it, signs included. The patch faces the camera with its `u`
+/// axis turned 30 degrees from `+X` towards `+Y`, which is up and to the right
+/// in the photograph, whose `y` runs down. So one texel right along a row of
+/// the tile moves the photograph's `y` up (`dy/dcol` negative), and one texel
+/// down a column of the tile moves its `x` right (`dx/drow` positive):
+/// `J = k [[cos, sin], [-sin, cos]]`, `k` being the fronto-parallel scale
+/// of 125 / 64.
+#[test]
+fn a_patch_turned_in_its_plane_has_off_diagonal_entries_of_the_turn() {
+    use super::patch::PATCH_RES;
+    use nalgebra::{Point3, Vector3};
+    let (camera, pose) = pinhole_at_origin();
+    let (s, c) = 30f64.to_radians().sin_cos();
+    // From the camera, `up` turned 30 degrees towards `-X` makes `u = v x n`
+    // turn the same way from `+X` towards `+Y`.
+    let patch = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(-s, c, 0.0),
+        [0.5, 0.5],
+    );
+    assert!((patch.u_axis - Vector3::new(c, s, 0.0)).norm() < 1e-12);
+
+    let jacobian = tile_centre_jacobian(&patch, &camera, &pose).expect("a Jacobian");
+    let k = 125.0 / f64::from(PATCH_RES);
+    assert_jacobian_near(jacobian, [[k * c, k * s], [-k * s, k * c]], 1e-3);
+    assert!(jacobian.0[0][1] > 0.0 && jacobian.0[1][0] < 0.0);
+
+    // A turn changes no zoom.
+    let [low, high] = jacobian.zoom_range().expect("a zoom");
+    assert!((low - 1.0 / k).abs() < 1e-3 && (high - 1.0 / k).abs() < 1e-3);
+}
+
+/// A 640 by 480 photograph with detail down to a few pixels, as a full
+/// pyramid: what a mip level averages away differs from the full-resolution
+/// pixels.
+fn textured_pyramid() -> sfmtool_core::camera::remap::ImageU8Pyramid {
+    use sfmtool_core::camera::remap::ImageU8Pyramid;
+    let (w, h) = (640u32, 480u32);
+    let data: Vec<u8> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            let v = ((x * 37 + y * 11) % 7 * 36) as u8;
+            [v, 255 - v, ((x / 3 + y / 5) % 2 * 200) as u8]
+        })
+        .collect();
+    let src = ImageU8::new(w, h, 3, data);
+    ImageU8Pyramid::build(&src, ImageU8Pyramid::full_levels(w, h))
+}
+
+/// `image`, three channels, as the opaque RGBA picture a tile is.
+fn opaque(image: &ImageU8) -> egui::ColorImage {
+    let rgba: Vec<u8> = image
+        .data()
+        .chunks(3)
+        .flat_map(|px| [px[0], px[1], px[2], 255])
+        .collect();
+    egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        &rgba,
+    )
+}
+
+/// The tile is one bilinear sample per texel from the mip level the warp's
+/// compression picks. A patch 250 px wide over 64 texels shrinks the
+/// photograph about 3.9 times at every texel, which is level 2, so the whole
+/// tile is plain bilinear on level 2 of the pyramid at the warp's coordinates
+/// divided by 4. A patch 62.5 px wide shrinks nothing, so every texel reads
+/// level 0 and the tile is plain bilinear on the photograph to the bit.
+#[test]
+fn a_tile_reads_the_mip_level_its_warp_shrinks_the_photograph_to() {
+    use sfmtool_core::camera::remap::remap_bilinear;
+    use sfmtool_core::camera::WarpMap;
+    let (camera, pose) = pinhole_at_origin();
+    let src = textured_pyramid();
+
+    // 1 unit at depth 2 is 250 px over 64 texels, 3.9 px a texel.
+    let near = facing_patch([0.0, 0.0, -2.0]);
+    let mut map = tile_map(&near, &camera, &pose);
+    map.compute_svd();
+    let (w, h) = (map.width(), map.height());
+    let mut at_level_2 = Vec::with_capacity(2 * (w * h) as usize);
+    for row in 0..h {
+        for col in 0..w {
+            assert!(
+                map.is_valid(col, row),
+                "texel ({col}, {row}) is off the photograph"
+            );
+            let (sigma_major, ..) = map.get_svd(col, row);
+            assert!(
+                (2f32.powf(1.5)..2f32.powf(2.5)).contains(&sigma_major),
+                "texel ({col}, {row}) shrinks the photograph {sigma_major} times, not level 2"
+            );
+            let (x, y) = map.get(col, row);
+            at_level_2.extend_from_slice(&[x / 4.0, y / 4.0]);
+        }
+    }
+    let want = opaque(&remap_bilinear(
+        src.level(2),
+        &WarpMap::new(w, h, at_level_2),
+    ));
+    let tile = super::patch::patch_color_image(&near, &camera, &pose, None, &src);
+    assert_eq!(tile, want, "the shrinking tile is not level 2 throughout");
+    assert_ne!(
+        tile,
+        opaque(&remap_bilinear(src.level(0), &map)),
+        "level 2 of this photograph is the photograph itself, so this proves less"
+    );
+
+    // At depth 8 it is 62.5 px over 64 texels: no texel spans more than a
+    // pixel, so every texel reads level 0.
+    let far = facing_patch([0.0, 0.0, -8.0]);
+    let map = tile_map(&far, &camera, &pose);
+    let tile = super::patch::patch_color_image(&far, &camera, &pose, None, &src);
+    assert_eq!(
+        tile,
+        opaque(&remap_bilinear(src.level(0), &map)),
+        "a tile that does not shrink is not plain bilinear"
+    );
+}
+
+/// A patch tilted away from the camera is foreshortened along the tilt, so
+/// the two singular directions give two zooms, and the cell prints the range,
+/// least first.
+#[test]
+fn a_tilted_tile_prints_a_range_of_zooms() {
+    use nalgebra::{Point3, Vector3};
+    let (camera, pose) = pinhole_at_origin();
+    // Turned 60 degrees about the vertical, so it is half as wide in the
+    // photograph as it is tall.
+    let (s, c) = 60f64.to_radians().sin_cos();
+    let patch = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::new(s, 0.0, c),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.5, 0.5],
+    );
+    let jacobian = tile_centre_jacobian(&patch, &camera, &pose).expect("a Jacobian");
+    let [low, high] = jacobian.zoom_range().expect("a zoom");
+    assert!(
+        (high / low - 2.0).abs() < 0.01,
+        "the zooms {low} and {high} are not one twice the other"
+    );
+    // 125 px over 64 texels up the patch, and half that across it.
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.51/1.0\u{d7}");
+    let mean = jacobian.mean_zoom().expect("a mean zoom");
+    assert!(((low * high).sqrt() - mean).abs() < 1e-9);
+}
+
+/// The zoom is geometry alone: a patch whose centre projects has one even
+/// where the middle of its tile is off the photograph. Only a patch whose
+/// centre does not project, here behind the camera, has none, and the *Zoom*
+/// cell prints `-` for it.
+#[test]
+fn a_tile_whose_middle_is_off_the_photograph_still_has_a_zoom() {
+    let (camera, pose) = pinhole_at_origin();
+    // 330 px right of the principal point, which is 10 px past the right edge;
+    // the patch is 125 px wide, so its left 52.5 px are on the photograph.
+    let off_the_side = facing_patch([2.64, 0.0, -4.0]);
+    let map = tile_map(&off_the_side, &camera, &pose);
+    assert!(
+        !map.is_valid(map.width() / 2, map.height() / 2),
+        "the middle of the tile is on the photograph, so this proves less"
+    );
+    let jacobian = tile_centre_jacobian(&off_the_side, &camera, &pose).expect("a Jacobian");
+    // A fronto-parallel patch under a pinhole is a pure scaling wherever it
+    // sits: 125 px across 64 texels.
+    let k = 125.0 / f64::from(super::patch::PATCH_RES);
+    assert_jacobian_near(jacobian, [[k, 0.0], [0.0, k]], 1e-3);
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "0.51/0.51\u{d7}");
+
+    let behind = facing_patch([0.0, 0.0, 4.0]);
+    assert_eq!(tile_centre_jacobian(&behind, &camera, &pose), None);
+
+    assert_eq!(super::table::zoom_text(None), "-");
+}
+
+/// A patch seen edge on has no zoom. Its plane passes through the camera, so
+/// the four points the Jacobian is read across project onto one line, and the
+/// finite difference leaves only a rounding residue across it, a smaller
+/// singular value near 1e-14 of the larger, which would otherwise print as a
+/// zoom of 10¹³. The cell prints `-` for it, as `get_bench_track` reports
+/// `tile_zoom` as null.
+#[test]
+fn a_patch_seen_edge_on_has_no_zoom() {
+    use nalgebra::{Point3, Vector3};
+    use sfmtool_core::camera::warp_map::singular_values_2x2;
+    let (camera, pose) = pinhole_at_origin();
+    let center = Vector3::<f64>::new(0.7, -0.2, -3.0);
+    // Normal to the line of sight, so the plane holds the camera centre.
+    let normal = Vector3::new(3.0, 0.0, 0.7).normalize();
+    assert!(normal.dot(&center).abs() < 1e-12);
+    let edge_on = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        Point3::from(center),
+        normal,
+        Vector3::y(),
+        [0.5, 0.5],
+    );
+    let jacobian = tile_centre_jacobian(&edge_on, &camera, &pose).expect("the centre projects");
+    let [major, minor] = singular_values_2x2(jacobian.0);
+    assert!(major > 0.1, "{jacobian:?}");
+    assert!(minor <= major * 1e-9, "not edge on: {major} {minor}");
+    assert_eq!(jacobian.zoom_range(), None, "{jacobian:?}");
+    assert_eq!(jacobian.mean_zoom(), None);
+    assert_eq!(super::table::zoom_text(Some(jacobian)), "-");
+}
+
+/// The zoom is read from the patch re-anchored where the observation sits, the
+/// placement its tile is rendered through, not from the patch as stored. One
+/// observation's keypoint is moved a few px off the patch's projection, and
+/// its Jacobian is exactly that of the patch re-anchored on the moved
+/// keypoint, which differs from the stored patch's.
+#[test]
+fn the_zoom_reads_the_patch_reanchored_on_the_keypoint() {
+    use sfmtool_core::bench::{Stage, TrackMeasurement};
+    use sfmtool_core::camera::warp_map::patch_grid_jacobian;
+    let (state, id, label, _panel, _ctx) = on_the_bench();
+    let mut track = (**state.bench_track(id, &label).expect("on the bench")).clone();
+    let recon = state.node(id).expect("loaded").recon();
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track made from a point is at the track stage");
+    };
+    let patch = payload.placement.clone().expect("a patch");
+    let row = 1;
+    let image = &recon.image_table.images[track.observations[row].image as usize];
+    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let pose = crate::scene::cam_from_world(image);
+    let [x, y] = camera
+        .project_homogeneous(&pose, patch.center.coords, patch.w)
+        .expect("the patch projects");
+    let moved = [x + 4.0, y - 3.0];
+    track.observations[row].track = Some(TrackMeasurement {
+        keypoint: Some([moved[0] as f32, moved[1] as f32]),
+        ..TrackMeasurement::default()
+    });
+    let site = track.observations[row].site().expect("a site");
+
+    let resolution = super::patch::PATCH_RES as usize;
+    let anchored = patch
+        .anchored_at_keypoint(camera, &pose, site)
+        .expect("the keypoint's ray meets the patch");
+    let want = patch_grid_jacobian(&anchored, camera, &pose, resolution).expect("projects");
+    let stored = patch_grid_jacobian(&patch, camera, &pose, resolution).expect("projects");
+    assert!(
+        (0..2).any(|r| (0..2).any(|c| (want[r][c] - stored[r][c]).abs() > 1e-6)),
+        "re-anchoring changes nothing here, so this proves less: {want:?} {stored:?}"
+    );
+
+    let got = super::tile_jacobian(recon, &track, row).expect("a Jacobian");
+    assert_eq!(got.0, want);
+}
+
+/// Each row of the table prints the zoom read from the Jacobian of the warp
+/// its tile is rendered through: the same Jacobian `get_bench_track` reports
+/// for the row.
+#[test]
+fn each_row_prints_the_jacobian_and_zoom_of_its_own_tile() {
+    let (state, id, label, panel, _ctx) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let recon = state.node(id).expect("loaded").recon();
+    assert_eq!(panel.rows().len(), 3);
+    for row in panel.rows() {
+        assert!(row.tile, "row {} drew no tile", row.observation);
+        let jacobian = super::tile_jacobian(recon, &track, row.observation);
+        assert!(
+            jacobian.is_some(),
+            "row {} has no Jacobian",
+            row.observation
+        );
+        assert_eq!(row.jacobian, jacobian, "row {}", row.observation);
+        assert_eq!(row.zoom_text, super::table::zoom_text(jacobian));
+        assert!(row.zoom_text.ends_with('\u{d7}'), "{:?}", row.zoom_text);
+    }
+}
+
+/// The *Zoom* cell is geometry and needs no photograph: with none decoded, no
+/// row has a tile, and every row still prints the zoom it prints once its
+/// photograph is there.
+#[test]
+fn a_row_prints_its_zoom_before_its_photograph_is_decoded() {
+    let (with_photographs, _id, _label, decoded, _ctx) = on_the_bench();
+
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(projected_embedded_demo(12)));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    state
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
+        .expect("a live point");
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    run_frame(&mut panel, &ctx, &state);
+    drop(with_photographs);
+
+    assert_eq!(panel.rows().len(), decoded.rows().len());
+    for (row, with) in panel.rows().iter().zip(decoded.rows()) {
+        assert!(
+            !row.tile,
+            "row {} drew a tile with no photograph",
+            row.observation
+        );
+        assert!(
+            row.jacobian.is_some(),
+            "row {} has no Jacobian",
+            row.observation
+        );
+        assert_eq!(row.jacobian, with.jacobian, "row {}", row.observation);
+        assert_eq!(row.zoom_text, with.zoom_text, "row {}", row.observation);
+    }
+}
+
+/// A click on *Zoom* orders the rows by their mean zoom, least first, since no
+/// bar judges it; a second click puts the most first.
+#[test]
+fn a_click_on_zoom_orders_the_rows_by_their_mean_zoom() {
+    let (state, _id, _label, mut panel, ctx) = measured_on_the_bench();
+    let means = |panel: &TrackBody| -> Vec<f64> {
+        panel
+            .rows()
+            .iter()
+            .map(|row| row.jacobian.and_then(|j| j.mean_zoom()).expect("a zoom"))
+            .collect()
+    };
+    let as_drawn = means(&panel);
+    assert!(
+        as_drawn.windows(2).any(|w| w[0] != w[1]),
+        "the fixture's rows all zoom alike: {as_drawn:?}"
+    );
+
+    click_heading(&mut panel, &ctx, &state, "Zoom");
+    assert_eq!(panel.sort.column, super::table::SortColumn::Zoom);
+    assert!(!panel.sort.descending);
+    let increasing = means(&panel);
+    assert!(
+        increasing.windows(2).all(|w| w[0] <= w[1]),
+        "{increasing:?}"
+    );
+
+    click_heading(&mut panel, &ctx, &state, "Zoom");
+    let decreasing = means(&panel);
+    assert!(
+        decreasing.windows(2).all(|w| w[0] >= w[1]),
+        "{decreasing:?}"
+    );
+}
+
+/// A row with no zoom sorts after every row with one, whichever way *Zoom*
+/// orders the rows. The fixture's rows all have one, so one row's cached
+/// Jacobian is set to none, as for a patch behind the camera; the cache keeps
+/// it until the track moves, which nothing here does.
+#[test]
+fn a_row_with_no_zoom_sorts_last_both_ways() {
+    let (state, _id, _label, mut panel, ctx) = measured_on_the_bench();
+    let missing = 1;
+    panel.jacobians.insert(missing, None);
+    let order = |panel: &TrackBody| -> Vec<(usize, Option<f64>)> {
+        panel
+            .rows()
+            .iter()
+            .map(|row| (row.observation, row.jacobian.and_then(|j| j.mean_zoom())))
+            .collect()
+    };
+
+    click_heading(&mut panel, &ctx, &state, "Zoom");
+    assert!(!panel.sort.descending);
+    let increasing = order(&panel);
+    assert_eq!(increasing.last(), Some(&(missing, None)), "{increasing:?}");
+    assert_eq!(panel.rows().last().expect("a row").zoom_text, "-");
+    assert!(
+        increasing[..2].windows(2).all(|w| w[0].1 <= w[1].1),
+        "{increasing:?}"
+    );
+
+    click_heading(&mut panel, &ctx, &state, "Zoom");
+    assert!(panel.sort.descending);
+    let decreasing = order(&panel);
+    assert_eq!(decreasing.last(), Some(&(missing, None)), "{decreasing:?}");
+    assert!(
+        decreasing[..2].windows(2).all(|w| w[0].1 >= w[1].1),
+        "{decreasing:?}"
+    );
+}
+
+/// The *Zoom* cell prints each zoom to two significant digits, judged after
+/// rounding: a zoom just under 10 that rounds to 10 prints whole, one just
+/// under 1 that rounds to 1 prints to one decimal, a small zoom keeps both its
+/// digits, and one of 100 or more prints whole.
+#[test]
+fn the_zoom_cell_picks_its_format_after_rounding() {
+    use super::patch::TileJacobian;
+    use super::table::zoom_text;
+    // A diagonal Jacobian of `1 / zoom` along each axis.
+    let zooms = |a: f64, b: f64| zoom_text(Some(TileJacobian([[1.0 / a, 0.0], [0.0, 1.0 / b]])));
+    assert_eq!(zooms(9.96, 9.96), "10/10\u{d7}");
+    assert_eq!(zooms(9.94, 9.94), "9.9/9.9\u{d7}");
+    assert_eq!(zooms(0.996, 0.996), "1.0/1.0\u{d7}");
+    assert_eq!(zooms(0.994, 0.994), "0.99/0.99\u{d7}");
+    assert_eq!(zooms(0.996, 9.96), "1.0/10\u{d7}");
+    assert_eq!(zooms(25.0, 0.5), "0.50/25\u{d7}");
+    assert_eq!(zooms(0.031, 0.0312), "0.031/0.031\u{d7}");
+    assert_eq!(zooms(0.031, 123.4), "0.031/123\u{d7}");
+}
+
 // ── Viewed mode ─────────────────────────────────────────────────────────────
 
 mod viewed;
+
+/// The self-similarity cell's hover lays out the whole and middle radii's
+/// reach in three units, `u` and `v` named, with a `+` on a lower bound and
+/// `3+` for a grid value at the largest radius, as the cell prints it.
+#[test]
+fn the_self_similarity_hover_shows_the_reach_in_three_units() {
+    use super::self_similarity_reach_text;
+    let (whole, middle) = hover_reaches();
+    let text = self_similarity_reach_text(Some(&whole), Some(&middle), Some("m")).expect("a reach");
+    assert_eq!(
+        text,
+        [
+            "           whole                    mid",
+            "grid px    0.42                     3+",
+            "  along    u 0.31  v 0.40           u 3+  v 0.80",
+            "image px   0.85                     5.6+",
+            "world      u 0.0031 m  v 0.0040 m   u 0.029+ m  v 0.0078 m",
+        ]
+        .join("\n")
+    );
+
+    // With no unit on the file, the numbers are bare and the row says so.
+    let bare = self_similarity_reach_text(Some(&whole), None, None).expect("a reach");
+    assert!(
+        bare.lines()
+            .any(|line| line.starts_with("scene units") && line.contains("u 0.0031  v 0.0040")),
+        "{bare}"
+    );
+    // Nothing is printed where nothing was measured.
+    assert_eq!(self_similarity_reach_text(None, None, Some("m")), None);
+}
+
+/// The two reaches the hover tests lay out: a whole core that locks, and a
+/// middle that matched itself at the edge of the search along `x`.
+fn hover_reaches() -> (
+    sfmtool_core::patch::self_similarity::SelfSimilarityReach,
+    sfmtool_core::patch::self_similarity::SelfSimilarityReach,
+) {
+    use sfmtool_core::patch::self_similarity::{
+        BoundedLength, PatchAxisReach, SelfSimilarityReach,
+    };
+    let exact = |value| BoundedLength {
+        value,
+        at_least: false,
+    };
+    let at_least = |value| BoundedLength {
+        value,
+        at_least: true,
+    };
+    let whole = SelfSimilarityReach {
+        grid_radius: exact(0.42),
+        grid_axes: [exact(0.31), exact(0.4)],
+        image_radius: Some(exact(0.853)),
+        patch_axes: Some(PatchAxisReach::Length([exact(0.0031), exact(0.004)])),
+    };
+    let middle = SelfSimilarityReach {
+        grid_radius: at_least(3.0),
+        grid_axes: [at_least(3.0), exact(0.8)],
+        image_radius: Some(at_least(5.62)),
+        patch_axes: Some(PatchAxisReach::Length([at_least(0.0291), exact(0.00781)])),
+    };
+    (whole, middle)
+}
+
+/// A patch at infinity reads its reach along `u` and `v` as an angle: the
+/// last row is labelled *angle* and each value carries a degree sign, a `+`
+/// before it on a lower bound. A part with no reach prints `-` in every row.
+#[test]
+fn the_self_similarity_hover_shows_a_bearing_in_degrees() {
+    use super::self_similarity_reach_text;
+    use sfmtool_core::patch::self_similarity::{
+        BoundedLength, PatchAxisReach, SelfSimilarityReach,
+    };
+    let (whole, _) = hover_reaches();
+    let bearing = SelfSimilarityReach {
+        patch_axes: Some(PatchAxisReach::Angle([
+            BoundedLength {
+                value: 0.12,
+                at_least: false,
+            },
+            BoundedLength {
+                value: 0.5,
+                at_least: true,
+            },
+        ])),
+        ..whole
+    };
+    let text = self_similarity_reach_text(Some(&bearing), None, Some("m")).expect("a reach");
+    assert_eq!(
+        text,
+        [
+            "           whole               mid",
+            "grid px    0.42                -",
+            "  along    u 0.31  v 0.40      -",
+            "image px   0.85                -",
+            "angle      u 0.12\u{b0}  v 0.50+\u{b0}   -",
+        ]
+        .join("\n")
+    );
+}
+
+/// At the cluster stage there is no patch, so the last row prints `-` for
+/// both parts, while the grid and image rows carry their numbers.
+#[test]
+fn the_self_similarity_hover_prints_a_dash_where_there_is_no_patch() {
+    use super::self_similarity_reach_text;
+    let (whole, middle) = hover_reaches();
+    let (whole, middle) = (
+        sfmtool_core::patch::self_similarity::SelfSimilarityReach {
+            patch_axes: None,
+            ..whole
+        },
+        sfmtool_core::patch::self_similarity::SelfSimilarityReach {
+            patch_axes: None,
+            ..middle
+        },
+    );
+    let text = self_similarity_reach_text(Some(&whole), Some(&middle), Some("m")).expect("a reach");
+    assert_eq!(
+        text,
+        [
+            "           whole            mid",
+            "grid px    0.42             3+",
+            "  along    u 0.31  v 0.40   u 3+  v 0.80",
+            "image px   0.85             5.6+",
+            "world      -                -",
+        ]
+        .join("\n")
+    );
+}
+
+/// A row evaluated at the track stage hovers the reach its measurement
+/// carries, with every unit filled in, and the same at the cluster stage
+/// without the patch's axes.
+#[test]
+fn an_evaluated_row_hovers_the_reach_its_measurement_carries_at_both_stages() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state.settle_bench_evaluation();
+    run_frame(&mut panel, &ctx, &state);
+    let track = state
+        .bench_track(id, &label)
+        .expect("the item on the bench");
+    let rows = panel.rows();
+    let row = &rows[0];
+    let m = track.observations[row.observation]
+        .track
+        .as_ref()
+        .expect("a track slot");
+    let (whole, middle) = (
+        m.zncc_self_similarity_reach.expect("a reach"),
+        m.zncc_self_similarity_reach_middle.expect("a reach"),
+    );
+    assert!(whole.image_radius.is_some() && whole.patch_axes.is_some());
+    let unit = crate::scene::node_by_id(&state.scene, id)
+        .expect("the node")
+        .recon()
+        .metadata
+        .world_space_unit
+        .clone();
+    assert_eq!(row.self_similarity_reach, [Some(whole), Some(middle)]);
+    let hover = super::self_similarity_reach_text(Some(&whole), Some(&middle), unit.as_deref())
+        .expect("the cell hovers its reach");
+    let image = hover
+        .lines()
+        .find(|line| line.starts_with("image px"))
+        .expect("an image row");
+    assert!(!image.contains(" -"), "{hover}");
+    assert!(
+        hover.lines().any(
+            |line| (line.starts_with("world") || line.starts_with("scene units"))
+                && line.contains("u ")
+                && line.contains("v ")
+        ),
+        "{hover}"
+    );
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    state.settle_bench_evaluation();
+    run_frame(&mut panel, &ctx, &state);
+    let [whole, middle] = panel.rows()[0].self_similarity_reach;
+    let hover = super::self_similarity_reach_text(whole.as_ref(), middle.as_ref(), unit.as_deref())
+        .expect("a cluster row hovers its reach too");
+    assert!(
+        hover
+            .lines()
+            .any(|line| line.starts_with("image px") && !line.contains(" -")),
+        "{hover}"
+    );
+    assert!(
+        hover.lines().any(|line| line.contains("    -")
+            && (line.starts_with("world") || line.starts_with("scene units"))),
+        "{hover}"
+    );
+}

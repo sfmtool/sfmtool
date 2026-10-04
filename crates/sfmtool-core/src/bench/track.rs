@@ -15,6 +15,7 @@ use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{ClusterRefineParams, MemberStatus};
+use crate::patch::self_similarity::SelfSimilarityReach;
 use crate::patch::view_selection::ViewSelectParams;
 
 /// Where an observation came from.
@@ -168,6 +169,16 @@ pub struct ClusterMeasurement {
     /// wherever `zncc_self_similarity_radius` is, and where the core has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
+    /// How far the whole core's self-similarity contour reaches, in grid px
+    /// (the radius and along each grid axis) and in source-image px, through
+    /// the seed shape's map from the grid to the image
+    /// ([`SelfSimilarityReach`]). A cluster member has no patch, so
+    /// `patch_axes` is always `None`. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_reach: Option<SelfSimilarityReach>,
+    /// The same for the middle square. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_reach_middle: Option<SelfSimilarityReach>,
     /// The refinement's own verdict on the observation, in the `member_status`
     /// legend.
     pub status: Option<MemberStatus>,
@@ -191,6 +202,8 @@ impl ClusterMeasurement {
             zncc_self_similarity_slide_grid: None,
             zncc_self_similarity_surface: None,
             zncc_self_similarity_tolerance: None,
+            zncc_self_similarity_reach: None,
+            zncc_self_similarity_reach_middle: None,
             status: None,
         }
     }
@@ -367,6 +380,18 @@ pub struct TrackMeasurement {
     /// wherever `zncc_self_similarity_radius` is, and where the core has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
+    /// How far the whole core's self-similarity contour reaches
+    /// ([`SelfSimilarityReach`]): in grid px, in source-image px through the
+    /// Jacobian of the tile's warp at its centre, and along the patch's `u`
+    /// and `v` axes in the scene's world-space unit (degrees for a patch at
+    /// infinity), all read through the keypoint-anchored placement the tile
+    /// was rendered through. `None` wherever `zncc_self_similarity_radius`
+    /// is; its `image_radius` is `None` where the tile's centre does not
+    /// project.
+    pub zncc_self_similarity_reach: Option<SelfSimilarityReach>,
+    /// The same for the middle square. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_reach_middle: Option<SelfSimilarityReach>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
     /// therefore kept, in patch-grid px.

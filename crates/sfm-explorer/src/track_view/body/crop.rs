@@ -129,7 +129,7 @@ pub(super) fn outline(
                 for i in 0..=n {
                     let (s, t) = along(2.0 * i as f64 / n as f64 - 1.0);
                     let (xyz, w) = frame.corner_homogeneous(s, t);
-                    points.push(geometry::project(&camera, &pose, xyz, w)?);
+                    points.push(camera.project_homogeneous(&pose, xyz, w)?);
                 }
                 Some(polyline_length(&points))
             };
@@ -140,7 +140,7 @@ pub(super) fn outline(
                 samples,
                 axes_px: [axis(|a| (a, 0.0)), axis(|a| (0.0, a))],
                 keypoint,
-                projection: geometry::project(&camera, &pose, target.coords, patch.w),
+                projection: camera.project_homogeneous(&pose, target.coords, patch.w),
                 projection_of: Some(match payload.position {
                     Some(_) => ProjectionOf::Point,
                     None => ProjectionOf::PatchCentre,

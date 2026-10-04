@@ -69,6 +69,10 @@ pub struct WarpMap {
     /// Optional precomputed SVD of the Jacobian at each pixel, for anisotropic
     /// resampling. Computed lazily via `compute_svd()`. See [`WarpMapSvd`].
     svd: Option<WarpMapSvd>,
+    /// The period, in source px, at which the source image's x wraps:
+    /// `Some(2π·fx)` for an equirectangular source camera, `None` otherwise.
+    /// See "Jacobian / SVD Data".
+    x_period: Option<f64>,
 }
 ```
 
@@ -119,8 +123,26 @@ pub struct WarpMapSvd {
 
 The Jacobian at each pixel is estimated from the warp map using central
 differences, then decomposed via 2x2 SVD (closed-form, no iteration needed).
-At boundary pixels and NaN pixels, values are set to `(1, 1, (1, 0))` —
-the identity, causing the resampler to fall back to a single bilinear sample.
+At the edge of the map the difference is one-sided; where a neighbour it needs
+is NaN, values are set to `(1, 1, (1, 0))` — the identity, causing the
+resampler to fall back to a single bilinear sample.
+
+An equirectangular source image's x wraps at the longitude ±180°, a period of
+`2π·fx` px. A destination texel beside that seam has neighbours near `x = 0` and
+near `x = width`, so a plain difference would give it a singular value about the
+panorama's width, and `remap_bilinear_mip` would read the coarsest pyramid level
+there, a blurred stripe down the tile. The constructors whose source camera is
+equirectangular (`from_cameras`, `from_cameras_with_rotation`,
+`from_cameras_with_pose`, `from_patch`) record that period in `x_period`, and
+each x difference is brought into `±period/2` before it is divided, the same
+rule `patch_grid_jacobian` applies to its four points (one private
+`wrap_difference` serves both). `WarpMap::new` and every other source camera
+leave `x_period` at `None`, which takes the unchanged `f32` difference, so their
+Jacobians and SVDs are the plain differences. The wrap is what samples the
+texels beside the seam at their own level wherever a mip or anisotropic remap,
+or a reader of `get_jacobian`, uses a map with an equirectangular source: the
+Track View tile and its hover view, the bench's `render_bitmap`, and the patch
+kernels that render tiles through `from_patch`.
 
 ```rust
 impl WarpMap {
@@ -235,8 +257,36 @@ impl CameraIntrinsics {
         origin: [f64; 3], col_step: [f64; 3], row_step: [f64; 3],
         cols: u32, rows: u32, out: &mut [f32],
     );
+
+    /// Project the homogeneous world point `(xyz, w)` at `cam_from_world`
+    /// with no test against the image's bounds: `w = 1` a finite point,
+    /// `w = 0` a direction, rotated into the camera frame without the
+    /// translation. `None` for a perspective model where the camera-frame
+    /// `z >= 0` (the camera looks along −Z), and for a ray-path model only
+    /// outside its domain, since it images past 90° off the axis.
+    pub fn project_homogeneous(
+        &self,
+        cam_from_world: &RigidTransform,
+        xyz: Vector3<f64>,
+        w: f64,
+    ) -> Option<[f64; 2]>;
 }
 ```
+
+`project_homogeneous` is the world-to-pixel projection that the keypoint
+localizer, the bench's steps, the patch-tile Jacobian
+(`warp_map::patch_grid_jacobian`) and the viewer share. It skips the frame test
+because a reprojection a pixel outside the frame is a small error, not a missing
+measurement, and a tile partly off the photograph still has a geometry.
+
+The bench's neighbourhood search (`ViewCamera::project_homogeneous` in
+[`bench/track_at_pixel/neighbourhood.rs`](../../../crates/sfmtool-core/src/bench/track_at_pixel/neighbourhood.rs),
+used by the track-at-pixel and nearby-point code) keeps its own variant with
+different rules: it projects through the rotation matrix and translation it
+caches once per view, normalizes the ray before `ray_to_pixel`, takes a
+perspective point as behind the camera when `−z ≤ 1e-12` rather than `z ≥ 0`,
+and returns `None` for a zero-length ray or a non-finite pixel. Its results were
+measured under those rules, so it stays separate rather than calling this one.
 
 `WarpMap::from_patch` builds its grid through `ray_to_pixel_grid`: it forms the
 affine ray basis from the patch plane + pose (model-free, infinity-aware) and the

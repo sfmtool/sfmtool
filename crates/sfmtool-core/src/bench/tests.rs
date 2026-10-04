@@ -20,6 +20,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 use ndarray::Array3;
 
+use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
 
@@ -27,6 +28,7 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{sample_member_grid, ClusterRefineParams, MemberStatus};
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalization};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
+use crate::patch::self_similarity::{PatchAxisReach, SelfSimilarity, SelfSimilarityReach};
 use crate::progress::Progress;
 use crate::reconstruction::data::Point3D;
 use crate::reconstruction::edited::{EditedReconstruction, PointMap, PointRecord};
@@ -2377,6 +2379,58 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             m.zncc_self_similarity_slide_grid,
             m.zncc_self_similarity_surface.as_ref(),
         );
+        // And its contour's reach, in each unit, read through the placement
+        // the tile was rendered through: the patch anchored on this sighting's
+        // keypoint, at the localizer's resolution.
+        let view = &scene.views()[image as usize];
+        let fitted = placement_of(&measured);
+        let keypoint = m.keypoint.map(|p| [f64::from(p[0]), f64::from(p[1])]);
+        let anchored = keypoint
+            .and_then(|kp| fitted.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
+            .unwrap_or_else(|| fitted.clone());
+        let resolution = test_fit_options().localize.resolution.max(2) as usize;
+        let jacobian = patch_grid_jacobian(&anchored, view.camera, view.cam_from_world, resolution)
+            .expect("the tile's centre projects");
+        for (reach, radius) in [
+            (m.zncc_self_similarity_reach, m.zncc_self_similarity_radius),
+            (
+                m.zncc_self_similarity_reach_middle,
+                m.zncc_self_similarity_radius_middle,
+            ),
+        ] {
+            let reach = reach.expect("a reach beside the radius");
+            assert_eq!(Some(reach.grid_radius.value), radius);
+            // One grid px along x is 2·half_extent[0] / R along u, and along y
+            // is 2·half_extent[1] / R along v.
+            let Some(PatchAxisReach::Length(along)) = reach.patch_axes else {
+                panic!("a finite patch reads lengths: {:?}", reach.patch_axes);
+            };
+            for (k, (got, grid)) in along.iter().zip(reach.grid_axes).enumerate() {
+                let want = grid.value * 2.0 * anchored.half_extent[k] / resolution as f64;
+                assert_eq!(got.value, want, "axis {k}");
+                assert_eq!(got.at_least, grid.at_least);
+            }
+        }
+        // The whole core's surface is stored, so its contour can be read
+        // again here, and its image radius is the one through the anchored
+        // placement's Jacobian.
+        let whole = SelfSimilarity {
+            radius: m.zncc_self_similarity_radius.expect("a radius"),
+            slide: [0.0; 2],
+            tolerance: m.zncc_self_similarity_tolerance.expect("a textured core"),
+            surface: m.zncc_self_similarity_surface.clone().expect("a surface"),
+        };
+        let contour = whole.contour().expect("a contour");
+        assert_eq!(
+            m.zncc_self_similarity_reach.and_then(|r| r.image_radius),
+            contour.image_radius(jacobian),
+            "image {image}"
+        );
+        assert_eq!(
+            m.zncc_self_similarity_reach,
+            SelfSimilarityReach::read(&whole, Some(jacobian), Some(&anchored), resolution),
+            "image {image}"
+        );
     }
 
     // The track's own point is where its sightings say it is, and the frame
@@ -3036,6 +3090,36 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
             m.zncc_self_similarity_slide_grid,
             m.zncc_self_similarity_surface.as_ref(),
         );
+        // A member has a grid and a photograph but no patch, so its contour
+        // reads in grid px and image px only. The grid is the seed shape's
+        // affine map: one grid px is `2·radius / R` keypoint-frame units,
+        // which the shape carries to image px.
+        let reach = m
+            .zncc_self_similarity_reach
+            .expect("a reach beside the radius");
+        assert_eq!(Some(reach.grid_radius.value), m.zncc_self_similarity_radius);
+        assert_eq!(reach.patch_axes, None);
+        let resolution = EvaluateOptions::default().cluster.resolution.max(2) as usize;
+        let step = 2.0 * payload.radius / resolution as f64;
+        let jacobian = m.seed_shape.map(|row| row.map(|v| v * step));
+        let whole = SelfSimilarity {
+            radius: m.zncc_self_similarity_radius.expect("a radius"),
+            slide: [0.0; 2],
+            tolerance: m.zncc_self_similarity_tolerance.expect("a textured core"),
+            surface: m.zncc_self_similarity_surface.clone().expect("a surface"),
+        };
+        assert_eq!(
+            Some(reach),
+            SelfSimilarityReach::read(&whole, Some(jacobian), None, resolution)
+        );
+        let image = reach.image_radius.expect("the seed shape maps the grid");
+        assert_eq!(
+            Some(image),
+            whole.contour().expect("a contour").image_radius(jacobian)
+        );
+        let middle = m.zncc_self_similarity_reach_middle.expect("a middle reach");
+        assert_eq!(middle.patch_axes, None);
+        assert!(middle.image_radius.is_some());
     }
     assert_eq!(
         refined.observations[reference]

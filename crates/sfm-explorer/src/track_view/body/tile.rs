@@ -36,11 +36,24 @@
 //! hover view draws over the picture: the patch's box, the keypoint, and, at
 //! the track stage, where the track's point projects, which is the other end of
 //! the row's reprojection error.
+//!
+//! **The *Zoom* column reads the tile's warp without drawing it**
+//! ([`tile_jacobian`]): the Jacobian at the centre of the same warp, from the
+//! same patch re-anchored on the same place, camera and pose, read by core's
+//! `patch_grid_jacobian` with no photograph in it. So the column and
+//! `get_bench_track` give the same numbers whether or not the photograph has
+//! been decoded, and whether or not the tile's middle is on it.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::remap::ImageU8Pyramid;
+use sfmtool_core::camera::warp_map::patch_grid_jacobian;
+use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
 use sfmtool_core::SfmrReconstruction;
+
+use super::patch::TileJacobian;
 
 /// The tile for one observation, uploaded, or `None` when [`image()`] had
 /// nothing to render.
@@ -54,6 +67,58 @@ pub(super) fn render(
 ) -> Option<egui::TextureHandle> {
     let tile = image(recon, track, observation, src)?;
     Some(ctx.load_texture(name, tile, egui::TextureOptions::NEAREST))
+}
+
+/// The Jacobian at the centre of one observation's track-stage tile, of the
+/// warp [`image()`] renders the tile through, without the photograph: core's
+/// `patch_grid_jacobian` of the patch re-anchored where the observation sits
+/// ([`super::patch::render_frame`]), at [`super::patch::PATCH_RES`] texels a
+/// side. What the *Zoom* cell prints the zoom of and the *Zoom* column orders
+/// by, and what `get_bench_track` reports for the row.
+///
+/// Geometry alone: a tile whose middle is off the photograph still has one.
+/// `None` in each case where there is no warp: a row at the cluster stage,
+/// whose tile is the refinement kernel's grid rather than a warp; a
+/// track-stage track with no patch yet; an observation with nothing saying
+/// where it sits; and a patch whose centre does not project, behind the
+/// camera or outside the camera model's domain.
+pub(crate) fn tile_jacobian(
+    recon: &SfmrReconstruction,
+    track: &EditableTrack,
+    observation: usize,
+) -> Option<TileJacobian> {
+    let (placement, camera, pose, keypoint) = track_tile_geometry(recon, track, observation)?;
+    let frame = super::patch::render_frame(placement, camera, &pose, Some(keypoint));
+    patch_grid_jacobian(&frame, camera, &pose, super::patch::PATCH_RES as usize).map(TileJacobian)
+}
+
+/// What a track-stage row's tile is warped through: the track's patch, the
+/// observation's camera and pose, and where the observation sits. `None` at
+/// the cluster stage and wherever one of them is missing.
+fn track_tile_geometry<'a>(
+    recon: &'a SfmrReconstruction,
+    track: &'a EditableTrack,
+    observation: usize,
+) -> Option<(
+    &'a OrientedPatch,
+    &'a CameraIntrinsics,
+    RigidTransform,
+    [f64; 2],
+)> {
+    let Stage::Track(payload) = &track.stage else {
+        return None;
+    };
+    let row = track.observations.get(observation)?;
+    let site = crate::bench::observation_site(row)?;
+    let placement = payload.placement.as_ref()?;
+    let image = recon.image_table.images.get(row.image as usize)?;
+    let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
+    Some((
+        placement,
+        camera,
+        crate::scene::cam_from_world(image),
+        site.pixel,
+    ))
 }
 
 /// The picture one row draws, or `None` when there is nothing to render: no
@@ -73,18 +138,15 @@ pub(super) fn image(
 ) -> Option<egui::ColorImage> {
     let row = track.observations.get(observation)?;
     let site = crate::bench::observation_site(row)?;
-    let img_idx = row.image as usize;
     match &track.stage {
-        Stage::Track(payload) => {
-            let frame = payload.placement.as_ref()?;
-            let image = recon.image_table.images.get(img_idx)?;
-            let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
+        Stage::Track(_) => {
+            let (frame, camera, pose, keypoint) = track_tile_geometry(recon, track, observation)?;
             Some(super::patch::patch_color_image(
                 frame,
                 camera,
-                &crate::scene::cam_from_world(image),
-                Some(site.pixel),
-                src.level(0),
+                &pose,
+                Some(keypoint),
+                src,
             ))
         }
         Stage::Cluster(payload) => {
@@ -183,7 +245,7 @@ pub(super) fn context(
             let mut wide = anchored.clone().unwrap_or_else(|| frame.clone());
             wide.half_extent = wide.half_extent.map(|h| h * f64::from(k));
             let side = super::patch::PATCH_RES * k;
-            let picture = super::patch::frame_color_image(&wide, camera, &pose, src.level(0), side);
+            let picture = super::patch::frame_color_image(&wide, camera, &pose, src, side);
             let side = side as f32;
             // The pixel of the photograph at `pixel`, as a place in the
             // picture: its ray met with the widened frame's plane, read on the
@@ -204,7 +266,7 @@ pub(super) fn context(
                 None => to_picture(site.pixel),
             };
             let target = payload.position.unwrap_or(frame.center);
-            let projected = crate::bench::geometry::project(camera, &pose, target.coords, frame.w);
+            let projected = camera.project_homogeneous(&pose, target.coords, frame.w);
             Some(TileContext {
                 image: picture,
                 patch_box: middle_box(side),

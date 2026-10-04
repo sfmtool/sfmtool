@@ -8,8 +8,9 @@
 //! the photograph around the patch's outline, the rendered patch tile and the
 //! verdict cell. After them come the stage's own photometric numbers, the ZNCC
 //! and then the self-similarity, whose column opens with its surface plot;
-//! then the reprojection error, the shift, the kernel's status, in Edited
-//! mode where the observation came from, and last the image's name.
+//! then the reprojection error, the shift, the zoom the tile gives the
+//! photograph at its centre, the kernel's status, in Edited mode where the
+//! observation came from, and last the image's name.
 //!
 //! The verdict cell is the one column the two modes draw differently. In
 //! Edited mode it is *Keep*: a switch and a pin, the row's own verdict. In
@@ -45,15 +46,17 @@
 //! cannot disagree.
 
 use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Thresholds, Verdict};
+use sfmtool_core::patch::self_similarity::SelfSimilarityReach;
 use sfmtool_core::SfmrReconstruction;
 
+use super::patch::TileJacobian;
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
-    row_grids, row_radius, row_surface, self_similarity_cell_color, zncc_cell_color, BodyMode,
-    BoxHover, BoxesMoved, Judgement, RowGrids, TrackBody, TrackBodyResponse,
-    MAX_PROJECTION_ERROR_LABEL, MAX_PROJECTION_ERROR_TIP, MAX_SELF_SIMILARITY_LABEL,
-    MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL, MAX_SHIFT_TIP, MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL,
-    MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
+    row_grids, row_radius, row_reach, row_surface, self_similarity_cell_color,
+    self_similarity_reach_text, significant, zncc_cell_color, BodyMode, BoxHover, BoxesMoved,
+    Judgement, RowGrids, TrackBody, TrackBodyResponse, MAX_PROJECTION_ERROR_LABEL,
+    MAX_PROJECTION_ERROR_TIP, MAX_SELF_SIMILARITY_LABEL, MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL,
+    MAX_SHIFT_TIP, MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL, MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -67,6 +70,8 @@ pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 /// Width of the *Keep* column: the switch, then the pin that marks a verdict
 /// set by hand.
 const KEEP_WIDTH: f32 = 64.0;
+/// Width of the *Zoom* column: room for `0.21/0.45×` with its sort triangle.
+const ZOOM_WIDTH: f32 = 76.0;
 /// Width of the *From* column: room for its longest cell, `feature 123456`.
 const FROM_WIDTH: f32 = 110.0;
 /// Width of the *Name* column, the last one. A name longer than this is
@@ -125,6 +130,18 @@ pub(crate) struct RowSummary {
     /// The five measurement cells, as printed, a cell with two readings
     /// holding them on two lines.
     pub cells: [String; 5],
+    /// The whole and middle radii's reach, which the *Self-similarity* cell's
+    /// hover lays out under [`SELF_SIMILARITY_REACH_CAPTION`] in grid px,
+    /// image px and along the patch's axes
+    /// ([`super::self_similarity_reach_text`], built only while the cell is
+    /// hovered). Both `None` where the cell has no hover.
+    pub self_similarity_reach: [Option<SelfSimilarityReach>; 2],
+    /// The Jacobian at the centre of the row's tile, computed without the
+    /// photograph ([`super::tile::tile_jacobian`], which lists where there is
+    /// none).
+    pub jacobian: Option<TileJacobian>,
+    /// The *Zoom* cell as printed, `3.1/4.8×`, or `-`.
+    pub zoom_text: String,
     /// What each line of each cell was coloured by, indexed as
     /// [`RowSummary::cells`] and then by line: a pass is drawn green, a fail
     /// red, and a reading no bar judged in the plain text colour. A cell's
@@ -155,6 +172,7 @@ pub(super) struct ColumnLayout {
     self_similarity_grid: f32,
     offset: f32,
     shift: f32,
+    zoom: f32,
     status: f32,
     from: f32,
 }
@@ -177,11 +195,11 @@ impl ColumnLayout {
         let offset = self_similarity_grid + GRID_SIDE + 10.0;
         // Room for the error in px over the same residual in degrees,
         // `12.65 px` over `0.08°`, and for the bar's box and its `px` in the
-        // threshold row. The shift sits beside the status, which says what a
-        // fit did with a shift past the bar.
+        // threshold row.
         let shift = offset + 76.0;
-        // Room for `12.25 px`.
-        let status = shift + 62.0;
+        // Room for `12.25 px`. The tile's zoom follows it.
+        let zoom = shift + 62.0;
+        let status = zoom + ZOOM_WIDTH;
         // The status cell holds a sentence at the track stage -- the reason a
         // row was not read, or the walk a fit refused and what it scored -- so
         // it is given room for one and elided to it.
@@ -198,6 +216,7 @@ impl ColumnLayout {
             self_similarity_grid,
             offset,
             shift,
+            zoom,
             status,
             from,
         }
@@ -269,6 +288,7 @@ impl ColumnLayout {
             ),
             (self.offset, "Proj. err", PROJECTION_ERROR_TIP),
             (self.shift, "Shift", SHIFT_TIP),
+            (self.zoom, "Zoom", ZOOM_TIP),
             (self.status, "Status", STATUS_TIP),
         ];
         if mode == BodyMode::Edited {
@@ -297,6 +317,9 @@ pub(crate) enum SortColumn {
     ProjectionError,
     /// The shift in px.
     Shift,
+    /// The zoom the tile applies to the photograph, as the geometric mean
+    /// over its two singular directions.
+    Zoom,
     /// The status cell's text.
     Status,
     /// The image's name.
@@ -315,6 +338,7 @@ impl SortColumn {
             "Self-similarity" => SortColumn::SelfSimilarity,
             "Proj. err" => SortColumn::ProjectionError,
             "Shift" => SortColumn::Shift,
+            "Zoom" => SortColumn::Zoom,
             "Status" => SortColumn::Status,
             "Name" => SortColumn::Name,
             _ => return None,
@@ -325,14 +349,19 @@ impl SortColumn {
     /// orders them decreasing. A column a bar judges starts at its worst
     /// rows: the most bars failed, the lowest ZNCC, the largest
     /// self-similarity radius, projection error and shift. A column no bar
-    /// judges starts increasing.
+    /// judges starts increasing. *Zoom* is one of those: no bar says one zoom
+    /// is worse than another.
     pub(super) fn worst_first_descending(self) -> bool {
         match self {
             SortColumn::Verdict
             | SortColumn::SelfSimilarity
             | SortColumn::ProjectionError
             | SortColumn::Shift => true,
-            SortColumn::Image | SortColumn::Zncc | SortColumn::Status | SortColumn::Name => false,
+            SortColumn::Image
+            | SortColumn::Zncc
+            | SortColumn::Zoom
+            | SortColumn::Status
+            | SortColumn::Name => false,
         }
     }
 
@@ -345,6 +374,7 @@ impl SortColumn {
             SortColumn::SelfSimilarity => "self-similarity",
             SortColumn::ProjectionError => "projection error",
             SortColumn::Shift => "shift",
+            SortColumn::Zoom => "zoom",
             SortColumn::Status => "status",
             SortColumn::Name => "name",
         }
@@ -458,6 +488,19 @@ pub(super) fn verdict_text(judged: Option<&Judgement>) -> String {
     }
 }
 
+/// The *Zoom* cell's text: the range of tile texels per source pixel over the
+/// two singular directions, least over most, `3.1/4.8×`, both numbers even
+/// where the two print the same, `0.51/0.51×`, or `-` where there is no
+/// reading. Each number carries two significant digits, judged after rounding
+/// ([`super::significant`]), so `0.031` prints `0.031`, `9.96` prints `10` and
+/// `0.996` prints `1.0`; a zoom of 100 or more prints whole.
+pub(super) fn zoom_text(jacobian: Option<TileJacobian>) -> String {
+    let Some([low, high]) = jacobian.and_then(|j| j.zoom_range()) else {
+        return "-".to_string();
+    };
+    format!("{}/{}\u{d7}", significant(low), significant(high))
+}
+
 /// The *Verdict* heading's hover text, in Viewed mode.
 pub(super) const VERDICT_TIP: &str = "What the thresholds say about the observation: in where \
     it clears every bar and holds its image, out where it does not, and - where nothing has \
@@ -525,6 +568,21 @@ pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where
     other photographs want the sighting moved. A fit moves it, up to the bar.\n\n\
     At the cluster stage it is how far the refinement moved the member off its seed.\n\n\
     The box under this heading is the shift bar, which judges it.";
+
+/// The *Zoom* heading's hover text.
+pub(super) const ZOOM_TIP: &str = "How much the patch tile magnifies the photograph at its \
+    centre: tile texels per pixel of the photograph, read from the Jacobian of the warp the \
+    tile is rendered through. Over 1\u{d7} the tile is the photograph enlarged, and under \
+    1\u{d7} it is the photograph shrunk. It is geometry alone, read from the patch, the camera, \
+    the image's pose and where the observation sits, so it does not wait for the photograph, \
+    and a tile whose middle is off the photograph still has one.\n\n\
+    The warp can stretch one direction more than another, so the cell gives the least zoom \
+    over the most, 0.71/1.3\u{d7}, and gives both even where the two agree, \
+    0.51/0.51\u{d7}. Each carries two significant digits.\n\n\
+    A - is a row at the cluster stage, whose tile is not drawn through a warp; a track with \
+    no patch yet; an observation with nothing saying where it sits; a patch whose centre is \
+    behind the camera or outside the camera model's domain; or a patch seen edge on.\n\n\
+    Ordering by this column orders by the geometric mean of the two.";
 
 /// The projection error heading's hover text.
 pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels over the \
@@ -1014,6 +1072,15 @@ impl TrackBody {
                 // it reports after drawing, so that offset is a frame ahead of
                 // the rows, and the headings are placed from this edge.
                 left = ui.max_rect().left();
+                // Every row's Jacobian before the rows are put in order by
+                // *Zoom*, whose key is read from it. Each row asks for its
+                // own as it is drawn anyway, and it is geometry alone, so
+                // this reads nothing that would not be read.
+                if self.sort.column == SortColumn::Zoom {
+                    for observation in 0..track.observations.len() {
+                        self.ensure_jacobian(recon, track, observation);
+                    }
+                }
                 for observation in self.row_order(recon, track, stage, mode) {
                     self.draw_row(
                         ui,
@@ -1132,6 +1199,15 @@ impl TrackBody {
                         |m| m.reprojection_error.or(m.projection_offset_px),
                     )),
                     SortColumn::Shift => number_key(readings(|m| m.shift_px, |m| m.seed_shift_px)),
+                    // Geometry rather than an evaluation's reading, so it is
+                    // there whatever the evaluation says, as the tile is.
+                    SortColumn::Zoom => number_key(
+                        self.jacobians
+                            .get(&i)
+                            .copied()
+                            .flatten()
+                            .and_then(|jacobian| jacobian.mean_zoom()),
+                    ),
                     SortColumn::Status => Some(SortKey::Text(
                         measurements(row, stage, &self.evaluation)[4].clone(),
                     )),
@@ -1696,6 +1772,31 @@ impl TrackBody {
             });
             lines(x, cell, colors);
         }
+        // Hovering the self-similarity numbers shows how far the contour they
+        // are read from reaches, in grid px, image px and along the patch's
+        // axes. The table is built only while the cell is hovered.
+        let self_similarity_reach = row_reach(row, stage, &self.evaluation);
+        if self_similarity_reach.iter().any(Option::is_some) {
+            let cell = egui::Rect::from_min_max(
+                egui::pos2(x0 + cols.self_similarity, rect.min.y),
+                egui::pos2(x0 + cols.self_similarity_grid - 4.0, rect.max.y),
+            );
+            let world_unit = recon.metadata.world_space_unit.as_deref();
+            ui.interact(
+                cell,
+                ui.id().with(("track_view_self_similarity", observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_ui(|ui| {
+                let [whole, middle] = &self_similarity_reach;
+                if let Some(text) =
+                    self_similarity_reach_text(whole.as_ref(), middle.as_ref(), world_unit)
+                {
+                    ui.label(SELF_SIMILARITY_REACH_CAPTION);
+                    ui.label(egui::RichText::new(text).monospace());
+                }
+            });
+        }
         // The status cell is a sentence rather than a number at the track
         // stage, so it is elided to its column the way the image name is.
         let status = crate::elide::middle(&cells[4], cols.from - cols.status - 8.0, |value| {
@@ -1707,6 +1808,12 @@ impl TrackBody {
             })
         });
         text(cols.status, &status, text_color);
+        // The tile's magnification is geometry, not a reading of the
+        // evaluation, so it is in the plain text colour whatever the
+        // evaluation stands at, as the tile is.
+        let jacobian = self.ensure_jacobian(recon, track, observation);
+        let zoom_text = zoom_text(jacobian);
+        text(cols.zoom, &zoom_text, text_color);
         if edited {
             text(cols.from, &provenance_text(row.provenance), weak);
         }
@@ -1790,6 +1897,9 @@ impl TrackBody {
             tint,
             crop_caption,
             cells,
+            self_similarity_reach,
+            jacobian,
+            zoom_text,
             checks,
             grids,
             tile: tile.is_some(),
@@ -1798,6 +1908,15 @@ impl TrackBody {
         });
     }
 }
+
+/// The line over the *Self-similarity* cell's hover table.
+pub(super) const SELF_SIMILARITY_REACH_CAPTION: &str = "How far from the centre a match could \
+    land and still look like the true position, for the whole patch and its middle: the \
+    radius in patch-grid px and its reach along each grid axis, the radius in the \
+    photograph's pixels, and the reach along the patch's u and v axes. Grid x runs along u \
+    and grid y down v. A + is a lower bound, so the true reach may be larger: the match ran \
+    off the search square along that axis, ran off along the other axis and did not hold its \
+    width, met a shift with no reading, or reached the largest radius searched.";
 
 /// The words under the hover view of a surface plot: the radius and the
 /// level the contour is drawn at.

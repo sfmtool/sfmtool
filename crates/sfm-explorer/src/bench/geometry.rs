@@ -418,8 +418,8 @@ pub(crate) fn view_of(
 /// [`normal_line_point`], [`tilt_point`]) take a ray, and this is a pixel's.
 /// Through the lens model's own inverse (`CameraIntrinsics::pixel_to_ray`), so a
 /// fisheye's pixel names the ray its lens really images there rather than a
-/// pinhole's reading of it, and the ray and [`project`] are each other's
-/// inverse.
+/// pinhole's reading of it, and the ray and
+/// `CameraIntrinsics::project_homogeneous` are each other's inverse.
 pub(crate) fn pixel_ray(
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
@@ -428,28 +428,6 @@ pub(crate) fn pixel_ray(
     let ray = camera.pixel_to_ray(pixel[0], pixel[1]);
     let direction = pose.to_rotation_matrix().transpose() * Vector3::new(ray[0], ray[1], ray[2]);
     Some((pose.inverse_translation_origin(), unit(direction)?))
-}
-
-/// Project a homogeneous world point into the view, or `None` when it falls
-/// behind the camera or outside the lens model's domain.
-///
-/// The frame test is deliberately absent: a corner that projects a little
-/// outside the photograph is a corner off-screen, which the panel clips, and
-/// not a sample that failed to project.
-pub(crate) fn project(
-    camera: &CameraIntrinsics,
-    pose: &RigidTransform,
-    xyz: Vector3<f64>,
-    w: f64,
-) -> Option<[f64; 2]> {
-    let pc = pose.transform_point_homogeneous(xyz, w);
-    // A point in front of a perspective camera has `z < 0`. A ray-path model
-    // images past 90 degrees off axis, where `z >= 0` is a legitimate sighting
-    // and the model's own domain is the only oracle.
-    if !camera.model.needs_ray_path() && pc.z >= 0.0 {
-        return None;
-    }
-    camera.ray_to_pixel([pc.x, pc.y, pc.z]).map(|(u, v)| [u, v])
 }
 
 /// The track's patch re-anchored on where `observation` sits in its
@@ -498,7 +476,7 @@ pub(crate) fn project_outline(
     let corners: Vec<[f64; 2]> = frame
         .boundary(1)
         .into_iter()
-        .filter_map(|p| project(camera, pose, p.coords, frame.w))
+        .filter_map(|p| camera.project_homogeneous(pose, p.coords, frame.w))
         .collect();
     let span = corners.iter().fold(0.0f64, |span, a| {
         corners.iter().fold(span, |span, b| {
@@ -511,7 +489,7 @@ pub(crate) fn project_outline(
     let projected = frame
         .boundary(samples)
         .iter()
-        .map(|point| project(camera, pose, point.coords, frame.w))
+        .map(|point| camera.project_homogeneous(pose, point.coords, frame.w))
         .collect();
     (projected, samples)
 }
@@ -1055,8 +1033,8 @@ pub(crate) fn half_width_px(
     pose: &RigidTransform,
 ) -> Option<f64> {
     let (center, w) = frame.corner_homogeneous(0.0, 0.0);
-    let center = project(camera, pose, center, w)?;
+    let center = camera.project_homogeneous(pose, center, w)?;
     let (edge, w) = frame.corner_homogeneous(1.0, 0.0);
-    let edge = project(camera, pose, edge, w)?;
+    let edge = camera.project_homogeneous(pose, edge, w)?;
     Some((edge[0] - center[0]).hypot(edge[1] - center[1]))
 }

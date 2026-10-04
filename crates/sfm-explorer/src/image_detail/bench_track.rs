@@ -413,7 +413,7 @@ impl Layer {
             return;
         };
         self.center = patch
-            .and_then(|patch| geometry::project(camera, pose, patch.center.coords, patch.w))
+            .and_then(|patch| camera.project_homogeneous(pose, patch.center.coords, patch.w))
             .map(to_panel);
         let viewpoint = Viewpoint::Observation(*index);
         let Some(square) = square_of(track, viewpoint, camera, pose) else {
@@ -534,7 +534,7 @@ impl Layer {
         {
             return None;
         }
-        let centre = geometry::project(&camera, &pose, patch.center.coords, patch.w)?;
+        let centre = camera.project_homogeneous(&pose, patch.center.coords, patch.w)?;
         let viewpoint = Viewpoint::Image(img_idx as u32);
         let (samples, per_edge) = geometry::project_outline(patch, &camera, &pose);
         let color = ghost_color();
@@ -985,7 +985,9 @@ fn normal_arrow(
         square.u_axis,
     );
     let at = |point: nalgebra::Point3<f64>| {
-        geometry::project(camera, pose, point.coords, 1.0).map(to_panel)
+        camera
+            .project_homogeneous(pose, point.coords, 1.0)
+            .map(to_panel)
     };
     Some(Arrow {
         outline: viewpoint,

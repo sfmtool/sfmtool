@@ -2366,7 +2366,7 @@ fn place_keypoints(
                         // Never localized, so there is no offset to keep.
                         None => was.center,
                     };
-                    project_center(&camera, &cam_from_world, place(from), was.w)
+                    camera.project_homogeneous(&cam_from_world, place(from).coords, was.w)
                 });
         observation.track = Some(match landed {
             Some(pixel) => {
@@ -2433,20 +2433,6 @@ fn view_of(
         ],
     );
     Ok((camera.clone(), pose))
-}
-
-/// Where a patch's centre lands in a view, as a pixel.
-fn project_center(
-    camera: &crate::camera::CameraIntrinsics,
-    cam_from_world: &crate::geometry::RigidTransform,
-    center: nalgebra::Point3<f64>,
-    w: f64,
-) -> Option<[f64; 2]> {
-    let pc = cam_from_world.transform_point_homogeneous(center.coords, w);
-    if !camera.model.needs_ray_path() && pc.z >= 0.0 {
-        return None;
-    }
-    camera.ray_to_pixel([pc.x, pc.y, pc.z]).map(|(u, v)| [u, v])
 }
 
 /// What one painting did.

@@ -2427,9 +2427,9 @@ fn projection_offsets(
                 observation.image as usize,
             )
             .expect("the fixture's images have cameras");
-            let centre =
-                crate::bench::geometry::project(&camera, &pose, frame.center.coords, frame.w)
-                    .expect("the demo's patch is in front of every camera");
+            let centre = camera
+                .project_homogeneous(&pose, frame.center.coords, frame.w)
+                .expect("the demo's patch is in front of every camera");
             let site = observation.site().expect("a sighting");
             [site[0] - centre[0], site[1] - centre[1]]
         })
@@ -2445,7 +2445,9 @@ fn patch_pixel(
     t: f64,
 ) -> [f64; 2] {
     let (xyz, w) = patch.corner_homogeneous(s, t);
-    crate::bench::geometry::project(camera, pose, xyz, w).expect("the demo's patch is in front")
+    camera
+        .project_homogeneous(pose, xyz, w)
+        .expect("the demo's patch is in front")
 }
 
 #[test]
@@ -3246,7 +3248,8 @@ fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usiz
 fn pixel_of(node: &SceneNode, image: usize, point: nalgebra::Point3<f64>) -> [f64; 2] {
     let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, image)
         .expect("the demo's images have cameras");
-    crate::bench::geometry::project(&camera, &pose, point.coords, 1.0)
+    camera
+        .project_homogeneous(&pose, point.coords, 1.0)
         .expect("in front of the camera")
 }
 

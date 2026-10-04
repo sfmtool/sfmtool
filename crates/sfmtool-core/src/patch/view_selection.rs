@@ -340,7 +340,10 @@ const AFFINE_BORDER_MARGIN_PX: f64 = 1.0 + AFFINE_MAX_RESIDUAL_PX;
 /// algebraically the same quantity `warp_map::svd_2x2` computes per pixel for
 /// the slow path (the two can still land on opposite sides of a level boundary
 /// when `σ` sits within rounding distance of `2^(ℓ+0.5)`, which is the
-/// documented approximation, not a defect).
+/// documented approximation, not a defect). The general `f64` form of both
+/// singular values is [`crate::camera::warp_map::singular_values_2x2`]; this
+/// keeps its own arithmetic so the level it selects does not move by a
+/// rounding.
 fn affine_sigma_major(a: f64, b: f64, c: f64, d: f64) -> f32 {
     let q = (0.5 * (a + d)).hypot(0.5 * (c - b));
     let r = (0.5 * (a - d)).hypot(0.5 * (c + b));

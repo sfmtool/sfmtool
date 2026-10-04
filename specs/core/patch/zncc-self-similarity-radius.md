@@ -54,9 +54,35 @@ On the patches it was checked against, the overlap reading of the whole bitmap r
 
 These figures were taken when both readings searched the disk `dx² + dy² ≤ r²` and read `r` whenever a shift in its outermost ring cleared the level. Most of the disagreements then were bitmaps the ringed reading sent to `3` through one such shift that cleared the level by a hundredth or two, such as `(2, 1)` at 0.956 against a level of 0.946, where on the overlap the same shift fell just under the level and the radius read between 1.9 and 2.5. The radius now reads such a shift at its own distance, 2.24 for `(2, 1)`, on either reading, which removes that cause of disagreement; the table has not been measured again. Samples with alpha 0 are rare in consensus bitmaps: 0% on seoul_bull and 0.16% on kerry_park.
 
+## The contour and its reach
+
+The radius is one length in grid px. The same contour also bounds where a match could land along each axis, and in the units of the photograph and of the scene, which is what a confidence bound on the 3D point along the patch's axes needs. The reading's **contour** is the set of points the radius is read from:
+
+- every crossing interpolated along a grid edge, as above, at its offset `(dx, dy)` in the grid's axes (`x` column-right, `y` row-down);
+- every shift at or above the level whose neighbour one grid step `e` away has no reading, at the shift's own offset, marked **open** towards `e` (`ContourPoint::open_towards`): its crossing lies somewhere past it in that direction, so its offset is a lower bound for it along that axis;
+- for a template with no textured channel, whose every shift counts, every shift of the square's border, open towards the outside.
+
+The radius is the largest distance of a contour point from the centre, capped at `r`, which is the radius above to the bit. A reading with no data (the overlap reading's `NaN`) has no contour. The **reach** of the contour is measured from it in three units, each length a `BoundedLength`, a value and whether it is only a lower bound (`at_least`):
+
+- **Grid px.** The radius, and the reach along each grid axis, `max |dx|` and `max |dy|` over the points.
+- **Image px.** With `J` the Jacobian of the map from the tile's grid to the source image at the tile's centre, in image px per grid px, the image radius is the largest `|J · d|` over the points `d`, each first brought in to `r` from the centre where it lies further, the cap the radius takes, so that under `J = s·I` it is `s` times the radius. A Jacobian that is not finite or is singular gives no image radius. Because `J` applies to the whole contour rather than to its furthest point, a contour stretched along `x` changes its image radius under a stretch of the image along `x` and not under one along `y`.
+- **Along the patch's axes.** For a tile whose `R × R` core is the patch `placement`, one grid px along `x` is `2·half_extent[0]/R` along `u`, and one along `y` is `2·half_extent[1]/R` along `−v` (`WarpMap::from_patch` steps the rows down `v`; the sign does not matter for a reach). The grid reaches scale to the reach along `u` and `v`, with their lower bounds, as lengths in the scene's world-space unit for a finite patch (`world_space_unit`, or scene units where the file names none). A patch at infinity (`w = 0`) has no length: its `center` is a unit direction `d`, its axes are tangent offsets, and the corner `d + a·u` is the direction at `atan(a)` from `d`, so its reach reads `atan(reach)` as an angle in degrees, which is the offset in radians to first order.
+
+### Lower bounds
+
+The reach is meant to bound where the 3D point could be along the patch's axes. A value is exact within the square of shifts searched, with a region that runs off the square and holds its width (below) taken to keep that width past the border; wherever the readings leave room for a larger value, it is flagged `at_least`. A repeating texture whose period exceeds `r` can match itself again beyond the square, and that is not seen: no reading of the square can tell it from a patch that does not repeat. Two things can hide part of the contour: the region at the level reaching the square's border, past which nothing was read, and a shift beside that region with no reading (a non-finite cell of the overlap reading). A shift with no reading whose read neighbours are all below the level is taken to be below it, as the radius takes it. `SelfSimilarity::contour` records both kinds of opening, and each measure applies them as follows.
+
+- **A gap inside the square.** The shifts with no reading next to a shift at the level are gathered with every shift with no reading connected to them. If that set touches the square's border, the region could continue through it past the border in any direction, so every measure is `at_least`, both grid axes, the radius and the image radius, whatever their values. Otherwise any crossing it hides lies on a grid edge between one of its shifts and a read neighbour, so the set and its read neighbours bound it: a measure is `at_least` when one of those shifts gives a larger value than the readings did (`|c_k|` for a grid axis, `|c|`, capped at `r`, for the radius, `|J·c|`, or `r·σ_max(J)` for a shift beyond `r`, for the image radius). Each measure is convex, so its largest value on an edge is at one of the edge's ends.
+- **Running off the square along an axis.** A shift at the level on the border whose neighbour one step along `x` (or `y`) lies past the border runs off along `x` (or `y`). It makes the reach along that axis `at_least`, the radius `at_least` (it reads `r` anyway), and the image radius `at_least`.
+- **The other axis of a run-off.** The readings say nothing past the border, so the region could turn and grow along the other axis there. The reach along the other axis stays exact only where the region **holds its width** over its last two lines before the border: take the run of shifts at the level along the border line through the open shift, `a ..= b`, and its crossings at the two ends, interpolated as the contour's are; every shift of the line just inside, `a ..= b`, is at the level, and the run there, with its own end crossings, spans at least as far at both ends, to within `1e-4` grid px. A region that keeps or narrows its width is extrapolated to keep doing so. The allowance is for the kernels' `f32` sums: a ridge of uniform stripes, the same on every line in exact arithmetic, reads crossings that differ from line to line by about `1e-7` grid px, and more where the surface falls through the level shallowly. `1e-4` is a thousand times that, and a region widening by `1e-4` per line would need ten thousand lines past the border to widen by one grid px. One that widens, moves sideways (a ridge slanted across the square), or whose run ends cannot be read (it reaches the square's corner, or a run end has no reading beside it) makes the reach along that axis `at_least` as well. So a ridge along `x` that runs off at `±x` with an even width reads its width along `y` exactly, while the ridge `z = 1 − 0.5·(dy − 3·dx)²`, at the level only at `(0, 0)` and `(±1, ±3)` for `r = 3`, runs off at `(1, 3)` towards `+y` with nothing at the level on the line inside it, and its reach along `x`, about 1.01 from its crossings, is `at_least`: it continues to `(2, 6)`.
+- **The cap.** The radius is `at_least` where it reaches `r`, the reading printed `3+`, and the image radius wherever a point lies at or beyond `r` from the centre and was brought in to it.
+
+The reach along the patch's axes takes the grid axes' flags. The radius's value is the reading's radius whatever its flag.
+
+
 ## Rust API
 
-The operation lives in [self_similarity/](../../../crates/sfmtool-core/src/patch/self_similarity/) (`mod.rs` for the API, `kernels.rs` for the scalar and AVX2 kernels, `overlap.rs` for the overlap reading, `tests.rs`), as `sfmtool_core::patch::self_similarity`. The bench reads it in [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the keypoint localizer's member gate in [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs) (`member_self_similarity_radius`), cluster-patch refinement's member gate in [cluster_refine/mod.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs) (`member_zncc_self_similarity_radius`), and it is bound as `sfmtool._sfmtool.patches.zncc_self_similarity_parts` in [patches/self_similarity.rs](../../../crates/sfmtool-py/src/patches/self_similarity.rs).
+The operation lives in [self_similarity/](../../../crates/sfmtool-core/src/patch/self_similarity/) (`mod.rs` for the API, `kernels.rs` for the scalar and AVX2 kernels, `overlap.rs` for the overlap reading, `contour.rs` for the contour and its reach, `tests.rs`), as `sfmtool_core::patch::self_similarity`. The bench reads it in [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the keypoint localizer's member gate in [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs) (`member_self_similarity_radius`), cluster-patch refinement's member gate in [cluster_refine/mod.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs) (`member_zncc_self_similarity_radius`), and it is bound as `sfmtool._sfmtool.patches.zncc_self_similarity_parts` in [patches/self_similarity.rs](../../../crates/sfmtool-py/src/patches/self_similarity.rs).
 
 ```rust
 /// The template spread, in grey levels, under which a channel carries no
@@ -205,6 +231,110 @@ let parts = zncc_self_similarity_parts_overlap(&tile, data.as_deref(), &SelfSimi
 let passes = parts.whole.radius <= 2.5; // NaN (no data) is judged by the caller
 ```
 
+The contour and its reach ([contour.rs](../../../crates/sfmtool-core/src/patch/self_similarity/contour.rs)):
+
+```rust
+/// One contour point, in the grid's axes, grid px from the centre.
+pub struct ContourPoint {
+    pub offset: [f64; 2],
+    /// `Some([ex, ey])` where the neighbour that way has no reading: the
+    /// crossing lies past the point in that direction.
+    pub open_towards: Option<[i8; 2]>,
+}
+
+impl ContourPoint {
+    /// Whether the point is open: `open_towards.is_some()`.
+    pub fn is_open(&self) -> bool;
+}
+
+/// A length and whether the true length may be larger ("this far or further").
+pub struct BoundedLength { pub value: f64, pub at_least: bool }
+
+/// The reach along the patch's `u` and `v`, `[u, v]`.
+pub enum PatchAxisReach {
+    Length([BoundedLength; 2]), // w = 1, the scene's world-space unit
+    Angle([BoundedLength; 2]),  // w = 0, degrees
+}
+
+impl PatchAxisReach {
+    /// `[u, v]`, whatever the unit.
+    pub fn values(&self) -> [BoundedLength; 2];
+}
+
+impl SelfSimilarity {
+    /// `None` for a reading with no data, or a surface that is not a
+    /// `(2r + 1)²` square for an odd side.
+    pub fn contour(&self) -> Option<SelfSimilarityContour>;
+}
+
+impl SelfSimilarityContour {
+    pub fn points(&self) -> &[ContourPoint];
+    pub fn max_radius(&self) -> usize;
+    pub fn radius(&self) -> BoundedLength;            // value == SelfSimilarity::radius
+    pub fn grid_axes(&self) -> [BoundedLength; 2];    // max |dx|, max |dy|
+    pub fn image_radius(&self, jacobian: [[f64; 2]; 2]) -> Option<BoundedLength>;
+    pub fn patch_axis_reach(
+        &self,
+        placement: &OrientedPatch,
+        resolution: usize,
+    ) -> Option<PatchAxisReach>;
+}
+
+/// The contour measured in every unit that can be computed for it.
+pub struct SelfSimilarityReach {
+    pub grid_radius: BoundedLength,
+    pub grid_axes: [BoundedLength; 2],
+    pub image_radius: Option<BoundedLength>,
+    pub patch_axes: Option<PatchAxisReach>,
+}
+
+impl SelfSimilarityReach {
+    pub fn read(
+        reading: &SelfSimilarity,
+        jacobian: Option<[[f64; 2]; 2]>,
+        placement: Option<&OrientedPatch>,
+        resolution: usize,
+    ) -> Option<Self>;
+}
+
+```
+
+The Jacobian the image radius is read through, and the singular values it is bounded by past the cap, live beside `WarpMap` in [camera/warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs), as `sfmtool_core::camera::warp_map`, since the first is the geometry of the warp a tile is rendered through, laid out as `WarpMap::from_patch` steps the grid, and the second is general 2×2 linear algebra:
+
+```rust
+/// Image px per grid px at the centre of a tile rendered through `placement`
+/// at `resolution`, `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`; `None` where
+/// a point beside the centre does not project.
+pub fn patch_grid_jacobian(
+    placement: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+    resolution: usize,
+) -> Option<[[f64; 2]; 2]>;
+
+/// The two singular values of a 2×2 matrix, larger first.
+pub fn singular_values_2x2(m: [[f64; 2]; 2]) -> [f64; 2];
+```
+
+`patch_grid_jacobian` projects through `CameraIntrinsics::project_homogeneous` ([image-warping.md](../camera/image-warping.md)), the projection with no test against the image's bounds that the localizer, the bench's steps and the viewer share. On an equirectangular camera it brings each `x` difference into `±π·fx`, half the panorama's `2π·fx` period, before averaging, so a patch straddling the seam behind the camera reads the same Jacobian as one in front. `singular_values_2x2` gives `image_radius` its bound past the cap, and Track View's *Zoom* column its zoom ([track-view.md](../../gui/track-view.md)). The warp map's per-pixel SVD and view selection's `affine_sigma_major` compute the same singular values in their own `f32` arithmetic, which they keep so their results do not change by a rounding.
+
+The contour is a method of the reading rather than a field of it because it is read from the surface and the tolerance the reading already carries, so the kernels and the overlap reading do not compute it and a stored reading can be measured later. The radius is computed from the same points, so the two cannot drift apart. `SelfSimilarityContour` keeps the points once for the several measures read from them, and `SelfSimilarityReach::read` is the one call for a caller that has a reading, a view and a placement, as the bench has; a caller that wants only the per-axis bound on the point in the scene's world-space unit calls `contour()?.patch_axis_reach(placement, R)` with no camera at all. The reach is a separate struct from the reading because the units it needs, the camera and the placement, are not the reading's: the same reading of a stored bitmap has a grid reach and nothing else.
+
+```rust
+use sfmtool_core::camera::warp_map::patch_grid_jacobian;
+use sfmtool_core::patch::self_similarity::{PatchAxisReach, SelfSimilarityReach};
+
+// `parts` read a tile rendered through `placement` with a 24 × 24 core.
+let jacobian = patch_grid_jacobian(&placement, &camera, &cam_from_world, 24);
+if let Some(reach) = SelfSimilarityReach::read(&parts.whole, jacobian, Some(&placement), 24) {
+    if let Some(PatchAxisReach::Length([u, v])) = reach.patch_axes {
+        // The point could sit up to `u.value` along u and `v.value` along v
+        // from where it is, in the scene's world-space unit; "or further"
+        // where `at_least`.
+    }
+}
+```
+
 ## Theory
 
 ### Why a curvature is not enough
@@ -279,9 +409,11 @@ The bench computes it at both stages, for every observation that has a pixel (se
 - **Track stage.** The tile is the patch rendered through the keypoint-anchored frame, with its half-extent grown by `(R + 2r) / R` and its resolution set to `R + 2r`, so the core is the same `R × R` patch and the ring around it is what the shifted windows read.
 - **Cluster stage.** The tile is the one cluster refinement's member gate reads, `sample_member_self_similarity_tile`: the member grid sampled at its seed geometry with the radius grown by the same factor and the resolution set to `R + 2r`. The bench's refinement runs with that gate off, so the bench's whole radius is the number the gate would have judged.
 
-Both read the default `SelfSimilarityParams`. The measurements carry `zncc_self_similarity_radius`, `zncc_self_similarity_radius_middle`, `zncc_self_similarity_radius_grid` (`[[f64; 3]; 3]`), `zncc_self_similarity_slide_grid` (`[[[f64; 2]; 3]; 3]`), `zncc_self_similarity_surface` (the whole core's surface, `Vec<f64>`) and `zncc_self_similarity_tolerance` (the whole core's tolerance, `None` where it is flat), each `None` where the tile could not be rendered or sampled. The bench's `Thresholds::max_zncc_self_similarity_radius` bar judges the whole core's radius, and the threshold painting turns out a row whose radius is over it: a patch that slides over itself that far and still matches, such as a straight edge or a flat patch, does not pin its position. Its default, `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, is 2.5 patch-grid px, the same as the localizer's member gate, under the largest shift searched; since the radius reads at most `r`, a bar of `r` or more turns nothing out. A row with no reading clears the bar and a `NaN` fails it. No bar judges the middle, the grid, the slide or the surface.
+The bench measures the [reach](#the-contour-and-its-reach) of both cores, the whole and the middle, at the track stage through the placement it renders the tile through, the track's placement re-anchored on the observation's keypoint (`OrientedPatch::anchored_at_keypoint`, falling back to the placement itself where the keypoint's ray cannot meet it), with its `half_extent` before the `(R + 2r)/R` growth and `resolution = R`, since the grown tile's grid step is the core's. `J` is `camera::warp_map::patch_grid_jacobian` of that placement at `R`: the finite difference across the four points half a grid px either side of the centre, the four middle texel centres of the warp map at `R`, each projected with no test against the image's bounds (`CameraIntrinsics::project_homogeneous`), so a tile partly or wholly off the photograph still has one. At the cluster stage the tile is the member grid at the seed shape `S`, an affine map, so `J = S · 2·radius/R`, and there is no patch, so no reach along its axes.
 
-**Track View** has a *Self-similarity* column, reading the whole radius over the middle one to one decimal (`0.4 px whole` over `1.4 px mid`, with `3+ px` for the maximum) and drawing the grid: green under 1, yellow from 1 to 2, orange from 2 to under `r`, red at `r` or more, with a line along the slide in a cell whose slide is at least 0.5 long, and beside the grid the core's surface plot: the surface interpolated between the shifts and drawn as a heatmap, with the contour at `1 - tolerance` over it and the shifts inside it marked ([track-view.md](../../gui/track-view.md)), and a *self-sim. px* box that sets the bar, from 0 to `r` to one decimal. `get_bench_track` reports the same fields in both blocks and the bar in its `thresholds`, which `apply_bench_track_thresholds` sets, the grids as three rows of three and the surface as rows of numbers with null where the core is flat ([mcp-server.md](../../gui/mcp-server.md)), and the Python observation dicts carry them as floats, float64 `(3, 3)` and `(3, 3, 2)` arrays, and a `(2r + 1, 2r + 1)` float64 surface, with the bar in `EditableTrack.thresholds` and as a keyword of `apply_thresholds`.
+Both read the default `SelfSimilarityParams`. The measurements carry `zncc_self_similarity_radius`, `zncc_self_similarity_radius_middle`, `zncc_self_similarity_radius_grid` (`[[f64; 3]; 3]`), `zncc_self_similarity_slide_grid` (`[[[f64; 2]; 3]; 3]`), `zncc_self_similarity_surface` (the whole core's surface, `Vec<f64>`), `zncc_self_similarity_tolerance` (the whole core's tolerance, `None` where it is flat), and `zncc_self_similarity_reach` and `zncc_self_similarity_reach_middle` (the whole core's and the middle's `SelfSimilarityReach`, measured as [The contour and its reach](#the-contour-and-its-reach) says, with no `patch_axes` at the cluster stage), each `None` where the tile could not be rendered or sampled. The bench's `Thresholds::max_zncc_self_similarity_radius` bar judges the whole core's radius, and the threshold painting turns out a row whose radius is over it: a patch that slides over itself that far and still matches, such as a straight edge or a flat patch, does not pin its position. Its default, `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, is 2.5 patch-grid px, the same as the localizer's member gate, under the largest shift searched; since the radius reads at most `r`, a bar of `r` or more turns nothing out. A row with no reading clears the bar and a `NaN` fails it. No bar judges the middle, the grid, the slide or the surface.
+
+**Track View** has a *Self-similarity* column, reading the whole radius over the middle one to one decimal (`0.4 px whole` over `1.4 px mid`, with `3+ px` for the maximum) and drawing the grid: green under 1, yellow from 1 to 2, orange from 2 to under `r`, red at `r` or more, with a line along the slide in a cell whose slide is at least 0.5 long, a hover on the numbers that tabulates the whole and middle reach in grid px, image px and along the patch's `u` and `v` in the file's world-space unit (or degrees for a patch at infinity), and beside the grid the core's surface plot: the surface interpolated between the shifts and drawn as a heatmap, with the contour at `1 - tolerance` over it and the shifts inside it marked ([track-view.md](../../gui/track-view.md)), and a *self-sim. px* box that sets the bar, from 0 to `r` to one decimal. `get_bench_track` reports the same fields in both blocks, the reach as nested objects with each length as `{value, at_least}` and `patch_axes` carrying the reconstruction's `world_space_unit`, and the bar in its `thresholds`, which `apply_bench_track_thresholds` sets, the grids as three rows of three and the surface as rows of numbers with null where the core is flat ([mcp-server.md](../../gui/mcp-server.md)). The Python observation dicts carry them as floats, float64 `(3, 3)` and `(3, 3, 2)` arrays, a `(2r + 1, 2r + 1)` float64 surface, and the reach as nested dicts in the wire's shape, with `patch_axes` as `{"kind", "along"}` and no unit, since the dict does not carry the reconstruction; the bar is in `EditableTrack.thresholds` and is a keyword of `apply_thresholds`.
 
 ## Parameters
 
@@ -296,7 +428,7 @@ The three parameters' defaults are defined on `SelfSimilarityParams::default()`,
 
 ## Python bindings
 
-`sfmtool._sfmtool.patches.zncc_self_similarity_parts(tile, resolution, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` takes an `(R + 2r, R + 2r)` single-channel tile or an `(R + 2r, R + 2r, C)` patch, uint8 or float32, with a fourth channel read as alpha and dropped, and returns a dict of `radius` (float), `radius_middle` (float), `radius_grid` (`(3, 3)` float64), `slide` (`(2,)` float64), `slide_grid` (`(3, 3, 2)` float64), `tolerance` (float) and `surface` (`(2r + 1, 2r + 1)` float64), the last three of the whole core. A tile of another dtype, rank or size, or with more than four channels, raises `ValueError`. The bench fields arrive through the existing observation dicts.
+`sfmtool._sfmtool.patches.zncc_self_similarity_parts(tile, resolution, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` takes an `(R + 2r, R + 2r)` single-channel tile or an `(R + 2r, R + 2r, C)` patch, uint8 or float32, with a fourth channel read as alpha and dropped, and returns a dict of `radius` (float), `radius_middle` (float), `radius_grid` (`(3, 3)` float64), `slide` (`(2,)` float64), `slide_grid` (`(3, 3, 2)` float64), `tolerance` (float) and `surface` (`(2r + 1, 2r + 1)` float64), the last three of the whole core. It does not return the reach, since a tile alone has no camera and no placement to measure it in; only the bench's observation dicts carry it. A tile of another dtype, rank or size, or with more than four channels, raises `ValueError`. The bench fields arrive through the existing observation dicts.
 
 ```python
 from sfmtool._sfmtool.patches import zncc_self_similarity_parts
@@ -326,8 +458,9 @@ In [self_similarity/tests.rs](../../../crates/sfmtool-core/src/patch/self_simila
 - The parts function agrees with separate calls on each part's template.
 - A tile with too little margin around the template, and a parts tile of the wrong size, are refused with a panic message naming the sizes.
 - The overlap reading: a corner locks (under 1); a straight edge at 0°, 30°, 45° and 90° reads 3 with its slide along the edge; a flat bitmap and an 8-bit ramp read 3; samples without data drop out, so what they hold does not change the reading, which equals that of the covered columns cut out on their own, and a cell with no data, or a bitmap with none, has no reading; on a bitmap cut from a larger textured tile, the middle and the centre cell read as the ringed reading of the larger tile does, over the whole square of shifts, and the whole bitmap within 0.25 of it, with the same tolerance; the parts agree with separate calls; the wrong number of data flags is refused; and `data_from_interleaved` reads alpha.
+- The contour: on every fixture above, ringed and overlap, the flat template included, its radius is the reading's radius to the bit; a ridge along `x` reaches 1.5 along `x` and 0.1 along `y`; through `J = diag(2, 1)` its image radius doubles and through `diag(1, 2)` it does not; along `u` and `v` it scales by each half-extent, `0.5` and `2`, and on a patch at infinity reads `atan` of that in degrees; a ridge running off the square with an even width is a lower bound along that axis and exact along the other, as is a tile of uniform stripes read by the kernels, whose crossings differ from line to line by `f32` rounding, while one that widens towards the border, a lone border shift at the level and the slanted ridge above are lower bounds along both axes (and a wider search shows the slanted one reaching 2 along `x`), and a flat template is a lower bound everywhere; the image radius is a lower bound under `J = diag(1, 0.1)` where an open point maps short of a crossed one; a gap with no reading beside the region makes each measure a lower bound where its shifts reach further than the value and leaves it exact where they do not, and one that reaches the border makes every measure a lower bound; a reading with no data has no contour; and `patch_grid_jacobian` is diagonal at the patch width over `R` on a fronto-parallel patch, agrees with the warp map's four middle texels on a slanted one, is `None` behind a pinhole camera, and on a 2000 × 1000 equirectangular camera reads the same Jacobian for a patch straddling the seam behind it as for one in front ([warp_map/tests.rs](../../../crates/sfmtool-core/src/camera/warp_map/tests.rs)).
 
-The bench's track and cluster evaluations fill every field for each observation with a pixel, the painting turns out a row whose radius is over the bar, keeps a row with no reading, and turns out nothing with the bar at the largest radius searched, and the default bar sits under that radius ([bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs)); the viewer's tests cover the column's text, colours, marks and heading ([track_view/body/tests.rs](../../../crates/sfm-explorer/src/track_view/body/tests.rs)) and the wire fields ([mcp/tests/bench.rs](../../../crates/sfm-explorer/src/mcp/tests/bench.rs)); and [test_self_similarity_rust_bindings.py](../../../tests/rust_bindings/test_self_similarity_rust_bindings.py) covers the binding. The localizer's tests ([keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)) check that its member gate drops a flat and an edge view and keeps textured ones at a bar of 2, drops nothing at `0` or at `r`, gives the same verdicts when the search is too narrow for the ring, passes at or under the bar and fails `NaN`, is on at 2.5 by default, and that a reference search reports the radius; [test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/test_add_image_to_tracks_rust_bindings.py) checks that a bar refuses as `unlocalizable` exactly the candidates whose radius is over it. Cluster refinement's tests ([cluster_refine/tests.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/tests.rs)) check that a textured member reads well under the bar and a flat, an edge and a smooth member over it, that the tile's core is the member grid, that at the default a flat and an edge member are refused and a textured one kept, that `0` and `3` refuse nobody, and the pass rule. [test_filter_by_zncc_self_similarity_radius.py](../../../tests/xform/test_filter_by_zncc_self_similarity_radius.py) checks the overlap binding on a flat, an edge, a textured and an empty bitmap, the shared pass rule (the default culls the flat and the edge point and keeps the textured and the empty one, `0` and `3` keep every point), and the xform filter on those bitmaps and on real ones; [test_embed_patches_command.py](../../../tests/patch/test_embed_patches_command.py) checks the embed-patches cull on the same four kinds, its default of 2.5, and that its flag reaches `embed_patches` and the written `tool_options`.
+The bench's track and cluster evaluations fill every field for each observation with a pixel, the painting turns out a row whose radius is over the bar, keeps a row with no reading, and turns out nothing with the bar at the largest radius searched, and the default bar sits under that radius ([bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs)); both fill the reach, its image radius equal to the contour's through `patch_grid_jacobian` of the anchored placement at the track stage and through `S · 2·radius/R` at the cluster stage, and its patch axes the grid axes times `2·half_extent/R` at the track stage; the viewer's tests cover the column's text, colours, marks, hover and heading ([track_view/body/tests.rs](../../../crates/sfm-explorer/src/track_view/body/tests.rs)) and the wire fields ([mcp/tests/bench.rs](../../../crates/sfm-explorer/src/mcp/tests/bench.rs)); [test_self_similarity_rust_bindings.py](../../../tests/rust_bindings/test_self_similarity_rust_bindings.py) covers the binding, and [test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py) reads the reach from an evaluated observation's dict. The localizer's tests ([keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)) check that its member gate drops a flat and an edge view and keeps textured ones at a bar of 2, drops nothing at `0` or at `r`, gives the same verdicts when the search is too narrow for the ring, passes at or under the bar and fails `NaN`, is on at 2.5 by default, and that a reference search reports the radius; [test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/test_add_image_to_tracks_rust_bindings.py) checks that a bar refuses as `unlocalizable` exactly the candidates whose radius is over it. Cluster refinement's tests ([cluster_refine/tests.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/tests.rs)) check that a textured member reads well under the bar and a flat, an edge and a smooth member over it, that the tile's core is the member grid, that at the default a flat and an edge member are refused and a textured one kept, that `0` and `3` refuse nobody, and the pass rule. [test_filter_by_zncc_self_similarity_radius.py](../../../tests/xform/test_filter_by_zncc_self_similarity_radius.py) checks the overlap binding on a flat, an edge, a textured and an empty bitmap, the shared pass rule (the default culls the flat and the edge point and keeps the textured and the empty one, `0` and `3` keep every point), and the xform filter on those bitmaps and on real ones; [test_embed_patches_command.py](../../../tests/patch/test_embed_patches_command.py) checks the embed-patches cull on the same four kinds, its default of 2.5, and that its flag reaches `embed_patches` and the written `tool_options`.
 
 ## Non-goals
 

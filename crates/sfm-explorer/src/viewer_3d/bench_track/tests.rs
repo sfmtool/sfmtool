@@ -219,7 +219,9 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
             f64::from(mark.segment.b[1]),
             f64::from(mark.segment.b[2]),
         ) - lift;
-        let back = geometry::project(&camera, &pose, q, 1.0).expect("q_i projects");
+        let back = camera
+            .project_homogeneous(&pose, q, 1.0)
+            .expect("q_i projects");
         let site = observation.site().expect("a placed sighting");
         let offset = (back[0] - site[0]).hypot(back[1] - site[1]);
         // A thousandth of a pixel: the figure carries its endpoints as `f32`,

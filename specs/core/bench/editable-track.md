@@ -119,6 +119,8 @@ pub struct TrackMeasurement {
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>, // each ninth's slide
     pub zncc_self_similarity_surface: Option<Vec<f64>>, // the whole core's ZNCC at every shift
     pub zncc_self_similarity_tolerance: Option<f64>, // the deficit it was judged by
+    pub zncc_self_similarity_reach: Option<SelfSimilarityReach>, // how far its contour reaches, three units
+    pub zncc_self_similarity_reach_middle: Option<SelfSimilarityReach>, // its middle square's
     pub walked_px: Option<f64>,              // grid px, set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
@@ -1323,8 +1325,15 @@ shift of the `(2r + 1)²` square, row-major from `(dx, dy) = (-r, -r)`, `1` at t
 centre and `NaN` where the core is flat.
 `zncc_self_similarity_tolerance` is the deficit `ε + mean_c (n / s_c)²` the core
 was judged by, so the radius is read on the surface at `1 -` that value; it is
-`None` where the core is flat. All are `None` where the tile could not be
-rendered or sampled.
+`None` where the core is flat. `zncc_self_similarity_reach` and
+`zncc_self_similarity_reach_middle` measure how far the contour the whole and
+middle radii are read from reaches: in grid px, in source-image px, and along
+the patch's `u` and `v` in the scene's world-space unit, or degrees for a patch
+at infinity, through the keypoint-anchored placement the tile is rendered
+through (§ "The contour and its reach" of
+[`../patch/zncc-self-similarity-radius.md`](../patch/zncc-self-similarity-radius.md));
+at the cluster stage, through the seed shape, with no patch axes. All are `None`
+where the tile could not be rendered or sampled.
 
 `max_zncc_self_similarity_radius` judges the whole core's radius, and no bar
 judges the middle, the grid, the slide, the surface or the tolerance. A tile
@@ -2540,7 +2549,11 @@ kept its seed, with `walked_zncc_grid` beside them. Both stages' dicts carry
 `zncc_self_similarity_radius_grid`, as a `(3, 3, 2)` float64 array
 `zncc_self_similarity_slide_grid`, and as a `(2r + 1, 2r + 1)` float64 array
 `zncc_self_similarity_surface` with the float `zncc_self_similarity_tolerance`
-beside it, where there are ones, and `thresholds` and `apply_thresholds` carry
+beside it, and as nested dicts `zncc_self_similarity_reach` and
+`zncc_self_similarity_reach_middle` in `get_bench_track`'s shape (each length
+`{"value", "at_least"}`; `grid_radius`, `grid_axes`, `image_radius`, and
+`patch_axes` as `{"kind", "along"}`, `None` at the cluster stage), where there
+are ones, and `thresholds` and `apply_thresholds` carry
 `min_zncc_middle` and `max_zncc_self_similarity_radius`.
 
 **The coordinate crosses under the name of whichever it is**, in the reports and

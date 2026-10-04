@@ -346,9 +346,9 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
                 observation.image as usize,
             )
             .expect("the fixture's images have cameras");
-            let expected =
-                crate::bench::geometry::project(&camera, &pose, frame.center.coords, frame.w)
-                    .expect("the demo's patch is in front of every camera");
+            let expected = camera
+                .project_homogeneous(&pose, frame.center.coords, frame.w)
+                .expect("the demo's patch is in front of every camera");
             let site = observation.site().expect("a sighting");
             assert!(
                 (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
@@ -383,7 +383,9 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
                   s: f64,
                   t: f64| {
         let (xyz, w) = patch.corner_homogeneous(s, t);
-        crate::bench::geometry::project(camera, pose, xyz, w).expect("in front of the camera")
+        camera
+            .project_homogeneous(pose, xyz, w)
+            .expect("in front of the camera")
     };
 
     let (before_patch, camera, pose) = outline(&state);
@@ -545,7 +547,9 @@ fn the_patch_tools_take_a_pixel_in_a_camera_image_the_track_has_no_sighting_in()
     };
     let corner = |patch: &sfmtool_core::patch::cloud::OrientedPatch, s: f64, t: f64| {
         let (xyz, w) = patch.corner_homogeneous(s, t);
-        crate::bench::geometry::project(&camera, &pose, xyz, w).expect("in front of the camera")
+        camera
+            .project_homogeneous(&pose, xyz, w)
+            .expect("in front of the camera")
     };
     let before = version_count(&state);
 
@@ -1282,6 +1286,119 @@ fn every_observation_reports_where_it_sits_read_or_not() {
         rows[0]["pixel"], rows[0]["track"]["keypoint"],
         "a read observation reports something other than its keypoint: {track}"
     );
+}
+
+/// Every track-stage row carries the Jacobian Track View's *Zoom* column reads
+/// and the zoom it prints, and they are the patch's own geometry: each is
+/// checked against the patch re-anchored on the row's pixel, the placement its
+/// tile is rendered through, projected through the row's camera half a texel
+/// either side of its centre along each tile axis, worked out here from the
+/// camera and the pose rather than through the viewer's warp map.
+#[test]
+fn every_track_stage_row_reports_its_tiles_jacobian_and_zoom() {
+    use nalgebra::Point3;
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let id = state.scene[0].id;
+    let bench_track = state.bench_track(id, &item).expect("on the bench");
+    let sfmtool_core::bench::Stage::Track(payload) = &bench_track.stage else {
+        panic!("a track made from a point is at the track stage: {track}");
+    };
+    let patch = payload.placement.clone().expect("a patch");
+    let recon = state.scene[0].recon();
+    let rows = track["observations"].as_array().expect("the observations");
+    assert_eq!(rows.len(), 3, "{track}");
+    for row in rows {
+        let index = row["camera_image"].as_u64().expect("an image") as usize;
+        let image = &recon.image_table.images[index];
+        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let pose = crate::scene::cam_from_world(image);
+        let pixel: [f64; 2] = serde_json::from_value(row["pixel"].clone()).expect("a pixel");
+        let anchored = patch
+            .anchored_at_keypoint(camera, &pose, pixel)
+            .expect("the row's ray meets the patch");
+        let project = |p: Point3<f64>| {
+            let cam = image.quaternion_wxyz.to_rotation_matrix() * p.coords + image.translation_xyz;
+            let (x, y) = camera
+                .ray_to_pixel([cam.x, cam.y, cam.z])
+                .expect("the camera sees the patch");
+            [x, y]
+        };
+        // One texel of the tile's 64 along each axis, in scene units: a column
+        // steps along `u`, and a row along `-v`, since rows count downward.
+        let col_step = anchored.u_axis * (2.0 * anchored.half_extent[0] / 64.0);
+        let row_step = -anchored.v_axis * (2.0 * anchored.half_extent[1] / 64.0);
+        let across = |step: nalgebra::Vector3<f64>| {
+            let (ahead, behind) = (
+                project(anchored.center + step * 0.5),
+                project(anchored.center - step * 0.5),
+            );
+            [ahead[0] - behind[0], ahead[1] - behind[1]]
+        };
+        let (by_col, by_row) = (across(col_step), across(row_step));
+        let want = [[by_col[0], by_row[0]], [by_col[1], by_row[1]]];
+
+        let got: [[f64; 2]; 2] =
+            serde_json::from_value(row["tile_jacobian"].clone()).expect("a Jacobian");
+        let scale = want.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!(scale > 0.0, "{row}");
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            assert!(
+                (got[r][c] - want[r][c]).abs() < 1e-3 * scale,
+                "entry [{r}][{c}] is {}, the projection gives {}: {row}",
+                got[r][c],
+                want[r][c]
+            );
+        }
+
+        // The zoom is texels per pixel: the reciprocals of the singular values,
+        // least first, so their product is `1 / |det J|`.
+        let [low, high]: [f64; 2] =
+            serde_json::from_value(row["tile_zoom"].clone()).expect("a zoom");
+        let det = (want[0][0] * want[1][1] - want[0][1] * want[1][0]).abs();
+        assert!(low <= high, "{row}");
+        assert!(
+            (low * high * det - 1.0).abs() < 1e-2,
+            "the zooms {low} and {high} do not multiply to 1 / {det}: {row}"
+        );
+    }
+}
+
+/// A cluster-stage row's tile is the refinement kernel's grid, not a warp of
+/// the patch, so it reports no Jacobian and no zoom.
+#[test]
+fn a_cluster_stage_row_reports_no_tile_jacobian_or_zoom() {
+    let (mut state, mut viewer) = benchable();
+    call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(track["stage"], json!("cluster"), "{track}");
+    let rows = track["observations"].as_array().expect("the observations");
+    assert!(!rows.is_empty(), "{track}");
+    for row in rows {
+        assert_eq!(row["tile_jacobian"], Value::Null, "{row}");
+        assert_eq!(row["tile_zoom"], Value::Null, "{row}");
+    }
 }
 
 /// A pixel added to a track-stage track is a keypoint a commit can write: turned
@@ -2274,6 +2391,11 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
         assert!((0.0..=3.0).contains(&radius), "{track}");
     }
+    // Its contour's reach: a cluster member has no patch, so no axes.
+    let reach = &cluster["zncc_self_similarity_reach"];
+    assert!(reach["grid_radius"]["value"].is_number(), "{track}");
+    assert!(reach["image_radius"]["value"].is_number(), "{track}");
+    assert!(reach["patch_axes"].is_null(), "{track}");
     // The core's ZNCC against itself, seven rows of seven, 1 at the centre
     // and a number in the corners outside the disk.
     let surface = cluster["zncc_self_similarity_surface"]
@@ -2373,6 +2495,39 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         measured["zncc_self_similarity_tolerance"].is_number(),
         "zncc_self_similarity_tolerance is not on the wire: {track}"
     );
+    // How far the contour reaches, in grid px, image px and along the patch's
+    // axes, whole and middle.
+    for key in [
+        "zncc_self_similarity_reach",
+        "zncc_self_similarity_reach_middle",
+    ] {
+        let reach = &measured[key];
+        assert_eq!(
+            reach["grid_radius"]["value"].as_f64(),
+            measured[if key.ends_with("middle") {
+                "zncc_self_similarity_radius_middle"
+            } else {
+                "zncc_self_similarity_radius"
+            }]
+            .as_f64(),
+            "{key}: {track}"
+        );
+        assert!(reach["grid_radius"]["at_least"].is_boolean(), "{track}");
+        assert_eq!(reach["grid_axes"].as_array().map(Vec::len), Some(2));
+        assert!(reach["image_radius"]["value"].is_number(), "{track}");
+        // A finite patch reads lengths, in the reconstruction's own unit, or
+        // with a null unit, scene units, where it names none.
+        assert_eq!(reach["patch_axes"]["kind"], json!("length"), "{track}");
+        assert_eq!(
+            reach["patch_axes"]["unit"],
+            json!(state.scene[0].recon().metadata.world_space_unit),
+            "{track}"
+        );
+        assert!(
+            reach["patch_axes"]["along"][1]["value"].is_number(),
+            "{track}"
+        );
+    }
     assert!(
         measured["reason"].is_null(),
         "a measured row carries no reason: {track}"

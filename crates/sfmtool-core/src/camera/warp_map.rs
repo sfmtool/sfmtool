@@ -39,6 +39,28 @@ pub struct WarpMap {
     /// `[a, b, c, d]` per pixel (`a = dx/dcol`, `b = dx/drow`,
     /// `c = dy/dcol`, `d = dy/drow`).
     jacobians: Option<Vec<f32>>,
+    /// The period, in source px, at which the source image's `x` wraps, when
+    /// it does: `2π·fx` for an equirectangular source camera, whose `x` wraps
+    /// at the longitude `±π`. `jacobian_at` brings each `x` difference into
+    /// `±period/2` so the texels either side of the seam read the local
+    /// Jacobian rather than one the panorama's width across. `None` for every
+    /// other source and for [`WarpMap::new`].
+    x_period: Option<f64>,
+}
+
+/// The source `x` period of `camera`'s image, if it wraps: `2π·fx` for an
+/// equirectangular camera, whose `x` wraps at the longitude `±π`.
+fn source_x_period(camera: &CameraIntrinsics) -> Option<f64> {
+    camera
+        .model
+        .is_equirectangular()
+        .then(|| 2.0 * std::f64::consts::PI * camera.focal_lengths().0)
+}
+
+/// `d` brought into `±period/2` by whole periods: the shorter way round a
+/// coordinate that wraps with that period.
+fn wrap_difference(d: f64, period: f64) -> f64 {
+    d - period * (d / period).round()
 }
 
 /// Destination-pixel count at or below which the warp / remap row loops run
@@ -134,6 +156,7 @@ impl WarpMap {
             data,
             svd: None,
             jacobians: None,
+            x_period: None,
         }
     }
 
@@ -196,6 +219,7 @@ impl WarpMap {
             data,
             svd: None,
             jacobians: None,
+            x_period: source_x_period(src_camera),
         }
     }
 
@@ -320,6 +344,7 @@ impl WarpMap {
             data,
             svd: None,
             jacobians: None,
+            x_period: source_x_period(src_camera),
         }
     }
 
@@ -393,6 +418,7 @@ impl WarpMap {
             data,
             svd: None,
             jacobians: None,
+            x_period: source_x_period(camera),
         }
     }
 
@@ -474,7 +500,10 @@ impl WarpMap {
     /// difference (so a non-identity warp still gets its actual scale at the
     /// frame edge, not a wrong identity); where any required neighbour is NaN,
     /// the identity Jacobian is used (`sigma_major = sigma_minor = 1`,
-    /// `major_dir = (1, 0)`) — see `jacobian_at`. Idempotent:
+    /// `major_dir = (1, 0)`) — see `jacobian_at`. A map whose source camera is
+    /// equirectangular takes each `x` difference the short way round the
+    /// `±180°` seam, so the texels beside it are not read as one panorama
+    /// width wide. Idempotent:
     /// a second call is a no-op (mirrors
     /// [`compute_jacobians`](Self::compute_jacobians)). The guard checks `svd`
     /// only because `compute_svd` always populates both `svd` and `jacobians`
@@ -632,6 +661,11 @@ impl WarpMap {
     /// pixels with non-zero window weight. Only when an axis collapses
     /// (`w < 2` or `h < 2`, no neighbour at all on that axis) or any required
     /// neighbour is NaN does it fall back to the identity Jacobian.
+    ///
+    /// When the source's `x` wraps (`x_period`, an equirectangular source),
+    /// each `x` difference is brought into `±period/2`, as
+    /// [`patch_grid_jacobian`] does, so a texel beside the seam reads the same
+    /// Jacobian as its neighbours rather than one the panorama's width across.
     fn jacobian_at(&self, col: usize, row: usize, w: usize, h: usize) -> [f32; 4] {
         let identity = [1.0f32, 0.0, 0.0, 1.0];
 
@@ -682,12 +716,91 @@ impl WarpMap {
             return identity;
         }
 
-        let a = (xr - xl) / col_denom; // dx/dcol
-        let b = (xb - xt) / row_denom; // dx/drow
+        // An `x` difference that crosses the source's seam is brought into
+        // `±period/2`. With no period the `f32` arithmetic is unchanged.
+        let x_difference = |to: f32, from: f32| match self.x_period {
+            Some(period) => wrap_difference(f64::from(to - from), period) as f32,
+            None => to - from,
+        };
+        let a = x_difference(xr, xl) / col_denom; // dx/dcol
+        let b = x_difference(xb, xt) / row_denom; // dx/drow
         let c = (yr - yl) / col_denom; // dy/dcol
         let d = (yb - yt) / row_denom; // dy/drow
         [a, b, c, d]
     }
+}
+
+/// The Jacobian of the map from a tile rendered through `placement` at
+/// `resolution` texels a side to the source image, at the tile's centre, in
+/// image px per grid px: `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`, `col`
+/// along `+u` and `row` along `−v` as [`WarpMap::from_patch`] steps them.
+///
+/// The centre is read as a finite difference across the four points half a
+/// grid px either side of it along each axis, which for an even `resolution`
+/// are the four middle texel centres the warp map samples. Each point is
+/// projected with no test against the image's bounds
+/// ([`CameraIntrinsics::project_homogeneous`]), so a tile partly or wholly off
+/// the photograph still has a Jacobian. `None` where one of them does not
+/// project: behind a perspective camera, or outside the camera model's domain.
+///
+/// An equirectangular camera's `x` wraps at the longitude `±π`, a period of
+/// `2π·fx` px, so each `x` difference is brought into `±π·fx` before the
+/// differences are averaged; a patch straddling the seam behind the camera
+/// reads the same Jacobian as one in front of it.
+pub fn patch_grid_jacobian(
+    placement: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+    resolution: usize,
+) -> Option<[[f64; 2]; 2]> {
+    if resolution == 0 {
+        return None;
+    }
+    let step = 2.0 / resolution as f64;
+    let at = |gx: f64, gy: f64| -> Option<[f64; 2]> {
+        let (xyz, w) = placement.corner_homogeneous(gx * step, -gy * step);
+        let [x, y] = camera.project_homogeneous(cam_from_world, xyz, w)?;
+        (x.is_finite() && y.is_finite()).then_some([x, y])
+    };
+    let (p00, p10, p01, p11) = (
+        at(-0.5, -0.5)?,
+        at(0.5, -0.5)?,
+        at(-0.5, 0.5)?,
+        at(0.5, 0.5)?,
+    );
+    let x_period = source_x_period(camera);
+    let difference = |to: [f64; 2], from: [f64; 2], k: usize| {
+        let d = to[k] - from[k];
+        match x_period {
+            Some(period) if k == 0 => wrap_difference(d, period),
+            _ => d,
+        }
+    };
+    let by_col = |k: usize| (difference(p10, p00, k) + difference(p11, p01, k)) / 2.0;
+    let by_row = |k: usize| (difference(p01, p00, k) + difference(p11, p10, k)) / 2.0;
+    Some([[by_col(0), by_row(0)], [by_col(1), by_row(1)]])
+}
+
+/// The two singular values of a 2×2 matrix `[[a, b], [c, d]]`, larger first:
+/// for a Jacobian such as [`patch_grid_jacobian`]'s, the most and the fewest
+/// image px one grid px spans over the directions in the grid.
+///
+/// For a 2×2 matrix `s1² + s2²` is the squared Frobenius norm and `s1·s2` is
+/// `|det|`, so `s1 + s2` and `s1 − s2` are the square roots of that norm plus
+/// and minus `2·|det|`.
+///
+/// The per-pixel SVD [`WarpMap::compute_svd`] stores is computed by a private
+/// `f32` routine that also returns the major direction, and
+/// `patch::view_selection` reads the larger singular value of an affine map
+/// by its own closed form in `f32`. Both are the same quantity; they keep
+/// their own arithmetic so their results do not change by a rounding.
+pub fn singular_values_2x2(m: [[f64; 2]; 2]) -> [f64; 2] {
+    let [[a, b], [c, d]] = m;
+    let norm2 = a * a + b * b + c * c + d * d;
+    let det = (a * d - b * c).abs();
+    let sum = (norm2 + 2.0 * det).max(0.0).sqrt();
+    let difference = (norm2 - 2.0 * det).max(0.0).sqrt();
+    [0.5 * (sum + difference), 0.5 * (sum - difference)]
 }
 
 /// Closed-form SVD of a 2x2 matrix `[[a, b], [c, d]]`.
@@ -695,6 +808,10 @@ impl WarpMap {
 /// Returns `(sigma_major, sigma_minor, v_major_x, v_major_y)` where
 /// `sigma_major >= sigma_minor >= 0` and `(v_major_x, v_major_y)` is the
 /// right singular vector corresponding to `sigma_major`.
+///
+/// The singular values alone, in `f64`, are the public
+/// [`singular_values_2x2`]; this one keeps its own `f32` arithmetic, which the
+/// stored per-pixel SVD has always used.
 fn svd_2x2(a: f32, b: f32, c: f32, d: f32) -> (f32, f32, f32, f32) {
     // Using the standard closed-form for 2x2 SVD via the quantities:
     //   s1 = a^2 + b^2 + c^2 + d^2  (= ||M||_F^2)
