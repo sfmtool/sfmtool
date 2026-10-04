@@ -223,6 +223,7 @@ Eight specs open with "This document describes/specifies…":
 - gui/user-experience
 - gui/viewport-navigation
 - xform/scale-by-measurements
+  > _Status (2026-10-04): **Done** — the opening now says what the option does (scales a reconstruction uniformly by the median of real-over-reconstructed distances for Point ID pairs listed in a YAML file, and records the unit) and when to use it, branch `finding-fix-17-scale-by-measurements-opening`._
 - xform/select-by-distribution
 
 ### 5. Coverage both ways

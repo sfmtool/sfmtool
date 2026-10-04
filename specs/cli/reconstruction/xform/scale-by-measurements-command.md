@@ -1,8 +1,12 @@
 # Scale by Measurements
 
-This document specifies the `--scale-by-measurements` option for `sfm xform`, which scales a
-`.sfmr` reconstruction to physical units using known real-world distances between pairs of 3D
-points.
+A structure-from-motion solve has no real-world scale. The `--scale-by-measurements` option of
+`sfm xform` gives a reconstruction physical units from distances measured in the scene: it reads
+a YAML file listing pairs of 3D points by Point ID, each with its real distance, computes one
+scale factor per pair as real distance over reconstructed distance, scales the whole
+reconstruction uniformly by the median of those factors, and records the declared unit (`mm`,
+`cm`, `m`, `in` or `ft`) as its world-space unit. Use it when the scene contains something of
+known size, such as a ruler, and the reconstruction needs to be in real units.
 
 ## Motivation
 
