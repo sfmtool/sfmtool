@@ -498,6 +498,7 @@ most of the per-sentence findings.
   - Mannered prose: "cut my teeth on" → "learn". The first-person voice is fine.
 **Recommendation:** update docs.
 **Unclear / incorrect / suspicious:** The screenshot may predate the current UI.
+> _Status (2026-10-04): **Done** — `docs/index.md` now gives the command `sfm explorer <file>.sfmr`, says wheels are published for Linux and Windows only and that other platforms, macOS included, build from the sdist with Rust 1.97 or newer, defines the motion as each photo's camera position and orientation with the intrinsics estimated alongside, names "the SfM solver" where "it solves" had no antecedent, and replaces "cut my teeth on" with "learning". The screenshot was not rechecked. Branch `report-fix-06-docs-index`._
 
 ### specs/core/bench/editable-track.md
 > _Status (2026-10-03): **Partially done** — rechecked against the current bench code and fixed in `editable-track.md`: `SeedTooFar` added to the API block's `Unmeasured`; `CreateTrackOptions` and `GeometrySearchOptions` added to the API block; the "world-point forms" clamping sentence and Testing paragraph rewritten for `translate_patch`/`resize_patch` taking a world-unit displacement and half-length, and "The **offset**" renamed to a translation along the normal (the `tests.rs` section header too); the "only one that proposes several" claim corrected to name `search_geometry` and the track-at-pixel cascade; the classification rows now name `DEFAULT_CLASSIFY_NOISE_FLOOR_PX` / `DEFAULT_CLASSIFY_Z_CUTOFF`; `track-at-pixel.md` linked; the Python `create_track` keywords `version=`/`label=` documented; "have the last word" and "repaired by its next fit" reworded; the stale non-goal "Editing the patch's frame or normal by hand" removed. Already gone before this pass: `§ "The split"`, "parting company", "used to be refusals". Not done: shrinking the third-copy code comments and restructuring the Testing section into property lists. PR #687._
@@ -811,6 +812,7 @@ most of the per-sentence findings.
 **What it does:** It launches the SfM Explorer GUI on a reconstruction through the Python bindings. It is the only CLI command with no command spec.
 **Why it matters:** It is user-facing. docs/index.md shows the GUI but cannot point to a command.
 **Recommendation:** Write `specs/cli/visualization/explorer-command.md`, a short spec that covers the flags and links to `gui/architecture.md`.
+> _Status (2026-10-04): **Partially done** — `docs/index.md` now names the command (`sfm explorer <file>.sfmr`). The command spec is not written yet. Branch `report-fix-06-docs-index`._
 
 ### crates/sfmtool-py (binding surface)
 **What it does:** It is the whole Python API (`sfmtool._sfmtool.*`). It is cited only piecemeal from individual core specs.
