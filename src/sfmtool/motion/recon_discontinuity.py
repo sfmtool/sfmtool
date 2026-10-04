@@ -685,19 +685,9 @@ def analyze_reconstruction(
         )  # per-frame, len n
 
         # Thresholds for this sequence (consumed by both the console table and
-        # the JSON report).
-        # Translation threshold: POSE_TRANS_FACTOR × median successive
-        # motion.  Using 1× is too tight — normal trajectory curvature
-        # produces extrapolation errors on the order of the step size.
-        # The factor leaves room for that while still catching real jumps.
-        # Invariant to pruning since it's based on trajectory properties,
-        # not error statistics.
+        # the JSON report).  constants.py says why translation scales with the
+        # median step and rotation is fixed.
         trans_threshold = POSE_TRANS_FACTOR * median_trans
-        # Rotation threshold: fixed.  Unlike translation, rotation
-        # extrapolation quality depends on the smoothness of the trajectory,
-        # not on the rotation rate.  A quadratic extrapolation from 3
-        # smooth neighbors should predict within a few degrees regardless
-        # of how fast the camera is rotating.
         rot_threshold = POSE_ROT_DEG
 
         # Per-frame flags.  StepR/CovR come from the landing edge (i-1, i), so

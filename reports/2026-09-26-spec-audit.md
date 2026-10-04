@@ -900,6 +900,7 @@ and the opening paragraphs listed in check 4.
 - `sift/mod.rs:310-329`, the proof of the cap-aware walk.
 - `geometry/resect_translation.rs:95-116`, the `residual_norm` chirality argument.
 - `motion/recon_discontinuity.py:689-700`, the threshold rationale, which is already in `constants.py`.
+  > _Status (2026-10-04): **Done** — the full rationale for both pose-extrapolation thresholds now sits beside `POSE_TRANS_FACTOR` and `POSE_ROT_DEG` in `constants.py` (it held only a one-line summary before), and `recon_discontinuity.py` keeps a one-line pointer to it, branch `finding-fix-23-motion-threshold-comment`._
 - `optical_flow/gpu/mod.rs:98-103`.
 - `kernels/sfmtool_pinhole.rs:87-110`.
 - `image_detail/intrinsics/field.rs:4-65`, a 62-line module doc.
