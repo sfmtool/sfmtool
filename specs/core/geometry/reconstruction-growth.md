@@ -149,7 +149,12 @@ of 280 it keeps nearly all of them and they are decided. With far points stored 
 observations are mostly of the far field has fewer correspondences to resect
 against, which is what the crossing costs growth; on a synthetic orbit with a
 far field 10⁶ units out every image still registers, as many as with the
-crossing off.
+crossing off. Every adjustment growth runs ends with a converged final round on
+the real tracks measured (49 adjustments over the seoul bull, seattle, dino
+and Kerry Park solves and the Kerry Park ground truth), so the storage decision
+is read at a converged level, and growth with the crossing takes 0.43 to 0.87 of the time it takes
+with the crossing off ([bundle-adjustment.md](bundle-adjustment.md) § "Cost is
+the solve's own").
 
 Everything covisibility-driven here rests on the dense cluster
 covisibility, which is only built up to `MAX_DENSE_IMAGES` (4096) images.
