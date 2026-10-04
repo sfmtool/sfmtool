@@ -943,9 +943,9 @@ microseconds per query against the in-memory path's ~1 us.
 Reaching ~1 us means a descriptor access costing nanoseconds, which means no lock
 and no hash lookup on the path: the corpus indexed directly, with the operating
 system's page cache doing the caching. That is the memory-mapped flat-array design
-[kdf-layout-measurements.md](kdf-layout-measurements.md#format-tradeoffs) records as the shape a
-mapping consumer wants, and this measurement is the argument for it rather than
-against.
+[kdf-layout-measurements.md](kdf-layout-measurements.md#format-tradeoffs) records
+as the shape a mapping consumer wants, and this measurement is the argument for it
+rather than against.
 
 **And an out-of-core index is not an out-of-core algorithm.** Cluster matching is
 a self-join, so the file-backed path also supplies its own queries — it reads each

@@ -91,8 +91,8 @@ Required fields in `metadata.json.zst`:
 Each tree has `root: [chunk_id, local_node_index]` and `chunks`, an array in
 chunk-ID order. When N is positive the root is `[0, 0]`, the first node of chunk
 0, and readers reject any other address; when N = 0 it is `null`. Each chunk
-object has integer `node_count` M, `feature_count` P, and `decoded_bytes`. The latter equals
-`40*M + sizeof(scalar_type)*M + 4*P`.
+object has integer `node_count` M, `feature_count` P, and `decoded_bytes`. The
+latter equals `40*M + sizeof(scalar_type)*M + 4*P`.
 Chunk and local node indices fit uint32. M is positive; an empty forest has
 no chunks in any tree. No tree is empty when N is positive.
 
@@ -182,7 +182,7 @@ The `chunk` entry's ten uint32 node columns, in order, are:
 
 | Column | Internal node | Leaf node |
 |--------|---------------|-----------|
-| `kind` | Legend code for internal | Legend code for leaf |
+| `kind` | 0 | 1 |
 | `logical_node_id` | Stable node ID within this tree | Same |
 | `split_dimension` | Zero-based axis, less than D | Zero |
 | `left_chunk` | Chunk ID within this tree | Zero |
@@ -454,7 +454,7 @@ one frame per entry reports an error instead of decoding only the first block an
 reporting success. Descriptor and geometry blocks use the same logical row
 boundaries but separate offsets because their compressed lengths differ.
 
-What is preserved are the properties a reader relies on. The file is still a ZIP of
+The properties a reader relies on are preserved. The file is still a ZIP of
 STORE entries, so standard tools still list it and still extract any entry. Binary
 arrays are still little-endian and row-major with no headers of their own. Names
 still encode shape and type, and every decoded length is still derivable from a
