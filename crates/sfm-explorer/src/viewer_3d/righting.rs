@@ -6,7 +6,7 @@
 //! [`step`] picks each frame's turning speed from the angle left and the last
 //! frame's speed, so the speed is the only state carried between frames. The
 //! speed profile, the timings [`MAX_SPEED`] and [`ACCELERATION`] give, and the
-//! two cases that need a choice of axis are in
+//! two cases that need a choice of how to turn are in
 //! `specs/gui/viewport-navigation.md` § "Maintain Z-up".
 
 use nalgebra::{Unit, UnitQuaternion, Vector3};
