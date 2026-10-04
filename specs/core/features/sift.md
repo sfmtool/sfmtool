@@ -439,8 +439,8 @@ low-risk overlaps:
   *K* falls back to the historical conservative `min(os.cpu_count(), 4)`.
   `SFMTOOL_SIFT_EXTRACT_WORKERS` overrides everything (`1` restores
   one-at-a-time; a value below 1 counts as 1, and a non-integer value is
-  ignored with a warning). Measured win (point-in-time, 4-core box, release build,
-  seoul_bull 270×480): **~1.27× batch throughput** (100 imgs 37.6→29.6 ms/img at
+  ignored with a warning). Measured win (point-in-time, 4-core box, release
+  build, seoul_bull 270×480): **~1.27× batch throughput** (100 imgs 37.6→29.6 ms/img at
   1→4+ workers), no single-image regression; because a 270×480 image already
   reaches ~4.5 effective cores, that box is near-saturated at *K*=4 and the win
   there is modest — the memory-bounded core-scaled default matters on many-core
