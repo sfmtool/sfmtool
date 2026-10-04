@@ -1,13 +1,16 @@
 # The sfmtool camera models
 
-## Summary
-
-Two camera models that use a spline for radially symmetric distortion. Each
-pairs a distortion-free base model with a monotonic spline correction whose
-number of knots is selectable: `SFMTOOL_FISHEYE` on an equidistant base,
-`SFMTOOL_PINHOLE` on a pinhole base. Both bases have square pixels and are
-parametrized with one focal length. The spline is constrained to be strictly
-increasing so that the distortion is invertible.
+`SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE` are two camera models, named by those
+strings in a camera's `model` field in a `.sfmr` file. Each projects a
+camera-frame ray to a pixel through a distortion-free base projection with one
+focal length and square pixels (equidistant for the fisheye, pinhole for the
+pinhole), plus a radially symmetric cubic B-spline correction whose number of
+coefficients each camera chooses. They let a reconstruction describe a lens's
+radial distortion with a spline instead of a fixed set of
+polynomial coefficients, while the distorted radius stays strictly increasing
+so the projection can be inverted exactly. This spec defines the projection, the parameters and how a
+camera stores them. COLMAP has no equivalent model, so a camera of either model
+cannot be exported to COLMAP.
 
 **Beta:** the parameterization may still change: the basis, the knot
 layout, and the parameter names. A `.sfmr` file carrying these models may
@@ -85,8 +88,8 @@ Consequences of the basis that the rest of the models rest on:
   observation.
 - **Minimum length.** A cubic basis needs four functions, so a defined spline
   needs at least two coefficients. A shorter spline (the empty one included)
-  evaluates as the identity `δ ≡ 0`, as does a `d_max` that is not positive
-  and finite.
+  evaluates as the identity `δ ≡ 0`. A file cannot store exactly one
+  coefficient (see [Serialization](#serialization)).
 - **Linear tail.** Beyond `d_max` the correction continues along its end
   tangent, `δ(d) = δ(d_max) + δ'(d_max)·(d − d_max)` with
   `δ'(d) = δ'(d_max)`, so `δ` is `C¹` at the domain end and the radial
@@ -118,14 +121,16 @@ own domain plus that single inequality. The invariant is what makes the radial
 distortion map injective and therefore exactly invertible. It is a
 **construction**
 invariant: enforced where a spline is produced, and relied on where one is
-read. A spline that violates it has left the map's increasing branch wherever
-`d + δ(d) ≤ 0` at a positive `d`; projection and derivative are both undefined
-there and return nothing. Deserialization is not one of the enforcement sites:
-it validates the parameter list and admits whatever coefficients the file
-carries. A file holding a violating spline therefore loads, projects on the
-fold-gated domain, and inverts to a root of the folded map rather than to the
-radius that produced the pixel. The decision procedure and the enforcement
-sites are
+read. A writer must not store a spline that violates it. A reader does not
+check it: it validates the parameter list and accepts whatever coefficients
+the file carries.
+
+A spline that violates the invariant has folded: its distorted radius
+`d + δ(d)` turns back down and can reach zero or below. Projection and its
+derivative return nothing at any positive `d` where `d + δ(d) ≤ 0`. A file
+holding such a spline therefore loads, projects only where `d + δ(d) > 0`, and
+inverts a pixel to some root of the folded map rather than necessarily to the
+radius that produced it. The decision procedure and the enforcement sites are
 specified in
 [../core/camera/sfmtool-fisheye-kernels.md](../core/camera/sfmtool-fisheye-kernels.md) and
 [../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md).
@@ -137,7 +142,9 @@ coefficients are all **exactly** `0.0`, is the identity correction. The test
 is exact, not an epsilon: the same convention `SIMPLE_RADIAL_FISHEYE` uses at
 `k1 == 0`.
 
-A `d_max` that is not positive and finite is likewise the identity
+A file always carries a positive, finite `d_max`, since a reader rejects any
+other value (see [Serialization](#serialization)). A camera built in memory
+with a `d_max` that is not positive and finite evaluates as the identity
 correction, whatever the coefficients.
 
 With the identity spline each model is exactly its base model, and the
@@ -150,12 +157,6 @@ nothing. The contract covers exactly those three maps; pixel-radius sizing
 helpers agree to rounding, not bitwise.
 
 ## Parameters
-
-The two variants and their serialization live in
-[intrinsics.rs](../../crates/sfmtool-core/src/camera/intrinsics.rs)
-(`CameraModel::SfmtoolFisheye` and `CameraModel::SfmtoolPinhole`, sharing the
-`get_bspline` parameter reader), with the spline basis in
-[bspline.rs](../../crates/sfmtool-core/src/camera/distortion/bspline.rs).
 
 Each model's parameter list is a fixed-length head followed by the spline
 coefficients:
@@ -172,8 +173,8 @@ bspline_c0 … bspline_c{N−1}
   in pixels.
 - The domain end `d_max`, named per model: `bspline_theta_max` for
   `SFMTOOL_FISHEYE`, in radians of incidence angle; `bspline_rho_max` for
-  `SFMTOOL_PINHOLE`, in normalized image-plane radius. The correction is held
-  constant beyond it.
+  `SFMTOOL_PINHOLE`, in normalized image-plane radius. Beyond it the correction
+  continues along its end tangent (the linear tail above).
 - `bspline_coeff_count`: the number of spline coefficients `N`, a non-negative
   integer. The parameter count varies with the spline, so the count is itself
   a parameter: the five-parameter head has fixed length, and reading it yields
@@ -183,8 +184,11 @@ bspline_c0 … bspline_c{N−1}
 
 ## `SFMTOOL_FISHEYE`
 
-With the camera-frame ray taken to the optical frame (`S = diag(1, −1, −1)` off
-the canonical convention), `ρ = √(rx² + ry²)`, unit image direction
+A camera-frame ray `(x, y, z)` is in the `.sfmr` camera convention: the camera
+looks down −Z, with +X right and +Y up in the image. The model first takes it
+to the optical frame, `(rx, ry, rz) = (x, −y, −z)` (the matrix
+`S = diag(1, −1, −1)`), in which the camera looks down +Z and +Y points down,
+the same way pixel `v` grows. With `ρ = √(rx² + ry²)`, unit image direction
 `û = (rx, ry)/ρ` and incidence angle `θ = atan2(ρ, rz) ∈ [0, π]`, the model
 projects
 
@@ -217,13 +221,8 @@ The zero-spline base is `SIMPLE_PINHOLE`, the one-focal pinhole.
 
 ## Serialization
 
-`SfmrCamera` stores the parameters under the names listed in
-[Parameters](#parameters). Because the parameter list is variable-length, these
-models are registered as `custom` in the camera model registry — their
-serialization is hand-written and intercepts the conversion before the
-fixed-arity table is reached, which is what keeps the validation below out of a
-generated lookup. See
-[../core/camera/camera-model-registry.md](../core/camera/camera-model-registry.md).
+A camera stores the parameters in its `parameters` map under the names listed
+in [Parameters](#parameters).
 
 The `.sfmr` container is pass-through for camera parameters
 (the format stores whatever `parameters` map the model writes), so
@@ -295,27 +294,48 @@ identity, is exactly the `EQUIDISTANT_FISHEYE` camera with focal `130.0`.
 
 Reading back, `bspline_coeff_count` declares the spline's length: it must be
 `0` or at least `2` (a defined spline needs at least two coefficients), every
-coefficient index below it must be present (`bspline_c0..bspline_c{N−1}`), no
-`bspline_c*` key at or beyond it may be present, and the domain end must be
-positive and finite. An absent `bspline_coeff_count`, domain end or
-coefficient below the declared length is `MissingParameter`; a
-`bspline_coeff_count` that is not a finite non-negative integer or is exactly
-`1`, a domain end that is not positive and finite, or a coefficient key at or
-beyond the declared length, is `InvalidParameter`. An empty spline round-trips
-as `bspline_coeff_count = 0` with no coefficient keys.
+coefficient index below it must be present (`bspline_c0..bspline_c{N−1}`), and
+the domain end must be positive and finite. A coefficient key is `bspline_c`
+followed by its index in decimal with no sign or leading zero; any other key
+starting with `bspline_c`, other than `bspline_coeff_count` itself, and any
+coefficient key at or beyond the declared length, is not allowed. A reader
+rejects the camera when any of these rules is broken, or when
+`bspline_coeff_count` is absent or is not a finite non-negative integer. An
+empty spline round-trips as `bspline_coeff_count = 0` with no coefficient keys.
 
-## Testing requirements
+## Implementations
 
-Per model:
+The two models are `CameraModel::SfmtoolFisheye` and
+`CameraModel::SfmtoolPinhole` in
+[intrinsics.rs](../../crates/sfmtool-core/src/camera/intrinsics.rs). The
+spline basis, the linear tail and the monotonicity check are in
+[bspline.rs](../../crates/sfmtool-core/src/camera/distortion/bspline.rs), and
+the projection kernels are in
+[sfmtool_fisheye.rs](../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs)
+and
+[sfmtool_pinhole.rs](../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_pinhole.rs).
 
-- **Serialization**: an `N`-coefficient camera round-trips through
-  `SfmrCamera`; an empty spline round-trips as `bspline_coeff_count = 0`; a missing
-  coefficient below the declared length, a missing domain end and a missing
-  `bspline_coeff_count` are `MissingParameter`; a non-integer, negative,
-  non-finite or exactly-one `bspline_coeff_count`, a domain end that is not
-  positive and finite, and a coefficient key at or beyond the declared length
-  are `InvalidParameter`.
-- **COLMAP rejection** on both export paths, with the model name in the error.
-- **Python surface** (`tests/rust_bindings/`): construction from a parameter
-  dict (including the serialization rejections above), pycolmap export
-  rejected, and the model's deliberate absence from `CAMERA_MODEL_NAMES`.
+Reading and writing the parameter map is in
+[registry.rs](../../crates/sfmtool-core/src/camera/intrinsics/registry.rs):
+`get_bspline` applies the rules in [Serialization](#serialization) and reports
+a missing key as `CameraIntrinsicsError::MissingParameter` and any other
+violation as `CameraIntrinsicsError::InvalidParameter`. Because the parameter
+list has variable length, both models are registered as `custom` in the camera
+model registry, so their conversion is written by hand instead of generated
+from the fixed-arity table; see
+[../core/camera/camera-model-registry.md](../core/camera/camera-model-registry.md).
+
+`CameraModel::has_distortion`, which reports whether a camera distorts at all,
+treats a coefficient whose magnitude is at most `1e-12` as zero, as it does for
+every model. Projection does not use it: the identity test that projection
+applies is the exact one in [The zero-spline identity](#the-zero-spline-identity).
+
+The serialization rules are tested in
+[intrinsics/tests.rs](../../crates/sfmtool-core/src/camera/intrinsics/tests.rs),
+the refusal of both COLMAP export paths in
+[colmap_io/tests.rs](../../crates/sfmtool-colmap/src/colmap_io/tests.rs), and
+the Python surface, including the models' absence from `CAMERA_MODEL_NAMES`,
+in
+[test_sfmtool_fisheye_rust_bindings.py](../../tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py)
+and
+[test_sfmtool_pinhole_rust_bindings.py](../../tests/rust_bindings/test_sfmtool_pinhole_rust_bindings.py).

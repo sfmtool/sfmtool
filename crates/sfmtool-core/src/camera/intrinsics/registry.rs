@@ -432,10 +432,14 @@ fn get_bspline(
     }
     let stray = params.keys().find(|k| {
         // `bspline_coeff_count` shares the coefficient prefix but is the
-        // declaration itself, never a coefficient.
+        // declaration itself, never a coefficient. An index is a coefficient
+        // only in the spelling the writer uses: `bspline_c01` or `bspline_c+1`
+        // parse to an in-range index but are not the key that index was read
+        // from, so they are strays too.
         k.as_str() != "bspline_coeff_count"
-            && k.strip_prefix("bspline_c")
-                .is_some_and(|i| !matches!(i.parse::<usize>(), Ok(i) if i < n))
+            && k.strip_prefix("bspline_c").is_some_and(
+                |i| !matches!(i.parse::<usize>(), Ok(j) if j < n && j.to_string() == i),
+            )
     });
     if let Some(stray) = stray {
         return Err(CameraIntrinsicsError::InvalidParameter {

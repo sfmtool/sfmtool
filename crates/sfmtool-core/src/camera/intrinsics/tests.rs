@@ -1312,6 +1312,28 @@ fn sfmtool_fisheye_coefficient_beyond_the_declared_length_is_an_invalid_paramete
     ));
 }
 
+#[test]
+fn sfmtool_fisheye_non_canonical_coefficient_key_is_an_invalid_parameter() {
+    // An index spelled differently from the writer's `bspline_c{i}` names an
+    // in-range coefficient but is not the key it was read from, so it is a
+    // stray rather than a silently ignored duplicate.
+    for key in ["bspline_c01", "bspline_c+1"] {
+        let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+        stored.parameters.insert(key.to_string(), -0.11);
+        let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CameraIntrinsicsError::InvalidParameter {
+                    ref model,
+                    ref parameter,
+                } if model == "SFMTOOL_FISHEYE" && parameter == key
+            ),
+            "{key} was accepted: {err}"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------
 // SfmtoolPinhole: pinhole base + radial spline. The same variable-length
 // serialization as its fisheye sibling under `bspline_rho_max`, and the

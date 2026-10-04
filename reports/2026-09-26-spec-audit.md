@@ -286,6 +286,8 @@ Eight specs open with "This document describes/specifies…":
 | sfmtool-camera-models.md | 5 | 2 | 7 findings |
 | sift-file-format.md | 1 | 4 | 7 findings, plus a wrong field definition |
 
+> _Status (2026-10-04): **Done** for `sfmtool-camera-models.md` — its code names now sit in an Implementations section; see that spec's section below, branch `report-fix-07-camera-models-contradiction`._
+
 **Structural result:** six of seven format specs with hits have no
 *Implementations* section, so crate, type, function and CLI names are spread
 through the normative text. Adding that section to each one is what would fix
@@ -784,6 +786,7 @@ most of the per-sentence findings.
 **Unclear / incorrect / suspicious:**
   - `spline_has_distortion` uses `DISTORTION_EPS = 1e-12`, but :136-137 say the zero test is exact.
   - `get_bspline` accepts key spellings such as `bspline_c01` and `bspline_c+1`.
+> _Status (2026-10-04): **Done** — `sfmtool-camera-models.md` now opens with a plain-language paragraph built on the proposed sentence; the Parameters bullet says the correction continues along its end tangent beyond `d_max`, matching § Linear tail; the non-positive `d_max` identity is stated as an in-memory rule, since a reader rejects such a file; a new Implementations section holds the code names (`CameraModel` variants, `get_bspline` in `intrinsics/registry.rs`, the registry's `custom` entry, the two error variants) and points at the tests, replacing the Testing requirements section; Serialization says "a reader rejects the camera"; the monotonicity section states the file rule (a writer must not store a violating spline, a reader does not check) and replaces "fold-gated domain" with the condition `d + δ(d) > 0`; the fisheye section restates the camera-frame convention; and the Implementations section says `has_distortion` uses a `1e-12` threshold while projection's identity test is exact. `get_bspline` now rejects non-canonical coefficient keys such as `bspline_c01` and `bspline_c+1`, with a test, and the spec states the key spelling rule. Branch `report-fix-07-camera-models-contradiction`._
 
 ---
 
