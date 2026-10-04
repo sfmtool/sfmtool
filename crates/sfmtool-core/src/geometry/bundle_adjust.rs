@@ -395,6 +395,15 @@ pub struct FreePointDecision {
     /// Free points the caller handed in as positions that are stored as
     /// directions.
     pub to_direction: usize,
+    /// Free points with an estimate that the test could not score, because
+    /// the final round kept fewer than two usable observations of them (the
+    /// trim or `min_track` dropped the rest). Each is stored in the
+    /// representation the caller handed it in -- as the solve left it where
+    /// that is the same, and as handed in otherwise; one handed in with no
+    /// estimate keeps the representation the re-estimation gave it -- and is
+    /// counted in neither `to_finite` nor `to_direction`. Zero where the test
+    /// was not read.
+    pub unscored: usize,
 }
 
 /// The cameras of a solve, and which of them took each image.
@@ -1148,19 +1157,32 @@ fn in_front_floor(depths: &[f64], is_dir: &[bool], obs_pt: &[u32]) -> f64 {
 /// image, so a track seen by two cameras back-projects each observation
 /// through its own lens.
 ///
-/// `free_from_rays` is the inverse-depth policy for free points. Off, every
-/// free point keeps its representation as it came in (the mask is honoured for
-/// the whole solve). On, a free point still re-estimates in the representation
-/// the last round's solve left it in -- a position by its midpoint, a direction
-/// (a point the solve took to `ρ = 0`) by its mean ray -- but with cheirality
-/// on, so a position whose midpoint lands behind a camera that observes it
-/// starts the next round as its mean ray, at `ρ = 0`. Neither is a decision
-/// about how the point is stored: the next round solves it in inverse depth
-/// from there, where it can move to or away from infinity, and the storage
-/// decision is taken at the end of the solve. An absent estimate (`NaN`)
-/// leaves the representation it had. A ranged point is carried by the
-/// distance rule at whatever origin its reference resolves to now, and a held
-/// point is not re-estimated at all.
+/// `cross_trim` is the inverse-depth policy for free points: `None` with the
+/// crossing off, and with it on, the trim threshold of the round about to
+/// start. Off, every free point keeps its representation as it came in (the
+/// mask is honoured for the whole solve). On, each free point starts the next
+/// round from whichever of three states fits its whole track best, read as the
+/// sum over its observations of the squared residual capped at `cross_trim`:
+/// the state the last round left it in, its midpoint, and its mean ray at
+/// `ρ = 0`, preferred in that order on a tie. The midpoint is read with
+/// cheirality on, so one behind a camera that observes the point is the mean
+/// ray. A state in the other representation than the last round left is taken
+/// only when at least `min_track` of the track's observations reproject under
+/// `cross_trim` from it, the number the next round's trim needs to keep the
+/// track in the solve; otherwise the last state stands, since a change of
+/// representation the next round cannot solve on would come back unscored and
+/// be reset to the row it was handed in with. A point with no estimate takes
+/// its midpoint, or its mean ray where that costs less, with no guard. The
+/// choice is not a decision about how the point is stored: the next
+/// round solves it in inverse depth from there, where it can move to or away
+/// from infinity, and the storage decision is taken at the end of the solve.
+/// It is a choice among starting values because neither closed form is right
+/// for every track: the midpoint of nearly parallel rays can land near the
+/// cameras, where its residuals put the whole track past the trim, and the mean
+/// ray of a near point's rays is off by its parallax. A free point with fewer
+/// than two usable observations becomes `NaN`, as any track does. A ranged
+/// point is carried by the distance rule at whatever origin its reference
+/// resolves to now, and a held point is not re-estimated at all.
 #[allow(clippy::too_many_arguments)]
 fn retriangulate_round(
     cams: &[CameraIntrinsics],
@@ -1173,8 +1195,10 @@ fn retriangulate_round(
     obs_img: &[u32],
     obs_pt: &[u32],
     cons: &Constraints,
-    free_from_rays: bool,
+    cross_trim: Option<f64>,
+    min_track: usize,
 ) {
+    let free_from_rays = cross_trim.is_some();
     let mut quats_wxyz = Vec::with_capacity(quats.len() * 4);
     for q in quats {
         quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
@@ -1203,33 +1227,112 @@ fn retriangulate_round(
             })
             .collect()
     });
-    let est = triangulate_points_through_cameras(
-        cams,
-        image_camera,
-        ObservationSet {
-            uv: uv.as_flattened(),
-            obs_image: obs_img,
-            obs_point: obs_pt,
-            quats_wxyz: &quats_wxyz,
-            translations: &translations,
-            n_tracks: points.len(),
-        },
-        Some(&*is_dir),
-        PointRules {
-            distance: distances.as_deref(),
-            cheirality: free_from_rays,
-            few: FewObservations::Absent,
-            ..Default::default()
-        },
-    );
-    for (p, (row, e)) in points.iter_mut().zip(&est.xyzw).enumerate() {
+    // The operation over every track, the free points marked as `free` says
+    // where it is given, and every point otherwise as the round's mask has it.
+    let estimate = |is_dir: &[bool], free: Option<bool>| {
+        let marks: Vec<bool> = (0..points.len())
+            .map(|p| match free {
+                Some(m) if cons.constraint[p] == PointConstraint::Free => m,
+                _ => is_dir[p],
+            })
+            .collect();
+        triangulate_points_through_cameras(
+            cams,
+            image_camera,
+            ObservationSet {
+                uv: uv.as_flattened(),
+                obs_image: obs_img,
+                obs_point: obs_pt,
+                quats_wxyz: &quats_wxyz,
+                translations: &translations,
+                n_tracks: points.len(),
+            },
+            Some(&marks),
+            PointRules {
+                distance: distances.as_deref(),
+                cheirality: free_from_rays,
+                few: FewObservations::Absent,
+                ..Default::default()
+            },
+        )
+        .xyzw
+    };
+    let Some(trim_px) = cross_trim else {
+        let est = estimate(is_dir, None);
+        for (p, (row, e)) in points.iter_mut().zip(&est).enumerate() {
+            // A held point owns its coordinate; the estimate for it is discarded.
+            if cons.held(p) {
+                continue;
+            }
+            *row = [e[0], e[1], e[2]];
+        }
+        return;
+    };
+    // Under the crossing: every free point's midpoint (its mean ray where the
+    // midpoint lies behind an observing camera) and its mean ray.
+    let mid = estimate(is_dir, Some(false));
+    let ray = estimate(is_dir, Some(true));
+    let mid_rows: Vec<[f64; 3]> = mid.iter().map(|e| [e[0], e[1], e[2]]).collect();
+    let mid_dirs: Vec<bool> = mid.iter().map(|e| e[3] == 0.0).collect();
+    let ray_rows: Vec<[f64; 3]> = ray.iter().map(|e| [e[0], e[1], e[2]]).collect();
+    let ray_dirs = vec![true; points.len()];
+    // A candidate state's cost per point, the squared residual of each of its
+    // observations capped at the next round's trim, and how many of them
+    // reproject under that trim.
+    let capped_cost = |rows: &[[f64; 3]], dirs: &[bool]| {
+        let (norms, _) = residual_norms_depths(
+            cams,
+            image_camera,
+            quats,
+            trans,
+            rows,
+            dirs,
+            uv,
+            obs_img,
+            obs_pt,
+        );
+        let mut cost = vec![0.0; rows.len()];
+        let mut under = vec![0usize; rows.len()];
+        for (k, &r) in norms.iter().enumerate() {
+            let p = obs_pt[k] as usize;
+            cost[p] += r.min(trim_px).powi(2);
+            under[p] += usize::from(r < trim_px);
+        }
+        (cost, under)
+    };
+    let (cost_now, _) = capped_cost(points, is_dir);
+    let (cost_mid, under_mid) = capped_cost(&mid_rows, &mid_dirs);
+    let (cost_ray, under_ray) = capped_cost(&ray_rows, &ray_dirs);
+    for p in 0..points.len() {
         // A held point owns its coordinate; the estimate for it is discarded.
         if cons.held(p) {
             continue;
         }
-        *row = [e[0], e[1], e[2]];
-        if free_from_rays && cons.constraint[p] == PointConstraint::Free && e[3].is_finite() {
-            is_dir[p] = e[3] == 0.0;
+        // A ranged point is carried by the distance rule, and a free point
+        // with fewer than two usable observations has no estimate.
+        if cons.constraint[p] != PointConstraint::Free || !mid[p][3].is_finite() {
+            points[p] = mid_rows[p];
+            continue;
+        }
+        // A state with no estimate (`NaN`) is replaced by the midpoint, as any
+        // track's is; otherwise a state in the other representation must keep
+        // enough of the track under the trim for the next round to solve it.
+        let now_finite = points[p].iter().all(|v| v.is_finite());
+        let admissible =
+            |dir: bool, under: usize| !now_finite || dir == is_dir[p] || under >= min_track;
+        let was_dir = is_dir[p];
+        let mut best = cost_now[p];
+        if !now_finite || (cost_mid[p] < best && admissible(mid_dirs[p], under_mid[p])) {
+            best = cost_mid[p];
+            points[p] = mid_rows[p];
+            is_dir[p] = mid_dirs[p];
+        }
+        if ray[p][3].is_finite()
+            && cost_ray[p] < best
+            && (!now_finite || was_dir || under_ray[p] >= min_track)
+        {
+            points[p] = ray_rows[p];
+            is_dir[p] = true;
         }
     }
 }
@@ -2667,10 +2770,21 @@ fn free_point_anchors(
 }
 
 /// The storage decision: each free point with an estimate, scored at the poses
-/// and cameras the solve ended at and at the noise level `sigma_px`, over every
-/// observation of its track, is stored as a position where [`is_finite`] says
-/// its rays ask for a depth and as a direction where they do not.
+/// and cameras the solve ended at and at the noise level `sigma_px`, over the
+/// observations of its track in `kept` (the final round's solve set), is stored
+/// as a position where [`is_finite`] says its rays ask for a depth and as a
+/// direction where they do not. Returns, per point, whether it has an estimate
+/// but fewer than two usable kept observations and so is not scored. Such a
+/// point is stored as the solve left it where that is in the representation
+/// the caller handed in (`input_points`, `input_is_dir`), and otherwise as the
+/// caller handed it in, so that a point the test never read is never stored in
+/// a representation it did not choose. A point handed in with no estimate has
+/// no row to go back to and keeps the representation the re-estimation gave it.
 ///
+/// - Only kept observations are read, so an observation the trim, the in-front
+///   floor or `min_track` rejected changes neither the verdict nor the stored
+///   bearing, and a track the trim starved is not stored from rays the solve
+///   did not fit.
 /// - A finite verdict on a point the solve left at a position keeps that
 ///   position, and on one it left at `ρ = 0` places it at the test's own point
 ///   fit ([`fit_point_and_bearing`]), where that point lies in front of every
@@ -2692,13 +2806,16 @@ fn decide_free_points(
     uv: &[[f64; 2]],
     obs_img: &[u32],
     obs_pt: &[u32],
+    kept: &[usize],
     cons: &Constraints,
     sigma_px: f64,
-) {
+    input_points: &[[f64; 3]],
+    input_is_dir: &[bool],
+) -> Vec<bool> {
     let n_pt = points.len();
     let mut track: Vec<Vec<usize>> = vec![Vec::new(); n_pt];
-    for (k, &p) in obs_pt.iter().enumerate() {
-        track[p as usize].push(k);
+    for &k in kept {
+        track[obs_pt[k] as usize].push(k);
     }
     let centres: Vec<Point3<f64>> = quats
         .iter()
@@ -2706,15 +2823,19 @@ fn decide_free_points(
         .map(|(q, t)| Point3::from(camera_centre(q, t)))
         .collect();
     let fit_options = PointBearingFitOptions::default();
-    let decided: Vec<Option<([f64; 3], bool)>> = (0..n_pt)
+    // Per point: the representation to store (the row and whether it is a
+    // direction), where it changes, and whether the point has an estimate but
+    // too few kept rays to score.
+    type Stored = Option<([f64; 3], bool)>;
+    let decided: Vec<(Stored, bool)> = (0..n_pt)
         .into_par_iter()
         .map(|p| {
             if cons.constraint[p] != PointConstraint::Free {
-                return None;
+                return (None, false);
             }
             let row = points[p];
             if !row.iter().all(|v| v.is_finite()) {
-                return None;
+                return (None, false);
             }
             let (mut dirs, mut cs, mut weights) = (Vec::new(), Vec::new(), Vec::new());
             for &k in &track[p] {
@@ -2726,29 +2847,39 @@ fn decide_free_points(
                     weights.push(r.weight);
                 }
             }
-            let score = bearing_score(&dirs, &cs, &weights)?;
+            let Some(score) = bearing_score(&dirs, &cs, &weights) else {
+                return (None, true);
+            };
             let finite = is_finite(&score, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD);
-            match (finite, is_dir[p]) {
+            let stored = match (finite, is_dir[p]) {
                 (true, true) => {
-                    let fit =
-                        fit_point_and_bearing(&dirs, &cs, &weights, None, None, &fit_options)?;
-                    let x = fit.point.filter(|_| fit.in_front_of_all_cameras)?;
-                    Some(([x.x, x.y, x.z], false))
+                    fit_point_and_bearing(&dirs, &cs, &weights, None, None, &fit_options)
+                        .and_then(|fit| fit.point.filter(|_| fit.in_front_of_all_cameras))
+                        .map(|x| ([x.x, x.y, x.z], false))
                 }
                 (false, _) if score.bearing_in_front_of_all_cameras => {
                     let b = score.bearing;
                     Some(([b.x, b.y, b.z], true))
                 }
                 _ => None,
-            }
+            };
+            (stored, false)
         })
         .collect();
-    for (p, d) in decided.into_iter().enumerate() {
+    let mut unscored = vec![false; n_pt];
+    for (p, (d, not_scored)) in decided.into_iter().enumerate() {
         if let Some((row, dir)) = d {
             points[p] = row;
             is_dir[p] = dir;
         }
+        let handed_in = input_points[p];
+        if not_scored && is_dir[p] != input_is_dir[p] && handed_in.iter().all(|v| v.is_finite()) {
+            points[p] = handed_in;
+            is_dir[p] = input_is_dir[p];
+        }
+        unscored[p] = not_scored;
     }
+    unscored
 }
 
 /// The staged loop: direction-aware residuals, trims, re-estimation, and the
@@ -2832,11 +2963,11 @@ fn bundle_adjust_staged(
         );
     }
     // The caller's representation, which the storage decision reports its
-    // changes against.
-    let input_is_dir: Vec<bool> = if free_points.cross {
-        is_dir.to_vec()
+    // changes against and restores to a point it cannot score.
+    let (input_points, input_is_dir): (Vec<[f64; 3]>, Vec<bool>) = if free_points.cross {
+        (points.to_vec(), is_dir.to_vec())
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     // The solve set of the last round, whose residuals the storage decision
     // measures, and whether that round met its convergence test.
@@ -2863,7 +2994,8 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 cons,
-                free_points.cross,
+                free_points.cross.then_some(stage.trim_px),
+                min_track,
             );
         }
         // Under the crossing every free point is solved in inverse depth about
@@ -2975,9 +3107,10 @@ fn bundle_adjust_staged(
 
     let cams_final: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
     // The storage decision: every free point is scored at the state the solve
-    // ended at and the noise level its final round measures, and stored as the
-    // test says. A final round that stopped on its iteration budget is decided
-    // too, at the level it measures, and the decision says it did not converge.
+    // ended at and the noise level its final round measures, over the
+    // observations that round kept, and stored as the test says. A final round
+    // that stopped on its iteration budget is decided too, at the level it
+    // measures, and the decision says it did not converge.
     let free_point_decision = free_points.cross.then(|| {
         let noise = round_noise(
             &cams_final,
@@ -2994,7 +3127,7 @@ fn bundle_adjust_staged(
         // A cancelled solve hands back the state it reached, and is not
         // decided on.
         let sigma = noise.sigma_px.filter(|_| !progress.is_cancelled());
-        if let Some(s) = sigma {
+        let unscored_points = sigma.map_or_else(Vec::new, |s| {
             decide_free_points(
                 &cams_final,
                 image_camera,
@@ -3005,13 +3138,20 @@ fn bundle_adjust_staged(
                 uv,
                 obs_img,
                 obs_pt,
+                &prev_kept,
                 cons,
                 s,
-            );
-        }
+                &input_points,
+                &input_is_dir,
+            )
+        });
+        let unscored = unscored_points.iter().filter(|&&u| u).count();
+        // A point not scored is not counted as changed, whatever row it keeps.
         let (mut to_finite, mut to_direction) = (0, 0);
         for p in 0..points.len() {
-            if cons.constraint[p] != PointConstraint::Free {
+            if cons.constraint[p] != PointConstraint::Free
+                || unscored_points.get(p).copied().unwrap_or(false)
+            {
                 continue;
             }
             match (input_is_dir[p], is_dir[p]) {
@@ -3028,11 +3168,16 @@ fn bundle_adjust_staged(
             } else {
                 "; the final round stopped on its iteration budget"
             };
+            let unscored_clause = if unscored > 0 {
+                format!(", {unscored} not scored: too few kept observations")
+            } else {
+                String::new()
+            };
             match sigma {
                 Some(s) => progress_info!(
                     progress,
                     "free points decided at noise {s:.3} px: {to_finite} to finite, \
-                     {to_direction} to directions{unconverged}"
+                     {to_direction} to directions{unscored_clause}{unconverged}"
                 ),
                 None if !progress.is_cancelled() => progress_info!(
                     progress,
@@ -3050,6 +3195,7 @@ fn bundle_adjust_staged(
             converged: last_converged,
             to_finite,
             to_direction,
+            unscored,
         }
     });
     let (norms, _depths) = residual_norms_depths(

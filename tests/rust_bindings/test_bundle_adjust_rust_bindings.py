@@ -1280,6 +1280,7 @@ def test_crossing_promotes_a_direction_whose_rays_carry_parallax():
     assert decision["converged"]
     assert decision["to_finite"] == 1
     assert decision["to_direction"] == 0
+    assert decision["unscored"] == 0
     assert decision["sigma_px"] is not None and decision["sigma_px"] > 0.0
     assert decision["observation_count"] > 0
     assert decision["outlier_count"] == 0

@@ -170,9 +170,10 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
 /// `, free points decided at 0.412 px: 3 to finite, 25 to directions`, with `
 /// before the final round converged` appended when it stopped on its iteration
 /// budget, since a level read from such a round still carries pose error and
-/// errs toward directions. `, free points not decided` when there was no
-/// level to decide at, and nothing when the adjustment kept every point's
-/// representation.
+/// errs toward directions, and `, 2 not scored` after the counts when the
+/// final round kept too few observations of some free points to score them.
+/// `, free points not decided` when there was no level to decide at, and
+/// nothing when the adjustment kept every point's representation.
 fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision>) -> String {
     let Some(d) = decision else {
         return String::new();
@@ -183,10 +184,18 @@ fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision
         " before the final round converged"
     };
     match d.sigma_px.filter(|_| d.decided) {
-        Some(sigma) => format!(
-            ", free points decided at {sigma:.3} px{unconverged}: {} to finite, {} to directions",
-            d.to_finite, d.to_direction
-        ),
+        Some(sigma) => {
+            let unscored = if d.unscored > 0 {
+                format!(", {} not scored", d.unscored)
+            } else {
+                String::new()
+            };
+            format!(
+                ", free points decided at {sigma:.3} px{unconverged}: {} to finite, \
+                 {} to directions{unscored}",
+                d.to_finite, d.to_direction
+            )
+        }
         None => ", free points not decided".to_string(),
     }
 }

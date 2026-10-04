@@ -414,30 +414,24 @@ fn min_track_drops_starved_points() {
         trim_px: 25.0,
         loss_scale: 1.0,
     }];
-    // Under the default crossing the storage decision reads every free point
-    // after the solve, the starved one included, over its whole track: its
-    // rays disagree by hundreds of pixels, no depth explains them, and it is
-    // stored as a direction.
-    let mut crossed = s.clone();
-    let out_crossed = run_with_schedule(&mut crossed, &schedule);
-    assert!(
-        out_crossed.point_at_infinity[victim],
-        "the storage decision leaves the starved track a position"
-    );
-    // That the trim drops the track from the solve is seen with the crossing
-    // off, where nothing writes the row after the solve.
-    let no_dirs = vec![false; s.points.len()];
-    let out = run_masked_with(
-        &mut s,
-        &no_dirs,
-        FreePointPolicy::KEEP,
-        false,
-        &schedule,
-        12,
-    );
+    // Under the default crossing the storage decision reads only the
+    // observations the final round kept, so the starved track, whose junk rays
+    // the trim dropped, is not scored: it is counted and stored as the solve
+    // left it, a position, rather than as a bearing through those rays.
+    let out = run_with_schedule(&mut s, &schedule);
     assert_eq!(
         s.points[victim], victim_before,
         "starved track must be dropped from the solve (point untouched)"
+    );
+    assert!(
+        !out.point_at_infinity[victim],
+        "the starved track was stored as a bearing"
+    );
+    let decision = out.free_point_decision.expect("a storage decision");
+    assert!(decision.decided);
+    assert_eq!(
+        decision.unscored, 1,
+        "the starved track is the one unscored"
     );
     let moved = (0..s.points.len())
         .filter(|&p| p != victim && s.points[p] != [0.0; 3])
@@ -1419,21 +1413,15 @@ fn protected_counts_toward_min_track_survival() {
         trim_px: 25.0,
         loss_scale: 1.0,
     }];
-    // Unprotected: the whole track leaves the solve, point bit-identical. With
-    // the crossing off, so that the storage decision does not write the row
-    // after the solve (see `min_track_drops_starved_points`).
+    // Unprotected: the whole track leaves the solve, point bit-identical, and
+    // the storage decision, which reads only kept observations, leaves it as
+    // the solve did (see `min_track_drops_starved_points`).
     let (mut plain, victim) = build();
     let before = plain.points[victim];
-    let no_dirs = vec![false; plain.points.len()];
-    run_masked_with(
-        &mut plain,
-        &no_dirs,
-        FreePointPolicy::KEEP,
-        false,
-        &schedule,
-        12,
-    );
+    let out = run_with_schedule(&mut plain, &schedule);
     assert_eq!(plain.points[victim], before, "starved track not dropped");
+    assert!(!out.point_at_infinity[victim]);
+    assert_eq!(out.free_point_decision.map(|d| d.unscored), Some(1));
     // Protected corrupted observations count toward min_track: the track
     // stays in the solve and its point moves.
     let (mut prot_scene, _) = build();
@@ -4468,6 +4456,7 @@ fn the_storage_decision_measures_its_noise_and_decides_on_the_test() {
         "the mismatched keypoint is gated out"
     );
     assert_eq!(round.observation_count, n_obs - 1);
+    assert_eq!(round.unscored, 0, "every track keeps its observations");
     let got = round.sigma_px.expect("a measured level");
     assert!(
         (got - sigma).abs() <= 1e-12 * sigma,
@@ -4539,7 +4528,66 @@ fn a_solve_with_no_finite_observation_decides_nothing() {
     assert_eq!(decision.sigma_px, None);
     assert!(!decision.decided);
     assert_eq!((decision.to_finite, decision.to_direction), (0, 0));
+    assert_eq!(decision.unscored, 0, "nothing is scored without a level");
     assert_eq!(out.point_at_infinity, mask);
+}
+
+/// The storage decision reads only the observations the final round kept. A
+/// far track with one outlier, which the final round trims, is stored as the
+/// same bearing as the track with that observation left out. A 20 px shift
+/// across the baseline, which no depth explains, would pull the bearing fitted
+/// over every observation off by about 7e-3 rad, and a 100 px shift would flip
+/// the verdict to finite; read over the kept observations, neither does.
+#[test]
+fn a_trimmed_observation_changes_neither_the_verdict_nor_the_stored_bearing() {
+    let mut base = make_scene(6, 40);
+    add_noise(&mut base, 0.3, 91);
+    let far = add_far_track(&mut base, 20000.0, 0.3, 92);
+    let bad = (0..base.uv.len())
+        .find(|&k| base.obs_pt[k] as usize == far)
+        .expect("the far track is observed");
+    let mut clean = base.clone();
+    clean.uv.remove(bad);
+    clean.obs_img.remove(bad);
+    clean.obs_pt.remove(bad);
+    let out_clean = run_constrained(
+        &mut clean,
+        None,
+        None,
+        CROSS,
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert!(
+        out_clean.point_at_infinity[far],
+        "the far track should be a bearing without the outlier"
+    );
+    let want = in_first_camera(&clean, far, &out_clean);
+    for shift in [[0.0, 20.0], [80.0, -60.0]] {
+        let mut s = base.clone();
+        s.uv[bad][0] += shift[0];
+        s.uv[bad][1] += shift[1];
+        let out = run_constrained(&mut s, None, None, CROSS, None, false, &DEFAULT_SCHEDULE);
+        assert!(
+            out.residual_norms[bad] > DEFAULT_SCHEDULE[2].trim_px,
+            "the outlier {shift:?} should be trimmed: {} px",
+            out.residual_norms[bad]
+        );
+        assert!(
+            out.point_at_infinity[far],
+            "the trimmed outlier {shift:?} flipped the verdict"
+        );
+        let got = in_first_camera(&s, far, &out);
+        let off = got.angle(&want);
+        assert!(
+            off < 1e-6,
+            "the trimmed outlier {shift:?} moved the stored bearing by {off} rad"
+        );
+        let decision = out.free_point_decision.expect("a storage decision");
+        assert_eq!(decision.to_direction, 1, "only the far track is a bearing");
+        assert_eq!(decision.unscored, 0);
+    }
 }
 
 /// Point `p` of a solved scene in the frame of its first camera: a position as
@@ -6327,5 +6375,365 @@ fn the_trim_drops_a_point_on_a_camera_centre_from_the_solve() {
     assert!(
         residual < 0.1,
         "the near point was not solved: camera-1 residual {residual}"
+    );
+}
+
+/// A scene of `n_img` arc cameras and one free track, seen by every camera, for
+/// calling the between-round re-estimation directly: the track's keypoints are
+/// the projections of `x` (a position, or a direction where `dir`), with
+/// `offsets[i]` pixels added to image `i`'s.
+fn one_track(n_img: usize, x: [f64; 3], dir: bool, offsets: &[[f64; 2]]) -> Scene {
+    let mut s = make_scene(n_img, 0);
+    s.points.push(x);
+    for (i, offset) in offsets.iter().enumerate().take(n_img) {
+        let v = Vector3::from(x);
+        let c = if dir {
+            s.quats[i] * v
+        } else {
+            s.quats[i] * v + s.trans[i]
+        };
+        let (u, w) = s.cam.ray_to_pixel([c.x, c.y, c.z]).expect("in view");
+        s.uv.push([u + offset[0], w + offset[1]]);
+        s.obs_img.push(i as u32);
+        s.obs_pt.push(0);
+    }
+    s
+}
+
+/// [`retriangulate_round`] under the crossing on a [`Scene`]'s state, with the
+/// point handed in at `row` (a direction where `dir`); the row and the
+/// representation it starts the next round with.
+fn reestimate(
+    s: &Scene,
+    row: [f64; 3],
+    dir: bool,
+    trim_px: f64,
+    min_track: usize,
+) -> ([f64; 3], bool) {
+    let mut points = vec![row];
+    let mut is_dir = vec![dir];
+    retriangulate_round(
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
+        &s.quats,
+        &s.trans,
+        &mut points,
+        &mut is_dir,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        &Constraints::all_free(1),
+        Some(trim_px),
+        min_track,
+    );
+    (points[0], is_dir[0])
+}
+
+/// Each observation's residual norm with the track at `row`.
+fn track_residuals(s: &Scene, row: [f64; 3], dir: bool) -> Vec<f64> {
+    residual_norms_depths(
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
+        &s.quats,
+        &s.trans,
+        &[row],
+        &[dir],
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+    )
+    .0
+}
+
+/// A rough start can leave a position whose every starting state puts most of
+/// its track past the next trim. The mean ray then costs least by reprojecting
+/// one observation under the trim, which is too few for the next round to keep
+/// the track, so taking it would hand the caller a direction the test never
+/// read. The position stands; with a `min_track` of one the same ray is taken.
+#[test]
+fn a_change_of_representation_needs_min_track_observations_under_the_trim() {
+    // A far direction, its keypoints pushed 30 px apart in alternating
+    // directions in every image but the first.
+    let d = Vector3::new(0.05, -0.04, -1.0).normalize();
+    let offsets = [
+        [0.0, 0.0],
+        [30.0, 0.0],
+        [-30.0, 0.0],
+        [0.0, 30.0],
+        [0.0, -30.0],
+    ];
+    let s = one_track(5, [d.x, d.y, d.z], true, &offsets);
+    // The position the last round left, a little in front of the cameras,
+    // where every observation reprojects past the trim.
+    let here = [0.6, 0.5, 2.0];
+    let trim = 12.0;
+    let capped = |r: &[f64]| r.iter().map(|x| x.min(trim).powi(2)).sum::<f64>();
+    let now = track_residuals(&s, here, false);
+    assert!(now.iter().all(|&r| r > trim), "residuals here {now:?}");
+    let ray = Vector3::new(0.0, 0.0, 0.0)
+        + (0..5)
+            .map(|i| {
+                let r = s.cam.pixel_to_ray(s.uv[i][0], s.uv[i][1]);
+                s.quats[i].inverse() * Vector3::new(r[0], r[1], r[2]).normalize()
+            })
+            .sum::<Vector3<f64>>();
+    let ray = ray.normalize();
+    let at_ray = track_residuals(&s, [ray.x, ray.y, ray.z], true);
+    assert!(
+        capped(&at_ray) < capped(&now),
+        "the mean ray should cost less"
+    );
+    assert_eq!(
+        at_ray.iter().filter(|&&r| r < trim).count(),
+        1,
+        "residuals at the mean ray {at_ray:?}"
+    );
+
+    let (row, dir) = reestimate(&s, here, false, trim, 2);
+    assert!(!dir, "the position became a direction on one observation");
+    if row != here {
+        // The midpoint is the other state a position can move to.
+        assert!(row.iter().all(|v| v.is_finite()));
+    }
+    let (_, dir) = reestimate(&s, here, false, trim, 1);
+    assert!(dir, "with a min_track of one the mean ray is taken");
+}
+
+/// The between-round choice reads each residual capped at the next round's
+/// trim, not at a fraction of it: a state whose every observation sits a few
+/// pixels out beats one that fits all but one observation exactly and the last
+/// a trim's width out, though a cap a quarter of the trim, or of a pixel, would
+/// choose the other.
+#[test]
+fn the_between_round_choice_caps_residuals_at_the_trim() {
+    // About 4 px a residual against a quarter-trim cap; about 1.3 px against
+    // a 1 px cap.
+    for (n, outlier, shift, trim) in [(6, 24.0, 0.0615, 12.0), (12, 15.0, 0.02, 12.0)] {
+        let x = [0.2, -0.1, 0.3];
+        let mut offsets = vec![[0.0, 0.0]; n];
+        offsets[0] = [outlier, 0.0];
+        let s = one_track(n, x, false, &offsets);
+        // The midpoint, taken from no estimate.
+        let (mid, mid_dir) = reestimate(&s, [f64::NAN; 3], false, trim, 2);
+        assert!(!mid_dir);
+        // The state the last round left: the point moved across the arc.
+        let here = [x[0], x[1] + shift, x[2]];
+        let capped = |r: &[f64], cap: f64| r.iter().map(|v| v.min(cap).powi(2)).sum::<f64>();
+        let now = track_residuals(&s, here, false);
+        let at_mid = track_residuals(&s, mid, false);
+        assert!(
+            capped(&now, trim) < capped(&at_mid, trim),
+            "n {n}: here {now:?}, midpoint {at_mid:?}"
+        );
+        let other_cap = if n == 6 { trim / 4.0 } else { 1.0 };
+        assert!(
+            capped(&at_mid, other_cap) < capped(&now, other_cap),
+            "n {n}: here {now:?}, midpoint {at_mid:?} at a cap of {other_cap}"
+        );
+        let (row, dir) = reestimate(&s, here, false, trim, 2);
+        assert_eq!((row, dir), (here, false), "n {n}: the midpoint was taken");
+    }
+}
+
+/// A point the decision cannot score is stored in the representation the
+/// caller handed it in, not one the rounds left it in: here a position handed
+/// in that the rounds left a direction comes back the position, and is counted
+/// as unscored.
+#[test]
+fn an_unscored_point_keeps_the_representation_it_was_handed_in() {
+    let s = make_scene(6, 1);
+    let handed_in = s.points[0];
+    let mut points = vec![[0.0, 0.0, -1.0]];
+    let mut is_dir = vec![true];
+    let unscored = decide_free_points(
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
+        &s.quats,
+        &s.trans,
+        &mut points,
+        &mut is_dir,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        &[],
+        &Constraints::all_free(1),
+        0.5,
+        &[handed_in],
+        &[false],
+    );
+    assert_eq!(unscored, vec![true]);
+    assert_eq!((points[0], is_dir[0]), (handed_in, false));
+
+    // And the other way: a direction handed in that the rounds left a
+    // position comes back the direction.
+    let handed_in = [0.0, 0.6, -0.8];
+    let mut points = vec![s.points[0]];
+    let mut is_dir = vec![false];
+    let unscored = decide_free_points(
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
+        &s.quats,
+        &s.trans,
+        &mut points,
+        &mut is_dir,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        &[],
+        &Constraints::all_free(1),
+        0.5,
+        &[handed_in],
+        &[true],
+    );
+    assert_eq!(unscored, vec![true]);
+    assert_eq!((points[0], is_dir[0]), (handed_in, true));
+}
+
+/// The guard on a change of representation covers the midpoint as well as the
+/// mean ray: a direction whose midpoint, a position, costs least by bringing
+/// one of five observations under the trim stays a direction, and becomes the
+/// midpoint with a `min_track` of one.
+#[test]
+fn a_midpoint_in_the_other_representation_needs_min_track_observations_too() {
+    let offsets = [
+        [0.0, 0.0],
+        [20.0, 0.0],
+        [-20.0, 0.0],
+        [0.0, 20.0],
+        [0.0, -20.0],
+    ];
+    let s = one_track(5, [0.3, -0.2, 5.0], false, &offsets);
+    let trim = 12.0;
+    // The direction the last round left, far off every ray.
+    let here = [0.6, 0.6, -0.5];
+    let capped = |r: &[f64]| r.iter().map(|x| x.min(trim).powi(2)).sum::<f64>();
+    let (mid, mid_dir) = reestimate(&s, [f64::NAN; 3], true, trim, 2);
+    assert!(!mid_dir, "the midpoint should be a position");
+    let at_mid = track_residuals(&s, mid, false);
+    let now = track_residuals(&s, here, true);
+    assert!(capped(&at_mid) < capped(&now), "{at_mid:?} against {now:?}");
+    assert_eq!(
+        at_mid.iter().filter(|&&r| r < trim).count(),
+        1,
+        "{at_mid:?}"
+    );
+
+    let (row, dir) = reestimate(&s, here, true, trim, 2);
+    assert!(dir, "the direction became a position on one observation");
+    assert_eq!(row, here);
+    let (row, dir) = reestimate(&s, here, true, trim, 1);
+    assert!(!dir, "with a min_track of one the midpoint is taken");
+    assert_eq!(row, mid);
+}
+
+/// The kernel's progress names the unscored points after the decision's
+/// counts, and says nothing of them when there are none.
+#[test]
+fn the_progress_line_counts_the_unscored_points() {
+    let lines = |s: &mut Scene| {
+        let said = std::sync::Mutex::new(Vec::new());
+        let sink = |event: crate::progress::Event<'_>| {
+            if let crate::progress::Event::Message { text, .. } = event {
+                said.lock().unwrap().push(text.to_string());
+            }
+        };
+        bundle_adjust(
+            &BaCameras::shared(&s.cam, s.quats.len()),
+            &mut s.quats,
+            &mut s.trans,
+            &mut s.points,
+            &s.uv,
+            &s.obs_img,
+            &s.obs_pt,
+            None,
+            None,
+            CROSS,
+            None,
+            DEFAULT_PROTECTED_LOSS_SCALE,
+            false,
+            false,
+            false,
+            &[BaSchedule {
+                trim_px: 25.0,
+                loss_scale: 1.0,
+            }],
+            60,
+            2,
+            12,
+            &Progress::to(&sink),
+        );
+        said.into_inner().unwrap()
+    };
+    let mut clean = make_scene(4, 30);
+    let said = lines(&mut clean);
+    let line = said
+        .iter()
+        .find(|t| t.starts_with("free points decided at noise "))
+        .expect("the decision line");
+    assert!(!line.contains("not scored"), "{line}");
+    // One track trimmed to a single survivor, as in
+    // `min_track_drops_starved_points`.
+    let mut s = make_scene(4, 30);
+    let victim = s.obs_pt[0] as usize;
+    for k in 1..s.uv.len() {
+        if s.obs_pt[k] as usize == victim {
+            s.uv[k][0] += 500.0;
+        }
+    }
+    let said = lines(&mut s);
+    let line = said
+        .iter()
+        .find(|t| t.starts_with("free points decided at noise "))
+        .expect("the decision line");
+    assert!(
+        line.contains(" to directions, 1 not scored: too few kept observations"),
+        "{line}"
+    );
+}
+
+/// A point handed in as a direction with no estimate is re-estimated from its
+/// rays between rounds, and where those rays are junk the next trim starves it:
+/// it comes back unscored in whatever representation the re-estimation gave it,
+/// since there is no row to restore, and the decision does not count it as
+/// moved to finite.
+#[test]
+fn an_unscored_point_is_not_counted_as_changed() {
+    let mut s = make_scene(6, 40);
+    let victim = s.points.len();
+    let x = Vector3::new(0.3, 0.2, -0.4);
+    s.points.push([f64::NAN; 3]);
+    let offsets = [[200.0, 0.0], [-200.0, 0.0], [0.0, 200.0], [0.0, -200.0]];
+    for i in 0..s.quats.len() {
+        let c = s.quats[i] * x + s.trans[i];
+        let (u, v) = s.cam.ray_to_pixel([c.x, c.y, c.z]).expect("in view");
+        let o = offsets[i % offsets.len()];
+        s.uv.push([u + o[0], v + o[1]]);
+        s.obs_img.push(i as u32);
+        s.obs_pt.push(victim as u32);
+    }
+    let mut mask = vec![false; s.points.len()];
+    mask[victim] = true;
+    let schedule = [
+        BaSchedule {
+            trim_px: 50.0,
+            loss_scale: 2.0,
+        },
+        BaSchedule {
+            trim_px: 4.0,
+            loss_scale: 1.0,
+        },
+    ];
+    let out = run_masked(&mut s, &mask, false, &schedule, 12);
+    assert!(s.points[victim].iter().all(|v| v.is_finite()));
+    assert!(
+        !out.point_at_infinity[victim],
+        "the re-estimate should be a position for this check"
+    );
+    let decision = out.free_point_decision.expect("a storage decision");
+    assert_eq!(decision.unscored, 1);
+    assert_eq!(
+        (decision.to_finite, decision.to_direction),
+        (0, 0),
+        "the unscored point was counted"
     );
 }

@@ -273,13 +273,18 @@ one.
   one observation is NaN in either family. The adjustment's trim, not this
   operation, decides what a behind point means.
 
-  With the adjustment's free points solved in inverse depth, the same call
-  turns `cheirality` on, so a free track re-estimates in the representation the
-  last round's solve left it in -- the midpoint, or the mean ray for a point
-  the solve took to infinity -- and one whose midpoint lands behind an
-  observing camera starts the next round as its mean ray. That is a starting
-  value: the next round's solve moves the point's inverse depth from there, and
-  its representation is decided at the end of the solve. The adjustment carries
+  With the adjustment's free points solved in inverse depth, the call turns
+  `cheirality` on and runs twice, once with every free point unmarked and once
+  with every free point marked, so each free track has a midpoint (its mean ray
+  where the midpoint lands behind an observing camera) and a mean ray. The
+  adjustment starts the next round from whichever of those two and the state
+  the last round left fits the track best, the squared residuals capped at the
+  next round's trim; a state in the other representation is taken only when
+  at least `min_track` of the track's observations reproject under that trim
+  from it. A track with no estimate takes its midpoint, or its mean ray where
+  that costs less, with no such guard. That is a starting value: the next round's solve moves the point's
+  inverse depth from there, and its representation is decided at the end of
+  the solve. The adjustment carries
   a ranged point through the `distance` rule at the origin its reference
   resolves to at the round's poses, and holds a held point's estimate back. See
   "Free points: inverse depth and the storage decision" in

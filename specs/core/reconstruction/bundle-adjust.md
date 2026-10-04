@@ -452,7 +452,8 @@ The report is the fields above as a dict, `cameras` a list with one dict per
 camera in the solve carrying the `CameraAdjustment` fields (`outermost_observed` a dict of
 `radius_px`, `theta_deg`, `image` and `xy`, or `None`), `free_point_decision`
 the dict the kernel binding reports (`sigma_px`, `observation_count`,
-`outlier_count`, `decided`, `converged`, `to_finite`, `to_direction`) or
+`outlier_count`, `decided`, `converged`, `to_finite`, `to_direction`,
+`unscored`) or
 `None` with the crossing off, and every refusal is a
 `ValueError` carrying the sentence the error writes.
 

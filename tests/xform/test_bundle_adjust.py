@@ -297,3 +297,28 @@ def test_bundle_adjust_description():
     desc = ba.description()
 
     assert "bundle" in desc.lower() or "adjust" in desc.lower() or "BA" in desc
+
+
+def test_free_point_decision_line_names_the_unscored_points():
+    """The xform line counts the free points the decision could not score,
+    and says nothing about them when there are none."""
+    from sfmtool.xform._bundle_adjust import format_free_point_decision
+
+    decision = {
+        "sigma_px": 0.412,
+        "observation_count": 100,
+        "outlier_count": 0,
+        "decided": True,
+        "converged": True,
+        "to_finite": 3,
+        "to_direction": 25,
+        "unscored": 0,
+    }
+    assert format_free_point_decision(decision) == (
+        "Free points decided at 0.412 px: 3 to finite, 25 to directions"
+    )
+    decision["unscored"] = 2
+    assert format_free_point_decision(decision) == (
+        "Free points decided at 0.412 px: 3 to finite, 25 to directions, "
+        "2 not scored: too few kept observations"
+    )

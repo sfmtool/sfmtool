@@ -439,8 +439,13 @@ none comes back at infinity; it deletes the points the solve leaves
 unsupported, and rescales patch frames with their depth, as the viewer's Bundle
 Adjust does. It prints the median residual before and after, each camera's
 focal change and what was released, and what the decision did: `Free points
-decided at 0.412 px: 3 to finite, 25 to directions`, with `; the final round
-stopped on its iteration budget` when it did not converge.
+decided at 0.412 px: 3 to finite, 25 to directions`, with `, 2 not scored: too
+few kept observations` when the final round kept fewer than two usable
+observations of some free points, which are then stored in the representation
+they were handed in with (or, handed in with no estimate, the one the
+re-estimation gave them),
+and `; the final round stopped on its iteration budget` when it did not
+converge.
 
 `cross=off` (any of `off`, `false`, `0`, `no`; `on` is the default) keeps every
 point in the representation it has for the whole solve and prints no decision.

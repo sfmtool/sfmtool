@@ -278,9 +278,14 @@ fn check_releases(
 ///     the test was read: not without a level, nor after a cancellation),
 ///     ``converged`` (whether the final round met its convergence test; the
 ///     decision is read either way, and a level read from a round that
-///     stopped on its budget still carries pose error), and ``to_finite`` and
+///     stopped on its budget still carries pose error), ``to_finite`` and
 ///     ``to_direction`` (the free points stored in the other representation
-///     than the one they were handed in with).
+///     than the one they were handed in with), and ``unscored`` (the free
+///     points the final round kept fewer than two usable observations of,
+///     which the test cannot score: each is stored in the representation it
+///     was handed in with, or, handed in with no estimate, in the one the
+///     re-estimation gave it, and is counted in neither ``to_finite`` nor
+///     ``to_direction``).
 ///     ``residual_norms`` are unweighted reprojection norms at the final
 ///     state, ``+inf`` where the point is non-finite / behind the camera /
 ///     outside the model domain.
@@ -566,7 +571,8 @@ pub fn bundle_adjust<'py>(
 
 /// The storage decision as the dict both adjustment bindings report it in, or
 /// `None` where there was none: `sigma_px` (or `None`), `observation_count`,
-/// `outlier_count`, `decided`, `converged`, `to_finite` and `to_direction`.
+/// `outlier_count`, `decided`, `converged`, `to_finite`, `to_direction` and
+/// `unscored`.
 pub(crate) fn free_point_decision_to_py<'py>(
     py: Python<'py>,
     decision: Option<&FreePointDecision>,
@@ -582,6 +588,7 @@ pub(crate) fn free_point_decision_to_py<'py>(
     d.set_item("converged", c.converged)?;
     d.set_item("to_finite", c.to_finite)?;
     d.set_item("to_direction", c.to_direction)?;
+    d.set_item("unscored", c.unscored)?;
     Ok(d.into_any())
 }
 

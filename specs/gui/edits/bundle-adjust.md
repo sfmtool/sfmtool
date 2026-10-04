@@ -178,8 +178,10 @@ residual 1.402 → 0.631 px (v3 → v4)`
 with each camera's focal change appended when the focal was released, what the
 storage decision did, `, free points decided at 0.412 px: 3 to finite, 25 to
 directions` (` before the final round converged` after the level when the final
-round stopped on its iteration budget, `, free points not decided` when there
-was no level, and nothing with the crossing off), and `, 12 points deleted`
+round stopped on its iteration budget, `, 2 not scored` after the counts when
+the final round kept too few observations of some free points to score them,
+`, free points not decided` when there was no level, and nothing with the
+crossing off), and `, 12 points deleted`
 when the solve left points unsupported. A solve over one
 camera reads `, focal 2803.5 → 2794.1`; one over several names each camera by
 its table index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →

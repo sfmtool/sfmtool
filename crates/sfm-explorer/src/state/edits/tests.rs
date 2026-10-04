@@ -2677,3 +2677,34 @@ fn a_refused_switch_names_the_camera_and_pushes_nothing() {
         .expect_err("no spline");
     assert!(why.contains("camera 0"), "{why}");
 }
+
+/// The Action Log's free-point clause counts the points the decision could not
+/// score after the other counts, and says nothing of them when there are none.
+#[test]
+fn the_free_point_clause_counts_the_unscored_points() {
+    let mut decision = sfmtool_core::geometry::FreePointDecision {
+        sigma_px: Some(0.412),
+        observation_count: 100,
+        outlier_count: 0,
+        decided: true,
+        converged: true,
+        to_finite: 3,
+        to_direction: 25,
+        unscored: 0,
+    };
+    assert_eq!(
+        super::free_point_clause(Some(&decision)),
+        ", free points decided at 0.412 px: 3 to finite, 25 to directions"
+    );
+    decision.unscored = 2;
+    assert_eq!(
+        super::free_point_clause(Some(&decision)),
+        ", free points decided at 0.412 px: 3 to finite, 25 to directions, 2 not scored"
+    );
+    decision.converged = false;
+    assert_eq!(
+        super::free_point_clause(Some(&decision)),
+        ", free points decided at 0.412 px before the final round converged: 3 to \
+         finite, 25 to directions, 2 not scored"
+    );
+}

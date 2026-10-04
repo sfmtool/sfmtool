@@ -322,6 +322,7 @@ class TestBundleAdjust:
             "converged",
             "to_finite",
             "to_direction",
+            "unscored",
         }
         assert decision["decided"] and decision["sigma_px"] > 0.0
         # The counts are the points stored in the other representation, so

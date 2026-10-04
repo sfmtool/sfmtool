@@ -40,6 +40,8 @@ def format_free_point_decision(decision: dict | None) -> str | None:
     or ``None`` when the adjustment kept every point's representation.
 
     ``Free points decided at 0.412 px: 3 to finite, 25 to directions``, with
+    ``, 2 not scored: too few kept observations`` when the final round kept
+    too few observations of some free points to score them, and
     ``; the final round stopped on its iteration budget`` when it did not
     converge, since a level read from such a round still carries pose error.
     """
@@ -54,6 +56,8 @@ def format_free_point_decision(decision: dict | None) -> str | None:
         f"Free points decided at {decision['sigma_px']:.3f} px: "
         f"{decision['to_finite']} to finite, {decision['to_direction']} to directions"
     )
+    if decision["unscored"]:
+        line += f", {decision['unscored']} not scored: too few kept observations"
     if not decision["converged"]:
         line += "; the final round stopped on its iteration budget"
     return line

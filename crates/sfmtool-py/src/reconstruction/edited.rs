@@ -809,8 +809,8 @@ impl PyEditedReconstruction {
     ///     ``free_point_decision``, the storage decision as
     ///     ``geometry.bundle_adjust`` reports it (``sigma_px``,
     ///     ``observation_count``, ``outlier_count``, ``decided``,
-    ///     ``converged``, ``to_finite``, ``to_direction``), or ``None`` with
-    ///     ``free_points_cross=False``.
+    ///     ``converged``, ``to_finite``, ``to_direction``, ``unscored``), or
+    ///     ``None`` with ``free_points_cross=False``.
     ///     Raises ``ValueError`` with the reason when the adjustment is
     ///     refused.
     ///
