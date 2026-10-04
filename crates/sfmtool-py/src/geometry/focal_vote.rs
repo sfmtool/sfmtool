@@ -305,8 +305,9 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 ///     width: Shared image width; the principal point is the image centre.
 ///         Omitted in the ``MatchesFile`` form.
 ///     height: Shared image height. Omitted in the ``MatchesFile`` form.
-///     seed: SplitMix64 seed for the sampled pair-table pass and the RANSAC
-///         estimators; same inputs + seed => bit-identical output (default 0).
+///     seed: SplitMix64 seed for the RANSAC estimators and the column scans
+///         (the pair tables draw no randomness); same inputs + seed =>
+///         bit-identical output (default 0).
 ///     epipolar_min_disp_frac: Wide-baseline gate for epipolar candidate
 ///         pairs, as a fraction of the image diagonal their mean feature
 ///         displacement must reach (default 0.02). Too low admits

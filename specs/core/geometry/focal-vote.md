@@ -52,8 +52,10 @@ backbone stores, so a file's own arrays are the vote's arguments:
 
 Positions arrive at `f32` because that is the width the `.matches` backbone
 stores them at, so a file's array is the argument with nothing converted in
-between. The pair-table pass widens each one exactly where it reads it and
-every computation below is `f64`.
+between. The pair-table pass widens each one to `f64` where it reads it.
+Every computation below is `f64` except the epipolar cell's residual loop,
+which computes in `f32` by default, as the last paragraph of this section
+explains.
 
 Cluster `c` owns members `cluster_starts[c]..cluster_starts[c+1]`. The index
 is validated up front in `O(n_clusters)` — the four conditions above, plus
@@ -71,10 +73,12 @@ lanes, `sqrt`/`div` in single precision): the residual is a directly
 computed sine ratio, well conditioned at small values, and its `f32`
 error (~1e-7) sits four orders under the consensus threshold.
 `SFMTOOL_FOCAL_VOTE_F64_EPI` restores the double-precision path for
-forensics, in the convention of the other two restore flags. The
-rotation cell stays `f64`: recovering a small angle from its cosine is
-ill-conditioned in `f32`, and the well-conditioned cross-product form
-costs its lane advantage back.
+forensics, in the convention of the other restore flags (see
+[Environment flags](#environment-flags)). The rotation cell computes in
+`f64` by default: recovering a small angle from its cosine is
+ill-conditioned in `f32`, and the well-conditioned cross-product form is
+no faster than the `f64` path. `SFMTOOL_FOCAL_VOTE_F32_ROT` turns on that
+`f32` cross-product form for measurement.
 
 ### From a `.matches` file
 
@@ -192,11 +196,13 @@ principal point):
 
 ## Homography estimation
 
-`estimate_homography` joins the geometry module as a public primitive
+`estimate_homography` is a public primitive of the geometry module
 beside `estimate_fundamental`, with the same RANSAC shape: seeded minimal
 sampling (4-point DLT), symmetric transfer error gating, local refit on
 the consensus set, and a `{h_matrix, inliers, iterations}` result. Inputs
-are two `f64 [n, 2]` correspondence arrays and `max_error_px`.
+are two `f64 [n, 2]` correspondence arrays and a `HomographyOptions`
+(`max_error_px`, `confidence`, `max_iterations`, `min_inliers`, `seed`,
+`local_optimization`).
 
 ## Consensus
 
@@ -466,9 +472,11 @@ returns a dict mirroring the output table (`family` and
 sequence of column names (`"pinhole"`, `"equidistant"` / `"fisheye"`);
 `None` means the pinhole-only default, which reproduces the closed-form
 kernel's dict exactly (`camera_model` is `"Pinhole"` and `columns` is
-empty). `estimate_homography(points1, points2, max_error_px=3.0, seed=0)` is
-exposed alongside `estimate_fundamental` and returns
-`{"h_matrix", "inliers", "iterations"}` or `None`.
+empty). `estimate_homography(points1, points2, *, max_error_px=3.0,
+confidence=0.999, max_iterations=10000, min_inliers=4, seed=0,
+local_optimization=True)` is exposed alongside `estimate_fundamental`; its
+options are keyword-only, and it returns `{"h_matrix", "inliers",
+"iterations"}`, or `None` when no consensus reaches `min_inliers`.
 
 ## Determinism
 
@@ -574,19 +582,34 @@ over an arbitrary index set is not an exact null space — as do `kabsch`,
 
 ### Environment flags
 
-Three, none of them a compatibility switch and none read on a production
-decision path:
+Seven variables are read. None of them is a compatibility switch, and a
+production run sets none of them.
 
 - `SFMTOOL_FOCAL_VOTE_NO_SIMD` forces the scalar residual loops. Output is
   unchanged by construction, which is what makes it a parity harness.
 - `SFMTOOL_FOCAL_VOTE_LIBM_ACOS` restores the libm `acos` in the rotation
   residuals.
 - `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE` restores the eigen minimal solvers.
+- `SFMTOOL_FOCAL_VOTE_F64_EPI` restores the `f64` epipolar residual loop
+  in place of the default `f32` one.
+- `SFMTOOL_FOCAL_VOTE_F32_ROT` computes the rotation residuals in `f32`
+  through the cross-product form instead of the default `f64` `acos` form.
+- `SFMTOOL_FOCAL_VOTE_F32_AUDIT` also runs the `f64` residual loop beside
+  every `f32` one, over the same rays, and adds a histogram of their
+  differences to the `SFMTOOL_PROFILE` summary, so it needs that variable
+  set too to print anything. The vote still scores from the `f32` residuals, so output
+  is unchanged; the extra work roughly triples the cost of the audited
+  loops.
+- `SFMTOOL_PROFILE` (set to anything but empty or `0`) times each phase of
+  the vote and prints a summary to stderr when it finishes. Output is
+  unchanged. Other `sfmtool-core` kernels read the same variable for their
+  own phase timing.
 
-The last two are diagnostic: they change the vote in the last bits (that
-is the point — they reproduce the arithmetic that preceded these kernels
-when a difference has to be attributed), so a run that sets them is a
-forensic run, not a supported configuration.
+The `LIBM_ACOS`, `EIGEN_MINSOLVE`, `F64_EPI` and `F32_ROT` flags are
+diagnostic: they change the vote in the last bits (that is the point —
+`LIBM_ACOS`, `EIGEN_MINSOLVE` and `F64_EPI` reproduce the arithmetic that
+preceded these kernels when a difference has to be attributed), so a run
+that sets them is a forensic run, not a supported configuration.
 
 ## Tests
 
@@ -644,7 +667,11 @@ forensic run, not a supported configuration.
   not start at zero and over an arbitrary subset (its scalar fallback);
   the homography scorer additionally pins the degenerate-infinity guard
   on a point that transfers to `w = 0` beside three inliers; the lane
-  transposes are pinned element by element.
+  transposes are pinned element by element. The eight-lane `f32`
+  epipolar and rotation kernels are compared bit for bit with their own
+  `f32` scalar twins (not with the `f64` kernels, which are a different
+  arithmetic) over lengths sweeping the eight-wide lane boundary and its
+  tail.
 - Rust, deterministic kernels: the polynomial `acos` tracks `f64::acos`
   within `5e-16` over a dense `[−1, 1]` grid and end-crowded random
   samples, is exact at `±1` and `±0` and within a ULP at the `±0.5`

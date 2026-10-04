@@ -752,8 +752,8 @@ pub fn focal_vote_from_matches(
 /// and `member_images` / `member_positions` carry one image id and one
 /// full-pixel keypoint position per member. Positions are `f32` because that
 /// is the width the `.matches` backbone stores them at; each one is widened
-/// exactly where the pair-table pass reads it, and everything downstream is
-/// `f64`. The principal point is the image centre `(width/2, height/2)`. Input
+/// to `f64` where the pair-table pass reads it. The epipolar residual loop
+/// computes in `f32` by default; see the spec's Inputs section. The principal point is the image centre `(width/2, height/2)`. Input
 /// that breaks that contract votes nothing and comes back as the empty result.
 pub fn focal_vote(
     cluster_starts: &[u32],
@@ -909,9 +909,9 @@ fn focal_vote_impl(
             // (cluster, image) row map) for the correspondence lists.
             let mut last_seen: HashMap<u32, [f64; 2]> = HashMap::new();
             for r in run_start..run_end {
-                // The one place the file's `f32` positions are read. Everything
-                // downstream is `f64`, and the widening is exact, so narrowing the
-                // interface moved no arithmetic.
+                // The one place the file's `f32` positions are read. The widening
+                // to `f64` is exact, so narrowing the interface moved no
+                // arithmetic.
                 let p = member_positions[r];
                 last_seen.insert(member_images[r], [f64::from(p[0]), f64::from(p[1])]);
             }
