@@ -517,6 +517,7 @@ most of the per-sentence findings.
 
 ### specs/gui/viewport-navigation.md
 > _Status (2026-10-03): **Partially done** — the fly and tilt paragraphs are back under Dolly / Fly and Tilt / Roll; Zoom to Fit gives the per-axis hfov/vfov distance with no clamp; indicator size 0.3 and opacity 20%→5%; the fog is described as a reversed-Z NDC difference with default 10.0; the `#camera-view-mode-override` anchor is now a heading, the "Step 9" citation links `camera-views.md#which-navigation-keeps-camera-view`, the initial distance is √29; the stale deferrals are fixed; the same `fog_distance = target_fog_multiplier × length_scale` error is corrected in `point-cloud-rendering.md` and two Rust doc comments, PR #685. Not done: the third copies in `righting.rs`/`mod.rs` (Rust doc comments) and the Shape items (opening, step lists, prose)._
+> _Status (2026-10-04): **Done** for the opening and the two mannered-prose items — the opening says what viewport navigation is and what it is for, "without ever losing your bearings" became "while keeping track of where the camera is", and "lantern" illumination became illumination "that falls off with distance from the target", branch `finding-fix-12-viewport-navigation-opening`. The Failure 4 step lists are still open._
 **Summary:** The new Maintain Z-up material (`righting.rs`, `right_toward_z_up`, the turn-offs on Q/E and MCP `set_view`) and turn-toward-target (`TURN_INTO_FRACTION` 0.5) match the code. The insertion split the Dolly/Fly section, and several older numbers no longer match.
 **Implementing code:** `sfm-explorer/src/viewer_3d/{mod.rs,righting.rs,camera.rs,input.rs,hud.rs}`, `mcp/view.rs:184-190`, `scene_renderer/gpu_types.rs`, `shaders/target_indicator.wgsl`, `platform/windows.rs`.
 **Inconsistencies:**
@@ -541,7 +542,6 @@ most of the per-sentence findings.
   - **Mannered prose:**
     - "without ever losing your bearings" → "while keeping track of where the camera is".
     - "lantern illumination" → "illumination that falls off with distance from the target".
-  > _Status (2026-10-04): **Done** for the opening and the two mannered-prose items — the opening says what viewport navigation is and what it is for, "without ever losing your bearings" became "while keeping track of where the camera is", and "lantern" illumination became illumination "that falls off with distance from the target", branch `finding-fix-12-viewport-navigation-opening`. The Failure 4 step lists are still open._
 **Recommendation:** update spec. **Fix the misplaced section first**; the Maintain Z-up change (#614) caused it.
 **Unclear / incorrect / suspicious:** The Windows DirectManipulation section (:792-1017) is a third of the file and might be better as its own `gui/` spec.
 
