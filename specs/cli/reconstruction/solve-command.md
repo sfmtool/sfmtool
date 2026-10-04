@@ -6,6 +6,21 @@ Runs Structure from Motion to produce a 3D reconstruction (`.sfmr` file) from im
 pre-computed matches. Uses pycolmap to run either COLMAP's incremental mapper
 or GLOMAP's global mapper.
 
+The command is implemented in
+[`_commands/solve.py`](../../../src/sfmtool/_commands/solve.py), a Click wrapper
+that validates the arguments and calls
+[`_solve_driver.py`](../../../src/sfmtool/_solve_driver.py), which runs one
+solve or the windows of `--seq-overlap` mode. Each solve calls
+[`_incremental_sfm.py`](../../../src/sfmtool/_incremental_sfm.py) (`--incremental`)
+or [`_global_sfm.py`](../../../src/sfmtool/_global_sfm.py) (`--global`). Both
+prepare the COLMAP database through
+[`_solve_setup.py`](../../../src/sfmtool/_solve_setup.py), which calls
+[`colmap/db_setup.py`](../../../src/sfmtool/colmap/db_setup.py) to extract
+features if needed, set up cameras and rigs, and run matching or load the
+`.matches` file. Both write their output through `_save_reconstructions` in
+`_incremental_sfm.py`, which applies the rules in
+[Outputs and Multiple Models](#outputs-and-multiple-models).
+
 ## Coordinate Convention
 
 The solvers work in COLMAP's +Z-forward, Y-down convention; the `.sfmr`
@@ -77,13 +92,16 @@ file the mapper reads (see
 
 ### Sequential overlap mode
 
-`--seq-overlap WINDOW,OVERLAP` reconstructs the sequence in overlapping windows of size
-`WINDOW` with `OVERLAP` shared images, then aligns and merges the sub-reconstructions. Useful
-for long sequences that fail with a single solve.
+`--seq-overlap WINDOW,OVERLAP` solves the sequence in overlapping windows of `WINDOW`
+images, consecutive windows sharing `OVERLAP` images, and writes each window's
+reconstruction to its own `.sfmr` file. It does not align or merge the windows; run
+`sfm align` and `sfm merge` on the outputs for that. Useful for long sequences that fail
+with a single solve. The input must contain exactly one numbered image sequence.
 
 `--seq-overlap` cannot be combined with `--output` (each window writes its own
 automatically-named output) or with a `.matches` input file (the windows drive
-their own feature matching).
+their own feature matching). Each window matches its images exhaustively;
+`--flow-match` is not applied to the windows.
 
 ## Outputs and Multiple Models
 
@@ -151,17 +169,17 @@ See [`../../formats/camrig-file-format.md`](../../formats/camrig-file-format.md)
 
 ```bash
 # Incremental SfM from images
-sfm solve --incremental
+sfm solve --incremental images/
 
 # Global SfM from pre-computed matches
 sfm solve matches/2026-01-15_match_001.matches --global
 
 # Flow-based matching for video, with seed
-sfm solve --incremental --flow-match --flow-preset high_quality --seed 42
+sfm solve images/ --incremental --flow-match --flow-preset high_quality --seed 42
 
 # Sequential overlap for long sequences
-sfm solve --global --seq-overlap 100,20
+sfm solve images/ --global --seq-overlap 100,20
 
 # Solve a subset of images
-sfm solve --incremental --range 1-200 --max-features 8192
+sfm solve images/ --incremental --range 1-200 --max-features 8192
 ```
