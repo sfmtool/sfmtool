@@ -247,10 +247,10 @@ path has never been observed to run, but it makes the output always equal to
 the full scan's. A cap of 0 detects nothing.
 
 A skipped octave saves its whole detection scan **and its last two Gaussian
-levels**. On 4K images with
-the default cap this skips octaves 0 and 1, about 94% of the pyramid's detection
-pixels with `double_image`, with byte-identical output (validated over 1196
-DinoLedge frames); small images that never fill the cap detect every octave.
+levels**. On 4K images with the default cap this skips octaves 0 and 1, about
+94% of the pyramid's detection pixels with `double_image`, with byte-identical
+output (validated over 1196 DinoLedge frames); small images that never fill the
+cap detect every octave.
 Together with the Tier 1.5 blur fusion this takes `sfm sift --extract` over those
 1196 frames from 300 s to 141 s (2.1×) on a 24-core i9-14900HX.
 
