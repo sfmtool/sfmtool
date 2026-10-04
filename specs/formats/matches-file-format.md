@@ -675,7 +675,7 @@ refinement measured and which members stand.
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `float32` (little-endian)
 - Warp-consistency residual: how far the member's warp is from a joint
-  weak-perspective factorization of all cluster warps in the file. The
+  weak-perspective factorization of the fitted warps of all clusters. The
   factorization models each image `k` as a scaled-orthographic camera, a
   2×3 matrix `M_k`, and each cluster `c` as a planar patch with a 3×2
   tangent frame `T_c`, fitted by least squares over all clusters at once.
