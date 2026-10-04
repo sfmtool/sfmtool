@@ -93,25 +93,14 @@ fn solve_ls(
 }
 
 /// Pixel residual norm of one observation at translation `t`, or
-/// [`INVALID_RESIDUAL`] when the camera cannot image the point or the point
-/// sits on the wrong side of the observation's own ray.
+/// [`INVALID_RESIDUAL`] when the point is not in front of the camera or
+/// `ray_to_pixel` cannot project it.
 ///
-/// The rows this gate trims are model-agnostic but SIGN-BLIND —
-/// `[r]ₓ·(R·X + t)` vanishes for `−r` too — so the in-front test is what
-/// carries the chirality, and it is model-dependent:
-///
-/// - **Perspective family:** the half-space `z < 0` (the canonical camera looks
-///   along `−Z`), which is also exactly that family's projection domain. The
-///   expression is unchanged from before this branch existed, so a perspective
-///   camera's result is bit-identical.
-/// - **[`CameraModel::needs_ray_path`] models** (fisheye, equirectangular):
-///   positive RANGE along the observed ray, `r·(R·X + t) > 0`. Such a camera
-///   images past 90° off axis, so the half-space would score every peripheral
-///   observation [`INVALID_RESIDUAL`] and leave the solve on the on-axis subset
-///   — while the range test still rejects the antipodal reflection, which is
-///   the one thing the sign-blind rows need the gate for.
-///
-/// The model's own `ray_to_pixel` domain is layered on top in both cases.
+/// "In front" is the half-space `z < 0` for the perspective family and
+/// positive range along the observed ray, `ray·(R·X + t) > 0`, for
+/// [`CameraModel::needs_ray_path`] models. The trim gate is where the
+/// chirality comes from, because the cross-product rows are sign-blind; see
+/// `specs/core/geometry/rotation-locked-resection.md` § Mechanism.
 ///
 /// [`CameraModel::needs_ray_path`]: crate::camera::CameraModel::needs_ray_path
 fn residual_norm(
