@@ -233,7 +233,7 @@ nothing until its *second* selected observer arrives, by design).
 
 ### Parameters
 
-The CLI does not expose it; the value is the constant `_H_RAD` in the module:
+The CLI does not expose `H`; its value is the constant `_H_RAD` in the module:
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
@@ -249,15 +249,15 @@ the observer-thinning gate should be one knob or two.
   wired into `src/sfmtool/_commands/xform.py` (a `@click.option`, the help text, and the "at least
   one transform" error list) plus a branch in `parse_transform_args`
   (`src/sfmtool/xform/_arg_parser.py`) that splits the arg on `,` — `COUNT` then optional `verbose`.
-  `COUNT < 2` surfaces as a `click.UsageError`, and so does any modifier other than `verbose`.
+  A `COUNT` that is not an integer or is below 2 surfaces as a `click.UsageError`, and so does any
+  modifier other than `verbose`.
   `description()` returns `"Select N cameras by distribution"`.
 - The module only computes *which images to keep*; it then delegates to `_filter_images()` from
   `_filter_by_image_range.py` for the track/point/rig-frame bookkeeping and index remapping.
 - Camera centers (needed only to form viewing rays) from `quaternions_wxyz` / `translations` as
   `C = -R(q)^T t` (COLMAP world-to-camera), computed by `camera_centers` from
-  `src/sfmtool/_pose_math.py`. A unit's viewing ray
-  toward point `p` is `(positions[p] − center)` normalized; the angle between two rays is `arccos` of
-  their clamped dot product.
+  `src/sfmtool/_pose_math.py`. A unit's viewing ray toward point `p` is `(positions[p] − center)`
+  normalized; the angle between two rays is `arccos` of their clamped dot product.
 - The "nearest well-covered point" queries use `KdTree3d` from the `sfmtool-core` spatial index
   (exposed as `sfmtool._sfmtool.spatial`). The tree over `Cov(S)` is rebuilt from scratch on each
   farthest-point step, and every candidate target is queried against it in one batch.
