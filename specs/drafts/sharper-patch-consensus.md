@@ -6,6 +6,7 @@
   - the Jacobian measures resolution, whether it is compressed by obliquity or by lens distortion;
   - the angle measures how sensitive the view is to errors in the patch model;
 - the sampler is chosen per view from the Jacobian's anisotropy, so an oblique or distorted view keeps the detail along its less compressed axis;
+- the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 5);
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no ring of pixels from outside it (Part 1). That change is a prerequisite and ships first.
 
 Not decided: the functional forms of the weights, the anisotropy at which the sampler switches, the blur used for matched-bandwidth scoring, and the order the consumers adopt it in. See [Open questions](#open-questions).
@@ -18,6 +19,7 @@ Amends:
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the bench readings
 - [core/camera/image-warping.md](../core/camera/image-warping.md): the per-view choice of sampler
+- [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
 
 ## Purpose
 
@@ -226,6 +228,64 @@ The view is scored against `T_v`: its ZNCC, its leave-one-out score and its IRLS
 
 **Effect on the bars.** ZNCC values change: far views score higher against a template blurred to their footprint. The bench's `min_zncc` bars (whole and middle) and the localizer's `min_absolute_zncc` / `min_relative_zncc` are re-measured once Part 4 lands.
 
+## Part 5: storing the self-similarity radii in the `.sfmr` file
+
+Each observation's self-similarity radius is the one input to the weights that needs the photograph and a shift search. The other inputs need no photograph: the footprint and the viewing angle come from geometry, and the IRLS agreement is cheap once the views are rendered. So the file stores the radii, and every operation that re-renders a point's bitmap reads them instead of measuring again. These operations include:
+- `embed-patches`;
+- the bench commit's fuse;
+- `fuse_patch_bitmap` / `fuse_patch_cloud_bitmaps`;
+- conversion to embedded patches;
+- any later re-render.
+
+The file stores the radius itself, in grid px, not the sharpness ratio `s_v` or the weight `w_v`. A ratio and a weight depend on the rest of the track and on functional forms that are still being tuned. A radius is a measurement with units, and it serves more than this draft:
+- the weights here (`g` is computed from it at render time);
+- the cull bars (`max_zncc_self_similarity_radius`), applied without the photographs;
+- the per-axis reach as a confidence bound on the point along the patch's axes, converted to scene units through the patch's half-extents;
+- the Track View, which can show a committed track's readings before its evaluation runs.
+
+### What is stored
+
+For observation `j` of point `i`, measured on the observation's own `R×R` render:
+- **The render.** It goes through point `i`'s patch, re-anchored on observation `j`'s keypoint, at the point's patch resolution `R`. It uses the sampler the rule in Part 2 picks for that view. This is the tile the bench and the member gates read (Part 1).
+- **The reading.** The overlap reading, with the default `max_radius` `r`.
+
+Three optional columns, parallel to the other `tracks/*` arrays:
+
+| Column | Shape, type | Meaning |
+|---|---|---|
+| `tracks/self_similarity_radius` | `(M,)` `float32` | The whole bitmap's radius, grid px |
+| `tracks/self_similarity_axes` | `(M, 2)` `float32` | The contour's extent along the grid's column and row axes (the patch's u and v), grid px |
+| `tracks/self_similarity_open` | `(M,)` `uint8` | Bit 0: the radius is a lower bound. Bit 1: the u extent is. Bit 2: the v extent is |
+
+- **Not measured.** `NaN` in the radius means the observation was not measured; its axes are then `NaN` and its flags 0.
+- **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own.
+- **Grid px.** The grid px are those of the point's `R` (`points3d/metadata.json`'s `patch_bitmap_resolution`), so the radius converts to scene units through the point's patch half-extents, as the reach does.
+
+The middle-square and per-cell readings are left out. They are cheap to recompute once a render exists, and nothing proposed here reads them without one.
+
+### When a stored radius stops being valid
+
+A radius describes one render: the point's patch (centre, normal, axes, half-extents), the observation's keypoint, the image's pose and intrinsics, and the photograph. The format states, as a rule about the data, that a writer which changes any of these for an observation must either re-measure that observation's radius or set it to `NaN`. Writers that only copy, filter or reorder observations carry the values through untouched.
+
+The open question is how strict "changes" is. Bundle adjustment moves every pose slightly, and a strict rule would clear every radius after each adjustment, although the renders barely change. One option is a tolerance stated in the file's terms:
+- the keypoint moves by less than a fraction of a grid px;
+- the patch normal turns by less than a few degrees;
+- the half-extent changes by less than a few per cent.
+
+Within it, a writer may keep the value.
+
+### A hand-set weight
+
+The bench can down-weight a view by hand, e.g. a photograph the user sees is out of focus. That is a judgement, not a measurement, so it lives in its own optional column, `tracks/appearance_weight_override` (`(M,)` `float32`, `NaN` where not set). A render multiplies it into `w_v`. It never overwrites the measured radius, so a later re-measurement does not erase the user's decision, and a reader can always tell which is which.
+
+### `observation_confidence`
+
+The format already has an optional per-observation column, `tracks/observation_confidence` (`uint8`). Its spec defines it as the observation's photometric sharpness relative to its track's consensus. The bench commit and Add Image to Tracks fill it with the observation's leave-one-out ZNCC against the consensus, which this draft shows is biased against sharp views (§ "The problem, measured"). Two changes keep the column's meaning and its contents in agreement:
+- writers fill it from the stored radius as the quantized sharpness ratio `s_v`;
+- or its spec is changed to say it is the leave-one-out ZNCC.
+
+Which one is part of this work. The radius columns do not depend on the choice.
+
 ## Evaluation
 
 **Cases:**
@@ -247,6 +307,9 @@ The view is scored against `T_v`: its ZNCC, its leave-one-out score and its IRLS
 7. **Sharpness and ZNCC of the views the sampler rule moves**, rendered both ways, to set the threshold `a`.
 
 ## Open questions
+
+- **The invalidation tolerance** for stored radii (Part 5): a strict rule clears every radius after bundle adjustment; a tolerance needs values that hold up across datasets.
+- **`observation_confidence`**: refill it from the radius as the quantized sharpness ratio, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 5).
 
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?
