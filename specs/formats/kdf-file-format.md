@@ -1,16 +1,17 @@
 # The KDF file format
 
-A `.kdf` stores every descriptor exactly once in a blocked corpus shared by all
-trees. SIFT-backed files also embed each feature's image-space keypoint and 2x2
-affine shape in a co-blocked geometry corpus, so descriptor matches can be turned
-into image constellations without reopening the source `.sift` files.
+A `.kdf` file is an approximate nearest-neighbor index: a set of fixed-width
+vectors, such as SIFT descriptors, plus one or more binary spatial-partition
+trees over them, laid out so a reader can answer queries without loading all
+vectors or trees into memory. Returned feature IDs identify rows in the original
+input, even though each tree stores them in a different order. Vectors may be
+byte descriptors such as SIFT, or finite float32 data; the metric is squared
+Euclidean distance.
 
-A `.kdf` file stores a set of fixed-width vectors and several binary spatial
-partition trees over that set. It supports approximate nearest-neighbor lookup
-without loading all vectors or trees into memory. Returned feature IDs identify
-rows in the original input, even though each tree stores them in a different
-order. Vectors may be byte descriptors such as SIFT, or finite float32 data;
-the metric is squared Euclidean distance.
+Every vector is stored exactly once, in a blocked corpus shared by all trees.
+SIFT-backed files also store each feature's image-space keypoint and 2x2 affine
+shape in a geometry corpus blocked the same way, so descriptor matches can be
+turned into image constellations without reopening the source `.sift` files.
 
 Here, a **feature** is one indexed vector row, including generic non-image
 vectors. `feature_count` counts those rows, and a **feature ID** is its zero-based
@@ -81,15 +82,16 @@ Required fields in `metadata.json.zst`:
 | `metric` | String `"squared_l2"` |
 | `feature_count` | Integer N, `0 <= N <= 2^32 - 1`; valid IDs are `0..N` exclusive |
 | `dimension` | Integer D, `1 <= D <= 65535` |
-| `node_kinds` | Canonical writer legend `["internal", "leaf"]`; readers resolve codes through this array |
+| `node_kinds` | Exactly `["internal", "leaf"]`, so node kind code 0 is internal and 1 is leaf; readers reject any other array |
 | `target_chunk_bytes` | Positive integer, writer's target decoded byte size; advisory, not a reader allocation limit |
 | `trees` | Nonempty ordered array of tree objects, described below |
 | `feature_source` | String `"sift_files"` for mapped descriptors, or `"none"` for generic vectors |
 | `descriptor_block_rows` | Positive integer Q, the row count of every full vector and geometry block |
 
-Each tree has `root: [chunk_id, local_node_index]` (or `null` for N = 0),
-and `chunks`, an array in chunk-ID order. Each chunk object has integer
-`node_count` M, `feature_count` P, and `decoded_bytes`. The latter equals
+Each tree has `root: [chunk_id, local_node_index]` and `chunks`, an array in
+chunk-ID order. When N is positive the root is `[0, 0]`, the first node of chunk
+0, and readers reject any other address; when N = 0 it is `null`. Each chunk
+object has integer `node_count` M, `feature_count` P, and `decoded_bytes`. The latter equals
 `40*M + sizeof(scalar_type)*M + 4*P`.
 Chunk and local node indices fit uint32. M is positive; an empty forest has
 no chunks in any tree. No tree is empty when N is positive.
@@ -357,11 +359,8 @@ Full verification is the one place a file's integrity is established. It
 recomputes every section digest from the bytes on disk, folds them, and compares
 both the sections and the whole-file digest against the directory; it also checks
 reachability, ID permutations, split constraints, and that every tree describes
-the same vectors. It necessarily reads the whole file. The digest half is
-[`KdfFile::verify_content`](../../crates/sfmtool-kdf-format/src/read.rs) and the
-structural half is
-[`verify_kdf`](../../crates/sfmtool-kdf-format/src/verify.rs), which calls it
-first.
+the same vectors. It necessarily reads the whole file. The digest check runs
+first, then the structural checks.
 
 All size arithmetic is checked before allocation, and readers may reject files
 exceeding explicit resource limits. The ZIP dependency indexes the central
@@ -402,8 +401,8 @@ with the schema.
 A `.sfmr`, `.sift`, `.matches` or `.camrig` file has a fixed set of entries: one
 per column the schema defines, however large the reconstruction. A `.kdf` has one
 per tree chunk and one per descriptor block, so a 9.7M-descriptor corpus reaches
-tens or hundreds of thousands of entries. At that scale the conventions stop being
-free:
+tens or hundreds of thousands of entries. At that scale the conventions have a
+measurable cost:
 
 - A ZIP entry costs about 164 bytes of local header and central directory record
   with names of this length, and a reader parses the whole central directory
@@ -451,11 +450,11 @@ read granularity. Unlike the grouping above it costs nothing in compression,
 because the frames are unchanged; only their addressing moved.
 
 The entries are named `.frames` rather than `.zst` so that a tool which assumes
-one frame per entry fails honestly instead of decoding only the first block and
+one frame per entry reports an error instead of decoding only the first block and
 reporting success. Descriptor and geometry blocks use the same logical row
 boundaries but separate offsets because their compressed lengths differ.
 
-What is preserved is the part that carries the weight. The file is still a ZIP of
+What is preserved are the properties a reader relies on. The file is still a ZIP of
 STORE entries, so standard tools still list it and still extract any entry. Binary
 arrays are still little-endian and row-major with no headers of their own. Names
 still encode shape and type, and every decoded length is still derivable from a
@@ -492,203 +491,18 @@ submodule, in
 [`spatial/kdf.rs`](../../crates/sfmtool-py/src/spatial/kdf.rs). `float32` is not bound: the
 eager `KdForest` it would be compared against is `uint8` only.
 
-## Sizing and tradeoffs
-
-### Version-1 DinoLedge layout study (2026-09-09)
-
-This section records the measurements that selected the one-corpus
-layout. Tree-local paths and totals below describe the rejected version-1
-alternative, not entries the current writer emits.
-
-Read-only inspection of `C:\DataSets\DinoLedge\frames` finds one feature set,
-`features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9`. All 1,196 images have
-a corresponding SIFT file. Counts come from the existing ZIP descriptor shapes
-and image metadata; compressed descriptor sizes are the stored zstd frame sizes,
-excluding ZIP headers. GB below means decimal bytes / 10^9; MiB means bytes / 2^20.
-
-| Measured source property | Value |
-|--------------------------|-------|
-| Images | 1,196 JPEGs, each 2160 x 3840 |
-| Image files combined | 1,837,792,903 bytes (1.838 GB) |
-| SIFT files combined | 1,178,249,456 bytes (1.178 GB) |
-| Descriptor rows | 9,702,948, each 128 uint8 values |
-| Features per image | Minimum 1,063; median and maximum 8,192 |
-| Descriptor bytes, decoded once | 1,241,977,344 bytes (1.242 GB) |
-| Existing compressed descriptor frames | 956,433,582 bytes (0.956 GB) |
-
-Assume tree-local descriptor storage, four trees, leaf_size 16, all descriptors
-included, and original feature IDs
-assigned by lexicographically sorted image filename then original SIFT row.
-The current median builder halves each node's feature count, so these shape
-calculations do not require knowing the chosen split axes or building the trees.
-Each tree has 1,048,576 leaves (9 or 10 features each), and 2,097,151 total nodes.
-These are calculated topology counts, not a measured serialized forest.
-
-At a 1 MiB decoded target, each tree has one routing chunk of 2,047 internal
-nodes and 2,048 complete-subtree chunks. Each subtree contains 1,023 nodes and
-4,737 or 4,738 descriptors, occupying 667,227 or 667,359 decoded bytes. The
-next parent is too large, so the target underfills to about 652 KiB. One routing
-chunk occupies 83,927 decoded bytes and has no feature rows.
-
-Illustrative layout for a file at the workspace root (chunk 1's exact P depends
-on traversal; 4,737 is one of the two valid sizes):
-
-```text
-DinoLedge.kdf
-  metadata.json.zst                  # N=9702948, D=128, four trees
-  images/
-    metadata.json.zst                # image_count=1196
-    names.json.zst                   # frames/DinoLedge_0001.jpg, ...
-    feature_tool_hashes.1196.uint128.zst
-    sift_content_hashes.1196.uint128.zst
-  origins/0/
-    image_indexes.131072.uint32.zst
-    image_feature_indexes.131072.uint32.zst
-  ...                               # blocks 1 through 73, also 131072 rows
-  origins/74/
-    image_indexes.3620.uint32.zst
-    image_feature_indexes.3620.uint32.zst
-  trees/0/chunks/0/                  # upper routing nodes
-    nodes.10.2047.uint32.zst
-    splits.2047.uint8.zst
-    feature_ids.0.uint32.zst
-    vectors.0.128.uint8.zst
-  trees/0/chunks/1/                  # complete subtree
-    nodes.10.1023.uint32.zst
-    splits.1023.uint8.zst
-    feature_ids.4737.uint32.zst
-    vectors.4737.128.uint8.zst
-  ...                               # through trees/0/chunks/2048
-  ...                               # trees 1, 2, 3 have the same counts
-  content_hash.json.zst
-```
-
-Directory lines here are prefixes, not ZIP directory entries. There are 8,196
-tree chunks, 32,784 tree entries, 150 origin entries and six metadata/image/hash
-entries: **32,940 ZIP entries**. Workspace relative_path is `"."`; its absolute
-path is `C:\DataSets\DinoLedge`. Image 0 is `frames/DinoLedge_0001.jpg`, and feature
-IDs 0 through 8,191 map to image 0, SIFT features 0 through 8,191. Feature ID 8,192
-maps to image 1, feature 0. Hashes are copied from each source's hash metadata.
-The two image hash arrays together occupy only 38,272 decoded bytes.
-
-### Size budget: measurements versus projection
-
-Four trees' decoded arrays total **5,467,089,308 bytes (5.467 GB)**:
-4,967,909,376 vector bytes, 155,247,168 feature-ID bytes, and 343,932,764 node/split
-bytes. Origins add 77,623,584 decoded bytes, but compress particularly well in
-image/feature order: encoding the actual complete mapping as 75 pairs of zstd
-level-3 frames measured **1,408,746 bytes** before ZIP headers. These mappings
-are stored once, not four times.
-
-A compression probe decoded every nineteenth SIFT file in filename order
-(63 files, 65,224,960 descriptor bytes), then compressed descriptor-only blocks
-at zstd level 3 with row counts matching the 1, 8 and 16 MiB layouts.
-Image-order bytes compressed to 76.96–76.98% of raw size; a seeded random row
-shuffle (Python Random seed 0) compressed to 77.44–77.46%. These are proxy orders,
-**not kd-tree leaf order**, and neither is a bound on its compression. The
-existing complete corpus's descriptor ratio is about 77.01%.
-
-Applying the measured proxy ratios to four vector copies projects **3.82–3.85 GB
-for vectors alone**. Allowing up to the decoded 0.499 GB for ID/node/split arrays
-as a conservative planning allowance, plus origins and metadata, gives a useful
-rounded planning range of **4.0–4.4 GB (about 3.7–4.1 GiB)** for this `.kdf`.
-ZIP headers/directory are only roughly 6–8 MB at 32,940 entries with these names;
-chunk metadata/hash JSON adds a few MB decoded before compression. Near or over
-4 GiB, writers must enable ZIP64 where individual offsets/sizes require it.
-
-Eight trees roughly double the dominant storage, giving a planning range near
-8.0–8.8 GB. The version-1 shared descriptor corpus removes three raw vector copies
-(3.726 GB), approximately 2.87–2.89 GB compressed under these proxy ratios.
-The format additionally embeds six float32 geometry values per SIFT feature:
-232,870,752 decoded bytes for this 9,702,948-row corpus. JPEG pixels and
-thumbnails remain external. The geometry's compressed size was not part of this
-version-1 measurement.
-
-### The file this projected: measured
-
-Building the projected file confirms the decoded arithmetic exactly and lands at
-the bottom of the projected range. Four trees over 9,701,948 of these descriptors
-at a 1 MiB chunk target and zstd level 3, via the version-1 revision of
-[`scripts/benchmark_kdf_layouts.py`](../../scripts/benchmark_kdf_layouts.py)
-(the current script measures version 3):
-
-| Section | Decoded | Stored | Ratio |
-|---------|---------|--------|-------|
-| `tree_vectors` | 4.9674 GB | 3.7975 GB | 76.45% |
-| `tree_chunks` | 0.4992 GB | 0.2280 GB | 45.69% |
-| `metadata` + `content_hash` | 0.0008 GB | 0.0001 GB | — |
-| **Payload** | **5.4674 GB** | **4.0257 GB** | **73.63%** |
-
-The decoded column reproduces the counts above to the byte: 5.467 GB total, and
-`tree_chunks` holds the 155,247,168 feature-ID bytes and 343,932,764 node and split
-bytes together. The file is **4.028 GB** including 2.7 MB of ZIP headers and
-directory across 16,394 entries.
-
-Two things the projection could not know. Descriptors compress to **76.45%** in
-kd-tree leaf order, marginally better than the 76.96–76.98% image-order proxy —
-so the proxy was sound, and the vectors alone came in at 3.7975 GB, just under
-the projected 3.82–3.85 GB. And the ID/node/split arrays are far from
-incompressible: the ten-column node record compresses to **25.63%**, so those
-arrays cost 0.223 GB stored rather than the 0.499 GB the conservative allowance
-reserved. Both errors push the same way, which is why the total landed at 4.026 GB
-rather than mid-range.
-
-The same forest in the version-1 shared layout is **1.212 GB**, 3.33x smaller: one 0.9489 GB
-descriptor corpus at the same 76.41% ratio, plus a 0.0328 GB row map and a 0.0001 GB
-offsets array, against four copies. That is 2.816 GB saved, against the
-2.87–2.89 GB projected. Its `tree_chunks` section is byte-identical to tree-local's,
-which is what makes the comparison a measurement of storage rather than of two
-different forests. What the layout costs in query time is measured in
-[lazy-kdforest-query.md](../core/features/lazy-kdforest-query.md#what-the-measurements-found).
-
-Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON
-with ZIP + zstd; sum descriptor entry shapes and stored frame sizes. Recursively
-calculate `nodes(n)=1` for n <= 16, otherwise `1+nodes(floor(n/2))+nodes(ceil(n/2))`;
-accept maximal subtrees satisfying `33*nodes(n)+132*n <= target`. Compress the
-two little-endian origin columns in blocks of 131,072 rows. The SHA-256 of the
-concatenation of `filename + space + stored content_xxh128 + newline` for the
-sorted source files is
-`2411cdb97d9c93912449ab767d296aa49710c1ad081016d0611b5722e2a409cd`.
-This identifies the inspected inventory, not independent verification of all
-source payload hashes. No source files were modified and no `.kdf` was built.
-
-### Format tradeoffs
-
-The format pays one uint32 row-map entry per feature to remove `T-1` descriptor
-copies. The version-1 comparison measured the corpus layout 3.3-3.4x smaller
-across corpora spanning 276x in size and faster in every measured regime except
-a fully resident warm batch. That evidence made the corpus layout the only
-representation from version 2 on, rather than a caller option.
-
-The grouped integer node columns are a deliberate adaptation of the usual
-one-entry-per-column convention: ten separate entries per chunk would cost ten
-reads and ten zstd frames to route through a single node. The format allows
-arbitrary partitions, so tree-chunk and corpus-block tuning do not require a
-version change. Descriptor performance measurements are in the companion query design.
-
-Descriptors are compressed, and therefore blocked and indexed, rather than
-stored as one flat fixed-stride array a reader could index arithmetically. The flat
-form is genuinely attractive on paper: it deletes the block-size choice, deletes
-`features/block_offsets`, and makes a descriptor read exactly `D * w` bytes at
-`row * D * w`. It costs about 24% more than the blocked corpus when descriptors
-compress to 76.4%.
-
-What makes that trade unattractive is the storage layer's granularity. A filesystem
-read is a page, commonly 4 KiB, so a 128-byte descriptor read moves a page anyway;
-scattered access pays about one page per descriptor in either form. Compression does
-not add a page to that cost — it *removes* pages, by raising how many descriptors a
-page holds. The choice is therefore not "fewer bytes versus simpler addressing" but
-"fewer pages versus simpler addressing", and blocking wins on the axis that turned
-out to dominate.
-
-A flat array remains the better shape for a consumer that memory-maps the corpus and
-leaves caching to the operating system, which is a different design rather than a
-tuning of this one.
-
-### Writer and summary working memory
+Full verification is
+[`verify_kdf`](../../crates/sfmtool-kdf-format/src/verify.rs), which first calls
+[`KdfFile::verify_content`](../../crates/sfmtool-kdf-format/src/read.rs) for the
+digest check and then runs the structural checks.
 
 The writer streams descriptor and geometry frames into their ZIP entries and
 retains the offsets and hashes; it does not buffer the complete compressed corpus.
 The summary derives array sizes from entry shapes, including the uint64 block
 offsets. JSON decompression is bounded by `max_metadata_bytes`; the ZIP STORE size
 alone does not bound the expanded JSON. Array-shape arithmetic checks overflow.
+
+The measurements that chose this layout — the size of a 9.7M-descriptor file
+under the rejected tree-local layout and under the shared corpus, and why the
+corpus is compressed in blocks rather than stored as a flat array — are recorded
+in [KDF layout measurements](../core/features/kdf-layout-measurements.md).

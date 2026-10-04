@@ -627,7 +627,7 @@ shared layout adds a feature-ID-to-row map — 32.8 MB compressed at 9.7M featur
 against 2.8 GB saved.
 
 **Descriptors compress to 76.4% in kd-tree leaf order.** The projections in
-[kdf-file-format.md](../../formats/kdf-file-format.md) had to estimate this from
+[kdf-layout-measurements.md](kdf-layout-measurements.md) had to estimate this from
 image order and a random shuffle, and said neither bounded leaf order. Leaf order
 sits just below image order's 76.96-76.98%, so the proxy was sound.
 
@@ -943,7 +943,7 @@ microseconds per query against the in-memory path's ~1 us.
 Reaching ~1 us means a descriptor access costing nanoseconds, which means no lock
 and no hash lookup on the path: the corpus indexed directly, with the operating
 system's page cache doing the caching. That is the memory-mapped flat-array design
-[kdf-file-format.md](../../formats/kdf-file-format.md) records as the shape a
+[kdf-layout-measurements.md](kdf-layout-measurements.md#format-tradeoffs) records as the shape a
 mapping consumer wants, and this measurement is the argument for it rather than
 against.
 
@@ -1090,7 +1090,7 @@ measurements; a smaller cache-hit count alone does not establish an improvement.
 
 ### DinoLedge packing example
 
-The [format case study](../../formats/kdf-file-format.md#dinoledge-case-study-2026-09-09)
+The [layout study](kdf-layout-measurements.md#version-1-dinoledge-layout-study-2026-09-09)
 measures 9,702,948 real 128-D descriptors across 1,196 images. For the
 four-tree/16-feature-leaf layout, calculated counts are:
 

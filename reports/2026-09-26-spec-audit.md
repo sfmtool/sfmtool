@@ -299,6 +299,7 @@ Eight specs open with "This document describes/specifies…":
 *Implementations* section, so crate, type, function and CLI names are spread
 through the normative text. Adding that section to each one is what would fix
 most of the per-sentence findings.
+> _Status (2026-10-04): **Done** for kdf-file-format.md — its three findings are closed: the verify links and the `max_metadata_bytes` sentence now sit only in § Implementations, the benchmark-script link moved out with the sizing study, and the remaining links are background, branch `report-fix-18-kdf-format-reader-rules`._
 
 **Other failure-6 checks:**
 - **Per-element code column with no legend in the file:** one, matches `member_status`. The spec does name all seven codes, so this is discussion-grade.
@@ -727,22 +728,29 @@ most of the per-sentence findings.
 **Implementing code:** `sfmtool-kdf-format/src/{types,read,verify,write}.rs`; `sfmtool-py/src/spatial/kdf.rs`.
 **Inconsistencies:**
   - :90 allows any root address. `read.rs:1296` requires `[0, 0]` for a nonempty tree.
+    > _Status (2026-10-04): **Done** — the tree paragraph now says the root of a nonempty tree is `[0, 0]` and readers reject any other address, branch `report-fix-18-kdf-format-reader-rules`._
   - :84 says readers resolve codes through `node_kinds`. `read.rs:1265` requires exactly `["internal","leaf"]`, so state the codes as fixed.
+    > _Status (2026-10-04): **Done** — the `node_kinds` row says the array is exactly `["internal", "leaf"]`, code 0 is internal and 1 is leaf, and readers reject any other array, branch `report-fix-18-kdf-format-reader-rules`._
   - "version-2" appears at :494 and :654, in `types.rs:77,113` and in `lazy-kdforest-query.md`. The writer emits version 3.
     > _Status (2026-10-03): **Done** — :494 and :654 no longer call the current layout version 2; the doc comments in `types.rs`, `summary.rs` and `sfmtool-py/src/spatial/kdf.rs` no longer name a version, PR #680._
   - The spec has no history of what versions 2 and 3 changed.
     > _Status (2026-10-03): **Done** — § Version says version 2 replaced version 1's two layouts with the single corpus and added the SIFT geometry corpus, and version 3 changed only the integrity directory to one digest per section, PR #680._
 **Format independence:**
   - :360-364 `KdfFile::verify_content` and `verify_kdf` → "the digest check runs first, then the structural checks", with the links moved to § Implementations (:466).
+    > _Status (2026-10-04): **Done** — § What is checked says the digest check runs first, then the structural checks; the two links are in § Implementations, branch `report-fix-18-kdf-format-reader-rules`._
   - :686 names the reader option `max_metadata_bytes`, and :605 links a script.
+    > _Status (2026-10-04): **Done** — the working-memory paragraph naming `max_metadata_bytes` is now part of § Implementations, and the script link moved with the sizing study, branch `report-fix-18-kdf-format-reader-rules`._
   - The other links are background (acquitted).
   - **Opening**, proposed: *"A `.kdf` file is an approximate nearest-neighbour index: a set of fixed-width vectors, such as SIFT descriptors, plus several binary spatial-partition trees over them, laid out so a reader can answer queries without loading the whole file."*
+    > _Status (2026-10-04): **Done** — the opening is the proposed sentence ("one or more" trees, since one tree is valid), followed by the shared-corpus and SIFT-geometry paragraph that used to come first, branch `report-fix-18-kdf-format-reader-rules`._
 **Shape:**
   - "Sizing and tradeoffs" (:488-688) is a dated version-1 study. Move it to a rationale document.
+    > _Status (2026-10-04): **Done** — moved to the new `specs/core/features/kdf-layout-measurements.md`, linked from § Implementations and back to the format spec; the three `lazy-kdforest-query.md` links into it (one with a broken anchor) now point at the new file, and `specs/formats/README.md` no longer describes tree-local descriptors, branch `report-fix-18-kdf-format-reader-rules`._
   - **Mannered prose:**
     - "fails honestly" → "reports an error".
     - "the conventions stop being free" → "the conventions have a measurable cost".
     - "carries the weight" → "the properties a reader relies on".
+    > _Status (2026-10-04): **Done** — all three replaced with the proposed wording, branch `report-fix-18-kdf-format-reader-rules`._
 **Recommendation:** update spec. Also fix the "version 2" comments in `types.rs`.
 
 ### specs/formats/archive-container.md
