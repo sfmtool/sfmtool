@@ -1,8 +1,12 @@
 # GUI User Experience
 
-This document describes the vision, goals, and design for the sfmtool 3D
-viewer — the interactive GUI for exploring Structure-from-Motion
-reconstructions.
+SfM Explorer is sfmtool's desktop viewer for Structure-from-Motion
+reconstructions stored as `.sfmr` files: a user opens one, moves freely
+around its points and cameras in 3D, and selects and inspects them across
+docked panels. This spec sets the design principles that experience is built
+on and summarizes what a user sees and does: the controls, overlays and panel
+layout. It is the starting point for the other viewer specs, which it links
+for the details of each part.
 
 ## Vision
 
