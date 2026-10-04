@@ -1,15 +1,15 @@
 # Image Warping for Distortion and Undistortion
 
-## Motivation
+Image warping resamples a whole image from one camera into another through a
+precomputed per-pixel map: for each output pixel, the map holds the position in
+the input image to sample. `sfm undistort` uses it to convert each photograph
+from its own camera model (fisheye or another distorted model) to a pinhole
+camera with square pixels. The same map, built from a rotation, a pose or an
+oriented patch instead of from the two cameras' intrinsics alone, renders the
+small image patches that the patch-refinement, strip-montage, viewer and
+panorama-tile code compare.
 
-The Rust codebase has complete implementations of `distort()` and `undistort()` for all 11
-COLMAP camera models, operating on individual pixel coordinates. However, there is no
-facility to apply these transforms to entire images — to produce an undistorted image from
-a distorted one, or vice versa. The existing Python `sfm undistort` command delegates to
-`pycolmap.undistort_image()`, which is a black box that always outputs PINHOLE cameras and
-offers no control over interpolation quality or output camera parameters.
-
-This spec provides two building blocks in the Rust `sfmtool-core` crate:
+This spec describes the two building blocks in the Rust `sfmtool-core` crate:
 
 1. **Warp map generation** — Given source and destination camera intrinsics, produce a
    dense pixel coordinate map describing where each output pixel samples from the input.
