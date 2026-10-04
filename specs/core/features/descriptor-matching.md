@@ -321,7 +321,8 @@ and
 
 - Matching without poses. `sfm match` finds pairs and matches with COLMAP's
   matchers, flow or track clusters ([match-command.md](../../cli/image-feature/match-command.md)),
-  not with this module.
+  not with the sweep. Its `--flow` mode uses one function from this module,
+  `match_candidates_and_deduplicate`.
 - Distorted or non-pinhole cameras. Keypoints are not undistorted and the sweep
   follows straight epipolar lines; [epipolar-curves.md](../camera/epipolar-curves.md)
   describes the curved lines a fisheye pair has.

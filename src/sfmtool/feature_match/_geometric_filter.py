@@ -4,7 +4,7 @@
 """Configuration for geometric filtering in feature matching.
 
 The geometric filtering algorithms are implemented in Rust
-(sfmtool-core/src/feature_match/geometric_filter.rs) and exposed
+(sfmtool-core/src/features/feature_match/geometric_filter.rs) and exposed
 via Python bindings. This module provides the Python-side configuration
 dataclass used by the matching pipeline.
 """
