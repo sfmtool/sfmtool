@@ -1838,6 +1838,14 @@ The code that reads, writes and verifies `.sfmr` files is:
 
 `verify_sfmr` returns `(is_valid, error_messages)`.
 
+The conversions between the canonical convention and COLMAP's, given in
+[Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary),
+are implemented once, in
+[`sfmtool-core/src/geometry/convention.rs`](../../crates/sfmtool-core/src/geometry/convention.rs),
+and bound for Python as `sfmtool._sfmtool.geometry`
+([bindings](../../crates/sfmtool-py/src/geometry/convention.rs)), with wrappers in
+[`sfmtool.colmap.convention`](../../src/sfmtool/colmap/convention.py).
+
 ## Point ID: Portable 3D Point References
 
 A **Point ID** is a compact, copy-pastable string that uniquely identifies a 3D

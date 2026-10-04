@@ -118,6 +118,8 @@ matches whose two rays meet at 5 degrees or more, a feature size ratio between
 [`sfm densify`](../reconstruction/densify-command.md) when
 `--enable-geometric-filtering` is given, with the angle and size-ratio limits
 set by its `--geometric-angle-diff-max` and `--geometric-size-ratio-max` flags.
+That filter and the pose-guided sweep matcher it runs inside are described in
+[descriptor-matching.md](../../core/features/descriptor-matching.md).
 
 ## Camera Intrinsics
 

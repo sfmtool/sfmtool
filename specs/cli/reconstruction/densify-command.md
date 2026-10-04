@@ -65,7 +65,8 @@ sfm densify <INPUT.sfmr> <OUTPUT.sfmr> [OPTIONS...]
 
 1. **Prune image pairs** — Select covisibility pairs (images already sharing 3D points).
    With `--frustum`, also find pairs whose camera frustums intersect but share no points.
-2. **Match pairs** — Run sort-and-sweep matching on each pair to find new correspondences.
+2. **Match pairs** — Run sort-and-sweep matching on each pair to find new correspondences
+   ([descriptor-matching.md](../../core/features/descriptor-matching.md)).
 3. **Triangulate** — Triangulate new tracks from matched features.
 4. **Bundle adjust** — Refine the combined reconstruction.
 5. **Filter** — Remove points failing reprojection error, track length, triangulation angle,

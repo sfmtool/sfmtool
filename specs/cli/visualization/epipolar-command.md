@@ -30,7 +30,7 @@ Image arguments accept filenames (e.g., `image_003.jpg`) or file numbers (e.g., 
 | `--undistort` | flag | | Remove lens distortion (mutually exclusive with `--rectify`) |
 | `--draw-lines / --no-lines` | bool | `true` | Draw epipolar lines/curves vs. horizontal scanlines |
 | `--side-by-side / --separate` | bool | `false` | Single combined image, or two separate files (the second suffixed `_other`) |
-| `--sweep-with-max-features` | int | | Run sort-and-sweep matching with this many features |
+| `--sweep-with-max-features` | int | | Run sort-and-sweep matching ([descriptor-matching.md](../../core/features/descriptor-matching.md)) with this many features |
 | `--sweep-window-size` | int | 30 | Window size for sweep matching |
 | `--pairs-dir` | path | | Process all adjacent pairs, saving to directory |
 
