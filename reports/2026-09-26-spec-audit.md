@@ -164,6 +164,7 @@ its Rust entry points. `covisibility-selection` lists names but no signatures.
     > _Status (2026-10-03): **Done** — rewritten in the present tense, PR #689._
   - `patch-normal-refine-view-subset.md:228`, which is a draft in shape: § Motivation and a test plan.
   - `select-by-distribution-command.md:230` "initially".
+    > _Status (2026-10-04): **Done** — § Parameters now says the CLI does not expose `H` and names the `_H_RAD` constant, and the implementation notes describe the code as it is (the `UsageError` cases, `description()`, `camera_centers`, the per-step `KdTree3d` rebuild) instead of giving instructions, branch `report-fix-20-select-by-distribution-initially`._
 - **Headings that matched the pattern but are not residue:**
   - Algorithm steps: `motion-command`, `select-by-distribution`, `epipolar-curves`, `photometric-subsets-ransac`.
   - Format "Versioning and migration" sections.
