@@ -1,5 +1,17 @@
 # Per-spherical-tile source patch stack
 
+To render a panorama from a reconstruction (`sfm panorama`), sfmtool
+divides the sphere of view directions into tiles, each a small pinhole
+camera aimed at one direction, and works out the colour of each tile from
+the source images. This stack holds the input to that step. For each tile
+it records which source images see the tile's centre direction, and for
+each of them it stores that image's view warped into the tile's pinhole
+frame, as an image pyramid that halves in size down to 1×1 pixel, with a
+mask of the pixels the source covers. The warp uses only each camera's
+orientation, not its position, so it treats the scene as infinitely far
+away. The photometric RANSAC and the consensus atlas read these patches to
+choose which sources agree and what colour they agree on.
+
 ## Motivation
 
 Many algorithms operating on a `SphericalTileRig` need the same input:

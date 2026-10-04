@@ -913,6 +913,7 @@ Fix one spec per PR.
   > _Status (2026-10-03): **Done** — added an opening paragraph based on the proposal, saying "every other kept member" (rejected members are stored too) and naming what the spec covers. PR #699._
 - `cli/reconstruction/embed-patches-command.md`. Proposed: *"Rewrites a reconstruction so it no longer depends on the .sift files it was solved from: each observation's pointer into a .sift file becomes an image patch and keypoint stored inline, producing a self-contained .sfmr."*
 - `core/spherical/per-spherical-tile-source-stack.md`. Proposed: *"Panorama work divides the sphere into small tiles and asks, per tile, what each source photograph saw in that direction; this gathers exactly that, each source warped into the tile's frame as an image pyramid."*
+  > _Status (2026-10-04): **Done** — added an opening paragraph that names `sfm panorama` as the use, says each source is warped into the tile's pinhole frame as a pyramid down to 1×1 with a coverage mask, and states that the warp is rotation-only (scene treated as infinitely far away), branch `finding-fix-11-per-spherical-tile-source-stack-opening`._
 - Lower priority: `flow-based-matching`, `affine-factorization`, `gui/action-log`, `gui/camera-intrinsics`, `gui/mcp-server`, `member-coherence-validation`, `gui/patch-rendering`, `cluster-patches-command`, `localize-keypoints-command`, `motion-command`, and the `specs/drafts/*-amendment.md` files, each of which opens "Amends [link]…".
 
 ### Surfaces without a spec
