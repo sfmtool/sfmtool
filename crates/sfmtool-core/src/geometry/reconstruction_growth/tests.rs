@@ -420,7 +420,7 @@ fn far_clusters_are_stored_as_directions_and_growth_still_registers() {
         &test_cam(F0),
         3,
         &GrowOptions {
-            free_points: FreePointPolicy::KEEP,
+            free_points: FreePointPolicy::NO_CROSS,
             ..Default::default()
         },
     );

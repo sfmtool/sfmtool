@@ -129,7 +129,7 @@ pub struct GrowOptions {
     /// direction. The default, [`FreePointPolicy::CROSS`], lets each adjustment
     /// store a point whose rays give no depth as a direction (and one it
     /// stored so as a position again, when later rays give it one);
-    /// [`FreePointPolicy::KEEP`] keeps every triangulated point a position.
+    /// [`FreePointPolicy::NO_CROSS`] keeps every triangulated point a position.
     pub free_points: FreePointPolicy,
 }
 
@@ -163,7 +163,7 @@ pub struct ReconstructionGrowth {
     pub points: Vec<[f64; 3]>,
     /// Per cluster, whether its `points` row is a direction: a point an
     /// adjustment's storage decision found no depth in. All `false` under
-    /// [`FreePointPolicy::KEEP`].
+    /// [`FreePointPolicy::NO_CROSS`].
     pub point_at_infinity: Vec<bool>,
     /// The shared focal after the finishing release (the input focal when
     /// growth was empty or the model is not SIMPLE_PINHOLE).

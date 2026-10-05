@@ -166,7 +166,7 @@ fn run_masked(
 }
 
 /// [`run_masked`] under a stated [`FreePointPolicy`]: a test of what a marked
-/// direction does for the whole solve passes [`FreePointPolicy::KEEP`], since
+/// direction does for the whole solve passes [`FreePointPolicy::NO_CROSS`], since
 /// under the default crossing a marked free point is solved in inverse depth
 /// and decided at the end like any other.
 fn run_masked_with(
@@ -809,7 +809,14 @@ fn perturbed_rotations_recover_against_directions() {
     // The frozen translation is a property of marked directions, which the
     // crossing does not keep: under it a marked free point is solved in
     // inverse depth, where a translation column is `ρ·J` rather than absent.
-    let out = run_masked_with(&mut s, &mask, FreePointPolicy::KEEP, false, &schedule, 0);
+    let out = run_masked_with(
+        &mut s,
+        &mask,
+        FreePointPolicy::NO_CROSS,
+        false,
+        &schedule,
+        0,
+    );
     // Translations are frozen: bit-identical pass-through.
     for (i, (t, t_orig)) in s.trans.iter().zip(&t0).enumerate() {
         for c in 0..3 {
@@ -955,7 +962,14 @@ fn all_direction_image_translation_frozen_rotation_refines() {
     }];
     // Marked directions held as directions (see
     // `perturbed_rotations_recover_against_directions`).
-    let out = run_masked_with(&mut s, &mask, FreePointPolicy::KEEP, false, &schedule, 12);
+    let out = run_masked_with(
+        &mut s,
+        &mask,
+        FreePointPolicy::NO_CROSS,
+        false,
+        &schedule,
+        12,
+    );
     for c in 0..3 {
         assert_eq!(
             s.trans[extra][c].to_bits(),
@@ -1094,7 +1108,7 @@ fn directions_lock_rotations_for_focal_release() {
         &s.obs_pt,
         Some(&mask),
         None,
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
@@ -1478,7 +1492,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
     run_masked_with(
         &mut plain,
         &mask,
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         false,
         &schedule,
         12,
@@ -1501,7 +1515,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         &s.obs_pt,
         Some(&mask),
         None,
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         Some(&prot),
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
@@ -3999,7 +4013,7 @@ fn constraints_off_reproduce_the_unconstrained_kernel() {
         &mut a,
         Some(&mask_a),
         None,
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         Some(&prot_a),
         true,
         &DEFAULT_SCHEDULE,
@@ -5137,7 +5151,7 @@ fn an_infinite_distance_reproduces_a_marked_direction() {
         &mut a,
         Some(&mask_a),
         None,
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         None,
         false,
         &DEFAULT_SCHEDULE,
@@ -5151,7 +5165,7 @@ fn an_infinite_distance_reproduces_a_marked_direction() {
         &mut b,
         None,
         Some(&cons),
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         None,
         false,
         &DEFAULT_SCHEDULE,
@@ -6047,7 +6061,7 @@ fn crossing_off_fixture() -> (Scene, Vec<bool>, Vec<bool>, PointConstraints) {
     (s, mask, prot, cons)
 }
 
-/// With the crossing off ([`FreePointPolicy::KEEP`]), the solve on
+/// With the crossing off ([`FreePointPolicy::NO_CROSS`]), the solve on
 /// [`crossing_off_fixture`] (released focal, directions, protected, held and
 /// ranged points) gives the sums below, recorded from it, so that any change to
 /// what the kernel computes with the crossing off shows here. They are compared
@@ -6061,7 +6075,7 @@ fn crossing_off_matches_its_recorded_output() {
         &mut s,
         Some(&mask),
         Some(&cons),
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         Some(&prot),
         true,
         &DEFAULT_SCHEDULE,
@@ -6146,7 +6160,7 @@ fn scale_fixture() -> (Scene, Vec<bool>) {
 #[test]
 fn the_adjustment_does_not_depend_on_the_world_scale() {
     let (base, mask) = scale_fixture();
-    for policy in [CROSS, FreePointPolicy::KEEP] {
+    for policy in [CROSS, FreePointPolicy::NO_CROSS] {
         let mut reference = base.clone();
         let want = run_constrained(
             &mut reference,
@@ -6345,7 +6359,7 @@ fn solve_with_a_point_near_camera_0(range: f64) -> ([f64; 3], [f64; 3], f64) {
         &mut s,
         None,
         None,
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         None,
         false,
         &[BaSchedule {

@@ -92,7 +92,7 @@ pub fn bundle_adjust(
     obs_pt: &[u32],                      // n_obs
     point_at_infinity: Option<&[bool]>,  // n_pt, the INITIAL representation
     constraints: Option<&PointConstraints>,  // n_pt constraints; None = all free
-    free_points: FreePointPolicy,        // default: free points cross; KEEP opts out
+    free_points: FreePointPolicy,        // default: free points cross; NO_CROSS opts out
     protected: Option<&[bool]>,          // n_obs
     protected_loss_scale: f64,
     opt_f: bool,
@@ -109,7 +109,7 @@ pub struct BundleAdjustment {
     pub cameras: Vec<CameraIntrinsics>,  // n_cam, the cameras after the solve
     pub residual_norms: Vec<f64>,        // n_obs
     pub point_at_infinity: Vec<bool>,    // n_pt, the representation each ended with
-    pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under KEEP
+    pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under NO_CROSS
 }
 ```
 
@@ -875,7 +875,7 @@ bundle_adjust(&BaCameras::shared(&cam, quats.len()),
               true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none());
 ```
 
-An absent `constraints` is every point free, and with `FreePointPolicy::KEEP`
+An absent `constraints` is every point free, and with `FreePointPolicy::NO_CROSS`
 (`cross = false`) every free point keeps the representation it is handed in,
 as the sections above describe. The Rust interface is
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
@@ -894,8 +894,8 @@ pub struct FreePointPolicy {
 }
 
 impl FreePointPolicy {
-    pub const CROSS: FreePointPolicy; // the default
-    pub const KEEP: FreePointPolicy;  // the opt-out: the caller's representation stands
+    pub const CROSS: FreePointPolicy;    // the default
+    pub const NO_CROSS: FreePointPolicy; // the opt-out: the caller's representation stands
 }
 
 pub struct FreePointDecision {
@@ -927,7 +927,7 @@ otherwise: `rotation_init`, `grow_reconstruction` (whose `GrowOptions::
 free_points` carries the switch), the reconstruction-level adjustment (whose
 `BundleAdjustOptions::free_points` carries it) and through that `sfm xform
 --bundle-adjust` and the viewer's Bundle Adjust. Each of those but
-`rotation_init` lets its own caller opt out with `FreePointPolicy::KEEP`:
+`rotation_init` lets its own caller opt out with `FreePointPolicy::NO_CROSS`:
 `--bundle-adjust cross=off`, the Bundle Adjust dialog's crossing checkbox, the
 `bundle_adjust` wire tool's `free_points_cross`, and the bindings'
 `free_points_cross=False`. The default is the module's rather than each
@@ -1562,10 +1562,10 @@ directions keeps its translation live, which is what a surveyed landmark is for.
 
 - **Parity**: on a fixture mixing finite points, directions and protected
   observations, an absent `constraints` and an all-free one under
-  `FreePointPolicy::KEEP` agree on every output field to the bit (poses,
+  `FreePointPolicy::NO_CROSS` agree on every output field to the bit (poses,
   points, focal, residual norms and the reported representation), and neither
   reports a storage decision.
-- **The crossing off**: under `FreePointPolicy::KEEP`, on a fixture with a
+- **The crossing off**: under `FreePointPolicy::NO_CROSS`, on a fixture with a
   released focal, directions, a far track, pixel noise, perturbed poses,
   protected observations, a held point and a ranged one, sums over the points,
   poses, residual norms and focal match values recorded for the fixture, to
@@ -1629,7 +1629,7 @@ directions keeps its translation live, which is what a surveyed landmark is for.
   finite evidence is one held point solves its translation, where the same
   landmark as a direction leaves the translation frozen to the bit.
 - **Ranged points**: an infinite distance reproduces a marked direction held
-  as one (`FreePointPolicy::KEEP`) bit for bit; a finite one comes back at
+  as one (`FreePointPolicy::NO_CROSS`) bit for bit; a finite one comes back at
   exactly its distance from the reference read at the final pose; and a
   landmark started at a wrong bearing but its true distance recovers the
   bearing the reference image sees, where the same track free converges to a
@@ -1644,7 +1644,7 @@ directions keeps its translation live, which is what a surveyed landmark is for.
   and every rejection above raises `ValueError`.
 - **What the crossing changes in the kernel's other tests**: the tests of a
   marked direction held for the whole solve (its frozen translation, the trim
-  and protection of its observations) state `FreePointPolicy::KEEP`, since
+  and protection of its observations) state `FreePointPolicy::NO_CROSS`, since
   under the default a marked free point is solved in inverse depth and decided
   like any other. The `min_track` tests run under the default: a track the trim
   starves comes back bit-identical, a position rather than a bearing through

@@ -375,7 +375,7 @@ fn a_point_at_infinity_comes_back_a_direction_with_the_crossing_off() {
     // a depth.
     let source = with_a_bearing_that_has_a_depth();
     let options = BundleAdjustOptions {
-        free_points: FreePointPolicy::KEEP,
+        free_points: FreePointPolicy::NO_CROSS,
         ..BundleAdjustOptions::default()
     };
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");

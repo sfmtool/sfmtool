@@ -57,7 +57,7 @@ pub struct BundleAdjustOptions {
     pub max_iters: usize,
     pub min_track: usize,
     pub min_obs: usize,
-    /// Default `FreePointPolicy::CROSS`; `FreePointPolicy::KEEP` opts out.
+    /// Default `FreePointPolicy::CROSS`; `FreePointPolicy::NO_CROSS` opts out.
     pub free_points: FreePointPolicy,
 }
 
@@ -86,7 +86,7 @@ pub struct BundleAdjustReport {
     pub median_residual_before: f64,
     pub median_residual_after: f64,
     pub cameras: Vec<CameraAdjustment>, // one per camera in the solve
-    /// The kernel's storage decision; `None` under `FreePointPolicy::KEEP`.
+    /// The kernel's storage decision; `None` under `FreePointPolicy::NO_CROSS`.
     pub free_point_decision: Option<FreePointDecision>,
 }
 
@@ -304,7 +304,7 @@ not comes back a bearing. Deciding that during the solve rather than in a pass
 after it is what lets the poses be fitted with no representation imposed on a
 far point. `report.free_point_decision` says at what level the points were
 decided, whether the final round converged, and how many crossed each way.
-Under `FreePointPolicy::KEEP` the mask is honoured for the **whole** solve, and
+Under `FreePointPolicy::NO_CROSS` the mask is honoured for the **whole** solve, and
 re-deciding the representation is left to
 [`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md)
 and `--classify-points-at-infinity`. Ranged and held points keep their
@@ -429,7 +429,7 @@ would leave the frame carrying the gauge drift of the solve.
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
 | `min_obs` | `12` | Trim survivors below which a round exits degenerate. |
-| `free_points` | `FreePointPolicy::CROSS` | Whether free points cross between a position and a direction by the storage decision; `KEEP` honours the value's representation. |
+| `free_points` | `FreePointPolicy::CROSS` | Whether free points cross between a position and a direction by the storage decision; `NO_CROSS` honours the value's representation. |
 
 The defaults after `releases` are the kernel's own
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)), stated
@@ -440,7 +440,7 @@ here so a caller sees what it is getting.
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
 releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12,
 free_points_cross=True)` returns `(EditedReconstruction, report)`.
-`free_points_cross=False` is `FreePointPolicy::KEEP`. `opt_f` and
+`free_points_cross=False` is `FreePointPolicy::NO_CROSS`. `opt_f` and
 `opt_distortion` are the release given to every camera of the table.
 `releases`, when given, replaces them: a list with one dict per camera in the
 table, in table order, each `{"focal": bool, "distortion": bool}`, a missing

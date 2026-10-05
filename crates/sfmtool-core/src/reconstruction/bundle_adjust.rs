@@ -88,7 +88,7 @@ pub struct BundleAdjustOptions {
     /// Whether free points cross between a position and a direction. The
     /// default, [`FreePointPolicy::CROSS`], solves every free point in inverse
     /// depth and stores it as the storage decision at the end of the solve
-    /// says; [`FreePointPolicy::KEEP`] keeps each point in the representation
+    /// says; [`FreePointPolicy::NO_CROSS`] keeps each point in the representation
     /// it has in the value. Ranged and held points keep theirs either way.
     pub free_points: FreePointPolicy,
 }
@@ -271,7 +271,7 @@ pub struct BundleAdjustReport {
     pub cameras: Vec<CameraAdjustment>,
     /// The storage decision of the free points: the noise level they were
     /// decided at, whether the final round converged, and how many crossed in
-    /// each direction. `None` under [`FreePointPolicy::KEEP`].
+    /// each direction. `None` under [`FreePointPolicy::NO_CROSS`].
     pub free_point_decision: Option<FreePointDecision>,
 }
 
@@ -311,7 +311,7 @@ pub struct CameraAdjustment {
 /// point goes in as the position or the direction it is and, under the default
 /// [`BundleAdjustOptions::free_points`], comes back as whichever the
 /// point-or-bearing test reads at the end of the solve, so a point can cross
-/// between a bearing and a position here; [`FreePointPolicy::KEEP`] honours
+/// between a bearing and a position here; [`FreePointPolicy::NO_CROSS`] honours
 /// the value's representation for the whole solve instead.
 /// [`BundleAdjustReport::free_point_decision`] says what the decision did. A
 /// point's constraint -- free, ranged or held -- is the one its
@@ -575,7 +575,7 @@ pub fn bundle_adjust(
         constraints.as_ref(),
         // An empty schedule runs no round and decides nothing; the policy is
         // stated off so that this call only measures.
-        FreePointPolicy::KEEP,
+        FreePointPolicy::NO_CROSS,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,

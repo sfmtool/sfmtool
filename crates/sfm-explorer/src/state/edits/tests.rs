@@ -1058,7 +1058,7 @@ fn the_log_entry_carries_the_counts_and_the_residuals() {
 fn the_log_entry_says_nothing_of_free_points_with_the_crossing_off() {
     let (mut state, id) = adjustable_state();
     let options = sfmtool_core::BundleAdjustOptions {
-        free_points: sfmtool_core::geometry::FreePointPolicy::KEEP,
+        free_points: sfmtool_core::geometry::FreePointPolicy::NO_CROSS,
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");

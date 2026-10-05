@@ -153,7 +153,7 @@ fn enter_runs_it_with_every_camera_held_and_the_points_crossing_which_is_the_def
 #[test]
 fn clearing_the_crossing_checkbox_keeps_every_point_as_it_is() {
     let answer = rig_answer(|p| p.free_points_cross = false);
-    assert_eq!(answer.free_points, FreePointPolicy::KEEP);
+    assert_eq!(answer.free_points, FreePointPolicy::NO_CROSS);
     assert_eq!(answer.releases, vec![HELD; 4]);
 }
 

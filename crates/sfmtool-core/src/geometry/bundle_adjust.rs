@@ -335,7 +335,7 @@ impl std::error::Error for PointConstraintsError {}
 ///
 /// [`FreePointPolicy::default`] crosses: every caller in the crate passes it,
 /// so free points are solved in inverse depth and decided at the end of each
-/// solve unless a caller opts out. [`FreePointPolicy::KEEP`] is the opt-out,
+/// solve unless a caller opts out. [`FreePointPolicy::NO_CROSS`] is the opt-out,
 /// the crossing off: the caller's `point_at_infinity` mask is honoured for the
 /// whole solve, so every free point keeps the representation it is handed in.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -354,8 +354,8 @@ impl FreePointPolicy {
     /// decision says: the default.
     pub const CROSS: FreePointPolicy = FreePointPolicy { cross: true };
     /// Free points keep the representation the caller handed in, for the
-    /// whole solve: the opt-out.
-    pub const KEEP: FreePointPolicy = FreePointPolicy { cross: false };
+    /// whole solve: the opt-out, `cross: false`.
+    pub const NO_CROSS: FreePointPolicy = FreePointPolicy { cross: false };
 }
 
 impl Default for FreePointPolicy {
@@ -780,7 +780,7 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// test at the noise level the final round's residuals measure. See "Point
 /// constraints" in
 /// `specs/core/geometry/bundle-adjustment.md`. The default policy crosses;
-/// under [`FreePointPolicy::KEEP`] every free point keeps the representation
+/// under [`FreePointPolicy::NO_CROSS`] every free point keeps the representation
 /// it is handed in. Absent constraints and all-free ones are the same solve to
 /// the bit.
 ///

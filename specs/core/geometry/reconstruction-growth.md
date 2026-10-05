@@ -56,7 +56,7 @@ index list), and options:
 - `free_points` (default `FreePointPolicy::CROSS`): whether the adjustments'
   storage decision may store a point as a direction, and a direction as a
   position again ([bundle-adjustment.md](bundle-adjustment.md) § "Free points:
-  inverse depth and the storage decision"). `FreePointPolicy::KEEP` keeps every
+  inverse depth and the storage decision"). `FreePointPolicy::NO_CROSS` keeps every
   triangulated point a position.
 
 ## Mechanism
@@ -139,7 +139,7 @@ keeps them, and the refill does not overwrite them. A residual of a direction
 is read through the rotation alone, as the kernel reads it. The crossing
 reaches only the clusters inside an adjustment's observation set: a direction
 outside it is wiped by the adjustment and refilled as a midpoint position, as
-under `FreePointPolicy::KEEP`. With a binding `ba_cluster_cap`, the crossing
+under `FreePointPolicy::NO_CROSS`. With a binding `ba_cluster_cap`, the crossing
 decides only the clusters the cap keeps, which are the ones seen by the most
 images; the far clusters it leaves out are triangulated as positions by the
 refill and never decided. With `ba_window` 4, `anchor_every` 2 and a cap of 150

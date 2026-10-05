@@ -103,7 +103,7 @@ and in what form. One more is about the points.
   stored as the storage decision at the end of the solve says
   ([`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)
   § "Free points: inverse depth and the storage decision"). Cleared, every point
-  keeps the representation it has, `FreePointPolicy::KEEP`. Its hover text says
+  keeps the representation it has, `FreePointPolicy::NO_CROSS`. Its hover text says
   both.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
@@ -230,7 +230,7 @@ Explorer (`sfm-explorer` lib tests, headless):
   none with the crossing off.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held
   and the points crossing), the crossing checkbox cleared answering
-  `FreePointPolicy::KEEP`,
+  `FreePointPolicy::NO_CROSS`,
   one row per camera the posed images use, each row releasing its own camera
   and the rest held, a release the camera's model cannot take never answered,
   a row's distortion released only with its own focal and cleared when a drawn
