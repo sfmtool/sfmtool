@@ -257,7 +257,7 @@ The type lives in
 [edited/row_map.rs](../../../crates/sfmtool-core/src/reconstruction/edited/row_map.rs);
 both are re-exported as
 `sfmtool_core::{EditedReconstruction, PointRecord, RecordObservation, PointView,
-RowMap, EditError}`, and reaches Python as
+RowMap, EditError}`. The type reaches Python as
 `sfmtool._sfmtool.reconstruction.EditedReconstruction`.
 
 ```rust
@@ -710,10 +710,9 @@ on which half a column lives in.
 The overlay is covered by
 `crates/sfmtool-core/src/reconstruction/edited/tests.rs`, the row map by
 `crates/sfmtool-core/src/reconstruction/edited/row_map/tests.rs`, and, from
-Python, by
-`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`. All three build on
-a reconstruction carrying every optional column, so a record that omits or
-invents one is a visible failure. What they pin:
+Python, by `tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`.
+All three build on a reconstruction carrying every optional column, so a record
+that omits or invents one is a visible failure. What they pin:
 
 - Every read through the overlay equals the same read on the materialised value
   under the row map, over pseudo-random sequences of delete, replace and add.

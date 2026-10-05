@@ -375,8 +375,9 @@ that undo and redo move the cursor without moving the versions, that an edit
 after an undo truncates the tail and keeps its maps, that serials are not reused,
 and that the budget releases values and never maps. The maps themselves are
 covered in core, in `crates/sfmtool-core/src/reconstruction/edited/tests.rs`:
-each case forward and inverse, over maps built the way the edits build them, and
-the scan a row map comes from.
+each case forward and inverse, over maps built the way the edits build them. The
+scan a row map comes from is covered beside `RowMap`, in
+`crates/sfmtool-core/src/reconstruction/edited/row_map/tests.rs`.
 
 `crates/sfm-explorer/src/state/edits/tests.rs` covers what follows: a surviving
 selection keeping its index across a point edit, a deleted selection clearing,
