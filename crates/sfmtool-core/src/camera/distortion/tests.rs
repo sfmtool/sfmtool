@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::camera::CameraIntrinsics;
 use approx::assert_relative_eq;
 
 // -----------------------------------------------------------------------

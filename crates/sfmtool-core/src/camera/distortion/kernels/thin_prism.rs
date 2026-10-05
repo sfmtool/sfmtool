@@ -5,7 +5,7 @@
 //! tangential (p1, p2) and thin-prism (s1–s4) terms in the distorted
 //! tangent plane, inverted by a 2D Newton solve.
 
-use crate::camera::distortion::{UNDISTORT_EPS, UNDISTORT_MAX_ITER};
+use super::newton::{newton_2d, Jacobian2};
 
 /// The thin prism fisheye model's additive distortion, in the equidistant
 /// (theta) space the model is actually defined in.
@@ -155,74 +155,51 @@ pub(in crate::camera::distortion) fn newton_thin_prism(
     sx1: f64,
     sy1: f64,
 ) -> (f64, f64) {
-    let mut uu = uu_init;
-    let mut vv = vv_init;
-    for _ in 0..UNDISTORT_MAX_ITER {
-        let uu2 = uu * uu;
-        let vv2 = vv * vv;
-        let theta2 = uu2 + vv2;
-        let theta4 = theta2 * theta2;
-        let theta6 = theta4 * theta2;
-        let theta8 = theta4 * theta4;
+    newton_2d(
+        x_d,
+        y_d,
+        uu_init,
+        vv_init,
+        |uu, vv| distort_thin_prism_equidistant(uu, vv, k1, k2, p1, p2, k3, k4, sx1, sy1),
+        |uu, vv| thin_prism_with_jacobian(uu, vv, k1, k2, p1, p2, k3, k4, sx1, sy1),
+    )
+}
 
-        let radial = k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8;
-        let duu = uu * radial + 2.0 * p1 * uu * vv + p2 * (theta2 + 2.0 * uu2) + sx1 * theta2;
-        let dvv = vv * radial + 2.0 * p2 * uu * vv + p1 * (theta2 + 2.0 * vv2) + sy1 * theta2;
+/// [`distort_thin_prism_equidistant`] together with its analytical Jacobian
+/// `∂(uu + duu, vv + dvv)/∂(uu, vv)`, for the Newton step in
+/// [`newton_thin_prism`].
+#[allow(clippy::too_many_arguments)]
+fn thin_prism_with_jacobian(
+    uu: f64,
+    vv: f64,
+    k1: f64,
+    k2: f64,
+    p1: f64,
+    p2: f64,
+    k3: f64,
+    k4: f64,
+    sx1: f64,
+    sy1: f64,
+) -> ((f64, f64), Jacobian2) {
+    let uu2 = uu * uu;
+    let vv2 = vv * vv;
+    let theta2 = uu2 + vv2;
+    let theta4 = theta2 * theta2;
+    let theta6 = theta4 * theta2;
+    let theta8 = theta4 * theta4;
 
-        // Residual: F(uu, vv) - (x_d, y_d)
-        let res_u = uu + duu - x_d;
-        let res_v = vv + dvv - y_d;
+    let radial = k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8;
+    let duu = uu * radial + 2.0 * p1 * uu * vv + p2 * (theta2 + 2.0 * uu2) + sx1 * theta2;
+    let dvv = vv * radial + 2.0 * p2 * uu * vv + p1 * (theta2 + 2.0 * vv2) + sy1 * theta2;
 
-        let res_norm = res_u * res_u + res_v * res_v;
-        if res_u.abs() + res_v.abs() < UNDISTORT_EPS {
-            break;
-        }
+    let d_radial = k1 + 2.0 * k2 * theta2 + 3.0 * k3 * theta4 + 4.0 * k4 * theta6;
 
-        // Jacobian of F(uu, vv) = (uu + duu, vv + dvv)
-        let d_radial = k1 + 2.0 * k2 * theta2 + 3.0 * k3 * theta4 + 4.0 * k4 * theta6;
+    let j00 = 1.0 + radial + 2.0 * uu2 * d_radial + 2.0 * p1 * vv + 6.0 * p2 * uu + 2.0 * sx1 * uu;
+    let j01 = 2.0 * uu * vv * d_radial + 2.0 * p1 * uu + 2.0 * p2 * vv + 2.0 * sx1 * vv;
+    let j10 = 2.0 * uu * vv * d_radial + 2.0 * p2 * vv + 2.0 * p1 * uu + 2.0 * sy1 * uu;
+    let j11 = 1.0 + radial + 2.0 * vv2 * d_radial + 2.0 * p2 * uu + 6.0 * p1 * vv + 2.0 * sy1 * vv;
 
-        let j00 =
-            1.0 + radial + 2.0 * uu2 * d_radial + 2.0 * p1 * vv + 6.0 * p2 * uu + 2.0 * sx1 * uu;
-        let j01 = 2.0 * uu * vv * d_radial + 2.0 * p1 * uu + 2.0 * p2 * vv + 2.0 * sx1 * vv;
-        let j10 = 2.0 * uu * vv * d_radial + 2.0 * p2 * vv + 2.0 * p1 * uu + 2.0 * sy1 * uu;
-        let j11 =
-            1.0 + radial + 2.0 * vv2 * d_radial + 2.0 * p2 * uu + 6.0 * p1 * vv + 2.0 * sy1 * vv;
-
-        // Solve J * delta = residual via 2x2 inverse
-        let det = j00 * j11 - j01 * j10;
-        if det.abs() < 1e-30 {
-            break;
-        }
-        let inv_det = 1.0 / det;
-        let delta_uu = (j11 * res_u - j01 * res_v) * inv_det;
-        let delta_vv = (-j10 * res_u + j00 * res_v) * inv_det;
-
-        // Backtracking line search: halve the step until the residual decreases.
-        let mut alpha = 1.0;
-        for _ in 0..10 {
-            let uu_t = uu - alpha * delta_uu;
-            let vv_t = vv - alpha * delta_vv;
-            let t2 = uu_t * uu_t + vv_t * vv_t;
-            let t4 = t2 * t2;
-            let t6 = t4 * t2;
-            let t8 = t4 * t4;
-            let rad_t = k1 * t2 + k2 * t4 + k3 * t6 + k4 * t8;
-            let du_t =
-                uu_t * rad_t + 2.0 * p1 * uu_t * vv_t + p2 * (t2 + 2.0 * uu_t * uu_t) + sx1 * t2;
-            let dv_t =
-                vv_t * rad_t + 2.0 * p2 * uu_t * vv_t + p1 * (t2 + 2.0 * vv_t * vv_t) + sy1 * t2;
-            let ru = uu_t + du_t - x_d;
-            let rv = vv_t + dv_t - y_d;
-            if ru * ru + rv * rv < res_norm {
-                break;
-            }
-            alpha *= 0.5;
-        }
-
-        uu -= alpha * delta_uu;
-        vv -= alpha * delta_vv;
-    }
-    (uu, vv)
+    ((uu + duu, vv + dvv), [[j00, j01], [j10, j11]])
 }
 
 /// Inverse of thin prism fisheye distortion.

@@ -50,9 +50,10 @@ resamplers in [remap.rs](../../../crates/sfmtool-core/src/camera/remap.rs)
 (`remap_bilinear`, `remap_aniso` and their variants), which read and write the
 image types in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs)
 (`ImageU8`, `ImageU8Pyramid`, `ImageF32WithGrad`, also re-exported from
-`camera::remap`), with
-`CameraIntrinsics::ray_to_pixel[_batch]` and the `Equirectangular` camera model
-in [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs); the
+`camera::remap`), with `CameraIntrinsics::ray_to_pixel[_batch]` in
+[distortion/projection.rs](../../../crates/sfmtool-core/src/camera/distortion/projection.rs)
+and the `Equirectangular` camera model in
+[distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs); the
 PyO3 bindings are in
 [warp.rs](../../../crates/sfmtool-py/src/flow/warp.rs).
 
@@ -643,8 +644,9 @@ crates/sfmtool-py/src/
 ├── flow/warp.rs       # PyWarpMap Python wrapper
 ```
 
-`ray_to_pixel` and `distort_ray` are methods on `CameraIntrinsics` /
-`CameraModel` in `crates/sfmtool-core/src/camera/distortion.rs`.
+`ray_to_pixel` is a method on `CameraIntrinsics` in
+`crates/sfmtool-core/src/camera/distortion/projection.rs`, and `distort_ray` a
+method on `CameraModel` in `crates/sfmtool-core/src/camera/distortion.rs`.
 
 ## Testing Strategy
 

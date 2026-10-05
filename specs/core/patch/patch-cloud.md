@@ -466,7 +466,7 @@ keypoint scale `σ_i` in place of `radius_px`.
 
 All three of `min_pixel_scale`, `pixel_radius_to_world` and
 `pixel_radius_to_angle` are `CameraIntrinsics` methods living in
-`camera/distortion.rs`, and the cloud builder reaches for them there rather than
+`camera/distortion/projection.rs`, and the cloud builder reaches for them there rather than
 carrying a closed form of its own: `build_patch_cloud` calls the first pair for
 finite sizes, `push_infinity_patches` the angular one, and both `PixelRadius` and
 `FeatureSize` route through the same code. That is why the internal `PatchScene`

@@ -390,7 +390,7 @@ from being confidently wrong, so the conventions are pinned here and cited from
 the sections that use them:
 
 - `CameraIntrinsics::pixel_to_ray` / `ray_to_pixel` work in the **canonical
-  camera frame: −Z forward, +Y up, +X right** (`camera/distortion.rs`). Forward
+  camera frame: −Z forward, +Y up, +X right** (`camera/distortion/projection.rs`). Forward
   is `(0, 0, −1)`.
 - Consequently a ray `(0, sin ε, −cos ε)` with `ε > 0` looks **upward** and
   projects **above** the principal point, and `(sin α, 0, −cos α)` with `α > 0`

@@ -103,6 +103,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 > _Status (2026-10-05): **Done** — `ImageU8`, `ImageU8Pyramid` and `ImageF32WithGrad` moved with their tests to `crates/sfmtool-core/src/camera/image.rs` (`camera::image`); `camera::remap` re-exports all three so the old paths still work, and every import in the workspace now uses the new path, branch `audit-fix-10-remap-image-types`._
 
 **Separate distortion projection and share Newton inversion mechanics**
+> _Status (2026-10-05): Done — the `CameraIntrinsics` methods moved to `camera/distortion/projection.rs`, and both thin-prism inverses run one shared `newton_2d` in `kernels/newton.rs`, each passing its own forward map and Jacobian; undistort outputs hash bit-identical before and after, branch `audit-fix-14-distortion-newton`._
 - Location: `crates/sfmtool-core/src/camera/distortion.rs` (1,233 lines), `crates/sfmtool-core/src/camera/distortion/kernels/thin_prism.rs:144`, and `crates/sfmtool-core/src/camera/distortion/kernels/rad_tan.rs:182`.
 - Problem: The second distortion impl block is projection, while neighboring thin-prism and radial-tangential inverse solvers still carry parallel Newton loops.
 - Proposed fix: Extract projection to its proper module and factor the common Newton step without merging model-specific residuals.

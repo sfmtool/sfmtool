@@ -40,8 +40,9 @@ choose the analytic or fallback path.
 
 ## API
 
-`CameraIntrinsics::ray_to_pixel_with_jacobian` and
-`CameraModel::distort_jacobian` live in
+`CameraIntrinsics::ray_to_pixel_with_jacobian` lives in
+[distortion/projection.rs](../../../crates/sfmtool-core/src/camera/distortion/projection.rs)
+and `CameraModel::distort_jacobian` in
 [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs), the
 per-model kernels in one file per model family —
 `radial_fisheye_ray_jacobian` in

@@ -6,8 +6,9 @@
 //! These are the private, model-specific forward/inverse distortion
 //! implementations and ray-direction helpers used by the public
 //! `distort` / `undistort` / `project` / `unproject` API in the parent
-//! module. Kept separate so `distortion.rs` holds only the two public
-//! `impl` blocks and the model dispatch.
+//! module and its `projection` submodule. Kept separate so `distortion.rs`
+//! holds only the `CameraModel` methods and their model dispatch, and
+//! `projection.rs` only the `CameraIntrinsics` methods.
 //!
 //! One module per camera-model family, in the order `distortion.rs`'s
 //! dispatch reaches them:
@@ -23,6 +24,7 @@
 //! - [`sfmtool_pinhole`] — `SFMTOOL_PINHOLE`, the pinhole base plus the same
 //!   spline.
 //! - [`blend`] — the tail the fisheye inverses share.
+//! - [`newton`] — the 2D Newton solve the two thin-prism inverses share.
 //!
 //! Every kernel is re-exported here, so the parent keeps reaching them
 //! through a single `use kernels::*` and no name carries its family in the
@@ -31,6 +33,7 @@
 mod blend;
 mod brown;
 mod equidistant;
+mod newton;
 mod rad_tan;
 mod sfmtool_fisheye;
 mod sfmtool_pinhole;
