@@ -135,8 +135,8 @@ if let Some(f) = result.focal_px {
 ### From a `.matches` file
 
 `focal_vote_from_matches(&MatchesData, &FocalVoteOptions)` is the whole
-file-to-vote path in one call: it reads the cluster backbone's CSR index and
-member images (borrowed), widens the member positions once, and takes
+file-to-vote path in one call: it borrows the cluster backbone's CSR index,
+member images and `f32` member positions without converting them, and takes
 `(width, height)` from `MatchesData::shared_image_dims` — the file-level
 reading of the one resolution every image carries, which **refuses a file
 whose images do not all carry the same dimensions**. That is the
@@ -184,7 +184,7 @@ two member images contribute nothing.
 The epipolar cell's residual loop computes in `f32` by default (eight
 lanes, `sqrt`/`div` in single precision): the residual is a directly
 computed sine ratio, well conditioned at small values, and its `f32`
-error (~1e-7) sits about four orders under the consensus threshold, which
+error (~1e-7) sits four to five orders under the consensus threshold, which
 is the sine of 3 px divided by the map's local scale `dr/dθ`: about 2e-2
 at a 137 px focal and about 2e-3 at a 1500 px one. The input
 positions are `f32` already, and keypoint noise is three orders above
@@ -197,9 +197,10 @@ focals within 7e-6 of the `f64` path, while the residual kernel runs
 forensics, in the convention of the other restore flags (see
 [Environment flags](#environment-flags)). The rotation cell computes in
 `f64` by default: recovering a small angle from its cosine is
-ill-conditioned in `f32` (a median error of 38% on inlier residuals), and the well-conditioned cross-product form is
-no faster than the `f64` path. `SFMTOOL_FOCAL_VOTE_F32_ROT` turns on that
-`f32` cross-product form for measurement.
+ill-conditioned in `f32` (a median error of 38% on inlier residuals), and
+the well-conditioned cross-product form is no faster than the `f64` path.
+`SFMTOOL_FOCAL_VOTE_F32_ROT` turns on that `f32` cross-product form for
+measurement.
 
 ## Output
 
@@ -244,7 +245,8 @@ nothing depends on image ordering.
 Candidate pairs: rank covisible pairs by shared-cluster count, descending,
 keeping pairs with at least `min_shared` clusters (`30`, relaxing to `16`
 when fewer than 6 pairs qualify) and mean displacement of at least
-`epipolar_min_disp_frac × diagonal` (default `0.02`); admit at most 2 pairs per image, up to 18 pairs.
+`epipolar_min_disp_frac × diagonal` (default `0.02`); admit at most 2
+pairs per image, up to 18 pairs.
 
 Per pair, over the shared clusters' correspondences:
 
@@ -478,8 +480,8 @@ The two fisheye cells:
   is not a restriction on the grid but the covariate below.
 
 **Radial coverage.** Pinhole and equidistant maps agree to first order
-near the principal point, so a pair whose inliers all lie near the centre cannot
-distinguish the columns regardless of how well it votes within one.
+near the principal point, so a pair whose inliers all lie near the centre
+cannot distinguish the columns regardless of how well it votes within one.
 Each vote therefore carries a radial-coverage covariate (a high quantile
 of its inliers' radial distance, as a fraction of the half-diagonal),
 and only votes above a coverage floor (`0.50` of the half-diagonal at
@@ -490,8 +492,7 @@ angular**: angular reach is what actually predicts discrimination, but
 an angular floor disqualifies a narrow-FOV pinhole capture's own
 legitimate votes by attrition and flips its model verdict — the radial
 covariate penalizes votes whose inliers lie near the principal point
-without penalizing narrow
-lenses.
+without penalizing narrow lenses.
 
 The certification floors, following the same pattern as the pinhole
 gates (each vote certified by its own geometry, no quorums): the
@@ -583,10 +584,9 @@ options are keyword-only, and it returns `{"h_matrix", "inliers",
 The pair tables and every pair selection built on them are exhaustive and
 draw no randomness at all; all sampling that remains (the RANSAC
 estimators and the column scans) derives from the input seed through a
-SplitMix64 generator. Identical
-inputs and seed produce identical output on every platform. The column
-scans draw their minimal-sample index sets once per candidate pair from
-the seed and the pair's position in the candidate list, then reuse them
+SplitMix64 generator. Identical inputs and seed produce identical output
+on every platform. The column scans draw their minimal-sample index sets
+once per candidate pair from the seed and the pair's position in the candidate list, then reuse them
 at every candidate focal, in every cell direction and in every column —
 so the cost curves carry no RANSAC jitter, the columns are directly
 comparable, and the per-pair scans may run in parallel without affecting
