@@ -17,50 +17,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Instant;
 
-/// Whether `SFMTOOL_PROFILE` is set (cached on first query).
-pub(crate) fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("SFMTOOL_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0"))
-}
-
-/// One accumulating phase counter: total nanoseconds and number of events.
-pub(crate) struct Phase {
-    name: &'static str,
-    ns: AtomicU64,
-    calls: AtomicU64,
-}
-
-impl Phase {
-    const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            ns: AtomicU64::new(0),
-            calls: AtomicU64::new(0),
-        }
-    }
-
-    fn reset(&self) {
-        self.ns.store(0, Ordering::Relaxed);
-        self.calls.store(0, Ordering::Relaxed);
-    }
-
-    /// Run `f`, attributing its wall time to this phase when profiling is on.
-    #[inline]
-    pub(crate) fn time<T>(&self, f: impl FnOnce() -> T) -> T {
-        if !enabled() {
-            return f();
-        }
-        let t0 = Instant::now();
-        let r = f();
-        self.ns
-            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        r
-    }
-}
+pub(crate) use crate::profiling::{enabled, Phase};
+use crate::profiling::{report_overhead, report_phases, reset_all, CallColumns, RowFormat};
 
 // Enclosing phase (overlaps everything else; the 100% denominator).
 /// The whole `focal_vote_with_options` call.
@@ -112,12 +71,12 @@ pub(crate) static ROT_MASK: Phase = Phase::new("rotation_mask");
 /// Trimming sorts and RMS accumulation of `fit_rotation`.
 pub(crate) static ROT_TRIM: Phase = Phase::new("rotation_trim");
 
-const PHASES: [&Phase; 19] = [
+/// Every phase, in report order.
+const PHASES: [&Phase; 22] = [
     &TOTAL, &PAIRTABLE, &CORR, &EST_F, &SCORE_F, &EST_H, &SCORE_H, &BOUGNOUX, &ORTHO, &SCAN_CAND,
     &RAYS, &EPI_ROWS, &MINSOLVE, &EPI_RESID, &EPI_MASK, &EPI_REFIT, &EPI_SVD, &KABSCH, &ROT_RESID,
+    &ROT_MASK, &ROT_TRIM, &H_DLT,
 ];
-/// The remaining leaves, split out only because `PHASES` is a fixed-size array.
-const PHASES2: [&Phase; 3] = [&ROT_MASK, &ROT_TRIM, &H_DLT];
 
 /// Leaves that partition the bulk of [`TOTAL`] (the `score_*` sub-phases are
 /// nested inside `EST_*` and are excluded so the sum stays a partition).
@@ -232,46 +191,34 @@ pub(crate) static AUDIT_EPI: ResidAudit = ResidAudit::new("epipolar_resid");
 /// the dot) on the same rays. Radians either way.
 pub(crate) static AUDIT_ROT: ResidAudit = ResidAudit::new("rotation_resid");
 
+/// The phase-row layout of this summary.
+const ROWS: RowFormat = RowFormat {
+    name_width: 16,
+    secs_precision: 4,
+    calls: Some(CallColumns {
+        count_width: 11,
+        per_call_width: 9,
+        per_call_precision: 3,
+    }),
+};
+
 /// Zero all counters (start of a profiled vote).
 pub(crate) fn reset() {
-    for p in PHASES.iter().chain(PHASES2.iter()) {
-        p.reset();
-    }
+    reset_all(&PHASES, &[]);
     AUDIT_EPI.reset();
     AUDIT_ROT.reset();
 }
 
 /// Print the accumulated summary to stderr (end of a profiled vote).
 pub(crate) fn report() {
-    let total_ns = TOTAL.ns.load(Ordering::Relaxed).max(1);
+    let total_ns = TOTAL.ns().max(1);
     eprintln!(
         "[sfmtool-profile] focal_vote: total {:.3}s (phase times are thread-summed CPU time; \
          % of total)",
         total_ns as f64 * 1e-9
     );
-    for p in PHASES.iter().chain(PHASES2.iter()) {
-        let ns = p.ns.load(Ordering::Relaxed);
-        let calls = p.calls.load(Ordering::Relaxed);
-        eprintln!(
-            "[sfmtool-profile]   {:<16} {:>9.4}s  {:>5.1}%  {:>11} calls  {:>9.3}us/call",
-            p.name,
-            ns as f64 * 1e-9,
-            100.0 * ns as f64 / total_ns as f64,
-            calls,
-            if calls > 0 {
-                ns as f64 * 1e-3 / calls as f64
-            } else {
-                0.0
-            },
-        );
-    }
-    let leaves: u64 = LEAVES.iter().map(|p| p.ns.load(Ordering::Relaxed)).sum();
-    eprintln!(
-        "[sfmtool-profile]   {:<16} {:>9.4}s  {:>5.1}%  (total minus leaf phases)",
-        "other/overhead",
-        total_ns.saturating_sub(leaves) as f64 * 1e-9,
-        100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
-    );
+    report_phases(PHASES, total_ns, &ROWS);
+    report_overhead(&LEAVES, total_ns, "total", &ROWS);
     AUDIT_EPI.report();
     AUDIT_ROT.report();
 }

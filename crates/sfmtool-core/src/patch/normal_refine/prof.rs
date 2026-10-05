@@ -14,51 +14,9 @@
 //! the total are therefore meaningful; absolute values exceed wall time.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::Instant;
 
-/// Whether `SFMTOOL_PROFILE` is set (cached on first query).
-pub fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("SFMTOOL_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0"))
-}
-
-/// One accumulating phase counter: total nanoseconds and number of events.
-pub struct Phase {
-    name: &'static str,
-    ns: AtomicU64,
-    calls: AtomicU64,
-}
-
-impl Phase {
-    const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            ns: AtomicU64::new(0),
-            calls: AtomicU64::new(0),
-        }
-    }
-
-    fn reset(&self) {
-        self.ns.store(0, Ordering::Relaxed);
-        self.calls.store(0, Ordering::Relaxed);
-    }
-
-    /// Run `f`, attributing its wall time to this phase when profiling is on.
-    #[inline]
-    pub fn time<T>(&self, f: impl FnOnce() -> T) -> T {
-        if !enabled() {
-            return f();
-        }
-        let t0 = Instant::now();
-        let r = f();
-        self.ns
-            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        r
-    }
-}
+pub use crate::profiling::{count, enabled, Phase};
+use crate::profiling::{report_overhead, report_phases, reset_all, PATCH_ROWS};
 
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
 /// `WarpMap::from_patch` for candidate renders.
@@ -126,14 +84,6 @@ pub static N_SUBSET: AtomicU64 = AtomicU64::new(0);
 /// (no front-facing view to anchor on), so all views were used.
 pub static N_SUBSET_NO_ANCHOR: AtomicU64 = AtomicU64::new(0);
 
-/// Count one event on `c` when profiling is on.
-#[inline]
-pub fn count(c: &AtomicU64, n: u64) {
-    if enabled() {
-        c.fetch_add(n, Ordering::Relaxed);
-    }
-}
-
 const PHASES: [&Phase; 20] = [
     &TOTAL,
     &WARP,
@@ -159,67 +109,46 @@ const PHASES: [&Phase; 20] = [
 
 /// Zero all counters (start of a profiled batch).
 pub fn reset() {
-    for p in PHASES {
-        p.reset();
-    }
-    for c in [
-        &N_EVAL,
-        &N_RENDER,
-        &N_REJECT,
-        &N_SUBSET,
-        &N_SUBSET_NO_ANCHOR,
-    ] {
-        c.store(0, Ordering::Relaxed);
-    }
+    reset_all(
+        &PHASES,
+        &[
+            &N_EVAL,
+            &N_RENDER,
+            &N_REJECT,
+            &N_SUBSET,
+            &N_SUBSET_NO_ANCHOR,
+        ],
+    );
     crate::camera::remap::prof::reset();
 }
 
 /// Print the accumulated summary to stderr (end of a profiled batch).
 pub fn report(patches: usize, wall_secs: f64) {
-    let total_ns = TOTAL.ns.load(Ordering::Relaxed).max(1);
+    let total_ns = TOTAL.ns().max(1);
     eprintln!(
         "[sfmtool-profile] refine_patch_cloud_normals: {patches} patches, wall {wall_secs:.3}s \
          (phase times are thread-summed CPU time; % of refine_total)"
     );
-    for p in PHASES {
-        let ns = p.ns.load(Ordering::Relaxed);
-        let calls = p.calls.load(Ordering::Relaxed);
-        eprintln!(
-            "[sfmtool-profile]   {:<16} {:>9.3}s  {:>5.1}%  {:>10} calls  {:>8.2}us/call",
-            p.name,
-            ns as f64 * 1e-9,
-            100.0 * ns as f64 / total_ns as f64,
-            calls,
-            if calls > 0 {
-                ns as f64 * 1e-3 / calls as f64
-            } else {
-                0.0
-            },
-        );
-    }
-    let leaves: u64 = [
-        &WARP,
-        &SVD,
-        &REMAP,
-        &ZNORM,
-        &CONSENSUS,
-        &MASK,
-        &CACHE_MAP,
-        &CACHE_RESAMPLE,
-        &CACHE_ZNORM,
-        &CACHE_CONSENSUS,
-        &CACHE_PACK,
-        &CACHE_SETUP,
-        &SUBSET,
-    ]
-    .iter()
-    .map(|p| p.ns.load(Ordering::Relaxed))
-    .sum();
-    eprintln!(
-        "[sfmtool-profile]   {:<16} {:>9.3}s  {:>5.1}%  (refine_total minus leaf phases)",
-        "other/overhead",
-        (total_ns.saturating_sub(leaves)) as f64 * 1e-9,
-        100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
+    report_phases(PHASES, total_ns, &PATCH_ROWS);
+    report_overhead(
+        &[
+            &WARP,
+            &SVD,
+            &REMAP,
+            &ZNORM,
+            &CONSENSUS,
+            &MASK,
+            &CACHE_MAP,
+            &CACHE_RESAMPLE,
+            &CACHE_ZNORM,
+            &CACHE_CONSENSUS,
+            &CACHE_PACK,
+            &CACHE_SETUP,
+            &SUBSET,
+        ],
+        total_ns,
+        "refine_total",
+        &PATCH_ROWS,
     );
     eprintln!(
         "[sfmtool-profile]   evals {}  renders {}  support-rejects {}  \

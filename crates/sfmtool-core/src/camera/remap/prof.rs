@@ -22,14 +22,11 @@
 //! via [`ANISO_FAST`] / [`ANISO_MULTI`] / [`ANISO_SUM_N`].
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
-/// Whether `SFMTOOL_PROFILE` is set (cached on first query).
-pub fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("SFMTOOL_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0"))
-}
+/// Add `n` to `c` when profiling is on.
+pub use crate::profiling::count as add;
+pub use crate::profiling::enabled;
+use crate::profiling::reset_all;
 
 /// `remap_*` calls (one per (patch, view) render).
 pub static CALLS: AtomicU64 = AtomicU64::new(0);
@@ -51,27 +48,20 @@ pub static ANISO_MULTI: AtomicU64 = AtomicU64::new(0);
 /// (mean `n = ANISO_SUM_N / ANISO_MULTI`).
 pub static ANISO_SUM_N: AtomicU64 = AtomicU64::new(0);
 
-/// Add `n` to `c` when profiling is on.
-#[inline]
-pub fn add(c: &AtomicU64, n: u64) {
-    if enabled() {
-        c.fetch_add(n, Ordering::Relaxed);
-    }
-}
-
 /// Zero all sampler counters (start of a profiled batch).
 pub fn reset() {
-    for c in [
-        &CALLS,
-        &PX_TOTAL,
-        &PX_SAMPLED,
-        &TAPS,
-        &ANISO_FAST,
-        &ANISO_MULTI,
-        &ANISO_SUM_N,
-    ] {
-        c.store(0, Ordering::Relaxed);
-    }
+    reset_all(
+        &[],
+        &[
+            &CALLS,
+            &PX_TOTAL,
+            &PX_SAMPLED,
+            &TAPS,
+            &ANISO_FAST,
+            &ANISO_MULTI,
+            &ANISO_SUM_N,
+        ],
+    );
 }
 
 /// Print the sampler summary to stderr (end of a profiled batch). No-op when

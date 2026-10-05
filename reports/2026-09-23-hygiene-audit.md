@@ -120,6 +120,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium.
 
 **Share the profiling scaffold and matching common path**
+> _Status (2026-10-05): Partially done — the eight `prof.rs` modules now take the `SFMTOOL_PROFILE` gate, the `Phase` timer, the event-counter increment, reset, and the phase and overhead report rows from one private `crate::profiling` module; each keeps its own phase names, report text and column layout, and a full `SFMTOOL_PROFILE=1` lib test run prints the same 3,278 profile lines, in the same shape and width, before and after. Polar and sweep matching are not merged: polar extends its candidate arrays for angle wraparound and carries separate positions, while sweep reads positions from its sort key, so a shared core is a design change rather than a mechanical one. Branch `audit-fix-13-prof-scaffold`._
 - Location: eight `crates/sfmtool-core/**/prof.rs` files; `crates/sfmtool-core/src/features/feature_match/polar.rs` (712) and `crates/sfmtool-core/src/features/feature_match/sweep.rs` (518).
 - Problem: Eight sibling profilers still repeat timing scaffolding, with five patch pairs sharing 21–26 long code lines. Polar and sweep still define parallel `GeometricInputs` and differ mainly in ordering policy.
 - Proposed fix: Centralize profiler counters and run logic, then pass an explicit ordering strategy to one shared matcher core.

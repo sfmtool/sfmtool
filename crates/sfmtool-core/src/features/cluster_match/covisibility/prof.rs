@@ -16,59 +16,8 @@
 //! Each phase is timed once per build, so the `Instant` pair costs nothing
 //! measurable even when profiling is on.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::Instant;
-
-/// Whether `SFMTOOL_PROFILE` is set (cached on first query).
-pub(crate) fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("SFMTOOL_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0"))
-}
-
-/// One accumulating phase counter: total nanoseconds.
-pub(crate) struct Phase {
-    name: &'static str,
-    ns: AtomicU64,
-}
-
-impl Phase {
-    const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            ns: AtomicU64::new(0),
-        }
-    }
-
-    fn reset(&self) {
-        self.ns.store(0, Ordering::Relaxed);
-    }
-
-    /// Run `f`, attributing its wall time to this phase when profiling is on.
-    #[inline]
-    pub(crate) fn time<T>(&self, f: impl FnOnce() -> T) -> T {
-        if !enabled() {
-            return f();
-        }
-        let t0 = Instant::now();
-        let r = f();
-        self.record(t0);
-        r
-    }
-
-    /// Attribute an already-started span to this phase. For a region that is
-    /// not expressible as a closure -- the enclosing build, whose body ends in
-    /// a fallible construction.
-    #[inline]
-    pub(crate) fn record(&self, t0: Instant) {
-        if !enabled() {
-            return;
-        }
-        self.ns
-            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-    }
-}
+pub(crate) use crate::profiling::{enabled, Phase};
+use crate::profiling::{report_overhead, report_phases, reset_all, RowFormat};
 
 /// The whole positioned build (the 100% denominator).
 pub(crate) static TOTAL: Phase = Phase::new("total");
@@ -86,35 +35,26 @@ const PHASES: [&Phase; 5] = [&TOTAL, &CLUSTER_PASS, &MEAN_FOLD, &NBR_ACCUM, &NBR
 /// Leaves that partition [`TOTAL`].
 const LEAVES: [&Phase; 4] = [&CLUSTER_PASS, &MEAN_FOLD, &NBR_ACCUM, &NBR_SORT];
 
+/// The phase-row layout of this summary.
+const ROWS: RowFormat = RowFormat {
+    name_width: 20,
+    secs_precision: 4,
+    calls: None,
+};
+
 /// Zero all counters (start of a profiled build).
 pub(crate) fn reset() {
-    for p in PHASES {
-        p.reset();
-    }
+    reset_all(&PHASES, &[]);
 }
 
 /// Print the accumulated summary to stderr (end of a profiled build).
 pub(crate) fn report(num_images: usize, n_clusters: usize, n_members: usize) {
-    let total_ns = TOTAL.ns.load(Ordering::Relaxed).max(1);
+    let total_ns = TOTAL.ns().max(1);
     eprintln!(
         "[sfmtool-profile] cluster_covisibility: total {:.3}s over {num_images} images, \
          {n_clusters} clusters, {n_members} members",
         total_ns as f64 * 1e-9
     );
-    for p in PHASES {
-        let ns = p.ns.load(Ordering::Relaxed);
-        eprintln!(
-            "[sfmtool-profile]   {:<20} {:>9.4}s  {:>5.1}%",
-            p.name,
-            ns as f64 * 1e-9,
-            100.0 * ns as f64 / total_ns as f64,
-        );
-    }
-    let leaves: u64 = LEAVES.iter().map(|p| p.ns.load(Ordering::Relaxed)).sum();
-    eprintln!(
-        "[sfmtool-profile]   {:<20} {:>9.4}s  {:>5.1}%  (total minus leaf phases)",
-        "other/overhead",
-        total_ns.saturating_sub(leaves) as f64 * 1e-9,
-        100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
-    );
+    report_phases(PHASES, total_ns, &ROWS);
+    report_overhead(&LEAVES, total_ns, "total", &ROWS);
 }

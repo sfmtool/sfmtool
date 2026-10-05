@@ -15,51 +15,9 @@
 //! the total are therefore meaningful; absolute values exceed wall time.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::Instant;
 
-/// Whether `SFMTOOL_PROFILE` is set (cached on first query).
-pub fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("SFMTOOL_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0"))
-}
-
-/// One accumulating phase counter: total nanoseconds and number of events.
-pub struct Phase {
-    name: &'static str,
-    ns: AtomicU64,
-    calls: AtomicU64,
-}
-
-impl Phase {
-    const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            ns: AtomicU64::new(0),
-            calls: AtomicU64::new(0),
-        }
-    }
-
-    fn reset(&self) {
-        self.ns.store(0, Ordering::Relaxed);
-        self.calls.store(0, Ordering::Relaxed);
-    }
-
-    /// Run `f`, attributing its wall time to this phase when profiling is on.
-    #[inline]
-    pub fn time<T>(&self, f: impl FnOnce() -> T) -> T {
-        if !enabled() {
-            return f();
-        }
-        let t0 = Instant::now();
-        let r = f();
-        self.ns
-            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        r
-    }
-}
+pub use crate::profiling::{count, enabled, Phase};
+use crate::profiling::{report_overhead, report_phases, reset_all, PATCH_ROWS};
 
 // Enclosing phase (overlaps the leaves; reported as the 100% denominator).
 /// Whole per-cluster `refine_cluster` calls.
@@ -106,14 +64,6 @@ pub static N_TILE_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Pixels copied into (re)built `LevelTile`s (tile area × channels).
 pub static N_TILE_PIXELS: AtomicU64 = AtomicU64::new(0);
 
-/// Count `n` events on `c` when profiling is on.
-#[inline]
-pub fn count(c: &AtomicU64, n: u64) {
-    if enabled() {
-        c.fetch_add(n, Ordering::Relaxed);
-    }
-}
-
 const PHASES: [&Phase; 7] = [
     &TOTAL,
     &GATE_SAMPLE,
@@ -126,57 +76,36 @@ const PHASES: [&Phase; 7] = [
 
 /// Zero all counters (start of a profiled batch).
 pub fn reset() {
-    for p in PHASES {
-        p.reset();
-    }
-    for c in [
-        &N_MEMBERS,
-        &N_GATED,
-        &N_GATE_REJECTED,
-        &N_REFINES,
-        &N_EVALS,
-        &N_EVALS_SHIFT,
-        &N_EVALS_SIM,
-        &N_EVALS_AFFINE,
-        &N_TILE_BUILDS,
-        &N_TILE_PIXELS,
-    ] {
-        c.store(0, Ordering::Relaxed);
-    }
+    reset_all(
+        &PHASES,
+        &[
+            &N_MEMBERS,
+            &N_GATED,
+            &N_GATE_REJECTED,
+            &N_REFINES,
+            &N_EVALS,
+            &N_EVALS_SHIFT,
+            &N_EVALS_SIM,
+            &N_EVALS_AFFINE,
+            &N_TILE_BUILDS,
+            &N_TILE_PIXELS,
+        ],
+    );
 }
 
 /// Print the accumulated summary to stderr (end of a profiled batch).
 pub fn report(clusters: usize, wall_secs: f64) {
-    let total_ns = TOTAL.ns.load(Ordering::Relaxed).max(1);
+    let total_ns = TOTAL.ns().max(1);
     eprintln!(
         "[sfmtool-profile] refine_cluster_patches: {clusters} clusters, wall {wall_secs:.3}s \
          (phase times are thread-summed CPU time; % of cluster_total)"
     );
-    for p in PHASES {
-        let ns = p.ns.load(Ordering::Relaxed);
-        let calls = p.calls.load(Ordering::Relaxed);
-        eprintln!(
-            "[sfmtool-profile]   {:<16} {:>9.3}s  {:>5.1}%  {:>10} calls  {:>8.2}us/call",
-            p.name,
-            ns as f64 * 1e-9,
-            100.0 * ns as f64 / total_ns as f64,
-            calls,
-            if calls > 0 {
-                ns as f64 * 1e-3 / calls as f64
-            } else {
-                0.0
-            },
-        );
-    }
-    let leaves: u64 = [&GATE_SAMPLE, &GATE_SCORE, &TEMPLATE, &REFINE]
-        .iter()
-        .map(|p| p.ns.load(Ordering::Relaxed))
-        .sum();
-    eprintln!(
-        "[sfmtool-profile]   {:<16} {:>9.3}s  {:>5.1}%  (cluster_total minus leaf phases)",
-        "other/overhead",
-        (total_ns.saturating_sub(leaves)) as f64 * 1e-9,
-        100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
+    report_phases(PHASES, total_ns, &PATCH_ROWS);
+    report_overhead(
+        &[&GATE_SAMPLE, &GATE_SCORE, &TEMPLATE, &REFINE],
+        total_ns,
+        "cluster_total",
+        &PATCH_ROWS,
     );
     let n_refines = N_REFINES.load(Ordering::Relaxed);
     let n_evals = N_EVALS.load(Ordering::Relaxed);
