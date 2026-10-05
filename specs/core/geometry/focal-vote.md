@@ -1,12 +1,16 @@
 # Structure-Free Focal Vote
 
-## Overview
+Before any reconstruction exists, the focal vote estimates the focal
+length, in pixels, shared by every image of a single-camera capture, from
+keypoints matched across the images. Pairs of images each cast a vote for
+the focal length, and the answer is the median of the votes. When the caller
+asks for more than one camera model, it also decides whether the lens is
+better described as a pinhole camera or an equidistant fisheye. It assumes no
+lens distortion beyond that model and a principal point at the image centre.
 
-The focal vote estimates a shared focal length from cluster-track
-observations before any reconstruction exists. Image pairs vote independently
-through one of two estimators, chosen per pair by what the pair's geometry
-can observe, and the consensus focal is the median of the pooled votes from
-both families:
+Each image pair votes through one of two estimators, chosen per pair by what
+the pair's geometry can observe, and the consensus focal is the median of
+the pooled votes from both families:
 
 - **Epipolar votes** — pairs whose correspondences carry parallax vote the
   Bougnoux focal of a robustly estimated fundamental matrix. Both cameras
@@ -36,6 +40,115 @@ camera rather than a table of columns and per-pair certificates calls
 [estimate-intrinsics.md](estimate-intrinsics.md), which composes this vote
 and returns the verdict, its corroboration, the focal and the votes that
 belong to that verdict.
+
+## Rust interface
+
+The kernel, its options and its result live in
+[focal_vote.rs](../../../crates/sfmtool-core/src/geometry/focal_vote.rs);
+the camera-model column scans in
+[column_scan.rs](../../../crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs);
+the 4-point LO-RANSAC homography in
+[homography_estimation.rs](../../../crates/sfmtool-core/src/geometry/homography_estimation.rs);
+and the SIMD dispatch and precision flags of the residual loops in
+[simd.rs](../../../crates/sfmtool-core/src/geometry/simd.rs). The Python
+bindings are in
+[focal_vote.rs](../../../crates/sfmtool-py/src/geometry/focal_vote.rs) and
+[homography_estimation.rs](../../../crates/sfmtool-py/src/geometry/homography_estimation.rs)
+(see Binding).
+
+```rust
+// sfmtool_core::geometry::focal_vote
+pub fn focal_vote_from_matches(
+    matches: &MatchesData,
+    options: &FocalVoteOptions,
+) -> Result<FocalVoteResult, MatchesInputError>;
+
+pub fn focal_vote_with_options(
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f32; 2]],
+    width: u32,
+    height: u32,
+    options: &FocalVoteOptions,
+) -> FocalVoteResult;
+
+/// Pinhole-only shorthands for `focal_vote_with_options`.
+pub fn focal_vote(cluster_starts, member_images, member_positions, width, height, seed: u64)
+    -> FocalVoteResult;
+pub fn focal_vote_with_min_disp(/* as focal_vote */, epipolar_min_disp_frac: f64)
+    -> FocalVoteResult;
+
+pub struct FocalVoteOptions {
+    pub seed: u64,                    // default 0
+    pub epipolar_min_disp_frac: f64,  // default 0.02
+    pub columns: Vec<CameraModel>,    // default [Pinhole]
+}
+
+/// The reading half of `focal_vote_from_matches`, shared with
+/// `estimate_intrinsics_from_matches`.
+impl MatchesObservations<'_> {
+    pub fn read(matches: &MatchesData) -> Result<Self, MatchesInputError>;
+}
+
+// sfmtool_core::geometry::focal_vote::column_scan
+pub fn scan_column(
+    model: CameraModel,
+    epipolar: &[ScanCandidate],
+    rotation: &[ScanCandidate],
+    max_wh: f64,
+    half_diag: f64,
+) -> ColumnScan;
+
+// sfmtool_core::geometry::homography_estimation
+pub fn estimate_homography(
+    x1: &[[f64; 2]],
+    x2: &[[f64; 2]],
+    options: &HomographyOptions,
+) -> Option<HomographyEstimate>;
+```
+
+The observations arrive as cluster-grouped arrays rather than as a list of
+image pairs because that is how the `.matches` file stores them, so the
+file's own arrays are the arguments. The array entry points return a
+`FocalVoteResult` rather than a `Result`: input that breaks the contract,
+and a capture the vote cannot answer, both come back as a result with no
+consensus. Only the file entry point has an error type, and only for a
+property of the file (see below). `FocalVoteResult` is the Output table
+below plus the model verdict `camera_model` and the per-column
+diagnostics `columns` (see Camera-Model Columns). `scan_column` runs both
+scan cells of one column over candidate pairs the kernel has already
+selected; the kernel is its only production caller.
+
+`epipolar_min_disp_frac` is the wide-baseline gate on epipolar candidate
+pairs (see Epipolar votes). Set too low, it admits near-static pairs whose
+ill-conditioned fundamental matrices vote junk focals into the pool.
+
+```rust
+use sfmtool_core::geometry::focal_vote::{focal_vote_from_matches, FocalVoteOptions};
+
+let result = focal_vote_from_matches(&matches, &FocalVoteOptions::default())?;
+if let Some(f) = result.focal_px {
+    println!("{f:.1} px from {} votes", result.n_pool);
+}
+```
+
+### From a `.matches` file
+
+`focal_vote_from_matches(&MatchesData, &FocalVoteOptions)` is the whole
+file-to-vote path in one call: it reads the cluster backbone's CSR index and
+member images (borrowed), widens the member positions once, and takes
+`(width, height)` from `MatchesData::shared_image_dims` — the file-level
+reading of the one resolution every image carries, which **refuses a file
+whose images do not all carry the same dimensions**. That is the
+shared-camera contract the centred principal point rests on, and it lives
+with the file rather than in every caller silently taking the first image's
+size; the vote restates its three dimension outcomes in its own terms. It
+errors only on a property of the file (`MatchesInputError`: no cluster
+backbone, no member positions, no images, no dimensions, mixed dimensions); a
+capture the vote simply cannot answer is a result with no consensus, not an
+error.
+[`estimate_intrinsics_from_matches`](estimate-intrinsics.md) is the same
+reading behind the typed answer.
 
 ## Inputs
 
@@ -71,32 +184,22 @@ two member images contribute nothing.
 The epipolar cell's residual loop computes in `f32` by default (eight
 lanes, `sqrt`/`div` in single precision): the residual is a directly
 computed sine ratio, well conditioned at small values, and its `f32`
-error (~1e-7) sits four orders under the consensus threshold.
+error (~1e-7) sits about four orders under the consensus threshold, which
+is the sine of 3 px divided by the map's local scale `dr/dθ`: about 2e-2
+at a 137 px focal and about 2e-3 at a 1500 px one. The input
+positions are `f32` already, and keypoint noise is three orders above
+`f32` resolution. Measured over 42 captures, the `f32` path leaves every
+model verdict, fisheye confirmation and column-escalation decision of
+[estimate-intrinsics.md](estimate-intrinsics.md) unchanged, with consensus
+focals within 7e-6 of the `f64` path, while the residual kernel runs
+2.7–3.2× and the escalated vote 12–19% faster.
 `SFMTOOL_FOCAL_VOTE_F64_EPI` restores the double-precision path for
 forensics, in the convention of the other restore flags (see
 [Environment flags](#environment-flags)). The rotation cell computes in
 `f64` by default: recovering a small angle from its cosine is
-ill-conditioned in `f32`, and the well-conditioned cross-product form is
+ill-conditioned in `f32` (a median error of 38% on inlier residuals), and the well-conditioned cross-product form is
 no faster than the `f64` path. `SFMTOOL_FOCAL_VOTE_F32_ROT` turns on that
 `f32` cross-product form for measurement.
-
-### From a `.matches` file
-
-`focal_vote_from_matches(&MatchesData, &FocalVoteOptions)` is the whole
-file-to-vote path in one call: it reads the cluster backbone's CSR index and
-member images (borrowed), widens the member positions once, and takes
-`(width, height)` from `MatchesData::shared_image_dims` — the file-level
-reading of the one resolution every image carries, which **refuses a file
-whose images do not all carry the same dimensions**. That is the
-shared-camera contract the centred principal point rests on, and it lives
-with the file rather than in every caller silently taking the first image's
-size; the vote restates its three dimension outcomes in its own terms. It
-errors only on a property of the file (`MatchesInputError`: no cluster
-backbone, no member positions, no images, no dimensions, mixed dimensions); a
-capture the vote simply cannot answer is a result with no consensus, not an
-error.
-[`estimate_intrinsics_from_matches`](estimate-intrinsics.md) is the same
-reading behind the typed answer.
 
 ## Output
 
@@ -141,11 +244,11 @@ nothing depends on image ordering.
 Candidate pairs: rank covisible pairs by shared-cluster count, descending,
 keeping pairs with at least `min_shared` clusters (`30`, relaxing to `16`
 when fewer than 6 pairs qualify) and mean displacement of at least
-`0.02 × diagonal`; admit at most 2 pairs per image, up to 18 pairs.
+`epipolar_min_disp_frac × diagonal` (default `0.02`); admit at most 2 pairs per image, up to 18 pairs.
 
 Per pair, over the shared clusters' correspondences:
 
-1. Estimate the fundamental matrix (existing `estimate_fundamental`,
+1. Estimate the fundamental matrix (`estimate_fundamental`,
    `max_error_px = 3.0`); record the inlier count `n_F`.
 2. Fit a homography to the same correspondences (see Homography
    estimation) at the same 3 px gate; record the inlier count `n_H`.
@@ -154,7 +257,7 @@ Per pair, over the shared clusters' correspondences:
    homography-dominated: it casts no epipolar vote (its F is collapsing
    toward H).
 3. Otherwise compute the Bougnoux focal of both directions of the
-   fundamental matrix (existing `focal_from_fundamental`, principal point
+   fundamental matrix (`focal_from_fundamental`, principal point
    at the image centre). A direction whose extraction is degenerate (no
    value) counts into `n_degenerate`; directional focals not strictly
    inside `(0.2, 4) × max(width, height)` are discarded into
@@ -256,7 +359,7 @@ on a second Insta360 One X body at 1920², all three arbitrated fisheye,
 voting 548–584 px (6.6% spread). The gate constants below are the
 data-derived values from those captures.
 
-- **Pinhole** — `ray ∝ ((x − cx)/f, (y − cy)/f, 1)`. The implemented
+- **Pinhole** — `ray ∝ ((x − cx)/f, (y − cy)/f, 1)`. The closed-form
   kernel above is this column; its two cells (epipolar, rotation) have
   closed-form focal extraction (Bougnoux, `K⁻¹HK` orthogonality).
 - **Equidistant fisheye** — `θ = r/f` for radial pixel distance `r` from
@@ -375,7 +478,7 @@ The two fisheye cells:
   is not a restriction on the grid but the covariate below.
 
 **Radial coverage.** Pinhole and equidistant maps agree to first order
-near the principal point, so a pair whose inliers hug the centre cannot
+near the principal point, so a pair whose inliers all lie near the centre cannot
 distinguish the columns regardless of how well it votes within one.
 Each vote therefore carries a radial-coverage covariate (a high quantile
 of its inliers' radial distance, as a fraction of the half-diagonal),
@@ -386,7 +489,8 @@ from the model verdict. Coverage is deliberately **radial, not
 angular**: angular reach is what actually predicts discrimination, but
 an angular floor disqualifies a narrow-FOV pinhole capture's own
 legitimate votes by attrition and flips its model verdict — the radial
-covariate penalizes centre-hugging votes without penalizing narrow
+covariate penalizes votes whose inliers lie near the principal point
+without penalizing narrow
 lenses.
 
 The certification floors, following the same pattern as the pinhole
@@ -408,7 +512,7 @@ available to the verdict.
 **Arbitration hierarchy.** Model precedes motion family: the model
 verdict is the column with the greater certified mass of
 model-informative votes, and the winning column then applies the
-existing two-family consensus (pooled log-space median, the `0.25`
+two-family consensus (pooled log-space median, the `0.25`
 family-disagreement rule) unchanged over its own votes. Certified
 masses are comparable **only when both columns' certificates come from
 the same scan machinery**: for arbitration purposes the pinhole column
@@ -428,8 +532,8 @@ Ties in the certified model-informative mass go to the pinhole column,
 the narrower hypothesis.
 
 **Compatibility.** The caller selects the column set; the default is
-pinhole-only, which reproduces the implemented kernel's behavior
-identically — no scan runs at all. Output gains `camera_model` (the
+pinhole-only, which reproduces the closed-form kernel's behavior
+identically — no scan runs at all. The result carries `camera_model` (the
 model verdict) and per-column diagnostics mirroring the per-family ones
 plus the certificate counts the verdict reads. A single requested column
 has nothing to arbitrate and is the verdict by construction; with
@@ -446,14 +550,6 @@ focal.
 
 ## Binding
 
-The kernel and its consensus live in
-[focal_vote.rs](../../../crates/sfmtool-core/src/geometry/focal_vote.rs), the
-camera-model column scans in
-[column_scan.rs](../../../crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs),
-and the 4-point LO-RANSAC homography in
-[homography_estimation.rs](../../../crates/sfmtool-core/src/geometry/homography_estimation.rs),
-bound as `sfmtool._sfmtool.geometry.focal_vote` and `estimate_homography`.
-
 `sfmtool._sfmtool.geometry.focal_vote` takes its observations in either of
 two forms and only these two, mirroring the two Rust entry points:
 
@@ -463,6 +559,10 @@ two forms and only these two, mirroring the two Rust entry points:
 - `focal_vote(cluster_starts, member_images, member_positions, width, height,
   *, seed=0, epipolar_min_disp_frac=0.02, columns=None)` — the CSR arrays
   spelled out.
+
+`member_positions` is a `float32` array; a `float64` array is accepted and
+cast to `float32`, which is exact for positions read out of a `.matches`
+file, since those started as `f32`.
 
 Passing observation arrays alongside a `MatchesFile`, or the array form with
 an argument missing, is a `ValueError`; so is a CSR index that does not open
@@ -482,7 +582,8 @@ options are keyword-only, and it returns `{"h_matrix", "inliers",
 
 The pair tables and every pair selection built on them are exhaustive and
 draw no randomness at all; all sampling that remains (the RANSAC
-estimators and the column scans) derives from the input seed. Identical
+estimators and the column scans) derives from the input seed through a
+SplitMix64 generator. Identical
 inputs and seed produce identical output on every platform. The column
 scans draw their minimal-sample index sets once per candidate pair from
 the seed and the pair's position in the candidate list, then reuse them
@@ -637,7 +738,7 @@ that sets them is a forensic run, not a supported configuration.
 - Rust, camera-model columns: synthetic equidistant scenes (pure
   rotation and parallax) recover a planted fisheye focal through each
   cell; the same fisheye pair read through the pinhole column survives
-  only on a centre-hugging subset and so contributes no
+  only on a subset near the principal point and so contributes no
   model-informative mass, while a narrow-FOV pinhole scene is the
   pinhole column's own ground; a synthetic pinhole capture is arbitrated
   `Pinhole` and a synthetic fisheye capture `EquidistantFisheye`, with

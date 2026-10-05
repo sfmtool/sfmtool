@@ -1,41 +1,22 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Camera-model columns of the structure-free focal vote
-//! (see `specs/core/geometry/focal-vote.md`, "Camera-Model Columns").
+//! Camera-model columns of the structure-free focal vote.
 //!
-//! A **column** is a camera-model hypothesis supplying an invertible pixel→ray
-//! map parameterized by its own focal ([`CameraModel`]). Both estimator
-//! families of [`super::focal_vote`] generalize over the camera model through
-//! that map, and each family becomes a **cell** that scans candidate focals for
-//! self-consistency:
+//! A **column** is a camera-model hypothesis ([`CameraModel`]) supplying an
+//! invertible pixel→ray map parameterized by its own focal. [`scan_column`]
+//! runs both of a column's **cells** over candidate pairs the kernel in
+//! [`super::focal_vote`] has already selected: the epipolar cell scans candidate
+//! focals for the essentialness of the ray-space epipolar matrix, and the
+//! rotation cell for the residual of a rotation fitted to the rays. Each pair's
+//! scan through a cell is a [`ScanVote`] that records whether its geometry
+//! certifies it, and the result is a [`ColumnScan`] whose certified masses are
+//! comparable across columns.
 //!
-//! - **Epipolar cell** — per candidate focal, map the pair's correspondences to
-//!   unit rays and robustly estimate the ray-space epipolar matrix; the cost is
-//!   the essentialness residual `(σ₁ − σ₂)/(σ₁ + σ₂)` of the consensus refit.
-//!   The two correspondence directions are scanned separately with **one-sided**
-//!   residuals (image-2 rays against `E·x₁`, image-1 rays against `Eᵀ·x₂`), and
-//!   their minima must agree within the direction band. A symmetric residual
-//!   would make that certificate vacuous: the epipolar matrix of the swapped
-//!   correspondences is exactly the transpose, with identical singular values.
-//! - **Rotation cell** — per candidate focal, fit a rotation of rays directly
-//!   (robust orthogonal fit); the cost is the fit's trimmed RMS angular
-//!   residual. The inlier support is frozen **once per pair** — both maps shrink
-//!   every ray angle as `1/f`, so a per-candidate support would let a bad focal
-//!   buy a low cost by keeping fewer points and the scan would pin at the top of
-//!   the grid instead of showing an interior minimum.
-//!
-//! Estimation and residuals live on the ray **sphere** throughout: an
-//! equidistant field of view can exceed 180°, and rays with `θ ≥ 90°` have no
-//! planar projection at all, yet are exactly the model-informative ones. The
-//! RANSAC consensus bound is an angle whose value derives per candidate focal
-//! from a pixel tolerance through the map's local scale `dr/dθ`; a fixed
-//! angular threshold does not transfer across lenses and resolutions.
-//!
-//! Everything here is seeded and deterministic: the minimal-sample index sets
-//! are drawn once per candidate pair from the input seed and reused at every
-//! candidate focal and in every column, so the cost curves carry no RANSAC
-//! jitter and the columns are directly comparable.
+//! Seeded and deterministic: identical candidates produce identical scans.
+//! The design — the one-sided direction residuals, the frozen rotation support,
+//! the angular consensus bound and every gate constant — is in
+//! `specs/core/geometry/focal-vote.md`, "Camera-Model Columns".
 
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 use rayon::prelude::*;
@@ -521,8 +502,9 @@ pub(crate) fn singular_values_desc(m: &Matrix3<f64>) -> [f64; 3] {
 //
 // Both cells spend most of their time scoring RANSAC hypotheses against every
 // correspondence, and both residuals survive single precision: the epipolar
-// one is a directly computed sine ratio whose `f32` error (~1e-7) sits five
-// orders below its ~1e-2 threshold, and the rotation one is measured through
+// one is a directly computed sine ratio whose `f32` error (~1e-7) sits about
+// four orders below its consensus bound (`sin(SCAN_TOL_PX / dr/dθ)`, ~2e-3 at a
+// 1500 px focal), and the rotation one is measured through
 // the NORM OF THE CROSS PRODUCT rather than the arccosine of the dot, which is
 // what keeps a small angle in its own leading digits (see
 // `crate::geometry::acos_poly::asin_poly_scalar_f32`).

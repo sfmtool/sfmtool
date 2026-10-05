@@ -269,25 +269,17 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
     Ok(d)
 }
 
-/// Estimate a shared focal length from cluster-track observations without any
-/// reconstruction (see ``specs/core/geometry/focal-vote.md``).
+/// Estimate the focal length shared by every image of a single-camera capture
+/// from cluster-track observations, without any reconstruction.
 ///
-/// Image pairs drawn from the cluster tracks each cast one focal vote through
-/// whichever estimator their geometry can observe — the Bougnoux focal of a
-/// fundamental matrix (parallax-rich pairs, one vote per pair: the geometric
-/// mean of its two direction-consistent focals) or rotation self-calibration of
-/// a parallax-free homography (far-field pairs, one vote per unordered image
-/// pair) — and the consensus focal is the log-space median of the pooled votes
-/// from both families. No structure is estimated, so the vote cannot be biased
-/// by the depth/focal (bas-relief) compensation of structure-based focal
-/// estimation.
+/// Image pairs each vote for a focal and the answer is the median of the votes.
+/// The estimators, gates and consensus rules are in
+/// ``specs/core/geometry/focal-vote.md``.
 ///
 /// Takes its observations in either of two forms, and only these two:
 ///
 /// * ``focal_vote(matches_file, ...)`` -- a ``MatchesFile`` (a selection
-///   included), whose cluster backbone already IS the layout below and whose
-///   image table supplies the shared image size. Every image of the file must
-///   carry the same dimensions, because the vote estimates one shared camera.
+///   included). Every image of the file must carry the same dimensions.
 /// * ``focal_vote(cluster_starts, member_images, member_positions, width,
 ///   height, ...)`` -- the same observations spelled out.
 ///
@@ -295,78 +287,41 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 ///     cluster_starts: A ``MatchesFile``, or the (n_clusters + 1,) uint32 CSR
 ///         offsets into the member arrays: opening at 0, nondecreasing, and
 ///         closing at the member count.
-///     member_images: (n_members,) uint32 image id per member. Omitted in the
-///         ``MatchesFile`` form.
-///     member_positions: (n_members, 2) float32 full-pixel keypoint positions
-///         -- the width the ``.matches`` backbone stores them at. A float64
-///         array is accepted and cast, which is exact for the
-///         ``f32``-originated values a caller reads out of such a file.
-///         Omitted in the ``MatchesFile`` form.
+///     member_images: (n_members,) uint32 image id per member.
+///     member_positions: (n_members, 2) float32 full-pixel keypoint
+///         positions; a float64 array is accepted and cast.
 ///     width: Shared image width; the principal point is the image centre.
-///         Omitted in the ``MatchesFile`` form.
-///     height: Shared image height. Omitted in the ``MatchesFile`` form.
-///     seed: SplitMix64 seed for the RANSAC estimators and the column scans
-///         (the pair tables draw no randomness); same inputs + seed =>
-///         bit-identical output (default 0).
-///     epipolar_min_disp_frac: Wide-baseline gate for epipolar candidate
-///         pairs, as a fraction of the image diagonal their mean feature
-///         displacement must reach (default 0.02). Too low admits
-///         near-static pairs whose fundamental matrices vote junk focals.
-///     columns: Camera-model columns to evaluate, as a sequence of names
-///         (``"pinhole"``, ``"equidistant"`` / ``"fisheye"``). The default
-///         ``("pinhole",)`` runs no scan and reproduces the closed-form
-///         kernel exactly; asking for both columns adds the self-consistency
-///         scans that arbitrate between them.
+///     height: Shared image height.
+///     seed: Seed for the RANSAC estimators and the column scans; same inputs
+///         and seed give bit-identical output (default 0).
+///     epipolar_min_disp_frac: Fraction of the image diagonal an epipolar
+///         candidate pair's mean feature displacement must reach
+///         (default 0.02).
+///     columns: Camera-model columns to evaluate (``"pinhole"``,
+///         ``"equidistant"`` / ``"fisheye"``). The default runs the pinhole
+///         column only, with no scan.
+///
+///     The four array arguments are omitted in the ``MatchesFile`` form.
 ///
 /// Returns:
-///     A dict mirroring the output table: ``{"focal_px": float | None,
-///     "family": "Epipolar" | "Rotation" | None, "epipolar_focal_px":
-///     float | None, "rotation_focal_px": float | None, "n_epipolar": int,
-///     "n_rotation": int, "n_pool": int, "pool_spread": float,
-///     "family_disagreement": float | None, "parallax_poverty": float,
-///     "epipolar_spread": float, "rotation_spread": float,
-///     "epipolar_votes": list[dict], "rotation_votes": list[dict],
-///     "n_h_dominated": int, "n_estimator_failed": int, "n_band_rejected":
-///     int, "n_degenerate": int, "n_inconsistent_pairs": int, "camera_model":
-///     str | None, "columns": list[dict]}``.
+///     A dict mirroring the spec's Output table: ``focal_px`` (``None``
+///     without a consensus), ``family`` (``"Epipolar"`` / ``"Rotation"`` /
+///     ``None``), ``epipolar_focal_px``, ``rotation_focal_px``,
+///     ``n_epipolar``, ``n_rotation``, ``n_pool``, ``pool_spread``,
+///     ``family_disagreement``, ``parallax_poverty``, ``epipolar_spread``,
+///     ``rotation_spread``, ``n_h_dominated``, ``n_estimator_failed``,
+///     ``n_band_rejected``, ``n_degenerate``, ``n_inconsistent_pairs``,
+///     ``camera_model`` (``"Pinhole"`` / ``"EquidistantFisheye"`` / ``None``),
+///     and three lists of dicts:
 ///
-///     ``focal_px`` is the log-space median of the pooled votes — one per
-///     direction-consistent epipolar pair plus one per unordered rotation pair
-///     — and is ``None`` with fewer than 2 pooled votes; ``n_pool`` is
-///     ``n_epipolar + n_rotation``. Every focal median here is taken in log
-///     space (an even-length median is the geometric mean of the two central
-///     votes). When both families voted and ``family_disagreement`` (their
-///     log-focal gap) exceeds ``0.25`` the pool is bimodal, and ``focal_px`` is
-///     the majority family's median instead of a blend. ``family`` is the
-///     pool's majority contributor (ties go to ``"Rotation"``), ``None`` when
-///     there is no consensus; under the disagreement rule ``focal_px`` is
-///     exactly that family's median. ``pool_spread`` is the log-focal
-///     interquartile range of the votes behind ``focal_px`` (the whole pool, or
-///     the majority family's votes under the disagreement rule).
-///
-///     ``n_h_dominated``, ``n_estimator_failed`` and ``n_inconsistent_pairs``
-///     count candidate PAIRS; ``n_band_rejected`` and ``n_degenerate`` count
-///     DIRECTIONS (a Bougnoux focal outside the plausibility band, and an
-///     extraction that produced no value at all).
-///
-///     ``epipolar_votes`` is the diagnostic detail layer, independent of what
-///     pools: every in-band directional Bougnoux focal, both directions, with
-///     ``image_a``, ``image_b``, ``shared_clusters``, ``mean_disp_px``,
-///     ``n_f_inliers``, ``n_h_inliers``, ``transposed``, ``focal_px``. Each
-///     ``rotation_votes`` entry carries ``image``, ``partner``,
-///     ``mean_disp_px``, ``n_inliers``, ``focal_px``, one entry per unordered
-///     image pair — two images that are each other's widest partner are
-///     reached twice by the scan and vote only on the first.
-///
-///     ``camera_model`` is the model verdict (the requested column with the
-///     greater certified mass of model-informative scan votes, ties going to
-///     ``"Pinhole"``); the top-level focal fields are the winning column's
-///     consensus, and ``columns`` carries every requested column's own
-///     consensus, spreads and certificate counts (plus its per-pair
-///     ``scan_votes``). Column focals are never blended: a pinhole focal and
-///     an equidistant focal parameterize different maps. With the default
-///     pinhole-only column set no scan runs, ``columns`` is empty and
-///     ``camera_model`` is ``"Pinhole"``.
+///     * ``epipolar_votes``: ``image_a``, ``image_b``, ``shared_clusters``,
+///       ``mean_disp_px``, ``n_f_inliers``, ``n_h_inliers``, ``transposed``,
+///       ``focal_px``.
+///     * ``rotation_votes``: ``image``, ``partner``, ``mean_disp_px``,
+///       ``n_inliers``, ``focal_px``.
+///     * ``columns``: one per requested column when a scan ran (empty for the
+///       pinhole-only default), with that column's consensus fields,
+///       certificate counts and per-pair ``scan_votes``.
 // This is a Python docstring (rendered by `help()`), not Rust prose: its
 // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
 // indented code blocks, which rustdoc then tries to parse as Rust.

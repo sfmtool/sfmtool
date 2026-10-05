@@ -59,10 +59,8 @@ pub(crate) fn avx2_enabled() -> bool {
 /// Unlike [`avx2_enabled`], this is **not** a pure performance switch: the
 /// residual is a different arithmetic and the rays it measures are narrowed to
 /// `f32` (widened back for the elimination rows, so a cell has one ray truth
-/// rather than two). Positions are stored `f32`, keypoint noise is three
-/// orders above `f32` resolution, and the fleet measured every verdict,
-/// confirmation and escalation invariant with consensus focals within 7e-6 —
-/// while the kernel runs 2.7-3.2x and the escalated vote 12-19% faster.
+/// rather than two). Why `f32` is enough, and what it was measured to change,
+/// is in `specs/core/geometry/focal-vote.md`, "Inputs".
 static F32_EPI: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_FOCAL_VOTE_F64_EPI").is_none());
 
