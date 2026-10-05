@@ -8,18 +8,53 @@ build-backend = "maturin"
 [project]
 name = "sfmtool"
 version = "0.2"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-description = "Fun with Structure from Motion"
-dependencies = [
-    "click",
-    "deadline",
-    "numpy",
-    "opencv-python-headless",
-    "pycolmap",
-    "xxhash",
+description = "Structure from Motion toolkit built on COLMAP: a CLI, file formats and a 3D viewer"
+readme = "README.md"
+authors = [{ name = "Mark Wiebe" }]
+keywords = [
+    "structure-from-motion",
+    "sfm",
+    "photogrammetry",
+    "colmap",
+    "3d-reconstruction",
+    "computer-vision",
 ]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+# Lower bounds are the versions CI runs against where an older release is known
+# to lack something sfmtool uses: pycolmap's API changes between major
+# versions, and `deadline` 0.60.7 is the release whose pinned
+# deadline-job-attachments provides `deadline.job_attachments.api`.
+dependencies = [
+    "click>=8",
+    "deadline>=0.60.7",
+    "numpy>=2",
+    "opencv-python-headless",
+    "pycolmap>=4.1.1,<5",
+    "xxhash>=3.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/sfmtool/sfmtool"
+Documentation = "https://sfmtool.github.io/sfmtool/"
+Repository = "https://github.com/sfmtool/sfmtool"
+Issues = "https://github.com/sfmtool/sfmtool/issues"
 
 [project.scripts]
 sfm = "sfmtool.cli:main"

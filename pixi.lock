@@ -15405,13 +15405,13 @@ packages:
 - pypi: ./
   name: sfmtool
   requires_dist:
-  - click
-  - deadline
-  - numpy
+  - click>=8
+  - deadline>=0.60.7
+  - numpy>=2
   - opencv-python-headless
-  - pycolmap
-  - xxhash
-  requires_python: '>=3.13'
+  - pycolmap>=4.1.1,<5
+  - xxhash>=3.4
+  requires_python: '>=3.14'
 - pypi: https://files.pythonhosted.org/packages/03/f0/6db07590ed7e0a77f186ef0bcea8d52553bf1ba57833e09467a2411f0f2d/xxhash-3.8.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   name: xxhash
   version: 3.8.1
