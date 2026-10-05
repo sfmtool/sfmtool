@@ -855,8 +855,8 @@ impl GrowState {
         );
     }
 
-    /// Triangulate every cluster that has gained posed views since it was
-    /// last filled.
+    /// Triangulate every cluster that lacks a finite point but has posed
+    /// observations, through [`fill_new_points`].
     fn fill_points(&mut self, inp: &GrowInputs) {
         fill_new_points(
             inp.camera,
@@ -1123,8 +1123,6 @@ fn force_accept(inp: &GrowInputs, st: &mut GrowState, j: usize) {
 /// a failed or gated one is deferred.
 fn register_candidate(inp: &GrowInputs, st: &mut GrowState, i: usize, ba_every: usize) {
     let options = inp.options;
-    // Normal candidate: estimate-then-refine, then the acceptance
-    // gate against the accepted-so-far median.
     let (_rows, uv_i, world_i, brs_i) = gather_correspondences(
         &inp.image_obs[i],
         inp.cluster_indexes,
