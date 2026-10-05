@@ -66,6 +66,15 @@ def test_options_then_files_in_order(monkeypatch, tmp_path):
     ]
 
 
+def test_mcp_port_out_of_range_is_refused(monkeypatch, tmp_path):
+    a = tmp_path / "a.sfmr"
+    a.write_bytes(b"")
+    result, calls = _invoke_with_fake_run(monkeypatch, [str(a), "--mcp", "70000"])
+    assert result.exit_code == 2
+    assert "70000" in result.output
+    assert calls == []
+
+
 def test_mcp_without_port_passes_default(monkeypatch, tmp_path):
     a = tmp_path / "a.sfmr"
     a.write_bytes(b"")

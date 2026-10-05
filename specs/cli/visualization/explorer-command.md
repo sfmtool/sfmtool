@@ -29,7 +29,7 @@ the Visualization category in [cli.py](../../../src/sfmtool/cli.py).
 | Argument / option | Type | Default | Meaning |
 |-------------------|------|---------|---------|
 | `FILE ...` | paths, zero or more | none | Files to load. Each must exist, or Click refuses the command before the viewer starts. Each file becomes its own node in the viewer's scene graph, in the order given, so several reconstructions can be compared in one 3D space ([scene-graph.md](../../gui/scene-graph.md)). With no files the viewer opens empty. |
-| `--mcp [PORT]` | int | off; `8787` when given without a number | Host a Model Context Protocol endpoint on `127.0.0.1:PORT`, so an agent can drive the viewer. `0` takes an ephemeral port, which the viewer prints at startup. See [mcp-server.md](../../gui/mcp-server.md). |
+| `--mcp [PORT]` | int, 0 to 65535 | off; `8787` when given without a number | Host a Model Context Protocol endpoint on `127.0.0.1:PORT`, so an agent can drive the viewer. `0` takes an ephemeral port, which the viewer prints at startup. See [mcp-server.md](../../gui/mcp-server.md). |
 | `--no-default-layout` | flag | off | Start with the stock panel grid, ignoring a layout saved at `~/.sfm-explorer-default-layout.json` ([panel-layout.md](../../gui/panel-layout.md) § "The default layout file"). |
 
 The default port is the constant `DEFAULT_MCP_PORT` in `explorer.py`. It
@@ -44,6 +44,11 @@ integer". Put the files first (`sfm explorer scene.sfmr --mcp`), give the port
 (`sfm explorer --mcp 8787 scene.sfmr`), or end the options with `--`
 (`sfm explorer --mcp -- scene.sfmr`). The viewer's own command line accepts
 `--mcp scene.sfmr` and reads it as the default port and a file.
+
+A port outside 0 to 65535 is refused with a usage error (exit status 2) before
+the viewer starts. The viewer would read `--mcp 70000` the same way as
+`--mcp scene.sfmr`, as the default port followed by a file named `70000`, and
+try to bind 8787.
 
 ## How the viewer is launched
 

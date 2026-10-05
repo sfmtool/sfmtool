@@ -23,7 +23,10 @@ VIEWER_MODULE = "sfmtool._explorer"
     is_flag=False,
     flag_value=str(DEFAULT_MCP_PORT),
     default=None,
-    type=int,
+    # The range check matters: the viewer reads `--mcp 70000` as the default
+    # port followed by a file named 70000, so an out-of-range number must be
+    # refused here rather than passed on.
+    type=click.IntRange(0, 65535),
     metavar="PORT",
     help=(
         "Host a Model Context Protocol endpoint on 127.0.0.1, so an agent can "
