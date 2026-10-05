@@ -252,8 +252,10 @@ at materialisation.
 ### Rust API
 
 The type lives in
-[edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs),
-re-exported as
+[edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs), and
+`RowMap` in its private child
+[edited/row_map.rs](../../../crates/sfmtool-core/src/reconstruction/edited/row_map.rs);
+both are re-exported as
 `sfmtool_core::{EditedReconstruction, PointRecord, RecordObservation, PointView,
 RowMap, EditError}`, and reaches Python as
 `sfmtool._sfmtool.reconstruction.EditedReconstruction`.
@@ -516,8 +518,8 @@ impl PointMap {
 }
 ```
 
-It is in [edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs)
-beside `RowMap`, and reachable as `sfmtool_core::PointMap`.
+It is in [edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs),
+and reachable as `sfmtool_core::PointMap`.
 
 **Every edit that can move an index reports one.** A bench commit hands back the
 write -- a `Replaced` of its one pair for a track seated on a point, a `Created`
@@ -706,8 +708,10 @@ binding surface is the contract: no Python-visible name, dtype or shape depends
 on which half a column lives in.
 
 The overlay is covered by
-`crates/sfmtool-core/src/reconstruction/edited/tests.rs` and, from Python, by
-`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`. Both build on
+`crates/sfmtool-core/src/reconstruction/edited/tests.rs`, the row map by
+`crates/sfmtool-core/src/reconstruction/edited/row_map/tests.rs`, and, from
+Python, by
+`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`. All three build on
 a reconstruction carrying every optional column, so a record that omits or
 invents one is a visible failure. What they pin:
 

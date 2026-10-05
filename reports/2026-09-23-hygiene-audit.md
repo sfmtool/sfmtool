@@ -126,6 +126,8 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium, because benchmark fields and match order are observable.
 
 **Break up the numbered cluster census and edited reconstruction internals**
+> _Status (2026-10-05): Done — `cluster_census` now calls one private helper per numbered phase (candidate poses, viewpoint groups, observation gathering and cluster measures, eligibility, per-pair census, global satisfaction, group consistency) with identical output on the test scenes; `RowMap`, `ScanRows` and their tests moved to the private `reconstruction/edited/row_map.rs`, re-exported unchanged, branch `audit-fix-16-census-edited-split`._
+
 - Location: `crates/sfmtool-core/src/analysis/cluster_census.rs` (737 lines, main function 425–734) and `crates/sfmtool-core/src/reconstruction/edited.rs` (1,893 lines, `RowMap` at 1396, `ScanRows` at 1423).
 - Problem: Census still encodes six phases in one 310-line function. The edited reconstruction file still mixes several mutation concerns with reusable row mapping.
 - Proposed fix: Extract census phase helpers and move row-map/scan-row machinery to a focused private module.
