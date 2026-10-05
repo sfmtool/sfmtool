@@ -5,13 +5,13 @@
 
 ``sfm explorer`` starts this module as a child process rather than calling the
 viewer itself, because the viewer needs a process to itself: it creates a window
-event loop, which macOS allows only on the main thread and ``winit`` allows only
-once per process, and it sets process-wide state, the logger and on Windows the
-DPI awareness, that should not carry over into the ``sfm`` process. The
-arguments are the viewer's own command line, as its ``--help`` describes, and
-the process exits with the status ``run_explorer`` returns: 0 once the window
-closes, 2 for a command line the viewer cannot act on, and 1 when it cannot
-start.
+event loop, which ``winit`` creates only on the main thread, on every platform,
+and only once per process, and it sets process-wide state, the logger and on
+Windows the DPI awareness, that should not carry over into the ``sfm`` process.
+The arguments are the viewer's own command line, as its ``--help`` describes,
+and the process exits with the status ``run_explorer`` returns: 0 once the
+window closes or ``--help`` has printed the usage, 2 for a command line the
+viewer cannot act on, and 1 when it cannot start.
 """
 
 import signal

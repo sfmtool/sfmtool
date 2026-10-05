@@ -399,10 +399,10 @@ extension module in every wheel. `run_with_args` reports a failure as a
 `RunError` carrying a message and an exit status (2 for a command line it
 cannot act on, 1 for a viewer that could not start), and `run` is the only
 function that ends the process with it. `sfm explorer` runs the viewer in a
-child process, `python -m sfmtool._explorer`, because the viewer needs the
-process's main thread for its event loop, `winit` allows one event loop per
-process, and the viewer sets process-wide state (the logger, and on Windows the
-DPI awareness); see
+child process, `python -m sfmtool._explorer`, because `winit` creates the
+viewer's event loop only on the process's main thread, on every platform, and
+only once per process, and the viewer sets process-wide state (the logger, and
+on Windows the DPI awareness); see
 [explorer-command.md](../cli/visualization/explorer-command.md).
 
 ---
@@ -493,9 +493,9 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
   the only backend the crate compiles in for this platform (`wgpu`'s features
   in `crates/sfm-explorer/Cargo.toml` name `dx12`, `vulkan` and `metal`), so
   there is nothing to fall back to: a machine carrying the Vulkan loader with
-  no ICD behind it — a bare CI runner is the usual one — panics on
-  `Failed to create wgpu surface` at startup rather than degrading to software
-  GL. Mesa's lavapipe is enough to run the viewer, and is what the
+  no ICD behind it — a bare CI runner is the usual one — exits with status 1
+  at startup, with "Could not create the window's GPU surface" or "Could not
+  find a GPU adapter for the window", rather than degrading to software GL. Mesa's lavapipe is enough to run the viewer, and is what the
   `ui-test-linux` CI job installs.
 - **Accessibility**: AT-SPI2 over D-Bus, published by AccessKit's Unix adapter,
   which egui-winit sets up. Unlike UI Automation and the AX API, this is not

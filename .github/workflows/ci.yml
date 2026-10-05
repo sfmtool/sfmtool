@@ -925,8 +925,9 @@ jobs:
   #
   # `mesa-vulkan-drivers` is there because the viewer's wgpu build carries
   # only the Vulkan backend on Linux (see sfm-explorer's Cargo.toml), so with
-  # the loader present but no ICD behind it every launch panics on
-  # `Failed to create wgpu surface` before a window opens. lavapipe, which
+  # the loader present but no ICD behind it every launch exits with status 1
+  # and "Could not create the window's GPU surface" (or "Could not find a GPU
+  # adapter for the window") before a window opens. lavapipe, which
   # this package carries, renders the suite fine.
   ui-test-linux:
     needs: changes

@@ -56,6 +56,16 @@ fn a_following_number_too_large_for_a_port_is_an_error() {
     assert!(error.contains("0 to 65535"), "{error}");
 }
 
+/// `u16`'s parser takes a leading `+`, so the `--mcp=` form does too, and the
+/// following-word form agrees with it rather than reading `+80` as a file.
+#[test]
+fn a_plus_sign_is_read_the_same_both_ways() {
+    assert_eq!(parse_ok(&["--mcp", "+80"]).mcp_port, Some(80));
+    assert!(parse_ok(&["--mcp", "+80"]).paths.is_empty());
+    assert_eq!(parse_ok(&["--mcp=+80"]).mcp_port, Some(80));
+    assert!(parse(["--mcp", "+"].map(String::from)).is_ok_and(|a| a.paths.len() == 1));
+}
+
 #[test]
 fn the_ends_of_the_port_range_are_ports() {
     assert_eq!(parse_ok(&["--mcp", "65535"]).mcp_port, Some(65535));

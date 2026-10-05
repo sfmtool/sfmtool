@@ -203,12 +203,15 @@ impl std::error::Error for RunError {}
 /// the `mcp` feature, and status 1 when the MCP endpoint cannot bind its port
 /// or the event loop, the window or its GPU device cannot be created. The
 /// command line is checked before anything else is done, so an error of status
-/// 2 leaves the process as it found it. A failure while the window is being
-/// created closes it and ends the event loop before the error is returned.
+/// 2 leaves the process as it found it. The MCP port is bound before the event
+/// loop is created, so a bind failure does not use up the process's one event
+/// loop. A failure while the window is being created closes it and ends the
+/// event loop before the error is returned.
 ///
-/// **Call it on the process's main thread, and once per process.** The `winit`
-/// event loop it creates must be created on the main thread on macOS, and
-/// `winit` refuses to create a second event loop in one process, which a second
+/// **Call it on the process's main thread, and once per process.** `winit`
+/// creates its event loop only on the main thread, on every platform, and
+/// panics when asked from another thread rather than returning an error. It
+/// also refuses to create a second event loop in one process, which a second
 /// call reports as a [`RunError`]. It also sets process-wide state that
 /// outlives the call: it initializes the global `env_logger` logger, unless a
 /// logger is already installed, and on Windows it sets the process's DPI
@@ -253,6 +256,18 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
         format!("SfM Explorer {} started", env!("CARGO_PKG_VERSION")),
     );
 
+    // The MCP endpoint, if it was asked for. Bound before anything else is
+    // created, so a port collision is reported on a terminal rather than
+    // behind a window that came up looking fine, and so it does not use up the
+    // process's one event loop. The server reaches the viewer through the
+    // event loop's proxy, which does not exist yet: it goes into this slot once
+    // the loop is built. A request that arrives before then waits in the
+    // channel, which the first frame drains.
+    #[cfg(feature = "mcp")]
+    let mcp_proxy = Arc::new(std::sync::OnceLock::new());
+    #[cfg(feature = "mcp")]
+    let mcp_rx = start_mcp(&mut state, args.mcp_port, &mcp_proxy)?;
+
     // Create DirectManipulation manager BEFORE the winit EventLoop so that
     // DM_POINTERHITTEST messages are generated for precision touchpad contacts.
     #[cfg(target_os = "windows")]
@@ -268,6 +283,8 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
         .build()
         .map_err(event_loop_error)?;
     let proxy = event_loop.create_proxy();
+    #[cfg(feature = "mcp")]
+    let _ = mcp_proxy.set(proxy.clone());
 
     // How a background worker gets an idle event loop to look at what it has
     // reported. A closure rather than the proxy, so that nothing reachable
@@ -278,13 +295,6 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
             let _ = proxy.send_event(UserEvent::Background);
         })
     });
-
-    // The MCP endpoint, if it was asked for. Started after the event loop
-    // exists, because the server's only way to reach the viewer is the proxy
-    // this hands it; started before the window, so a port collision is reported
-    // on a terminal rather than behind a window that came up looking fine.
-    #[cfg(feature = "mcp")]
-    let mcp_rx = start_mcp(&mut state, args.mcp_port, &proxy)?;
 
     // Every path becomes its own scene node, in the order given, through one
     // background open that the first frames drive to its end. It starts after
@@ -385,11 +395,15 @@ fn event_loop_error(error: winit::error::EventLoopError) -> RunError {
 ///
 /// The endpoint line goes to stdout, because that is what a human pastes into
 /// a client config; the error is returned, for the caller to report.
+///
+/// It runs before the event loop is built, so a bind failure leaves the
+/// process's one event loop unused. `proxy` is empty until the loop exists, and
+/// the server's wake does nothing until then.
 #[cfg(feature = "mcp")]
 fn start_mcp(
     state: &mut AppState,
     port: Option<u16>,
-    proxy: &EventLoopProxy<UserEvent>,
+    proxy: &Arc<std::sync::OnceLock<EventLoopProxy<UserEvent>>>,
 ) -> Result<Option<tokio::sync::mpsc::UnboundedReceiver<mcp::Request>>, RunError> {
     let Some(port) = port else {
         return Ok(None);
@@ -397,11 +411,15 @@ fn start_mcp(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     // The server's whole access to the viewer: this channel, and a wake. A
     // closure rather than the proxy itself, so `mcp::server` depends on no
-    // winit type and can be driven by a test with no event loop at all.
-    let proxy = proxy.clone();
+    // winit type and can be driven by a test with no event loop at all. Before
+    // the proxy is in its slot there is no loop to wake, and the request waits
+    // for the first frame.
+    let proxy = Arc::clone(proxy);
     let busy = std::sync::Arc::clone(&state.busy_notice);
     let address = mcp::serve(port, tx, busy, move || {
-        let _ = proxy.send_event(UserEvent::McpRequest);
+        if let Some(proxy) = proxy.get() {
+            let _ = proxy.send_event(UserEvent::McpRequest);
+        }
     })
     .map_err(|e| RunError::startup(e.to_string()))?;
     println!("SfM Explorer MCP endpoint: http://{address}/mcp");

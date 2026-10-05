@@ -284,7 +284,8 @@ backlog and keep them honest as findings get addressed:
   passthrough on a desktop; the `ui-test-linux` job apt-installs `xvfb` for
   it. The viewer also needs a Vulkan ICD (`mesa-vulkan-drivers` for
   lavapipe): Vulkan is the only wgpu backend compiled in for Linux, so without
-  one it panics at surface creation. See `specs/gui/architecture.md` §
+  one it exits with status 1 and an error saying it could not create the
+  window's GPU surface (or find a GPU adapter). See `specs/gui/architecture.md` §
   "Testing".
 - Rustdoc warnings are **errors**, via `[workspace.lints.rustdoc]` in the root
   `Cargo.toml` (each crate opts in with `[lints] workspace = true`). That means

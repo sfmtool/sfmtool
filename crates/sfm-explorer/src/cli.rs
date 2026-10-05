@@ -53,7 +53,9 @@ OPTIONS:
     --mcp [PORT]    Host a Model Context Protocol endpoint on 127.0.0.1, so an
                     agent can drive this window. Off unless asked for. PORT
                     defaults to 8787; 0 takes an ephemeral port, reported on
-                    stdout at startup.
+                    stdout at startup. PORT is 0 to 65535, and a number after
+                    --mcp is always read as PORT: write ./8080 for a file
+                    named 8080, or put the files first.
     --no-default-layout
                     Start with the stock panel grid, ignoring any layout saved
                     at ~/.sfm-explorer-default-layout.json.
@@ -107,9 +109,12 @@ pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, Stri
 }
 
 /// Whether the word after a bare `--mcp` is meant as its port: one or more
-/// ASCII digits, whether or not the number fits in a port.
+/// ASCII digits, after an optional `+`, whether or not the number fits in a
+/// port. The `+` is accepted because `u16`'s parser accepts it, so `--mcp +80`
+/// and `--mcp=+80` both mean port 80.
 fn is_number(word: &str) -> bool {
-    !word.is_empty() && word.bytes().all(|b| b.is_ascii_digit())
+    let digits = word.strip_prefix('+').unwrap_or(word);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// The error for a value given as `--mcp`'s port that is not one.

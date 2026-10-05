@@ -87,10 +87,13 @@ status and `sfm explorer` exits with the child's.
 The viewer runs in a child process rather than in the `sfm` process because it
 needs a process to itself:
 
-- It creates a `winit` event loop, which macOS allows only on the process's
-  main thread, and which `winit` allows only once per process. A second
-  `run_explorer` call in one process returns status 1 with a message saying
-  so.
+- It creates a `winit` event loop, which `winit` creates only on the
+  process's main thread, on every platform, and only once per process. A call
+  from another thread panics. Because of the once-per-process rule, a second
+  `run_explorer` call in one process that gets as far as creating the event
+  loop returns status 1 with a message saying the viewer has already run in
+  this process. No test makes that second call, since the first would have to
+  open a window.
 - It sets process-wide state that outlives the call: it initializes the global
   `env_logger` logger, unless one is already installed, and on Windows it sets
   the process's DPI awareness. An MCP endpoint's server thread also keeps

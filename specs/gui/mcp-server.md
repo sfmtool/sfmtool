@@ -60,10 +60,12 @@ Hand-rolled rather than `clap`: four flags and a list of paths fit in one short
 function, and it keeps the viewer's dependency tree as it was. The
 following-argument form has to look at what comes next, because
 `--mcp scene.sfmr` is the common invocation and means the default port and a
-file — so a next argument that is not all ASCII digits is left alone rather
-than consumed. A next argument of digits is always taken as the port, so
-`--mcp 70000` is refused rather than read as the default port and a file named
-`70000`.
+file — so a next argument that is not all ASCII digits (after an optional
+`+`, which `--mcp=+80` accepts too) is left alone rather than consumed. A next
+argument of digits is always taken as the port, so `--mcp 70000` is refused
+rather than read as the default port and a file named `70000`; a file whose
+name is all digits is given as `./8080`, or before `--mcp`. The `--help` text
+says the same.
 
 On startup the server binds and prints one line to stdout, which is what a
 human pastes into a client config:
@@ -76,7 +78,13 @@ SfM Explorer MCP endpoint: http://127.0.0.1:8787/mcp
 mistake, and a viewer that silently came up without the endpoint the agent was
 told to use is worse than one that refused to start. The message names the port
 and suggests `--mcp 0`. Binding happens on the calling thread, before the server
-thread is spawned, which is what lets the error reach the caller at all.
+thread is spawned, which is what lets the error reach the caller at all. The
+viewer returns it from `run_with_args` as a status-1 `RunError`, which the
+binary prints and exits with. It binds before the `winit` event loop is
+created, so a failed bind leaves the process's one event loop unused; the
+server's wake reaches the event loop's proxy through a slot that is filled once
+the loop exists, and a request that arrives before then waits in the channel
+for the first frame.
 
 **The window says so.** While the server is live the title carries a suffix —
 `SfM Explorer - scene.sfmr [MCP :8787]` — and the Scene panel grows a header

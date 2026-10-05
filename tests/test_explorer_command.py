@@ -7,8 +7,9 @@ The command is checked with ``subprocess.run`` replaced, so only the command
 line it builds is looked at. The child program, ``python -m sfmtool._explorer``,
 is run for real through the built extension, but only with arguments the
 viewer answers before it creates a window: ``--help``, and an unknown option.
-``run_explorer`` is also called in this process with those arguments, which it
-answers by returning a status, without ending the process.
+``run_explorer`` is also called in this process with those two command lines
+and with ``--mcp 70000``, which it answers by returning a status without ending
+the process.
 """
 
 import importlib

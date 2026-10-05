@@ -187,9 +187,10 @@ fn build_profile() -> &'static str {
 /// endpoint cannot bind or its window cannot be created. See
 /// `sfm_explorer::run_with_args`.
 ///
-/// Call it on the main thread, and once per process: the window's event loop
-/// can be created only once per process, so a second call returns 1, and on
-/// macOS only on the main thread. The viewer also sets process-wide state, the
+/// Call it on the main thread, and once per process: `winit` creates the
+/// window's event loop only on the main thread, on every platform, and panics
+/// when called from another thread; and only once per process, so a second
+/// call returns 1. The viewer also sets process-wide state, the
 /// `env_logger` logger and on Windows the DPI awareness, which is why
 /// `sfm explorer` runs it in a process of its own.
 ///
