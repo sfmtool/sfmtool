@@ -176,10 +176,13 @@ empty-handed". Name the thing and say what it does.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). See "Quality reports"
   below.
-- `skills/` — the five project skills (`audit-hygiene`, `audit-specs`,
-  `gui-bug-bash`, `implement-random-idea`, `suggest-next-steps`), checked in
-  here and symlinked into `.claude/skills/`. `gui-bug-bash` carries scripts
-  that launch a viewer on a random port and call its MCP endpoint over HTTP.
+- `skills/` — the six project skills (`audit-hygiene`, `audit-specs`,
+  `fix-report-findings`, `gui-bug-bash`, `implement-random-idea`,
+  `suggest-next-steps`), checked in here and symlinked into `.claude/skills/`.
+  `gui-bug-bash` carries scripts that launch a viewer on a random port and call
+  its MCP endpoint over HTTP. `fix-report-findings` works through open report
+  findings, one branch per finding, with a fixer agent and an independent
+  auditor agent for each.
 - `.github/workflows/` — `ci.yml` (Linux runs `scripts/coverage.sh` as two
   parallel jobs, `test-linux-rust` and `test-linux-python`, each uploading
   its own lcov to codecov;
