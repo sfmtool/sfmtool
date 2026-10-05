@@ -192,6 +192,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: low.
 
 **Split epipolar display by mode**
+> _Status (2026-10-05): Done — `draw_epipolar_visualization` keeps its signature and now only resolves the pair, picks the feature source and dispatches; track pairing, sort-and-sweep matching, image reading and undistortion, one drawing helper per mode, and output saving are private helpers. Output images were byte-identical before and after for every source, mode, line, layout and save combination on three seoul_bull pairs. Branch `audit-fix-19-epipolar-display-split`._
 - Location: `src/sfmtool/visualization/_epipolar_display.py` (619 lines), `draw_epipolar_visualization` 111–619 (509 lines).
 - Problem: One renderer still handles the two-by-three mode matrix with 16 parameters, unlike the decomposed flow display sibling.
 - Proposed fix: Separate image preparation and mode-specific drawing behind the existing public call.
