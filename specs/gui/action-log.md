@@ -34,11 +34,13 @@ as the second, non-active tab, ahead of Edit History, so the viewer still opens
 on the image strip:
 
 ```
-┌────────┬──────────────────┬────────────────────────┐
-│        │    3D Viewer     │       Track View       │
-│ Scene  ├──────────────────┴────────────────────────┤
-│        │ Image Browser │ Action Log │ Edit History │  ← tab group, Image Browser active
-└────────┴───────────────────────────────────────────┘
+┌─────────────────┬─────────────────────────────┬────────────────────────────────┐
+│                 │ 3D Viewer │ Image Detail    │ Track View │ Camera Intrinsics │
+│      Scene      │                             │                                │
+│                 │                             │                                │
+├─────────────────┼─────────────────────────────┴────────────────────────────────┤
+│ Background Task │ Image Browser │ Action Log │ Edit History                    │  ← tab group, Image Browser active
+└─────────────────┴──────────────────────────────────────────────────────────────┘
 ```
 
 The user can drag it anywhere `egui_dock` allows, and close it, as with every

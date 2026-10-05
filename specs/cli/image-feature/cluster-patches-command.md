@@ -3,15 +3,15 @@
 ## Overview
 
 `sfm cluster-patches` checks feature clusters against the image pixels. A
-cluster, written by `sfm match --cluster`, is a group of SIFT features in
-different images that probably show the same point of the scene, each with a
+cluster, written by `sfm match --cluster`, is a group of SIFT features from
+several images that probably show the same point of the scene, each with a
 position and a 2×2 affine shape. For each cluster the command picks a reference
 member, refines the other members' positions and shapes so that each member's
 image patch matches the reference's patch, and records for every member whether
 it is kept or why it was rejected. It needs no camera poses. The result, a
 **patch cluster** per cluster, is read by cluster selection, cluster
-covisibility and several viewer tools, which count only the reference and the
-kept members. It is written to a **new** `.matches` file, leaving the input as
+covisibility and several viewer tools, which by default count only the
+reference and the kept members. It is written to a **new** `.matches` file, leaving the input as
 it is: the images and clusters sections are carried over, with each refined
 member's position and shape replacing its detection, and the reference choice,
 the member statuses and the measured scores go in a `cluster_patches/` section.
