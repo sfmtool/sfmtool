@@ -1,26 +1,39 @@
 # Cluster Selection
 
-Derives a smaller, self-contained working set from a cluster-backbone `.matches`
-file: a predicate over members and clusters that produces a new cluster-backbone
-file holding only the surviving subset. The operation is
-`MatchesData::select_clusters` in the `sfmtool-matches-format` crate, surfaced
-in Python as `MatchesFile.select_clusters`. It is a predicate, not a strategy —
-nothing is reordered or ranked; consumers that need an admission order compute
-it from the selected file's arrays.
+Cluster selection takes the contents of a cluster-backbone `.matches` file and
+produces a new, writable set of contents holding only the clusters and members
+that pass a predicate on member status, image name, source cluster id and the
+number of distinct images a cluster spans. Consumers use it to get a smaller,
+self-contained working set, such as the clusters seen in a chosen group of
+images, without changing the source file. It is a filter: nothing is
+reordered or ranked, and a consumer that needs an admission order computes it
+from the selected arrays.
 
 The output is an ordinary `.matches` file whose file-level contract —
 provenance record, sentinel scoping, verifiability — is specified in
 [matches-file-format.md](matches-file-format.md#cluster-selection-derived-files).
 This document specifies the operation itself.
 
+## Interface
+
+The operation is `MatchesData::select_clusters(&ClusterSelect)` in
+[`select.rs`](../../crates/sfmtool-matches-format/src/select.rs) of the
+`sfmtool-matches-format` crate. It returns a new `MatchesData` and leaves the
+source untouched; writing the result is the caller's choice. Python reaches it
+as `MatchesFile.select_clusters` in
+[`matches_file.rs`](../../crates/sfmtool-py/src/io/matches_file.rs), which
+returns a new `MatchesFile` handle. `select.rs` also holds the decode
+accessors described [below](#decode-accessors).
+
 ## Options
 
 - `min_span` — the minimum number of distinct selected images a cluster's
   kept members must span (≥ 2, since every written cluster needs ≥ 2 members)
 - `restrict_images` — an optional set of image **names**; every requested
-  name must exist in the source file
+  name must exist in the source file, and a repeated name counts once
 - `restrict_cluster_ids` — an optional set of **source** cluster ids; every
-  requested id must be a valid cluster index of the source
+  requested id must be a valid cluster index of the source, and a repeated id
+  counts once
 - `accepted_statuses` — the member statuses that survive (default
   `reference` + `kept`); ignored when the source has no `cluster_patches/`
   section (every member is then a candidate)
@@ -62,13 +75,15 @@ records no cross-numbering correspondence.
 
 ## Absent references
 
-A restriction can drop a cluster's reference member (its image is not
-selected) while the cluster itself survives on `min_span` other members. The
-derived file does not keep out-of-restriction rows for such references; it
-records `reference_members[c] = 0xFFFFFFFF` instead, under the derived-file
-sentinel reading scoped by the format specification. The kept members still
-carry their absolute positions and absolute shapes, which stay valid without
-the reference; only the reference-relative warp becomes unrecoverable.
+A cluster can lose its reference member in two ways: an image
+restriction drops it because its image is not selected, or `accepted_statuses`
+leaves out `reference`, which drops every reference member. The cluster still
+survives when its other kept members span `min_span` images. The derived file
+does not keep the dropped reference; it records `reference_members[c] =
+0xFFFFFFFF` instead, under the derived-file sentinel reading scoped by the
+format specification. The kept members still carry their absolute positions
+and absolute shapes, which stay valid without the reference; only the
+reference-relative warp becomes unrecoverable.
 
 ## Provenance
 
@@ -88,13 +103,12 @@ top-level metadata under `matching_options["cluster_selection"]`:
 
 `source_content_xxh128` is the source file's whole-file `content_xxh128`;
 `restrict_images` is `null` for an unrestricted selection. A
-`restrict_cluster_ids` key holds the requested **source** ids (sorted) and is
-present **only** when a cluster-id restriction was requested, so every
-selection without one — including all previously written files — is
-byte-identical to before the option existed. All other metadata
-— including the timestamp — is inherited from the source; the derived file's
-own content hashes are computed when it is written. The source file is never
-modified.
+`restrict_cluster_ids` key holds the requested **source** ids, sorted and
+without duplicates, and is present **only** when a cluster-id restriction was
+requested. The counts, the section flags and the format version describe the
+derived file; all other metadata — including the timestamp — is inherited
+from the source. The derived file's own content hashes are empty until it is
+written, and are computed then. The source file is never modified.
 
 A selection may itself be selected again — narrowing a working set the caller
 already holds, without re-deriving it from the archive. The source is then an
@@ -140,10 +154,13 @@ otherwise re-implement:
   reference member's shape
 - per-cluster worst consistency — the maximum finite
   `member_consistency_residual` over each cluster's members (`inf` when no
-  member has a finite residual)
+  member has a finite residual). The residuals live in `cluster_patches/`, so
+  a file without that section has none: the Rust accessor returns `None` and
+  the Python one raises `ValueError`
 - `refine_radius` — the refinement patch half-width, normalizing the
   `refine_options` key generations (`patch_size` full edge / 2, legacy
-  `radius` as-is)
+  `radius` as-is); `None` when `refine_options` holds neither key as a
+  number
 
 ## Errors
 

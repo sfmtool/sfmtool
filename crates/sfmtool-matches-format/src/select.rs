@@ -9,8 +9,9 @@
 //! holding only the surviving clusters and members, with images, member
 //! indexes, and cluster numbering densely renumbered. The derivation is
 //! recorded in the output metadata (`matching_options["cluster_selection"]`).
-//! See `specs/formats/matches-file-format.md` § "Cluster Selection (Derived
-//! Files)".
+//! The operation is specified in `specs/formats/cluster-selection.md`, and the
+//! derived file's contract in `specs/formats/matches-file-format.md` §
+//! "Cluster Selection (Derived Files)".
 
 use ndarray::{Array1, Array2, Array3};
 
@@ -69,9 +70,7 @@ impl ClusterSelect {
     /// when the source is an ordinary file.
     ///
     /// `restrict_cluster_ids` is likewise recorded only when a cluster-id
-    /// restriction was requested (as the sorted, deduplicated source ids), so
-    /// a selection that does not use the axis writes exactly the record it
-    /// wrote before the axis existed.
+    /// restriction was requested, as the sorted, deduplicated source ids.
     fn provenance(
         &self,
         source_content_xxh128: &str,
@@ -111,52 +110,24 @@ impl MatchesData {
     /// clusters and members that pass `opts` — a self-shaped, writable
     /// subset.
     ///
-    /// Semantics, in order:
-    ///
-    /// 1. Clusters whose `reference_members` entry is
-    ///    [`CLUSTER_REFERENCE_UNREFINABLE`] in the **source** are dropped
-    ///    (only when the source carries `cluster_patches/`).
-    /// 2. When `restrict_cluster_ids` is set, clusters whose **source** id is
-    ///    not requested are dropped. The axis composes with
-    ///    `restrict_images`; each applies its own.
-    /// 3. Per cluster, a member is kept iff its status is in
-    ///    `accepted_statuses` (when `cluster_patches/` is present) **and**,
-    ///    when `restrict_images` is set, its image is in the restriction.
-    /// 4. The cluster survives iff its kept members span at least
-    ///    `min_span` distinct (selected) images.
-    /// 5. Surviving clusters and members are densely renumbered in source
-    ///    order; `reference_members` global indexes are remapped. When a
-    ///    surviving cluster's reference member was itself dropped (its image
-    ///    outside the restriction), the derived entry is
-    ///    [`CLUSTER_REFERENCE_UNREFINABLE`] — in a derived file that
-    ///    sentinel means "reference not present in this selection"; the
-    ///    kept members keep their absolute positions and shapes, which stay
-    ///    valid without the reference — only the reference-relative warp
-    ///    (`S·S_ref⁻¹`) becomes unrecoverable.
-    /// 6. When image-restricted, the image table shrinks to exactly the
-    ///    requested images (file order preserved, images with zero members
-    ///    included) and all parallel image arrays plus `member_images` are
-    ///    renumbered. A cluster-id restriction alone leaves the image table
-    ///    untouched.
-    ///
-    /// Every member-parallel array is gathered by the same survival mask, the
-    /// backbone's geometry
-    /// ([`ClustersData::member_positions`] / `member_affine_shapes`)
-    /// included, so a selection is itself a writable cluster file whose
-    /// members keep the values — and the stage — the source gave them.
-    ///
-    /// The output metadata carries the derivation provenance in
-    /// `matching_options["cluster_selection"]` (source `content_xxh128` +
-    /// the selection options, plus the source's own record under
-    /// `source_selection` when the source was itself a selection); all other
-    /// metadata — including the timestamp — is inherited from the source. The
-    /// output's `content_hash` is cleared (recomputed by
-    /// [`crate::write_matches`]).
+    /// Clusters the source could not refine, and clusters outside a
+    /// `restrict_cluster_ids` restriction, are dropped; a member is kept
+    /// when its status is accepted and its image is selected; a cluster is
+    /// kept when its kept members span at least `min_span` images. Survivors
+    /// are densely renumbered in source order, every member-parallel array is
+    /// gathered by the same mask, and an image restriction makes the image
+    /// table exactly the requested set. A kept cluster whose reference member
+    /// was dropped gets [`CLUSTER_REFERENCE_UNREFINABLE`]. The derivation is
+    /// recorded in `matching_options["cluster_selection"]`, and the output's
+    /// `content_hash` is empty until [`crate::write_matches`] computes it.
     ///
     /// Errors when the source stores the pairwise backbone, when
     /// `min_span < 2`, when a restriction name is not in the source image
     /// table, or when a requested cluster id is outside the source's cluster
     /// range.
+    ///
+    /// The steps, their order and the provenance record are specified in
+    /// `specs/formats/cluster-selection.md`.
     pub fn select_clusters(&self, opts: &ClusterSelect) -> Result<MatchesData, MatchesError> {
         let clusters = self.clusters.as_ref().ok_or_else(|| {
             MatchesError::InvalidFormat(

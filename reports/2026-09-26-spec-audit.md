@@ -741,6 +741,8 @@ most of the per-sentence findings.
 **Third copies:** The six semantic steps are copied almost verbatim into the `select.rs:112-150` doc.
 **Recommendation:** discuss. Move it to `specs/core/` in template shape, and leave the provenance record's format contract in `matches-file-format.md`.
 
+> _Status (2026-10-05): **Partially done** — the spec now states the three behaviours it left out (the `restrict_cluster_ids` record is sorted and deduplicated, and repeated names or ids count once; a dropped reference member from `accepted_statuses` without `reference` also gets the `0xFFFFFFFF` sentinel; the worst-consistency accessor returns `None` in Rust and raises in Python without `cluster_patches/`, and `refine_radius` returns `None` when neither key is recorded), the opening paragraph says what the operation is and what it is for, the API names moved to a new *Interface* section with links to the code, the :92-94 residue is gone (also in the `provenance` doc), and the six-step copy in the `select_clusters` doc is now a short summary that points at the spec, branch `audit-fix-02-cluster-selection`. Not done: moving the spec from `formats/` to `specs/core/`, which is a maintainer decision._
+
 ### specs/formats/kdf-file-format.md
 **Summary:** The entries, metadata, chunk byte layout, hash tree, defaults and version 3 match. The reader enforces two rules the spec does not state, and about 200 lines of version-1 study still refer to a "version-2" writer.
 **Implementing code:** `sfmtool-kdf-format/src/{types,read,verify,write}.rs`; `sfmtool-py/src/spatial/kdf.rs`.
