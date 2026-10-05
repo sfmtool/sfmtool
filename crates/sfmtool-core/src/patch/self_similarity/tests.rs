@@ -1217,6 +1217,38 @@ fn the_radius_is_the_semi_major_axis() {
     }
 }
 
+/// A region that stays inside the square but whose semi-major axis passes `r`,
+/// three lobes along the diagonal at `(−2, −2)`, `(0, 0)` and `(2, 2)`, reads
+/// its major axis capped at `r` and flagged, and its matrix rebuilt from the
+/// capped axes at the same angle.
+#[test]
+fn an_axis_past_r_is_capped_and_its_matrix_rebuilt() {
+    let s = read_surface(
+        surface_of(3, |dx, dy| match (dx, dy) {
+            (0, 0) | (2, 2) | (-2, -2) => 1.0,
+            _ => 0.5,
+        }),
+        3,
+        0.05,
+    );
+    let e = s.ellipse;
+    assert_eq!(e.axes[0], 3.0, "{e:?}");
+    assert_eq!(s.radius, 3.0);
+    assert!(e.axes[1] < 0.5, "{e:?}");
+    assert!(e.axes_is_at_least[0], "{e:?}");
+    assert!(
+        axis_angle_gap(e.major_angle, std::f64::consts::FRAC_PI_4) < 1e-9,
+        "{e:?}"
+    );
+    // E has the capped axes as its eigenvalues' roots, along the same angle.
+    let m = e.matrix;
+    let trace = m[0][0] + m[1][1];
+    let det = m[0][0] * m[1][1] - m[0][1] * m[0][1];
+    assert!((trace - 9.0 - e.axes[1].powi(2)).abs() < 1e-9, "{m:?}");
+    assert!((det - 9.0 * e.axes[1].powi(2)).abs() < 1e-9, "{m:?}");
+    assert!(m[0][1] > 0.0, "{m:?}");
+}
+
 /// A region that runs off the square may go on past it: its major axis and the
 /// radius are lower bounds. A ridge along `x` that holds its width over its
 /// last two columns is taken to keep it past the border, so its minor axis,
@@ -1246,6 +1278,23 @@ fn running_off_the_square_is_a_lower_bound_on_the_major_axis() {
     // The ridge's half-width, about 0.1, is spread evenly across it.
     let b = even.ellipse.axes[1];
     assert!(b > 0.1 && b < 0.12, "{:?}", even.ellipse);
+
+    // The same ridge along `y` reads the same, turned to π/2.
+    let along_y = read_surface(
+        surface_of(3, |dx, dy| {
+            let (x, y) = (dx as f64, dy as f64);
+            1.0 - 0.5 * x * x - 0.001 * y * y
+        }),
+        3,
+        0.05,
+    );
+    assert_eq!(along_y.ellipse.axes_is_at_least, [true, false]);
+    assert!(
+        axis_angle_gap(along_y.ellipse.major_angle, std::f64::consts::FRAC_PI_2) < 1e-9,
+        "{:?}",
+        along_y.ellipse
+    );
+    assert!((along_y.ellipse.axes[1] - b).abs() < 1e-12);
 
     let widening = ridge(0.1);
     assert_eq!(
@@ -1337,7 +1386,8 @@ fn a_striped_tile_holds_its_width_across_the_run_off_through_f32_rounding() {
 /// reach further from the centre than half that axis, past which added area
 /// lengthens it; a gap well inside a large region leaves both axes exact. A
 /// gap that reaches the square's border may hide a region running off it, so
-/// every axis is a lower bound.
+/// every axis is a lower bound. A gap diagonal to a shift at the level counts
+/// as one beside it does.
 #[test]
 fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_far_enough() {
     let disc_with_gap = |gap: (i64, i64)| {
@@ -1408,6 +1458,24 @@ fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_far_enough() {
         0.05,
     );
     assert_eq!(through.ellipse.axes_is_at_least, [true, true]);
+
+    // A gap only diagonal to the one shift at the level still shares a cell
+    // with it, which the moments leave out, so it counts as a gap.
+    let diagonal = read_surface(
+        surface_of(3, |dx, dy| match (dx, dy) {
+            (0, 0) => 1.0,
+            (1, 1) => f64::NAN,
+            _ => 0.5,
+        }),
+        3,
+        0.05,
+    );
+    assert_eq!(
+        diagonal.ellipse.axes_is_at_least,
+        [true, true],
+        "{:?}",
+        diagonal.ellipse
+    );
 }
 
 /// A flat template reads a circle of radius `r`, at least along both axes,

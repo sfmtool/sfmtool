@@ -617,7 +617,7 @@ struct Openings {
     /// run, which a continuation with that run past the border has.
     continuation_sq: [f64; 2],
     /// The corners of every cell a gap with no reading next to a shift at the
-    /// level could hide part of the region in, where the gap does not reach
+    /// level, diagonals included, could hide part of the region in, where the gap does not reach
     /// the border: the shifts within one step, diagonals included, of each
     /// shift of the gap.
     gap_points: Vec<[f64; 2]>,
@@ -626,10 +626,21 @@ struct Openings {
 /// Where the region at `level` of the `(2r + 1)²` `surface` reaches a shift
 /// with no reading, and how far that leaves it open.
 ///
-/// Only gaps next to a shift at the level count: a shift with no reading whose
-/// read neighbours are all below the level is treated as below it.
+/// Only gaps next to a shift at the level, diagonals included, count: a shift
+/// with no reading whose eight read neighbours are all below the level is
+/// treated as below it.
 fn openings(surface: &[f64], r: usize, level: f64) -> Openings {
     const STEPS: [[i64; 2]; 4] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const NEIGHBOURS: [[i64; 2]; 8] = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [1, -1],
+        [-1, 1],
+        [-1, -1],
+    ];
     let side = 2 * r + 1;
     let ri = r as i64;
     let inside = |[dx, dy]: [i64; 2]| dx.abs() <= ri && dy.abs() <= ri;
@@ -667,7 +678,13 @@ fn openings(surface: &[f64], r: usize, level: f64) -> Openings {
                         }
                         None => out.axis_open[1 - j] = true,
                     }
-                } else if reading(next).is_none() && !gathered[index(next)] {
+                }
+            }
+            // A gap at any of the eight neighbours shares a cell with this
+            // shift, and that cell adds nothing to the region.
+            for [ex, ey] in NEIGHBOURS {
+                let next = [dx + ex, dy + ey];
+                if inside(next) && reading(next).is_none() && !gathered[index(next)] {
                     // A gap inside the square: gather it, and the shifts
                     // around it, the corners of the cells it could hide part
                     // of the region in.
