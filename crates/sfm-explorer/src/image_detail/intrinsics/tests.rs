@@ -497,7 +497,7 @@ fn the_field_is_split_into_measurements_and_marked_nodes() {
 fn panel_frame(
     node: &crate::scene::SceneNode,
     sift: &crate::state::CachedSiftFeatures,
-    image: &sfmtool_core::camera::remap::ImageU8,
+    image: &sfmtool_core::camera::image::ImageU8,
     feature_display: &crate::state::FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,
 ) -> Vec<egui::Shape> {
@@ -522,7 +522,7 @@ fn panel_frame(
 fn panel_frame_with_input(
     node: &crate::scene::SceneNode,
     sift: &crate::state::CachedSiftFeatures,
-    image: &sfmtool_core::camera::remap::ImageU8,
+    image: &sfmtool_core::camera::image::ImageU8,
     feature_display: &crate::state::FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,
     input: egui::RawInput,
@@ -621,9 +621,9 @@ fn flatten(shapes: &[egui::Shape], out: &mut Vec<String>) {
 fn demo_panel_fixture() -> (
     crate::scene::SceneNode,
     crate::state::CachedSiftFeatures,
-    sfmtool_core::camera::remap::ImageU8,
+    sfmtool_core::camera::image::ImageU8,
 ) {
-    use sfmtool_core::camera::remap::ImageU8;
+    use sfmtool_core::camera::image::ImageU8;
 
     let node = crate::scene::SceneNode::from_path(
         std::path::Path::new("/runs/demo.sfmr"),
@@ -824,7 +824,7 @@ fn press_i(at: egui::Pos2) -> egui::RawInput {
 fn logged_panel_frame(
     node: &crate::scene::SceneNode,
     sift: &crate::state::CachedSiftFeatures,
-    image: &sfmtool_core::camera::remap::ImageU8,
+    image: &sfmtool_core::camera::image::ImageU8,
     feature_display: &crate::state::FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,
     log: &mut crate::action_log::ActionLog,

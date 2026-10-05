@@ -33,7 +33,7 @@ pub(super) fn editable() -> (AppState, Viewer3D) {
         state.insert_photograph(
             id,
             index,
-            sfmtool_core::camera::remap::ImageU8::new(width, height, 3, data),
+            sfmtool_core::camera::image::ImageU8::new(width, height, 3, data),
         );
     }
     let mut viewer = Viewer3D::new();

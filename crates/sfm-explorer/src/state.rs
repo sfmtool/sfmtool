@@ -15,8 +15,8 @@ use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
+use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::photograph_cache::default_budget_bytes;
-use sfmtool_core::camera::remap::ImageU8Pyramid;
 use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
@@ -1627,7 +1627,7 @@ impl AppState {
         &self,
         id: ReconId,
         index: usize,
-        image: sfmtool_core::camera::remap::ImageU8,
+        image: sfmtool_core::camera::image::ImageU8,
     ) {
         let recon = self.node(id).expect("a loaded node").recon();
         let path = photograph_path(recon, index).expect("an image of the node");

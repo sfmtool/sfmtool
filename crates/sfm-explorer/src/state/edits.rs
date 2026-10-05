@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sfmtool_core::bench::ImageDeletion;
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::{CameraIntrinsics, PhotographCache};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};

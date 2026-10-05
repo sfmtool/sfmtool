@@ -38,7 +38,7 @@ leave out the ones they will not read.
 
 The cache lives in
 [photograph_cache.rs](../../../crates/sfmtool-core/src/camera/photograph_cache.rs),
-beside `ImageU8Pyramid` in [remap.rs](../../../crates/sfmtool-core/src/camera/remap.rs),
+beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
 `PeekedPhotograph`, `GetManyTally` and `PhotographCacheStats`.
 `default_budget_bytes` and `BUDGET_ENV_VAR` are reached through

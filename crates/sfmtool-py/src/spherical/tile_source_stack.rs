@@ -7,7 +7,7 @@ use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::spherical::per_tile_source_stack::{
     BuildError, BuildParams, ConsensusAtlasError, PerSphericalTileSourceStack,
 };

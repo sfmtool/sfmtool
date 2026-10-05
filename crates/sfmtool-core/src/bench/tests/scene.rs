@@ -13,7 +13,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
-use crate::camera::remap::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;

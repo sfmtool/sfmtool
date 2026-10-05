@@ -9,9 +9,11 @@
 //! [`core_value`] / [`core_value_with_jg`]), and the coarse-grid gate
 //! ([`grid_to_source_scale`] / [`TILE_MAX_GRID_TO_SOURCE`]).
 
+use crate::camera::image::ImageF32WithGrad;
+
 use crate::camera::remap::{
     remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip,
-    remap_bilinear_mip_with_grad_into, remap_bilinear_with_grad_into, ImageF32WithGrad,
+    remap_bilinear_mip_with_grad_into, remap_bilinear_with_grad_into,
 };
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;

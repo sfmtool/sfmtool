@@ -6,7 +6,7 @@
 
 use super::kernels::{eval_zncc_scalar, SupportTables, TileCache};
 use super::*;
-use crate::camera::remap::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use ndarray::{Array2, Array3 as NdArray3};
 
 /// Band-limited analytic texture in `[2, 252]` (no u8 clipping).

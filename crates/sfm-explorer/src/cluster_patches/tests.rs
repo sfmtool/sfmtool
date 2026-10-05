@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::features::cluster_match::{
     background_floor_clusters_from_neighbors, BackgroundFloorParams, NeighborTable,
 };

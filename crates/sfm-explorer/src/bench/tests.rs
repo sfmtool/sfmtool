@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use sfmtool_core::bench::{BenchItem, StageKind, Verdict};
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 
 use crate::action_log::Kind;
 use crate::background::{Finished, Operation};

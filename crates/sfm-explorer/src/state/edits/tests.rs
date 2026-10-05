@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::Entry;

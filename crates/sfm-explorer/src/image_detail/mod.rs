@@ -38,7 +38,7 @@ use crate::state::{
     CachedSiftFeatures, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode,
 };
 use crate::texture::rgb_to_color_image;
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::spatial::PointCloud2;
 use sfmtool_core::EditedReconstruction;

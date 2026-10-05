@@ -20,7 +20,8 @@
 //! stage, for the header and the recent items strip alike.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::remap::{remap_bilinear_mip, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::remap::remap_bilinear_mip;
 use sfmtool_core::camera::warp_map::singular_values_2x2;
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;

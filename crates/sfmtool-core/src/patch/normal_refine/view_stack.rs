@@ -25,7 +25,7 @@ pub(in crate::patch) const AGREEMENT_SIGMA: f64 = 24.0;
 /// Map a rendered source pixel to RGB, replicating a single channel to grey and
 /// taking the first three of a multi-channel image (matching the thumbnail RGB
 /// convention).
-fn sample_rgb(img: &crate::camera::remap::ImageU8, col: u32, row: u32, channels: u32) -> [f64; 3] {
+fn sample_rgb(img: &crate::camera::image::ImageU8, col: u32, row: u32, channels: u32) -> [f64; 3] {
     match channels {
         0 => [0.0; 3],
         1 | 2 => {
@@ -60,7 +60,7 @@ fn sample_rgb(img: &crate::camera::remap::ImageU8, col: u32, row: u32, channels:
 pub(in crate::patch) struct PatchViewStack {
     resolution: u32,
     /// One full `R×R` render per kept view.
-    images: Vec<crate::camera::remap::ImageU8>,
+    images: Vec<crate::camera::image::ImageU8>,
     /// Full-grid per-pixel validity per kept view (row-major, length `R²`),
     /// parallel to `images`.
     valid: Vec<Vec<bool>>,

@@ -15,7 +15,7 @@
 //! texture's size, the panel's rect, the zoom), and the ordering of that against
 //! input handling is exactly what a unit call would fake away.
 
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 
 use super::ImageDetail;
 
@@ -1365,7 +1365,7 @@ fn is_bench_color(color: &egui::epaint::ColorMode) -> bool {
 /// Where the panel puts one source pixel, for a frame drawn at the fixture's
 /// panel size with the view unmoved. The panel fits the image and centres it,
 /// which is the whole of the mapping at zoom 1.
-fn to_panel(image: &sfmtool_core::camera::remap::ImageU8, pixel: [f64; 2]) -> egui::Pos2 {
+fn to_panel(image: &sfmtool_core::camera::image::ImageU8, pixel: [f64; 2]) -> egui::Pos2 {
     let (w, h) = (image.width() as f32, image.height() as f32);
     let scale = (PANEL.x / w).min(PANEL.y / h);
     let origin = egui::pos2(

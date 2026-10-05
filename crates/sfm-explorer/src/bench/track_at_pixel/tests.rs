@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation};

@@ -14,7 +14,7 @@ use pyo3::types::PyList;
 use rayon::prelude::*;
 
 use sfmtool_core::bench::GreyImages;
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::PatchCloud;
 use sfmtool_core::CameraIntrinsics;

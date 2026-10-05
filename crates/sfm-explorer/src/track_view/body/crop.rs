@@ -28,7 +28,8 @@
 
 use egui::{Color32, ColorImage, Pos2, Rect, Stroke};
 use sfmtool_core::bench::{EditableTrack, Stage, Verdict};
-use sfmtool_core::camera::remap::{sample_bilinear_u8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::remap::sample_bilinear_u8;
 use sfmtool_core::SfmrReconstruction;
 
 use super::tile::{ProjectionOf, CONTEXT_FACTOR, CONTEXT_HOVER_SIDE};

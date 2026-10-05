@@ -11,7 +11,7 @@
 //! boxes paint, and what it reports back to the dock -- rather than pixels.
 
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 
 use super::{TrackBody, TrackBodyResponse, LOCK_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
@@ -4436,8 +4436,8 @@ fn a_patch_turned_in_its_plane_has_off_diagonal_entries_of_the_turn() {
 /// A 640 by 480 photograph with detail down to a few pixels, as a full
 /// pyramid: what a mip level averages away differs from the full-resolution
 /// pixels.
-fn textured_pyramid() -> sfmtool_core::camera::remap::ImageU8Pyramid {
-    use sfmtool_core::camera::remap::ImageU8Pyramid;
+fn textured_pyramid() -> sfmtool_core::camera::image::ImageU8Pyramid {
+    use sfmtool_core::camera::image::ImageU8Pyramid;
     let (w, h) = (640u32, 480u32);
     let data: Vec<u8> = (0..w * h)
         .flat_map(|i| {

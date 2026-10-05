@@ -6,7 +6,7 @@
 //! [`CacheMode`] knobs, the [`NormalRefineParams`] bundle and its
 //! [`NormalRefineResult`], plus the shared numeric thresholds.
 
-use crate::camera::remap::ImageU8Pyramid;
+use crate::camera::image::ImageU8Pyramid;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;

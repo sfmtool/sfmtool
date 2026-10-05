@@ -9,7 +9,7 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
 use super::*;
-use crate::camera::remap::ImageU8;
+use crate::camera::image::ImageU8;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::reconstruction::data::{Point3D, SfmrImage};
 

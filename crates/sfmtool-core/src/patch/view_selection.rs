@@ -33,7 +33,9 @@
 //! `specs/core/patch/patch-view-selection.md` for the accepted admission-flip loss
 //! and the measured numbers.
 
-use crate::camera::remap::{mip_level_for_sigma, ImageU8};
+use crate::camera::image::ImageU8;
+
+use crate::camera::remap::mip_level_for_sigma;
 use crate::camera::CameraIntrinsics;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{

@@ -31,7 +31,9 @@ use std::collections::HashMap;
 use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array3};
 
-use crate::camera::remap::{remap_bilinear_mip, ImageU8Pyramid};
+use crate::camera::image::ImageU8Pyramid;
+
+use crate::camera::remap::remap_bilinear_mip;
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;

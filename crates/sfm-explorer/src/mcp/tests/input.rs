@@ -43,7 +43,7 @@ struct Clicks {
 /// its own tests synthesize them.
 struct Photograph {
     sift: crate::state::CachedSiftFeatures,
-    image: sfmtool_core::camera::remap::ImageU8,
+    image: sfmtool_core::camera::image::ImageU8,
 }
 
 impl Photograph {
@@ -66,7 +66,7 @@ impl Photograph {
                 affine_shapes: vec![[[6.0, 0.0], [0.0, 6.0]]; count],
                 read_count: count,
             },
-            image: sfmtool_core::camera::remap::ImageU8::new(8, 8, 3, vec![90u8; 8 * 8 * 3]),
+            image: sfmtool_core::camera::image::ImageU8::new(8, 8, 3, vec![90u8; 8 * 8 * 3]),
         }
     }
 }

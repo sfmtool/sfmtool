@@ -211,7 +211,7 @@ pub fn display_thumbnail_row(
         .workspace_dir
         .join(&recon.image_table.images[index].name);
     if path.is_file() {
-        if let Ok(image) = crate::camera::remap::ImageU8::read_rgb(&path) {
+        if let Ok(image) = crate::camera::image::ImageU8::read_rgb(&path) {
             let (width, height) = (image.width() as usize, image.height() as usize);
             if width > 0 && height > 0 {
                 return (

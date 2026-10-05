@@ -53,7 +53,7 @@
 //! report is read from them.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::remap::ImageU8Pyramid;
+use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::warp_map::patch_grid_jacobian;
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;

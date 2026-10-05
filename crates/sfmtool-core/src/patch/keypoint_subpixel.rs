@@ -86,7 +86,7 @@
 //! (`WarpMap::get_jacobian`): `∂I/∂δ = ∇_src I · J`. The previous finite-difference
 //! path took five renders per GN step; the analytic path takes one.
 
-use crate::camera::remap::ImageF32WithGrad;
+use crate::camera::image::ImageF32WithGrad;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{project, seed_offset, shifted_center};
 use crate::patch::normal_refine::{

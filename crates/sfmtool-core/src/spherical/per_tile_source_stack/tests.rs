@@ -6,7 +6,8 @@ use std::f64::consts::PI;
 use nalgebra::Vector3;
 
 use super::*;
-use crate::camera::remap::{remap_bilinear, ImageU8};
+use crate::camera::image::ImageU8;
+use crate::camera::remap::remap_bilinear;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RotQuaternion;

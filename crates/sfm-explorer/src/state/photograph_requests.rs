@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use sfmtool_core::camera::remap::ImageU8Pyramid;
+use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::{PeekedPhotograph, PhotographCache};
 use sfmtool_core::SfmrReconstruction;
 

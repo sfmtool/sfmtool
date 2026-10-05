@@ -2089,7 +2089,7 @@ fn closing_a_node_purges_its_caches_and_selection() {
     state.insert_photograph(
         first,
         0,
-        sfmtool_core::camera::remap::ImageU8::new(2, 2, 3, vec![9; 12]),
+        sfmtool_core::camera::image::ImageU8::new(2, 2, 3, vec![9; 12]),
     );
     for id in [first, second] {
         state.sift_cache.insert(
@@ -2151,7 +2151,7 @@ fn close_all_empties_the_scene_and_keeps_the_photographs() {
     state.insert_photograph(
         id,
         0,
-        sfmtool_core::camera::remap::ImageU8::new(2, 2, 3, vec![9; 12]),
+        sfmtool_core::camera::image::ImageU8::new(2, 2, 3, vec![9; 12]),
     );
     state.select_image(Some(ImageRef::new(id, 0)));
 

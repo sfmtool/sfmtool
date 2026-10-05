@@ -197,8 +197,8 @@ fn ray_path_corners_are_model_pixels_and_survive_past_ninety_degrees() {
         Vector3::y(),
         [0.08, 0.08],
     );
-    let img = crate::camera::remap::ImageU8::new(w, h, 1, vec![0u8; (w * h) as usize]);
-    let pyr = crate::camera::remap::ImageU8Pyramid::build(&img, 2);
+    let img = crate::camera::image::ImageU8::new(w, h, 1, vec![0u8; (w * h) as usize]);
+    let pyr = crate::camera::image::ImageU8Pyramid::build(&img, 2);
     let equi_view = ProjectedImage {
         camera: &equi,
         cam_from_world: &pose,

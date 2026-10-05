@@ -26,7 +26,7 @@ use std::time::SystemTime;
 
 use rayon::prelude::*;
 
-use crate::camera::remap::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::progress::{Cancelled, Progress};
 
 /// The environment variable that overrides [`default_budget_bytes`], in

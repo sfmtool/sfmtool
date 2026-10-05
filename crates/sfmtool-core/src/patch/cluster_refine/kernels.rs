@@ -18,7 +18,7 @@
 //! shift-invariant so nothing needs undoing).
 
 use super::prof;
-use crate::camera::remap::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::patch::normal_refine::{PartZncc, Parts, Support, FLAT_NORM_SQ_EPS};
 use crate::patch::view_selection::AffineCoreMap;
 

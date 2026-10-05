@@ -30,7 +30,7 @@ use rayon::prelude::*;
 
 use sfmtool_sfmr_format::ContentHash;
 
-use crate::camera::remap::ImageU8Pyramid;
+use crate::camera::image::ImageU8Pyramid;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
@@ -494,7 +494,7 @@ impl From<Cancelled> for AddImageToTracksError {
 /// };
 /// # fn run(
 /// #     recon: &sfmtool_core::SfmrReconstruction,
-/// #     pyramids: &[Option<&sfmtool_core::camera::remap::ImageU8Pyramid>],
+/// #     pyramids: &[Option<&sfmtool_core::camera::image::ImageU8Pyramid>],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
 /// let (next, report) = add_image_to_tracks(
 ///     recon,

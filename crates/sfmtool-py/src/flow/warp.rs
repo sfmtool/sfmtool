@@ -6,9 +6,9 @@
 use numpy::{PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::camera::remap::{
-    remap_aniso, remap_aniso_with_pyramid, remap_bilinear, ImageU8, ImageU8Pyramid,
-};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+
+use sfmtool_core::camera::remap::{remap_aniso, remap_aniso_with_pyramid, remap_bilinear};
 use sfmtool_core::camera::WarpMap;
 
 use crate::geometry::rigid_transform::PyRigidTransform;

@@ -47,7 +47,10 @@ The map and its SVD data live in
 [warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs) (`WarpMap`,
 `WarpMapSvd`, `from_cameras` and the pose-aware constructors below) and the
 resamplers in [remap.rs](../../../crates/sfmtool-core/src/camera/remap.rs)
-(`ImageU8`, `ImageU8Pyramid`, `remap_bilinear`, `remap_aniso`), with
+(`remap_bilinear`, `remap_aniso` and their variants), which read and write the
+image types in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs)
+(`ImageU8`, `ImageU8Pyramid`, `ImageF32WithGrad`, also re-exported from
+`camera::remap`), with
 `CameraIntrinsics::ray_to_pixel[_batch]` and the `Equirectangular` camera model
 in [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs); the
 PyO3 bindings are in
@@ -629,7 +632,8 @@ In `sfmtool-core`:
 ```
 crates/sfmtool-core/src/camera/
 ├── warp_map.rs          # WarpMap struct, from_cameras(), Jacobian estimation
-├── remap.rs             # remap_bilinear(), remap_aniso(), ImageU8, ImageU8Pyramid
+├── image.rs             # ImageU8, ImageU8Pyramid, ImageF32WithGrad
+├── remap.rs             # remap_bilinear(), remap_aniso() and variants
 ```
 
 In `sfmtool-py`:

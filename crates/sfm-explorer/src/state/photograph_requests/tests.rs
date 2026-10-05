@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::image::ImageU8;
 
 use super::*;
 use crate::state::PYRAMID_LEVELS;

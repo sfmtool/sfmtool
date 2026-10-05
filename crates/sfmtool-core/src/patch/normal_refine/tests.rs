@@ -12,7 +12,8 @@ use super::obliquity::{fill_kept_obliquity_priors, fronto_prior, OBLIQUITY_PRIOR
 use super::support::{grid_bounds, square_cells, view_render_patch, windowed_zncc_at, zncc_grid};
 use super::znorm::{weighted_moments, weighted_moments_scalar, znorm_write, znorm_write_scalar};
 use super::*;
-use crate::camera::remap::{remap_bilinear, ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::remap::remap_bilinear;
 use crate::camera::{CameraIntrinsics, CameraModel, WarpMap};
 use crate::geometry::RigidTransform;
 

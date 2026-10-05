@@ -48,7 +48,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ndarray::{Array2, Array3};
 use rayon::prelude::*;
 
-use crate::camera::remap::ImageU8Pyramid;
+use crate::camera::image::ImageU8Pyramid;
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
 };

@@ -15,7 +15,7 @@
 
 use std::sync::OnceLock;
 
-use crate::camera::remap::ImageU8;
+use crate::camera::image::ImageU8;
 use crate::patch::normal_refine::ProjectedImage;
 
 /// The standard deviation of the blur, in px.

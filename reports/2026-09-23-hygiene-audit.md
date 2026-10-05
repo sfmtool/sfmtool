@@ -100,6 +100,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Problem: Widely used image containers still live under a remapping module, so their path implies a narrower purpose than they serve.
 - Proposed fix: Move the containers to a camera image module and re-export during migration.
 - Effort: medium. Risk: low.
+> _Status (2026-10-05): **Done** — `ImageU8`, `ImageU8Pyramid` and `ImageF32WithGrad` moved with their tests to `crates/sfmtool-core/src/camera/image.rs` (`camera::image`); `camera::remap` re-exports all three so the old paths still work, and every import in the workspace now uses the new path, branch `audit-fix-10-remap-image-types`._
 
 **Separate distortion projection and share Newton inversion mechanics**
 - Location: `crates/sfmtool-core/src/camera/distortion.rs` (1,233 lines), `crates/sfmtool-core/src/camera/distortion/kernels/thin_prism.rs:144`, and `crates/sfmtool-core/src/camera/distortion/kernels/rad_tan.rs:182`.

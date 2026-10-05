@@ -46,7 +46,7 @@ pub(super) fn benchable_with(recon: sfmtool_core::SfmrReconstruction) -> (AppSta
         state.insert_photograph(
             id,
             image,
-            sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data),
+            sfmtool_core::camera::image::ImageU8::new(w, h, 3, data),
         );
     }
     let mut viewer = Viewer3D::new();

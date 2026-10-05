@@ -261,7 +261,7 @@ fn the_panels_read_the_pyramid_the_cache_holds_for_the_path() {
     let recon = SfmrReconstruction::demo(8);
     assert!(recon.image_count() > 1, "the demo has two images");
     let pyramid = Arc::new(ImageU8Pyramid::from_image(
-        sfmtool_core::camera::remap::ImageU8::new(8, 8, 3, vec![42u8; 8 * 8 * 3]),
+        sfmtool_core::camera::image::ImageU8::new(8, 8, 3, vec![42u8; 8 * 8 * 3]),
         PYRAMID_LEVELS,
     ));
     let cache = PhotographCache::new(1 << 30, PYRAMID_LEVELS);
