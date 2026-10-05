@@ -2486,7 +2486,7 @@ impl SplitSettings {
 ///
 /// A row's patch zoom is stated per grid px at this `R`
 /// (`crate::track_view::body::patch_jacobian`), so it is in the unit of the
-/// shift and the self-similarity reach beside it. The Track View's display
+/// shift and the self-similarity radius beside it. The Track View's display
 /// tile is rendered at its own resolution, which no number depends on.
 pub(crate) fn patch_resolution(recon: &sfmtool_core::SfmrReconstruction) -> u32 {
     EvaluateOptions::default().patch_resolution(recon)

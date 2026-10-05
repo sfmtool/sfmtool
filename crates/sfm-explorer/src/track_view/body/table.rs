@@ -576,7 +576,7 @@ pub(super) const ZOOM_TIP: &str = "How much the patch magnifies the photograph a
     centre: patch-grid px per pixel of the photograph, read from the Jacobian of the warp \
     from the patch to the photograph. The grid is the reconstruction's own patch resolution, \
     the one its patch bitmaps are stored at (24 px a side unless the file says otherwise), \
-    and the unit of the shift and the self-similarity reach; it is not the resolution the \
+    and the unit of the shift and the self-similarity radius; it is not the resolution the \
     tile here is drawn at. Over 1\u{d7} the patch samples the photograph more finely than \
     its pixels, and under 1\u{d7} more coarsely. It is geometry alone, read from the patch, \
     the camera, the image's pose and where the observation sits, so it does not wait for the \
@@ -1864,8 +1864,8 @@ impl TrackBody {
             });
         }
 
-        // The whole tile's self-similarity surface, with the contour its radius is
-        // read at, and a larger one on hover.
+        // The whole tile's self-similarity surface, with the contour round the
+        // region its radius is read from, and a larger one on hover.
         let mut plotted = false;
         if let Some((surface, tolerance)) = row_surface(row, stage, &self.evaluation) {
             let radius = row_radius(row, stage);
@@ -1932,8 +1932,8 @@ pub(super) fn plot_caption(radius: Option<f64>, tolerance: f64) -> String {
     format!(
         "ZNCC of the patch against itself at every shift up to 3 px along each axis. The \
          contour is at {:.3}, one minus the tolerance {:.3}; the dots are the whole-pixel \
-         shifts inside it. Radius {radius}: how far from the centre the contour reaches, \
-         read up to 3 px.",
+         shifts inside it. Radius {radius}: the semi-major axis of the ellipse with the \
+         same spread about the centre as the region inside the contour, read up to 3 px.",
         1.0 - tolerance,
         tolerance
     )

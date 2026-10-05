@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The self-similarity surface plot: a patch's ZNCC against itself at every
-//! whole-pixel shift, drawn as a heatmap with the contour the radius is read
-//! at.
+//! whole-pixel shift, drawn as a heatmap with the contour round the region the
+//! radius is read from.
 //!
 //! The bench carries the surface as the `(2r + 1)²` square of ZNCC values
 //! the score searches and reads its radius from, and the tolerance `τ` the

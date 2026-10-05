@@ -3419,7 +3419,8 @@ project; and `patch`, `{"kind", "unit", "ellipse"}` along the patch's `u` and
 `"angle"` and `unit` `"degrees"` for a patch at infinity; `patch` is null at
 the cluster stage, which has no patch. Each ellipse is `{"axes",
 "axes_is_at_least", "major_angle", "matrix"}`: `axes` `[semi-major,
-semi-minor]`, each capped at the largest radius searched in grid px;
+semi-minor]`, each capped at the largest radius searched in `grid_px`, which the
+other units map;
 `axes_is_at_least` per axis, true where the true length may be larger, because
 the region at the level runs off the square searched, a shift with no reading
 beside it could hide more of it, or the length reached the largest radius
@@ -3441,7 +3442,7 @@ reciprocals of its two singular values, which Track View's *Zoom* column
 prints. The grid is the reconstruction's patch resolution `R`, which
 `stage_data` reports as `patch_resolution`: the edge of its patch bitmaps
 (`patch_bitmap_resolution` in the `.sfmr`), else the evaluation's 24. It is the
-grid the shift and the reach's grid px are in, and not the 64 texels Track View
+grid the shift and the `grid_px` ellipses are in, and not the 64 texels Track View
 draws a tile at. Both are null at the cluster stage, on a track with no patch yet, for a
 row with nothing saying where it sits, and for a patch whose centre is behind
 the camera or outside the camera model's domain; `patch_zoom` is null as well for

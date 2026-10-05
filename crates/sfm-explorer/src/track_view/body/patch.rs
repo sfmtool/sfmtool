@@ -101,7 +101,7 @@ const EDGE_ON_RATIO: f64 = 1e-9;
 /// `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`, the layout
 /// `WarpMap::get_jacobian` uses. Core's `patch_grid_jacobian` reads it at the
 /// reconstruction's patch resolution `R` ([`super::tile::patch_jacobian`]),
-/// the grid the bench's shift and self-similarity reach are stated in, never
+/// the grid the bench's shift and self-similarity radius are stated in, never
 /// at the display tile's [`PATCH_RES`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PatchJacobian(pub(crate) [[f64; 2]; 2]);

@@ -45,7 +45,7 @@
 //! rather than at the tile's display resolution. So the column and
 //! `get_bench_track` give the same numbers whether or not the photograph has
 //! been decoded, and whether or not the tile's middle is on it, in the grid
-//! px the shift and the self-similarity reach are stated in.
+//! px the shift and the self-similarity radius are stated in.
 //!
 //! The tile and its hover view are rendered at display resolutions
 //! ([`super::patch::PATCH_RES`], and [`CONTEXT_FACTOR`] times it), which only

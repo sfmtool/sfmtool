@@ -1419,7 +1419,7 @@ an `.sfmr` declares as `patch_bitmap_resolution`, and where it stores none the
 evaluation's own 24 (core's `EvaluateOptions::patch_resolution`). The track
 stage's shift and self-similarity are read on the same grid
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)), so the
-zoom, the shift and the reach's grid px are in one unit; the 64 texels Track
+zoom, the shift and the self-similarity radius are in one unit; the 64 texels Track
 View draws a tile at do not enter any of them. The table does not print the
 Jacobian; it is reported as a diagnostic.
 Both are geometry alone, read from the patch, the camera, the pose and where the

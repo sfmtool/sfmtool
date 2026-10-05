@@ -317,7 +317,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           or kind angle and unit degrees for a patch at infinity; patch is null \
                           at the cluster stage. Each ellipse is {axes, axes_is_at_least, \
                           major_angle, matrix}: axes [semi-major, semi-minor], each capped at 3 \
-                          grid px; axes_is_at_least true per axis where the true length may be \
+                          in grid_px, which the other units map; axes_is_at_least true per axis where the true length may be \
                           larger, because the region runs off the square searched, a shift with \
                           no reading beside it could hide more of it, or the length reached the \
                           largest radius searched; major_angle the major axis's angle in \
@@ -332,7 +332,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           photograph, which needs no photograph and is reported whatever the \
                           evaluation says. patch_jacobian is [[dx/dcol, dx/drow], [dy/dcol, \
                           dy/drow]] at the patch's centre, in photograph px per patch-grid px \
-                          at R, the grid the shift and the reach's grid px are in. patch_zoom \
+                          at R, the grid the shift and the grid_px ellipses are in. patch_zoom \
                           is [least, most], patch-grid px per photograph px over the warp's \
                           two singular directions, the numbers the Zoom column prints; neither \
                           depends on the resolution Track View draws its tiles at. Both are \
