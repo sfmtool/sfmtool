@@ -1091,9 +1091,10 @@ also collapse a run of frames onto one centre, with much the same effect.)
 When a track's observing cameras all sit at essentially the same centre, the
 point-or-bearing test finds no gain from a depth, and a producer that applies
 it stores the track as `w = 0` at the bearing fitted to its keypoints' rays.
-For a real pan the rays agree on one direction and the bearing fits them. A solver's collapse can leave them diverging, since the
-poses kept their rotations; then no bearing fits them well, but nothing else
-does either, and the pass still stores the bearing (see
+For a real pan the rays agree on one direction and the bearing fits them. A
+solver's collapse can leave them diverging, since the poses kept their
+rotations; then no bearing fits them well, but nothing else
+does either, and the producer still stores the bearing (see
 [batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
 § "Consumers"). This is the correct model — the depth genuinely
 cannot be known — and it lets distance-free operations (angular patch sizing,
@@ -1437,8 +1438,8 @@ and infinity points alike:
 
 A producer that converts a point between finite and infinity carries its
 patch frame across preserving apparent size: demotion divides the half-vectors
-by the demotion-time distance from the camera-cloud centroid and projects them onto
-the tangent plane of `d` (enforcing `u × v` along `-d`; a degenerate
+by the demotion-time distance from the camera-cloud centroid and projects them
+onto the tangent plane of `d` (enforcing `u × v` along `-d`; a degenerate
 projection, or a demotion whose finite position was meaningless, clears the
 patch and its bitmap row); promotion and materialisation multiply the angular
 half-vectors by the new point's distance from the same centroid, yielding a
@@ -1843,14 +1844,17 @@ describes. Other parts of this spec are implemented by:
   equals `sfmtool_sift_format::THUMBNAIL_SIZE`, and Python sees it as
   `sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors produce the pixels.
 - Points at infinity: `SfmrReconstruction::classify_points_at_infinity` applies
-  the point-or-bearing test and moves each point to finite or to `w = 0` as the
-  test decides, and `materialize_points_at_infinity` places every point at
-  infinity at a supplied finite depth; both carry patch frames
-  as [Per-point patch frame](#per-point-patch-frame-optional-version-3)
-  describes ([source](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)).
+  the point-or-bearing test and stores each scored point as finite or at
+  `w = 0` as the test decides, and `materialize_points_at_infinity` places
+  every point at infinity at a finite point along its direction, at a distance
+  it computes from the cameras so the point's parallax stays under one pixel;
+  both carry patch frames as
+  [Per-point patch frame](#per-point-patch-frame-optional-version-3) describes ([source](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)).
 - The keypoint affine shape of an `embedded_patches` observation:
   `SfmrReconstruction::observation_affine_shape`
   ([source](../../crates/sfmtool-core/src/reconstruction/data/affine_shape.rs)).
+- World orientation: `sfm xform --rotate` and `--align-to` refine it after a
+  solve.
 - `world_space_unit`: `sfm xform --scale-by-measurements` scales a
   reconstruction and sets the field.
 
