@@ -144,9 +144,9 @@ pub fn run() {
 /// `--mcp` in a build without the `mcp` feature, and with status 1 when the MCP
 /// endpoint cannot bind its port. It initializes the global `env_logger` logger
 /// and, on Windows, sets the process's DPI awareness, so it can run only once
-/// per process. The
-/// `winit` event loop it creates must be created on the main thread on macOS,
-/// and `winit` refuses to create a second event loop in one process.
+/// per process. The `winit` event loop it creates must be created on the main
+/// thread on macOS, and `winit` refuses to create a second event loop in one
+/// process.
 pub fn run_with_args(args: impl IntoIterator<Item = String>) {
     #[cfg(target_os = "windows")]
     unsafe {
@@ -332,7 +332,7 @@ fn start_mcp(
 fn start_mcp(_state: &mut AppState, port: Option<u16>, _proxy: &EventLoopProxy<UserEvent>) {
     if port.is_some() {
         eprintln!(
-            "This sfm-explorer was built without the \"mcp\" feature, so --mcp has nothing to \
+            "This SfM Explorer build was made without the \"mcp\" feature, so --mcp has nothing to \
              start. Rebuild with it (it is on by default) to use the MCP endpoint."
         );
         std::process::exit(2);

@@ -183,9 +183,8 @@ fn build_profile() -> &'static str {
 /// status 2 when `args` does not parse (an unknown option, or `--mcp=` with
 /// something that is not a port number) or asks for `--mcp` in a build without
 /// the `mcp` feature, and with status 1 when its MCP endpoint cannot bind, and
-/// the window's event loop can be created only once
-/// per process (and, on macOS, only on the main thread). See
-/// `sfm_explorer::run_with_args`.
+/// the window's event loop can be created only once per process (and, on
+/// macOS, only on the main thread). See `sfm_explorer::run_with_args`.
 ///
 /// The GIL is released while the viewer runs.
 #[pyfunction]

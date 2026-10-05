@@ -21,8 +21,11 @@ def main(argv: list[str]) -> None:
     # Python's own SIGINT handler only sets a flag for the interpreter to act
     # on, and the interpreter does not run while the viewer holds the main
     # thread, so Ctrl+C would do nothing. Restore the default, which ends the
-    # process as it does for any other program.
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # process as it does for any other program. Python installs its handler only
+    # over an inherited default, so an inherited "ignore" (a background job of a
+    # non-interactive shell) is left as it is.
+    if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
     run_explorer(argv)
 
 

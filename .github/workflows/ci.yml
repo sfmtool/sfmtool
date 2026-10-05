@@ -182,9 +182,10 @@ jobs:
   # Builds the workspace with the *minimum* supported Rust, which is deliberately
   # older than the toolchain pixi.toml pins for development. The consumer is the
   # PyPI sdist: wheels are published for x86-64 Linux, x86-64 Windows and
-  # Apple-silicon macOS, so everyone else (Intel Macs, other Linux architectures)
-  # compiles this whole workspace with whatever rustc they already have. Without this job an MSRV regression is invisible until it
-  # reaches them as a confusing mid-compile error.
+  # Apple-silicon macOS, so everyone else (for example Intel Macs, other Linux
+  # architectures and musl Linux) compiles this whole workspace with whatever
+  # rustc they already have. Without this job an MSRV regression is invisible
+  # until it reaches them as a confusing mid-compile error.
   #
   # Dependencies routinely raise the floor without declaring it (libsqlite3-sys
   # 0.38.1 forced 1.95 via `cfg_select!` while declaring no rust-version at all),
