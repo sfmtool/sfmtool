@@ -158,6 +158,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium, because the API is public.
 
 **Split `clone_with_changes` by data family**
+> _Status (2026-10-05): **Done** — `clone_with_changes` now hands each keyword argument to `apply_point_field`, `apply_image_field` or `apply_observation_field` in the caller's order, records dependent values in a `DeferredChanges` struct, and applies them in one `finalize` sequence whose doc comment lists the order; the image-count, patch-bitmap and track-rebuild steps are their own functions. Accepted keys, error messages, check order and clear/rebuild order are unchanged (104 key combinations on the seoul_bull ground truth gave identical arrays and errors before and after), branch `audit-fix-17-clone-with-changes`._
 - Location: `crates/sfmtool-py/src/reconstruction/clone.rs` (915 lines), function 76–738 (663 lines), 27 string-keyed arms.
 - Problem: A long extract/validate/assign match and fixed postprocessing tail still carry point, image, and track changes together. It grew 24 lines since the old report.
 - Proposed fix: Separate point, image, and track field applicators and retain one finalization sequence with explicit dependency order.

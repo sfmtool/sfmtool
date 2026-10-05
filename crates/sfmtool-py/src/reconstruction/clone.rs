@@ -74,6 +74,18 @@ macro_rules! extract_array2 {
 ///
 /// See `PySfmrReconstruction::clone_with_changes` for the public docstring and
 /// the list of supported fields.
+///
+/// The work runs in two passes. The first visits the keyword arguments in the
+/// order the caller passed them and hands each key to the applicator for its
+/// data family: [`apply_point_field`], [`apply_image_field`] or
+/// [`apply_observation_field`]. A key whose value can be applied on its own is
+/// applied there; a key that depends on another key, or on a count that a later
+/// key may still change, is recorded in [`DeferredChanges`]. The second pass,
+/// [`finalize`], applies the recorded values in a fixed order. Because the
+/// first pass follows the caller's order, a check that compares against a
+/// count (for example `colors` against the point count) sees the count as the
+/// keys before it left it, and when several keys are bad the first one passed
+/// raises the error.
 pub(crate) fn clone_with_changes(
     inner: &SfmrReconstruction,
     py: Python<'_>,
@@ -85,88 +97,186 @@ pub(crate) fn clone_with_changes(
         return Ok(recon);
     };
 
-    // Track whether we need to rebuild images from scratch
-    let mut new_image_names: Option<Vec<String>> = None;
-    let mut new_camera_indexes: Option<Vec<u32>> = None;
-    // Observation-source columns collected here and recombined into the
-    // `ObservationSource` enum after the image count is settled.
-    let mut new_feature_tool_hashes: Option<Vec<[u8; 16]>> = None;
-    let mut new_sift_content_hashes: Option<Vec<[u8; 16]>> = None;
-    let mut new_image_file_hashes: Option<Vec<[u8; 16]>> = None;
-    let mut new_keypoints_xy: Option<ndarray::Array2<f32>> = None;
-    let mut keypoints_given = false;
-    // `keypoints_xy=None` on a `sift_files` value: the result carries no
-    // inline keypoint column, even when its tracks are replaced.
-    let mut drop_keypoints = false;
-    let mut new_feature_source: Option<String> = None;
-    // The constraint triple, collected here and applied once the point count is
-    // settled. The outer `Option` is "was the kwarg passed", the inner one
-    // "with an array, or with `None` to drop the set".
-    let mut new_point_constraints: Option<Option<Vec<u8>>> = None;
-    let mut new_constraint_distances: Option<Option<Vec<f64>>> = None;
-    let mut new_constraint_reference_images: Option<Option<Vec<u32>>> = None;
     let old_point_count = recon.point_set.points.len();
+    // Any one of the three track arrays marks the tracks as replaced in this
+    // call; `rebuild_tracks` refuses a call that passes only some of them.
+    let replacing_tracks = kw.contains("track_image_indexes")?
+        || kw.contains("track_feature_indexes")?
+        || kw.contains("track_point_indexes")?;
+    let mut deferred = DeferredChanges::default();
 
     for (key, value) in kw.iter() {
         let key_str: String = key.extract()?;
-        match key_str.as_str() {
-            "positions" => {
-                let arr = extract_array2!(value, "positions", f64)?;
-                let s = to_contiguous!(arr);
-                let cols = arr.shape()[1];
-                if cols != 3 && cols != 4 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'positions' must have shape (N, 3) \
-                         [Euclidean] or (N, 4) [homogeneous], got shape ({}, {})",
-                        arr.shape()[0],
-                        cols
-                    )));
-                }
-                // Allow changing number of points
-                let n = arr.shape()[0];
-                recon.point_set.points.resize(
-                    n,
-                    sfmtool_core::Point3D {
-                        position: nalgebra::Point3::origin(),
-                        w: 1.0,
-                        color: [0, 0, 0],
-                        error: 0.0,
-                        normal: Vector3::zeros(),
-                    },
-                );
-                // (N, 3) input is Euclidean (w = 1). (N, 4) input is
-                // homogeneous; normalise into the ergonomic form — a finite
-                // point stores its Euclidean position with w = 1, a point
-                // at infinity stores a unit-length direction with w = 0.
-                for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
-                    let off = i * cols;
-                    let (x, y, z) = (s[off], s[off + 1], s[off + 2]);
-                    let w = if cols == 4 { s[off + 3] } else { 1.0 };
-                    if w != 0.0 {
-                        pt.position = nalgebra::Point3::new(x / w, y / w, z / w);
-                        pt.w = 1.0;
-                    } else {
-                        let dir = Vector3::new(x, y, z);
-                        let norm = dir.norm();
-                        if norm == 0.0 {
-                            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                                "clone_with_changes(): 'positions' row {i} is the \
-                                 all-zero homogeneous coordinate (0, 0, 0, 0), which \
-                                 denotes no point; a point at infinity (w = 0) needs \
-                                 a non-zero direction"
-                            )));
-                        }
-                        pt.position = nalgebra::Point3::from(dir / norm);
-                        pt.w = 0.0;
+        let key = key_str.as_str();
+        let handled = apply_point_field(&mut recon, &mut deferred, key, &value)?
+            || apply_image_field(&mut recon, &mut deferred, py, key, &value)?
+            || apply_observation_field(&mut recon, &mut deferred, replacing_tracks, key, &value)?;
+        if !handled {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "clone_with_changes() got unexpected keyword argument: '{key}'"
+            )));
+        }
+    }
+
+    finalize(
+        inner,
+        recon,
+        kw,
+        deferred,
+        old_point_count,
+        replacing_tracks,
+    )
+}
+
+/// Values read in the first pass of `clone_with_changes` whose application
+/// waits for [`finalize`], because they depend on a count or on another key
+/// that a later keyword argument may still change.
+#[derive(Default)]
+struct DeferredChanges {
+    /// `image_names`, applied first in [`finalize`]; it can change the image
+    /// count.
+    image_names: Option<Vec<String>>,
+    /// `camera_indexes`, checked against the image count once `image_names`
+    /// has settled it.
+    camera_indexes: Option<Vec<u32>>,
+    // Observation-source columns, recombined into the `ObservationSource`
+    // enum after the image count is settled.
+    feature_tool_hashes: Option<Vec<[u8; 16]>>,
+    sift_content_hashes: Option<Vec<[u8; 16]>>,
+    image_file_hashes: Option<Vec<[u8; 16]>>,
+    keypoints_xy: Option<ndarray::Array2<f32>>,
+    feature_source: Option<String>,
+    /// Whether `keypoints_xy` was passed with an array.
+    keypoints_given: bool,
+    /// `keypoints_xy=None` on a `sift_files` value: the result carries no
+    /// inline keypoint column, even when its tracks are replaced.
+    drop_keypoints: bool,
+    // The constraint triple, applied once the point count is settled. The
+    // outer `Option` is "was the kwarg passed", the inner one "with an array,
+    // or with `None` to drop the set".
+    point_constraints: Option<Option<Vec<u8>>>,
+    constraint_distances: Option<Option<Vec<f64>>>,
+    constraint_reference_images: Option<Option<Vec<u32>>>,
+}
+
+/// Apply one per-point keyword argument (positions, colors, errors, normals,
+/// their confidence, the constraint triple and the patch columns).
+///
+/// Returns `Ok(false)` when `key` is not a per-point key.
+fn apply_point_field(
+    recon: &mut SfmrReconstruction,
+    deferred: &mut DeferredChanges,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "positions" => {
+            let arr = extract_array2!(value, "positions", f64)?;
+            let s = to_contiguous!(arr);
+            let cols = arr.shape()[1];
+            if cols != 3 && cols != 4 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'positions' must have shape (N, 3) \
+                     [Euclidean] or (N, 4) [homogeneous], got shape ({}, {})",
+                    arr.shape()[0],
+                    cols
+                )));
+            }
+            // Allow changing number of points
+            let n = arr.shape()[0];
+            recon.point_set.points.resize(
+                n,
+                sfmtool_core::Point3D {
+                    position: nalgebra::Point3::origin(),
+                    w: 1.0,
+                    color: [0, 0, 0],
+                    error: 0.0,
+                    normal: Vector3::zeros(),
+                },
+            );
+            // (N, 3) input is Euclidean (w = 1). (N, 4) input is
+            // homogeneous; normalise into the ergonomic form — a finite
+            // point stores its Euclidean position with w = 1, a point
+            // at infinity stores a unit-length direction with w = 0.
+            for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
+                let off = i * cols;
+                let (x, y, z) = (s[off], s[off + 1], s[off + 2]);
+                let w = if cols == 4 { s[off + 3] } else { 1.0 };
+                if w != 0.0 {
+                    pt.position = nalgebra::Point3::new(x / w, y / w, z / w);
+                    pt.w = 1.0;
+                } else {
+                    let dir = Vector3::new(x, y, z);
+                    let norm = dir.norm();
+                    if norm == 0.0 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'positions' row {i} is the \
+                             all-zero homogeneous coordinate (0, 0, 0, 0), which \
+                             denotes no point; a point at infinity (w = 0) needs \
+                             a non-zero direction"
+                        )));
                     }
+                    pt.position = nalgebra::Point3::from(dir / norm);
+                    pt.w = 0.0;
                 }
             }
-            "colors" => {
-                let arr = extract_array2!(value, "colors", u8)?;
+        }
+        "colors" => {
+            let arr = extract_array2!(value, "colors", u8)?;
+            let s = to_contiguous!(arr);
+            if arr.shape()[1] != 3 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'colors' must have shape (N, 3), \
+                     got shape ({}, {})",
+                    arr.shape()[0],
+                    arr.shape()[1]
+                )));
+            }
+            if arr.shape()[0] != recon.point_set.points.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'colors' length ({}) must match point count ({}). \
+                     Hint: pass 'positions' first if changing point count.",
+                    arr.shape()[0],
+                    recon.point_set.points.len()
+                )));
+            }
+            for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
+                let off = i * 3;
+                pt.color = [s[off], s[off + 1], s[off + 2]];
+            }
+        }
+        "errors" => {
+            let arr = extract_array1!(value, "errors", f32)?;
+            let s = arr.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'errors' must be C-contiguous: {e}"
+                ))
+            })?;
+            if s.len() != recon.point_set.points.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'errors' length ({}) must match point count ({}). \
+                     Hint: pass 'positions' first if changing point count.",
+                    s.len(),
+                    recon.point_set.points.len()
+                )));
+            }
+            for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
+                pt.error = s[i];
+            }
+        }
+        "normals" => {
+            if value.is_none() {
+                // Opt out of normals entirely (no normals_xyz written).
+                recon.point_set.has_normals = false;
+                for pt in recon.point_set.points.iter_mut() {
+                    pt.normal = Vector3::zeros();
+                }
+            } else {
+                let arr = extract_array2!(value, "normals", f32)?;
                 let s = to_contiguous!(arr);
                 if arr.shape()[1] != 3 {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'colors' must have shape (N, 3), \
+                        "clone_with_changes(): 'normals' must have shape (N, 3), \
                          got shape ({}, {})",
                         arr.shape()[0],
                         arr.shape()[1]
@@ -174,385 +284,471 @@ pub(crate) fn clone_with_changes(
                 }
                 if arr.shape()[0] != recon.point_set.points.len() {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'colors' length ({}) must match point count ({}). \
-                         Hint: pass 'positions' first if changing point count.",
+                        "clone_with_changes(): 'normals' length ({}) must match point count ({})",
                         arr.shape()[0],
                         recon.point_set.points.len()
                     )));
                 }
+                recon.point_set.has_normals = true;
                 for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
                     let off = i * 3;
-                    pt.color = [s[off], s[off + 1], s[off + 2]];
+                    pt.normal = Vector3::new(s[off], s[off + 1], s[off + 2]);
                 }
             }
-            "errors" => {
-                let arr = extract_array1!(value, "errors", f32)?;
+        }
+        "normal_confidence" => {
+            // Matches the `normals` convention above: `None` clears the
+            // column outright (nothing is written), an array replaces it,
+            // and omitting the kwarg preserves whatever the source carried.
+            if value.is_none() {
+                recon.point_set.normal_confidence = None;
+            } else {
+                let arr = extract_array1!(value, "normal_confidence", u8)?;
                 let s = arr.as_slice().map_err(|e| {
                     pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'errors' must be C-contiguous: {e}"
+                        "clone_with_changes(): 'normal_confidence' must be C-contiguous: {e}"
                     ))
                 })?;
                 if s.len() != recon.point_set.points.len() {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'errors' length ({}) must match point count ({}). \
-                         Hint: pass 'positions' first if changing point count.",
+                        "clone_with_changes(): 'normal_confidence' length ({}) must match \
+                         point count ({})",
                         s.len(),
                         recon.point_set.points.len()
                     )));
                 }
-                for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
-                    pt.error = s[i];
-                }
-            }
-            "normals" => {
-                if value.is_none() {
-                    // Opt out of normals entirely (no normals_xyz written).
-                    recon.point_set.has_normals = false;
-                    for pt in recon.point_set.points.iter_mut() {
-                        pt.normal = Vector3::zeros();
-                    }
-                } else {
-                    let arr = extract_array2!(value, "normals", f32)?;
-                    let s = to_contiguous!(arr);
-                    if arr.shape()[1] != 3 {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'normals' must have shape (N, 3), \
-                             got shape ({}, {})",
-                            arr.shape()[0],
-                            arr.shape()[1]
-                        )));
-                    }
-                    if arr.shape()[0] != recon.point_set.points.len() {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'normals' length ({}) must match point count ({})",
-                            arr.shape()[0],
-                            recon.point_set.points.len()
-                        )));
-                    }
-                    recon.point_set.has_normals = true;
-                    for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
-                        let off = i * 3;
-                        pt.normal = Vector3::new(s[off], s[off + 1], s[off + 2]);
-                    }
-                }
-            }
-            "normal_confidence" => {
-                // Matches the `normals` convention above: `None` clears the
-                // column outright (nothing is written), an array replaces it,
-                // and omitting the kwarg preserves whatever the source carried.
-                if value.is_none() {
-                    recon.point_set.normal_confidence = None;
-                } else {
-                    let arr = extract_array1!(value, "normal_confidence", u8)?;
-                    let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'normal_confidence' must be C-contiguous: {e}"
-                        ))
-                    })?;
-                    if s.len() != recon.point_set.points.len() {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'normal_confidence' length ({}) must match \
-                             point count ({})",
-                            s.len(),
-                            recon.point_set.points.len()
-                        )));
-                    }
-                    recon.point_set.normal_confidence = Some(s.to_vec());
-                }
-            }
-            // The constraint triple. Each is recorded rather than applied here:
-            // the three columns are one statement and the point count may still
-            // be changing in this same call, so they are settled together after
-            // the loop.
-            "point_constraints" => {
-                new_point_constraints = Some(if value.is_none() {
-                    None
-                } else {
-                    let arr = extract_array1!(value, "point_constraints", u8)?;
-                    Some(to_contiguous!(arr).into_owned())
-                });
-            }
-            "constraint_distances" => {
-                new_constraint_distances = Some(if value.is_none() {
-                    None
-                } else {
-                    let arr = extract_array1!(value, "constraint_distances", f64)?;
-                    Some(to_contiguous!(arr).into_owned())
-                });
-            }
-            "constraint_reference_images" => {
-                new_constraint_reference_images = Some(if value.is_none() {
-                    None
-                } else {
-                    let arr = extract_array1!(value, "constraint_reference_images", u32)?;
-                    Some(to_contiguous!(arr).into_owned())
-                });
-            }
-            "patches" => {
-                if value.is_none() {
-                    recon.point_set.patch_u_halfvec_xyz = None;
-                    recon.point_set.patch_v_halfvec_xyz = None;
-                    recon.point_set.patch_bitmaps_y_x_rgba = None;
-                } else {
-                    let cloud: PyRef<crate::PyPatchCloud> = value.extract().map_err(|_| {
-                        pyo3::exceptions::PyTypeError::new_err(
-                            "clone_with_changes(): 'patches' must be a PatchCloud or None",
-                        )
-                    })?;
-                    let (u, v) = cloud.inner.to_halfvec_arrays(recon.point_set.points.len());
-                    recon.point_set.patch_u_halfvec_xyz = Some(u);
-                    recon.point_set.patch_v_halfvec_xyz = Some(v);
-                    // The cloud carries geometry only; clear any stale bitmaps.
-                    recon.point_set.patch_bitmaps_y_x_rgba = None;
-                }
-            }
-            "quaternions_wxyz" => {
-                let arr = extract_array2!(value, "quaternions_wxyz", f64)?;
-                let s = to_contiguous!(arr);
-                if arr.shape()[1] != 4 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'quaternions_wxyz' must have shape (N, 4), \
-                         got shape ({}, {})",
-                        arr.shape()[0],
-                        arr.shape()[1]
-                    )));
-                }
-                let n = arr.shape()[0];
-                // Resize images if needed (when combined with image_names)
-                while recon.image_table.images.len() < n {
-                    recon.image_table.images.push(sfmtool_core::SfmrImage {
-                        name: String::new(),
-                        camera_index: 0,
-                        quaternion_wxyz: UnitQuaternion::identity(),
-                        translation_xyz: Vector3::zeros(),
-                    });
-                }
-                recon.image_table.images.truncate(n);
-                for (i, im) in recon.image_table.images.iter_mut().enumerate() {
-                    let off = i * 4;
-                    // Bit-preserving for already-unit inputs, so cloning a
-                    // reconstruction with its own accessor arrays round-trips
-                    // the poses exactly (see the helper's docs).
-                    im.quaternion_wxyz = sfmtool_core::reconstruction::unit_quaternion_preserving(
-                        s[off],
-                        s[off + 1],
-                        s[off + 2],
-                        s[off + 3],
-                    );
-                }
-            }
-            "translations" => {
-                let arr = extract_array2!(value, "translations", f64)?;
-                let s = to_contiguous!(arr);
-                if arr.shape()[1] != 3 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'translations' must have shape (N, 3), \
-                         got shape ({}, {})",
-                        arr.shape()[0],
-                        arr.shape()[1]
-                    )));
-                }
-                if arr.shape()[0] != recon.image_table.images.len() {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'translations' length ({}) must match image count ({}). \
-                         Hint: pass 'quaternions_wxyz' or 'image_names' first to resize.",
-                        arr.shape()[0],
-                        recon.image_table.images.len()
-                    )));
-                }
-                for (i, im) in recon.image_table.images.iter_mut().enumerate() {
-                    let off = i * 3;
-                    im.translation_xyz = Vector3::new(s[off], s[off + 1], s[off + 2]);
-                }
-            }
-            "track_image_indexes" | "track_feature_indexes" | "track_point_indexes" => {
-                // These must all be set together to rebuild tracks
-                // Defer to after the loop
-            }
-            "patch_bitmaps" => {
-                // Deferred to after the loop so it always runs *after* 'patches'
-                // (which clears any bitmaps), regardless of kwargs order.
-            }
-            "observation_counts" => {
-                let arr = extract_array1!(value, "observation_counts", u32)?;
-                recon.point_set.observation_counts = arr
-                    .as_slice()
-                    .map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'observation_counts' must be C-contiguous: {e}"
-                        ))
-                    })?
-                    .to_vec();
-            }
-            "image_names" => {
-                new_image_names = Some(value.extract()?);
-            }
-            "camera_indexes" => {
-                let arr = extract_array1!(value, "camera_indexes", u32)?;
-                new_camera_indexes = Some(
-                    arr.as_slice()
-                        .map_err(|e| {
-                            pyo3::exceptions::PyValueError::new_err(format!(
-                                "clone_with_changes(): 'camera_indexes' must be C-contiguous: {e}"
-                            ))
-                        })?
-                        .to_vec(),
-                );
-            }
-            "cameras" => {
-                use sfmtool_core::CameraIntrinsics;
-                let sfmr_cameras = extract_cameras_as_sfmr(&value)?;
-                recon.image_table.cameras = sfmr_cameras
-                    .iter()
-                    .map(|sc| {
-                        CameraIntrinsics::try_from(sc).map_err(|e| {
-                            pyo3::exceptions::PyValueError::new_err(format!(
-                                "clone_with_changes(): failed to convert camera: {e}"
-                            ))
-                        })
-                    })
-                    .collect::<PyResult<Vec<_>>>()?;
-            }
-            "feature_tool_hashes" => {
-                new_feature_tool_hashes = Some(py_to_u128_bytes(&value)?);
-            }
-            "sift_content_hashes" => {
-                new_sift_content_hashes = Some(py_to_u128_bytes(&value)?);
-            }
-            "feature_source" => {
-                new_feature_source = Some(value.extract()?);
-            }
-            "observation_confidence" => {
-                // Matches the `normal_confidence` convention: `None` clears the
-                // column outright, an array replaces it, and omitting the kwarg
-                // preserves whatever the source carried. The row count is checked
-                // eagerly only when the tracks are not also being replaced in
-                // this call -- when they are, the observation count is not known
-                // until they are rebuilt, so the final
-                // `validate_observation_columns` is what catches a desync.
-                if value.is_none() {
-                    recon.point_set.observation_confidence = None;
-                } else {
-                    let arr = extract_array1!(value, "observation_confidence", u8)?;
-                    let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'observation_confidence' must be                              C-contiguous: {e}"
-                        ))
-                    })?;
-                    let replacing_tracks = kw.contains("track_image_indexes")?
-                        || kw.contains("track_feature_indexes")?
-                        || kw.contains("track_point_indexes")?;
-                    if !replacing_tracks && s.len() != recon.point_set.tracks.len() {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'observation_confidence' length ({})                              must match observation count ({})",
-                            s.len(),
-                            recon.point_set.tracks.len()
-                        )));
-                    }
-                    recon.point_set.observation_confidence = Some(s.to_vec());
-                }
-            }
-            "keypoints_xy" if value.is_none() => {
-                // Drop the optional inline copy a `sift_files` value carries; an
-                // `embedded_patches` value's keypoints are its observations.
-                match &mut recon.point_set.observations {
-                    sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } => {
-                        *keypoints_xy = None;
-                        drop_keypoints = true;
-                    }
-                    sfmtool_core::ObservationSource::EmbeddedPatches { .. } => {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "clone_with_changes(): an embedded_patches reconstruction \
-                             cannot drop keypoints_xy",
-                        ));
-                    }
-                }
-            }
-            "keypoints_xy" => {
-                let arr = extract_array2!(value, "keypoints_xy", f32)?;
-                if arr.shape()[1] != 2 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'keypoints_xy' must have shape (K, 2), \
-                         got shape {:?}",
-                        arr.shape()
-                    )));
-                }
-                // Validate the row count eagerly only when the tracks are not
-                // also being replaced in this call (in which case the count is
-                // fixed). When tracks change too, the observation count isn't
-                // known until they're rebuilt, so defer to the final
-                // `validate_observation_columns`.
-                let replacing_tracks = kw.contains("track_image_indexes")?
-                    || kw.contains("track_feature_indexes")?
-                    || kw.contains("track_point_indexes")?;
-                if !replacing_tracks && arr.shape()[0] != recon.point_set.tracks.len() {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'keypoints_xy' must have shape (K, 2) with \
-                         K = observation count ({}), got shape {:?}",
-                        recon.point_set.tracks.len(),
-                        arr.shape()
-                    )));
-                }
-                new_keypoints_xy = Some(arr.as_array().as_standard_layout().into_owned());
-                keypoints_given = true;
-            }
-            "image_file_hashes" => {
-                if !value.is_none() {
-                    new_image_file_hashes = Some(py_to_u128_bytes(&value)?);
-                }
-            }
-            "thumbnails_y_x_rgb" if value.is_none() => {
-                // Drop the column: every row of everything else is kept.
-                recon.image_table.thumbnails_y_x_rgb = None;
-            }
-            "thumbnails_y_x_rgb" => {
-                // The `$dtype` slot also carries the shape suffix here so the
-                // rendered message reproduces the legacy thumbnails wording.
-                let s = sfmtool_core::THUMBNAIL_SIZE;
-                let arr = extract_ndarray!(
-                    value,
-                    "thumbnails_y_x_rgb",
-                    numpy::PyReadonlyArray4<u8>,
-                    "a 4D contiguous ndarray",
-                    format!("uint8 and shape (N, {s}, {s}, 3)")
-                )?;
-                let shape = arr.shape();
-                if shape[1] != s || shape[2] != s || shape[3] != 3 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'thumbnails_y_x_rgb' must have shape \
-                         (N, {s}, {s}, 3), got shape {shape:?}"
-                    )));
-                }
-                recon.image_table.thumbnails_y_x_rgb =
-                    Some(Arc::new(arr.as_array().as_standard_layout().into_owned()));
-            }
-            "rig_frame_data" => {
-                if value.is_none() {
-                    recon.image_table.rig_frame_data = None;
-                } else {
-                    // Wrap in a temporary dict for extract_rig_frame_data
-                    let tmp = PyDict::new(py);
-                    tmp.set_item("rig_frame_data", &value)?;
-                    recon.image_table.rig_frame_data = extract_rig_frame_data(py, &tmp)?;
-                }
-            }
-            "world_space_unit" => {
-                if value.is_none() {
-                    recon.metadata.world_space_unit = None;
-                } else {
-                    recon.metadata.world_space_unit = Some(value.extract()?);
-                }
-            }
-            other => {
-                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                    "clone_with_changes() got unexpected keyword argument: '{other}'"
-                )));
+                recon.point_set.normal_confidence = Some(s.to_vec());
             }
         }
+        // The constraint triple. Each is recorded rather than applied here:
+        // the three columns are one statement and the point count may still
+        // be changing in this same call, so they are settled together after
+        // the loop.
+        "point_constraints" => {
+            deferred.point_constraints = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array1!(value, "point_constraints", u8)?;
+                Some(to_contiguous!(arr).into_owned())
+            });
+        }
+        "constraint_distances" => {
+            deferred.constraint_distances = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array1!(value, "constraint_distances", f64)?;
+                Some(to_contiguous!(arr).into_owned())
+            });
+        }
+        "constraint_reference_images" => {
+            deferred.constraint_reference_images = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array1!(value, "constraint_reference_images", u32)?;
+                Some(to_contiguous!(arr).into_owned())
+            });
+        }
+        "patches" => {
+            if value.is_none() {
+                recon.point_set.patch_u_halfvec_xyz = None;
+                recon.point_set.patch_v_halfvec_xyz = None;
+                recon.point_set.patch_bitmaps_y_x_rgba = None;
+            } else {
+                let cloud: PyRef<crate::PyPatchCloud> = value.extract().map_err(|_| {
+                    pyo3::exceptions::PyTypeError::new_err(
+                        "clone_with_changes(): 'patches' must be a PatchCloud or None",
+                    )
+                })?;
+                let (u, v) = cloud.inner.to_halfvec_arrays(recon.point_set.points.len());
+                recon.point_set.patch_u_halfvec_xyz = Some(u);
+                recon.point_set.patch_v_halfvec_xyz = Some(v);
+                // The cloud carries geometry only; clear any stale bitmaps.
+                recon.point_set.patch_bitmaps_y_x_rgba = None;
+            }
+        }
+        "patch_bitmaps" => {
+            // Deferred to after the loop so it always runs *after* 'patches'
+            // (which clears any bitmaps), regardless of kwargs order.
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Apply one per-image keyword argument (poses, names, camera assignments,
+/// cameras, thumbnails and rig frames), or the reconstruction-level
+/// `world_space_unit`.
+///
+/// Returns `Ok(false)` when `key` is not one of these keys.
+fn apply_image_field(
+    recon: &mut SfmrReconstruction,
+    deferred: &mut DeferredChanges,
+    py: Python<'_>,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "quaternions_wxyz" => {
+            let arr = extract_array2!(value, "quaternions_wxyz", f64)?;
+            let s = to_contiguous!(arr);
+            if arr.shape()[1] != 4 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'quaternions_wxyz' must have shape (N, 4), \
+                     got shape ({}, {})",
+                    arr.shape()[0],
+                    arr.shape()[1]
+                )));
+            }
+            let n = arr.shape()[0];
+            // Resize images if needed (when combined with image_names)
+            while recon.image_table.images.len() < n {
+                recon.image_table.images.push(sfmtool_core::SfmrImage {
+                    name: String::new(),
+                    camera_index: 0,
+                    quaternion_wxyz: UnitQuaternion::identity(),
+                    translation_xyz: Vector3::zeros(),
+                });
+            }
+            recon.image_table.images.truncate(n);
+            for (i, im) in recon.image_table.images.iter_mut().enumerate() {
+                let off = i * 4;
+                // Bit-preserving for already-unit inputs, so cloning a
+                // reconstruction with its own accessor arrays round-trips
+                // the poses exactly (see the helper's docs).
+                im.quaternion_wxyz = sfmtool_core::reconstruction::unit_quaternion_preserving(
+                    s[off],
+                    s[off + 1],
+                    s[off + 2],
+                    s[off + 3],
+                );
+            }
+        }
+        "translations" => {
+            let arr = extract_array2!(value, "translations", f64)?;
+            let s = to_contiguous!(arr);
+            if arr.shape()[1] != 3 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'translations' must have shape (N, 3), \
+                     got shape ({}, {})",
+                    arr.shape()[0],
+                    arr.shape()[1]
+                )));
+            }
+            if arr.shape()[0] != recon.image_table.images.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'translations' length ({}) must match image count ({}). \
+                     Hint: pass 'quaternions_wxyz' or 'image_names' first to resize.",
+                    arr.shape()[0],
+                    recon.image_table.images.len()
+                )));
+            }
+            for (i, im) in recon.image_table.images.iter_mut().enumerate() {
+                let off = i * 3;
+                im.translation_xyz = Vector3::new(s[off], s[off + 1], s[off + 2]);
+            }
+        }
+        "image_names" => {
+            deferred.image_names = Some(value.extract()?);
+        }
+        "camera_indexes" => {
+            let arr = extract_array1!(value, "camera_indexes", u32)?;
+            deferred.camera_indexes = Some(
+                arr.as_slice()
+                    .map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'camera_indexes' must be C-contiguous: {e}"
+                        ))
+                    })?
+                    .to_vec(),
+            );
+        }
+        "cameras" => {
+            use sfmtool_core::CameraIntrinsics;
+            let sfmr_cameras = extract_cameras_as_sfmr(value)?;
+            recon.image_table.cameras = sfmr_cameras
+                .iter()
+                .map(|sc| {
+                    CameraIntrinsics::try_from(sc).map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): failed to convert camera: {e}"
+                        ))
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+        }
+        "thumbnails_y_x_rgb" if value.is_none() => {
+            // Drop the column: every row of everything else is kept.
+            recon.image_table.thumbnails_y_x_rgb = None;
+        }
+        "thumbnails_y_x_rgb" => {
+            // The `$dtype` slot also carries the shape suffix here so the
+            // rendered message reproduces the legacy thumbnails wording.
+            let s = sfmtool_core::THUMBNAIL_SIZE;
+            let arr = extract_ndarray!(
+                value,
+                "thumbnails_y_x_rgb",
+                numpy::PyReadonlyArray4<u8>,
+                "a 4D contiguous ndarray",
+                format!("uint8 and shape (N, {s}, {s}, 3)")
+            )?;
+            let shape = arr.shape();
+            if shape[1] != s || shape[2] != s || shape[3] != 3 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'thumbnails_y_x_rgb' must have shape \
+                     (N, {s}, {s}, 3), got shape {shape:?}"
+                )));
+            }
+            recon.image_table.thumbnails_y_x_rgb =
+                Some(Arc::new(arr.as_array().as_standard_layout().into_owned()));
+        }
+        "rig_frame_data" => {
+            if value.is_none() {
+                recon.image_table.rig_frame_data = None;
+            } else {
+                // Wrap in a temporary dict for extract_rig_frame_data
+                let tmp = PyDict::new(py);
+                tmp.set_item("rig_frame_data", value)?;
+                recon.image_table.rig_frame_data = extract_rig_frame_data(py, &tmp)?;
+            }
+        }
+        "world_space_unit" => {
+            if value.is_none() {
+                recon.metadata.world_space_unit = None;
+            } else {
+                recon.metadata.world_space_unit = Some(value.extract()?);
+            }
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Apply one keyword argument of the tracks and the observation source (the
+/// track arrays, per-point observation counts, per-observation columns, and
+/// the per-image hashes that name where the observations come from).
+///
+/// `replacing_tracks` says whether the call also replaces the tracks, in which
+/// case a per-observation column's row count is checked only at the end.
+/// Returns `Ok(false)` when `key` is not one of these keys.
+fn apply_observation_field(
+    recon: &mut SfmrReconstruction,
+    deferred: &mut DeferredChanges,
+    replacing_tracks: bool,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "track_image_indexes" | "track_feature_indexes" | "track_point_indexes" => {
+            // These must all be set together to rebuild tracks
+            // Defer to after the loop
+        }
+        "observation_counts" => {
+            let arr = extract_array1!(value, "observation_counts", u32)?;
+            recon.point_set.observation_counts = arr
+                .as_slice()
+                .map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'observation_counts' must be C-contiguous: {e}"
+                    ))
+                })?
+                .to_vec();
+        }
+        "feature_tool_hashes" => {
+            deferred.feature_tool_hashes = Some(py_to_u128_bytes(value)?);
+        }
+        "sift_content_hashes" => {
+            deferred.sift_content_hashes = Some(py_to_u128_bytes(value)?);
+        }
+        "feature_source" => {
+            deferred.feature_source = Some(value.extract()?);
+        }
+        "observation_confidence" => {
+            // Matches the `normal_confidence` convention: `None` clears the
+            // column outright, an array replaces it, and omitting the kwarg
+            // preserves whatever the source carried. The row count is checked
+            // eagerly only when the tracks are not also being replaced in
+            // this call -- when they are, the observation count is not known
+            // until they are rebuilt, so the final
+            // `validate_observation_columns` is what catches a desync.
+            if value.is_none() {
+                recon.point_set.observation_confidence = None;
+            } else {
+                let arr = extract_array1!(value, "observation_confidence", u8)?;
+                let s = arr.as_slice().map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'observation_confidence' must be                              C-contiguous: {e}"
+                    ))
+                })?;
+                if !replacing_tracks && s.len() != recon.point_set.tracks.len() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'observation_confidence' length ({})                              must match observation count ({})",
+                        s.len(),
+                        recon.point_set.tracks.len()
+                    )));
+                }
+                recon.point_set.observation_confidence = Some(s.to_vec());
+            }
+        }
+        "keypoints_xy" if value.is_none() => {
+            // Drop the optional inline copy a `sift_files` value carries; an
+            // `embedded_patches` value's keypoints are its observations.
+            match &mut recon.point_set.observations {
+                sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } => {
+                    *keypoints_xy = None;
+                    deferred.drop_keypoints = true;
+                }
+                sfmtool_core::ObservationSource::EmbeddedPatches { .. } => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "clone_with_changes(): an embedded_patches reconstruction \
+                         cannot drop keypoints_xy",
+                    ));
+                }
+            }
+        }
+        "keypoints_xy" => {
+            let arr = extract_array2!(value, "keypoints_xy", f32)?;
+            if arr.shape()[1] != 2 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'keypoints_xy' must have shape (K, 2), \
+                     got shape {:?}",
+                    arr.shape()
+                )));
+            }
+            // Validate the row count eagerly only when the tracks are not
+            // also being replaced in this call (in which case the count is
+            // fixed). When tracks change too, the observation count isn't
+            // known until they're rebuilt, so defer to the final
+            // `validate_observation_columns`.
+            if !replacing_tracks && arr.shape()[0] != recon.point_set.tracks.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'keypoints_xy' must have shape (K, 2) with \
+                     K = observation count ({}), got shape {:?}",
+                    recon.point_set.tracks.len(),
+                    arr.shape()
+                )));
+            }
+            deferred.keypoints_xy = Some(arr.as_array().as_standard_layout().into_owned());
+            deferred.keypoints_given = true;
+        }
+        "image_file_hashes" => {
+            if !value.is_none() {
+                deferred.image_file_hashes = Some(py_to_u128_bytes(value)?);
+            }
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Apply the deferred changes and rebuild the derived fields, in this order:
+///
+/// 1. `image_names`, then `camera_indexes`: the names can change the image
+///    count, and the camera indexes are checked against the result.
+/// 2. The observation source, whose per-image hash columns are checked against
+///    the settled image count.
+/// 3. The depth histogram, reset when the image count changed.
+/// 4. `patch_bitmaps`, after the first pass so it wins over the clear that
+///    `patches` does, whatever order the two were passed in.
+/// 5. The tracks, which also recompute `observation_counts` and so override an
+///    `observation_counts` value passed in the same call.
+/// 6. The constraint triple, checked against the settled point count.
+/// 7. `rebuild_derived_fields`.
+/// 8. The inline keypoint column of a `sift_files` value whose tracks were
+///    replaced, which reads image names and the rebuilt tracks.
+/// 9. The checks that every per-observation and per-point column matches its
+///    count.
+fn finalize(
+    inner: &SfmrReconstruction,
+    mut recon: SfmrReconstruction,
+    kw: &Bound<'_, PyDict>,
+    deferred: DeferredChanges,
+    old_point_count: usize,
+    replacing_tracks: bool,
+) -> PyResult<SfmrReconstruction> {
+    let DeferredChanges {
+        image_names,
+        camera_indexes,
+        feature_tool_hashes,
+        sift_content_hashes,
+        image_file_hashes,
+        keypoints_xy,
+        feature_source,
+        keypoints_given,
+        drop_keypoints,
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
+    } = deferred;
+
+    apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
+
+    // Recombine the observation-source columns into the enum once the image
+    // count is settled. Any column not supplied falls back to the current value.
+    rebuild_observation_source(
+        &mut recon,
+        feature_source,
+        feature_tool_hashes,
+        sift_content_hashes,
+        image_file_hashes,
+        keypoints_xy,
+    )?;
+
+    // Resize depth_histogram_counts to match the (possibly new) image count.
+    // When the image count changes, histogram data becomes stale so we reset it.
+    if recon.image_table.depth_histogram_counts.len() != recon.image_table.images.len() {
+        let num_buckets = recon.image_table.depth_statistics.num_histogram_buckets as usize;
+        recon.image_table.depth_histogram_counts =
+            vec![vec![0u32; num_buckets]; recon.image_table.images.len()];
     }
 
-    // Apply image-level field updates that may change the image count
-    if let Some(names) = new_image_names {
+    apply_patch_bitmaps(&mut recon, kw)?;
+
+    if replacing_tracks {
+        rebuild_tracks(&mut recon, kw)?;
+    }
+
+    apply_point_constraints(
+        &mut recon,
+        old_point_count,
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
+    )?;
+
+    // Recompute derived fields
+    recon.rebuild_derived_fields();
+
+    // A `sift_files` value whose tracks were replaced without a keypoint
+    // column of their own gets one rebuilt for the new tracks.
+    if replacing_tracks && !keypoints_given && !drop_keypoints {
+        carry_sift_keypoints(inner, &mut recon);
+    }
+
+    // The track arrays and the observation-source columns can be supplied in the
+    // same call (and are applied in separate passes), so guard against leaving a
+    // per-observation column out of step with the new track count — e.g.
+    // replacing the tracks of an embedded_patches recon without also passing a
+    // matching `keypoints_xy`.
+    recon.validate_observation_columns().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
+    })?;
+    // The same guard on the point axis: the constraint columns can be replaced
+    // in the same call that replaces the images a distance references.
+    recon.validate_point_columns().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
+    })?;
+
+    Ok(recon)
+}
+
+/// Apply `image_names`, which may change the image count, then check
+/// `camera_indexes` against the resulting count and apply it.
+fn apply_image_count_changes(
+    recon: &mut SfmrReconstruction,
+    image_names: Option<Vec<String>>,
+    camera_indexes: Option<Vec<u32>>,
+) -> PyResult<()> {
+    if let Some(names) = image_names {
         let n = names.len();
         // Resize images vec to match
         while recon.image_table.images.len() < n {
@@ -568,7 +764,7 @@ pub(crate) fn clone_with_changes(
             im.name.clone_from(&names[i]);
         }
     }
-    if let Some(ref indexes) = new_camera_indexes {
+    if let Some(ref indexes) = camera_indexes {
         if indexes.len() != recon.image_table.images.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "clone_with_changes(): 'camera_indexes' length ({}) must match image count ({})",
@@ -580,29 +776,13 @@ pub(crate) fn clone_with_changes(
             im.camera_index = indexes[i];
         }
     }
-    // Recombine the observation-source columns into the enum once the image
-    // count is settled. Any column not supplied falls back to the current value.
-    rebuild_observation_source(
-        &mut recon,
-        new_feature_source,
-        new_feature_tool_hashes,
-        new_sift_content_hashes,
-        new_image_file_hashes,
-        new_keypoints_xy,
-    )?;
+    Ok(())
+}
 
-    // Resize depth_histogram_counts to match the (possibly new) image count.
-    // When the image count changes, histogram data becomes stale so we reset it.
-    if recon.image_table.depth_histogram_counts.len() != recon.image_table.images.len() {
-        let num_buckets = recon.image_table.depth_statistics.num_histogram_buckets as usize;
-        recon.image_table.depth_histogram_counts =
-            vec![vec![0u32; num_buckets]; recon.image_table.images.len()];
-    }
-
-    // Per-point patch bitmaps (deferred so this wins over the 'patches' clear,
-    // regardless of kwargs order). Requires the patch frame to be present —
-    // either already on the reconstruction or attached via 'patches' in the same
-    // call (which is processed in the loop above).
+/// Apply a `patch_bitmaps` keyword argument. It runs after the first pass so
+/// that it wins over the clear that `patches` does, and so that a patch frame
+/// attached by `patches` in the same call is present when it is checked.
+fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyResult<()> {
     if let Some(value) = kw.get_item("patch_bitmaps")? {
         if value.is_none() {
             recon.point_set.patch_bitmaps_y_x_rgba = None;
@@ -635,137 +815,99 @@ pub(crate) fn clone_with_changes(
             recon.point_set.patch_bitmaps_for_display = false;
         }
     }
+    Ok(())
+}
 
-    // Rebuild tracks if any track arrays were provided
-    let has_tracks = kw.contains("track_image_indexes")?
-        || kw.contains("track_feature_indexes")?
-        || kw.contains("track_point_indexes")?;
+/// Replace the tracks from the three track arrays, which must all be passed,
+/// and recompute `observation_counts` from them.
+fn rebuild_tracks(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyResult<()> {
+    let img_idx = kw.get_item("track_image_indexes")?.ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
+             track_point_indexes must all be provided together",
+        )
+    })?;
+    let img_idx: PyReadonlyArray1<u32> = extract_array1!(img_idx, "track_image_indexes", u32)?;
 
-    if has_tracks {
-        let img_idx = kw.get_item("track_image_indexes")?.ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(
-                "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
-                 track_point_indexes must all be provided together",
-            )
-        })?;
-        let img_idx: PyReadonlyArray1<u32> = extract_array1!(img_idx, "track_image_indexes", u32)?;
+    let feat_idx = kw.get_item("track_feature_indexes")?.ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
+             track_point_indexes must all be provided together",
+        )
+    })?;
+    let feat_idx: PyReadonlyArray1<u32> = extract_array1!(feat_idx, "track_feature_indexes", u32)?;
 
-        let feat_idx = kw.get_item("track_feature_indexes")?.ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(
-                "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
-                 track_point_indexes must all be provided together",
-            )
-        })?;
-        let feat_idx: PyReadonlyArray1<u32> =
-            extract_array1!(feat_idx, "track_feature_indexes", u32)?;
+    let pt_idx = kw.get_item("track_point_indexes")?.ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
+             track_point_indexes must all be provided together",
+        )
+    })?;
+    let pt_idx: PyReadonlyArray1<u32> = extract_array1!(pt_idx, "track_point_indexes", u32)?;
 
-        let pt_idx = kw.get_item("track_point_indexes")?.ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(
-                "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
-                 track_point_indexes must all be provided together",
-            )
-        })?;
-        let pt_idx: PyReadonlyArray1<u32> = extract_array1!(pt_idx, "track_point_indexes", u32)?;
+    let img_s = img_idx.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "clone_with_changes(): 'track_image_indexes' must be C-contiguous: {e}"
+        ))
+    })?;
+    let feat_s = feat_idx.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "clone_with_changes(): 'track_feature_indexes' must be C-contiguous: {e}"
+        ))
+    })?;
+    let pt_s = pt_idx.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "clone_with_changes(): 'track_point_indexes' must be C-contiguous: {e}"
+        ))
+    })?;
 
-        let img_s = img_idx.as_slice().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): 'track_image_indexes' must be C-contiguous: {e}"
-            ))
-        })?;
-        let feat_s = feat_idx.as_slice().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): 'track_feature_indexes' must be C-contiguous: {e}"
-            ))
-        })?;
-        let pt_s = pt_idx.as_slice().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): 'track_point_indexes' must be C-contiguous: {e}"
-            ))
-        })?;
+    if img_s.len() != feat_s.len() || img_s.len() != pt_s.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "clone_with_changes(): track arrays must all have the same length, \
+             got track_image_indexes={}, track_feature_indexes={}, track_point_indexes={}",
+            img_s.len(),
+            feat_s.len(),
+            pt_s.len()
+        )));
+    }
 
-        if img_s.len() != feat_s.len() || img_s.len() != pt_s.len() {
+    recon.point_set.tracks = (0..img_s.len())
+        .map(|i| sfmtool_core::TrackObservation {
+            image_index: img_s[i],
+            point_index: pt_s[i],
+        })
+        .collect();
+    // Per-observation feature indices live in the observation source for
+    // sift_files reconstructions; keep them in step with the new tracks.
+    // (embedded_patches has no feature indices — its per-observation data
+    // is keypoints_xy, updated via the 'keypoints_xy' kwarg, which is also
+    // how a sift_files recon carrying the optional inline column keeps that
+    // column in step.)
+    if let sfmtool_core::ObservationSource::SiftFiles {
+        feature_indexes, ..
+    } = &mut recon.point_set.observations
+    {
+        *feature_indexes = feat_s.to_vec();
+    }
+
+    // Derive observation_counts from the new tracks (which are grouped by
+    // point) so the per-point counts/offsets don't go stale relative to the
+    // replaced tracks. This overrides any 'observation_counts' kwarg, since
+    // the tracks are authoritative.
+    let point_count = recon.point_set.points.len();
+    let mut new_counts = vec![0u32; point_count];
+    for t in &recon.point_set.tracks {
+        let p = t.point_index as usize;
+        if p >= point_count {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): track arrays must all have the same length, \
-                 got track_image_indexes={}, track_feature_indexes={}, track_point_indexes={}",
-                img_s.len(),
-                feat_s.len(),
-                pt_s.len()
+                "clone_with_changes(): 'track_point_indexes' contains point index {p} \
+                 out of range (point count {point_count})"
             )));
         }
-
-        recon.point_set.tracks = (0..img_s.len())
-            .map(|i| sfmtool_core::TrackObservation {
-                image_index: img_s[i],
-                point_index: pt_s[i],
-            })
-            .collect();
-        // Per-observation feature indices live in the observation source for
-        // sift_files reconstructions; keep them in step with the new tracks.
-        // (embedded_patches has no feature indices — its per-observation data
-        // is keypoints_xy, updated via the 'keypoints_xy' kwarg, which is also
-        // how a sift_files recon carrying the optional inline column keeps that
-        // column in step.)
-        if let sfmtool_core::ObservationSource::SiftFiles {
-            feature_indexes, ..
-        } = &mut recon.point_set.observations
-        {
-            *feature_indexes = feat_s.to_vec();
-        }
-
-        // Derive observation_counts from the new tracks (which are grouped by
-        // point) so the per-point counts/offsets don't go stale relative to the
-        // replaced tracks. This overrides any 'observation_counts' kwarg, since
-        // the tracks are authoritative.
-        let point_count = recon.point_set.points.len();
-        let mut new_counts = vec![0u32; point_count];
-        for t in &recon.point_set.tracks {
-            let p = t.point_index as usize;
-            if p >= point_count {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "clone_with_changes(): 'track_point_indexes' contains point index {p} \
-                     out of range (point count {point_count})"
-                )));
-            }
-            new_counts[p] += 1;
-        }
-        recon.point_set.observation_counts = new_counts;
+        new_counts[p] += 1;
     }
-
-    apply_point_constraints(
-        &mut recon,
-        old_point_count,
-        new_point_constraints,
-        new_constraint_distances,
-        new_constraint_reference_images,
-    )?;
-
-    // Recompute derived fields
-    recon.rebuild_derived_fields();
-
-    // A `sift_files` value whose tracks were replaced without a keypoint
-    // column of their own gets one rebuilt for the new tracks.
-    let replaced_tracks = kw.contains("track_image_indexes")?
-        || kw.contains("track_feature_indexes")?
-        || kw.contains("track_point_indexes")?;
-    if replaced_tracks && !keypoints_given && !drop_keypoints {
-        carry_sift_keypoints(inner, &mut recon);
-    }
-
-    // The track arrays and the observation-source columns can be supplied in the
-    // same call (and are applied in separate passes), so guard against leaving a
-    // per-observation column out of step with the new track count — e.g.
-    // replacing the tracks of an embedded_patches recon without also passing a
-    // matching `keypoints_xy`.
-    recon.validate_observation_columns().map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
-    })?;
-    // The same guard on the point axis: the constraint columns can be replaced
-    // in the same call that replaces the images a distance references.
-    recon.validate_point_columns().map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
-    })?;
-
-    Ok(recon)
+    recon.point_set.observation_counts = new_counts;
+    Ok(())
 }
 
 /// Rebuild the inline keypoint column of a `sift_files` `recon` whose tracks
