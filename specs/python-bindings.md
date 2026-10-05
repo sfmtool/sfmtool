@@ -6,14 +6,14 @@ crate with PyO3. The bindings convert NumPy arrays and Python objects to the
 Rust types and back; the behaviour of each binding is the behaviour of the Rust
 code it calls, and that code's spec is where the behaviour is described. This
 page is the index from the bindings to those specs: for each submodule of
-`sfmtool._sfmtool`, the source files that register its names, the main classes
+`sfmtool._sfmtool`, the source files that define its names, the main classes
 and functions each file exposes, and the spec that describes them. A row whose
 spec column reads *none* is a binding that no spec describes.
 
 ## How the module is assembled
 
 [`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers eleven submodules, each
-through the `register` function of its source directory, and sets each
+through the `register` function of its source module, and sets each
 submodule's `__name__` to the public `sfmtool.<name>`, so tracebacks and help
 text name the public location. Only three names are registered at the root:
 
@@ -41,7 +41,7 @@ Paths in the *Source* column are relative to
 |--------|---------|------|
 | [geometry/camera_intrinsics.rs](../crates/sfmtool-py/src/geometry/camera_intrinsics.rs) | `CameraIntrinsics`, with `CameraIntrinsics.refit` | [camera-model-registry.md](core/camera/camera-model-registry.md), [sfmtool-camera-models.md](formats/sfmtool-camera-models.md); `refit` in [refit-camera-intrinsics.md](core/camera/refit-camera-intrinsics.md) |
 | [geometry/rot_quaternion.rs](../crates/sfmtool-py/src/geometry/rot_quaternion.rs), [rigid_transform.rs](../crates/sfmtool-py/src/geometry/rigid_transform.rs), [se3_transform.rs](../crates/sfmtool-py/src/geometry/se3_transform.rs) | `RotQuaternion`, `RigidTransform`, `Se3Transform` | none |
-| [geometry/convention.rs](../crates/sfmtool-py/src/geometry/convention.rs) | `poses_colmap_to_canonical`, `poses_canonical_to_colmap`, `world_rotate_w`, `flip_camera_poses_s` | [sfmr-file-format.md](formats/sfmr-file-format.md) (coordinate conventions) |
+| [geometry/convention.rs](../crates/sfmtool-py/src/geometry/convention.rs) | `poses_colmap_to_canonical`, `poses_canonical_to_colmap`, `relative_poses_conjugate_s`, `flip_camera_poses_s`, `world_rotate_w`, `world_rotate_w_inverse` | [sfmr-file-format.md](formats/sfmr-file-format.md) (coordinate conventions) |
 | [geometry/absolute_pose.rs](../crates/sfmtool-py/src/geometry/absolute_pose.rs), [pose_refine.rs](../crates/sfmtool-py/src/geometry/pose_refine.rs) | `p3p_solve`, `estimate_absolute_pose`, `refine_absolute_pose` | [absolute-pose.md](core/geometry/absolute-pose.md) |
 | [geometry/affine_factorization.rs](../crates/sfmtool-py/src/geometry/affine_factorization.rs) | `factorize_affine`, `AffineFactorization`, `MetricHypothesis` | [affine-factorization.md](core/geometry/affine-factorization.md) |
 | [geometry/epipolar_estimation.rs](../crates/sfmtool-py/src/geometry/epipolar_estimation.rs) | `estimate_fundamental`, `focal_from_fundamental` | [epipolar-estimation.md](core/geometry/epipolar-estimation.md) |
@@ -55,7 +55,7 @@ Paths in the *Source* column are relative to
 | [geometry/reconstruction_growth.rs](../crates/sfmtool-py/src/geometry/reconstruction_growth.rs), [resect_images.rs](../crates/sfmtool-py/src/geometry/resect_images.rs) | `grow_reconstruction`, `resect_images_batch`, `resect_images` | [reconstruction-growth.md](core/geometry/reconstruction-growth.md) |
 | [geometry/pose_verification.rs](../crates/sfmtool-py/src/geometry/pose_verification.rs) | `verify_poses`, `repair_poses` | [pose-verification.md](core/geometry/pose-verification.md) |
 | [geometry/relative_pose.rs](../crates/sfmtool-py/src/geometry/relative_pose.rs) | `estimate_essential_rays`, `fit_ray_rotation` | [relative-pose.md](core/geometry/relative-pose.md) |
-| [geometry/translation_averaging.rs](../crates/sfmtool-py/src/geometry/translation_averaging.rs) | `average_translations`, `relative_lengths`, `direction_reading`, `orientation_reading` and their iteration constants | [translation-averaging.md](core/geometry/translation-averaging.md) |
+| [geometry/translation_averaging.rs](../crates/sfmtool-py/src/geometry/translation_averaging.rs) | `average_translations`, `relative_lengths`, `direction_reading`, `orientation_reading` and their solver constants | [translation-averaging.md](core/geometry/translation-averaging.md) |
 
 ### `io`
 
@@ -80,9 +80,16 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [reconstruction/sfmr_reconstruction.rs](../crates/sfmtool-py/src/reconstruction/sfmr_reconstruction.rs) | `SfmrReconstruction` | [sfmr-file-format.md](formats/sfmr-file-format.md) |
+| | `SfmrReconstruction.to_embedded_patches` | [sift-to-patch-reconstruction.md](core/patch/sift-to-patch-reconstruction.md) |
+| | `SfmrReconstruction.triangulation_diagnostics` | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
+| | `SfmrReconstruction.find_points_at_infinity` | [find-points-at-infinity.md](cli/reconstruction/xform/find-points-at-infinity.md) |
 | [reconstruction/edited.rs](../crates/sfmtool-py/src/reconstruction/edited.rs) | `EditedReconstruction`, `PointMap` | [edited-reconstruction.md](core/reconstruction/edited-reconstruction.md) |
+| | `EditedReconstruction.bundle_adjust` | [bundle-adjust.md](core/reconstruction/bundle-adjust.md) |
+| | `EditedReconstruction.move_camera` | [move-camera.md](core/reconstruction/move-camera.md) |
+| | `EditedReconstruction.prune_covered_observations` | [prune-covered-observations.md](core/reconstruction/prune-covered-observations.md) |
+| | `EditedReconstruction.resect_image_in_place` | [resect-image.md](gui/edits/resect-image.md) |
 | [reconstruction/add_image_to_tracks.rs](../crates/sfmtool-py/src/reconstruction/add_image_to_tracks.rs) | `EditedReconstruction.add_image_to_tracks` | [add-image-to-tracks.md](core/reconstruction/add-image-to-tracks.md) |
-| [reconstruction/switch_camera_model.rs](../crates/sfmtool-py/src/reconstruction/switch_camera_model.rs) | `switch_camera_model`, `outermost_keypoints` methods | [switch-camera-model.md](core/reconstruction/switch-camera-model.md), [outermost-keypoint.md](core/reconstruction/outermost-keypoint.md) |
+| [reconstruction/switch_camera_model.rs](../crates/sfmtool-py/src/reconstruction/switch_camera_model.rs) | the `switch_camera_model` method of both reconstruction classes, `SfmrReconstruction.outermost_keypoints` | [switch-camera-model.md](core/reconstruction/switch-camera-model.md), [outermost-keypoint.md](core/reconstruction/outermost-keypoint.md) |
 | [reconstruction/triangulate_points.rs](../crates/sfmtool-py/src/reconstruction/triangulate_points.rs) | `triangulate_points`, `VERDICT_CODES` | [triangulation-rules.md](core/reconstruction/triangulation-rules.md) |
 | [reconstruction/range_expr.rs](../crates/sfmtool-py/src/reconstruction/range_expr.rs) | `RangeExpr` | none (its grammar is used in [inspect-command.md](cli/reconstruction/inspect-command.md) and [to-colmap-bin-command.md](cli/colmap-interop/to-colmap-bin-command.md)) |
 
@@ -97,7 +104,7 @@ Paths in the *Source* column are relative to
 | [patches/refine_keypoints.rs](../crates/sfmtool-py/src/patches/refine_keypoints.rs) | `PatchCloud.refine_keypoints` | [keypoint-subpixel-refinement.md](core/patch/keypoint-subpixel-refinement.md) |
 | [patches/member_coherence.rs](../crates/sfmtool-py/src/patches/member_coherence.rs) | `PatchCloud.validate_member_coherence` | [member-coherence-validation.md](core/patch/member-coherence-validation.md) |
 | [patches/spawn.rs](../crates/sfmtool-py/src/patches/spawn.rs) | `spawn_candidate_tracks` | [candidate-track-spawning.md](core/patch/candidate-track-spawning.md) |
-| [patches/self_similarity.rs](../crates/sfmtool-py/src/patches/self_similarity.rs) | `zncc_self_similarity_parts`, `zncc_self_similarity_parts_stack`, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS` | [zncc-self-similarity-radius.md](core/patch/zncc-self-similarity-radius.md) |
+| [patches/self_similarity.rs](../crates/sfmtool-py/src/patches/self_similarity.rs), [mod.rs](../crates/sfmtool-py/src/patches/mod.rs) | `zncc_self_similarity_parts`, `zncc_self_similarity_parts_stack`, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS` | [zncc-self-similarity-radius.md](core/patch/zncc-self-similarity-radius.md) |
 | [patches/photometric_ransac.rs](../crates/sfmtool-py/src/patches/photometric_ransac.rs) | `refine_photometric_ransac`, `RansacPhotometricOutput` | [photometric-subsets-ransac.md](core/spherical/photometric-subsets-ransac.md) |
 | [patches/consensus_atlas.rs](../crates/sfmtool-py/src/patches/consensus_atlas.rs) | `render_consensus_atlas` | [tile-batched-consensus-atlas.md](core/spherical/tile-batched-consensus-atlas.md) |
 
@@ -105,7 +112,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [bench.rs](../crates/sfmtool-py/src/bench.rs) | `Bench`, `EditableTrack`, and the track steps `create_track`, `create_cluster`, `add_observation`, the verdict, patch and search steps, `fit`, `split`, `duplicate`, `commit` | [bench.md](core/bench/bench.md), [editable-track.md](core/bench/editable-track.md) |
+| [bench.rs](../crates/sfmtool-py/src/bench.rs) | `Bench`, `EditableTrack`, and the track steps `create_track`, `create_cluster`, `add_observation`, `sight_observation`, `shape_observation`, the verdict steps (`set_verdict`, `pin_verdict`, `unpin_verdict`, `apply_thresholds`), the patch steps (`translate_patch`, `translate_patch_to_pixel`, `tilt_patch`, `spin_patch`, `resize_patch`, `resize_patch_to_pixel`), `search_descriptors`, `search_geometry`, `evaluate`, `fit`, `set_stage`, `split`, `duplicate`, `commit` | [bench.md](core/bench/bench.md), [editable-track.md](core/bench/editable-track.md) |
 | [bench/track_at_pixel.rs](../crates/sfmtool-py/src/bench/track_at_pixel.rs) | `build_track_at_pixel`, `TrackAtPixelSources`, `TrackAtPixelError` | [track-at-pixel.md](core/bench/track-at-pixel.md) |
 | [bench/nearby.rs](../crates/sfmtool-py/src/bench/nearby.rs) | `NearbyTrackSources`, `nearby_points`, `nearby_cluster_tracks`, `guided_matches`, `constellation_seeds` | [nearby-sources.md](core/bench/nearby-sources.md) |
 | [bench/nearby_tracks.rs](../crates/sfmtool-py/src/bench/nearby_tracks.rs) | `find_nearby_tracks` | [nearby-tracks.md](core/bench/nearby-tracks.md) |
