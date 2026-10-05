@@ -2,25 +2,19 @@
 
 ## Purpose
 
-A viewer that a human and an agent both drive needs a record of who did what,
-and when. SfM Explorer already reports each action in a one-line status
-message painted on the 3D viewport, and the MCP control surface prefixes its
-own actions there with `MCP:` so the person watching can tell them from their
-own. But that line holds exactly one message. The moment the next action runs,
-the previous one is gone; there is no way to scroll back, no way to copy it
-into a bug report or an agent transcript, and no time on it to correlate with
-anything else.
-
-The Action Log is the longer-term record that status line was standing in for.
-It is a dock panel, docked by default as a second tab beside the Image Browser
-strip, that shows a scrolling, timestamped, terminal-style list of every action
-taken in the viewer: opening and closing files, changing the scene graph,
-moving the selection, framing the view, playing the image animation, editing a
-reconstruction and walking its history, saving it, and every call the MCP
-endpoint applies. Each entry says which of three actors did it —
-the user at the window, an agent over MCP, or the viewer itself — and the
-viewport status line becomes a view of the log's most recent entry rather than
-a separate piece of state.
+The Action Log is a dock panel in SfM Explorer that lists the actions taken in
+the viewer, one timestamped line each, oldest first: opening and closing files,
+changing the scene graph, moving the selection, framing the view, playing the
+image animation, editing a reconstruction and undoing or redoing the edits,
+arranging the panels and the window, and every call the MCP endpoint
+applies. Each entry names which of three actors took it: the user at the
+window, an agent over MCP, or the viewer itself. A person and an agent can
+drive the same window, and the log is how either one finds out afterwards who
+did what and when; it can be scrolled back and copied into a bug report or an
+agent transcript. By default it is docked as a tab beside the Image Browser
+strip, behind it. The one-line status message on the 3D viewport shows the
+log's most recent entry other than a successful read-only query, prefixed
+`MCP:` when an agent took it.
 
 The log records outcomes, not intentions. An action that changed nothing
 (selecting the image already selected) writes no entry. A request that failed

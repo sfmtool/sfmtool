@@ -2,24 +2,22 @@
 
 ## Purpose
 
-SfM Explorer is a viewer you drive by hand: you open reconstructions, click a
-camera, look at where its rays land, notice that one image is in the wrong
-place, and go and fix it somewhere else. An AI coding agent working on this
-repository cannot do any of that. It can read `.sfmr` files with `sfm inspect`
-and it can read the source, but it cannot see the picture, and it cannot ask
-the picture a question — which means the one tool that would tell it fastest
-whether a solve is wrong, and *where*, is the one tool it cannot reach.
+The SfM Explorer MCP server lets an AI agent drive a running SfM Explorer
+window. Started with `sfm-explorer --mcp`, the viewer hosts a
+[Model Context Protocol][mcp] (MCP) endpoint on a loopback HTTP address, port
+8787 unless another is given. An agent connected to it can list the loaded
+scene graph, open and close `.sfmr` files, move the selection and the 3D
+camera, choose what the Image Detail panel draws over its photograph, arrange
+the panels, size and place the window, read the Action Log, edit a loaded
+reconstruction and undo or redo the edits, save it, and take a screenshot of
+the window or of any panel in it. The endpoint is off unless `--mcp` is given.
 
-This is an opt-in control surface for the running viewer, speaking the
-[Model Context Protocol][mcp] (MCP) over a loopback HTTP endpoint. Started with
-`sfm-explorer --mcp`, the viewer hosts a small server; an agent connects to it
-and can then enumerate the loaded scene graph, open and close `.sfmr` files,
-move the selection and the 3D camera, choose what the Image Detail panel draws
-over its photograph, arrange the panels, size and place the window, read back
-everything that has happened in the viewer, edit a loaded reconstruction and
-walk its history, write it out, and photograph the window or any panel in it.
-The human keeps the window in front of them the whole
-time and watches it change.
+It exists so that an agent working on this repository can look at a
+reconstruction. Without it an agent can read `.sfmr` files with `sfm inspect`
+and read the source, but it cannot see the scene, and looking at the scene is
+often the fastest way to find out whether a solve is wrong and where. The
+person keeps the window in front of them the whole time and watches it change
+as the agent works.
 
 The window itself is part of what the surface drives, because the window is
 shared. The agent wants the 3D viewport to fill it before a screenshot and the

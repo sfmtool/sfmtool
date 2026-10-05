@@ -2,7 +2,16 @@
 
 ## Purpose
 
-Given 2D observations of clusters across a small group of images — with
+Affine factorization recovers cameras and 3D points for a small group of
+nearby images from 2D feature positions alone, with no poses, no intrinsics
+and no pairwise geometry as input. Each input is a cluster: one scene point's
+observed positions in the images that see it. The method models each image as
+an affine camera, which holds when the depth variation in the scene is small
+compared to the viewing distance, so its result is a starting estimate rather
+than a final answer. It is a library function in
+`sfmtool-core` with Python bindings; no command calls it.
+
+In detail: given 2D observations of clusters across a small group of images — with
 most (cluster, image) combinations unobserved and some observations junk —
 jointly estimate:
 
@@ -16,12 +25,6 @@ and, as a second step, the **metric upgrade**: the 3×3 gauge that makes the
 affine cameras rotation-times-scale, yielding a per-image rotation and
 scale (both reflection hypotheses — the factorization cannot distinguish
 them).
-
-This is an operation that produces cameras and structure from 2D
-positions alone: no poses, no intrinsics, no pairwise geometry. Its
-output is an initialization, valid to the extent the affine camera model
-holds (depth relief small relative to viewing distance — i.e. groups of
-nearby viewpoints).
 
 ## Model
 

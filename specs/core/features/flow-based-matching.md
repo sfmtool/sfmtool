@@ -1,5 +1,17 @@
 # Flow-Based Feature Matching
 
+Flow-based matching finds SIFT feature correspondences in an ordered image
+sequence, such as the frames of a video, without comparing descriptors across
+every image pair. It computes dense optical flow between each pair of adjacent
+images, moves each image's keypoints along that flow into the images that
+follow, and matches each moved keypoint to a nearby keypoint in the target image
+whose descriptor is close enough. Keypoints are carried up to five images ahead
+by default, so each image is matched to the next five, not only to its
+neighbour. `sfm match --flow` and `sfm solve --flow-match` use it; the matches
+are written to the COLMAP database and then pass through COLMAP's geometric
+verification. This spec gives the measurements that set its parameters, the
+matching pipeline, its cost and its limits.
+
 ## The Idea
 
 Traditional SfM feature matching compares SIFT descriptors between image pairs to find
