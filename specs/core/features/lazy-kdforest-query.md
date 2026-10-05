@@ -356,8 +356,9 @@ respective corpora; an origin miss reads its two compressed columns.
 A chunk is a logical cache unit, not necessarily one system call. The
 offset/length index is kept for the handle's lifetime; the ZIP is never reopened
 or reparsed for a node. Descriptor and geometry frames are read with positional
-reads, so concurrent misses share no seek cursor; tree chunks and origin blocks
-are read through one ZIP reader behind a lock. The eager `DecodedEntries` path,
+reads, so concurrent misses share no seek cursor, and are decompressed outside
+any lock; tree chunks and origin blocks are read and decompressed through one
+ZIP reader behind a lock. The eager `DecodedEntries` path,
 which loads the whole archive, is not used.
 
 The cache is a per-file byte-weighted LRU of decoded chunks and blocks, keyed by
@@ -371,8 +372,8 @@ The cache budget includes pinned resident chunk arrays; admission reserves space
 and waits for readers to release chunks if necessary. The cache and in-flight
 limits must each admit the largest declared chunk, and a declared chunk over
 `max_chunk_bytes` is rejected. The same limits apply to descriptor, geometry,
-and origin blocks. Decode memory is reserved before I/O. Compressed buffers are
-bounded separately by `max_compressed_bytes`; they and the decoder workspace are
+and origin blocks. Decode memory is reserved before I/O. Each compressed buffer is
+bounded separately by `max_compressed_bytes`; these buffers and the decoder workspace are
 outside the decoded cache limit, which is therefore not a process RSS limit. A loader never
 waits for admission while holding a different chunk pin, avoiding cache deadlock.
 
@@ -443,8 +444,8 @@ to seed a four-tree search. Directory lookup itself is paid once at open.
 A packing comparison holds vectors, topology, query order, k and check budget
 fixed. The version-1 comparison covered both layouts that version supported, with
 the shared corpus packed in tree-0 order, and eager loading of the same forest.
-Shared descriptor block sizes were swept independently at 16, 64, 256 KiB and
-1 MiB.
+Shared descriptor block sizes are swept independently of the tree-chunk target;
+the sweep in [What the measurements found](#what-the-measurements-found) covers 2 KiB to 256 KiB.
 
 | Axis | Cases |
 |------|-------|
