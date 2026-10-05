@@ -117,8 +117,35 @@ impl From<egui_winit::accesskit_winit::Event> for UserEvent {
     }
 }
 
-/// Entry point for the SfM Explorer GUI application.
+/// Run the viewer with the process's own command line, `std::env::args()`
+/// without the program name. This is what the `sfm-explorer` binary calls; see
+/// [`run_with_args`] for what it does and when it ends the process.
 pub fn run() {
+    run_with_args(std::env::args().skip(1));
+}
+
+/// Run the viewer with the command line given, without the program name:
+/// parse it, open the window, and return when the window closes.
+///
+/// The arguments are the ones the viewer's `--help` describes: `--mcp [PORT]`,
+/// `--no-default-layout`, `--demo`, `-h` / `--help`, and the files to load.
+/// With `--help` it prints the usage text to stdout and returns without
+/// opening a window.
+///
+/// It takes its arguments rather than reading `std::env::args()` so that a
+/// caller other than the `sfm-explorer` binary can run it. The `sfmtool-py`
+/// extension exposes it to Python as `sfmtool._sfmtool.run_explorer`, which
+/// `sfm explorer` calls in a child Python process.
+///
+/// **Call it only in a process that exists to run the viewer, and only on that
+/// process's main thread.** It ends the process with `std::process::exit` on an
+/// option it does not recognize (status 2), on `--mcp` in a build without the
+/// `mcp` feature (status 2), and when the MCP endpoint cannot bind its port
+/// (status 1). It initializes the global `env_logger` logger and, on Windows,
+/// sets the process's DPI awareness, so it can run once per process. The
+/// `winit` event loop it creates must be created on the main thread on macOS,
+/// and `winit` refuses to create a second event loop in one process.
+pub fn run_with_args(args: impl IntoIterator<Item = String>) {
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::UI::HiDpi::{
@@ -129,7 +156,7 @@ pub fn run() {
 
     env_logger::init();
 
-    let args = match cli::parse(std::env::args().skip(1)) {
+    let args = match cli::parse(args) {
         Ok(args) => args,
         Err(message) => {
             eprintln!("{message}");

@@ -479,7 +479,7 @@ fn has_button(nodes: &[UiaNode], name: &str) -> bool {
 ///
 /// **Windows only, because the viewer's own accessibility logic is.** The
 /// viewer creates its window hidden and shows it only after AccessKit has
-/// registered its UI Automation provider (`sfm_explorer::run`), and that
+/// registered its UI Automation provider (`sfm_explorer::run_with_args`), and that
 /// ordering is what this checks. On macOS and Linux the AccessKit adapters are
 /// egui-winit's, with no code of the viewer's around them. On every platform
 /// the MCP tests already show that the tree has content, because
@@ -699,7 +699,7 @@ fn aim_at(pid: u32, x: i32, y: i32) {
 ///
 /// `SetCursorPos`, `GetCursorPos` and `WindowFromPoint` take and return
 /// coordinates in the calling process's DPI context. The viewer is per-monitor
-/// aware (its manifest and `sfm_explorer::run` both say so), so the window
+/// aware (its manifest and `sfm_explorer::run_with_args` both say so), so the window
 /// block's `inner_position` and a listing's `rect_px` are physical pixels. A
 /// process that is not DPI aware sees a scaled display in logical pixels, and
 /// its cursor would land at a fraction of the point it was given. Setting the
