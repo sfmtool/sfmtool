@@ -37,7 +37,7 @@ def _f(x: Any) -> float | None:
         return None
     try:
         v = float(x)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if math.isnan(v) or math.isinf(v):
         return None

@@ -82,7 +82,7 @@ def _print_video_info(insv_path: Path, streams: list[dict]) -> None:
             try:
                 fps = int(num) / int(den)
                 parts.append(f"{fps:.1f} fps")
-            except (ValueError, ZeroDivisionError):
+            except ValueError, ZeroDivisionError:
                 pass
         duration = s.get("duration")
         nb_frames = s.get("nb_frames")

@@ -223,7 +223,7 @@ def _extract_mem_budget_bytes() -> int:
     """
     try:
         total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (AttributeError, ValueError, OSError):
+    except AttributeError, ValueError, OSError:
         total = 4 * 1024**3  # assume ~4 GiB when the platform won't report it
     return max(1, total // 2)
 
@@ -286,7 +286,7 @@ def _stream_sift_with_sfmtool(
     try:
         height, width = first_decoded[1].shape[:2]
         image_pixels = height * width
-    except (AttributeError, TypeError, ValueError):
+    except AttributeError, TypeError, ValueError:
         image_pixels = None  # non-array frame (e.g. a test fake): size blind
     workers = _extract_workers(image_pixels)
 

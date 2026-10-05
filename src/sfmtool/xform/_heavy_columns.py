@@ -195,7 +195,7 @@ def _verified_sift_thumbnail(
 
     try:
         sift_path = get_sift_path_from_recon(recon, name)
-    except (KeyError, TypeError):
+    except KeyError, TypeError:
         return None
     if not sift_path.is_file():
         return None

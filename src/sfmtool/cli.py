@@ -54,7 +54,7 @@ def main():
     try:
         sys.stdout = open(sys.stdout.fileno(), "w", buffering=1, encoding="utf-8")
         sys.stderr = open(sys.stderr.fileno(), "w", buffering=1, encoding="utf-8")
-    except (AttributeError, UnsupportedOperation):
+    except AttributeError, UnsupportedOperation:
         pass
 
 
