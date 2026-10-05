@@ -46,7 +46,9 @@ belong to that verdict.
 The kernel, its options and its result live in
 [focal_vote.rs](../../../crates/sfmtool-core/src/geometry/focal_vote.rs);
 the camera-model column scans in
-[column_scan.rs](../../../crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs);
+[column_scan.rs](../../../crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs),
+with their residual kernels (scalar and AVX2) in
+[column_scan/residuals.rs](../../../crates/sfmtool-core/src/geometry/focal_vote/column_scan/residuals.rs);
 the 4-point LO-RANSAC homography in
 [homography_estimation.rs](../../../crates/sfmtool-core/src/geometry/homography_estimation.rs);
 and the SIMD dispatch and precision flags of the residual loops in

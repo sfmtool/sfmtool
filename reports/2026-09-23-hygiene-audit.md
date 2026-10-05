@@ -114,6 +114,8 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Proposed fix: Keep public scanning here and place architecture-specific kernels in a private sibling with scalar equivalence tests.
 - Effort: medium. Risk: medium.
 
+> _Status (2026-10-05): **Done** — the epipolar and rotation residual kernels (dispatchers, scalar references and AVX2 kernels, `f64` and `f32`), with `RaysF32` and `consecutive_run`, moved unchanged into the private module `column_scan/residuals.rs`, which now holds all of the column scan's `unsafe` code; their parity tests moved to `column_scan/residuals/tests.rs`. `column_scan.rs` is 1,411 lines. Branch `audit-fix-11-column-scan-simd`._
+
 **Extract the GPU level runner's stages**
 - Location: `crates/sfmtool-core/src/features/optical_flow/gpu/mod.rs` (741 lines), `run_gpu_levels_prebuilt` from 254.
 - Problem: One method still consumes most of the module and interleaves level orchestration with GPU resource handling.
