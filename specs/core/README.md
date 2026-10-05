@@ -8,6 +8,9 @@ A few specs here describe Python pipelines in `src/sfmtool/` that orchestrate
 these kernels rather than an `sfmtool-core` module of their own; they are filed
 under the module they drive.
 
+The Python bindings to these modules are indexed by submodule in
+[../python-bindings.md](../python-bindings.md), which names the spec for each.
+
 | Directory | Module | Contents |
 |-----------|--------|----------|
 | [analysis/](analysis/) | `analysis/` | Graphs and measurements over a reconstruction: covisibility, adjacency, coverage, alignment between reconstructions. |

@@ -37,3 +37,7 @@ section, with repo paths written as relative Markdown links.
 | [workspace/](workspace/README.md) | Workspace layout and its config files | flat |
 | [drafts/](drafts/README.md) | Proposals, and the specified-but-unbuilt parts of standing specs | flat; an amendment draft names the spec it amends |
 | [research/](research/README.md) | Background studies of how other software solves a problem sfmtool also has — not specs, and describing no code here | flat; each study names the spec it informed |
+
+[python-bindings.md](python-bindings.md) maps each submodule of the compiled
+`sfmtool._sfmtool` extension, and each source file of the `sfmtool-py` crate
+that builds it, to the spec that describes what its bindings do.
