@@ -28,16 +28,17 @@ when it would otherwise scroll fastest.
 
 ### Placement
 
-The panel is a seventh dock tab, `Tab::ActionLog`, titled **Action Log**. In
-the default layout it joins the bottom node beside the Image Browser as the
-second, non-active tab, so the viewer still opens on the image strip:
+The panel is one of the viewer's dock tabs, `Tab::ActionLog`, titled **Action
+Log**. In the default layout it joins the bottom node beside the Image Browser
+as the second, non-active tab, ahead of Edit History, so the viewer still opens
+on the image strip:
 
 ```
-┌────────┬──────────────────┬───────────────┐
-│        │    3D Viewer     │  Track View   │
-│ Scene  ├──────────────────┴───────────────┤
-│        │  Image Browser │ Action Log      │  ← tab group, Image Browser active
-└────────┴──────────────────────────────────┘
+┌────────┬──────────────────┬────────────────────────┐
+│        │    3D Viewer     │       Track View       │
+│ Scene  ├──────────────────┴────────────────────────┤
+│        │ Image Browser │ Action Log │ Edit History │  ← tab group, Image Browser active
+└────────┴───────────────────────────────────────────┘
 ```
 
 The user can drag it anywhere `egui_dock` allows, and close it, as with every

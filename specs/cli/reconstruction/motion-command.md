@@ -1,5 +1,17 @@
 # Camera Motion Analysis
 
+`sfm motion` looks for discontinuities in a numbered sequence of images: places
+where two neighbouring frames are not smoothly connected. Given images, it
+computes optical flow between frames near each other in the sequence and flags
+the transitions where the flow is missing, unreliable or unusually large. Given
+a single `.sfmr` reconstruction, it orders the cameras by frame number and flags
+the transitions where a camera's pose departs from what its neighbours predict,
+where the step between cameras is out of proportion to the steps around it, or
+where the cameras on either side share far fewer 3D points than they do at
+the transitions around it. It is for finding cuts and occlusions in the input
+before solving, and places where a solve went wrong after. It prints a report of
+the flagged transitions and can also write it as JSON.
+
 ## Motivation
 
 Datasets used for Structure from Motion can come from many sources: frames extracted

@@ -10,7 +10,9 @@ points back here.
 runs one thread per pixel in 16×16 workgroups and reads every value it needs,
 including the four neighbours of `flow_u`, `flow_v`, `du_old` and `dv_old`, from
 global storage buffers. Each neighbour value is read by up to five threads in the
-same workgroup.
+same workgroup. This draft proposes reading those values from workgroup shared
+memory instead, so that each one is loaded from global memory once per
+workgroup, to make the step faster.
 
 ## Proposal
 

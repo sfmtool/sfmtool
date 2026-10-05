@@ -1,11 +1,17 @@
 # `sfm xform --localize-keypoints` Design
 
-The `sfm xform --localize-keypoints` operation surfaces the discrete
-cross-view keypoint localization described in
-[patch-keypoint-localization.md](../../../core/patch/patch-keypoint-localization.md)
-as a reconstruction transform: it re-locates each observation's 2D keypoint by
-registering a point's views against one another, and **rebuilds** the
-reconstruction from the views that co-register.
+The `sfm xform --localize-keypoints` operation moves the 2D keypoints of an
+`embedded_patches` reconstruction, which stores a patch for each 3D point (a
+small oriented square of the surface around it). For each point it starts from
+the point's projection into every image that observes it, searches for the shift
+at which that image's view of the patch best agrees with the point's other
+views, and drops the views it cannot register this way. It then **rebuilds** the
+reconstruction from the views that remain, removing points left with too few of
+them. It is the search that places each keypoint near enough to the best match
+for `--refine-keypoints` to refine it locally, and a way to remove the
+observations that do not register with the rest of their track. The search
+itself is specified in
+[patch-keypoint-localization.md](../../../core/patch/patch-keypoint-localization.md).
 
 ## What it does
 

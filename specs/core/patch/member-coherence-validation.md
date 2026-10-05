@@ -2,18 +2,23 @@
 
 ## Overview
 
-A track's members are the observations of one 3D point. Some tracks are
-**chimeras**: their members image two different surfaces. Scoring each member
-against the fused cross-view consensus does not find them — the consensus is
-built *from* the members, so a balanced split makes it a compromise blend that
-every member scores well against, and the more even the split the better the
-blend flatters both sides.
+Member-coherence validation checks whether all the observations of one 3D point
+show the same piece of surface. Those observations are the members of the
+point's track. For each member it samples a small image patch on the point's
+oriented patch plane, anchored at that member's keypoint where it has one; it
+correlates every pair of members (windowed ZNCC) into a `k×k` matrix, and reads
+a verdict off the matrix: keep the track whole, keep a majority block of members
+that agree and reject the rest, or retire the point because its members support
+two incompatible surfaces with neither prevailing. It runs on the patches of a
+[`PatchCloud`](../../../crates/sfmtool-core/src/patch/cloud.rs) and is exposed
+to Python as `PatchCloud.validate_member_coherence`.
 
-The disagreement is only visible **between** members. This module builds the
-`k×k` matrix of pairwise agreement between a point's members and reads a verdict
-off it: keep the track whole, keep a majority block and reject the rest, or
-retire the point because its evidence supports two incompatible surfaces with
-neither prevailing.
+The tracks it is meant to catch are **chimeras**: their members image two
+different surfaces. Scoring each member against the fused cross-view consensus
+does not find them — the consensus is built *from* the members, so a balanced
+split makes it a compromise blend that every member scores well against, and the
+more even the split the better the blend flatters both sides. The disagreement
+is only visible **between** members, which is why the matrix is pairwise.
 
 The matrix is a diagnostic in its own right — it says *which* members go
 together, not just *that* something is wrong — so building it and deciding on it

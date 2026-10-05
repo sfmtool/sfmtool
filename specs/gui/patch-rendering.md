@@ -1,20 +1,23 @@
 # Patch (Surfel) Rendering in the 3D Viewport
 
-The SfM Explorer renders **embedded patches** as small textured, oriented quads
-("surfels") in the 3D viewport, one per reconstruction 3D point that carries a
-patch frame.
+The SfM Explorer draws a reconstruction's **embedded patches** in the 3D
+viewport as small textured, oriented quads ("surfels"). An embedded patch is a
+small square of surface stored with a 3D point in the `.sfmr` file: a frame (the
+point's position and two in-plane half-extent vectors, whose cross product is
+the normal) and an RGBA bitmap of what the surface looks like there. The viewer
+draws one surfel for each point that has both. A reconstruction that carries
+frames but no bitmaps draws no patches.
 
 The point-splat renderer draws each 3D point as a camera-facing round billboard
-(see [point-cloud-rendering.md](point-cloud-rendering.md)). A patch adds
-the missing surface information: instead of a view-facing dot, each point is
-drawn as a **world-oriented rectangle** textured with the point's rendered patch
-bitmap, so the viewport shows the reconstructed *surface* — orientation, texture,
-and local appearance — not just a cloud of colored specks.
+(see [point-cloud-rendering.md](point-cloud-rendering.md)). A patch adds the
+surface information a splat lacks: instead of a view-facing dot, each point is
+drawn as a **world-oriented rectangle** textured with the point's patch bitmap,
+so the viewport shows the reconstructed *surface* — orientation, texture, and
+local appearance — not just a cloud of colored specks.
 
-This is the 3D-viewport counterpart to the existing 2D patch-strip inspectors
-(`sfm inspect --strips`, `sfm compare --strips`); it reuses the same
-`OrientedPatch` geometry and the same `(P, R, R, 4)` RGBA bitmaps already stored
-in the `.sfmr`.
+This is the 3D-viewport counterpart to the 2D patch-strip inspectors
+(`sfm inspect --strips`, `sfm compare --strips`), which show a point's patch
+and its views of it as rows of 2D tiles.
 
 ---
 
