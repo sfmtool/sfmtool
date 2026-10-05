@@ -609,3 +609,32 @@ class TestEpipolarE2E:
         single_img = cv2.imread(str(workspace_dir / image_names[0]))
         if single_img is not None:
             assert img.shape[1] > single_img.shape[1]
+
+    def test_unreadable_image_on_sweep_path_raises(
+        self, seoul_bull_workspace, monkeypatch
+    ):
+        """The sweep path reports an unreadable image as a ValueError."""
+        import pycolmap
+
+        from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
+        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool._workspace import load_workspace_config
+
+        sfmr_path = seoul_bull_workspace
+        workspace_dir = sfmr_path.parent
+        recon = SfmrReconstruction.load(sfmr_path)
+        workspace_config = load_workspace_config(workspace_dir)
+        image_names = recon.image_names
+
+        monkeypatch.setattr(pycolmap.Bitmap, "read", lambda *args, **kwargs: None)
+
+        with pytest.raises(ValueError, match="Could not read image files"):
+            draw_epipolar_visualization(
+                recon=recon,
+                image1_name=image_names[0],
+                image2_name=image_names[1],
+                output_path=str(workspace_dir / "epipolar_unreadable.png"),
+                feature_tool=workspace_config["feature_tool"],
+                feature_options=workspace_config["feature_options"],
+                sweep_max_features=200,
+            )
