@@ -839,6 +839,10 @@ pub fn focal_vote_with_options(
 
 /// The vote itself; [`focal_vote_with_options`] wraps it in the opt-in phase
 /// timing of [`mod@prof`].
+///
+/// The stages run in this order, each a function of its own: the pair tables,
+/// the epipolar candidate pairs and their votes, the rotation scan and its
+/// votes, the camera-model columns, and the choice of the consensus to report.
 fn focal_vote_impl(
     cluster_starts: &[u32],
     member_images: &[u32],
@@ -850,7 +854,101 @@ fn focal_vote_impl(
     let seed = options.seed;
     let epipolar_min_disp_frac = options.epipolar_min_disp_frac;
     let columns = canonical_columns(&options.columns);
-    let empty = FocalVoteResult {
+    // The whole input contract, checked once and in O(n_clusters): a valid CSR
+    // index over member arrays of one length. Nothing below re-checks it.
+    let n_obs = member_images.len();
+    if n_obs == 0 || member_positions.len() != n_obs || !valid_csr(cluster_starts, n_obs) {
+        return empty_result();
+    }
+
+    let n_img = match member_images.iter().max() {
+        Some(&m) => m as usize + 1,
+        None => return empty_result(),
+    };
+    let pp = [width as f64 / 2.0, height as f64 / 2.0];
+    let max_wh = width.max(height) as f64;
+    let diag = (width as f64).hypot(height as f64);
+
+    let (image_clusters, pair_accum) =
+        build_pair_tables(cluster_starts, member_images, member_positions, n_img);
+
+    let epipolar_pairs = select_epipolar_pairs(&pair_accum, epipolar_min_disp_frac, diag);
+    let epipolar = epipolar_votes(
+        &image_clusters,
+        &pair_accum,
+        &epipolar_pairs,
+        pp,
+        max_wh,
+        seed,
+    );
+
+    let rotation = rotation_votes(&image_clusters, &pair_accum, n_img, pp, max_wh, diag, seed);
+
+    // ── Consensus ────────────────────────────────────────────────────────────
+    // Per-pair gating already certified every surviving vote, so both families
+    // pool into a single population and the consensus is its log-space median —
+    // unless the two families' medians disagree so far that the pool is bimodal
+    // and a blend would report a focal no pair voted for.
+    // `parallax_poverty` medians H/F inlier ratios, not focals, so it stays a
+    // linear median.
+    // No certified pairs means no poverty evidence, which reads as zero rather
+    // than as the empty median's NaN.
+    let poverty = if epipolar.ratios.is_empty() {
+        0.0
+    } else {
+        median(&epipolar.ratios)
+    };
+    let pinhole = family_consensus(&epipolar.bou, &rotation.rot);
+
+    let (camera_model, column_diags) = camera_model_columns(
+        &columns,
+        &image_clusters,
+        &epipolar_pairs,
+        &rotation.rotation_pairs,
+        &epipolar.bou,
+        &rotation.rot,
+        pp,
+        max_wh,
+        diag,
+        seed,
+    );
+
+    let (consensus, n_epipolar, n_rotation) = reported_consensus(
+        camera_model,
+        &column_diags,
+        pinhole,
+        epipolar.bou.len(),
+        rotation.rot.len(),
+    );
+
+    FocalVoteResult {
+        focal_px: consensus.focal_px,
+        family: consensus.family,
+        epipolar_focal_px: consensus.epipolar_focal_px,
+        rotation_focal_px: consensus.rotation_focal_px,
+        n_epipolar,
+        n_rotation,
+        n_pool: n_epipolar + n_rotation,
+        pool_spread: consensus.pool_spread,
+        family_disagreement: consensus.family_disagreement,
+        parallax_poverty: poverty,
+        epipolar_spread: consensus.epipolar_spread,
+        rotation_spread: consensus.rotation_spread,
+        epipolar_votes: epipolar.bou_detail,
+        rotation_votes: rotation.rot_detail,
+        n_h_dominated: epipolar.n_h_dominated,
+        n_estimator_failed: epipolar.n_estimator_failed,
+        n_band_rejected: epipolar.n_band_rejected,
+        n_degenerate: epipolar.n_degenerate,
+        n_inconsistent_pairs: epipolar.n_inconsistent_pairs,
+        camera_model,
+        columns: column_diags,
+    }
+}
+
+/// The result of input that breaks the contract: no votes and no consensus.
+fn empty_result() -> FocalVoteResult {
+    FocalVoteResult {
         focal_px: None,
         family: None,
         epipolar_focal_px: None,
@@ -872,22 +970,18 @@ fn focal_vote_impl(
         n_inconsistent_pairs: 0,
         camera_model: None,
         columns: Vec::new(),
-    };
-    // The whole input contract, checked once and in O(n_clusters): a valid CSR
-    // index over member arrays of one length. Nothing below re-checks it.
-    let n_obs = member_images.len();
-    if n_obs == 0 || member_positions.len() != n_obs || !valid_csr(cluster_starts, n_obs) {
-        return empty;
     }
+}
 
-    let n_img = match member_images.iter().max() {
-        Some(&m) => m as usize + 1,
-        None => return empty,
-    };
-    let pp = [width as f64 / 2.0, height as f64 / 2.0];
-    let max_wh = width.max(height) as f64;
-    let diag = (width as f64).hypot(height as f64);
-
+/// The pair tables, built in one pass over the cluster runs: per image, the
+/// (run, position) list the correspondence merge-join reads, and per image
+/// pair, the shared-cluster count and summed feature displacement.
+fn build_pair_tables(
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f32; 2]],
+    n_img: usize,
+) -> (ImageClusters, HashMap<(u32, u32), PairAccum>) {
     // ── Pair tables: one pass over cluster runs ──────────────────────────────
     // Each cluster's covisible member pairs contribute to their image pair's
     // shared-cluster count and mean feature displacement. The same pass builds,
@@ -935,7 +1029,15 @@ fn focal_vote_impl(
             }
         }
     });
+    (image_clusters, pair_accum)
+}
 
+/// The epipolar candidate pairs, in the order they vote.
+fn select_epipolar_pairs(
+    pair_accum: &HashMap<(u32, u32), PairAccum>,
+    epipolar_min_disp_frac: f64,
+    diag: f64,
+) -> Vec<(u32, u32)> {
     // ── Epipolar votes ───────────────────────────────────────────────────────
     // Candidate pairs: shared-cluster count >= min_shared (30, relaxing to 16
     // when fewer than 6 qualify) and mean displacement >= 0.02·diagonal; admit
@@ -971,7 +1073,37 @@ fn focal_vote_impl(
             break;
         }
     }
+    epipolar_pairs
+}
 
+/// The epipolar family's votes and gate counters, folded over the candidate
+/// pairs in pair order.
+struct EpipolarTally {
+    /// The pooled epipolar votes: one geometric-mean vote per
+    /// direction-consistent pair.
+    bou: Vec<f64>,
+    /// Every in-band directional focal (the diagnostic layer, independent of
+    /// what pools).
+    bou_detail: Vec<EpipolarVote>,
+    /// The H/F inlier ratios that `parallax_poverty` medians.
+    ratios: Vec<f64>,
+    n_h_dominated: usize,
+    n_estimator_failed: usize,
+    n_band_rejected: usize,
+    n_degenerate: usize,
+    n_inconsistent_pairs: usize,
+}
+
+/// Run the closed-form epipolar cell over every candidate pair and fold the
+/// outcomes into the family's votes and counters.
+fn epipolar_votes(
+    image_clusters: &ImageClusters,
+    pair_accum: &HashMap<(u32, u32), PairAccum>,
+    epipolar_pairs: &[(u32, u32)],
+    pp: [f64; 2],
+    max_wh: f64,
+    seed: u64,
+) -> EpipolarTally {
     let f_opts = FundamentalOptions {
         max_error_px: 3.0,
         seed,
@@ -995,8 +1127,8 @@ fn focal_vote_impl(
         .par_iter()
         .map(|&(a, b)| {
             epipolar_pair_outcome(
-                &image_clusters,
-                &pair_accum,
+                image_clusters,
+                pair_accum,
                 a,
                 b,
                 pp,
@@ -1032,7 +1164,41 @@ fn focal_vote_impl(
             bou.push(v);
         }
     }
+    EpipolarTally {
+        bou,
+        bou_detail,
+        ratios,
+        n_h_dominated,
+        n_estimator_failed,
+        n_band_rejected,
+        n_degenerate,
+        n_inconsistent_pairs,
+    }
+}
 
+/// The rotation family's votes, and the pairs its scan reaches.
+struct RotationTally {
+    /// The pooled rotation votes, one per unordered pair.
+    rot: Vec<f64>,
+    /// The diagnostic entry of each pooled vote.
+    rot_detail: Vec<RotationVote>,
+    /// The pairs the scan reaches, deduplicated, whether or not the
+    /// closed-form self-calibration accepted them: the rotation cell's
+    /// candidate list for the column scans.
+    rotation_pairs: Vec<(u32, u32)>,
+}
+
+/// Scan a sample of images for their widest partner and self-calibrate each
+/// partner pair's homography.
+fn rotation_votes(
+    image_clusters: &ImageClusters,
+    pair_accum: &HashMap<(u32, u32), PairAccum>,
+    n_img: usize,
+    pp: [f64; 2],
+    max_wh: f64,
+    diag: f64,
+    seed: u64,
+) -> RotationTally {
     // ── Rotation votes ───────────────────────────────────────────────────────
     // For a sample of images spaced to visit at most 60, the partner with the
     // largest mean displacement among pairs sharing >= 25 clusters, when that
@@ -1055,7 +1221,7 @@ fn focal_vote_impl(
     let scanned: Vec<usize> = (0..n_img).step_by(step).collect();
     let widest: Vec<Option<(f64, u32)>> = scanned
         .par_iter()
-        .map(|&i| widest_partner(&pair_accum, i))
+        .map(|&i| widest_partner(pair_accum, i))
         .collect();
 
     // Every visited image whose partner clears the displacement floor fits its
@@ -1072,7 +1238,7 @@ fn focal_vote_impl(
             if dmean < ROTATION_MIN_DISP_FRAC * diag {
                 return None;
             }
-            let (x1, x2) = pair_correspondences(&image_clusters, i, j as usize);
+            let (x1, x2) = pair_correspondences(image_clusters, i, j as usize);
             // Centre on the principal point: H = K R K⁻¹ has K at the origin.
             let x1c: Vec<[f64; 2]> = x1.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
             let x2c: Vec<[f64; 2]> = x2.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
@@ -1122,23 +1288,29 @@ fn focal_vote_impl(
             rot_detail.push(vote);
         }
     }
+    RotationTally {
+        rot,
+        rot_detail,
+        rotation_pairs,
+    }
+}
 
-    // ── Consensus ────────────────────────────────────────────────────────────
-    // Per-pair gating already certified every surviving vote, so both families
-    // pool into a single population and the consensus is its log-space median —
-    // unless the two families' medians disagree so far that the pool is bimodal
-    // and a blend would report a focal no pair voted for.
-    // `parallax_poverty` medians H/F inlier ratios, not focals, so it stays a
-    // linear median.
-    // No certified pairs means no poverty evidence, which reads as zero rather
-    // than as the empty median's NaN.
-    let poverty = if ratios.is_empty() {
-        0.0
-    } else {
-        median(&ratios)
-    };
-    let pinhole = family_consensus(&bou, &rot);
-
+/// Run every requested camera-model column and pick the model: the verdict
+/// and each column's diagnostics, or pinhole and no diagnostics when pinhole
+/// is the only column.
+#[allow(clippy::too_many_arguments)]
+fn camera_model_columns(
+    columns: &[CameraModel],
+    image_clusters: &ImageClusters,
+    epipolar_pairs: &[(u32, u32)],
+    rotation_pairs: &[(u32, u32)],
+    bou: &[f64],
+    rot: &[f64],
+    pp: [f64; 2],
+    max_wh: f64,
+    diag: f64,
+    seed: u64,
+) -> (Option<CameraModel>, Vec<ColumnDiagnostics>) {
     // ── Camera-model columns ─────────────────────────────────────────────────
     // Model precedes motion family: every requested column runs the same two
     // self-consistency scans over the same candidate pairs (so the certified
@@ -1146,11 +1318,11 @@ fn focal_vote_impl(
     // mass wins, and the winner's own two-family consensus is what the top
     // level reports. Pinhole-only — the default — skips all of this and keeps
     // the closed forms, bit for bit.
-    let (camera_model, column_diags) = if columns == [CameraModel::Pinhole] {
+    if columns == [CameraModel::Pinhole] {
         (Some(CameraModel::Pinhole), Vec::new())
     } else {
-        let epi_cands = scan_candidates(&image_clusters, &epipolar_pairs, pp, seed, 0);
-        let rot_cands = scan_candidates(&image_clusters, &rotation_pairs, pp, seed, 1);
+        let epi_cands = scan_candidates(image_clusters, epipolar_pairs, pp, seed, 0);
+        let rot_cands = scan_candidates(image_clusters, rotation_pairs, pp, seed, 1);
         let half_diag = 0.5 * diag;
         let diags: Vec<ColumnDiagnostics> = columns
             .iter()
@@ -1160,7 +1332,7 @@ fn focal_vote_impl(
                 let (col_bou, col_rot) = match model {
                     // The pinhole column keeps its closed-form focal answer;
                     // its scans only supply arbitration certificates.
-                    CameraModel::Pinhole => (bou.clone(), rot.clone()),
+                    CameraModel::Pinhole => (bou.to_vec(), rot.to_vec()),
                     CameraModel::EquidistantFisheye => (
                         scan.certified_focals(ScanCell::Epipolar),
                         scan.certified_focals(ScanCell::Rotation),
@@ -1170,8 +1342,18 @@ fn focal_vote_impl(
             })
             .collect();
         (model_verdict(&diags), diags)
-    };
+    }
+}
 
+/// The consensus the top level reports, with its epipolar and rotation vote
+/// counts: the winning column's, or the closed-form pinhole consensus.
+fn reported_consensus(
+    camera_model: Option<CameraModel>,
+    column_diags: &[ColumnDiagnostics],
+    pinhole: FamilyConsensus,
+    n_bou: usize,
+    n_rot: usize,
+) -> (FamilyConsensus, usize, usize) {
     // Column focals are not blended — a pinhole focal and an equidistant focal
     // parameterize different maps — so the top level simply reports the winning
     // column's consensus.
@@ -1204,32 +1386,9 @@ fn focal_vote_impl(
                 .find(|c| c.model == CameraModel::EquidistantFisheye);
             c.map_or((0, 0), |c| (c.n_epipolar, c.n_rotation))
         }
-        _ => (bou.len(), rot.len()),
+        _ => (n_bou, n_rot),
     };
-
-    FocalVoteResult {
-        focal_px: consensus.focal_px,
-        family: consensus.family,
-        epipolar_focal_px: consensus.epipolar_focal_px,
-        rotation_focal_px: consensus.rotation_focal_px,
-        n_epipolar,
-        n_rotation,
-        n_pool: n_epipolar + n_rotation,
-        pool_spread: consensus.pool_spread,
-        family_disagreement: consensus.family_disagreement,
-        parallax_poverty: poverty,
-        epipolar_spread: consensus.epipolar_spread,
-        rotation_spread: consensus.rotation_spread,
-        epipolar_votes: bou_detail,
-        rotation_votes: rot_detail,
-        n_h_dominated,
-        n_estimator_failed,
-        n_band_rejected,
-        n_degenerate,
-        n_inconsistent_pairs,
-        camera_model,
-        columns: column_diags,
-    }
+    (consensus, n_epipolar, n_rotation)
 }
 
 /// Image `i`'s widest-displacement partner among the pairs sharing at least

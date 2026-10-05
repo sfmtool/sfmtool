@@ -706,6 +706,183 @@ pub fn grow_reconstruction(
     let n_cl = cluster_indexes.last().map(|&c| c as usize + 1).unwrap_or(0);
     let f0 = camera.focal_lengths().0;
 
+    // Per-image observation rows, the covisibility, and the (fixed-focal)
+    // observation bearings.
+    let mut image_obs: Vec<Vec<usize>> = vec![Vec::new(); n_img];
+    for (k, &i) in image_indexes.iter().enumerate() {
+        image_obs[i as usize].push(k);
+    }
+    let covis = build_covisibility(cluster_indexes, image_indexes, n_img, n_cl);
+    let bearings: Vec<Vector3<f64>> = positions_xy
+        .iter()
+        .map(|p| {
+            let d = camera.pixel_to_ray(p[0], p[1]);
+            Vector3::new(d[0], d[1], d[2])
+        })
+        .collect();
+    let inp = GrowInputs {
+        camera,
+        cluster_indexes,
+        image_indexes,
+        positions_xy,
+        options,
+        n_img,
+        n_cl,
+        image_obs,
+        covis,
+        bearings,
+    };
+
+    let mut st = seed_state(&inp, quaternions_wxyz, translations, posed_indexes);
+
+    // ── Growth loop ──────────────────────────────────────────────────────
+    let ba_every = (n_img / 10).clamp(3, 8);
+
+    if n_seed > 0 {
+        loop {
+            // Next-best-view: most observations of currently-valid points.
+            let cnt_all = next_best_view_counts(
+                cluster_indexes,
+                image_indexes,
+                &st.posed,
+                &st.points,
+                &st.is_dir,
+            );
+            if cnt_all.iter().all(|&c| c == 0) {
+                break;
+            }
+            let (i, best_cnt) = next_best_view(&cnt_all, &st.blocked);
+
+            if best_cnt < options.min_obs {
+                // Every eligible image is deferred or too weak. One
+                // adjustment + refill pass may repair the frontier;
+                // afterwards the deferred images get a second chance.
+                if !st.blocked.is_empty() && st.ba_retry {
+                    st.ba_retry = false;
+                    st.blocked.clear();
+                    st.run_ba(&inp);
+                    st.since_ba = 0;
+                    continue;
+                }
+                // Verified force-accept: pose the strongest deferred
+                // candidate WITHOUT building points from it, adjust, and
+                // keep it only if its inliers rose into the accepted band.
+                let Some(j) = force_accept_trial(&st, &cnt_all, options.min_obs) else {
+                    break;
+                };
+                force_accept(&inp, &mut st, j);
+                continue;
+            }
+
+            register_candidate(&inp, &mut st, i, ba_every);
+        }
+    }
+
+    // ── Finishing: release the focal on a covisibility-spread subset ────
+    if st.grown == 0 {
+        // Degenerate inputs / empty growth: the input state passes through.
+        return build_result(
+            camera,
+            cluster_indexes,
+            image_indexes,
+            positions_xy,
+            &st.quats,
+            &st.trans,
+            &st.posed,
+            st.points,
+            st.is_dir,
+            f0,
+        );
+    }
+
+    finish(&inp, st)
+}
+
+/// The inputs every growth stage reads, with what is derived from them once.
+struct GrowInputs<'a> {
+    camera: &'a CameraIntrinsics,
+    cluster_indexes: &'a [u32],
+    image_indexes: &'a [u32],
+    positions_xy: &'a [[f64; 2]],
+    options: &'a GrowOptions,
+    n_img: usize,
+    n_cl: usize,
+    /// Per image, its observation rows.
+    image_obs: Vec<Vec<usize>>,
+    covis: Option<ClusterCovisibility>,
+    /// Per observation, its bearing at the input focal.
+    bearings: Vec<Vector3<f64>>,
+}
+
+/// The state growth changes as it registers images.
+struct GrowState {
+    quats: Vec<UnitQuaternion<f64>>,
+    trans: Vec<Vector3<f64>>,
+    posed: Vec<bool>,
+    /// Registration order: seed images ascending, then acceptance order.
+    posed_order: Vec<usize>,
+    points: Vec<[f64; 3]>,
+    is_dir: Vec<bool>,
+    /// Per observation, whether the adjustments see it.
+    ba_mask: Vec<bool>,
+    ba_calls: usize,
+    since_ba: usize,
+    accepted_inl: Vec<f64>,
+    blocked: BTreeSet<usize>,
+    force_tried: BTreeSet<usize>,
+    ba_retry: bool,
+    grown: usize,
+}
+
+impl GrowState {
+    /// One growth adjustment over the current state.
+    fn run_ba(&mut self, inp: &GrowInputs) {
+        run_grow_ba(
+            inp.camera,
+            inp.cluster_indexes,
+            inp.image_indexes,
+            inp.positions_xy,
+            &mut self.quats,
+            &mut self.trans,
+            &mut self.points,
+            &mut self.is_dir,
+            &self.posed,
+            &self.posed_order,
+            &self.ba_mask,
+            inp.covis.as_ref(),
+            inp.options,
+            &mut self.ba_calls,
+        );
+    }
+
+    /// Triangulate every cluster that has gained posed views since it was
+    /// last filled.
+    fn fill_points(&mut self, inp: &GrowInputs) {
+        fill_new_points(
+            inp.camera,
+            inp.cluster_indexes,
+            inp.image_indexes,
+            inp.positions_xy,
+            &self.posed,
+            &self.quats,
+            &self.trans,
+            &mut self.points,
+            &mut self.is_dir,
+        );
+    }
+}
+
+/// The growth state at the seed: the seed poses, every other image at the
+/// identity and un-posed, the adjustment-set cluster mask, and the initial
+/// structure.
+fn seed_state(
+    inp: &GrowInputs,
+    quaternions_wxyz: &[[f64; 4]],
+    translations: &[[f64; 3]],
+    posed_indexes: &[u32],
+) -> GrowState {
+    let n_img = inp.n_img;
+    let n_cl = inp.n_cl;
     // Seed state. Un-posed images carry the identity pose until accepted.
     let mut quats = vec![UnitQuaternion::identity(); n_img];
     let mut trans = vec![Vector3::zeros(); n_img];
@@ -719,472 +896,412 @@ pub fn grow_reconstruction(
         posed[i as usize] = true;
     }
     // Registration order: seed images ascending, then acceptance order.
-    let mut posed_order: Vec<usize> = (0..n_img).filter(|&i| posed[i]).collect();
+    let posed_order: Vec<usize> = (0..n_img).filter(|&i| posed[i]).collect();
 
-    // Per-image observation rows, the covisibility, the adjustment-set
-    // cluster mask, and the (fixed-focal) observation bearings.
-    let mut image_obs: Vec<Vec<usize>> = vec![Vec::new(); n_img];
-    for (k, &i) in image_indexes.iter().enumerate() {
-        image_obs[i as usize].push(k);
-    }
-    let covis = build_covisibility(cluster_indexes, image_indexes, n_img, n_cl);
-    let mut ba_mask = ba_cluster_mask(cluster_indexes, image_indexes, n_cl, options.ba_cluster_cap);
-    let bearings: Vec<Vector3<f64>> = positions_xy
-        .iter()
-        .map(|p| {
-            let d = camera.pixel_to_ray(p[0], p[1]);
-            Vector3::new(d[0], d[1], d[2])
-        })
-        .collect();
+    let ba_mask = ba_cluster_mask(
+        inp.cluster_indexes,
+        inp.image_indexes,
+        n_cl,
+        inp.options.ba_cluster_cap,
+    );
 
     // Initial structure from the seed poses, every row a position until an
     // adjustment decides otherwise.
-    let mut points = vec![[f64::NAN; 3]; n_cl];
-    let mut is_dir = vec![false; n_cl];
+    let mut st = GrowState {
+        quats,
+        trans,
+        posed,
+        posed_order,
+        points: vec![[f64::NAN; 3]; n_cl],
+        is_dir: vec![false; n_cl],
+        ba_mask,
+        ba_calls: 0,
+        since_ba: 0,
+        accepted_inl: Vec::new(),
+        blocked: BTreeSet::new(),
+        force_tried: BTreeSet::new(),
+        ba_retry: true,
+        grown: 0,
+    };
+    st.fill_points(inp);
+    st
+}
+
+/// The next-best view: the un-blocked image with the most observations of
+/// currently-valid points (the lowest index among ties), and that count.
+fn next_best_view(cnt_all: &[usize], blocked: &BTreeSet<usize>) -> (usize, usize) {
+    let mut best_i = 0usize;
+    let mut best_cnt = 0usize;
+    for (i, &c) in cnt_all.iter().enumerate() {
+        let c = if blocked.contains(&i) { 0 } else { c };
+        if c > best_cnt {
+            best_cnt = c;
+            best_i = i;
+        }
+    }
+    (best_i, best_cnt)
+}
+
+/// The deferred image a force-accept tries next: the strongest one not yet
+/// tried that still has `min_obs` observations of valid points.
+fn force_accept_trial(st: &GrowState, cnt_all: &[usize], min_obs: usize) -> Option<usize> {
+    st.blocked
+        .iter()
+        .filter(|&&j| !st.force_tried.contains(&j) && cnt_all[j] >= min_obs)
+        .max_by_key(|&&j| (cnt_all[j], std::cmp::Reverse(j)))
+        .copied()
+}
+
+/// Most-covisible posed neighbours' poses as fallback inits.
+fn fallback_inits(
+    inp: &GrowInputs,
+    i: usize,
+    cap: usize,
+    posed: &[bool],
+    quats: &[UnitQuaternion<f64>],
+    trans: &[Vector3<f64>],
+) -> Vec<(UnitQuaternion<f64>, Vector3<f64>)> {
+    let posed_idx: Vec<u32> = (0..inp.n_img as u32)
+        .filter(|&j| posed[j as usize])
+        .collect();
+    let mut sel: Vec<u32> = match &inp.covis {
+        Some(c) => c
+            .rank_by_covisibility(i as u32, &posed_idx)
+            .into_iter()
+            .take(cap)
+            .collect(),
+        None => Vec::new(),
+    };
+    if sel.is_empty() {
+        sel = posed_idx.iter().take(1).copied().collect();
+    }
+    sel.iter()
+        .map(|&j| (quats[j as usize], trans[j as usize]))
+        .collect()
+}
+
+/// Verified force-accept of deferred image `j`: pose it WITHOUT building
+/// points from it, adjust, and keep it only if its inliers rose into the
+/// accepted band or its P3P consensus survived the adjustment. A rejected
+/// force-accept restores the state the adjustment changed.
+fn force_accept(inp: &GrowInputs, st: &mut GrowState, j: usize) {
+    let camera = inp.camera;
+    let cluster_indexes = inp.cluster_indexes;
+    let positions_xy = inp.positions_xy;
+    let options = inp.options;
+    st.force_tried.insert(j);
+    st.blocked.remove(&j);
+
+    let (rows, uv_j, world_j, brs_j) = gather_correspondences(
+        &inp.image_obs[j],
+        cluster_indexes,
+        positions_xy,
+        &inp.bearings,
+        &st.points,
+        &st.is_dir,
+    );
+    let inits = fallback_inits(inp, j, GROW_FALLBACK_INITS, &st.posed, &st.quats, &st.trans);
+    let Some(outcome) = resect_one(
+        camera,
+        &uv_j,
+        &world_j,
+        &brs_j,
+        P3P_MIN_CONSENSUS_GROW,
+        options.seed,
+        &inits,
+    ) else {
+        return;
+    };
+
+    // Snapshot for the restore-on-reject contract.
+    let saved = Rollback::take(
+        &st.quats,
+        &st.trans,
+        &st.points,
+        &st.is_dir,
+        &st.ba_mask,
+        st.since_ba,
+    );
+
+    st.quats[j] = outcome.rotation;
+    st.trans[j] = outcome.translation;
+    st.posed[j] = true;
+    st.posed_order.push(j);
+    // A P3P-registered image's observations are mostly wrong
+    // matches; anchor it on its own verified evidence: the WHOLE
+    // consensus clusters enter the adjustment set (all members'
+    // observations, so the inter-round retriangulation keeps
+    // their points), its non-consensus observations leave it.
+    let consensus_rows: Option<Vec<usize>> = outcome
+        .consensus
+        .as_ref()
+        .map(|cons| cons.iter().map(|&r| rows[r]).collect());
+    if let Some(cons_rows) = &consensus_rows {
+        let mut cons_cl = vec![false; inp.n_cl];
+        for &k in cons_rows {
+            cons_cl[cluster_indexes[k] as usize] = true;
+        }
+        for (k, m) in st.ba_mask.iter_mut().enumerate() {
+            if cons_cl[cluster_indexes[k] as usize] {
+                *m = true;
+            }
+        }
+        for &k in &inp.image_obs[j] {
+            st.ba_mask[k] = false;
+        }
+        for &k in cons_rows {
+            st.ba_mask[k] = true;
+        }
+    }
+    st.run_ba(inp);
+    st.since_ba = 0;
+
+    let inl_after = image_inlier_fraction(
+        camera,
+        &st.quats[j],
+        &st.trans[j],
+        &inp.image_obs[j],
+        cluster_indexes,
+        positions_xy,
+        &st.points,
+        &st.is_dir,
+    );
+    let bar = if st.accepted_inl.is_empty() {
+        0.0
+    } else {
+        options.accept_gate * median(&st.accepted_inl)
+    };
+    // Verification: the all-observation inlier bar, OR — for a
+    // P3P-registered image whose observations are mostly wrong
+    // matches — survival of the consensus set through the
+    // adjustment (the registration claim is those observations).
+    let surv = consensus_rows.as_ref().map(|cons_rows| {
+        let n_in = cons_rows
+            .iter()
+            .filter(|&&k| {
+                let c = cluster_indexes[k] as usize;
+                residual_norm(
+                    camera,
+                    &st.quats[j],
+                    &st.trans[j],
+                    &st.points[c],
+                    st.is_dir[c],
+                    &positions_xy[k],
+                )
+                .is_some_and(|rn| rn < INLIER_PX)
+            })
+            .count();
+        n_in as f64 / cons_rows.len().max(1) as f64
+    });
+    if inl_after >= bar || surv.is_some_and(|s| s >= CONSENSUS_SURVIVAL) {
+        st.accepted_inl.push(inl_after.max(bar));
+        st.grown += 1;
+        st.fill_points(inp);
+        st.ba_retry = true;
+        st.blocked.clear();
+    } else {
+        // Rejected: restore the prior poses, structure, and
+        // adjustment set; the image stays un-posed for good.
+        st.posed[j] = false;
+        if st.posed_order.last() == Some(&j) {
+            st.posed_order.pop();
+        }
+        saved.restore(
+            &mut st.quats,
+            &mut st.trans,
+            &mut st.points,
+            &mut st.is_dir,
+            &mut st.ba_mask,
+            &mut st.since_ba,
+        );
+    }
+}
+
+/// Normal candidate `i`: estimate-then-refine, then the acceptance gate
+/// against the accepted-so-far median. An accepted image is posed and its new
+/// points filled, and every `ba_every`-th acceptance runs a growth adjustment;
+/// a failed or gated one is deferred.
+fn register_candidate(inp: &GrowInputs, st: &mut GrowState, i: usize, ba_every: usize) {
+    let options = inp.options;
+    // Normal candidate: estimate-then-refine, then the acceptance
+    // gate against the accepted-so-far median.
+    let (_rows, uv_i, world_i, brs_i) = gather_correspondences(
+        &inp.image_obs[i],
+        inp.cluster_indexes,
+        inp.positions_xy,
+        &inp.bearings,
+        &st.points,
+        &st.is_dir,
+    );
+    let inits = fallback_inits(inp, i, GROW_FALLBACK_INITS, &st.posed, &st.quats, &st.trans);
+    let Some(outcome) = resect_one(
+        inp.camera,
+        &uv_i,
+        &world_i,
+        &brs_i,
+        P3P_MIN_CONSENSUS_GROW,
+        options.seed,
+        &inits,
+    ) else {
+        st.blocked.insert(i);
+        return;
+    };
+    if !st.accepted_inl.is_empty()
+        && outcome.inlier_fraction < options.accept_gate * median(&st.accepted_inl)
+    {
+        // Deferred, not rejected: another chance after the frontier
+        // improves.
+        st.blocked.insert(i);
+        return;
+    }
+    st.accepted_inl.push(outcome.inlier_fraction);
+    st.quats[i] = outcome.rotation;
+    st.trans[i] = outcome.translation;
+    st.posed[i] = true;
+    st.posed_order.push(i);
+    st.ba_retry = true;
+    st.grown += 1;
+    st.fill_points(inp);
+    st.since_ba += 1;
+    if st.since_ba >= ba_every {
+        st.since_ba = 0;
+        st.run_ba(inp);
+    }
+}
+
+/// One bounded growth adjustment + the full-set refill.
+#[allow(clippy::too_many_arguments)]
+fn run_grow_ba(
+    camera: &CameraIntrinsics,
+    cluster_indexes: &[u32],
+    image_indexes: &[u32],
+    positions_xy: &[[f64; 2]],
+    quats: &mut [UnitQuaternion<f64>],
+    trans: &mut [Vector3<f64>],
+    points: &mut [[f64; 3]],
+    is_dir: &mut [bool],
+    posed: &[bool],
+    posed_order: &[usize],
+    ba_mask: &[bool],
+    covis: Option<&ClusterCovisibility>,
+    options: &GrowOptions,
+    ba_calls: &mut usize,
+) {
+    *ba_calls += 1;
+    let win = grow_ba_window(posed, posed_order, covis, options, *ba_calls);
+
+    let mut obs_img: Vec<u32> = Vec::new();
+    let mut obs_pt: Vec<u32> = Vec::new();
+    let mut uv: Vec<[f64; 2]> = Vec::new();
+    for k in 0..cluster_indexes.len() {
+        let i = image_indexes[k] as usize;
+        let c = cluster_indexes[k] as usize;
+        if !posed[i] || !points[c][0].is_finite() || !ba_mask[k] {
+            continue;
+        }
+        if let Some(win) = &win {
+            if !win[i] {
+                continue;
+            }
+        }
+        obs_img.push(i as u32);
+        obs_pt.push(c as u32);
+        uv.push(positions_xy[k]);
+    }
+    let ba = bundle_adjust(
+        &BaCameras::shared(camera, quats.len()),
+        quats,
+        trans,
+        points,
+        &uv,
+        &obs_img,
+        &obs_pt,
+        Some(is_dir),
+        None,
+        options.free_points,
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        false,
+        false,
+        false,
+        &GROW_SCHEDULE,
+        BA_MAX_ITERS,
+        BA_MIN_TRACK,
+        BA_MIN_OBS,
+        &Progress::none(),
+    );
+    take_representation(is_dir, &ba.point_at_infinity, points);
+    // The adjustment re-triangulates only the observations it was given,
+    // wiping every other cluster's point — refill from the full
+    // observation set at the updated poses, or the next-best-view count
+    // sees only adjustment-set connectivity and growth stalls at its
+    // boundary.
     fill_new_points(
         camera,
         cluster_indexes,
         image_indexes,
         positions_xy,
-        &posed,
-        &quats,
-        &trans,
-        &mut points,
-        &mut is_dir,
+        posed,
+        quats,
+        trans,
+        points,
+        is_dir,
     );
+}
 
-    // ── Growth loop ──────────────────────────────────────────────────────
-    let ba_every = (n_img / 10).clamp(3, 8);
-    let mut ba_calls = 0usize;
-    let mut since_ba = 0usize;
-    let mut accepted_inl: Vec<f64> = Vec::new();
-    let mut blocked: BTreeSet<usize> = BTreeSet::new();
-    let mut force_tried: BTreeSet<usize> = BTreeSet::new();
-    let mut ba_retry = true;
-    let mut grown = 0usize;
+/// The camera subset growth adjustment number `ba_calls` refines, as a
+/// per-image mask: the frontier window, or (every `anchor_every`-th call) a
+/// covisibility-spread subset of all posed cameras. `None` when the
+/// adjustment refines every posed camera.
+fn grow_ba_window(
+    posed: &[bool],
+    posed_order: &[usize],
+    covis: Option<&ClusterCovisibility>,
+    options: &GrowOptions,
+    ba_calls: usize,
+) -> Option<Vec<bool>> {
+    let n_img = posed.len();
+    let n_posed = posed.iter().filter(|&&p| p).count();
 
-    // One bounded growth adjustment + the full-set refill. Macro-free helper
-    // closures fight the borrow checker here, so the adjustment is a local
-    // function over explicit state.
-    #[allow(clippy::too_many_arguments)]
-    fn run_grow_ba(
-        camera: &CameraIntrinsics,
-        cluster_indexes: &[u32],
-        image_indexes: &[u32],
-        positions_xy: &[[f64; 2]],
-        quats: &mut [UnitQuaternion<f64>],
-        trans: &mut [Vector3<f64>],
-        points: &mut [[f64; 3]],
-        is_dir: &mut [bool],
-        posed: &[bool],
-        posed_order: &[usize],
-        ba_mask: &[bool],
-        covis: Option<&ClusterCovisibility>,
-        options: &GrowOptions,
-        ba_calls: &mut usize,
-    ) {
-        *ba_calls += 1;
-        let n_img = posed.len();
-        let n_posed = posed.iter().filter(|&&p| p).count();
-
-        // Camera subset: the frontier window, or (every anchor_every-th
-        // call) a covisibility-spread subset of all posed cameras.
-        let mut win = vec![false; n_img];
-        let mut windowed = false;
-        if options.ba_window > 0 {
-            let anchor = options.anchor_every > 0
-                && ba_calls.is_multiple_of(options.anchor_every)
-                && n_posed > options.ba_window;
-            if let Some(cv) = if anchor { covis } else { None } {
-                for &i in &cv.thin_to(n_posed.min(ANCHOR_CAP)) {
-                    if posed[i as usize] {
-                        win[i as usize] = true;
-                        windowed = true;
-                    }
-                }
-            } else if posed_order.len() > options.ba_window {
-                for &i in &posed_order[posed_order.len() - options.ba_window..] {
-                    win[i] = true;
+    // Camera subset: the frontier window, or (every anchor_every-th
+    // call) a covisibility-spread subset of all posed cameras.
+    let mut win = vec![false; n_img];
+    let mut windowed = false;
+    if options.ba_window > 0 {
+        let anchor = options.anchor_every > 0
+            && ba_calls.is_multiple_of(options.anchor_every)
+            && n_posed > options.ba_window;
+        if let Some(cv) = if anchor { covis } else { None } {
+            for &i in &cv.thin_to(n_posed.min(ANCHOR_CAP)) {
+                if posed[i as usize] {
+                    win[i as usize] = true;
                     windowed = true;
                 }
             }
-        }
-
-        let mut obs_img: Vec<u32> = Vec::new();
-        let mut obs_pt: Vec<u32> = Vec::new();
-        let mut uv: Vec<[f64; 2]> = Vec::new();
-        for k in 0..cluster_indexes.len() {
-            let i = image_indexes[k] as usize;
-            let c = cluster_indexes[k] as usize;
-            if !posed[i] || !points[c][0].is_finite() || !ba_mask[k] {
-                continue;
-            }
-            if windowed && !win[i] {
-                continue;
-            }
-            obs_img.push(i as u32);
-            obs_pt.push(c as u32);
-            uv.push(positions_xy[k]);
-        }
-        let ba = bundle_adjust(
-            &BaCameras::shared(camera, quats.len()),
-            quats,
-            trans,
-            points,
-            &uv,
-            &obs_img,
-            &obs_pt,
-            Some(is_dir),
-            None,
-            options.free_points,
-            None,
-            DEFAULT_PROTECTED_LOSS_SCALE,
-            false,
-            false,
-            false,
-            &GROW_SCHEDULE,
-            BA_MAX_ITERS,
-            BA_MIN_TRACK,
-            BA_MIN_OBS,
-            &Progress::none(),
-        );
-        take_representation(is_dir, &ba.point_at_infinity, points);
-        // The adjustment re-triangulates only the observations it was given,
-        // wiping every other cluster's point — refill from the full
-        // observation set at the updated poses, or the next-best-view count
-        // sees only adjustment-set connectivity and growth stalls at its
-        // boundary.
-        fill_new_points(
-            camera,
-            cluster_indexes,
-            image_indexes,
-            positions_xy,
-            posed,
-            quats,
-            trans,
-            points,
-            is_dir,
-        );
-    }
-
-    // Most-covisible posed neighbours' poses as fallback inits.
-    let fallback_inits = |i: usize,
-                          cap: usize,
-                          posed: &[bool],
-                          quats: &[UnitQuaternion<f64>],
-                          trans: &[Vector3<f64>]|
-     -> Vec<(UnitQuaternion<f64>, Vector3<f64>)> {
-        let posed_idx: Vec<u32> = (0..n_img as u32).filter(|&j| posed[j as usize]).collect();
-        let mut sel: Vec<u32> = match &covis {
-            Some(c) => c
-                .rank_by_covisibility(i as u32, &posed_idx)
-                .into_iter()
-                .take(cap)
-                .collect(),
-            None => Vec::new(),
-        };
-        if sel.is_empty() {
-            sel = posed_idx.iter().take(1).copied().collect();
-        }
-        sel.iter()
-            .map(|&j| (quats[j as usize], trans[j as usize]))
-            .collect()
-    };
-
-    if n_seed > 0 {
-        loop {
-            // Next-best-view: most observations of currently-valid points.
-            let cnt_all =
-                next_best_view_counts(cluster_indexes, image_indexes, &posed, &points, &is_dir);
-            if cnt_all.iter().all(|&c| c == 0) {
-                break;
-            }
-            let mut best_i = 0usize;
-            let mut best_cnt = 0usize;
-            for (i, &c) in cnt_all.iter().enumerate() {
-                let c = if blocked.contains(&i) { 0 } else { c };
-                if c > best_cnt {
-                    best_cnt = c;
-                    best_i = i;
-                }
-            }
-            let i = best_i;
-
-            if best_cnt < options.min_obs {
-                // Every eligible image is deferred or too weak. One
-                // adjustment + refill pass may repair the frontier;
-                // afterwards the deferred images get a second chance.
-                if !blocked.is_empty() && ba_retry {
-                    ba_retry = false;
-                    blocked.clear();
-                    run_grow_ba(
-                        camera,
-                        cluster_indexes,
-                        image_indexes,
-                        positions_xy,
-                        &mut quats,
-                        &mut trans,
-                        &mut points,
-                        &mut is_dir,
-                        &posed,
-                        &posed_order,
-                        &ba_mask,
-                        covis.as_ref(),
-                        options,
-                        &mut ba_calls,
-                    );
-                    since_ba = 0;
-                    continue;
-                }
-                // Verified force-accept: pose the strongest deferred
-                // candidate WITHOUT building points from it, adjust, and
-                // keep it only if its inliers rose into the accepted band.
-                let trial: Option<usize> = blocked
-                    .iter()
-                    .filter(|&&j| !force_tried.contains(&j) && cnt_all[j] >= options.min_obs)
-                    .max_by_key(|&&j| (cnt_all[j], std::cmp::Reverse(j)))
-                    .copied();
-                let Some(j) = trial else {
-                    break;
-                };
-                force_tried.insert(j);
-                blocked.remove(&j);
-
-                let (rows, uv_j, world_j, brs_j) = gather_correspondences(
-                    &image_obs[j],
-                    cluster_indexes,
-                    positions_xy,
-                    &bearings,
-                    &points,
-                    &is_dir,
-                );
-                let inits = fallback_inits(j, GROW_FALLBACK_INITS, &posed, &quats, &trans);
-                let Some(outcome) = resect_one(
-                    camera,
-                    &uv_j,
-                    &world_j,
-                    &brs_j,
-                    P3P_MIN_CONSENSUS_GROW,
-                    options.seed,
-                    &inits,
-                ) else {
-                    continue;
-                };
-
-                // Snapshot for the restore-on-reject contract.
-                let saved = Rollback::take(&quats, &trans, &points, &is_dir, &ba_mask, since_ba);
-
-                quats[j] = outcome.rotation;
-                trans[j] = outcome.translation;
-                posed[j] = true;
-                posed_order.push(j);
-                // A P3P-registered image's observations are mostly wrong
-                // matches; anchor it on its own verified evidence: the WHOLE
-                // consensus clusters enter the adjustment set (all members'
-                // observations, so the inter-round retriangulation keeps
-                // their points), its non-consensus observations leave it.
-                let consensus_rows: Option<Vec<usize>> = outcome
-                    .consensus
-                    .as_ref()
-                    .map(|cons| cons.iter().map(|&r| rows[r]).collect());
-                if let Some(cons_rows) = &consensus_rows {
-                    let mut cons_cl = vec![false; n_cl];
-                    for &k in cons_rows {
-                        cons_cl[cluster_indexes[k] as usize] = true;
-                    }
-                    for (k, m) in ba_mask.iter_mut().enumerate() {
-                        if cons_cl[cluster_indexes[k] as usize] {
-                            *m = true;
-                        }
-                    }
-                    for &k in &image_obs[j] {
-                        ba_mask[k] = false;
-                    }
-                    for &k in cons_rows {
-                        ba_mask[k] = true;
-                    }
-                }
-                run_grow_ba(
-                    camera,
-                    cluster_indexes,
-                    image_indexes,
-                    positions_xy,
-                    &mut quats,
-                    &mut trans,
-                    &mut points,
-                    &mut is_dir,
-                    &posed,
-                    &posed_order,
-                    &ba_mask,
-                    covis.as_ref(),
-                    options,
-                    &mut ba_calls,
-                );
-                since_ba = 0;
-
-                let inl_after = image_inlier_fraction(
-                    camera,
-                    &quats[j],
-                    &trans[j],
-                    &image_obs[j],
-                    cluster_indexes,
-                    positions_xy,
-                    &points,
-                    &is_dir,
-                );
-                let bar = if accepted_inl.is_empty() {
-                    0.0
-                } else {
-                    options.accept_gate * median(&accepted_inl)
-                };
-                // Verification: the all-observation inlier bar, OR — for a
-                // P3P-registered image whose observations are mostly wrong
-                // matches — survival of the consensus set through the
-                // adjustment (the registration claim is those observations).
-                let surv = consensus_rows.as_ref().map(|cons_rows| {
-                    let n_in = cons_rows
-                        .iter()
-                        .filter(|&&k| {
-                            let c = cluster_indexes[k] as usize;
-                            residual_norm(
-                                camera,
-                                &quats[j],
-                                &trans[j],
-                                &points[c],
-                                is_dir[c],
-                                &positions_xy[k],
-                            )
-                            .is_some_and(|rn| rn < INLIER_PX)
-                        })
-                        .count();
-                    n_in as f64 / cons_rows.len().max(1) as f64
-                });
-                if inl_after >= bar || surv.is_some_and(|s| s >= CONSENSUS_SURVIVAL) {
-                    accepted_inl.push(inl_after.max(bar));
-                    grown += 1;
-                    fill_new_points(
-                        camera,
-                        cluster_indexes,
-                        image_indexes,
-                        positions_xy,
-                        &posed,
-                        &quats,
-                        &trans,
-                        &mut points,
-                        &mut is_dir,
-                    );
-                    ba_retry = true;
-                    blocked.clear();
-                } else {
-                    // Rejected: restore the prior poses, structure, and
-                    // adjustment set; the image stays un-posed for good.
-                    posed[j] = false;
-                    if posed_order.last() == Some(&j) {
-                        posed_order.pop();
-                    }
-                    saved.restore(
-                        &mut quats,
-                        &mut trans,
-                        &mut points,
-                        &mut is_dir,
-                        &mut ba_mask,
-                        &mut since_ba,
-                    );
-                }
-                continue;
-            }
-
-            // Normal candidate: estimate-then-refine, then the acceptance
-            // gate against the accepted-so-far median.
-            let (_rows, uv_i, world_i, brs_i) = gather_correspondences(
-                &image_obs[i],
-                cluster_indexes,
-                positions_xy,
-                &bearings,
-                &points,
-                &is_dir,
-            );
-            let inits = fallback_inits(i, GROW_FALLBACK_INITS, &posed, &quats, &trans);
-            let Some(outcome) = resect_one(
-                camera,
-                &uv_i,
-                &world_i,
-                &brs_i,
-                P3P_MIN_CONSENSUS_GROW,
-                options.seed,
-                &inits,
-            ) else {
-                blocked.insert(i);
-                continue;
-            };
-            if !accepted_inl.is_empty()
-                && outcome.inlier_fraction < options.accept_gate * median(&accepted_inl)
-            {
-                // Deferred, not rejected: another chance after the frontier
-                // improves.
-                blocked.insert(i);
-                continue;
-            }
-            accepted_inl.push(outcome.inlier_fraction);
-            quats[i] = outcome.rotation;
-            trans[i] = outcome.translation;
-            posed[i] = true;
-            posed_order.push(i);
-            ba_retry = true;
-            grown += 1;
-            fill_new_points(
-                camera,
-                cluster_indexes,
-                image_indexes,
-                positions_xy,
-                &posed,
-                &quats,
-                &trans,
-                &mut points,
-                &mut is_dir,
-            );
-            since_ba += 1;
-            if since_ba >= ba_every {
-                since_ba = 0;
-                run_grow_ba(
-                    camera,
-                    cluster_indexes,
-                    image_indexes,
-                    positions_xy,
-                    &mut quats,
-                    &mut trans,
-                    &mut points,
-                    &mut is_dir,
-                    &posed,
-                    &posed_order,
-                    &ba_mask,
-                    covis.as_ref(),
-                    options,
-                    &mut ba_calls,
-                );
+        } else if posed_order.len() > options.ba_window {
+            for &i in &posed_order[posed_order.len() - options.ba_window..] {
+                win[i] = true;
+                windowed = true;
             }
         }
     }
+    windowed.then_some(win)
+}
 
-    // ── Finishing: release the focal on a covisibility-spread subset ────
-    if grown == 0 {
-        // Degenerate inputs / empty growth: the input state passes through.
-        return build_result(
-            camera,
-            cluster_indexes,
-            image_indexes,
-            positions_xy,
-            &quats,
-            &trans,
-            &posed,
-            points,
-            is_dir,
-            f0,
-        );
-    }
+/// The finishing adjustment: release the focal on a covisibility-spread
+/// subset of the posed cameras, re-triangulate at the released focal, and
+/// pack the result.
+fn finish(inp: &GrowInputs, mut st: GrowState) -> ReconstructionGrowth {
+    let camera = inp.camera;
+    let cluster_indexes = inp.cluster_indexes;
+    let image_indexes = inp.image_indexes;
+    let positions_xy = inp.positions_xy;
+    let n_img = inp.n_img;
+    let n_obs = cluster_indexes.len();
+    let posed = &st.posed;
 
     let n_posed = posed.iter().filter(|&&p| p).count();
-    let sub: Vec<bool> = match &covis {
+    let sub: Vec<bool> = match &inp.covis {
         Some(cv) if n_posed > FINISH_CAP => {
             let mut s = vec![false; n_img];
             for &i in &cv.thin_to(FINISH_CAP) {
@@ -1202,23 +1319,23 @@ pub fn grow_reconstruction(
     for k in 0..n_obs {
         let i = image_indexes[k] as usize;
         let c = cluster_indexes[k] as usize;
-        if sub[i] && points[c][0].is_finite() && ba_mask[k] {
+        if sub[i] && st.points[c][0].is_finite() && st.ba_mask[k] {
             obs_img.push(i as u32);
             obs_pt.push(c as u32);
             uv.push(positions_xy[k]);
         }
     }
     let ba = bundle_adjust(
-        &BaCameras::shared(camera, quats.len()),
-        &mut quats,
-        &mut trans,
-        &mut points,
+        &BaCameras::shared(camera, st.quats.len()),
+        &mut st.quats,
+        &mut st.trans,
+        &mut st.points,
         &uv,
         &obs_img,
         &obs_pt,
-        Some(&is_dir),
+        Some(&st.is_dir),
         None,
-        options.free_points,
+        inp.options.free_points,
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
@@ -1230,7 +1347,7 @@ pub fn grow_reconstruction(
         BA_MIN_OBS,
         &Progress::none(),
     );
-    take_representation(&mut is_dir, &ba.point_at_infinity, &points);
+    take_representation(&mut st.is_dir, &ba.point_at_infinity, &st.points);
     let cam_final = ba.cameras[0].clone();
     let focal = cam_final.focal_lengths().0;
     // Re-triangulation at the released focal (the finishing adjustment wiped
@@ -1240,11 +1357,11 @@ pub fn grow_reconstruction(
         cluster_indexes,
         image_indexes,
         positions_xy,
-        &posed,
-        &quats,
-        &trans,
-        &mut points,
-        &mut is_dir,
+        &st.posed,
+        &st.quats,
+        &st.trans,
+        &mut st.points,
+        &mut st.is_dir,
     );
 
     build_result(
@@ -1252,11 +1369,11 @@ pub fn grow_reconstruction(
         cluster_indexes,
         image_indexes,
         positions_xy,
-        &quats,
-        &trans,
-        &posed,
-        points,
-        is_dir,
+        &st.quats,
+        &st.trans,
+        &st.posed,
+        st.points,
+        st.is_dir,
         focal,
     )
 }

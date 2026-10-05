@@ -90,6 +90,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium.
 
 **Separate policy orchestration from focal voting and reconstruction growth**
+> _Status (2026-10-05): **Done** — `focal_vote_impl` now calls named stages (`build_pair_tables`, `select_epipolar_pairs`, `epipolar_votes`, `rotation_votes`, `camera_model_columns`, `reported_consensus`); `grow_reconstruction` keeps the growth loop's decisions and hands the work to `seed_state`, `next_best_view`, `force_accept_trial`, `force_accept`, `register_candidate` and `finish` over a `GrowInputs`/`GrowState` pair, with `run_grow_ba` (and its camera-window choice, `grow_ba_window`) at module level. A throwaway capture of both functions' full results on test fixtures, plus the focal vote's profiler call counts, was bit-identical before and after; branch `audit-fix-15-focal-vote-stages`._
 - Location: `crates/sfmtool-core/src/geometry/focal_vote.rs` (1,478 lines, `focal_vote_impl` 835–1233) and `crates/sfmtool-core/src/geometry/reconstruction_growth.rs` (1,102 lines, `grow_reconstruction` 488–1099, nested `run_grow_ba` at 592).
 - Problem: Both entry points still combine policy choices with their staged numerical pipelines. The old growth finding is unchanged in shape despite moved lines.
 - Proposed fix: Extract named policy stages and the nested BA runner, keeping orchestration in the public entry points.
