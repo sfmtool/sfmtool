@@ -521,15 +521,6 @@ where
             .map(|(i, d, _)| (i, d))
     }
 
-    /// A batch query that also reports the batch's summed traversal counters.
-    ///
-    /// Read amplification — decoded chunk bytes over the vector bytes a query
-    /// actually evaluated — needs both halves, and only this half is countable
-    /// here: `io_stats` sees bytes moved, not how many descriptors those bytes
-    /// were consulted for. The counters are summed over the batch rather than
-    /// returned per query because the ratio is computed over a whole batch, and
-    /// a per-query vector would allocate alongside every result row to say
-    /// something no caller has asked for.
     /// [`search_batch_with_distances`](Self::search_batch_with_distances) with
     /// the queries *processed* in `order`, results still written to their own
     /// rows.
@@ -699,6 +690,15 @@ where
         Ok((indices, distances))
     }
 
+    /// A batch query that also reports the batch's summed traversal counters.
+    ///
+    /// Read amplification — decoded chunk bytes over the vector bytes a query
+    /// actually evaluated — needs both halves, and only this half is countable
+    /// here: `io_stats` sees bytes moved, not how many descriptors those bytes
+    /// were consulted for. The counters are summed over the batch rather than
+    /// returned per query because the ratio is computed over a whole batch, and
+    /// a per-query vector would allocate alongside every result row to say
+    /// something no caller has asked for.
     pub fn search_batch_with_stats(
         &self,
         queries: &[S],

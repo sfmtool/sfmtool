@@ -1,11 +1,14 @@
 # Lazy KD-Forest Queries
 
-A persistent kd-tree forest lets a process search a large set of descriptors
-while keeping only the portions it visits in memory. The file-backed query path
-in core does this over chunked trees and one blocked descriptor corpus, targeting
-local seekable files, repeated queries, and corpora larger than the configured
-memory cache. It preserves the in-memory forest's search behavior while storing
-each vector once.
+A `.kdf` file stores a randomized kd-tree forest, an index for approximate
+nearest-neighbour search, together with the descriptors it indexes, such as the
+SIFT descriptors of a set of images. `LazyKdForest` answers nearest-neighbour
+queries against that file directly. It reads and decompresses only the tree
+chunks and descriptor blocks a query visits, keeps them in a cache of bounded
+size, and returns the same neighbours as the in-memory forest the file was
+written from. This lets a process search a descriptor set larger than the memory
+it can spend on it, and reuse an index across runs without rebuilding it. The
+file stores each descriptor once, however many trees the forest has.
 
 Packing and cache values are configurable. The interface lists their defaults;
 the measurements and their scope are documented in
@@ -16,12 +19,12 @@ and uses the [KDF format](../../formats/kdf-file-format.md).
 
 ## Rust interface and responsibilities
 
-The integration belongs beside the existing implementation in
+The lazy forest sits beside the in-memory forest in
 [core's kdforest module](../../../crates/sfmtool-core/src/features/kdforest/mod.rs).
 The `sfmtool-kdf-format` crate owns storage types and validated decoded chunks;
 core depends on it, never the reverse. Persistence exports the already-built
-topology and feature order rather than rebuilding from a seed. This avoids making
-random-generator or future builder changes part of the file compatibility contract.
+topology and feature order rather than rebuilding from a seed, so the random
+generator and the builder are not part of the file compatibility contract.
 
 The public surface is implemented in
 [`kdforest/persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
@@ -30,20 +33,20 @@ and re-exported by the kdforest module:
 ```rust
 pub struct KdfWriteOptions {
     pub target_descriptor_block_bytes: usize, // default: 2 KiB
-    pub target_chunk_bytes: usize, // provisional: 1 MiB
-    pub compression_level: i32,    // provisional: 3
-    pub origin_block_rows: usize,  // provisional: 131072 (two u32 columns = 1 MiB)
-    pub replace_existing: bool,    // default: false, so a destination that exists is refused
+    pub target_chunk_bytes: usize,    // default: 1 MiB
+    pub compression_level: i32,       // default: 3
+    pub origin_block_rows: usize,     // default: 131072 (two u32 columns = 1 MiB)
+    pub replace_existing: bool,       // default: false, so a destination that exists is refused
 }
 pub struct LazyKdForestOptions {
-    pub max_address_map_bytes: usize, // 768 MiB: 5 bytes a feature
-    pub max_leaf_features: usize,     // provisional: 1,048,576
-    pub cache_bytes: usize,        // provisional: 256 MiB decoded cache
-    pub max_in_flight_bytes: usize,// provisional: 64 MiB decode reservations
-    pub max_compressed_bytes: usize, // 384 MiB: the compressed row map sets this
-    pub max_metadata_bytes: usize, // 384 MiB
-    pub max_chunk_bytes: usize,    // provisional: 64 MiB decoded
-    pub query_workers: usize,     // provisional: 1; caller can raise
+    pub max_address_map_bytes: usize, // default: 768 MiB, 5 bytes a feature
+    pub max_leaf_features: usize,     // default: 1,048,576
+    pub cache_bytes: usize,           // default: 256 MiB decoded cache
+    pub max_in_flight_bytes: usize,   // default: 64 MiB decode reservations
+    pub max_compressed_bytes: usize,  // default: 384 MiB, set by the compressed row map
+    pub max_metadata_bytes: usize,    // default: 384 MiB
+    pub max_chunk_bytes: usize,       // default: 64 MiB decoded
+    pub query_workers: usize,         // default: 1; the caller can raise it
 }
 pub struct LazyKdForest<S: ForestScalar + KdfScalar> { /* file handle, cache, workers */ }
 pub type LazyKdForestU8 = LazyKdForest<u8>;
@@ -234,30 +237,31 @@ selects the descriptor, tree-chunk, origin, and compression defaults; callers ma
 tune block sizes but cannot duplicate vectors per tree. Files of any other
 version are rejected.
 
-Keep one best-bin-first traversal, result set, dedup set and scalar distance
+There is one best-bin-first traversal, result set, dedup set and scalar distance
 implementation. Storage access supplies node data, ordered leaf feature IDs and
 vector rows. A feature ID indexes the resident storage-row map, which locates a
 descriptor block. This keeps storage addressing out of the ANN algorithm.
 
 Export orders descriptors by tree 0's leaf permutation, writes its inverse
 as storage_rows, and partitions vectors into Q complete rows per block, where
-`Q = max(1, floor(target_descriptor_block_bytes / bytes_per_vector))`. Reject zero
-targets. Targets smaller than a row produce one-row blocks. This block target is
+`Q = max(1, floor(target_descriptor_block_bytes / bytes_per_vector))`. A zero
+target is rejected. Targets smaller than a row produce one-row blocks. This block target is
 independent of the tree-chunk target and does not change topology or leaf size.
 
 Open loads and validates the row map within `max_address_map_bytes`,
-checking permutation validity with bounded temporary memory. Reject excess
-rather than silently paging it. Report resident map and validation-scratch bytes;
-the map is separate from the decoded chunk cache and metadata limit.
+checking permutation validity with bounded temporary memory. A map over that
+limit is rejected rather than paged. The resident map and validation-scratch
+bytes are reported; the map is separate from the decoded chunk cache and metadata limit.
 
 Descriptor, optional geometry, tree, and origin blocks use the same byte-weighted
 cache with distinct key kinds and single-load coordination.
-Before requesting descriptors, copy the ordered leaf IDs into query scratch
-and release the tree chunk pin. Process rows in leaf order, deduplicating IDs before
-fetching vectors; release a descriptor block pin before requesting another block.
-This prevents waiting for cache admission while retaining a different cache pin.
-Leaf scratch is additional memory bounded by `max_leaf_features`; reject oversized
-leaves. Prefetching or grouping reads must not reorder evaluations or result ties.
+Before requesting descriptors, a query copies the ordered leaf IDs into its
+scratch and releases the tree chunk pin. It processes rows in leaf order,
+deduplicating IDs before fetching vectors, and releases a descriptor block pin
+before requesting another block, so it never waits for cache admission while
+holding a different cache pin. Leaf scratch is additional memory bounded by
+`max_leaf_features`; a larger leaf is rejected. The order in which blocks are
+read never changes the order of evaluations or result ties.
 
 The geometry corpus uses the same storage permutation and row boundaries as
 descriptors, so block b in each corpus correlates positionally. Its cache key,
@@ -280,14 +284,15 @@ inside it without another descriptor fetch.
 Local node order is deterministic (preorder within a complete subtree). Leaf
 rows follow local leaf order, preserving each leaf's original member order.
 Logical node IDs retain source arena IDs even when physical node order changes.
-Assign chunk IDs deterministically, root chunk first, then remaining chunks in
-left-before-right traversal order. Physical ZIP order follows tree/chunk IDs.
-No writer changes leaf size to make chunks fit: that changes the ANN index.
+Chunk IDs are assigned deterministically, root chunk first, then the remaining
+chunks in left-before-right traversal order. Physical ZIP order follows
+tree/chunk IDs. The writer never changes leaf size to make chunks fit, because
+that would change the ANN index.
 
-For a binary median tree, maximal fitting subtrees often underfill the target;
-report actual size distributions instead of labeling every chunk “1 MiB”.
-Never pack by compressed size: compression depends on data and would make
-allocation sizes and benchmark comparisons misleading.
+For a binary median tree, maximal fitting subtrees often underfill the target,
+so a chunk is described by its actual size, not by the 1 MiB target. Packing is
+by decoded size, never compressed size: compression depends on the data and
+would make allocation sizes and benchmark comparisons misleading.
 
 The corpus defaults to tree-0 leaf order. Other trees may scatter one leaf across
 several descriptor blocks; the measured cost is outweighed by removing `T-1`
@@ -296,36 +301,39 @@ without changing feature identity or query results.
 
 ## Search behavior and parity
 
-Use the current in-memory search as the behavioral reference, specifically
-[search.rs](../../../crates/sfmtool-core/src/features/kdforest/search.rs), rather
-than reproducing the older pseudocode's equality convention. The storage path
-must preserve the following details:
+The behavioural reference is the in-memory search in
+[search.rs](../../../crates/sfmtool-core/src/features/kdforest/search.rs), not the
+older pseudocode's equality convention. The storage path preserves the following
+details:
 
-- Seed every tree in increasing tree index before testing the check budget.
-  Descend left for query coordinate <= split, right for > split. For float32,
-  use the existing scalar total-order comparison, including signed-zero behavior.
-- A descent retains its incoming branch priority along its near chain; enqueue
-  far children with incoming priority plus squared split-plane distance, only
-  when this is <= the current result threshold.
-- Pop the smallest priority first. Equal priorities use descending tree index,
+- Every tree is seeded in increasing tree index before the check budget is
+  tested. A descent goes left for query coordinate <= split, right for > split.
+  For float32 it uses the existing scalar total-order comparison, including
+  signed-zero behavior.
+- A descent retains its incoming branch priority along its near chain; far
+  children are enqueued with incoming priority plus squared split-plane
+  distance, only when this is <= the current result threshold.
+- The smallest priority pops first. Equal priorities use descending tree index,
   then descending **logical node ID**, matching the existing heap tuple order.
-  Chunk IDs must never replace logical node IDs in this comparison.
-- Deduplicate original feature IDs across trees and evaluate leaf members in their
-  stored order. Check count measures unique distance evaluations. Finish a leaf
-  once entered, even when it crosses the budget; zero checks still seeds trees.
-- After seeding, stop before the next descent if checks meet the budget or its
-  priority exceeds the current threshold. The additive priority is not an
-  admissible geometric bound: unlimited checks still do not imply exact ANN.
-- Preserve result tie behavior: equal distances retain encounter order; an equal
-  candidate does not replace the worst member of a full result set. Use the
-  same scalar kernels and cutoff conversion as the in-memory implementation.
+  Chunk IDs never replace logical node IDs in this comparison.
+- Original feature IDs are deduplicated across trees and leaf members are
+  evaluated in their stored order. Check count measures unique distance
+  evaluations. A leaf, once entered, is finished even when it crosses the
+  budget; zero checks still seeds trees.
+- After seeding, the search stops before the next descent if checks meet the
+  budget or its priority exceeds the current threshold. The additive priority is
+  not an admissible geometric bound: unlimited checks still do not imply exact
+  ANN.
+- Result ties behave as in memory: equal distances retain encounter order, and
+  an equal candidate does not replace the worst member of a full result set. The
+  scalar kernels and cutoff conversion are the in-memory implementation's.
 
 Cache hits, eviction, file layout, and worker schedule affect speed only.
 For the same persisted topology and supported finite inputs, results and check
 counts match the in-memory reference. Float results are bit-identical when
 using the same scalar kernel/platform; no cross-platform float promise is added.
-Reject NaN/infinite query coordinates and negative/NaN cutoffs; positive infinity
-means unbounded. Finite float coordinates may overflow squared distance to
+NaN/infinite query coordinates and negative/NaN cutoffs are rejected; a positive
+infinite cutoff means unbounded. Finite float coordinates may overflow squared distance to
 positive infinity, as in the existing kernel. Empty forests and k = 0 return
 empty results without reading tree chunks. A wrong query dimension is an error.
 Batch arrays are row-major with `u32::MAX`/positive infinity padding.
@@ -338,36 +346,37 @@ latency-budgeted search would need to report incompleteness explicitly.
 Open reads the ZIP central directory, metadata and content-hash entry once,
 builds a chunk-to-entry index, and validates their bounded sizes. It does not
 decode trees or descriptors. ZIP metadata/index memory is O(number of entries),
-not constant; enforce the metadata budget on both decoded JSON and index
-allocations, rejecting excess directory entries before unbounded allocation.
+not constant; the metadata budget applies to both decoded JSON and index
+allocations, and excess directory entries are rejected before unbounded
+allocation.
 
-On a tree miss, read and verify only that chunk's grouped topology/feature-ID
+A tree miss reads and checks only that chunk's grouped topology/feature-ID
 entry. Descriptor and geometry misses read one independent frame from their
 respective corpora; an origin miss reads its two compressed columns.
-When entries are adjacent, a reader may coalesce their ranges, including intervening
-ZIP headers. A chunk is a logical cache unit, not necessarily one system call.
-Cache the offset/length index for the handle's lifetime; never reopen or reparse
-the ZIP for a node. Positional reads or separately positioned handles avoid a
-shared seek cursor race. A lock around seek/read is an acceptable first fallback;
-decompression happens outside it. Do not use the existing eager `DecodedEntries`
-path to load the whole archive.
+A chunk is a logical cache unit, not necessarily one system call. The
+offset/length index is kept for the handle's lifetime; the ZIP is never reopened
+or reparsed for a node. Descriptor and geometry frames are read with positional
+reads, so concurrent misses share no seek cursor; tree chunks and origin blocks
+are read through one ZIP reader behind a lock. The eager `DecodedEntries` path,
+which loads the whole archive, is not used.
 
-Use a per-file byte-weighted LRU of decoded chunks and blocks, keyed by payload
-kind and block/chunk ID. In-flight requests for the same key share one load. Keep no
-unbounded pinned “upper tree”: frequent routing chunks stay hot through reuse.
+The cache is a per-file byte-weighted LRU of decoded chunks and blocks, keyed by
+payload kind and block/chunk ID. In-flight requests for the same key share one
+load. No "upper tree" is pinned: frequent routing chunks stay in the cache
+because they are reused.
 Each descent holds at most its current decoded chunk and releases it before
 requesting another. Queue entries hold addresses, not chunk references.
 
 The cache budget includes pinned resident chunk arrays; admission reserves space
-and waits for readers to release chunks if necessary. Require cache and in-flight
-limits each to admit the largest declared chunk, and reject declared chunks over
-`max_chunk_bytes`. Apply the same limits to descriptor, geometry, and origin blocks. Reserve decode memory
-before I/O. Separately bound compressed
-buffers and decoder workspace; include these in reported peak memory rather
-than claiming the decoded cache limit is a process RSS limit. A loader never
+and waits for readers to release chunks if necessary. The cache and in-flight
+limits must each admit the largest declared chunk, and a declared chunk over
+`max_chunk_bytes` is rejected. The same limits apply to descriptor, geometry,
+and origin blocks. Decode memory is reserved before I/O. Compressed buffers are
+bounded separately by `max_compressed_bytes`; they and the decoder workspace are
+outside the decoded cache limit, which is therefore not a process RSS limit. A loader never
 waits for admission while holding a different chunk pin, avoiding cache deadlock.
 
-Size `cache_bytes` for the query's working set, not just for the largest item
+`cache_bytes` needs to cover the query's working set, not just the largest item
 the file declares. The 256 MiB default admits DinoLedge's blocks but causes
 repeated patch searches to evict blocks they immediately need again. In a
 2026-09-23 check of a 1,455 MB DinoLedge index built by
@@ -388,7 +397,7 @@ metadata, scratch, output, compressed buffers and decoder workspace are addition
 to the cache. Checked arithmetic and configurable worker count constrain growth;
 this is bounded residency of file data, not constant total memory for arbitrary k.
 
-Treat open files as immutable for the handle lifetime. Atomic replacement can
+An open file is treated as immutable for the handle's lifetime. Atomic replacement can
 leave an old handle serving its old snapshot; in-place writes are unsupported.
 Chunk validation checks references before dereference and detects revisited
 logical nodes per query to prevent malformed cycles. Full semantic verification
@@ -424,17 +433,18 @@ the single corpus representation, which version 2 introduced and version 3 keeps
 Tree-local measurements describe the removed alternative, not a mode accepted by
 the current API.
 
-One MiB is 1,048,576 decoded bytes. Start with a configurable 1 MiB target,
-then compare 256 KiB, 1, 4, 8 and 16 MiB; these are experiment settings, not
-claims that one size is optimal. Larger chunks reduce directory entries and may
+One MiB is 1,048,576 decoded bytes. The tree-chunk sweep starts from a
+configurable 1 MiB target and compares 256 KiB, 1, 4, 8 and 16 MiB; these are
+experiment settings, not claims that one size is optimal. Larger chunks reduce directory entries and may
 amortize reads across queries, but increase cold-query read/decode amplification.
 In particular, four independent 16 MiB subtree misses can decode 64 MiB merely
 to seed a four-tree search. Directory lookup itself is paid once at open.
 
-Hold vectors, topology, query order, k and check budget fixed when comparing
-packing. Compare both supported version-1 layouts, with the shared corpus packed
-in tree-0 order, and eager loading of the same forest. Sweep shared descriptor
-block sizes independently at 16, 64, 256 KiB and 1 MiB.
+A packing comparison holds vectors, topology, query order, k and check budget
+fixed. The version-1 comparison covered both layouts that version supported, with
+the shared corpus packed in tree-0 order, and eager loading of the same forest.
+Shared descriptor block sizes were swept independently at 16, 64, 256 KiB and
+1 MiB.
 
 | Axis | Cases |
 |------|-------|
@@ -445,23 +455,23 @@ block sizes independently at 16, 64, 256 KiB and 1 MiB.
 | Storage | Local SSD; HDD if available; record OS, device, filesystem and compression level |
 | Warmth | Fresh process/application cache with warm OS cache; controlled cold OS cache where available; fully warm repeat |
 
-Use a staged sweep, not the entire Cartesian product: screen chunk sizes on
-four trees/16-feature leaves first, then stress the winning candidates. A reopened
-file is not evidence of cold physical storage; label uncontrolled cache state.
-Do not download benchmark datasets automatically as part of implementing specs.
+The sweep is staged rather than the entire Cartesian product: chunk sizes are
+screened on four trees and 16-feature leaves first, then the winning candidates
+are stressed. A reopened file is not evidence of cold physical storage, so an
+uncontrolled cache state is labelled as such.
 
-Measure open time and resident metadata, p50/p95/p99 query latency, batch
-throughput, compressed bytes requested, decoded bytes, read calls, unique chunk
-misses, cache hits/evictions, duplicate-load suppression, peak cache/pinned/
-in-flight/scratch/RSS bytes, file size and export time. Application read bytes
-are distinct from physical device traffic. Report read amplification as decoded
-chunk bytes divided by unique evaluated vector bytes (undefined for zero checks).
+The measurements are open time and resident metadata, p50/p95/p99 query
+latency, batch throughput, compressed bytes requested, decoded bytes, read
+calls, unique chunk misses, cache hits/evictions, duplicate-load suppression,
+peak cache/pinned/in-flight/scratch/RSS bytes, file size and export time. Application read bytes
+are distinct from physical device traffic. Read amplification is decoded chunk
+bytes divided by unique evaluated vector bytes (undefined for zero checks).
 
-Measure recall against exhaustive search on a held-out subset, and separately
-assert exact result/check parity with the in-memory forest. Excluding self for
-recall must use the same postprocessing/reference procedure for both paths;
-it does not add an exclusion option to the API. Repeat runs, report variability,
-and record corpus/query hashes and hardware.
+Recall is measured against exhaustive search on a held-out subset; exact
+result/check parity with the in-memory forest is asserted separately. Excluding
+self for recall uses the same postprocessing/reference procedure for both paths;
+the API has no exclusion option. Runs are repeated, variability is reported, and
+corpus/query hashes and hardware are recorded.
 
 [`scripts/benchmark_kdf_layouts.py`](../../../scripts/benchmark_kdf_layouts.py)
 runs this against a workspace's `.sift` files. It builds the forest once per run
@@ -736,8 +746,8 @@ what other packing methods can achieve. At 694k descriptors all three policies
 read about 22,200 blocks from a corpus of 21,698 blocks. These runs do not show a
 useful batch-read reduction.
 
-**Shared block size trades cold query time against file size, and the balance
-sits far smaller than it first appeared.** Once descriptor blocks stopped being one
+**Shared block size trades cold query time against file size, and the best
+block size is smaller than the first measurements suggested.** Once descriptor blocks stopped being one
 ZIP entry each, block size became free in entry count, which had been the whole
 penalty for small blocks. What remains is a genuine two-sided tradeoff, measured on
 DinoLedge with a 4 GiB budget and a 1,000-query batch:
@@ -899,9 +909,9 @@ these keys are dense integers this crate generates while walking a file it has
 already validated, and the crate already hashes every stored section with XXH3, so
 this adds no dependency and no second hash to justify.
 
-An earlier version of this section attributed workers not helping to rayon's
-per-task overhead on sub-millisecond queries. That was wrong — it was lock
-contention, which is why sharding fixes it and task overhead would not.
+Extra workers did not help because of lock contention, not because of rayon's
+per-task overhead on sub-millisecond queries. That is why sharding fixes it, and
+why reducing task overhead would not.
 
 **A note on measuring any of this.** Timings on this machine drift by up to 2x
 between runs, enough to invent effects and hide real ones: during this work a
@@ -1293,11 +1303,13 @@ another extraction.
 
 ## The Python surface
 
-The benchmark plan above is a Python job — a sweep over corpora, block sizes, chunk
+The benchmarks above are Python jobs — sweeps over corpora, block sizes, chunk
 sizes and cache budgets, reporting latency percentiles and recall — so the
 `uint8` path is bound on the `sfmtool.spatial` submodule, in
 [`spatial/kdf.rs`](../../../crates/sfmtool-py/src/spatial/kdf.rs), beside the
-in-memory `KdForest` it is measured against.
+in-memory `KdForest` it is measured against. Only `uint8` is bound: the Python
+`LazyKdForest` wraps `LazyKdForestU8`, and opening a `float32` file with it
+raises `ValueError`, because the file's scalar type does not match.
 
 ```python
 from sfmtool._sfmtool.spatial import (
@@ -1335,7 +1347,8 @@ same on a 5 GB file as on a 5 KB one. It attributes `descriptors`,
 
 Errors are split by what a sweep must do about them: a budget that cannot hold
 what was asked for raises `MemoryError` (try another cell), a malformed or
-damaged file raises `OSError` (stop), and a bad argument raises `ValueError`.
+damaged file raises `OSError` (stop), and a bad argument or a file of the
+wrong scalar type raises `ValueError`.
 
 ## Out of scope
 
