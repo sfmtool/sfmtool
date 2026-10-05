@@ -4,9 +4,9 @@ SfM Explorer, the sfmtool 3D viewer, is a native Rust application in the
 `sfm-explorer` crate. It opens a `winit` window, draws the 3D scene with `wgpu`,
 and draws its panels with `egui` inside the same frame, running its own event
 loop rather than eframe's. `pixi run gui` runs the crate's `sfm-explorer`
-binary; `sfm explorer` runs `launch-sfm-explorer`, a binary target of the
-`sfmtool-py` crate, as a subprocess found on `PATH`. Both call
-`sfm_explorer::run`. `lib.rs` owns the window and the event loop, `app.rs` runs
+binary; `sfm explorer` runs `python -m sfmtool._explorer` as a child process,
+which calls the viewer through `run_explorer` in the `sfmtool._sfmtool`
+extension. Both reach `sfm_explorer::run_with_args`. `lib.rs` owns the window and the event loop, `app.rs` runs
 each frame, `dock.rs` routes the panels, `scene_renderer/` owns the GPU passes
 and `state.rs` holds the application state. This spec records why the
 viewer is built on this stack, what each module is responsible for, the order
@@ -389,11 +389,14 @@ pixi run cargo-check
 
 ### Python Integration
 
-The GUI runs as a standalone binary (`sfm-explorer`). It can be launched via
-`pixi run gui` or `sfm explorer` from the CLI. The `sfmtool-py` crate includes
-a `launch-sfm-explorer` binary, and the `sfm explorer` CLI command runs it as a
-subprocess, found on `PATH`. maturin builds only the extension module, so the
-wheel does not contain that binary; see
+The viewer is a library, `sfm_explorer`, with two entry points: `run`, which
+reads the process's command line, and `run_with_args`, which takes it as an
+argument. The crate's `sfm-explorer` binary calls `run`, and `pixi run gui`
+builds and runs that binary. The `sfmtool-py` crate exposes `run_with_args` to
+Python as `sfmtool._sfmtool.run_explorer`, so the viewer is part of the
+extension module in every wheel. `sfm explorer` runs it in a child process,
+`python -m sfmtool._explorer`, because the viewer needs the process's main
+thread for its event loop and ends the process on an error; see
 [explorer-command.md](../cli/visualization/explorer-command.md).
 
 ---

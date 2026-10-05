@@ -300,13 +300,15 @@ backlog and keep them honest as findings get addressed:
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.
-- `sfm explorer` does not run the same binary as `pixi run gui`. It runs
-  `launch-sfm-explorer`, a binary target of `sfmtool-py`, as a subprocess
-  found on `PATH`; `pixi run gui` runs the `sfm-explorer` crate's own
-  `sfm-explorer` binary. Both call `sfm_explorer::run`, so the viewer is the
-  same. maturin does not put `launch-sfm-explorer` in the wheel or the editable
-  install: build it with `pixi run cargo build --release -p sfmtool-py` and put
-  `target/release` on `PATH`. See `specs/cli/visualization/explorer-command.md`.
+- `sfm explorer` does not run the same build of the viewer as `pixi run gui`.
+  The viewer is compiled into the `sfmtool._sfmtool` extension
+  (`run_explorer`), and `sfm explorer` runs it in a child process,
+  `python -m sfmtool._explorer`; `pixi run gui` builds and runs the
+  `sfm-explorer` crate's own `sfm-explorer` binary. Both reach
+  `sfm_explorer::run_with_args`, so the viewer is the same code, but after a
+  viewer change `sfm explorer` shows it only once `pixi run maturin develop
+  --release` has rebuilt the extension. See
+  `specs/cli/visualization/explorer-command.md`.
 - **The viewer can be driven over MCP, and an agent may own its lifecycle.**
   `pixi run gui-mcp <file>.sfmr` hosts a Model Context Protocol endpoint on
   `127.0.0.1:8787` for reading the scene graph, moving the selection and the 3D

@@ -62,9 +62,10 @@ $ sfm explorer
 ```
 
 !!! note
-    The `sfm explorer` command is not yet included in the PyPI package. To run
-    it from source, use `pixi run gui`. SfM Explorer has only been tested on
-    Windows.
+    SfM Explorer is part of the PyPI package, so `sfm explorer` works after
+    `pip install sfmtool`. Its automated window tests run on Windows, macOS and
+    Linux, but most hands-on use has been on Windows. On Linux it needs a
+    Vulkan driver.
 
 ![SfM Explorer with dino dog toy reconstruction](images/dino-in-sfm-explorer.jpg)
 

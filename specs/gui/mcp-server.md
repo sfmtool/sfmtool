@@ -39,8 +39,8 @@ it (§ "Editing reconstruction data").
 
 ## Enabling it
 
-Off unless asked for. The flag is on the Rust binary and is forwarded by the
-Python CLI:
+Off unless asked for. The flag is on the viewer's own command line, which the
+`sfm-explorer` binary reads, and is forwarded by the Python CLI:
 
 ```bash
 sfm-explorer --mcp scene.sfmr          # default port, 127.0.0.1:8787
@@ -4155,8 +4155,10 @@ revisions a given version negotiates is the reason it is a dependency at all,
 and a silent minor bump could change it.
 
 The cost is a dependency tree: `tokio`, `hyper`, `axum`, `rmcp`, in a workspace
-with no async runtime otherwise, compiled from the PyPI **sdist** on the user's
-own rustc (wheels ship for Linux and Windows only, so macOS users build it).
+with no async runtime otherwise. It is in the `sfmtool._sfmtool` extension
+module of every wheel, since `sfm explorer` runs the viewer from there, and it
+is compiled from the PyPI **sdist** on the user's own rustc wherever no wheel
+fits.
 Beside `wgpu`, `winit`, `egui` and `image`, which `sfm-explorer` already pulls
 in, it is a modest addition — and it sits behind a Cargo feature so it can be
 dropped:
