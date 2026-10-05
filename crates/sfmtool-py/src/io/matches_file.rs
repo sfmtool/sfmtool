@@ -349,18 +349,15 @@ impl PyMatchesFile {
             .unbind())
     }
 
-    /// Derive a new handle holding only the clusters/members that pass the
-    /// selection (see `MatchesData::select_clusters` in `sfmtool-matches-format`):
-    /// source-unrefinable clusters drop; members must have an accepted
-    /// status and (when restricted) lie on a selected image; clusters must
-    /// span `min_span` distinct selected images. When restricted, the image
-    /// table becomes exactly the requested set and a surviving cluster
-    /// whose reference fell outside the restriction records the
-    /// `0xFFFFFFFF` sentinel ("reference not present in this selection").
+    /// Derive a new handle holding only the clusters and members that pass
+    /// the selection, densely renumbered. This handle is left unchanged and
+    /// nothing is written; call `save` to write the result. The steps, the
+    /// `0xFFFFFFFF` absent-reference sentinel and the provenance record are
+    /// specified in `specs/formats/cluster-selection.md`.
     ///
-    /// A cluster-id restriction drops every cluster whose id in THIS file is
-    /// not requested; it composes with `restrict_images` and leaves the image
-    /// table untouched on its own.
+    /// Raises ValueError on a pairwise file, on `min_span < 2`, on a
+    /// `restrict_images` name not in this file's image table, or on a
+    /// `restrict_cluster_ids` id outside this file's cluster range.
     ///
     /// Args:
     ///     min_span: Minimum distinct selected images per cluster (>= 2,
