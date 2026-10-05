@@ -432,32 +432,111 @@ pub fn cluster_census(
         return Err(CovisibilityError::TooManyImages { num_images: n_img }.into());
     }
 
-    // ── Candidate poses ──────────────────────────────────────────────────
-    let mut posed = vec![false; n_img];
-    let mut quats = vec![UnitQuaternion::<f64>::identity(); n_img];
-    let mut centers = vec![Point3::<f64>::origin(); n_img];
-    let mut quats_flat = vec![0.0f64; n_img * 4];
-    let mut trans_flat = vec![0.0f64; n_img * 3];
-    for (s, &i) in posed_indexes.iter().enumerate() {
-        let i = i as usize;
-        let [qw, qx, qy, qz] = quaternions_wxyz[s];
-        let q = UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz));
-        let t = Vector3::new(translations[s][0], translations[s][1], translations[s][2]);
-        quats[i] = q;
-        // Camera center C = −Rᵀ·t.
-        centers[i] = Point3::from(-(q.inverse() * t));
-        posed[i] = true;
-        let qn = q.into_inner();
-        quats_flat[i * 4] = qn.w;
-        quats_flat[i * 4 + 1] = qn.i;
-        quats_flat[i * 4 + 2] = qn.j;
-        quats_flat[i * 4 + 3] = qn.k;
-        trans_flat[i * 3] = t.x;
-        trans_flat[i * 3 + 1] = t.y;
-        trans_flat[i * 3 + 2] = t.z;
-    }
+    let poses = CandidatePoses::new(n_img, posed_indexes, quaternions_wxyz, translations);
+    let groups = viewpoint_groups(cluster_indexes, image_indexes, n_cl, &poses)?;
+    let obs =
+        PosedObservations::gather(cluster_indexes, image_indexes, positions_xy, camera, &poses);
+    let measures = measure_clusters(camera, &poses, &obs, &groups.group_of);
+    let eligible = evidence_eligibility(
+        &obs.seg_cluster,
+        cluster_warp_consistency,
+        &measures,
+        params,
+    );
+    let (pairs, score) = pair_census(&measures, &eligible, params);
+    let sat_pct = global_satisfaction(&measures, &eligible, params.sat_px);
+    let consistency = if params.compute_group_consistency {
+        group_consistency_companion(camera, &poses, &groups, &obs, &measures, &eligible, params)
+    } else {
+        None
+    };
 
-    // ── 1. Viewpoint groups: CNM communities of raw cluster covisibility ──
+    Ok(CensusReport {
+        score,
+        n_groups: groups.n_groups,
+        group_of: groups.group_of,
+        pairs,
+        sat_pct,
+        group_consistency: consistency,
+    })
+}
+
+/// The candidate's poses, dense over every image index below `n_img`, in the
+/// two forms the census reads them in: `nalgebra` rotations and centres for
+/// the ray geometry, and flat WXYZ / XYZ arrays for the reprojection kernel.
+struct CandidatePoses {
+    /// Whether each image is posed by the candidate.
+    posed: Vec<bool>,
+    /// World-to-camera rotation per image (identity when unposed).
+    quats: Vec<UnitQuaternion<f64>>,
+    /// Camera centre per image (origin when unposed).
+    centers: Vec<Point3<f64>>,
+    /// `quats` flattened WXYZ, four entries per image.
+    quats_flat: Vec<f64>,
+    /// World-to-camera translation per image, three entries per image.
+    trans_flat: Vec<f64>,
+}
+
+impl CandidatePoses {
+    fn new(
+        n_img: usize,
+        posed_indexes: &[u32],
+        quaternions_wxyz: &[[f64; 4]],
+        translations: &[[f64; 3]],
+    ) -> Self {
+        let mut posed = vec![false; n_img];
+        let mut quats = vec![UnitQuaternion::<f64>::identity(); n_img];
+        let mut centers = vec![Point3::<f64>::origin(); n_img];
+        let mut quats_flat = vec![0.0f64; n_img * 4];
+        let mut trans_flat = vec![0.0f64; n_img * 3];
+        for (s, &i) in posed_indexes.iter().enumerate() {
+            let i = i as usize;
+            let [qw, qx, qy, qz] = quaternions_wxyz[s];
+            let q = UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz));
+            let t = Vector3::new(translations[s][0], translations[s][1], translations[s][2]);
+            quats[i] = q;
+            // Camera center C = −Rᵀ·t.
+            centers[i] = Point3::from(-(q.inverse() * t));
+            posed[i] = true;
+            let qn = q.into_inner();
+            quats_flat[i * 4] = qn.w;
+            quats_flat[i * 4 + 1] = qn.i;
+            quats_flat[i * 4 + 2] = qn.j;
+            quats_flat[i * 4 + 3] = qn.k;
+            trans_flat[i * 3] = t.x;
+            trans_flat[i * 3 + 1] = t.y;
+            trans_flat[i * 3 + 2] = t.z;
+        }
+        Self {
+            posed,
+            quats,
+            centers,
+            quats_flat,
+            trans_flat,
+        }
+    }
+}
+
+/// The viewpoint groups of § 1.
+struct ViewpointGroups {
+    /// The posed image indexes, ascending: the nodes of the community graph.
+    posed_images: Vec<u32>,
+    /// Group id per image, `-1` for an unposed image.
+    group_of: Vec<i32>,
+    /// Number of groups.
+    n_groups: usize,
+}
+
+/// § 1. Viewpoint groups: CNM communities of raw cluster covisibility among
+/// the posed images.
+fn viewpoint_groups(
+    cluster_indexes: &[u32],
+    image_indexes: &[u32],
+    n_cl: usize,
+    poses: &CandidatePoses,
+) -> Result<ViewpointGroups, CensusError> {
+    let posed = &poses.posed;
+    let n_img = posed.len();
     let mut cluster_starts = vec![0u32; n_cl + 1];
     for &c in cluster_indexes {
         cluster_starts[c as usize + 1] += 1;
@@ -482,38 +561,111 @@ pub fn cluster_census(
     for (a, &i) in posed_images.iter().enumerate() {
         group_of[i as usize] = labels[a] as i32;
     }
+    Ok(ViewpointGroups {
+        posed_images,
+        group_of,
+        n_groups,
+    })
+}
 
-    // ── 2. Cluster placement at the candidate ────────────────────────────
-    // Posed observations only, grouped into contiguous per-cluster segments
-    // (the input's cluster order is preserved by the filter).
-    let mut seg_cluster: Vec<u32> = Vec::new();
-    let mut seg_offsets: Vec<usize> = Vec::new();
-    let mut obs_image: Vec<u32> = Vec::new();
-    let mut obs_uv: Vec<f64> = Vec::new();
-    let mut dirs: Vec<Vector3<f64>> = Vec::new();
-    let mut obs_center: Vec<Point3<f64>> = Vec::new();
-    for k in 0..n_obs {
-        let img = image_indexes[k] as usize;
-        if !posed[img] {
-            continue;
+/// The posed observations, grouped into contiguous per-cluster segments (the
+/// input's cluster order is preserved by the filter). Segment `s` is cluster
+/// `seg_cluster[s]` and owns observations `seg_offsets[s]..seg_offsets[s + 1]`.
+struct PosedObservations {
+    /// Cluster id per segment.
+    seg_cluster: Vec<u32>,
+    /// CSR offsets of the segments into the per-observation arrays.
+    seg_offsets: Vec<usize>,
+    /// Image index per observation.
+    obs_image: Vec<u32>,
+    /// Observed pixel position per observation, flattened `[x, y]`.
+    obs_uv: Vec<f64>,
+    /// World-frame ray direction per observation.
+    dirs: Vec<Vector3<f64>>,
+    /// Centre of the observing camera per observation.
+    obs_center: Vec<Point3<f64>>,
+}
+
+impl PosedObservations {
+    fn gather(
+        cluster_indexes: &[u32],
+        image_indexes: &[u32],
+        positions_xy: &[[f64; 2]],
+        camera: &CameraIntrinsics,
+        poses: &CandidatePoses,
+    ) -> Self {
+        let mut seg_cluster: Vec<u32> = Vec::new();
+        let mut seg_offsets: Vec<usize> = Vec::new();
+        let mut obs_image: Vec<u32> = Vec::new();
+        let mut obs_uv: Vec<f64> = Vec::new();
+        let mut dirs: Vec<Vector3<f64>> = Vec::new();
+        let mut obs_center: Vec<Point3<f64>> = Vec::new();
+        for k in 0..cluster_indexes.len() {
+            let img = image_indexes[k] as usize;
+            if !poses.posed[img] {
+                continue;
+            }
+            let c = cluster_indexes[k];
+            if seg_cluster.last() != Some(&c) {
+                seg_cluster.push(c);
+                seg_offsets.push(obs_image.len());
+            }
+            let uv = positions_xy[k];
+            let d = camera.pixel_to_ray(uv[0], uv[1]);
+            dirs.push(poses.quats[img].inverse() * Vector3::new(d[0], d[1], d[2]));
+            obs_center.push(poses.centers[img]);
+            obs_image.push(img as u32);
+            obs_uv.push(uv[0]);
+            obs_uv.push(uv[1]);
         }
-        let c = cluster_indexes[k];
-        if seg_cluster.last() != Some(&c) {
-            seg_cluster.push(c);
-            seg_offsets.push(obs_image.len());
+        seg_offsets.push(obs_image.len());
+        Self {
+            seg_cluster,
+            seg_offsets,
+            obs_image,
+            obs_uv,
+            dirs,
+            obs_center,
         }
-        let uv = positions_xy[k];
-        let d = camera.pixel_to_ray(uv[0], uv[1]);
-        dirs.push(quats[img].inverse() * Vector3::new(d[0], d[1], d[2]));
-        obs_center.push(centers[img]);
-        obs_image.push(img as u32);
-        obs_uv.push(uv[0]);
-        obs_uv.push(uv[1]);
     }
-    seg_offsets.push(obs_image.len());
-    let n_seg = seg_cluster.len();
 
-    let tris = triangulate_batch(&dirs, &obs_center, &seg_offsets);
+    /// Number of segments.
+    fn n_seg(&self) -> usize {
+        self.seg_cluster.len()
+    }
+}
+
+/// What § 2 measures of each segment at the candidate.
+struct ClusterMeasures {
+    /// Median reprojection residual (px).
+    med: Vec<f64>,
+    /// At least two observations, a finite point and a finite median.
+    measurable: Vec<bool>,
+    /// The distinct groups the segment's observations fall in, ascending.
+    groups_of_seg: Vec<Vec<u32>>,
+    /// Widest ray angle (degrees) of a measurable bridge; `NaN` otherwise.
+    parallax: Vec<f64>,
+}
+
+/// § 2. Cluster placement at the candidate: triangulate each segment, then
+/// read its median residual, measurability, spanned groups and parallax.
+fn measure_clusters(
+    camera: &CameraIntrinsics,
+    poses: &CandidatePoses,
+    obs: &PosedObservations,
+    group_of: &[i32],
+) -> ClusterMeasures {
+    let PosedObservations {
+        seg_offsets,
+        obs_image,
+        obs_uv,
+        dirs,
+        obs_center,
+        ..
+    } = obs;
+    let n_seg = obs.n_seg();
+
+    let tris = triangulate_batch(dirs, obs_center, seg_offsets);
 
     let mut points_flat = vec![0.0f64; n_seg * 3];
     for (s, tri) in tris.iter().enumerate() {
@@ -529,11 +681,11 @@ pub fn cluster_census(
     }
     let residuals = reprojection_residuals(
         camera,
-        &quats_flat,
-        &trans_flat,
+        &poses.quats_flat,
+        &poses.trans_flat,
         &points_flat,
-        &obs_uv,
-        &obs_image,
+        obs_uv,
+        obs_image,
         &obs_point,
         INVALID_RESIDUAL_PX,
     );
@@ -592,25 +744,55 @@ pub fn cluster_census(
         }
         parallax[s] = min_cos.clamp(-1.0, 1.0).acos().to_degrees();
     }
+    ClusterMeasures {
+        med,
+        measurable,
+        groups_of_seg,
+        parallax,
+    }
+}
 
-    // ── 3. Evidence eligibility (data-derived) ───────────────
+/// § 3. Evidence eligibility (data-derived): a segment is eligible when its
+/// cluster's warp-consistency residual is finite and at or below the chosen
+/// percentile of the satisfied segments' residuals.
+fn evidence_eligibility(
+    seg_cluster: &[u32],
+    cluster_warp_consistency: &[f64],
+    measures: &ClusterMeasures,
+    params: &CensusParams,
+) -> Vec<bool> {
+    let ClusterMeasures {
+        med, measurable, ..
+    } = measures;
     let warp: Vec<f64> = seg_cluster
         .iter()
         .map(|&c| cluster_warp_consistency[c as usize])
         .collect();
-    let mut satisfied_warp: Vec<f64> = (0..n_seg)
+    let mut satisfied_warp: Vec<f64> = (0..seg_cluster.len())
         .filter(|&s| measurable[s] && med[s] < params.sat_px && warp[s].is_finite())
         .map(|s| warp[s])
         .collect();
     let q_eligible = percentile_linear(&mut satisfied_warp, params.warp_percentile);
-    let eligible: Vec<bool> = warp
-        .iter()
+    warp.iter()
         .map(|&q| q.is_finite() && q <= q_eligible)
-        .collect();
+        .collect()
+}
 
-    // ── 4. Per-pair census ───────────────────────────────────────────────
+/// § 4. Per-pair census: the per-pair counts and Wilson bounds, ascending by
+/// group pair, and the score (their maximum).
+fn pair_census(
+    measures: &ClusterMeasures,
+    eligible: &[bool],
+    params: &CensusParams,
+) -> (Vec<PairStats>, f64) {
+    let ClusterMeasures {
+        med,
+        measurable,
+        groups_of_seg,
+        parallax,
+    } = measures;
     let mut pair_counts: BTreeMap<(u32, u32), (u32, u32)> = BTreeMap::new();
-    for s in 0..n_seg {
+    for s in 0..med.len() {
         let gs = &groups_of_seg[s];
         if !measurable[s] || gs.len() < 2 {
             continue;
@@ -645,61 +827,75 @@ pub fn cluster_census(
             }
         })
         .collect();
+    (pairs, score)
+}
 
-    // ── 5. Companion: global satisfaction ────────────────────────────────
+/// § 5. Companion: global satisfaction, the percent of eligible measurable
+/// segments whose median residual is under `sat_px` (0 when there are none).
+fn global_satisfaction(measures: &ClusterMeasures, eligible: &[bool], sat_px: f64) -> f64 {
+    let ClusterMeasures {
+        med, measurable, ..
+    } = measures;
     let mut n_eval = 0usize;
     let mut n_sat = 0usize;
-    for s in 0..n_seg {
+    for s in 0..med.len() {
         if measurable[s] && eligible[s] {
             n_eval += 1;
-            if med[s] < params.sat_px {
+            if med[s] < sat_px {
                 n_sat += 1;
             }
         }
     }
-    let sat_pct = if n_eval > 0 {
+    if n_eval > 0 {
         100.0 * n_sat as f64 / n_eval as f64
     } else {
         0.0
-    };
+    }
+}
 
-    // ── 6. Companion: group consistency (opt-in) ─────────────────────────
-    let consistency = if params.compute_group_consistency {
-        let eval_segs: Vec<usize> = (0..n_seg)
-            .filter(|&s| measurable[s] && eligible[s] && groups_of_seg[s].len() >= 2)
-            .collect();
-        let eval_hi_parallax: Vec<bool> = eval_segs
-            .iter()
-            .map(|&s| parallax[s].is_finite() && parallax[s] >= params.hi_parallax_deg)
-            .collect();
-        let posed_centers: Vec<Point3<f64>> =
-            posed_images.iter().map(|&i| centers[i as usize]).collect();
-        group_consistency::group_consistency(&group_consistency::GroupConsistencyInput {
-            camera,
-            quats: &quats,
-            group_of: &group_of,
-            n_groups,
-            posed_centers: &posed_centers,
-            dirs: &dirs,
-            obs_center: &obs_center,
-            obs_image: &obs_image,
-            obs_uv: &obs_uv,
-            seg_offsets: &seg_offsets,
-            eval_segs: &eval_segs,
-            eval_hi_parallax: &eval_hi_parallax,
-            sat_px: params.sat_px,
-        })
-    } else {
-        None
-    };
-
-    Ok(CensusReport {
-        score,
-        n_groups,
-        group_of,
-        pairs,
-        sat_pct,
-        group_consistency: consistency,
+/// § 6. Companion: group consistency (opt-in), run over the eligible
+/// measurable bridges.
+fn group_consistency_companion(
+    camera: &CameraIntrinsics,
+    poses: &CandidatePoses,
+    groups: &ViewpointGroups,
+    obs: &PosedObservations,
+    measures: &ClusterMeasures,
+    eligible: &[bool],
+    params: &CensusParams,
+) -> Option<GroupConsistency> {
+    let ClusterMeasures {
+        measurable,
+        groups_of_seg,
+        parallax,
+        ..
+    } = measures;
+    let eval_segs: Vec<usize> = (0..obs.n_seg())
+        .filter(|&s| measurable[s] && eligible[s] && groups_of_seg[s].len() >= 2)
+        .collect();
+    let eval_hi_parallax: Vec<bool> = eval_segs
+        .iter()
+        .map(|&s| parallax[s].is_finite() && parallax[s] >= params.hi_parallax_deg)
+        .collect();
+    let posed_centers: Vec<Point3<f64>> = groups
+        .posed_images
+        .iter()
+        .map(|&i| poses.centers[i as usize])
+        .collect();
+    group_consistency::group_consistency(&group_consistency::GroupConsistencyInput {
+        camera,
+        quats: &poses.quats,
+        group_of: &groups.group_of,
+        n_groups: groups.n_groups,
+        posed_centers: &posed_centers,
+        dirs: &obs.dirs,
+        obs_center: &obs.obs_center,
+        obs_image: &obs.obs_image,
+        obs_uv: &obs.obs_uv,
+        seg_offsets: &obs.seg_offsets,
+        eval_segs: &eval_segs,
+        eval_hi_parallax: &eval_hi_parallax,
+        sat_px: params.sat_px,
     })
 }
 
