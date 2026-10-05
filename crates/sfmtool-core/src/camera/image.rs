@@ -237,9 +237,9 @@ impl ImageU8Pyramid {
 /// a scratch field, [`resize`](Self::resize) it for the new tile's shape (cheap
 /// when shape is unchanged), and pass it as the `out` of an `_into` variant.
 pub struct ImageF32WithGrad {
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) channels: u32,
+    width: u32,
+    height: u32,
+    channels: u32,
     pub(super) value: Vec<f32>,
     pub(super) grad_x: Vec<f32>,
     pub(super) grad_y: Vec<f32>,
