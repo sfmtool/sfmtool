@@ -71,7 +71,8 @@ empty-handed". Name the thing and say what it does.
 
 - `src/sfmtool/` — the Python package. Entry point is `cli.py`
   (Click + `_cli_group.CategoryGroup` for categorized `--help`). Subpackages:
-  - `_commands/` — one module per top-level CLI subcommand
+  - `_commands/` — one module per top-level CLI subcommand, imported only when
+    its command runs (a row in `cli.COMMANDS`; see below)
   - `align/` — alignment of multiple reconstructions (pairwise, by-cameras, by-points, multi-way)
   - `analyze/` — reconstruction analysis: summary, per-image metrics, depth, covisibility/frustum graphs
   - `camera/` — camera intrinsics, EXIF/config-based inference, `camera_config.json` resolution
@@ -102,8 +103,8 @@ empty-handed". Name the thing and say what it does.
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
     "SfM Explorer", or "SfM Explorer - <file>.sfmr" once a file is loaded
   - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`; also carries
-    the viewer entry point `run_explorer`, which `sfm explorer` runs in a
-    child process (`python -m sfmtool._explorer`)
+    the viewer entry point `run_explorer`, which `sfm explorer` calls in its
+    own process
 - `tests/` — pytest (top-level modules + `tests/camrig/`, `tests/matching/`,
   `tests/patch/`, `tests/rig/`, `tests/rust_bindings/`, `tests/sift/` and
   `tests/xform/`). Fixtures in
@@ -295,6 +296,18 @@ backlog and keep them honest as findings get addressed:
   is an error (`private_intra_doc_links`) — write those as a plain code span
   (`` `foo` ``) rather than widening visibility. Method refs inside an inherent
   impl need `Self::`; sibling private modules need `super::`.
+- **`sfmtool` and `sfm` load their Python modules lazily.** `import sfmtool`
+  binds the extension's names and nothing else; the names from its Python
+  submodules (`SiftReader`, `extract_sift_with_colmap`, …) are bound on first
+  use through the `__getattr__` in `sfmtool/__init__.py`, so a new public
+  name from a Python submodule goes in its `_LAZY_NAMES` table, not in an
+  import line. `sfm` imports a command's module only when that command runs, and
+  lists the commands in `--help` from `COMMANDS` in `cli.py`, so a new command
+  is a row there, its one-line help the first sentence of its docstring, and a
+  command module does no work at import time beyond defining the command.
+  `tests/test_lazy_loading.py` checks both, including that `import sfmtool`
+  and `sfm --help` import none of numpy, OpenCV and pycolmap. See
+  `specs/cli/README.md` § "How `sfm` loads its commands".
 - Every `.rs` under `crates/` and every `.py` under `src/`, `tests/` and
   `scripts/` opens with the two-line `Copyright The SfM Tool Authors` /
   `SPDX-License-Identifier: Apache-2.0` header (after the shebang, where there
@@ -305,8 +318,8 @@ backlog and keep them honest as findings get addressed:
   Rust changes.
 - `sfm explorer` does not run the same build of the viewer as `pixi run gui`.
   The viewer is compiled into the `sfmtool._sfmtool` extension
-  (`run_explorer`), and `sfm explorer` runs it in a child process,
-  `python -m sfmtool._explorer`; `pixi run gui` builds and runs the
+  (`run_explorer`), and `sfm explorer` calls it in the `sfm` process;
+  `pixi run gui` builds and runs the
   `sfm-explorer` crate's own `sfm-explorer` binary. Both reach
   `sfm_explorer::run_with_args`, so the viewer is the same code, but after a
   viewer change `sfm explorer` shows it only once `pixi run maturin develop

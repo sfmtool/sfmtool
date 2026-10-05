@@ -194,7 +194,7 @@ impl std::error::Error for RunError {}
 /// It takes its arguments rather than reading `std::env::args()` so that a
 /// caller other than the `sfm-explorer` binary can run it. The `sfmtool-py`
 /// extension exposes it to Python as `sfmtool._sfmtool.run_explorer`, which
-/// `sfm explorer` calls in a child Python process.
+/// `sfm explorer` calls in the `sfm` process.
 ///
 /// It does not end the process. A failure is returned as a [`RunError`] with
 /// the message and the exit status [`run`] ends the binary with: status 2 when

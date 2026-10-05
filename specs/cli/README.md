@@ -4,6 +4,30 @@ One spec per `sfm` subcommand, in the directory matching the category the
 command is registered under in `src/sfmtool/cli.py` — the same grouping
 `sfm --help` prints. Implementations live in `src/sfmtool/_commands/`.
 
+## How `sfm` loads its commands
+
+`sfm` imports a command's module only when that command is looked up: when it
+runs, or when its own `--help` is printed. `COMMANDS` in
+[cli.py](../../src/sfmtool/cli.py) lists every top-level command but `version`
+with its name, its `--help` category, the module in `sfmtool._commands` and the
+attribute that define it, and its one-line help, the first sentence of the
+command's docstring. `CategoryGroup` in
+[_cli_group.py](../../src/sfmtool/_cli_group.py) lists the commands by
+category from that table, so `sfm --help` imports no command module, and
+`sfm explorer` does not import the modules of the commands that need numpy,
+OpenCV or pycolmap. The package root works the same way:
+[`sfmtool/__init__.py`](../../src/sfmtool/__init__.py) binds the extension's
+names on import, which takes about 10 ms, and the names of its Python
+submodules on first use, through a module `__getattr__`.
+
+So a command module does no work at import time beyond defining its command,
+and `sfmtool._commands/__init__.py` imports none of them. A new command is a
+row in `COMMANDS`, with the first sentence of its docstring as the one-line
+help; [test_lazy_loading.py](../../tests/test_lazy_loading.py) checks that each
+row names a command defined where the row says, under that name, with that
+help, and that `import sfmtool` and `sfm --help` import none of numpy, OpenCV,
+pycolmap and the command modules.
+
 ## Workspace
 
 | Command | Spec |

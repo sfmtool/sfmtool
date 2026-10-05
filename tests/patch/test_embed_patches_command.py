@@ -556,7 +556,7 @@ def test_embed_patches_self_similarity_cull_defaults_to_the_member_gates_bar():
     `embed_patches`, the member gates' bar, and the old flag is gone."""
     import inspect
 
-    command = main.commands["embed-patches"]
+    command = main.get_command(None, "embed-patches")
     options = {p.name: p for p in command.params}
     assert options["max_zncc_self_similarity_radius"].default == 2.5
     assert "max_keypoint_uncertainty" not in options

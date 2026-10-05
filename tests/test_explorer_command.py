@@ -3,47 +3,45 @@
 
 """Tests for ``sfm explorer`` that open no window.
 
-The command is checked with ``subprocess.run`` replaced, so only the command
-line it builds is looked at. The child program, ``python -m sfmtool._explorer``,
-is run for real through the built extension, but only with arguments the
-viewer answers before it creates a window: ``--help``, and an unknown option.
-``run_explorer`` is also called in this process with those two command lines
-and with ``--mcp 70000``, which it answers by returning a status without ending
-the process.
+The command is checked with ``run_explorer`` replaced in the command's module,
+so only the viewer command line it builds and what it does with the status are
+looked at. ``run_explorer`` itself is called in this process only with
+arguments the viewer answers before it creates a window: ``--help``, an unknown
+option, and ``--mcp 70000``, which it answers by returning a status without
+ending the process. A child Python process checks which libraries ``sfm
+explorer`` imports.
 """
 
 import importlib
+import signal
 import subprocess
 import sys
-from types import SimpleNamespace
 
 from click.testing import CliRunner
 
 from sfmtool._sfmtool import run_explorer
 from sfmtool.cli import main
 
-# `sfmtool._commands` re-exports the `explorer` command under the module's own
-# name, so the module is reached through `importlib`.
 explorer_module = importlib.import_module("sfmtool._commands.explorer")
 
 
-def _invoke_with_fake_run(monkeypatch, args, returncode=0):
-    """Run ``sfm explorer ARGS`` with ``subprocess.run`` recorded, not run."""
+def _invoke_with_fake_viewer(monkeypatch, args, status=0):
+    """Run ``sfm explorer ARGS`` with ``run_explorer`` recorded, not run."""
     calls = []
 
-    def fake_run(argv, *a, **kw):
-        calls.append(argv)
-        return SimpleNamespace(returncode=returncode)
+    def fake_run_explorer(viewer_args):
+        calls.append(list(viewer_args))
+        return status
 
-    monkeypatch.setattr(explorer_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(explorer_module, "run_explorer", fake_run_explorer)
     result = CliRunner().invoke(main, ["explorer", *args])
     return result, calls
 
 
-def test_no_arguments_runs_viewer_module(monkeypatch):
-    result, calls = _invoke_with_fake_run(monkeypatch, [])
+def test_no_arguments_runs_viewer_with_no_arguments(monkeypatch):
+    result, calls = _invoke_with_fake_viewer(monkeypatch, [])
     assert result.exit_code == 0, result.output
-    assert calls == [[sys.executable, "-P", "-m", "sfmtool._explorer"]]
+    assert calls == [[]]
 
 
 def test_options_then_files_in_order(monkeypatch, tmp_path):
@@ -51,29 +49,17 @@ def test_options_then_files_in_order(monkeypatch, tmp_path):
     b = tmp_path / "b.sfmr"
     a.write_bytes(b"")
     b.write_bytes(b"")
-    result, calls = _invoke_with_fake_run(
+    result, calls = _invoke_with_fake_viewer(
         monkeypatch, [str(a), str(b), "--no-default-layout", "--mcp", "9000"]
     )
     assert result.exit_code == 0, result.output
-    assert calls == [
-        [
-            sys.executable,
-            "-P",
-            "-m",
-            "sfmtool._explorer",
-            "--mcp",
-            "9000",
-            "--no-default-layout",
-            str(a),
-            str(b),
-        ]
-    ]
+    assert calls == [["--mcp", "9000", "--no-default-layout", str(a), str(b)]]
 
 
 def test_mcp_port_out_of_range_is_refused(monkeypatch, tmp_path):
     a = tmp_path / "a.sfmr"
     a.write_bytes(b"")
-    result, calls = _invoke_with_fake_run(monkeypatch, [str(a), "--mcp", "70000"])
+    result, calls = _invoke_with_fake_viewer(monkeypatch, [str(a), "--mcp", "70000"])
     assert result.exit_code == 2
     assert "70000" in result.output
     assert calls == []
@@ -82,43 +68,63 @@ def test_mcp_port_out_of_range_is_refused(monkeypatch, tmp_path):
 def test_mcp_without_port_passes_default(monkeypatch, tmp_path):
     a = tmp_path / "a.sfmr"
     a.write_bytes(b"")
-    result, calls = _invoke_with_fake_run(monkeypatch, [str(a), "--mcp"])
+    result, calls = _invoke_with_fake_viewer(monkeypatch, [str(a), "--mcp"])
     assert result.exit_code == 0, result.output
-    assert calls[0][4:] == ["--mcp", str(explorer_module.DEFAULT_MCP_PORT), str(a)]
+    assert calls == [["--mcp", str(explorer_module.DEFAULT_MCP_PORT), str(a)]]
 
 
 def test_exit_status_is_the_viewers(monkeypatch):
-    result, calls = _invoke_with_fake_run(monkeypatch, [], returncode=3)
+    result, calls = _invoke_with_fake_viewer(monkeypatch, [], status=3)
     assert len(calls) == 1
     assert result.exit_code == 3
 
 
 def test_missing_file_is_refused_before_launch(monkeypatch, tmp_path):
-    result, calls = _invoke_with_fake_run(monkeypatch, [str(tmp_path / "missing.sfmr")])
+    result, calls = _invoke_with_fake_viewer(
+        monkeypatch, [str(tmp_path / "missing.sfmr")]
+    )
     assert result.exit_code != 0
     assert calls == []
 
 
-def _run_viewer_module(*args):
-    return subprocess.run(
-        [sys.executable, "-P", "-m", "sfmtool._explorer", *args],
-        capture_output=True,
-        text=True,
-        timeout=120,
+def test_ctrl_c_ends_the_process_while_the_viewer_runs(monkeypatch):
+    # While the viewer holds the main thread, SIGINT has its default action, and
+    # Python's handler is back once the viewer returns.
+    seen = []
+
+    def fake_run_explorer(viewer_args):
+        seen.append(signal.getsignal(signal.SIGINT))
+        return 0
+
+    monkeypatch.setattr(explorer_module, "run_explorer", fake_run_explorer)
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        result = CliRunner().invoke(main, ["explorer"])
+    finally:
+        restored = signal.signal(signal.SIGINT, previous)
+    assert result.exit_code == 0, result.output
+    assert seen == [signal.SIG_DFL]
+    assert restored is signal.default_int_handler
+
+
+def test_explorer_imports_no_numpy_pycolmap_or_opencv():
+    # In a fresh interpreter, so this process's own imports do not count.
+    code = (
+        "import sys\n"
+        "import sfmtool\n"
+        "from sfmtool.cli import main\n"
+        "try:\n"
+        "    main(['explorer', '--help'])\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "print(sorted(m for m in ('pycolmap', 'cv2', 'numpy') if m in sys.modules))\n"
     )
-
-
-def test_viewer_module_help_prints_usage_without_a_window():
-    result = _run_viewer_module("--help")
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
     assert result.returncode == 0, result.stderr
-    assert "USAGE:" in result.stdout
-    assert "--no-default-layout" in result.stdout
-
-
-def test_viewer_module_unknown_option_exits_2():
-    result = _run_viewer_module("--no-such-option")
-    assert result.returncode == 2
-    assert "--no-such-option" in result.stderr
+    assert "Launch the SfM Explorer 3D viewer." in result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "[]"
 
 
 def test_run_explorer_returns_2_on_an_unknown_option_in_process(capfd):

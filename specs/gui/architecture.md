@@ -4,9 +4,8 @@ SfM Explorer, the sfmtool 3D viewer, is a native Rust application in the
 `sfm-explorer` crate. It opens a `winit` window, draws the 3D scene with `wgpu`,
 and draws its panels with `egui` inside the same frame, running its own event
 loop rather than eframe's. `pixi run gui` runs the crate's `sfm-explorer`
-binary; `sfm explorer` runs `python -m sfmtool._explorer` as a child process,
-which calls the viewer through `run_explorer` in the `sfmtool._sfmtool`
-extension. Both reach `sfm_explorer::run_with_args`. `lib.rs` owns the window
+binary; `sfm explorer` calls the viewer in its own process through
+`run_explorer` in the `sfmtool._sfmtool` extension. Both reach `sfm_explorer::run_with_args`. `lib.rs` owns the window
 and the event loop, `app.rs` runs each frame, `dock.rs` routes the panels,
 `scene_renderer/` owns the GPU passes and `state.rs` holds the application
 state. This spec records why the viewer is built on this stack, what each
@@ -398,11 +397,12 @@ Python as `sfmtool._sfmtool.run_explorer`, so the viewer is part of the
 extension module in every wheel. `run_with_args` reports a failure as a
 `RunError` carrying a message and an exit status (2 for a command line it
 cannot act on, 1 for a viewer that could not start), and `run` is the only
-function that ends the process with it. `sfm explorer` runs the viewer in a
-child process, `python -m sfmtool._explorer`, because `winit` creates the
-viewer's event loop only on the process's main thread, on every platform, and
-only once per process, and the viewer sets process-wide state (the logger, and
-on Windows the DPI awareness); see
+function that ends the process with it. `run_explorer` must be called on the
+process's main thread, and once per process, because `winit` creates the
+viewer's event loop only on the main thread, on every platform, and only once
+per process; and the viewer sets process-wide state (the logger, and on Windows
+the DPI awareness). `sfm explorer` calls it on the `sfm` process's main thread
+as the last thing it does, and exits with the status it returns; see
 [explorer-command.md](../cli/visualization/explorer-command.md).
 
 ---

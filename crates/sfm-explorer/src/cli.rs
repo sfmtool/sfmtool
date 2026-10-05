@@ -4,7 +4,7 @@
 //! The command line:
 //! `[--mcp [PORT]] [--no-default-layout] [--demo] [path.sfmr ...]`, after the
 //! program name, which differs between the `sfm-explorer` binary and
-//! `python -m sfmtool._explorer` and so is not named in the help or errors.
+//! `sfm explorer` and so is not named in the help or errors.
 //!
 //! Hand-rolled rather than `clap`, because there are three flags and a list of
 //! paths. A dozen lines keeps the viewer's dependency tree as it was; reach for

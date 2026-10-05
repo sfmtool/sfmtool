@@ -58,8 +58,8 @@ def test_submodule_public_names():
 def test_root_surface_is_deliberate_and_minimal():
     """The `_sfmtool` root registers only its deliberate root-level names:
     `build_profile`, `ProgressCounter` and `THUMBNAIL_SIZE`, which the package
-    root re-exports, and `run_explorer`, the viewer entry point that
-    `sfmtool._explorer` calls and the package root does not re-export. The old
+    root re-exports, and `run_explorer`, the viewer entry point that `sfm
+    explorer` calls and the package root does not re-export. The old
     flat class registrations are gone, and the package root still re-exports
     the public API explicitly."""
     assert callable(_sfmtool.build_profile)

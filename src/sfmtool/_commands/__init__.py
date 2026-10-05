@@ -1,68 +1,11 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI command implementations organized by functionality."""
+"""CLI command implementations, one module per top-level command.
 
-from .align import align
-from .analyze import analyze
-from .camrig import camrig
-from .cluster_patches import cluster_patches
-from .compare import compare
-from .densify import densify
-from .embed_patches import embed_patches_command
-from .epipolar import epipolar
-from .estimate_intrinsics import estimate_intrinsics
-from .explorer import explorer
-from .flow import flow
-from .from_colmap_bin import from_colmap_bin
-from .heatmap import heatmap
-from .inspect import inspect
-from .insv2rig import insv2rig
-from .match import match
-from .merge import merge
-from .motion import motion
-from .pano2rig import pano2rig
-from .panorama import panorama
-from .render_patches import render_patches_command
-from .sift import sift
-from .solve import solve
-from .to_colmap_bin import to_colmap_bin
-from .to_colmap_db import to_colmap_db
-from .to_nerfstudio import to_nerfstudio
-from .undistort import undistort
-from .web_export import web_export
-from .ws import ws
-from .xform import xform
-
-__all__ = [
-    "align",
-    "analyze",
-    "camrig",
-    "cluster_patches",
-    "compare",
-    "densify",
-    "embed_patches_command",
-    "epipolar",
-    "estimate_intrinsics",
-    "explorer",
-    "flow",
-    "from_colmap_bin",
-    "heatmap",
-    "inspect",
-    "insv2rig",
-    "match",
-    "merge",
-    "motion",
-    "pano2rig",
-    "panorama",
-    "render_patches_command",
-    "sift",
-    "solve",
-    "to_colmap_bin",
-    "to_colmap_db",
-    "to_nerfstudio",
-    "undistort",
-    "web_export",
-    "ws",
-    "xform",
-]
+The package imports none of its modules: `sfmtool.cli` imports a command's
+module only when that command is looked up (see `sfmtool._cli_group`), so a
+module here should do no work at import time beyond defining its command, and
+should import heavy libraries (numpy, OpenCV, pycolmap) only if its own command
+needs them.
+"""

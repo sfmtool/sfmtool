@@ -19,7 +19,7 @@
 //! progress instrumentation shared by patch and matching kernels),
 //! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
 //! extractors resize to) and `run_explorer` (the viewer, which `sfm explorer`
-//! runs in a child process through `sfmtool/_explorer.py`). The first three
+//! calls from `sfmtool/_commands/explorer.py`). The first three
 //! are re-exported explicitly by `sfmtool/__init__.py`; `run_explorer` is not.
 //! `sfmtool/__init__.py` additionally
 //! re-exports each submodule wholesale (`from sfmtool._sfmtool.<sub> import
@@ -177,10 +177,9 @@ fn build_profile() -> &'static str {
 /// program name), and return its exit status when its window closes: 0 when
 /// the viewer ran and its window was closed, or `--help` printed the usage.
 ///
-/// This is how `sfm explorer` runs the viewer: it starts
-/// `python -P -m sfmtool._explorer` as a child process, which calls this
-/// function with its own arguments and exits with the status returned. It does
-/// not end the process. When the viewer cannot run it prints the error to
+/// This is how `sfm explorer` runs the viewer: it calls this function in the
+/// `sfm` process, on its main thread, with the viewer's command line, and exits
+/// with the status returned. This function does not end the process. When the viewer cannot run it prints the error to
 /// stderr and returns the error's status: 2 when `args` does not parse (an
 /// unknown option, or `--mcp=` with something that is not a port number) or
 /// asks for `--mcp` in a build without the `mcp` feature, and 1 when its MCP
@@ -191,8 +190,9 @@ fn build_profile() -> &'static str {
 /// window's event loop only on the main thread, on every platform, and panics
 /// when called from another thread; and only once per process, so a second
 /// call returns 1. The viewer also sets process-wide state, the
-/// `env_logger` logger and on Windows the DPI awareness, which is why
-/// `sfm explorer` runs it in a process of its own.
+/// `env_logger` logger and on Windows the DPI awareness, so a caller that
+/// goes on running after the viewer closes carries that state with it.
+/// `sfm explorer` ends the process once this returns.
 ///
 /// The GIL is released while the viewer runs.
 #[pyfunction]
@@ -213,8 +213,8 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
 
     // The viewer. Root-level because it is not a binding of any one area of
-    // the library; it is the program `sfm explorer` runs in a child process
-    // (see `sfmtool/_explorer.py`). Not re-exported by `sfmtool/__init__.py`.
+    // the library; it is the program `sfm explorer` runs (see
+    // `sfmtool/_commands/explorer.py`). Not re-exported by `sfmtool/__init__.py`.
     m.add_function(wrap_pyfunction!(run_explorer, m)?)?;
 
     // Geometric value types: camera intrinsics, quaternions, rigid + SE3 transforms.
