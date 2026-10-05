@@ -164,6 +164,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium, because a changed clear/rebuild order can silently alter reconstructions.
 
 **Share the CSR argument resolver and reference prose**
+> _Status (2026-10-05): **Partially done** — the private `crates/sfmtool-py/src/csr_args.rs` holds one `MatchesFile`-or-`cluster_starts` resolver (`resolve_csr_source`), the shared index checks, and one `float32`/`float64` array reader (`float_array_f32`), used by `focal_vote`, `estimate_intrinsics` and `cluster_radii`/`coarsest_cluster_ids` with every input form, cast, error type, message and check order kept; tests now pin those messages and orders. The shared argument-reference prose is left until branch `audit-fix-05`, which shrinks the `focal_vote` docstring to a spec pointer, has merged. Branch `audit-fix-18-csr-resolver`._
 - Location: `crates/sfmtool-py/src/geometry/{focal_vote,estimate_intrinsics}.rs` and `crates/sfmtool-py/src/analysis/cluster_radii.rs`.
 - Problem: `radii_source` at `cluster_radii.rs:47` still duplicates `vote_source` at `focal_vote.rs:82`, as do numeric array coercers. The three binding docs share 18–20 distinct `///` lines pairwise, so one validation contract is transcribed three times.
 - Proposed fix: One typed CSR/source resolver, one array coercer, and a shared included argument reference block.

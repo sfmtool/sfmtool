@@ -337,6 +337,33 @@ def test_focal_vote_array_form_needs_every_argument():
         focal_vote("not an array", im, pos, W, H)
 
 
+def test_focal_vote_array_form_error_messages():
+    starts, im, pos = _rotation_scene(2024)
+    with pytest.raises(ValueError, match="array form takes cluster_starts"):
+        focal_vote(starts, im, pos, W)
+    with pytest.raises(TypeError, match="MatchesFile or a"):
+        focal_vote(starts.astype(np.int64), im, pos, W, H)
+    with pytest.raises(ValueError, match=r"shape \(n_members, 2\)"):
+        focal_vote(starts, im, np.zeros((len(im), 3)), W, H)
+    with pytest.raises(ValueError, match="share n_members"):
+        focal_vote(starts, im, pos[:-1], W, H)
+    with pytest.raises(TypeError, match="float32 or float64"):
+        focal_vote(starts, im, pos.reshape(-1), W, H)
+    with pytest.raises(ValueError, match="open at 0"):
+        focal_vote(np.array([1, len(im)], np.uint32), im, pos, W, H)
+    with pytest.raises(ValueError, match="nondecreasing"):
+        focal_vote(np.array([0, 3, 2, len(im)], np.uint32), im, pos, W, H)
+    with pytest.raises(ValueError, match="close at the member count"):
+        focal_vote(np.array([0, 2, len(im) - 1], np.uint32), im, pos, W, H)
+
+
+def test_focal_vote_reads_positions_before_the_index():
+    # A malformed positions array is reported ahead of a malformed index.
+    starts, im, pos = _rotation_scene(2024)
+    with pytest.raises(ValueError, match=r"shape \(n_members, 2\)"):
+        focal_vote(np.array([1, 0], np.uint32), im, np.zeros((len(im), 3)), W, H)
+
+
 def test_focal_vote_rotation_scene():
     # Parallax-free rig: the epipolar candidates are homography-dominated, so
     # the pool is rotation votes and Rotation is its majority contributor.

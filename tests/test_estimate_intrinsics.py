@@ -556,7 +556,7 @@ def test_the_object_form_takes_no_observation_arrays(cluster_matches_file):
     from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
 
     selection, data = ei._load_selection(cluster_matches_file)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="takes no observation arrays"):
         estimate(
             selection,
             np.asarray(selection.member_images, dtype=np.uint32),

@@ -4,7 +4,9 @@
 //! Python binding for the structure-free focal vote
 //! (``sfmtool._sfmtool.geometry.focal_vote``; see ``specs/core/geometry/focal-vote.md``).
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::ndarray::Ix2;
+use numpy::{PyReadonlyArray1, PyUntypedArrayMethods};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -14,7 +16,9 @@ use sfmtool_core::geometry::focal_vote::{
 };
 use sfmtool_matches_format::MatchesData;
 
-use crate::io::matches_file::PyMatchesFile;
+use crate::csr_args::{
+    check_starts_close, check_starts_nondecreasing, float_array_f32, resolve_csr_source, CsrSource,
+};
 
 /// One column's `scan_votes` entry as a Python dict.
 pub(crate) fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyDict>> {
@@ -86,35 +90,29 @@ pub(crate) fn vote_source<'a, 'py>(
     width: Option<u32>,
     height: Option<u32>,
 ) -> PyResult<VoteSource<'a>> {
-    if let Ok(file) = source.cast::<PyMatchesFile>() {
-        if member_images.is_some()
-            || member_positions.is_some()
-            || width.is_some()
-            || height.is_some()
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "the MatchesFile form takes no observation arrays: the file states \
-                 its own members and image size",
-            ));
-        }
-        return Ok(VoteSource::Matches(file.get().data()));
-    }
-    let cluster_starts: PyReadonlyArray1<'py, u32> = source.extract().map_err(|_| {
-        pyo3::exceptions::PyTypeError::new_err(
-            "the first argument must be a MatchesFile or a (n_clusters + 1,) uint32 \
-             cluster_starts array",
-        )
-    })?;
+    let extra_given = member_images.is_some()
+        || member_positions.is_some()
+        || width.is_some()
+        || height.is_some();
+    let starts = match resolve_csr_source(
+        source,
+        extra_given,
+        "the MatchesFile form takes no observation arrays: the file states \
+         its own members and image size",
+    )? {
+        CsrSource::Matches(matches) => return Ok(VoteSource::Matches(matches)),
+        CsrSource::Starts(starts) => starts,
+    };
     let (Some(member_images), Some(member_positions), Some(width), Some(height)) =
         (member_images, member_positions, width, height)
     else {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "the array form takes cluster_starts, member_images, member_positions, \
              width and height",
         ));
     };
     Ok(VoteSource::Arrays(vote_arrays(
-        cluster_starts,
+        starts,
         member_images,
         member_positions,
         width,
@@ -125,90 +123,46 @@ pub(crate) fn vote_source<'a, 'py>(
 /// Validate and unpack the CSR observation arrays.
 ///
 /// The index contract is checked here, in `O(n_clusters)`, so a caller learns
-/// what is wrong with its arrays instead of getting the empty vote back.
+/// what is wrong with its arrays instead of getting the empty vote back. The
+/// positions are read first, so a malformed positions array is reported ahead
+/// of a malformed index.
 fn vote_arrays(
-    cluster_starts: PyReadonlyArray1<'_, u32>,
+    starts: Vec<u32>,
     member_images: PyReadonlyArray1<'_, u32>,
     member_positions: Bound<'_, PyAny>,
     width: u32,
     height: u32,
 ) -> PyResult<VoteArrays> {
     let n_members = member_images.shape()[0];
-    let positions = member_positions_f32(&member_positions, n_members)?;
-
-    let starts = to_contiguous!(cluster_starts);
-    let images = to_contiguous!(member_images);
+    let positions = float_array_f32::<Ix2>(
+        &member_positions,
+        "member_positions must be a (n_members, 2) float32 or float64 array",
+    )?;
+    if positions.shape[1] != 2 {
+        return Err(PyValueError::new_err(
+            "member_positions must have shape (n_members, 2)",
+        ));
+    }
+    if positions.shape[0] != n_members {
+        return Err(PyValueError::new_err(
+            "member_images and member_positions must share n_members",
+        ));
+    }
 
     if starts.first() != Some(&0) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "cluster_starts must have at least one entry and open at 0",
         ));
     }
-    if starts.windows(2).any(|w| w[1] < w[0]) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "cluster_starts must be nondecreasing",
-        ));
-    }
-    if starts.last().copied().unwrap_or(0) as usize != n_members {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "cluster_starts must close at the member count ({n_members}), not {}",
-            starts.last().copied().unwrap_or(0)
-        )));
-    }
+    check_starts_nondecreasing(&starts)?;
+    check_starts_close(&starts, n_members)?;
     Ok(VoteArrays {
-        cluster_starts: starts.into_owned(),
-        member_images: images.into_owned(),
-        member_positions: positions,
+        cluster_starts: starts,
+        member_images: to_contiguous!(member_images).into_owned(),
+        member_positions: positions.data.as_chunks::<2>().0.to_vec(),
         width,
         height,
     })
-}
-
-/// The `member_positions` argument as the `f32` pairs the kernel takes.
-///
-/// `float32` is the array's own width and is taken as it lies. `float64` is
-/// accepted and cast, because a caller holding positions read out of a
-/// `.matches` file has `f32`-originated values in a `float64` array and the
-/// cast is exact for every one of them; a caller that has genuinely computed
-/// in double precision loses the bits below `f32` here, which is what the
-/// kernel would do at its own read anyway.
-fn member_positions_f32(obj: &Bound<'_, PyAny>, n_members: usize) -> PyResult<Vec<[f32; 2]>> {
-    let shape_err = || {
-        pyo3::exceptions::PyValueError::new_err("member_positions must have shape (n_members, 2)")
-    };
-    let count_err = || {
-        pyo3::exceptions::PyValueError::new_err(
-            "member_images and member_positions must share n_members",
-        )
-    };
-    if let Ok(a) = obj.extract::<PyReadonlyArray2<'_, f32>>() {
-        if a.shape()[1] != 2 {
-            return Err(shape_err());
-        }
-        if a.shape()[0] != n_members {
-            return Err(count_err());
-        }
-        let flat = to_contiguous!(a);
-        return Ok(flat.as_chunks::<2>().0.to_vec());
-    }
-    let a: PyReadonlyArray2<'_, f64> = obj.extract().map_err(|_| {
-        pyo3::exceptions::PyTypeError::new_err(
-            "member_positions must be a (n_members, 2) float32 or float64 array",
-        )
-    })?;
-    if a.shape()[1] != 2 {
-        return Err(shape_err());
-    }
-    if a.shape()[0] != n_members {
-        return Err(count_err());
-    }
-    let flat = to_contiguous!(a);
-    Ok(flat
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|c| [c[0] as f32, c[1] as f32])
-        .collect())
 }
 
 /// Map a core matches-reading refusal onto the Python exception the caller

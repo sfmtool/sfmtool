@@ -5,9 +5,8 @@
 //! ordered by it (``sfmtool._sfmtool.analysis.cluster_radii`` /
 //! ``coarsest_cluster_ids``; see ``specs/core/analysis/source-clusters.md``).
 
-use std::borrow::Cow;
-
-use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray3, PyUntypedArrayMethods};
+use numpy::ndarray::Ix3;
+use numpy::PyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -18,7 +17,9 @@ use sfmtool_core::analysis::cluster_radii::{
 };
 use sfmtool_matches_format::MatchesData;
 
-use crate::io::matches_file::PyMatchesFile;
+use crate::csr_args::{
+    check_starts_close, check_starts_nondecreasing, float_array_f32, resolve_csr_source, CsrSource,
+};
 
 /// What a radius-shaped binding was called with: a parsed `.matches` handle,
 /// or the CSR index and the shapes spelled out.
@@ -49,79 +50,41 @@ fn radii_source<'a, 'py>(
     member_affine_shapes: Option<Bound<'py, PyAny>>,
     refine_radius: Option<f32>,
 ) -> PyResult<RadiiSource<'a>> {
-    if let Ok(file) = source.cast::<PyMatchesFile>() {
-        if member_affine_shapes.is_some() || refine_radius.is_some() {
-            return Err(PyValueError::new_err(
-                "the MatchesFile form takes no shape arrays: the file states its own \
-                 member shapes and the refine radius they are expressed against",
-            ));
-        }
-        return Ok(RadiiSource::Matches(file.get().data()));
-    }
-    let cluster_starts: PyReadonlyArray1<'py, u32> = source.extract().map_err(|_| {
-        pyo3::exceptions::PyTypeError::new_err(
-            "the first argument must be a MatchesFile or a (n_clusters + 1,) uint32 \
-             cluster_starts array",
-        )
-    })?;
+    let starts = match resolve_csr_source(
+        source,
+        member_affine_shapes.is_some() || refine_radius.is_some(),
+        "the MatchesFile form takes no shape arrays: the file states its own \
+         member shapes and the refine radius they are expressed against",
+    )? {
+        CsrSource::Matches(matches) => return Ok(RadiiSource::Matches(matches)),
+        CsrSource::Starts(starts) => starts,
+    };
     let (Some(shapes), Some(refine_radius)) = (member_affine_shapes, refine_radius) else {
         return Err(PyValueError::new_err(
             "the array form takes cluster_starts, member_affine_shapes and refine_radius",
         ));
     };
-    let starts = to_contiguous!(cluster_starts);
     if starts.is_empty() {
         return Err(PyValueError::new_err(
             "cluster_starts must carry at least one boundary",
         ));
     }
-    if starts.windows(2).any(|w| w[1] < w[0]) {
+    check_starts_nondecreasing(&starts)?;
+    let shapes = float_array_f32::<Ix3>(
+        &shapes,
+        "member_affine_shapes must be a (n_member, 2, 2) float32 or float64 array",
+    )?;
+    if shapes.shape[1] != 2 || shapes.shape[2] != 2 {
         return Err(PyValueError::new_err(
-            "cluster_starts must be nondecreasing",
+            "member_affine_shapes must have shape (n_member, 2, 2)",
         ));
     }
-    let shapes = member_shapes_f32(&shapes)?;
-    if starts.last().copied().unwrap_or(0) as usize != shapes.len() / 4 {
-        return Err(PyValueError::new_err(format!(
-            "cluster_starts must close at the member count ({}), not {}",
-            shapes.len() / 4,
-            starts.last().copied().unwrap_or(0)
-        )));
-    }
+    check_starts_close(&starts, shapes.data.len() / 4)?;
     Ok(RadiiSource::Arrays {
-        cluster_starts: starts.into_owned(),
-        member_affine_shapes: shapes,
+        cluster_starts: starts,
+        member_affine_shapes: shapes.data,
         refine_radius,
     })
-}
-
-/// The `member_affine_shapes` argument as the flat `f32` fours the kernel
-/// takes.
-///
-/// `float32` is the array's own width and is taken as it lies. `float64` is
-/// accepted and cast, because a caller holding shapes read out of a
-/// `.matches` file has `f32`-originated values in a `float64` array and the
-/// cast is exact for every one of them.
-fn member_shapes_f32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
-    let shape_err =
-        || PyValueError::new_err("member_affine_shapes must have shape (n_member, 2, 2)");
-    if let Ok(a) = obj.extract::<PyReadonlyArray3<'_, f32>>() {
-        if a.shape()[1] != 2 || a.shape()[2] != 2 {
-            return Err(shape_err());
-        }
-        let flat: Cow<'_, [f32]> = to_contiguous!(a);
-        return Ok(flat.into_owned());
-    }
-    let a: PyReadonlyArray3<'_, f64> = obj.extract().map_err(|_| {
-        pyo3::exceptions::PyTypeError::new_err(
-            "member_affine_shapes must be a (n_member, 2, 2) float32 or float64 array",
-        )
-    })?;
-    if a.shape()[1] != 2 || a.shape()[2] != 2 {
-        return Err(shape_err());
-    }
-    let flat = to_contiguous!(a);
-    Ok(flat.iter().map(|&v| v as f32).collect())
 }
 
 /// Map a core radius-reading refusal onto the Python exception the caller

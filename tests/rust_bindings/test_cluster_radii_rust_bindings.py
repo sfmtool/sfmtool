@@ -149,6 +149,42 @@ class TestClusterRadii:
                 np.array([0, 2], dtype=np.uint32), MEMBER_SHAPES, REFINE_RADIUS
             )
 
+    def test_a_first_argument_that_is_neither_form_is_a_type_error(self):
+        with pytest.raises(TypeError, match="MatchesFile or a"):
+            cluster_radii("not an array", MEMBER_SHAPES, REFINE_RADIUS)
+        with pytest.raises(TypeError, match="MatchesFile or a"):
+            cluster_radii(CLUSTER_STARTS.astype(np.int64), MEMBER_SHAPES, 4.0)
+
+    def test_a_broken_cluster_starts_is_refused(self):
+        with pytest.raises(ValueError, match="at least one boundary"):
+            cluster_radii(np.zeros(0, np.uint32), MEMBER_SHAPES, REFINE_RADIUS)
+        with pytest.raises(ValueError, match="nondecreasing"):
+            cluster_radii(
+                np.array([0, 4, 2, 8], np.uint32), MEMBER_SHAPES, REFINE_RADIUS
+            )
+
+    def test_malformed_shapes_are_refused(self):
+        with pytest.raises(ValueError, match=r"shape \(n_member, 2, 2\)"):
+            cluster_radii(CLUSTER_STARTS, np.zeros((8, 2, 3)), REFINE_RADIUS)
+        with pytest.raises(TypeError, match="float32 or float64"):
+            cluster_radii(CLUSTER_STARTS, MEMBER_SHAPES.astype(np.int32), REFINE_RADIUS)
+        with pytest.raises(TypeError, match="float32 or float64"):
+            cluster_radii(CLUSTER_STARTS, np.zeros((8, 4)), REFINE_RADIUS)
+
+    def test_the_index_order_is_checked_before_the_shapes(self):
+        # A decreasing index is reported ahead of malformed shapes, while the
+        # closing check, which needs the member count, runs after them.
+        with pytest.raises(ValueError, match="nondecreasing"):
+            cluster_radii(np.array([0, 4, 2, 8], np.uint32), np.zeros((8, 2, 3)), 4.0)
+        with pytest.raises(ValueError, match=r"shape \(n_member, 2, 2\)"):
+            cluster_radii(np.array([0, 2], np.uint32), np.zeros((8, 2, 3)), 4.0)
+
+    def test_noncontiguous_float64_shapes_are_read_in_c_order(self):
+        fortran = np.asfortranarray(MEMBER_SHAPES.astype(np.float64))
+        npt.assert_array_equal(
+            cluster_radii(CLUSTER_STARTS, fortran, REFINE_RADIUS), EXPECTED_RADII
+        )
+
 
 # ── coarsest_cluster_ids ──────────────────────────────────────────────────
 
