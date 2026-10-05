@@ -45,6 +45,31 @@ jobs:
           name: wheels-windows-py${{ matrix.python-version }}
           path: dist/*.whl
 
+  # Apple silicon only: `macos-latest` is an arm64 runner, it is the platform
+  # the `test-os-python` CI job tests on, and it is the only macOS platform
+  # pixi.toml supports. Intel Macs build from the sdist.
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64-apple-darwin
+          args: --release --out dist --interpreter python${{ matrix.python-version }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-macos-py${{ matrix.python-version }}
+          path: dist/*.whl
+
   build-sdist:
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +86,7 @@ jobs:
           path: dist/*.tar.gz
 
   publish:
-    needs: [build-linux, build-windows, build-sdist]
+    needs: [build-linux, build-windows, build-macos, build-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
