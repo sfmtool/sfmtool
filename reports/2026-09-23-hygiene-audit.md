@@ -115,11 +115,11 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium.
 
 **Extract the GPU level runner's stages**
+> _Status (2026-10-05): Done — `run_gpu_levels_prebuilt` now reads as the sequence of its stages: `create_level_bind_groups` and `create_final_upsample` (preparation), `encode_levels` and `encode_final_upsample` (dispatch) and `read_back_final_flow` (readback), with `patch_grid` shared by the pool sizing and the per-level uniforms. GPU command order, buffers and the single submit and wait are unchanged; on lavapipe the GPU flow output is bit-identical before and after for final upsample step counts 0 to 3, branch `audit-fix-12-gpu-levels-stages`._
 - Location: `crates/sfmtool-core/src/features/optical_flow/gpu/mod.rs` (741 lines), `run_gpu_levels_prebuilt` from 254.
 - Problem: One method still consumes most of the module and interleaves level orchestration with GPU resource handling.
 - Proposed fix: Name preparation, dispatch, and readback stages as private helpers.
 - Effort: medium. Risk: medium.
-> _Status (2026-10-05): **Done** — `run_gpu_levels_prebuilt` now reads as the sequence of its stages: `create_level_bind_groups` and `create_final_upsample` (preparation), `encode_levels` and `encode_final_upsample` (dispatch) and `read_back_final_flow` (readback), with `patch_grid` shared by the pool sizing and the per-level uniforms. GPU command order, buffers and the single submit and wait are unchanged; on lavapipe the GPU flow output is bit-identical before and after for final upsample step counts 0 to 3, branch `audit-fix-12-gpu-levels-stages`._
 
 **Share the profiling scaffold and matching common path**
 > _Status (2026-10-05): Partially done — the eight `prof.rs` modules now take the `SFMTOOL_PROFILE` gate, the `Phase` timer, the event-counter increment, reset, and the phase and overhead report rows from one private `crate::profiling` module; each keeps its own phase names, report text and column layout, and a full `SFMTOOL_PROFILE=1` lib test run prints the same 3,278 profile lines, in the same shape and width, before and after. Polar and sweep matching are not merged: polar extends its candidate arrays for angle wraparound and carries separate positions, while sweep reads positions from its sort key, so a shared core is a design change rather than a mechanical one. Branch `audit-fix-13-prof-scaffold`._
