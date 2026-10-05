@@ -1,7 +1,8 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# The only root-level `_sfmtool` names — everything else lives on a submodule.
+# The root-level `_sfmtool` names — everything else lives on a submodule.
+# `run_explorer`, also root-level, is left out: `sfmtool._explorer` calls it.
 from sfmtool._sfmtool import THUMBNAIL_SIZE, ProgressCounter, build_profile  # noqa: F401
 from sfmtool._sfmtool.reconstruction import *  # noqa: F401, F403
 from sfmtool._sfmtool.patches import *  # noqa: F401, F403

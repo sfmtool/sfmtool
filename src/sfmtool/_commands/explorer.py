@@ -1,7 +1,6 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import shutil
 import subprocess
 import sys
 
@@ -12,6 +11,9 @@ import click
 # repeated here rather than queried because Click needs it to build ``--help``,
 # before the viewer is launched.
 DEFAULT_MCP_PORT = 8787
+
+# The module `sfm explorer` runs with `python -m` to start the viewer.
+VIEWER_MODULE = "sfmtool._explorer"
 
 
 @click.command()
@@ -54,16 +56,19 @@ def explorer(mcp_port, no_default_layout, sfmr_files):
     panels, and a screenshot of the viewport. The window says so while it is
     live, in its title bar and in the Scene panel. See specs/gui/mcp-server.md.
     """
-    exe = shutil.which("launch-sfm-explorer")
-    if exe is None:
-        raise click.ClickException(
-            "launch-sfm-explorer executable not found. "
-            "Install sfmtool with binary support or build with: "
-            "pixi run cargo build --release -p sfmtool-py"
-        )
-
     args = [] if mcp_port is None else ["--mcp", str(mcp_port)]
     if no_default_layout:
         args.append("--no-default-layout")
-    result = subprocess.run([exe, *args, *sfmr_files])
+    result = subprocess.run(viewer_command([*args, *sfmr_files]))
     sys.exit(result.returncode)
+
+
+def viewer_command(viewer_args: list[str]) -> list[str]:
+    """The command line that runs the viewer with ``viewer_args``.
+
+    The viewer is in the ``sfmtool._sfmtool`` extension, so it runs in a child
+    of this same Python interpreter, through ``python -m sfmtool._explorer``.
+    It needs a process of its own: it takes over the process's main thread for
+    its window event loop, and it ends the process on an error.
+    """
+    return [sys.executable, "-m", VIEWER_MODULE, *viewer_args]

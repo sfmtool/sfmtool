@@ -38,11 +38,11 @@ ndarray = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nalgebra = "0.35"
+# The viewer, which `run_explorer` runs and `sfm explorer` reaches through it.
+# Default features, so the `mcp` feature is on and `sfm explorer --mcp` works
+# from a wheel.
 sfm-explorer = { path = "../sfm-explorer" }
 openjd-expr = "0.9.0"
-
-[[bin]]
-name = "launch-sfm-explorer"
 
 # Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
 [lints]
