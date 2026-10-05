@@ -84,8 +84,9 @@ macro_rules! extract_array2 {
 /// [`finalize`], applies the recorded values in a fixed order. Because the
 /// first pass follows the caller's order, a check that compares against a
 /// count (for example `colors` against the point count) sees the count as the
-/// keys before it left it, and when several keys are bad the first one passed
-/// raises the error.
+/// keys before it left it, and when several keys fail a first-pass check the
+/// first one passed raises the error. A first-pass error comes before any
+/// error from [`finalize`], whose checks run in its own fixed order.
 pub(crate) fn clone_with_changes(
     inner: &SfmrReconstruction,
     py: Python<'_>,
