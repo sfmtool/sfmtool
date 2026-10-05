@@ -56,10 +56,11 @@ file"), `--demo` ([architecture.md](architecture.md) § "Testing") and `-h` /
 refused as an unknown option, `--mcp=` followed by something that is not a port
 number from 0 to 65535 is refused, and every remaining argument is a path.
 Hand-rolled rather than `clap`: four flags and a list of paths fit in one short
-function, and it keeps the binary's dependency tree as it was. The
-following-argument form has to look at what comes next, because `--mcp scene.sfmr` is the common invocation and means
-the default port and a file — so a next argument that is not a port is left
-alone rather than consumed.
+function, and it keeps the viewer's dependency tree as it was. The
+following-argument form has to look at what comes next, because
+`--mcp scene.sfmr` is the common invocation and means the default port and a
+file — so a next argument that is not a port is left alone rather than
+consumed.
 
 On startup the server binds and prints one line to stdout, which is what a
 human pastes into a client config:

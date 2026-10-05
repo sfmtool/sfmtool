@@ -49,10 +49,14 @@ integer". Put the files first (`sfm explorer scene.sfmr --mcp`), give the port
 
 The command builds the viewer's command line: `--mcp PORT` (when `--mcp` was
 given), then `--no-default-layout` (when given), then the files. It runs
-`[sys.executable, "-m", "sfmtool._explorer", *that]` with `subprocess.run`,
-so the child is the same Python interpreter as the command, and calls
-`sys.exit` with the child's return code. `viewer_command` in `explorer.py`
-builds that list, and `VIEWER_MODULE` names the module.
+`[sys.executable, "-P", "-m", "sfmtool._explorer", *that]` with
+`subprocess.run`, so the child is the same Python interpreter as the command,
+and calls `sys.exit` with the child's return code. `viewer_command` in
+`explorer.py` builds that list, and `VIEWER_MODULE` names the module. `-P`
+stops Python from putting the current directory first on `sys.path`, which
+`python -m` otherwise does; without it a `sfmtool.py` or `sfmtool/` in the
+directory `sfm explorer` is run from would be imported in place of the
+installed package.
 
 [_explorer.py](../../../src/sfmtool/_explorer.py) is the child's program. It
 restores the default `SIGINT` handler, so Ctrl+C ends the viewer as it ends any
@@ -67,9 +71,11 @@ needs a process to itself:
 
 - It creates a `winit` event loop, which macOS allows only on the process's
   main thread, and which `winit` allows only once per process.
-- It ends the process with `std::process::exit` on an option it does not
-  recognize (status 2), on `--mcp` in a build without the `mcp` feature
-  (status 2), and when the MCP endpoint cannot bind its port (status 1).
+- It ends the process with `std::process::exit` with status 2 when its
+  command line does not parse (an unknown option, or `--mcp=` followed by
+  something that is not a port number) or asks for `--mcp` in a build without
+  the `mcp` feature, and with status 1 when the MCP endpoint cannot bind its
+  port.
 - It initializes the global `env_logger` logger and, on Windows, sets the
   process's DPI awareness.
 
@@ -77,7 +83,14 @@ needs a process to itself:
 entry point: the `sfm-explorer` crate's own `sfm-explorer` binary,
 [main.rs](../../../crates/sfm-explorer/src/main.rs), whose `main` calls
 `sfm_explorer::run`, which passes `std::env::args()` without the program name
-to `run_with_args`. Both accept the same command line.
+to `run_with_args`. Both accept the same command line, and the viewer's
+`--help` text and its unknown-option error name neither program: the usage line
+is `[OPTIONS] [FILE.sfmr ...]` under a heading naming SfM Explorer.
+
+A panic in `run_with_args`, for example when there is no display or no Vulkan
+driver, reaches Python as an exception: the child prints a Python traceback
+ending in `pyo3_runtime.PanicException` and exits with status 1, which
+`sfm explorer` then exits with.
 
 ### What is in the wheel
 
@@ -122,9 +135,10 @@ extension: `--help` prints the viewer's usage and exits 0, and an unknown option
 exits 2. The viewer is tested in the `sfm-explorer` crate: its command-line
 parser in [cli/tests.rs](../../../crates/sfm-explorer/src/cli/tests.rs), and the
 running window in the `ui_basic` integration tests described in
-[architecture.md](../../gui/architecture.md) § "Testing".
+[architecture.md](../../gui/architecture.md) § "Testing". Those window-opening
+tests run the standalone `sfm-explorer` binary, so no automated test opens the
+window through `python -m sfmtool._explorer`.
 
 ## Non-goals
 
-The command does not run the viewer in its own process, and it does not look
-for a viewer executable on the `PATH`.
+The command does not run the viewer in the `sfm` process.

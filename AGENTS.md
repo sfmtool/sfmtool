@@ -101,7 +101,8 @@ empty-handed". Name the thing and say what it does.
   - `sfmtool-core` — algorithms: camera, alignment, distortion, epipolar, matching, frustum, optical flow, transforms, spatial indexing
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
     "SfM Explorer", or "SfM Explorer - <file>.sfmr" once a file is loaded
-  - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`
+  - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`; also carries
+    the viewer entry point `run_explorer` that `sfm explorer` calls
 - `tests/` — pytest (top-level modules + `tests/camrig/`, `tests/matching/`,
   `tests/patch/`, `tests/rig/`, `tests/rust_bindings/`, `tests/sift/` and
   `tests/xform/`). Fixtures in
@@ -345,8 +346,9 @@ backlog and keep them honest as findings get addressed:
   toolchain, and it is deliberately not the same thing as the MSRV: the workspace
   declares `rust-version = "1.97"` in `[workspace.package]` (inherited by every
   crate in the workspace), because the PyPI sdist compiles this workspace on the
-  user's own rustc
-  and we publish wheels for Linux and Windows only. The `msrv` job in `ci.yml`
+  user's own rustc. Wheels are published for x86-64 Linux, x86-64 Windows and
+  Apple-silicon macOS, so everyone else (Intel Macs, other Linux architectures)
+  builds from the sdist with the rustc they have. The `msrv` job in `ci.yml`
   builds against that floor; it reads the version out of `Cargo.toml`, so raise
   the MSRV there and nowhere else. The same job also checks `sfm-explorer`
   with `--no-default-features`, the only build that compiles the viewer

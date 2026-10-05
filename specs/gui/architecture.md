@@ -6,12 +6,13 @@ and draws its panels with `egui` inside the same frame, running its own event
 loop rather than eframe's. `pixi run gui` runs the crate's `sfm-explorer`
 binary; `sfm explorer` runs `python -m sfmtool._explorer` as a child process,
 which calls the viewer through `run_explorer` in the `sfmtool._sfmtool`
-extension. Both reach `sfm_explorer::run_with_args`. `lib.rs` owns the window and the event loop, `app.rs` runs
-each frame, `dock.rs` routes the panels, `scene_renderer/` owns the GPU passes
-and `state.rs` holds the application state. This spec records why the
-viewer is built on this stack, what each module is responsible for, the order
-of the render passes, how it is built and launched, its performance targets,
-what differs per platform, and how it is tested.
+extension. Both reach `sfm_explorer::run_with_args`. `lib.rs` owns the window
+and the event loop, `app.rs` runs each frame, `dock.rs` routes the panels,
+`scene_renderer/` owns the GPU passes and `state.rs` holds the application
+state. This spec records why the viewer is built on this stack, what each
+module is responsible for, the order of the render passes, how it is built and
+launched, its performance targets, what differs per platform, and how it is
+tested.
 
 For the user experience goals driving these choices, see
 [user-experience.md](user-experience.md).
@@ -468,10 +469,18 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 - **DPI awareness**: `SetProcessDpiAwarenessContext` for per-monitor DPI
 - **Graphics backend**: DirectX 12 via wgpu
 
-### macOS (Planned)
+### macOS
 
-- Trackpad gestures via native NSEvent / egui's built-in `zoom_delta`
-- Metal backend via wgpu
+- **Graphics backend**: Metal via wgpu.
+- **Trackpad gestures**: no native handling of their own. A two-finger scroll
+  arrives through winit as a scroll, and a pinch through egui's built-in
+  `zoom_delta`, which the 3D viewport and Image Detail read.
+- **Event loop**: `winit` creates its event loop only on the process's main
+  thread on macOS, which is one reason `sfm explorer` runs the viewer in a child
+  process of its own.
+- **Testing**: the windowed `ui_basic` suite runs on macOS in the
+  `ui-test-macos` CI job, the same way as on Windows and Linux; see "Testing"
+  below. It needs no Accessibility (TCC) grant.
 
 ### Linux
 
