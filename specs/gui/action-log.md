@@ -5,9 +5,9 @@
 The Action Log is a dock panel in SfM Explorer that lists the actions taken in
 the viewer, one timestamped line each, oldest first: opening and closing files,
 changing the scene graph, moving the selection, framing the view, playing the
-image animation, editing a reconstruction and undoing or redoing the edits,
-arranging the panels and the window, and every call the MCP endpoint
-applies. Each entry names which of three actors took it: the user at the
+image animation, editing a reconstruction, undoing or redoing the edits and
+saving it, arranging the panels and the window, and every call the MCP
+endpoint applies. Each entry names which of three actors took it: the user at the
 window, an agent over MCP, or the viewer itself. A person and an agent can
 drive the same window, and the log is how either one finds out afterwards who
 did what and when; it can be scrolled back and copied into a bug report or an
