@@ -1994,7 +1994,9 @@ Potential additions while maintaining backward compatibility:
 1. **Optional fields**:
    - Covariance matrices: `points3d/covariances.{N}.3.3.float64.zst`
    - Per-observation ZNCC self-similarity radii of each observation's own patch
-     render, with their per-axis extents and lower-bound flags, proposed in
+     render, with their reach along the patch's axes, whether each value is
+     only a lower bound, and the view angle and zoom of the render they were
+     read on, proposed in
      [sharper-patch-consensus.md](../drafts/sharper-patch-consensus.md) § "Part 5"
 
 2. **Metadata extensions**:

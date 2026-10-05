@@ -151,7 +151,7 @@ The `Anisotropic` sampler keeps that detail, at 1.6–3× the cost of a single s
 
 ### The view's angle to the patch
 
-`θ_v` is the angle between the view's ray to the patch centre and the patch's outward normal, and it costs one dot product. It measures what the Jacobian does not: how much the view's tile changes when the patch model is slightly wrong.
+`θ_v` is the angle between the view's ray through the observation's keypoint and the patch's outward normal: `cos θ_v = −n · d̂`, with `d̂` the unit ray from the camera centre through the keypoint. Because the render re-anchors the patch so its centre projects onto the keypoint, this is also the ray to the rendered patch's centre. Computing `d̂` unprojects the keypoint through the camera model; the dot product is then one multiply-add per axis. It measures what the Jacobian does not: how much the view's tile changes when the patch model is slightly wrong.
 - **An error in the normal** moves and shears the rendered tile by an amount that grows with `tan θ`. A view facing the patch barely changes.
 - **Relief and non-planarity.** At grazing angles, bumps on the surface hide or stretch parts of the patch, and a planar warp fits worse.
 - **Appearance.** Shading, specular highlights and how much of the texture is visible change with the angle. An oblique view correlates worse even when it is sharp and well aligned.
@@ -249,30 +249,42 @@ For observation `j` of point `i`, measured on the observation's own `R×R` rende
 - **The render.** It goes through point `i`'s patch, re-anchored on observation `j`'s keypoint, at the point's patch resolution `R`. It uses the sampler the rule in Part 2 picks for that view. This is the tile the bench and the member gates read (Part 1).
 - **The reading.** The overlap reading, with the default `max_radius` `r`.
 
-Three optional columns, parallel to the other `tracks/*` arrays:
+Optional columns, parallel to the other `tracks/*` arrays. Their names follow the glossary: the measurement is the ZNCC self-similarity radius, its per-axis values are its reach, and a value whose true length may be larger is "at least" that value. Each 0/1 column is named after the value it qualifies and has the same shape, so no column needs a legend.
 
 | Column | Shape, type | Meaning |
 |---|---|---|
-| `tracks/self_similarity_radius` | `(M,)` `float32` | The whole bitmap's radius, grid px |
-| `tracks/self_similarity_axes` | `(M, 2)` `float32` | The contour's extent along the grid's column and row axes (the patch's u and v), grid px |
-| `tracks/self_similarity_open` | `(M,)` `uint8` | Bit 0: the radius is a lower bound. Bit 1: the u extent is. Bit 2: the v extent is |
+| `tracks/zncc_self_similarity_radius` | `(M,)` `float32` | The whole bitmap's radius, grid px |
+| `tracks/zncc_self_similarity_radius_is_at_least` | `(M,)` `uint8` | 1 where the true radius may be larger, 0 otherwise |
+| `tracks/zncc_self_similarity_reach_uv` | `(M, 2)` `float32` | The contour's reach along the patch's u and v axes (the grid's column and row axes), grid px |
+| `tracks/zncc_self_similarity_reach_uv_is_at_least` | `(M, 2)` `uint8` | 1 per axis where the true reach may be larger |
+| `tracks/zncc_self_similarity_cos_view_angle` | `(M,)` `float32` | `cos θ = −n · d̂` of the render the radius was read on: `n` the re-anchored patch's outward normal, `d̂` the unit ray from the camera centre through the observation's keypoint. Positive where the patch faces the camera |
+| `tracks/zncc_self_similarity_zoom` | `(M, 2)` `float32` | `[least, most]` zoom of that render: `[1/σ_major, 1/σ_minor]` of the Jacobian of the patch grid into the photograph at the patch centre, grid px per photograph px |
 
-- **Not measured.** `NaN` in the radius means the observation was not measured; its axes are then `NaN` and its flags 0.
+- **What the last two columns describe.** They record the geometry of the render the radius was read on, not the file's current geometry. The format text says so in those words.
+  - **Why the prefix.** They carry the `zncc_self_similarity_` prefix so a reader sees they belong to that measurement.
+  - **Why store them.** Both need the camera model to recompute. The angle needs the keypoint unprojected, and the zoom needs the projection's derivative. Storing them gives a reader the exact measured values without implementing the camera models.
+- **The fallback render.** Where the keypoint's ray cannot meet the patch plane (parallel to it, or the plane behind the camera), the render uses the stored patch without re-anchoring, and `d̂` is the ray to the stored patch's centre. Such a view is at or past grazing, so its value is near zero or negative either way.
+- **Not measured.** `NaN` in the radius means the observation was not measured. Its reach, angle and zoom are then `NaN` and its flags 0.
 - **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own.
 - **Grid px.** The grid px are those of the point's `R` (`points3d/metadata.json`'s `patch_bitmap_resolution`), so the radius converts to scene units through the point's patch half-extents, as the reach does.
 
 The middle-square and per-cell readings are left out. They are cheap to recompute once a render exists, and nothing proposed here reads them without one.
 
-### When a stored radius stops being valid
+### When a stored radius stops describing the view
 
-A radius describes one render: the point's patch (centre, normal, axes, half-extents), the observation's keypoint, the image's pose and intrinsics, and the photograph. The format states, as a rule about the data, that a writer which changes any of these for an observation must either re-measure that observation's radius or set it to `NaN`. Writers that only copy, filter or reorder observations carry the values through untouched.
+A radius describes one render: the point's patch (centre, normal, axes, half-extents), the observation's keypoint, the image's pose and intrinsics, and the photograph. These change often, and by small amounts. Bundle adjustment moves every pose, and Fit and normal refinement move keypoints and normals.
 
-The open question is how strict "changes" is. Bundle adjustment moves every pose slightly, and a strict rule would clear every radius after each adjustment, although the renders barely change. One option is a tolerance stated in the file's terms:
-- the keypoint moves by less than a fraction of a grid px;
-- the patch normal turns by less than a few degrees;
-- the half-extent changes by less than a few per cent.
+**The reader judges staleness, not the writer.** A writer that changes the geometry does not have to clear or re-measure the radii. It carries the stored values through, and a writer that copies, filters or reorders observations does the same. A reader that uses a radius compares the stored angle and zoom with the ones it computes from the current geometry:
+- small differences mean the radius still describes this view;
+- a large change means it no longer does. Examples are a normal refit that turns the patch 20°, a resize that halves the zoom, or a keypoint moved onto other texture.
 
-Within it, a writer may keep the value.
+Each consumer applies the tolerance that suits it. A weight can tolerate more drift than a cull bar.
+
+**Two cases the stored conditions cannot detect, so a writer clears the radius (sets it to `NaN`):**
+- a keypoint moved so far that the render covers different texture while the angle and zoom stay about the same, as when a Fit walks an observation to another place;
+- the observation's photograph replaced.
+
+The threshold for "so far" is stated in grid px, e.g. more than half the radius's own `r`.
 
 ### A hand-set weight
 
@@ -308,7 +320,7 @@ Which one is part of this work. The radius columns do not depend on the choice.
 
 ## Open questions
 
-- **The invalidation tolerance** for stored radii (Part 5): a strict rule clears every radius after bundle adjustment; a tolerance needs values that hold up across datasets.
+- **The staleness tolerances** a consumer applies to the stored angle and zoom (Part 5), and the keypoint distance past which a writer clears a stored radius.
 - **`observation_confidence`**: refill it from the radius as the quantized sharpness ratio, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 5).
 
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
