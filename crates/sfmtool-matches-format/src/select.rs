@@ -474,10 +474,11 @@ impl MatchesData {
 }
 
 impl ClusterPatchData {
-    /// The refinement patch half-width in pixels, normalized across the
-    /// `refine_options` key generations: `patch_size` (the full patch edge,
-    /// current) divided by 2, or the legacy `radius` (already a half-width)
-    /// as-is. `None` when `refine_options` carries neither as a number.
+    /// The refinement patch half-width in pixels, read from whichever
+    /// `refine_options` key the file carries, by the rule in
+    /// `specs/formats/matches-file-format.md` §
+    /// "`cluster_patches/metadata.json.zst`". `None` when `refine_options`
+    /// carries neither key as a number.
     pub fn refine_radius(&self) -> Option<f64> {
         let opts = self.refine_options.as_object()?;
         if let Some(v) = opts.get("patch_size").and_then(|v| v.as_f64()) {

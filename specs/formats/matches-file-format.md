@@ -955,6 +955,25 @@ keeps the chain naming the archive it started from; nesting repeats to any
 depth, and the innermost `source_content_xxh128` names that archive. The key is
 absent whenever the source is an ordinary file.
 
+A selection of a selection, for example, records:
+
+```json
+{
+  "cluster_selection": {
+    "source_content_xxh128": "",
+    "min_span": 2,
+    "restrict_images": ["frames/frame_0010.jpg", "..."],
+    "accepted_statuses": ["reference", "kept"],
+    "source_selection": {
+      "source_content_xxh128": "9a51...",
+      "min_span": 2,
+      "restrict_images": null,
+      "accepted_statuses": ["reference", "kept"]
+    }
+  }
+}
+```
+
 **Sentinel scoping.** Only in a file carrying the `cluster_selection`
 provenance record may `reference_members[c] = 0xFFFFFFFF` additionally mean
 "the cluster's reference member is not present in this selection": the

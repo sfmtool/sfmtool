@@ -87,55 +87,22 @@ reference-relative warp becomes unrecoverable.
 
 ## Provenance
 
-The operation records its predicate and its source in the derived file's
-top-level metadata under `matching_options["cluster_selection"]`:
+The operation records its source and the options it was called with in the
+derived file's top-level metadata, as the provenance record under
+`matching_options["cluster_selection"]`. The record's keys, an example, and the
+`source_selection` nesting are defined once, in
+[matches-file-format.md](matches-file-format.md#cluster-selection-derived-files).
 
-```json
-{
-  "cluster_selection": {
-    "source_content_xxh128": "9a51...",
-    "min_span": 2,
-    "restrict_images": ["frames/frame_0010.jpg", "..."],
-    "accepted_statuses": ["reference", "kept"]
-  }
-}
-```
-
-`source_content_xxh128` is the source file's whole-file `content_xxh128`;
-`restrict_images` is `null` for an unrestricted selection. A
-`restrict_cluster_ids` key holds the requested **source** ids, sorted and
-without duplicates, and is present **only** when a cluster-id restriction was
-requested. The counts, the section flags and the format version describe the
-derived file; all other metadata — including the timestamp — is inherited
-from the source. The derived file's own content hashes are empty until it is
-written, and are computed then. The source file is never modified.
-
-A selection may itself be selected again — narrowing a working set the caller
-already holds, without re-deriving it from the archive. The source is then an
-unwritten derivation whose `content_xxh128` is empty, so the record nests the
-source's own `cluster_selection` object under `source_selection`:
-
-```json
-{
-  "cluster_selection": {
-    "source_content_xxh128": "",
-    "min_span": 2,
-    "restrict_images": ["frames/frame_0010.jpg", "..."],
-    "accepted_statuses": ["reference", "kept"],
-    "source_selection": {
-      "source_content_xxh128": "9a51...",
-      "min_span": 2,
-      "restrict_images": null,
-      "accepted_statuses": ["reference", "kept"]
-    }
-  }
-}
-```
-
-The key is present only when the source carries a `cluster_selection` record,
-so a selection of an ordinary file is unchanged. Nesting repeats to any depth,
-and the innermost `source_content_xxh128` names the archive the chain started
-from.
+A selection may itself be selected again, narrowing a working set the caller
+already holds without re-deriving it from the archive. The source is then an
+unwritten derivation whose `content_xxh128` is empty, which is why the record
+nests the source's own record: the chain still names the archive it started
+from. A `restrict_cluster_ids` key is written only when a cluster-id
+restriction was requested, so a selection without one writes the same record
+as before that option existed. The counts, the section flags and the format
+version describe the derived file; all other metadata, the timestamp included,
+is inherited from the source. The derived file's own content hashes are
+computed when it is written. The source file is never modified.
 
 A selection is a working view, not a replacement archive: non-accepted
 members are gone, so per-member evidence for re-gating is absent from the
@@ -157,10 +124,10 @@ otherwise re-implement:
   member has a finite residual). The residuals live in `cluster_patches/`, so
   a file without that section has none: the Rust accessor returns `None` and
   the Python one raises `ValueError`
-- `refine_radius` — the refinement patch half-width, normalizing the
-  `refine_options` key generations (`patch_size` full edge / 2, legacy
-  `radius` as-is); `None` when `refine_options` holds neither key as a
-  number
+- `refine_radius` — the refinement patch half-width, read from either
+  `refine_options` key by the rule under
+  [`cluster_patches/metadata.json.zst`](matches-file-format.md#cluster_patchesmetadatajsonzst);
+  `None` when `refine_options` holds neither key as a number
 
 ## Errors
 
