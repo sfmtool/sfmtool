@@ -121,7 +121,7 @@ sighting's self-similarity from the same tile the gate reads, rather than from a
 second copy of the sampling.
 
 ```rust
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::patch::cluster_refine::{
     refine_cluster_patches, ClusterRefineParams, FeatureGeometry, MemberStatus,
 };
