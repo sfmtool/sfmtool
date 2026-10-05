@@ -7,7 +7,7 @@
   - the angle measures how sensitive the view is to errors in the patch model, and along which direction;
 - the sampler is chosen per view from the Jacobian's anisotropy, so an oblique or distorted view keeps the detail along its less compressed axis;
 - the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 6);
-- the self-similarity grid's region is summarised by an ellipse, whose semi-major axis becomes the radius. A step of its own replaces the contour's furthest-point radius, the slide and the reach with it, in the code and on the bench (Part 2);
+- the self-similarity reading summarises its region by an ellipse, whose semi-major axis is the radius, in place of the contour's furthest point, the slide and the reach (Part 2). That step is built;
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built.
 
 Not decided: the functional forms of the weights, the anisotropy at which the sampler switches, the blur used for matched-bandwidth scoring, and the order the consumers adopt it in. See [Open questions](#open-questions).
@@ -18,7 +18,6 @@ Amends:
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the matched-bandwidth score
 - [core/camera/image-warping.md](../core/camera/image-warping.md): the per-view choice of sampler
-- [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md): the contour's ellipse, whose semi-major axis becomes the radius, in place of the contour's furthest point, its slide and its reach along the grid axes
 - [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
 
 ## Purpose
@@ -39,7 +38,7 @@ It also proposes scoring each view against the template at a resolution the view
 
 ## The problem, measured
 
-Both cases are tracks on the bench of a local ground-truth candidate for the checked-in `dino_dog_toy` images (`dino_dog_toy_ground_truth_candidate_v001.sfmr`, 85 images at 2040×1536, patch resolution `R = 24`). They were read with the Track View's *Zoom* column and the reach of the self-similarity contour ([core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md) § "The contour and its reach").
+Both cases are tracks on the bench of a local ground-truth candidate for the checked-in `dino_dog_toy` images (`dino_dog_toy_ground_truth_candidate_v001.sfmr`, 85 images at 2040×1536, patch resolution `R = 24`). They were read with the Track View's *Zoom* column and the extent of the self-similarity region along the patch's axes, which the Track View's hover then showed; it now shows the region's ellipse ([core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md) § "The ellipse in other units"). The radii in the table are the contour's furthest point, which reads about a tenth of a pixel longer than the ellipse's semi-major axis.
 
 **A wood-grain patch sized to about 1× at its closest view.** The patch has half-extent 0.053, with its v axis turned along the grain.
 - Its five original views read zoom 0.59/0.92× to 0.92/1.3×.
@@ -83,53 +82,9 @@ The template is the Tukey/MAD IRLS weighted mean of z-normalized cores (`irls_vi
 
 The bench, both member gates and the culls read the ZNCC self-similarity radius of exactly the `R×R` tile or bitmap they judge, with no pixels from outside it, as [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md) § "The overlap reading" describes; the 2.5 bar was re-measured there and kept.
 
-## Part 2: the self-similarity contour as an ellipse
+## Part 2 (built): the self-similarity region as an ellipse
 
-The self-similarity reading describes the region of shifts that match the tile by three things: its furthest point (the radius), its slide, and its reach along the grid axes. This part replaces all three with one ellipse fitted to the region, and makes the radius the ellipse's semi-major axis. It amends [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md), and it lands before any consumer in the later parts reads the ellipse.
-
-The [overlap reading](../core/patch/zncc-self-similarity-radius.md#the-overlap-reading) of the view's own `R×R` tile gives its self-similarity grid and the contour on it. The shifts inside the contour match the tile as well as a true match between two views would:
-- on a texture that varies in every direction, the region is round;
-- on one that varies in one direction (grain, an edge, stripes), it is long and thin.
-
-**The ellipse.** The region is summarised by the ellipse with the same area and second moments as the region inside the contour:
-- its **major axis** is the direction the tile slides along most easily;
-- its **minor axis** is the direction across it;
-- each has a semi-axis length in grid px, and the major axis has an angle in the patch's u, v frame.
-
-The ratio of the two lengths says whether the view pins the keypoint down in every direction or only across one, and the angle says which. On the wood-grain patch the major axis runs along the grain and the minor axis is short.
-
-**The radius is the semi-major axis.** `ρ_v`, the length that judges the bitmap, is the ellipse's semi-major axis in grid px. The gates, the culls, the bench's bar and the weights read it.
-- **Shorter is sharper.** A sharper tile has a smaller region, so a shorter `ρ_v`.
-- **It reads the whole region.** It is not set by the contour's single furthest point, so one crossing at the edge of the square does not decide it.
-- **On a round region it is the same length.** For a disc, the moment ellipse is the disc itself, so the radius changes mainly on irregular regions.
-
-**Why an ellipse.**
-- **It follows the texture.** Lengths along fixed axes follow the patch's u axis, which has no relation to the texture.
-- **It maps through any linear map as an ellipse.** With `E` its 2×2 matrix, `J E Jᵀ` is the ellipse in image px. Through the half-extents it is an ellipse on the patch in scene units. Its extent along any direction, u and v included, is read from it, so it serves every use the per-axis reach serves now.
-- **It is the form an uncertainty takes.** A 2×2 matrix is what bundle adjustment and the localizer take as a covariance.
-
-**Cost.** It comes from the self-similarity grid the radius is already read from, with no further shift search.
-
-**Lower bounds.** Where the region runs off the square or a gap hides part of it, the true region may be larger. Each axis then carries an "at least" flag, under the rules the radius and the reach use now.
-
-**The step.** It removes what the ellipse replaces rather than leaving it beside it:
-- **Core** ([self_similarity/](../../crates/sfmtool-core/src/patch/self_similarity/)).
-  - Add the ellipse reading: axes, angle, flags and the 2×2 matrix, for the whole tile, the middle square and each ninth.
-  - Make the radius its semi-major axis.
-  - Remove the contour's furthest-point radius, the slide, `SelfSimilarityReach`, `PatchAxisReach`, `grid_axes`, `patch_axis_reach` and `image_radius`. The ellipse's extent through `J` or through the half-extents replaces each.
-- **The bench** (`TrackMeasurement`). The ellipse fields replace `zncc_self_similarity_reach`, `_reach_middle` and `_slide_grid`.
-- **The Track View's hover.** It shows the ellipse's two axes and angle in grid px, image px and world units, in place of the reach.
-- **The MCP bench fields and the Python bindings** (`zncc_self_similarity_parts`). They follow, with their tests.
-- **The 2.5 bar.** It is re-measured against the semi-major axis on seoul_bull and kerry_park, as Part 1's change was.
-- **Specs.** The self-similarity spec, editable-track, the bench, mcp-server and the glossary's entries for the reach and the slide.
-
-**What else the reading serves:**
-- **Gates and culls**, which read the radius already.
-- **Ranking the views** (Part 3) and the bitmap's weights (Part 4), comparing views within one track.
-- **Focus.** A radius longer than the zoom predicts means blur in the photograph. Aggregated over the points an image sees, it says which photographs, or which parts of a photograph, are out of focus.
-- **Positional uncertainty.** The ellipse, taken through the Jacobian into image px, is where the keypoint could lie. That is a per-observation, direction-dependent uncertainty that bundle adjustment could weight each observation by. Taken through the half-extents, it bounds the 3D point along the patch.
-- **The localizer.** Along the ellipse's major axis, the view constrains the keypoint weakly. That is the direction congealing drifts along on a grain, so the localizer can limit or tie its moves there.
-- **The Track View**, which shows it per view.
+The self-similarity reading summarises the region of shifts that match the tile by the ellipse with the same second moments about the true position, with its semi-axes, the angle of its major axis, a flag on each axis where the true length may be larger, and its 2×2 matrix, for the whole tile, its middle and each ninth. The radius is the ellipse's semi-major axis. The ellipse maps into image px through the tile's Jacobian and onto the patch through its half-extents, and the bench, the Track View's hover, the MCP fields and the Python bindings carry it in place of the furthest-point radius, the slide and the reach, as [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md) § "The region, its ellipse and the radius" describes; the 2.5 bar was re-measured there and kept. What else it could serve is left to later work: a radius longer than the zoom predicts as a sign of blur in the photograph, the ellipse through the Jacobian as a per-observation, direction-dependent weight for bundle adjustment, and limiting the localizer's moves along the major axis, the direction congealing drifts along on a grain.
 
 ## Part 3: what each view can contribute
 
@@ -138,7 +93,7 @@ A sharper template needs to know, for each view, how much detail its tile carrie
 ### What we can measure
 
 - **The ZNCC self-similarity grid.** The tile correlated with itself at each small shift. A sharp tile stops matching itself within a fraction of a pixel, and a blurry one keeps matching further. Its values are computed only from the patch bitmap's pixels, so they measure the patch itself.
-  - We judge the bitmap with a radius that is the semi-major axis of an ellipse fitted to the contour where the ZNCC falls to `1 − τ`, where `τ` adapts to the bitmap's contrast (`1 − τ` is about 0.95 on a high-contrast bitmap and lower on a faint one). When the semi-minor axis is much shorter, the patch can slide one way but is held in place perpendicular to it (Part 2).
+  - We judge the bitmap with a radius that is the semi-major axis of an ellipse fitted to the region where the ZNCC is at or above `1 − τ`, where `τ` adapts to the bitmap's contrast (`1 − τ` is about 0.95 on a high-contrast bitmap and lower on a faint one). When the semi-minor axis is much shorter, the patch can slide one way but is held in place perpendicular to it (Part 2).
   - Reading it costs one shift search per view. The localizer's gate and the bench already read it, and a stored value (Part 6) saves reading it again.
 - **The zoom.** The Jacobian of the patch grid's map into the photograph, at the patch centre. Like the self-similarity, it has a major and a minor axis: its singular values give the least and the most zoom, in grid px per photograph px, along two perpendicular directions. Its values are computed only from the camera and the patch geometry, not from any pixels.
   - Where the zoom along an axis is above 1, one photograph pixel covers more than one grid pixel. The zoom is then an upper bound on how sharp the bitmap can be along that axis. Below 1, the sampler reads the mip level that matches, so the bitmap can be as sharp as its grid.
@@ -399,7 +354,6 @@ Which one is part of this work. The radius columns do not depend on the choice.
 - **The staleness tolerances** a consumer applies to the stored angle and zoom (Part 6), and the keypoint distance past which a writer clears a stored radius.
 - **`observation_confidence`**: refill it from the radius as the quantized ratio `ρ_min / ρ_v`, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 6).
 
-- **Fitting the ellipse** (Part 2). The second moments of the region inside the contour are the proposal. The alternatives are a fit to the contour points alone, and storing the 2×2 matrix in place of the axes and angle.
 - **Which pairs to correlate** (Part 4), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?

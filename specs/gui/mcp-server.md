@@ -3403,28 +3403,34 @@ ZNCC self-similarity radius" of the same spec): `zncc_self_similarity_radius`
 and `zncc_self_similarity_radius_middle`, how far in grid px the tile
 and its middle square slide over themselves and still match themselves, `3`
 meaning 3 or more; `zncc_self_similarity_radius_grid`, the same for each
-ninth, as three rows of three; `zncc_self_similarity_slide_grid`, per ninth the
-`[x, y]` direction its matching shifts line up in, as three rows of three
-pairs; and `zncc_self_similarity_surface`, the tile's ZNCC against itself at
+ninth, as three rows of three; and `zncc_self_similarity_surface`, the tile's ZNCC against itself at
 every shift of the `(2r + 1)²` square as rows of numbers from `(dx, dy) = (-r,
 -r)`, with null where the tile is flat, beside
 `zncc_self_similarity_tolerance`, the deficit the tile was judged by, so the
-radius is read on the surface at `1 -` that value; and
-`zncc_self_similarity_reach` and `zncc_self_similarity_reach_middle`, how far
-the contour the whole and middle radii are read from reaches, each length as
-`{"value", "at_least"}` with `at_least` true where the true length may be
-larger, because the region at the level runs off the square searched along that
-axis, runs off along the other axis without holding its width, borders a gap (a
-neighbour with no reading), or reaches the largest radius searched (the cap):
-`grid_radius` and `grid_axes` (`[x, y]`) in patch-grid px (at the track stage, the reconstruction's patch resolution `R` below),
-`image_radius` in the photograph's px, null where the tile's centre does not
-project, and `patch_axes`, `{"kind", "unit", "along"}` with `along` the reach
-along the patch's `u` and `v`, `[u, v]`, and either `kind` `"length"` with
-`unit` the reconstruction's `world_space_unit` (null for scene units, where the
-file names none) or `kind` `"angle"` with `unit` `"degrees"` for a patch at
-infinity; `patch_axes` is null at the cluster stage, which has no patch
+region of matching shifts is the surface at or above `1 -` that value; and
+`zncc_self_similarity_ellipse` and `zncc_self_similarity_ellipse_middle`, the
+ellipse of that region for the whole tile and its middle, as
+`{"grid_px", "image_px", "patch"}`: `grid_px` in patch-grid px (at the track
+stage, the reconstruction's patch resolution `R` below), its semi-major axis the
+radius; `image_px` in the photograph's px, null where the tile's centre does not
+project; and `patch`, `{"kind", "unit", "ellipse"}` along the patch's `u` and
+`v`, with either `kind` `"length"` and `unit` the reconstruction's
+`world_space_unit` (null for scene units, where the file names none) or `kind`
+`"angle"` and `unit` `"degrees"` for a patch at infinity; `patch` is null at
+the cluster stage, which has no patch. Each ellipse is `{"axes",
+"axes_is_at_least", "major_angle", "matrix"}`: `axes` `[semi-major,
+semi-minor]`, each capped at the largest radius searched in grid px;
+`axes_is_at_least` per axis, true where the true length may be larger, because
+the region at the level runs off the square searched, a shift with no reading
+beside it could hide more of it, or the length reached the largest radius
+searched (the cap); `major_angle` in radians in `[0, π)` from the frame's first
+axis towards its second (grid and image `x` right towards `y` down, the patch's
+`u` towards `v`), null for a circle; and `matrix`, the 2×2 `E` with
+`dᵀ E⁻¹ d = 1` on the ellipse. `zncc_self_similarity_ellipse_grid` is each
+ninth's ellipse in grid px, as three rows of three, null for a ninth with no
+reading
 ([`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
-§ "The contour and its reach"). Each is null where the tile could not be read.
+§ "The ellipse in other units"). Each is null where the tile could not be read.
 Each track-stage row also carries the geometry of its patch in its
 photograph, which needs no photograph and is reported whatever the evaluation
 says: `patch_jacobian`, the Jacobian of the warp from the patch grid to the

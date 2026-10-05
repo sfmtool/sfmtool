@@ -1396,10 +1396,10 @@ beside `zncc` (the same samples read over the middle square of the patch and
 over each ninth of it, § "The middle ZNCC" and § "The ZNCC grid" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and the ZNCC
 self-similarity radius `zncc_self_similarity_radius` with its `_middle` and
-`_grid`, `zncc_self_similarity_slide_grid`, `zncc_self_similarity_surface`,
-`zncc_self_similarity_tolerance`, and `zncc_self_similarity_reach` with its
-`_middle`, how far the contour the radius is read from reaches in grid px, image
-px and along the patch's axes
+`_grid`, `zncc_self_similarity_surface`, `zncc_self_similarity_tolerance`,
+`zncc_self_similarity_ellipse` with its `_middle`, the ellipse whose semi-major
+axis is the radius, in grid px, image px and along the patch, and
+`zncc_self_similarity_ellipse_grid`, each ninth's in grid px
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 ZNCC self-similarity radius"), at the track stage
 the two distances

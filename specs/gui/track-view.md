@@ -1090,90 +1090,92 @@ percent, in the same layout.
 and § "The ZNCC self-similarity radius" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)): how far,
 in patch-grid pixels, the tile can slide over itself and still match
-itself as well as a true match between two views would, read where its ZNCC
-against itself, interpolated between whole-pixel shifts, falls through that
-level. `whole` is the whole tile's and `mid` its middle square's, each to one
+itself as well as a true match between two views would: the semi-major axis of
+the ellipse fitted to the shifts where its ZNCC against itself, interpolated
+between whole-pixel shifts, is at or above that level. `whole` is the whole tile's and `mid` its middle square's, each to one
 decimal (`0.4 px`, `1.4 px`), and `3+ px` for the largest radius searched,
 which reads "3 or more". Beside them is the grid of each ninth of the tile read
 alone: a box is green under `1`, yellow from `1` to `2`, orange from `2` to
 `3` and red at `3` or more, and carries a dark
-line along its slide where the slide is at least `0.5` long, so the ninth's
-matching shifts line up along one direction, as on an edge. Hovering it shows
+line along its ellipse's major axis where the ellipse is long and thin, its
+elongation `1 − (minor / major)²` at least `0.5` (a minor axis at most 0.71 of
+the major), so the ninth's matching shifts line up along one direction, as on an
+edge. Hovering it shows
 its nine numbers as the cell prints them. The self-similarity bar judges
 `whole`; the middle and the grid are shown and judged by no bar.
 
-**Hovering the two numbers shows how far the contour they are read from
-reaches**, in three units, under a sentence saying what the table is. The
-measurement's `zncc_self_similarity_reach` and `_middle` carry it, measured in
-sfmtool-core
+**Hovering the two numbers shows the ellipses they are the semi-major axes
+of**, in three units, under a sentence saying what the table is. The
+measurement's `zncc_self_similarity_ellipse` and `_middle` carry them, measured
+in sfmtool-core
 ([`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
-§ "The contour and its reach"), and the hover only prints it, a column for
+§ "The ellipse in other units"), and the hover only prints them, a column for
 `whole` and one for `mid`:
 
 ```
-           whole                mid
-grid px    0.42                 3+
-  along    u 0.31  v 0.40       u 3+  v 0.80
-image px   0.85                 5.6+
-world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm
+           whole                  mid
+grid px    0.42 × 0.31 at 35°     3+ × 0.80 at 0°
+image px   0.85 × 0.60 at 41°     5.6+ × 1.6 at 2°
+world      3.1 × 2.2 mm at 145°   29+ × 7.8 mm at 0°
 ```
 
 The table is built only while the cell is hovered; the row keeps the two
-reaches, not the text.
+ellipses, not the text. Each cell is the semi-major axis × the semi-minor axis
+and the angle of the major axis in whole degrees, `0°` to `179°`; a circle has
+no direction and prints no angle.
 
-- **grid px** is the radius, which the cell prints, and **along** its reach
-  along the grid's `x` and `y`, labelled with the patch axes they run along, `u`
-  and `v` (the grid's `y` runs down `v`). `u` and `v` are named rather than
-  separated by a bare `/`, which the *Zoom* cell uses for least over most.
-- **image px** is the radius in the photograph's pixels, through the Jacobian of
-  the patch grid at its centre at the reconstruction's patch resolution `R`
+- **grid px** is the ellipse in patch-grid px, whose semi-major axis is the
+  radius the cell prints, its angle from the grid's `x` (right) towards its `y`
+  (down).
+- **image px** is the ellipse in the photograph's pixels, through the Jacobian
+  of the patch grid at its centre at the reconstruction's patch resolution `R`
   (the edge of its patch bitmaps, else the evaluation's 24), the grid the
-  reading was taken on, not the 64-texel display tile.
-- **world** is the reach along `u` and `v` in world space, from the
-  reconstruction's `metadata.world_space_unit`, with the unit after each value.
-  Every length in the row, `u` and `v` for both parts, prints in one unit,
-  chosen from the largest of them so they compare directly. A metric scene
-  (`mm`, `cm`, `m`) keeps its own unit where that puts the largest in
-  [1, 1000), and otherwise takes whichever of `µm`, `mm` and `m` does, so
-  `0.0031 m` prints `3.1 mm` and `cm` appears only in a scene in `cm`; a length
-  over 1000 m or under 1 µm takes the nearer end, `m` or `µm`. A scene in
-  `ft` prints in `in` while the largest is under 1 ft, and a scene in `in`
-  stays in `in`. Where the file names no unit the row is labelled **scene
-  units** and the numbers are bare and not converted; where the largest is
-  under 0.001, every number prints in scientific form to two significant
-  digits (`5.4e-4`). Only the hover text is scaled: the reach the table row
-  keeps, and the MCP and Python readings, stay in the scene's own unit. A patch
-  at infinity has no length, so the row is labelled **angle** and reads in
-  degrees.
+  reading was taken on, not the 64-texel display tile; its angle runs from the
+  photograph's `x` towards its `y` (down).
+- **world** is the ellipse along the patch, its angle from `u` towards `v`, in
+  world space from the reconstruction's `metadata.world_space_unit`, with the
+  unit after the two lengths. Every length in the row, both axes for both parts,
+  prints in one unit, chosen from the largest of them so they compare directly.
+  A metric scene (`mm`, `cm`, `m`) keeps its own unit where that puts the
+  largest in [1, 1000), and otherwise takes whichever of `µm`, `mm` and `m`
+  does, so `0.0031 m` prints `3.1 mm` and `cm` appears only in a scene in
+  `cm`; a length over 1000 m or under 1 µm takes the nearer end, `m` or `µm`.
+  A scene in `ft` prints in `in` while the largest is under 1 ft, and a scene
+  in `in` stays in `in`. Where the file names no unit the row is labelled
+  **scene units** and the numbers are bare and not converted; where the
+  largest is under 0.001, every number prints in scientific form to two
+  significant digits (`5.4e-4`). Only the hover text is scaled: the ellipses
+  the table row keeps, and the MCP and Python readings, stay in the scene's own
+  unit. A patch at infinity has no length, so the row is labelled **angle** and
+  each semi-axis reads in degrees.
 
 Numbers carry two significant digits, chosen after rounding. A `+` after a
 number marks a lower bound, as the cell's `3+` does: the region at the level ran
-off the square the reading searched along that axis, ran off along the other
-axis without holding its width, borders a gap (a neighbour with no reading), or
-reached the largest radius searched, so the true reach may be larger (the rule
-is § "Lower bounds" of the self-similarity spec). A grid value at the largest
-radius prints `3+` as the cell does. A value that cannot be computed prints `-`:
-the world row at the cluster stage, which has no patch (its image row is read
-through the seed shape), and the image row where a point beside the tile's
-centre does not project. A row whose evaluation is refused or failed, or that
-has no reading, has no hover. The hover adds to the cell and changes nothing
-about it: its text, its colours, its bar and the column's ordering are the
-radius's.
+off the square the reading searched, met a shift with no reading that could hide
+more of it, or reached the largest radius searched, so the true length may be
+larger (the rule is § "Lower bounds" of the self-similarity spec). A grid length
+at the largest radius prints `3+` as the cell does. A value that cannot be
+computed prints `-`: the world row at the cluster stage, which has no patch (its
+image row is read through the seed shape), and the image row where a point
+beside the tile's centre does not project. A row whose evaluation is refused or
+failed, or that has no reading, has no hover. The hover adds to the cell and
+changes nothing about it: its text, its colours, its bar and the column's
+ordering are the radius's.
 
 **The column opens with the tile's surface plot**, before the two readings:
 the whole tile's ZNCC against
 itself at every whole-pixel shift the radius searches, interpolated between
 the shifts (Catmull-Rom, repeating the edge value past the square's edge)
 and drawn over the whole square of shifts, with the contour at `1 - τ`, the
-level the radius is read at, over it. The colour ramp is keyed to that level so
+level the region is read at, over it. The colour ramp is keyed to that level so
 the region inside the contour reads as one shape: below the level a muted ramp
 from dark to mid slate, and at it a jump to bright amber that lightens towards
 pale yellow at `1`. A dot marks each whole-pixel shift inside the contour and a
-ring marks the centre, and the radius is how far from the centre the contour
-reaches, read up to `r`. A
+ring marks the centre, and the radius is the semi-major axis of the ellipse
+fitted to the region inside the contour, read up to `r`. A
 small ring round the centre is a patch that locks; a long region is a patch
 that slides along it; a region that runs to the edge of the square is one that
-slides at least as far as the radius looks. Hovering the plot draws it large
+may slide further than the radius looks. Hovering the plot draws it large
 with a sentence giving the contour's level, the tolerance and the radius. The
 picture and the contour are computed once per reading and kept until the row's
 surface or tolerance changes.
@@ -1230,7 +1232,7 @@ describes the warp the tile shows and not a separately derived placement.
 
 **The zoom is in patch-grid px at the reconstruction's patch resolution `R`**,
 per photograph pixel: the grid the bench's shift and self-similarity readings
-are in, so the zoom, the shift and the reach beside it are in one unit. `R` is
+are in, so the zoom, the shift and the ellipse beside it are in one unit. `R` is
 `crate::bench::patch_resolution`, core's `EvaluateOptions::patch_resolution`:
 the edge of the reconstruction's patch bitmaps, which an `.sfmr` declares as
 `patch_bitmap_resolution`, and where it stores none the evaluation's own
@@ -1912,13 +1914,14 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
   with no zoom last either way; the *Zoom* cell's two significant digits chosen
   after rounding, with both numbers printed where they agree; the
-  *Self-similarity* hover's table in grid px, image px and world space with `u`
-  and `v` named and `+` on a lower bound, every world length scaled to the one
+  *Self-similarity* hover's table of ellipses in grid px, image px and world
+  space, each as major × minor axis and angle, with `+` on a lower bound and no
+  angle on a circle, every world length scaled to the one
   unit its largest picks (metres to mm and µm, cm kept, feet to inches) with
   the `+` kept, bare numbers under *scene units* with no unit on the file, in
   scientific form under 0.001 and plain from there up, the whole table for a
   patch at infinity in degrees, and for the cluster stage with `-` in the world
-  row, and an evaluated row carrying exactly the reach its measurement carries
+  row, and an evaluated row carrying exactly the ellipses its measurement carries
   at both stages; and a long image name cut in its middle, keeping the start of
   the path and the end of the file name.
 - **The Scene tree**,
