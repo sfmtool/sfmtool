@@ -53,14 +53,17 @@ sfm explorer --mcp 9000 scene.sfmr     # same, through the Python CLI
 `--no-default-layout` ([panel-layout.md](panel-layout.md) § "The default layout
 file"), `--demo` ([architecture.md](architecture.md) § "Testing") and `-h` /
 `--help`. Any other argument that starts with `-` (apart from a lone `-`) is
-refused as an unknown option, `--mcp=` followed by something that is not a port
-number from 0 to 65535 is refused, and every remaining argument is a path.
+refused as an unknown option, a port that is not a number from 0 to 65535 is
+refused (after `--mcp=`, or as a word of digits after `--mcp`), and every
+remaining argument is a path.
 Hand-rolled rather than `clap`: four flags and a list of paths fit in one short
 function, and it keeps the viewer's dependency tree as it was. The
 following-argument form has to look at what comes next, because
 `--mcp scene.sfmr` is the common invocation and means the default port and a
-file — so a next argument that is not a port is left alone rather than
-consumed.
+file — so a next argument that is not all ASCII digits is left alone rather
+than consumed. A next argument of digits is always taken as the port, so
+`--mcp 70000` is refused rather than read as the default port and a file named
+`70000`.
 
 On startup the server binds and prints one line to stdout, which is what a
 human pastes into a client config:
@@ -217,7 +220,7 @@ should treat these five differently and none of the others:
   `ToolKind` is `Input`. Each does no more than press what a person could
   press, but what it presses is decided by the widget it lands on, and that
   includes the viewer's own destructive items: a click on File ▸ Save writes
-  the file as a person's click does, File ▸ Quit ends the process, and an item
+  the file as a person's click does, File ▸ Quit closes the viewer, and an item
   that opens a file chooser (`Open...`, `Save As...`, the Panels menu's `Save
   Layout...` and `Load Layout...`) stops the GUI thread until the human answers
   it, so every call waits behind it (§ "Non-goals"). A sequence of them can
@@ -4713,7 +4716,8 @@ argument arriving as a JSON-RPC error instead, and a foreign `Origin` getting
 `403` while the endpoint's own origin and a missing one both pass.
 
 `crates/sfm-explorer/src/cli.rs` carries its own tests for the flag, including
-the case that matters most: `--mcp scene.sfmr` must not eat the path as a port.
+the case that matters most: `--mcp scene.sfmr` must not eat the path as a port,
+and `--mcp 70000` must be refused rather than read as a path.
 
 **`screenshot` is the one tool with a real frame behind it**, so it also has
 tests in `ui_basic` (`pixi run ui-test`, on all three desktop platforms), which

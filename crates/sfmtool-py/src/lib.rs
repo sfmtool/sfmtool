@@ -174,22 +174,35 @@ fn build_profile() -> &'static str {
 }
 
 /// Run SfM Explorer, the 3D viewer, with the command line `args` (without a
-/// program name), and return when its window closes.
+/// program name), and return its exit status when its window closes: 0 when
+/// the viewer ran and its window was closed, or `--help` printed the usage.
 ///
 /// This is how `sfm explorer` runs the viewer: it starts
-/// `python -m sfmtool._explorer` as a child process, which calls this function
-/// with its own arguments. Call it only in a process that exists to run the
-/// viewer, on its main thread, and once: the viewer ends the process with
-/// status 2 when `args` does not parse (an unknown option, or `--mcp=` with
-/// something that is not a port number) or asks for `--mcp` in a build without
-/// the `mcp` feature, and with status 1 when its MCP endpoint cannot bind, and
-/// the window's event loop can be created only once per process (and, on
-/// macOS, only on the main thread). See `sfm_explorer::run_with_args`.
+/// `python -P -m sfmtool._explorer` as a child process, which calls this
+/// function with its own arguments and exits with the status returned. It does
+/// not end the process. When the viewer cannot run it prints the error to
+/// stderr and returns the error's status: 2 when `args` does not parse (an
+/// unknown option, or `--mcp=` with something that is not a port number) or
+/// asks for `--mcp` in a build without the `mcp` feature, and 1 when its MCP
+/// endpoint cannot bind or its window cannot be created. See
+/// `sfm_explorer::run_with_args`.
+///
+/// Call it on the main thread, and once per process: the window's event loop
+/// can be created only once per process, so a second call returns 1, and on
+/// macOS only on the main thread. The viewer also sets process-wide state, the
+/// `env_logger` logger and on Windows the DPI awareness, which is why
+/// `sfm explorer` runs it in a process of its own.
 ///
 /// The GIL is released while the viewer runs.
 #[pyfunction]
-fn run_explorer(py: Python<'_>, args: Vec<String>) {
-    py.detach(|| sfm_explorer::run_with_args(args));
+fn run_explorer(py: Python<'_>, args: Vec<String>) -> i32 {
+    match py.detach(|| sfm_explorer::run_with_args(args)) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            error.exit_status()
+        }
+    }
 }
 
 /// Python module for sfmtool core functionality.

@@ -45,10 +45,11 @@ integer". Put the files first (`sfm explorer scene.sfmr --mcp`), give the port
 (`sfm explorer --mcp -- scene.sfmr`). The viewer's own command line accepts
 `--mcp scene.sfmr` and reads it as the default port and a file.
 
-A port outside 0 to 65535 is refused with a usage error (exit status 2) before
-the viewer starts. The viewer would read `--mcp 70000` the same way as
-`--mcp scene.sfmr`, as the default port followed by a file named `70000`, and
-try to bind 8787.
+A port outside 0 to 65535 is refused by Click with a usage error (exit status
+2) before the viewer starts. The viewer refuses it too, with exit status 2, as
+it takes a word of digits after `--mcp` as the port whether or not it fits;
+checking it in the command gives the error in the same form as the command's
+other usage errors and starts no child process for it.
 
 ## How the viewer is launched
 
@@ -65,24 +66,35 @@ installed package.
 
 [_explorer.py](../../../src/sfmtool/_explorer.py) is the child's program. It
 restores the default `SIGINT` handler, so Ctrl+C ends the viewer as it ends any
-other program, and calls `sfmtool._sfmtool.run_explorer(sys.argv[1:])`.
-`run_explorer` is a root-level function of the extension, in
+other program, and exits with the status that
+`sfmtool._sfmtool.run_explorer(sys.argv[1:])` returns. `run_explorer` is a
+root-level function of the extension, in
 [lib.rs](../../../crates/sfmtool-py/src/lib.rs) of `sfmtool-py`. It releases
 the GIL and calls `sfm_explorer::run_with_args`, which parses the viewer's
 command line, opens the window, and returns when the window closes.
+
+`run_with_args` does not end the process. It returns `Result<(), RunError>`,
+and a `RunError` carries the message to show and the exit status to end with:
+status 2 when the command line does not parse (an unknown option, or `--mcp=`
+followed by something that is not a port number) or asks for `--mcp` in a build
+without the `mcp` feature, and status 1 when the MCP endpoint cannot bind its
+port or the event loop, the window or its GPU device cannot be created (for
+example with no display, or no Vulkan driver on Linux). `run_explorer` prints
+the message to stderr and returns the status, or returns 0 when the window
+closed or `--help` printed the usage, so the child exits with the viewer's
+status and `sfm explorer` exits with the child's.
 
 The viewer runs in a child process rather than in the `sfm` process because it
 needs a process to itself:
 
 - It creates a `winit` event loop, which macOS allows only on the process's
-  main thread, and which `winit` allows only once per process.
-- It ends the process with `std::process::exit` with status 2 when its
-  command line does not parse (an unknown option, or `--mcp=` followed by
-  something that is not a port number) or asks for `--mcp` in a build without
-  the `mcp` feature, and with status 1 when the MCP endpoint cannot bind its
-  port.
-- It initializes the global `env_logger` logger and, on Windows, sets the
-  process's DPI awareness.
+  main thread, and which `winit` allows only once per process. A second
+  `run_explorer` call in one process returns status 1 with a message saying
+  so.
+- It sets process-wide state that outlives the call: it initializes the global
+  `env_logger` logger, unless one is already installed, and on Windows it sets
+  the process's DPI awareness. An MCP endpoint's server thread also keeps
+  running after the window closes, until the process ends.
 
 `pixi run gui` runs the same viewer from a source checkout through a different
 entry point: the `sfm-explorer` crate's own `sfm-explorer` binary,
@@ -92,8 +104,8 @@ to `run_with_args`. Both accept the same command line, and the viewer's
 `--help` text and its unknown-option error name neither program: the usage line
 is `[OPTIONS] [FILE.sfmr ...]` under a heading naming SfM Explorer.
 
-A panic in `run_with_args`, for example when there is no display or no Vulkan
-driver, reaches Python as an exception: the child prints a Python traceback
+A panic in `run_with_args`, which is a bug in the viewer rather than a failure
+to start, reaches Python as an exception: the child prints a Python traceback
 ending in `pyo3_runtime.PanicException` and exits with status 1, which
 `sfm explorer` then exits with.
 
@@ -137,8 +149,13 @@ without opening a window, that the command passes its options and files to
 `python -m sfmtool._explorer` in the order above and exits with the child's
 status, and that `python -m sfmtool._explorer` reaches the viewer in the built
 extension: `--help` prints the viewer's usage and exits 0, and an unknown option
-exits 2. The viewer is tested in the `sfm-explorer` crate: its command-line
-parser in [cli/tests.rs](../../../crates/sfm-explorer/src/cli/tests.rs), and the
+exits 2. It also calls `run_explorer` in the test process with those two command
+lines and with `--mcp 70000`, and checks that it returns 0, 2 and 2 without
+ending the process. The
+viewer is tested in the `sfm-explorer` crate: its command-line
+parser in [cli/tests.rs](../../../crates/sfm-explorer/src/cli/tests.rs), the
+errors `run_with_args` returns before it creates an event loop in
+[tests.rs](../../../crates/sfm-explorer/src/tests.rs), and the
 running window in the `ui_basic` integration tests described in
 [architecture.md](../../gui/architecture.md) § "Testing". Those window-opening
 tests run the standalone `sfm-explorer` binary, so no automated test opens the

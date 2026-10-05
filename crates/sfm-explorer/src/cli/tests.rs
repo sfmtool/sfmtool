@@ -47,6 +47,23 @@ fn port_zero_is_a_port() {
     assert_eq!(args.paths, vec![PathBuf::from("scene.sfmr")]);
 }
 
+/// A number after `--mcp` is its port even when it cannot be one: refused, not
+/// read as the default port followed by a file named `70000`.
+#[test]
+fn a_following_number_too_large_for_a_port_is_an_error() {
+    let error = parse(["--mcp", "70000", "scene.sfmr"].map(String::from)).expect_err("rejected");
+    assert!(error.contains("\"70000\""), "{error}");
+    assert!(error.contains("0 to 65535"), "{error}");
+}
+
+#[test]
+fn the_ends_of_the_port_range_are_ports() {
+    assert_eq!(parse_ok(&["--mcp", "65535"]).mcp_port, Some(65535));
+    let args = parse_ok(&["--mcp", "0"]);
+    assert_eq!(args.mcp_port, Some(0));
+    assert!(args.paths.is_empty());
+}
+
 #[test]
 fn an_unparseable_explicit_port_is_an_error() {
     let error = parse(["--mcp=nine".to_string()]).expect_err("rejected");

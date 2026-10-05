@@ -7,6 +7,8 @@ The command is checked with ``subprocess.run`` replaced, so only the command
 line it builds is looked at. The child program, ``python -m sfmtool._explorer``,
 is run for real through the built extension, but only with arguments the
 viewer answers before it creates a window: ``--help``, and an unknown option.
+``run_explorer`` is also called in this process with those arguments, which it
+answers by returning a status, without ending the process.
 """
 
 import importlib
@@ -16,6 +18,7 @@ from types import SimpleNamespace
 
 from click.testing import CliRunner
 
+from sfmtool._sfmtool import run_explorer
 from sfmtool.cli import main
 
 # `sfmtool._commands` re-exports the `explorer` command under the module's own
@@ -115,3 +118,22 @@ def test_viewer_module_unknown_option_exits_2():
     result = _run_viewer_module("--no-such-option")
     assert result.returncode == 2
     assert "--no-such-option" in result.stderr
+
+
+def test_run_explorer_returns_2_on_an_unknown_option_in_process(capfd):
+    # The viewer reports the bad option and returns its status, rather than
+    # ending this process; reaching the assertions is the check.
+    assert run_explorer(["--no-such-option"]) == 2
+    assert "--no-such-option" in capfd.readouterr().err
+
+
+def test_run_explorer_returns_2_on_an_out_of_range_port_in_process(capfd):
+    # A number after `--mcp` is the port, so one too large for a port is
+    # refused rather than read as the default port and a file named 70000.
+    assert run_explorer(["--mcp", "70000"]) == 2
+    assert "70000" in capfd.readouterr().err
+
+
+def test_run_explorer_returns_0_on_help_in_process(capfd):
+    assert run_explorer(["--help"]) == 0
+    assert "USAGE:" in capfd.readouterr().out

@@ -23,9 +23,8 @@ VIEWER_MODULE = "sfmtool._explorer"
     is_flag=False,
     flag_value=str(DEFAULT_MCP_PORT),
     default=None,
-    # The range check matters: the viewer reads `--mcp 70000` as the default
-    # port followed by a file named 70000, so an out-of-range number must be
-    # refused here rather than passed on.
+    # The viewer refuses an out-of-range port as well; checking it here gives
+    # the error as a Click usage error, before any child process is started.
     type=click.IntRange(0, 65535),
     metavar="PORT",
     help=(
@@ -72,7 +71,9 @@ def viewer_command(viewer_args: list[str]) -> list[str]:
     The viewer is in the ``sfmtool._sfmtool`` extension, so it runs in a child
     of this same Python interpreter, through ``python -m sfmtool._explorer``.
     It needs a process of its own: it takes over the process's main thread for
-    its window event loop, and it ends the process on an error.
+    its window event loop, ``winit`` allows only one event loop per process, and
+    the viewer sets process-wide state (the logger, and on Windows the DPI
+    awareness) that should not carry over into this process.
 
     ``-P`` keeps the current directory off the front of ``sys.path``, where
     ``python -m`` would otherwise put it, so a ``sfmtool.py`` or ``sfmtool/``

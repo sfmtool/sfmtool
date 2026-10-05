@@ -68,8 +68,9 @@ OPTIONS:
 /// `--mcp` takes its port as either `--mcp=PORT` or a following bare number.
 /// The following-argument form has to look at what comes next, because
 /// `--mcp scene.sfmr` is the common invocation and means the default port and a
-/// file — so a next argument that is not a port is left alone rather than
-/// consumed.
+/// file — so a next argument that is not all digits is left alone rather than
+/// consumed. One that is all digits is the port, and an error if it does not
+/// fit in one, rather than a file named `70000`.
 pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut args = Args::default();
     let mut argv = argv.into_iter().peekable();
@@ -79,20 +80,18 @@ pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, Stri
             "--no-default-layout" => args.no_default_layout = true,
             "--demo" => args.demo = true,
             "--mcp" => {
-                let port = match argv.peek().and_then(|next| next.parse::<u16>().ok()) {
-                    Some(port) => {
-                        argv.next();
-                        port
-                    }
+                // A next word of digits is a port, and one too large to be a
+                // port is an error rather than a file name: `--mcp 70000`
+                // means a port, and binding 8787 instead would be wrong.
+                let port = match argv.next_if(|next| is_number(next)) {
+                    Some(value) => value.parse::<u16>().map_err(|_| port_error(&value))?,
                     None => DEFAULT_MCP_PORT,
                 };
                 args.mcp_port = Some(port);
             }
             other => {
                 if let Some(value) = other.strip_prefix("--mcp=") {
-                    let port = value.parse::<u16>().map_err(|_| {
-                        format!("--mcp wants a port number from 0 to 65535, not {value:?}.")
-                    })?;
+                    let port = value.parse::<u16>().map_err(|_| port_error(value))?;
                     args.mcp_port = Some(port);
                 } else if other.starts_with('-') && other != "-" {
                     return Err(format!(
@@ -105,6 +104,17 @@ pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, Stri
         }
     }
     Ok(args)
+}
+
+/// Whether the word after a bare `--mcp` is meant as its port: one or more
+/// ASCII digits, whether or not the number fits in a port.
+fn is_number(word: &str) -> bool {
+    !word.is_empty() && word.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The error for a value given as `--mcp`'s port that is not one.
+fn port_error(value: &str) -> String {
+    format!("--mcp wants a port number from 0 to 65535, not {value:?}.")
 }
 
 #[cfg(test)]

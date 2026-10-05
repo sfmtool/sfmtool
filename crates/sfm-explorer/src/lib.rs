@@ -118,18 +118,77 @@ impl From<egui_winit::accesskit_winit::Event> for UserEvent {
 }
 
 /// Run the viewer with the process's own command line, `std::env::args()`
-/// without the program name. This is what the `sfm-explorer` binary calls; see
-/// [`run_with_args`] for what it does and when it ends the process.
+/// without the program name, and end the process if it fails. This is what the
+/// `sfm-explorer` binary calls; see [`run_with_args`] for what it does.
+///
+/// On a [`RunError`] it prints the error's message to stderr and ends the
+/// process with the error's [`RunError::exit_status`]. It is the only function
+/// in the crate that ends the process.
 pub fn run() {
-    run_with_args(std::env::args().skip(1));
+    if let Err(error) = run_with_args(std::env::args().skip(1)) {
+        eprintln!("{error}");
+        std::process::exit(error.exit_status());
+    }
 }
+
+/// Why [`run_with_args`] did not run the viewer until its window closed: the
+/// message to show the person who started it, and the exit status a program
+/// that exists only to run the viewer ends with.
+///
+/// The statuses are those of a command-line program: 2 when the command line is
+/// wrong (it does not parse, or asks for `--mcp` in a build without the `mcp`
+/// feature), and 1 when the viewer could not start for another reason (the MCP
+/// endpoint could not bind its port, or the event loop, the window or its GPU
+/// device could not be created).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunError {
+    message: String,
+    exit_status: i32,
+}
+
+impl RunError {
+    /// A command line the viewer cannot act on: exit status 2.
+    fn usage(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            exit_status: 2,
+        }
+    }
+
+    /// A viewer that could not start: exit status 1.
+    fn startup(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            exit_status: 1,
+        }
+    }
+
+    /// What went wrong, for a person to read. It can run over several lines.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The status a process that exists to run the viewer exits with: 2 for a
+    /// command line it cannot act on, 1 for anything else.
+    pub fn exit_status(&self) -> i32 {
+        self.exit_status
+    }
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RunError {}
 
 /// Run the viewer with the command line given, without the program name:
 /// parse it, open the window, and return when the window closes.
 ///
 /// The arguments are the ones the viewer's `--help` describes: `--mcp [PORT]`,
 /// `--no-default-layout`, `--demo`, `-h` / `--help`, and the files to load.
-/// With `--help` it prints the usage text to stdout and returns without
+/// With `--help` it prints the usage text to stdout and returns `Ok` without
 /// opening a window.
 ///
 /// It takes its arguments rather than reading `std::env::args()` so that a
@@ -137,17 +196,41 @@ pub fn run() {
 /// extension exposes it to Python as `sfmtool._sfmtool.run_explorer`, which
 /// `sfm explorer` calls in a child Python process.
 ///
-/// **Call it only in a process that exists to run the viewer, and only on that
-/// process's main thread.** It ends the process with `std::process::exit` with
-/// status 2 when the command line does not parse (an unknown option, or
-/// `--mcp=` followed by something that is not a port number) or asks for
-/// `--mcp` in a build without the `mcp` feature, and with status 1 when the MCP
-/// endpoint cannot bind its port. It initializes the global `env_logger` logger
-/// and, on Windows, sets the process's DPI awareness, so it can run only once
-/// per process. The `winit` event loop it creates must be created on the main
-/// thread on macOS, and `winit` refuses to create a second event loop in one
-/// process.
-pub fn run_with_args(args: impl IntoIterator<Item = String>) {
+/// It does not end the process. A failure is returned as a [`RunError`] with
+/// the message and the exit status [`run`] ends the binary with: status 2 when
+/// the command line does not parse (an unknown option, or `--mcp=` followed by
+/// something that is not a port number) or asks for `--mcp` in a build without
+/// the `mcp` feature, and status 1 when the MCP endpoint cannot bind its port
+/// or the event loop, the window or its GPU device cannot be created. The
+/// command line is checked before anything else is done, so an error of status
+/// 2 leaves the process as it found it. A failure while the window is being
+/// created closes it and ends the event loop before the error is returned.
+///
+/// **Call it on the process's main thread, and once per process.** The `winit`
+/// event loop it creates must be created on the main thread on macOS, and
+/// `winit` refuses to create a second event loop in one process, which a second
+/// call reports as a [`RunError`]. It also sets process-wide state that
+/// outlives the call: it initializes the global `env_logger` logger, unless a
+/// logger is already installed, and on Windows it sets the process's DPI
+/// awareness. A running MCP endpoint's server thread is not stopped when the
+/// window closes either.
+pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunError> {
+    let args = cli::parse(args).map_err(RunError::usage)?;
+    if args.help {
+        print!("{}", cli::USAGE);
+        return Ok(());
+    }
+    // Refused here, before the event loop is created, rather than ignored: a
+    // viewer that came up with no endpoint would leave the agent that asked for
+    // it with nothing to connect to.
+    #[cfg(not(feature = "mcp"))]
+    if args.mcp_port.is_some() {
+        return Err(RunError::usage(
+            "This SfM Explorer build was made without the \"mcp\" feature, so --mcp has nothing \
+             to start. Rebuild with it (it is on by default) to use the MCP endpoint.",
+        ));
+    }
+
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::UI::HiDpi::{
@@ -156,19 +239,9 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    env_logger::init();
-
-    let args = match cli::parse(args) {
-        Ok(args) => args,
-        Err(message) => {
-            eprintln!("{message}");
-            std::process::exit(2);
-        }
-    };
-    if args.help {
-        print!("{}", cli::USAGE);
-        return;
-    }
+    // A logger installed earlier, by a previous call or by the program this
+    // runs inside, is left in place.
+    let _ = env_logger::try_init();
 
     // The first log entry, before anything is loaded: a session read back later
     // — next to an agent's transcript, or in a bug report — should say what it
@@ -193,7 +266,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) {
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
-        .expect("Failed to create event loop");
+        .map_err(event_loop_error)?;
     let proxy = event_loop.create_proxy();
 
     // How a background worker gets an idle event loop to look at what it has
@@ -211,9 +284,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) {
     // this hands it; started before the window, so a port collision is reported
     // on a terminal rather than behind a window that came up looking fine.
     #[cfg(feature = "mcp")]
-    let mcp_rx = start_mcp(&mut state, args.mcp_port, &proxy);
-    #[cfg(not(feature = "mcp"))]
-    start_mcp(&mut state, args.mcp_port, &proxy);
+    let mcp_rx = start_mcp(&mut state, args.mcp_port, &proxy)?;
 
     // Every path becomes its own scene node, in the order given, through one
     // background open that the first frames drive to its end. It starts after
@@ -263,6 +334,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) {
         prev_ray_source: None,
         prev_hidden_image: None,
         quit_requested: false,
+        startup_error: None,
         applied_title: String::new(),
         no_default_layout: args.no_default_layout,
         #[cfg(feature = "mcp")]
@@ -281,62 +353,66 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) {
         next_dm_update: None,
     };
 
-    event_loop.run_app(&mut app).expect("Event loop failed");
+    let ran = event_loop.run_app(&mut app);
+    // A window that could not be created ends the event loop cleanly, so its
+    // error is the one to report rather than the loop's own result.
+    if let Some(error) = app.startup_error.take() {
+        return Err(error);
+    }
+    ran.map_err(|e| RunError::startup(format!("The viewer's event loop failed: {e}")))
+}
+
+/// The error for an event loop `winit` would not create, which is what a second
+/// run in one process, or a session with no display, runs into first.
+fn event_loop_error(error: winit::error::EventLoopError) -> RunError {
+    match error {
+        winit::error::EventLoopError::RecreationAttempt => RunError::startup(
+            "SfM Explorer has already run in this process, and winit allows only one event loop \
+             per process. Run the viewer in a new process.",
+        ),
+        other => RunError::startup(format!(
+            "Could not create the viewer's window event loop: {other}. Check that a display is \
+             available."
+        )),
+    }
 }
 
 /// Bring the MCP endpoint up, or return `None` because it was not asked for.
 ///
-/// **A bind failure is fatal and loud.** Two viewers on one port is the common
-/// mistake, and a viewer that silently came up without the endpoint the agent
-/// was told to use is worse than one that refused to start.
+/// **A bind failure stops the viewer from starting.** Two viewers on one port
+/// is the common mistake, and a viewer that silently came up without the
+/// endpoint the agent was told to use is worse than one that refused to start.
 ///
 /// The endpoint line goes to stdout, because that is what a human pastes into
-/// a client config; the error goes to stderr and takes the process with it.
+/// a client config; the error is returned, for the caller to report.
 #[cfg(feature = "mcp")]
 fn start_mcp(
     state: &mut AppState,
     port: Option<u16>,
     proxy: &EventLoopProxy<UserEvent>,
-) -> Option<tokio::sync::mpsc::UnboundedReceiver<mcp::Request>> {
-    let port = port?;
+) -> Result<Option<tokio::sync::mpsc::UnboundedReceiver<mcp::Request>>, RunError> {
+    let Some(port) = port else {
+        return Ok(None);
+    };
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     // The server's whole access to the viewer: this channel, and a wake. A
     // closure rather than the proxy itself, so `mcp::server` depends on no
     // winit type and can be driven by a test with no event loop at all.
     let proxy = proxy.clone();
     let busy = std::sync::Arc::clone(&state.busy_notice);
-    match mcp::serve(port, tx, busy, move || {
+    let address = mcp::serve(port, tx, busy, move || {
         let _ = proxy.send_event(UserEvent::McpRequest);
-    }) {
-        Ok(address) => {
-            println!("SfM Explorer MCP endpoint: http://{address}/mcp");
-            state.mcp = Some(state::McpStatus::new(address.port()));
-            let endpoint = state.mcp.as_ref().expect("just set").endpoint();
-            state.action_log.record_as(
-                action_log::Actor::Viewer,
-                action_log::Kind::Session,
-                format!("MCP endpoint listening on {endpoint}"),
-            );
-            Some(rx)
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Reject `--mcp` in a build compiled without it, rather than ignoring the flag
-/// and coming up with no endpoint.
-#[cfg(not(feature = "mcp"))]
-fn start_mcp(_state: &mut AppState, port: Option<u16>, _proxy: &EventLoopProxy<UserEvent>) {
-    if port.is_some() {
-        eprintln!(
-            "This SfM Explorer build was made without the \"mcp\" feature, so --mcp has nothing to \
-             start. Rebuild with it (it is on by default) to use the MCP endpoint."
-        );
-        std::process::exit(2);
-    }
+    })
+    .map_err(|e| RunError::startup(e.to_string()))?;
+    println!("SfM Explorer MCP endpoint: http://{address}/mcp");
+    state.mcp = Some(state::McpStatus::new(address.port()));
+    let endpoint = state.mcp.as_ref().expect("just set").endpoint();
+    state.action_log.record_as(
+        action_log::Actor::Viewer,
+        action_log::Kind::Session,
+        format!("MCP endpoint listening on {endpoint}"),
+    );
+    Ok(Some(rx))
 }
 
 pub(crate) struct App {
@@ -393,6 +469,10 @@ pub(crate) struct App {
     /// Set by File > Quit and read by the event loop right after the frame it
     /// was clicked in, which then exits.
     pub(crate) quit_requested: bool,
+    /// Why the window could not be created, set by `resumed` as it ends the
+    /// event loop, and returned by [`run_with_args`] once `run_app` has
+    /// returned.
+    startup_error: Option<RunError>,
     /// Window title as last handed to the window manager, so the per-frame
     /// sync in `run_ui_and_paint` only calls `set_title` when it changes.
     /// Starts empty so the first frame always applies the real title.
@@ -433,146 +513,16 @@ pub(crate) struct App {
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
+        if self.window.is_some() || self.startup_error.is_some() {
             return;
         }
-
-        // Step 1: Create window (raw winit, matching working test)
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    WindowAttributes::default()
-                        .with_title(crate::state::WINDOW_TITLE_BASE)
-                        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
-                        .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
-                        .with_visible(false), // shown after AccessKit registers its UIAutomation provider
-                )
-                .expect("Failed to create window"),
-        );
-
-        self.window = Some(window.clone());
-
-        // Step 2: Raw wgpu setup. Pick the backend per platform: DX12 on
-        // Windows (pairs with the DirectManipulation integration), Metal on
-        // macOS, Vulkan elsewhere. A single hardcoded backend would leave the
-        // surface uncreatable on the others.
-        let backends = if cfg!(target_os = "windows") {
-            wgpu::Backends::DX12
-        } else if cfg!(target_os = "macos") {
-            wgpu::Backends::METAL
-        } else {
-            wgpu::Backends::VULKAN
-        };
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("Failed to create wgpu surface");
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .expect("Failed to find wgpu adapter");
-
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("Failed to create wgpu device");
-
-        let size = window.inner_size();
-        let mut surface_config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .expect("Surface not supported by adapter");
-        // `COPY_SRC` on the swapchain is what lets the MCP `screenshot` tool
-        // photograph the window the human is looking at rather than only the 3D
-        // render target. `get_default_config` asks for `RENDER_ATTACHMENT`
-        // alone, and a usage the surface does not advertise is a validation
-        // error at `configure` — so it is added only where the platform allows
-        // it (DX12, Vulkan and Metal all do in practice) and the viewer
-        // remembers whether it got it. The same config is what `resize`
-        // reconfigures with, so the flag survives a resize.
-        let surface_readable = surface
-            .get_capabilities(&adapter)
-            .usages
-            .contains(wgpu::TextureUsages::COPY_SRC);
-        if surface_readable {
-            surface_config.usage |= wgpu::TextureUsages::COPY_SRC;
+        if let Err(message) = self.open_window(event_loop) {
+            // Drop the window, still hidden, and stop the loop; `run_with_args`
+            // returns the error once `run_app` has returned.
+            self.window = None;
+            self.startup_error = Some(RunError::startup(message));
+            event_loop.exit();
         }
-        surface.configure(&device, &surface_config);
-        log::debug!(
-            "surface {:?}, readable: {surface_readable}",
-            surface_config.format
-        );
-        #[cfg(feature = "mcp")]
-        {
-            self.surface_readable = surface_readable;
-        }
-
-        // Step 3: Initialize DirectManipulation AFTER wgpu (matching working test order)
-        #[cfg(target_os = "windows")]
-        self.try_init_gesture_handler();
-
-        // Step 4: Create egui renderer (uses raw wgpu device, not Painter)
-        let egui_renderer = eframe::egui_wgpu::Renderer::new(
-            &device,
-            surface_config.format,
-            eframe::egui_wgpu::RendererOptions::default(),
-        );
-
-        // Step 5: Set up egui-winit integration
-        let max_texture_side = device.limits().max_texture_dimension_2d as usize;
-        let mut egui_winit_state = egui_winit::State::new(
-            self.egui_ctx.clone(),
-            ViewportId::ROOT,
-            event_loop,
-            Some(window.scale_factor() as f32),
-            event_loop.system_theme(),
-            Some(max_texture_side),
-        );
-
-        // Repaint callback
-        let repaint_window = window.clone();
-        self.egui_ctx.set_request_repaint_callback(move |_info| {
-            repaint_window.request_redraw();
-        });
-
-        // Initialize AccessKit so egui's widget tree is visible to UIAutomation
-        // (and screen readers). Must happen after egui_winit_state is created
-        // but while the window is still hidden.
-        egui_winit_state.init_accesskit::<UserEvent>(event_loop, &window, self.proxy.clone());
-        self.egui_ctx.enable_accesskit();
-
-        self.wgpu_device = Some(device);
-        self.wgpu_queue = Some(queue);
-        self.wgpu_surface = Some(surface);
-        self.wgpu_surface_config = Some(surface_config);
-        self.egui_renderer = Some(egui_renderer);
-        self.egui_winit_state = Some(egui_winit_state);
-
-        // The default layout, if the human saved one — window and panels both,
-        // through the same path as Panels ▸ Load Layout…. Applied while the
-        // window is still hidden, so a saved "maximized on the left monitor"
-        // comes up that way rather than appearing at 1280 × 720 in the middle
-        // and jumping. A file that is absent is nothing: no entry, no log line.
-        if !self.no_default_layout {
-            if let Some(path) = layout::default_layout_path().filter(|path| path.is_file()) {
-                let mut host = window.clone();
-                self.state.load_layout_file(&mut host, &path);
-            }
-        }
-
-        window.set_visible(true);
-
-        // Schedule initial DM update and repaint
-        #[cfg(target_os = "windows")]
-        if let Some(next) = self.next_dm_update {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(next));
-        }
-
-        window.request_redraw();
     }
 
     #[allow(unused_variables)]
@@ -727,3 +677,152 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 }
+
+impl App {
+    /// Create the window, its GPU surface and device, and the egui renderer
+    /// around them, and show the window. The error is the message for a
+    /// [`RunError`]: no window, no GPU adapter for its surface (on Linux, often
+    /// a missing Vulkan driver), or no device.
+    fn open_window(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
+        // Step 1: Create window (raw winit, matching working test)
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    WindowAttributes::default()
+                        .with_title(crate::state::WINDOW_TITLE_BASE)
+                        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
+                        .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
+                        .with_visible(false), // shown after AccessKit registers its UIAutomation provider
+                )
+                .map_err(|e| format!("Could not create the viewer's window: {e}"))?,
+        );
+
+        self.window = Some(window.clone());
+
+        // Step 2: Raw wgpu setup. Pick the backend per platform: DX12 on
+        // Windows (pairs with the DirectManipulation integration), Metal on
+        // macOS, Vulkan elsewhere. A single hardcoded backend would leave the
+        // surface uncreatable on the others.
+        let backends = if cfg!(target_os = "windows") {
+            wgpu::Backends::DX12
+        } else if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else {
+            wgpu::Backends::VULKAN
+        };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("Could not create the window's GPU surface: {e}"))?;
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .map_err(|e| format!("Could not find a GPU adapter for the window: {e}"))?;
+
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(|e| format!("Could not create the GPU device: {e}"))?;
+
+        let size = window.inner_size();
+        let mut surface_config = surface
+            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+            .ok_or("The GPU adapter does not support the window's surface.")?;
+        // `COPY_SRC` on the swapchain is what lets the MCP `screenshot` tool
+        // photograph the window the human is looking at rather than only the 3D
+        // render target. `get_default_config` asks for `RENDER_ATTACHMENT`
+        // alone, and a usage the surface does not advertise is a validation
+        // error at `configure` — so it is added only where the platform allows
+        // it (DX12, Vulkan and Metal all do in practice) and the viewer
+        // remembers whether it got it. The same config is what `resize`
+        // reconfigures with, so the flag survives a resize.
+        let surface_readable = surface
+            .get_capabilities(&adapter)
+            .usages
+            .contains(wgpu::TextureUsages::COPY_SRC);
+        if surface_readable {
+            surface_config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
+        surface.configure(&device, &surface_config);
+        log::debug!(
+            "surface {:?}, readable: {surface_readable}",
+            surface_config.format
+        );
+        #[cfg(feature = "mcp")]
+        {
+            self.surface_readable = surface_readable;
+        }
+
+        // Step 3: Initialize DirectManipulation AFTER wgpu (matching working test order)
+        #[cfg(target_os = "windows")]
+        self.try_init_gesture_handler();
+
+        // Step 4: Create egui renderer (uses raw wgpu device, not Painter)
+        let egui_renderer = eframe::egui_wgpu::Renderer::new(
+            &device,
+            surface_config.format,
+            eframe::egui_wgpu::RendererOptions::default(),
+        );
+
+        // Step 5: Set up egui-winit integration
+        let max_texture_side = device.limits().max_texture_dimension_2d as usize;
+        let mut egui_winit_state = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            ViewportId::ROOT,
+            event_loop,
+            Some(window.scale_factor() as f32),
+            event_loop.system_theme(),
+            Some(max_texture_side),
+        );
+
+        // Repaint callback
+        let repaint_window = window.clone();
+        self.egui_ctx.set_request_repaint_callback(move |_info| {
+            repaint_window.request_redraw();
+        });
+
+        // Initialize AccessKit so egui's widget tree is visible to UIAutomation
+        // (and screen readers). Must happen after egui_winit_state is created
+        // but while the window is still hidden.
+        egui_winit_state.init_accesskit::<UserEvent>(event_loop, &window, self.proxy.clone());
+        self.egui_ctx.enable_accesskit();
+
+        self.wgpu_device = Some(device);
+        self.wgpu_queue = Some(queue);
+        self.wgpu_surface = Some(surface);
+        self.wgpu_surface_config = Some(surface_config);
+        self.egui_renderer = Some(egui_renderer);
+        self.egui_winit_state = Some(egui_winit_state);
+
+        // The default layout, if the human saved one — window and panels both,
+        // through the same path as Panels ▸ Load Layout…. Applied while the
+        // window is still hidden, so a saved "maximized on the left monitor"
+        // comes up that way rather than appearing at 1280 × 720 in the middle
+        // and jumping. A file that is absent is nothing: no entry, no log line.
+        if !self.no_default_layout {
+            if let Some(path) = layout::default_layout_path().filter(|path| path.is_file()) {
+                let mut host = window.clone();
+                self.state.load_layout_file(&mut host, &path);
+            }
+        }
+
+        window.set_visible(true);
+
+        // Schedule initial DM update and repaint
+        #[cfg(target_os = "windows")]
+        if let Some(next) = self.next_dm_update {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+        }
+
+        window.request_redraw();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -395,9 +395,14 @@ reads the process's command line, and `run_with_args`, which takes it as an
 argument. The crate's `sfm-explorer` binary calls `run`, and `pixi run gui`
 builds and runs that binary. The `sfmtool-py` crate exposes `run_with_args` to
 Python as `sfmtool._sfmtool.run_explorer`, so the viewer is part of the
-extension module in every wheel. `sfm explorer` runs it in a child process,
-`python -m sfmtool._explorer`, because the viewer needs the process's main
-thread for its event loop and ends the process on an error; see
+extension module in every wheel. `run_with_args` reports a failure as a
+`RunError` carrying a message and an exit status (2 for a command line it
+cannot act on, 1 for a viewer that could not start), and `run` is the only
+function that ends the process with it. `sfm explorer` runs the viewer in a
+child process, `python -m sfmtool._explorer`, because the viewer needs the
+process's main thread for its event loop, `winit` allows one event loop per
+process, and the viewer sets process-wide state (the logger, and on Windows the
+DPI awareness); see
 [explorer-command.md](../cli/visualization/explorer-command.md).
 
 ---
