@@ -37,8 +37,8 @@ convention flag: a conforming `.sfmr` file is always in this convention.
 - SfM cannot always observe gravity, so the world orientation of a freshly
   solved reconstruction is a best-effort canonicalization (see
   [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary)).
-  The convention states what the axes *mean*; tools like `sfm xform --rotate`
-  and `--align-to` refine the orientation afterwards. Regardless of how well
+  The convention states what the axes *mean*; a later rotation of the
+  reconstruction can refine the orientation. Regardless of how well
   "up" was recovered, the frame is always right-handed.
 - `points3d/positions_xyzw` are world coordinates. A `w = 0` row is a unit
   direction in this frame, pointing **from each camera centre toward the
@@ -109,11 +109,10 @@ particular, COLMAP interop (binary models, databases, pycolmap objects) must
 convert on import and on export; a COLMAP pose or point must never be copied
 verbatim into a `.sfmr`.
 
-The in-memory side of that boundary is
-[`SfmrReconstruction`](../../crates/sfmtool-core/src/reconstruction/data.rs) in
-`sfmtool-core`: it holds a file's contents as nalgebra geometric types, and its
-`conversion` child owns the round trip to the raw columnar representation the
-entries below describe. Everything it holds is already canonical.
+A reader of a version 5 or later file therefore loads its geometry without
+converting it, and a writer stores geometry without converting it: data held in
+memory is already in the canonical convention. A file below version 5 is
+converted once, on load (see [Version 4 → Version 5](#version-4--version-5)).
 
 For COLMAP (+Z-forward, Y-down cameras; arbitrary world orientation), with the
 camera-frame flip `S = diag(1, −1, −1)` and the fixed world rotation
@@ -285,9 +284,9 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number (`1` to `11`; the current version is `11`).
-  See [Versioning and Migration](#versioning-and-migration) for the relationship
-  to earlier versions.
+- `version`: Format version number. The valid versions, the current one, and
+  how each earlier version maps to the current model are given under
+  [Versioning and Migration](#versioning-and-migration).
 - `feature_source`: (version 4+) How each observation's 2D coordinate is carried
   — `"sift_files"` (a reference into a per-image `.sift` file, the model of
   versions 1–3) or `"embedded_patches"` (an inline patch-derived keypoint). A
@@ -514,9 +513,9 @@ XXH128 hashes for integrity verification:
 **Field descriptions.** Each section hash covers that section's data files in
 lexicographic path order; see [archive-container.md](archive-container.md) for how
 a section digest is taken and how the digests combine into `content_xxh128`.
-The [verifier](../../crates/sfmtool-sfmr-format/src/verify.rs) checks each section
-in the order below, then compares the overall digest. For version 10+, it
-checks `derived/` before images but excludes that digest from the overall fold.
+A verifier checks each section hash, then compares the overall digest. The
+order in which the section hashes combine into `content_xxh128` is stated once,
+in the `content_xxh128` entry below.
 
 - `metadata_xxh128`: Hash of the uncompressed JSON content of `metadata.json.zst`
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`
@@ -540,7 +539,7 @@ out of `content_xxh128`. The two are different questions and the format answers
 both:
 
 - **Is this file intact?** Every byte of every section, `derived/` included, is
-  covered by a stored section hash that `verify_sfmr` recomputes and compares.
+  covered by a stored section hash that a verifier recomputes and compares.
   A corrupted statistic fails verification exactly as a corrupted pose does.
 - **Which reconstruction is this?** `content_xxh128`, over the sections that
   carry the reconstruction itself.
@@ -647,10 +646,7 @@ Array of camera intrinsic parameters:
 
 The "pycolmap" column shows the corresponding short parameter names from COLMAP/pycolmap for reference. The parameter order in the JSON `parameters` object matches the pycolmap parameter array order. Models with a single `focal_length` use the same value for both fx and fy. All fisheye models use equidistant projection.
 
-This table is the authoritative human-readable list. On the code side each row
-is declared once, in the camera model registry, from which both directions of
-the `SfmrCamera` conversion are generated — see
-[../core/camera/camera-model-registry.md](../core/camera/camera-model-registry.md).
+This table is the authoritative list of models and their parameter keys.
 
 `EQUIRECTANGULAR` is an sfmtool model for panoramic
 imagery, used by the spherical-tile rig pipeline: longitude and latitude map
@@ -1006,14 +1002,8 @@ fixed value rather than parameterising it. A reader may cross-check it, but must
 not treat a different value as a description of the data it is about to read —
 the entry name is authoritative.
 
-In this repository the value has a single declaration,
-`sfmtool_sfmr_format::THUMBNAIL_SIZE`, which the entry name, the read path, the
-write path and the section metadata are all derived from. `.sift` thumbnails are
-copied verbatim into `.sfmr`, so `sfmtool_sift_format::THUMBNAIL_SIZE` must
-equal it; that is enforced by a compile-time assertion in `sfmtool-core`, the
-first crate that sees both. The value is also exported to Python as
-`sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors are what produce the
-pixels.
+A producer that copies thumbnails from `.sift` files relies on the `.sift`
+thumbnail edge being the same 128; the two formats fix the same value.
 
 #### Depth Statistics
 
@@ -1099,10 +1089,9 @@ during that motion has no depth cue — every frame sees it in the same
 direction, so a finite point looks exactly like an infinite one. (A solver can
 also collapse a run of frames onto one centre, with much the same effect.)
 When a track's observing cameras all sit at essentially the same centre, the
-point-or-bearing test finds no gain from a depth, and
-`classify_points_at_infinity` stores the track as `w = 0` at the bearing fitted
-to its keypoints' rays. For a real pan the rays agree on one direction and the
-bearing fits them. A solver's collapse can leave them diverging, since the
+point-or-bearing test finds no gain from a depth, and a producer that applies
+it stores the track as `w = 0` at the bearing fitted to its keypoints' rays.
+For a real pan the rays agree on one direction and the bearing fits them. A solver's collapse can leave them diverging, since the
 poses kept their rotations; then no bearing fits them well, but nothing else
 does either, and the pass still stores the bearing (see
 [batch-triangulation-api.md](../core/reconstruction/batch-triangulation-api.md)
@@ -1446,11 +1435,9 @@ and infinity points alike:
   `normalize(u × v)` is implied by the direction rather than read from
   `normals_xyz`.
 
-The finite ↔ infinity conversions
-(`SfmrReconstruction::classify_points_at_infinity` /
-`materialize_points_at_infinity`) carry patch frames across the boundary
-preserving apparent size: demotion divides the half-vectors by the
-demotion-time distance from the camera-cloud centroid and projects them onto
+A producer that converts a point between finite and infinity carries its
+patch frame across preserving apparent size: demotion divides the half-vectors
+by the demotion-time distance from the camera-cloud centroid and projects them onto
 the tangent plane of `d` (enforcing `u × v` along `-d`; a degenerate
 projection, or a demotion whose finite position was meaningless, clears the
 patch and its bitmap row); promotion and materialisation multiply the angular
@@ -1766,8 +1753,7 @@ and the two half-axis tips are projected as *directions* (`w = 0` folds out the
 camera translation), giving a roughly circular footprint. Because the patch
 frame is per point (not per observation), two views of the same point share
 `(u, v)` in the world but generally yield **different** `A` matrices, since
-`project_i` differs per camera. This is implemented as
-`SfmrReconstruction::observation_affine_shape`.
+`project_i` differs per camera.
 
 ## Data Ordering and Constraints
 
@@ -1793,9 +1779,8 @@ frame is per point (not per observation), two views of the same point share
 
 ## Compression Details
 
-Every entry of a `.sfmr` file is written at the same zstandard level, which
-defaults to 3 (`sfmtool_sfmr_format::WriteOptions::zstd_level`, and the
-`zstd_level` argument of the `write_sfmr` binding). The rest is the container's;
+Every entry of a `.sfmr` file is written at the same zstandard level. The
+writer's default level is 3. The rest is the container's;
 see [archive-container.md](archive-container.md).
 
 ## File Naming Convention
@@ -1814,7 +1799,8 @@ A `.sfmr` file uses `uint8`, `uint32`, `float32`, `float64`, and `uint128` (a ra
 
 ### Hash Computation
 
-The hashes are the ones described under [Content Hash](#2-content-hash-content_hashjsonzst): a `metadata_xxh128` and a `cameras_xxh128` over their two JSON entries, one digest per present section over its data files in lexicographic path order, and a `content_xxh128` over those in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. Two conditional details worth restating here: the points3d section includes the optional per-point patch-frame files (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when present, and the images and tracks sections include only the files present for the file's `feature_source` mode (see [Observation source](#observation-source-version-4)).
+The hashes, which files each covers, and the order they combine in are given
+once, under [Content Hash](#2-content-hash-content_hashjsonzst).
 
 ### Verification Process
 
@@ -1836,7 +1822,37 @@ The code that reads, writes and verifies `.sfmr` files is:
   most of the Python package uses
   ([bindings](../../crates/sfmtool-py/src/reconstruction/sfmr_reconstruction.rs)).
 
-`verify_sfmr` returns `(is_valid, error_messages)`.
+`verify_sfmr` returns `(is_valid, error_messages)`. The zstandard level is
+`WriteOptions::zstd_level` in Rust and the `zstd_level` argument of the
+`write_sfmr` binding, both defaulting to 3.
+
+In memory, a file's contents are held by
+[`SfmrReconstruction`](../../crates/sfmtool-core/src/reconstruction/data.rs) in
+`sfmtool-core`, as nalgebra geometric types. Its
+[`conversion`](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs)
+child module converts between that and the columnar entries this spec
+describes. Other parts of this spec are implemented by:
+
+- The camera models table: the camera model registry declares each row once,
+  and both directions of the conversion between the JSON `parameters` object
+  and the in-memory `SfmrCamera` are generated from it — see
+  [camera-model-registry.md](../core/camera/camera-model-registry.md).
+- The thumbnail edge: `sfmtool_sfmr_format::THUMBNAIL_SIZE` is its single
+  declaration, from which the entry name, the read and write paths and the
+  section metadata are derived. `sfmtool-core` asserts at compile time that it
+  equals `sfmtool_sift_format::THUMBNAIL_SIZE`, and Python sees it as
+  `sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors produce the pixels.
+- Points at infinity: `SfmrReconstruction::classify_points_at_infinity` applies
+  the point-or-bearing test and moves each point to finite or to `w = 0` as the
+  test decides, and `materialize_points_at_infinity` places every point at
+  infinity at a supplied finite depth; both carry patch frames
+  as [Per-point patch frame](#per-point-patch-frame-optional-version-3)
+  describes ([source](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)).
+- The keypoint affine shape of an `embedded_patches` observation:
+  `SfmrReconstruction::observation_affine_shape`
+  ([source](../../crates/sfmtool-core/src/reconstruction/data/affine_shape.rs)).
+- `world_space_unit`: `sfm xform --scale-by-measurements` scales a
+  reconstruction and sets the field.
 
 The conversions between the canonical convention and COLMAP's, given in
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary),
@@ -1914,9 +1930,9 @@ answer when it does not.
 ### Why `content_xxh128`
 
 The `content_xxh128` is the reconstruction's identity hash, computed from the
-section hashes that describe the reconstruction (metadata, cameras, rigs and
-frames if present, images, points3d, tracks). From version 10 it leaves out the `derived/`
-section, as described under
+section hashes that describe the reconstruction (listed under
+[Content Hash](#2-content-hash-content_hashjsonzst)). From version 10 it leaves
+out the `derived/` section, as described under
 [Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying).
 It identifies the reconstruction a file holds: from version 8 two saves of one
 unchanged value write the same `content_xxh128`.
@@ -1996,9 +2012,9 @@ solve.
 
 **Propagation:** When a reconstruction with `world_space_unit` set is transformed by operations
 that preserve scale (rotation, translation, filtering, bundle adjustment), the output should
-preserve `world_space_unit`. Operations that change scale (`--scale`) should clear the field
-unless the caller explicitly sets it. The `--scale-by-measurements` transform both scales the
-reconstruction and sets the field.
+preserve `world_space_unit`. Operations that change scale should clear the field unless the
+caller explicitly sets it. A transform that scales the reconstruction to match known measurements
+both scales it and sets the field.
 
 **Display:** The GUI and CLI inspection tools can use this field to display coordinates with
 appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numbers).
@@ -2035,7 +2051,8 @@ All extensions should:
 The format spans eleven versions (`1` to `11`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.
 Version 11 is the current format version: a reader accepts any version up to
-it.
+it. This section is the one place the versions and their changes are
+described; [Version History](#version-history) is an index into it.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals
@@ -2212,49 +2229,27 @@ its camera.
 
 ## Version History
 
-- **Version 11**: `images/thumbnails_y_x_rgb` becomes optional, flagged by
-  `has_thumbnails` in `images/metadata.json`; a version 10 or earlier file
-  reads as having thumbnails.
-- **Version 10**: `images/depth_statistics.json.zst` and
-  `images/observed_depth_histogram_counts` move into a new `derived/` section,
-  hashed into a required `derived_xxh128` that is left out of
-  `content_xxh128`. Changing how a statistic is computed no longer changes a
-  file's content hash.
-- **Version 9**: Optional top-level `lineage`: the contents this
-  reconstruction descends from, each with a composed map from its points onto
-  this file's rows, so a Point ID written against an ancestor still resolves
-  here. Absent when there are none, so a file with no ancestor hashes as it did
-  at version 8, and a version 8 file reads as an empty list.
-- **Version 8**: The write timestamp moves out of `metadata.json` into the
-  top-level `written.json`, which is outside every section hash and so
-  outside `content_xxh128`. Two saves of one unchanged value then write the
-  same content hash, and a value can be hashed before it is written. A file
-  below version 8 keeps its timestamp in `metadata.json`, where it was
-  hashed; a reader takes the timestamp from whichever entry is present and
-  leaves an older file's stored hashes alone.
-- **Version 7**: Optional per-point constraint triple
-  `points3d/point_constraints`,
-  `points3d/constraint_distances` and `points3d/constraint_reference_images`:
-  what a bundle adjustment owns
-  of each point and what a caller-owned distance is measured from, flagged
-  together by `has_point_constraints` and read through the
-  `point_constraint_names` legend beside it.
-- **Version 6**: Optional per-observation `tracks/observation_confidence` —
-  photometric sharpness of an observation relative to its track's consensus,
-  flagged by `has_observation_confidence`.
-- **Version 5**: Canonical coordinate convention — right-handed
-  Z-up world, −Z-forward / +Y-up cameras — becomes normative; version ≤ 4
-  files (COLMAP convention) upgrade on load via the fixed `S`/`W` conversion.
-- **Version 4**: Added the top-level `feature_source` discriminator and the
-  `embedded_patches` observation mode — inline `tracks/keypoints_xy` and
-  `images/image_file_hashes` replacing the `.sift`-link columns
-  (`tracks/feature_indexes`, `images/feature_tool_hashes`,
-  `images/sift_content_hashes`); `tracks/metadata.json` gains `has_feature_indexes`
-  / `has_keypoints_xy`. Versions 1–3 are `sift_files`.
-- **Version 3**: Per-point normals array renamed `estimated_normals_xyz` →
-  `normals_xyz` and made optional (flagged by `has_normals`); optional per-point
-  patch frame stored in `points3d/` (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, and optional
-  `patch_bitmaps_y_x_rgba`).
-- **Version 2**: Unified homogeneous point model — points at infinity
-  (`w = 0`) are first-class.
-- **Version 1.0rc1**: Release candidate
+One line per version, newest first. Each version's changes are described in
+the migration section it links to.
+
+- **Version 11**: `images/thumbnails_y_x_rgb` becomes optional. See
+  [Version 10 → Version 11](#version-10--version-11).
+- **Version 10**: the depth statistics move into a `derived/` section that is
+  left out of `content_xxh128`. See [Version 9 → Version 10](#version-9--version-10).
+- **Version 9**: optional top-level `lineage`. See
+  [Version 8 → Version 9](#version-8--version-9).
+- **Version 8**: the write timestamp moves into `written.json`. See
+  [Version 7 → Version 8](#version-7--version-8).
+- **Version 7**: optional per-point constraints. See
+  [Version 6 → Version 7](#version-6--version-7).
+- **Version 6**: optional per-observation `tracks/observation_confidence`. See
+  [Version 5 → Version 6](#version-5--version-6).
+- **Version 5**: the canonical coordinate convention becomes normative. See
+  [Version 4 → Version 5](#version-4--version-5).
+- **Version 4**: `feature_source` and the `embedded_patches` observation mode.
+  See [Version 3 → Version 4](#version-3--version-4).
+- **Version 3**: optional normals and the optional per-point patch frame. See
+  [Version 2 → Version 3](#version-2--version-3).
+- **Version 2**: the homogeneous point model, with points at infinity. See
+  [Version 1 → Version 2 (history)](#version-1--version-2-history).
+- **Version 1**: the first version.
