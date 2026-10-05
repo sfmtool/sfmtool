@@ -72,10 +72,13 @@ def test_the_stack_reads_each_kind():
     assert np.isnan(radius[EMPTY])
     assert list(out["covered"]) == [True, True, True, False]
     assert out["radius_grid"].shape == (4, 3, 3)
-    assert out["slide"].shape == (4, 2)
+    assert out["ellipse_axes"].shape == (4, 2)
+    assert out["ellipse_axes_is_at_least"].shape == (4, 2)
+    assert out["radius_is_at_least"].shape == (4,)
     assert np.isinf(out["tolerance"][FLAT])
-    # The edge slides along itself: straight down the columns.
-    assert abs(out["slide"][EDGE][1]) > 0.9
+    # The edge slides along itself: its major axis runs straight down the
+    # columns, along y.
+    assert abs(out["ellipse_major_angle"][EDGE] - np.pi / 2) < 0.1
 
 
 def test_the_stack_refuses_a_bad_shape():

@@ -292,36 +292,40 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           over it, and the grid is null where zncc is. \
                           zncc_self_similarity_radius is how far, in grid px, \
                           the tile can slide over itself and still match itself as well \
-                          as a true match between two views would, read where its ZNCC against \
-                          itself, interpolated linearly between whole-pixel shifts, falls through \
-                          that level: under 1 on a corner or busy texture, and 3 meaning 3 or \
-                          more, on a straight edge or a flat patch. zncc_self_similarity_radius_middle \
-                          and zncc_self_similarity_radius_grid read the middle square and each \
-                          cell of the same split the same way, and zncc_self_similarity_slide_grid \
-                          gives per cell the [x, y] direction the matching shifts line up in, \
-                          near 1 long along an edge and near 0 where they spread evenly or there \
-                          are none. zncc_self_similarity_surface is the tile's ZNCC against \
-                          itself at every shift of the 7 x 7 square, seven rows of seven from \
-                          (dx, dy) = (-3, -3), 1 at the centre and null where the tile is flat, \
-                          and \
-                          zncc_self_similarity_tolerance the ZNCC deficit the tile was judged \
-                          by, so the radius is read on the surface at 1 - tolerance. \
-                          zncc_self_similarity_reach and zncc_self_similarity_reach_middle say \
-                          how far the contour the radius is read from reaches, each length as \
-                          {value, at_least} with at_least true where the true length may be \
-                          larger, because the region at the level runs off the square searched \
-                          along that axis, runs off along the other axis without holding its \
-                          width, borders a gap (a neighbour with no reading), or reaches the \
-                          largest radius searched (the cap): grid_radius (the \
-                          radius) and grid_axes ([x, y], along the grid's x and y) in \
-                          patch-grid px: at the track stage the grid of the reconstruction's \
-                          patch resolution R, which stage_data reports as patch_resolution, \
-                          and at the cluster stage the refinement kernel's grid; image_radius in the photograph's px (null where the \
-                          tile's centre does not project); and patch_axes, the reach along the \
-                          patch's u and v, its along holding [u, v], with kind length and unit \
-                          the reconstruction's world_space_unit (null for scene units, where \
-                          the file names none), or kind angle and unit degrees for a patch at \
-                          infinity; patch_axes is null at the cluster stage. The \
+                          as a true match between two views would: the semi-major axis of the \
+                          ellipse with the same second moments per unit area about the true position \
+                          as the shifts where its ZNCC against itself, interpolated bilinearly \
+                          between whole-pixel shifts, is at or above that level; under 1 on a \
+                          corner or busy texture, and 3 meaning 3 or more, on a straight edge \
+                          or a flat patch. zncc_self_similarity_radius_middle and \
+                          zncc_self_similarity_radius_grid read the middle square and each cell \
+                          of the same split the same way. zncc_self_similarity_surface is the \
+                          tile's ZNCC against itself at every shift of the 7 x 7 square, seven \
+                          rows of seven from (dx, dy) = (-3, -3), 1 at the centre and null where \
+                          the tile is flat, and zncc_self_similarity_tolerance the ZNCC deficit \
+                          the tile was judged by, so the region is the surface at or above \
+                          1 - tolerance. zncc_self_similarity_ellipse and \
+                          zncc_self_similarity_ellipse_middle are that region's ellipse for the \
+                          whole tile and its middle, as grid_px in patch-grid px (x right, y \
+                          down): at the track stage the grid of the reconstruction's patch \
+                          resolution R, which stage_data reports as patch_resolution, and at the \
+                          cluster stage the refinement kernel's grid; image_px in the \
+                          photograph's px (x right, y down; null where the tile's centre does \
+                          not project); and patch, along the patch's u and v, as {kind, unit, \
+                          ellipse} with kind length and unit the reconstruction's \
+                          world_space_unit (null for scene units, where the file names none), \
+                          or kind angle and unit degrees for a patch at infinity; patch is null \
+                          at the cluster stage. Each ellipse is {axes, axes_is_at_least, \
+                          major_angle, matrix}: axes [semi-major, semi-minor], each capped at 3 \
+                          grid px; axes_is_at_least true per axis where the true length may be \
+                          larger, because the region runs off the square searched, a shift with \
+                          no reading beside it could hide more of it, or the length reached the \
+                          largest radius searched; major_angle the major axis's angle in \
+                          radians in [0, pi) from the frame's first axis towards its second, \
+                          null for a circle; and matrix the 2 x 2 matrix E, with d^T E^-1 d = 1 \
+                          on the ellipse. zncc_self_similarity_ellipse_grid gives each cell's \
+                          ellipse in grid px, three rows of three, null for a cell with no \
+                          reading. The \
                           self-similarity fields are \
                           null where the tile could not be read. Each observation also carries \
                           patch_jacobian and patch_zoom, the geometry of the patch in its \

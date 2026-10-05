@@ -46,7 +46,9 @@ use sfmtool_core::bench::{
     bar_checks, verdicts_if_unpinned, BarChecks, EditableTrack, Observation, Provenance, Stage,
     StageKind, Thresholds, Verdict,
 };
-use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach, SelfSimilarityReach};
+use sfmtool_core::patch::self_similarity::{
+    PatchEllipse, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
+};
 use sfmtool_core::{EditedReconstruction, Point3D, SfmrReconstruction};
 
 use crate::bench::live::Evaluation;
@@ -1219,58 +1221,57 @@ fn self_similarity_text(whole: Option<f64>, middle: Option<f64>) -> String {
     })
 }
 
-/// The *Self-similarity* cell's hover text: how far the contour the whole and
-/// middle radii are read from reaches, in three units, as a small table with a
-/// column for each part. `None` where neither part has a reach.
+/// The *Self-similarity* cell's hover text: the ellipses of the whole and
+/// middle readings, in three units, as a small table with a column for each
+/// part. `None` where neither part has an ellipse.
 ///
 /// ```text
-///            whole                mid
-/// grid px    0.42                 3+
-///   along    u 0.31  v 0.40       u 3+  v 0.80
-/// image px   0.85                 5.6+
-/// world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm
+///            whole                   mid
+/// grid px    0.42 × 0.31 at 35°      3+ × 0.80 at 0°
+/// image px   0.85 × 0.60 at 41°      5.6+ × 1.6 at 2°
+/// world      3.1 × 2.2 mm at 145°    29+ × 7.8 mm at 0°
 /// ```
 ///
-/// The grid row is the radius, which the cell prints, and the row under it the
-/// reach along the grid's `x` and `y`, labelled with the patch axes they run
-/// along, `u` and `v` (the grid's `y` runs down `v`). The image row is the
-/// radius in the photograph's pixels. The last row is the reach along `u` and
-/// `v` in world space, with the unit after each value: the reconstruction's
-/// `world_space_unit` scaled to one unit for every length in the hover
-/// (`LengthDisplay`, so `0.0031 m` prints `3.1 mm`), or bare and labelled
-/// *scene units* where the file names none (in scientific form, `5.4e-4`,
-/// where the largest is under 0.001), or as an angle in degrees for a patch at
-/// infinity. A `+` marks a
-/// lower bound, as the cell's `3+` does: the region at the level ran off the
-/// square the reading searched along that axis, ran off along the other axis
-/// without holding its width, borders a gap (a neighbour with no reading), or
-/// reached the largest radius searched, so the true reach may be larger.
-/// Numbers carry two significant digits; a grid value at the largest radius
+/// Each cell is the ellipse's semi-major axis × its semi-minor axis, and the
+/// angle of the major axis in whole degrees from 0 to 179, left out where the
+/// ellipse is a circle. The grid row is in patch-grid px, and its semi-major
+/// axis is the radius the cell prints; its angle runs from the grid's `x`
+/// (right) towards its `y` (down). The image row is in the photograph's
+/// pixels, its angle from the photograph's `x` towards its `y` (down). The
+/// last row is along the patch, its angle from `u` towards `v`, with the unit
+/// after the two lengths: the reconstruction's `world_space_unit` scaled to
+/// one unit for every length in the hover (`LengthDisplay`, so `0.0031 m`
+/// prints `3.1 mm`), or bare and labelled *scene units* where the file names
+/// none (in scientific form, `5.4e-4`, where the largest is under 0.001), or
+/// as angles in degrees for a patch at infinity. A `+` marks a lower bound,
+/// as the cell's `3+` does: the region at the level ran off the square the
+/// reading searched, met a shift with no reading that could hide more of it,
+/// or reached the largest radius searched, so the true length may be larger.
+/// Numbers carry two significant digits; a grid length at the largest radius
 /// prints `3+` as the cell does. `-` stands for a value that cannot be
 /// computed, as at the cluster stage, which has no patch.
-fn self_similarity_reach_text(
-    whole: Option<&SelfSimilarityReach>,
-    middle: Option<&SelfSimilarityReach>,
+fn self_similarity_ellipse_text(
+    whole: Option<&SelfSimilarityEllipseUnits>,
+    middle: Option<&SelfSimilarityEllipseUnits>,
     world_unit: Option<&str>,
 ) -> Option<String> {
     if whole.is_none() && middle.is_none() {
         return None;
     }
     let max = max_self_similarity_radius();
-    let grid = |r: BoundedLength| {
-        if r.value >= max {
+    let grid_length = |value: f64, at_least: bool| {
+        if value >= max {
             format!("{max:.0}+")
         } else {
-            reach_number(r)
+            bounded_number(value, at_least)
         }
     };
-    let pair = |[u, v]: [String; 2]| format!("u {u}  v {v}");
     let parts = [whole, middle];
     let degrees = parts
         .iter()
         .flatten()
-        .any(|reach| matches!(reach.patch_axes, Some(PatchAxisReach::Angle(_))));
-    let cells = |f: &dyn Fn(&SelfSimilarityReach) -> Option<String>| {
+        .any(|units| matches!(units.patch, Some(PatchEllipse::Angle(_))));
+    let cells = |f: &dyn Fn(&SelfSimilarityEllipseUnits) -> Option<String>| {
         parts.map(|part| part.and_then(f).unwrap_or_else(|| "-".to_string()))
     };
     let world_label = match (degrees, world_unit) {
@@ -1281,39 +1282,48 @@ fn self_similarity_reach_text(
     let largest_length = parts
         .iter()
         .flatten()
-        .filter_map(|reach| match reach.patch_axes {
-            Some(PatchAxisReach::Length(values)) => Some(values),
+        .filter_map(|units| match units.patch {
+            Some(PatchEllipse::Length(e)) => Some(e.axes[0]),
             _ => None,
         })
-        .flatten()
-        .map(|r| r.value)
         .filter(|value| value.is_finite())
         .fold(None, |most: Option<f64>, value| {
             Some(most.map_or(value, |most| most.max(value)))
         });
     let length_display = LengthDisplay::for_largest(world_unit, largest_length);
-    let rows: [(String, [String; 2]); 4] = [
+    let rows: [(String, [String; 2]); 3] = [
         (
             "grid px".to_string(),
-            cells(&|reach| Some(grid(reach.grid_radius))),
-        ),
-        (
-            "  along".to_string(),
-            cells(&|reach| Some(pair(reach.grid_axes.map(grid)))),
+            cells(&|units| Some(ellipse_text(&units.grid_px, &grid_length, ""))),
         ),
         (
             "image px".to_string(),
-            cells(&|reach| reach.image_radius.map(reach_number)),
+            cells(&|units| {
+                units
+                    .image_px
+                    .map(|e| ellipse_text(&e, &bounded_number, ""))
+            }),
         ),
         (
             world_label,
-            cells(&|reach| {
-                Some(pair(match reach.patch_axes? {
-                    PatchAxisReach::Length(values) => values.map(|r| length_display.text(r)),
-                    PatchAxisReach::Angle(values) => {
-                        values.map(|r| format!("{}\u{b0}", reach_number(r)))
+            cells(&|units| {
+                Some(match units.patch? {
+                    PatchEllipse::Length(e) => {
+                        let number =
+                            |value: f64, at_least: bool| length_display.number(value, at_least);
+                        let unit = length_display
+                            .unit
+                            .as_deref()
+                            .map_or_else(String::new, |unit| format!(" {unit}"));
+                        ellipse_text(&e, &number, &unit)
                     }
-                }))
+                    PatchEllipse::Angle(e) => {
+                        let number = |value: f64, at_least: bool| {
+                            format!("{}\u{b0}", bounded_number(value, at_least))
+                        };
+                        ellipse_text(&e, &number, "")
+                    }
+                })
             }),
         ),
     ];
@@ -1350,10 +1360,34 @@ fn self_similarity_reach_text(
     Some(out.join("\n"))
 }
 
+/// One ellipse as a hover cell prints it: `major × minor`, each through
+/// `number` with its lower bound, then `unit`, then the major axis's angle in
+/// whole degrees from 0 to 179 where it has one (`0.42 × 0.31 at 35°`).
+fn ellipse_text(
+    ellipse: &SelfSimilarityEllipse,
+    number: &dyn Fn(f64, bool) -> String,
+    unit: &str,
+) -> String {
+    let [major, minor] = ellipse.axes;
+    let [major_at_least, minor_at_least] = ellipse.axes_is_at_least;
+    let lengths = format!(
+        "{} \u{d7} {}{unit}",
+        number(major, major_at_least),
+        number(minor, minor_at_least)
+    );
+    let angle = ellipse.major_angle;
+    if angle.is_finite() {
+        let degrees = (angle.to_degrees().round() as i64).rem_euclid(180);
+        format!("{lengths} at {degrees}\u{b0}")
+    } else {
+        lengths
+    }
+}
+
 /// One length to two significant digits, with a `+` where it is a lower bound.
-fn reach_number(r: BoundedLength) -> String {
-    let number = finite_or_nan(r.value, significant);
-    if r.at_least {
+fn bounded_number(value: f64, at_least: bool) -> String {
+    let number = finite_or_nan(value, significant);
+    if at_least {
         format!("{number}+")
     } else {
         number
@@ -1439,10 +1473,10 @@ impl LengthDisplay {
         }
     }
 
-    /// One length in this display: two significant digits, a `+` on a lower
-    /// bound, and the unit after it.
-    fn text(&self, r: BoundedLength) -> String {
-        let value = r.value * self.factor;
+    /// One length in this display, without its unit: two significant digits
+    /// (or scientific form), and a `+` on a lower bound.
+    fn number(&self, value: f64, at_least: bool) -> String {
+        let value = value * self.factor;
         let mut number = finite_or_nan(value, |v| {
             if self.scientific {
                 format!("{v:.1e}")
@@ -1450,13 +1484,10 @@ impl LengthDisplay {
                 significant(v)
             }
         });
-        if r.at_least {
+        if at_least {
             number.push('+');
         }
-        match &self.unit {
-            Some(unit) => format!("{number} {unit}"),
-            None => number,
-        }
+        number
     }
 }
 
@@ -1541,9 +1572,8 @@ pub(crate) struct RowGrids {
     pub zncc: Option<[[f64; 3]; 3]>,
     /// The ZNCC self-similarity radius of each cell, in grid px.
     pub radius: Option<[[f64; 3]; 3]>,
-    /// Per cell, the direction the cell's indistinguishable shifts line up
-    /// in, scaled by how strongly.
-    pub radius_slide: Option<[[[f64; 2]; 3]; 3]>,
+    /// The ellipse of each cell's self-similarity region, in grid px.
+    pub radius_ellipse: Option<[[SelfSimilarityEllipse; 3]; 3]>,
 }
 
 /// The whole tile's self-similarity radius of `observation` at `stage`.
@@ -1554,28 +1584,28 @@ fn row_radius(observation: &Observation, stage: StageKind) -> Option<f64> {
     }
 }
 
-/// The whole tile's and the middle's self-similarity reach of `observation` at
-/// `stage`, or none while the evaluation is refused or failed, when the row's
-/// cells print `-` too.
-fn row_reach(
+/// The whole tile's and the middle's self-similarity ellipses of
+/// `observation` at `stage`, or none while the evaluation is refused or
+/// failed, when the row's cells print `-` too.
+fn row_ellipse(
     observation: &Observation,
     stage: StageKind,
     evaluation: &Evaluation,
-) -> [Option<SelfSimilarityReach>; 2] {
+) -> [Option<SelfSimilarityEllipseUnits>; 2] {
     if matches!(evaluation, Evaluation::Refused(_) | Evaluation::Failed(_)) {
         return [None, None];
     }
     match stage {
         StageKind::Cluster => observation.cluster.as_ref().map_or([None, None], |m| {
             [
-                m.zncc_self_similarity_reach,
-                m.zncc_self_similarity_reach_middle,
+                m.zncc_self_similarity_ellipse,
+                m.zncc_self_similarity_ellipse_middle,
             ]
         }),
         StageKind::Track => observation.track.as_ref().map_or([None, None], |m| {
             [
-                m.zncc_self_similarity_reach,
-                m.zncc_self_similarity_reach_middle,
+                m.zncc_self_similarity_ellipse,
+                m.zncc_self_similarity_ellipse_middle,
             ]
         }),
     }
@@ -1622,7 +1652,7 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .map_or_else(RowGrids::default, |m| RowGrids {
                 zncc: m.zncc_grid,
                 radius: m.zncc_self_similarity_radius_grid,
-                radius_slide: m.zncc_self_similarity_slide_grid,
+                radius_ellipse: m.zncc_self_similarity_ellipse_grid,
             }),
         StageKind::Track => observation
             .track
@@ -1630,7 +1660,7 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .map_or_else(RowGrids::default, |m| RowGrids {
                 zncc: m.zncc_grid,
                 radius: m.zncc_self_similarity_radius_grid,
-                radius_slide: m.zncc_self_similarity_slide_grid,
+                radius_ellipse: m.zncc_self_similarity_ellipse_grid,
             }),
     }
 }

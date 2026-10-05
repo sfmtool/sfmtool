@@ -30,7 +30,10 @@ use crate::patch::keypoint_localize::{
     localize_patch_keypoints, KeypointLocalization, KeypointLocalizeParams,
 };
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
-use crate::patch::self_similarity::{PatchAxisReach, SelfSimilarity, SelfSimilarityReach};
+use crate::patch::self_similarity::{
+    zncc_self_similarity_parts, PatchEllipse, PatchTile, SelfSimilarityEllipse,
+    SelfSimilarityEllipseUnits, SelfSimilarityParams,
+};
 use crate::progress::Progress;
 use crate::reconstruction::data::Point3D;
 use crate::reconstruction::edited::{EditedReconstruction, PointMap, PointRecord};
@@ -56,13 +59,14 @@ const BITMAP_R: usize = 24;
 const PIXEL_SEED_RADIUS_PX: f64 = 5.0;
 
 /// Check a measurement's ZNCC self-similarity readings are all present and in
-/// range: radii in `0 ..= 3`, slides at most unit length, and a `7 × 7`
-/// surface that is `1` at its centre (or all `NaN` for a flat core).
+/// range: radii in `0 ..= 3`, each cell's ellipse with its semi-major axis
+/// the cell's radius, and a `7 × 7` surface that is `1` at its centre (or all
+/// `NaN` for a flat core).
 fn assert_self_similarity(
     radius: Option<f64>,
     middle: Option<f64>,
     grid: Option<[[f64; 3]; 3]>,
-    slide: Option<[[[f64; 2]; 3]; 3]>,
+    ellipses: Option<[[SelfSimilarityEllipse; 3]; 3]>,
     surface: Option<&Vec<f64>>,
 ) {
     let in_range = |r: f64| (0.0..=3.0).contains(&r);
@@ -70,11 +74,11 @@ fn assert_self_similarity(
     assert!(in_range(middle.expect("a middle self-similarity radius")));
     let grid = grid.expect("a self-similarity radius grid");
     assert!(grid.iter().flatten().all(|&r| in_range(r)));
-    let slide = slide.expect("a self-similarity slide grid");
-    assert!(slide
-        .iter()
-        .flatten()
-        .all(|s| s[0].hypot(s[1]) <= 1.0 + 1e-9));
+    let ellipses = ellipses.expect("a self-similarity ellipse grid");
+    for (e, r) in ellipses.iter().flatten().zip(grid.iter().flatten()) {
+        assert_eq!(e.axes[0].to_bits(), r.to_bits());
+        assert!(e.axes[1] <= e.axes[0]);
+    }
     let surface = surface.expect("a self-similarity surface");
     assert_eq!(surface.len(), 49);
     assert!(surface[24] == 1.0 || surface.iter().all(|z| z.is_nan()));
@@ -2381,11 +2385,11 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             m.zncc_self_similarity_radius,
             m.zncc_self_similarity_radius_middle,
             m.zncc_self_similarity_radius_grid,
-            m.zncc_self_similarity_slide_grid,
+            m.zncc_self_similarity_ellipse_grid,
             m.zncc_self_similarity_surface.as_ref(),
         );
-        // And its contour's reach, in each unit, read through the placement
-        // the tile was rendered through: the patch anchored on this sighting's
+        // And its ellipse, in each unit, read through the placement the tile
+        // was rendered through: the patch anchored on this sighting's
         // keypoint, at the localizer's resolution.
         let view = &scene.views()[image as usize];
         let fitted = placement_of(&measured);
@@ -2396,46 +2400,30 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         let resolution = test_fit_options().localize.resolution.max(2) as usize;
         let jacobian = patch_grid_jacobian(&anchored, view.camera, view.cam_from_world, resolution)
             .expect("the tile's centre projects");
-        for (reach, radius) in [
-            (m.zncc_self_similarity_reach, m.zncc_self_similarity_radius),
+        for (units, radius) in [
             (
-                m.zncc_self_similarity_reach_middle,
+                m.zncc_self_similarity_ellipse,
+                m.zncc_self_similarity_radius,
+            ),
+            (
+                m.zncc_self_similarity_ellipse_middle,
                 m.zncc_self_similarity_radius_middle,
             ),
         ] {
-            let reach = reach.expect("a reach beside the radius");
-            assert_eq!(Some(reach.grid_radius.value), radius);
+            let units = units.expect("an ellipse beside the radius");
+            assert_eq!(Some(units.grid_px.axes[0]), radius);
+            assert_eq!(units.image_px, units.grid_px.mapped(jacobian));
             // One grid px along x is 2·half_extent[0] / R along u, and along y
-            // is 2·half_extent[1] / R along v.
-            let Some(PatchAxisReach::Length(along)) = reach.patch_axes else {
-                panic!("a finite patch reads lengths: {:?}", reach.patch_axes);
+            // is 2·half_extent[1] / R along −v.
+            let Some(PatchEllipse::Length(on_patch)) = units.patch else {
+                panic!("a finite patch reads lengths: {:?}", units.patch);
             };
-            for (k, (got, grid)) in along.iter().zip(reach.grid_axes).enumerate() {
-                let want = grid.value * 2.0 * anchored.half_extent[k] / resolution as f64;
-                assert_eq!(got.value, want, "axis {k}");
-                assert_eq!(got.at_least, grid.at_least);
-            }
+            let scale = |k: usize| 2.0 * anchored.half_extent[k] / resolution as f64;
+            assert_eq!(
+                Some(on_patch),
+                units.grid_px.mapped([[scale(0), 0.0], [0.0, -scale(1)]])
+            );
         }
-        // The whole core's surface is stored, so its contour can be read
-        // again here, and its image radius is the one through the anchored
-        // placement's Jacobian.
-        let whole = SelfSimilarity {
-            radius: m.zncc_self_similarity_radius.expect("a radius"),
-            slide: [0.0; 2],
-            tolerance: m.zncc_self_similarity_tolerance.expect("a textured core"),
-            surface: m.zncc_self_similarity_surface.clone().expect("a surface"),
-        };
-        let contour = whole.contour().expect("a contour");
-        assert_eq!(
-            m.zncc_self_similarity_reach.and_then(|r| r.image_radius),
-            contour.image_radius(jacobian),
-            "image {image}"
-        );
-        assert_eq!(
-            m.zncc_self_similarity_reach,
-            SelfSimilarityReach::read(&whole, Some(jacobian), Some(&anchored), resolution),
-            "image {image}"
-        );
         // The readings are the overlap readings of the `R×R` tile rendered
         // through the anchored placement, the grid a stored patch bitmap is
         // rendered on, so no pixel from outside that tile enters them.
@@ -2458,15 +2446,15 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
                 }
             }
         }
-        let parts = crate::patch::self_similarity::zncc_self_similarity_parts(
-            &crate::patch::self_similarity::PatchTile {
+        let parts = zncc_self_similarity_parts(
+            &PatchTile {
                 values: &planes,
                 channels: colour,
                 width: resolution,
                 height: resolution,
             },
             None,
-            &crate::patch::self_similarity::SelfSimilarityParams::default(),
+            &SelfSimilarityParams::default(),
         );
         assert_eq!(m.zncc_self_similarity_radius, Some(parts.whole.radius));
         assert_eq!(
@@ -2485,6 +2473,27 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         assert_eq!(
             m.zncc_self_similarity_surface.as_ref(),
             Some(&parts.whole.surface)
+        );
+        // Its ellipses are the parts' ellipses, the whole one read through the
+        // anchored placement's Jacobian and half-extents.
+        assert_eq!(
+            m.zncc_self_similarity_ellipse,
+            SelfSimilarityEllipseUnits::read(
+                &parts.whole,
+                Some(jacobian),
+                Some(&anchored),
+                resolution
+            ),
+            "image {image}"
+        );
+        assert_eq!(
+            m.zncc_self_similarity_ellipse_grid,
+            Some(
+                parts
+                    .grid
+                    .each_ref()
+                    .map(|row| row.each_ref().map(|c| c.ellipse))
+            )
         );
     }
 
@@ -3142,39 +3151,28 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
             m.zncc_self_similarity_radius,
             m.zncc_self_similarity_radius_middle,
             m.zncc_self_similarity_radius_grid,
-            m.zncc_self_similarity_slide_grid,
+            m.zncc_self_similarity_ellipse_grid,
             m.zncc_self_similarity_surface.as_ref(),
         );
-        // A member has a grid and a photograph but no patch, so its contour
+        // A member has a grid and a photograph but no patch, so its ellipse
         // reads in grid px and image px only. The grid is the seed shape's
         // affine map: one grid px is `2·radius / R` keypoint-frame units,
         // which the shape carries to image px.
-        let reach = m
-            .zncc_self_similarity_reach
-            .expect("a reach beside the radius");
-        assert_eq!(Some(reach.grid_radius.value), m.zncc_self_similarity_radius);
-        assert_eq!(reach.patch_axes, None);
+        let units = m
+            .zncc_self_similarity_ellipse
+            .expect("an ellipse beside the radius");
+        assert_eq!(Some(units.grid_px.axes[0]), m.zncc_self_similarity_radius);
+        assert_eq!(units.patch, None);
         let resolution = EvaluateOptions::default().cluster.resolution.max(2) as usize;
         let step = 2.0 * payload.radius / resolution as f64;
         let jacobian = m.seed_shape.map(|row| row.map(|v| v * step));
-        let whole = SelfSimilarity {
-            radius: m.zncc_self_similarity_radius.expect("a radius"),
-            slide: [0.0; 2],
-            tolerance: m.zncc_self_similarity_tolerance.expect("a textured core"),
-            surface: m.zncc_self_similarity_surface.clone().expect("a surface"),
-        };
-        assert_eq!(
-            Some(reach),
-            SelfSimilarityReach::read(&whole, Some(jacobian), None, resolution)
-        );
-        let image = reach.image_radius.expect("the seed shape maps the grid");
-        assert_eq!(
-            Some(image),
-            whole.contour().expect("a contour").image_radius(jacobian)
-        );
-        let middle = m.zncc_self_similarity_reach_middle.expect("a middle reach");
-        assert_eq!(middle.patch_axes, None);
-        assert!(middle.image_radius.is_some());
+        assert!(units.image_px.is_some(), "the seed shape maps the grid");
+        assert_eq!(units.image_px, units.grid_px.mapped(jacobian));
+        let middle = m
+            .zncc_self_similarity_ellipse_middle
+            .expect("a middle ellipse");
+        assert_eq!(middle.patch, None);
+        assert!(middle.image_px.is_some());
         // The radius is the overlap reading of the member's own `R×R` grid at
         // its seed: the number cluster refinement's member gate judges.
         let params = ClusterRefineParams {
@@ -3182,6 +3180,30 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
             ..EvaluateOptions::default().cluster
         };
         let views = scene.views();
+        let samples = sample_member_grid(
+            views[observation.image as usize].pyramid,
+            m.seed_position,
+            m.seed_shape,
+            &params,
+        )
+        .expect("the member's grid");
+        let channels = samples.len() / (resolution * resolution);
+        let (planes, colour) =
+            PatchTile::planes_from_interleaved(&samples, resolution, resolution, channels);
+        let parts = zncc_self_similarity_parts(
+            &PatchTile {
+                values: &planes,
+                channels: colour,
+                width: resolution,
+                height: resolution,
+            },
+            None,
+            &SelfSimilarityParams::default(),
+        );
+        assert_eq!(
+            Some(units),
+            SelfSimilarityEllipseUnits::read(&parts.whole, Some(jacobian), None, resolution)
+        );
         assert_eq!(
             m.zncc_self_similarity_radius,
             crate::patch::cluster_refine::member_zncc_self_similarity_radius(
@@ -3543,10 +3565,10 @@ fn a_track_stage_reading_is_in_the_grid_of_the_stored_patch_bitmaps() {
     let mut differs = false;
     for (i, observation) in stored.observations.iter().enumerate() {
         let got = observation.track.as_ref().expect("a row");
-        assert!(got.zncc_self_similarity_reach.is_some(), "row {i}");
+        assert!(got.zncc_self_similarity_ellipse.is_some(), "row {i}");
         assert_eq!(Some(got), asked.observations[i].track.as_ref(), "row {i}");
         let default = at_24.observations[i].track.as_ref().expect("a row");
-        differs |= got.zncc_self_similarity_reach != default.zncc_self_similarity_reach;
+        differs |= got.zncc_self_similarity_ellipse != default.zncc_self_similarity_ellipse;
     }
     assert!(differs, "16 and 24 read the same, so this proves less");
 }

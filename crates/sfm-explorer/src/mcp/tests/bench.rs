@@ -2401,11 +2401,15 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
         assert!((0.0..=3.0).contains(&radius), "{track}");
     }
-    // Its contour's reach: a cluster member has no patch, so no axes.
-    let reach = &cluster["zncc_self_similarity_reach"];
-    assert!(reach["grid_radius"]["value"].is_number(), "{track}");
-    assert!(reach["image_radius"]["value"].is_number(), "{track}");
-    assert!(reach["patch_axes"].is_null(), "{track}");
+    // Its ellipse: a cluster member has no patch, so none along the patch.
+    let ellipse = &cluster["zncc_self_similarity_ellipse"];
+    assert_eq!(
+        ellipse["grid_px"]["axes"][0].as_f64(),
+        cluster["zncc_self_similarity_radius"].as_f64(),
+        "{track}"
+    );
+    assert!(ellipse["image_px"]["axes"][1].is_number(), "{track}");
+    assert!(ellipse["patch"].is_null(), "{track}");
     // The tile's ZNCC against itself, seven rows of seven, 1 at the centre
     // and a number in the corners outside the disk.
     let surface = cluster["zncc_self_similarity_surface"]
@@ -2420,20 +2424,20 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         surface[3][3] == json!(1.0) || surface[3][3].is_null(),
         "{track}"
     );
-    // And per cell the direction a match could slide, as an `[x, y]` pair.
-    for key in ["zncc_self_similarity_slide_grid"] {
-        let slides = cluster[key]
-            .as_array()
-            .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
-        assert_eq!(slides.len(), 3, "{track}");
-        for cell in slides
-            .iter()
-            .flat_map(|row| row.as_array().expect("a row of cells"))
-        {
-            let pair = cell.as_array().expect("an [x, y] pair");
-            assert_eq!(pair.len(), 2, "{track}");
-            let (x, y) = (pair[0].as_f64().unwrap(), pair[1].as_f64().unwrap());
-            assert!(x.hypot(y) <= 1.0 + 1e-9, "{track}");
+    // And per cell its ellipse, whose semi-major axis is the cell's radius.
+    let ellipses = cluster["zncc_self_similarity_ellipse_grid"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no cluster ellipse grid on the wire: {track}"));
+    assert_eq!(ellipses.len(), 3, "{track}");
+    for (r, row) in ellipses.iter().enumerate() {
+        for (c, cell) in row.as_array().expect("a row of cells").iter().enumerate() {
+            assert_eq!(
+                cell["axes"][0].as_f64(),
+                cluster["zncc_self_similarity_radius_grid"][r][c].as_f64(),
+                "{track}"
+            );
+            assert_eq!(cell["axes_is_at_least"].as_array().map(Vec::len), Some(2));
+            assert_eq!(cell["matrix"].as_array().map(Vec::len), Some(2));
         }
     }
 
@@ -2486,7 +2490,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     for key in [
         "zncc_grid",
         "zncc_self_similarity_radius_grid",
-        "zncc_self_similarity_slide_grid",
+        "zncc_self_similarity_ellipse_grid",
     ] {
         assert_eq!(
             measured[key].as_array().map(Vec::len),
@@ -2505,15 +2509,15 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         measured["zncc_self_similarity_tolerance"].is_number(),
         "zncc_self_similarity_tolerance is not on the wire: {track}"
     );
-    // How far the contour reaches, in grid px, image px and along the patch's
-    // axes, whole and middle.
+    // The ellipse of the matching shifts, in grid px, image px and along the
+    // patch's axes, whole and middle.
     for key in [
-        "zncc_self_similarity_reach",
-        "zncc_self_similarity_reach_middle",
+        "zncc_self_similarity_ellipse",
+        "zncc_self_similarity_ellipse_middle",
     ] {
-        let reach = &measured[key];
+        let ellipse = &measured[key];
         assert_eq!(
-            reach["grid_radius"]["value"].as_f64(),
+            ellipse["grid_px"]["axes"][0].as_f64(),
             measured[if key.ends_with("middle") {
                 "zncc_self_similarity_radius_middle"
             } else {
@@ -2522,19 +2526,30 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             .as_f64(),
             "{key}: {track}"
         );
-        assert!(reach["grid_radius"]["at_least"].is_boolean(), "{track}");
-        assert_eq!(reach["grid_axes"].as_array().map(Vec::len), Some(2));
-        assert!(reach["image_radius"]["value"].is_number(), "{track}");
+        assert!(
+            ellipse["grid_px"]["axes_is_at_least"][0].is_boolean(),
+            "{track}"
+        );
+        assert!(
+            ellipse["grid_px"]["major_angle"].is_number()
+                || ellipse["grid_px"]["major_angle"].is_null(),
+            "{track}"
+        );
+        assert_eq!(
+            ellipse["grid_px"]["matrix"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert!(ellipse["image_px"]["axes"][0].is_number(), "{track}");
         // A finite patch reads lengths, in the reconstruction's own unit, or
         // with a null unit, scene units, where it names none.
-        assert_eq!(reach["patch_axes"]["kind"], json!("length"), "{track}");
+        assert_eq!(ellipse["patch"]["kind"], json!("length"), "{track}");
         assert_eq!(
-            reach["patch_axes"]["unit"],
+            ellipse["patch"]["unit"],
             json!(state.scene[0].recon().metadata.world_space_unit),
             "{track}"
         );
         assert!(
-            reach["patch_axes"]["along"][1]["value"].is_number(),
+            ellipse["patch"]["ellipse"]["axes"][1].is_number(),
             "{track}"
         );
     }

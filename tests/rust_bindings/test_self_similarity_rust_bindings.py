@@ -33,9 +33,26 @@ def test_the_result_carries_every_part_in_its_shape():
     assert isinstance(out["tolerance"], float)
     assert out["radius_grid"].shape == (3, 3)
     assert out["radius_grid"].dtype == np.float64
-    assert out["slide"].shape == (2,)
-    assert out["slide_grid"].shape == (3, 3, 2)
-    assert out["slide_grid"].dtype == np.float64
+    assert isinstance(out["radius_is_at_least"], bool)
+    for suffix in ("", "_middle"):
+        assert out[f"ellipse_axes{suffix}"].shape == (2,)
+        assert out[f"ellipse_axes_is_at_least{suffix}"].dtype == np.bool_
+        assert isinstance(out[f"ellipse_major_angle{suffix}"], float)
+    assert out["ellipse_matrix"].shape == (2, 2)
+    assert out["ellipse_axes_grid"].shape == (3, 3, 2)
+    assert out["ellipse_axes_grid"].dtype == np.float64
+    assert out["ellipse_axes_is_at_least_grid"].shape == (3, 3, 2)
+    assert out["ellipse_major_angle_grid"].shape == (3, 3)
+    # The radius is the ellipse's semi-major axis, whole, middle and per cell.
+    assert out["radius"] == out["ellipse_axes"][0]
+    assert out["radius_middle"] == out["ellipse_axes_middle"][0]
+    np.testing.assert_array_equal(out["radius_grid"], out["ellipse_axes_grid"][..., 0])
+    # The matrix's eigenvalues are the squared semi-axes.
+    np.testing.assert_allclose(
+        np.sort(np.linalg.eigvalsh(out["ellipse_matrix"]))[::-1],
+        out["ellipse_axes"] ** 2,
+        rtol=1e-9,
+    )
     assert out["surface"].shape == (7, 7)
     assert out["surface"][3, 3] == 1.0
     # The corners outside the disk of radius 3 are read too.
@@ -45,16 +62,21 @@ def test_the_result_carries_every_part_in_its_shape():
     assert 0.0 < out["radius"] < 1.0
 
 
-def test_an_edge_slides_along_itself_and_a_corner_does_not():
+def test_an_edge_reads_a_long_ellipse_along_itself_and_a_corner_a_small_one():
     out = zncc_self_similarity_parts(_edge(0.0))
     assert out["radius"] == 3.0
-    assert abs(out["slide"][0]) > 0.99 and abs(out["slide"][1]) < 1e-9
+    assert out["radius_is_at_least"]
+    major, minor = out["ellipse_axes"]
+    assert minor < 0.5 * major
+    # The edge runs along x, so its major axis does too.
+    angle = out["ellipse_major_angle"]
+    assert min(angle, np.pi - angle) < 1e-6
 
     y, x = np.mgrid[0:R, 0:R]
     corner = np.where((x >= R // 2) & (y >= R // 2), 200, 50).astype(np.uint8)
     out = zncc_self_similarity_parts(corner)
     assert out["radius"] < 1.0
-    np.testing.assert_array_equal(out["slide"], [0.0, 0.0])
+    assert not out["radius_is_at_least"]
 
 
 def test_a_flat_bitmap_scores_the_maximum_and_has_no_surface():
@@ -64,6 +86,9 @@ def test_a_flat_bitmap_scores_the_maximum_and_has_no_surface():
     assert (out["radius_grid"] == 3.0).all()
     assert out["tolerance"] == np.inf
     assert np.isnan(out["surface"]).all()
+    np.testing.assert_array_equal(out["ellipse_axes"], [3.0, 3.0])
+    assert out["ellipse_axes_is_at_least"].all()
+    assert np.isnan(out["ellipse_major_angle"])
 
 
 def test_uint8_float32_and_opaque_alpha_read_alike():
@@ -92,6 +117,8 @@ def test_samples_with_alpha_zero_carry_no_data():
     assert np.isnan(a["radius_grid"][:, 0]).all()
     none = zncc_self_similarity_parts(np.zeros((R, R, 4), np.uint8))
     assert np.isnan(none["radius"])
+    assert np.isnan(none["ellipse_axes"]).all()
+    assert not none["ellipse_axes_is_at_least"].any()
 
 
 def test_one_bitmap_reads_as_it_does_in_a_stack():
@@ -104,6 +131,16 @@ def test_one_bitmap_reads_as_it_does_in_a_stack():
         assert alone["radius"] == together["radius"][i]
         assert alone["radius_middle"] == together["radius_middle"][i]
         np.testing.assert_array_equal(alone["radius_grid"], together["radius_grid"][i])
+        np.testing.assert_array_equal(
+            alone["ellipse_axes"], together["ellipse_axes"][i]
+        )
+        np.testing.assert_array_equal(
+            alone["ellipse_axes_is_at_least"], together["ellipse_axes_is_at_least"][i]
+        )
+        assert alone["radius_is_at_least"] == together["radius_is_at_least"][i]
+        np.testing.assert_equal(
+            alone["ellipse_major_angle"], together["ellipse_major_angle"][i]
+        )
 
 
 def test_the_parameters_are_keywords():

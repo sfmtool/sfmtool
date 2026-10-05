@@ -20,8 +20,11 @@
 //! route visits every sample of every overlap.
 
 use super::kernels;
+use super::{
+    flat_reading, no_reading, read_surface, PatchTile, SelfSimilarity, SelfSimilarityParams,
+    SelfSimilarityParts,
+};
 use super::{grid_bounds, middle_span, Kernel, FLAT_FLOOR, FLAT_NORM_SQ_EPS};
-use super::{read_surface, PatchTile, SelfSimilarity, SelfSimilarityParams, SelfSimilarityParts};
 
 /// One template rectangle `Ω = (x, y, w, h)` inside `tile`, read the overlap
 /// way: at each shift, only the samples of `Ω` whose moved sample lies inside
@@ -32,7 +35,7 @@ use super::{read_surface, PatchTile, SelfSimilarity, SelfSimilarityParams, SelfS
 /// A template with `max_radius` px of tile around it on every side, every
 /// sample carrying data, has the whole template as its overlap at every shift.
 ///
-/// A template with no sample carrying data has no reading: its radius, slide,
+/// A template with no sample carrying data has no reading: its radius, ellipse,
 /// tolerance and surface are all `NaN`.
 ///
 /// # Panics
@@ -552,12 +555,7 @@ fn judge(
     let shift_count = side * side;
     let centre = &sums[r * side + r];
     if centre.count == 0.0 {
-        return SelfSimilarity {
-            radius: f64::NAN,
-            slide: [f64::NAN; 2],
-            tolerance: f64::NAN,
-            surface: vec![f64::NAN; shift_count],
-        };
+        return no_reading(r);
     }
     let floor_sq = FLAT_FLOOR * FLAT_FLOOR;
     let textured: Vec<(usize, f64)> = (0..channels)
@@ -567,12 +565,7 @@ fn judge(
         })
         .collect();
     if textured.is_empty() {
-        return SelfSimilarity {
-            radius: r as f64,
-            slide: [0.0; 2],
-            tolerance: f64::INFINITY,
-            surface: vec![f64::NAN; shift_count],
-        };
+        return flat_reading(r);
     }
     let noise_term = textured
         .iter()

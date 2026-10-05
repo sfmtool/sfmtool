@@ -15,7 +15,7 @@ use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{ClusterRefineParams, MemberStatus};
-use crate::patch::self_similarity::SelfSimilarityReach;
+use crate::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 use crate::patch::view_selection::ViewSelectParams;
 
 /// Where an observation came from.
@@ -136,7 +136,7 @@ pub struct ClusterMeasurement {
     /// radius are.
     pub shift_px: Option<f64>,
     /// The ZNCC self-similarity radius of the observation's own tile, in
-    /// template-grid px: the length of the furthest whole-pixel shift at which
+    /// template-grid px: the semi-major axis of the ellipse of the shifts at which
     /// the `R×R` tile still matches itself within the tolerance a true match
     /// between two views allows, `0 ..= r`, with `r` read as "`r` or more",
     /// read the overlap way with no pixels from outside the tile
@@ -151,13 +151,19 @@ pub struct ClusterMeasurement {
     /// three-by-three split of the same tile, `grid[row][col]` from the
     /// top-left cell. `None` wherever `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_radius_grid: Option<[[f64; 3]; 3]>,
-    /// For each cell of [`Self::zncc_self_similarity_radius_grid`], the
-    /// direction the cell's indistinguishable shifts line up in, `[x, y]` in
-    /// the template-grid frame (`x` column-right, `y` row-down), scaled by how
-    /// strongly they line up: near `1` along a straight edge, near `0` where
-    /// they spread evenly or there are none. Its sign means nothing. `None`
-    /// wherever `zncc_self_similarity_radius` is.
-    pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
+    /// The ellipse of the whole tile's self-similarity region
+    /// ([`SelfSimilarityEllipseUnits`]): in grid px, and in source-image px
+    /// through the seed shape's map from the grid to the image. A cluster
+    /// member has no patch, so `patch` is always `None`. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_ellipse: Option<SelfSimilarityEllipseUnits>,
+    /// The same for the middle square. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_ellipse_middle: Option<SelfSimilarityEllipseUnits>,
+    /// The ellipse of each cell of [`Self::zncc_self_similarity_radius_grid`],
+    /// in grid px (`x` column-right, `y` row-down). `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_ellipse_grid: Option<[[SelfSimilarityEllipse; 3]; 3]>,
     /// The whole tile's ZNCC against itself at every shift of the `(2r + 1)²`
     /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre, all
     /// `NaN` when the tile has no texture. `None` wherever
@@ -166,20 +172,10 @@ pub struct ClusterMeasurement {
     /// The tolerance the tile was judged by, `ε + mean_c (n / s_c)²`: a shift
     /// whose ZNCC deficit is at or under it is indistinguishable from the
     /// true position, so `1 - tolerance` is the level of
-    /// [`Self::zncc_self_similarity_surface`] the radius is read at. `None`
+    /// [`Self::zncc_self_similarity_surface`] the ellipse is read at. `None`
     /// wherever `zncc_self_similarity_radius` is, and where the tile has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
-    /// How far the whole tile's self-similarity contour reaches, in grid px
-    /// (the radius and along each grid axis) and in source-image px, through
-    /// the seed shape's map from the grid to the image
-    /// ([`SelfSimilarityReach`]). A cluster member has no patch, so
-    /// `patch_axes` is always `None`. `None` wherever
-    /// `zncc_self_similarity_radius` is.
-    pub zncc_self_similarity_reach: Option<SelfSimilarityReach>,
-    /// The same for the middle square. `None` wherever
-    /// `zncc_self_similarity_radius` is.
-    pub zncc_self_similarity_reach_middle: Option<SelfSimilarityReach>,
     /// The refinement's own verdict on the observation, in the `member_status`
     /// legend.
     pub status: Option<MemberStatus>,
@@ -200,11 +196,11 @@ impl ClusterMeasurement {
             zncc_self_similarity_radius: None,
             zncc_self_similarity_radius_middle: None,
             zncc_self_similarity_radius_grid: None,
-            zncc_self_similarity_slide_grid: None,
+            zncc_self_similarity_ellipse: None,
+            zncc_self_similarity_ellipse_middle: None,
+            zncc_self_similarity_ellipse_grid: None,
             zncc_self_similarity_surface: None,
             zncc_self_similarity_tolerance: None,
-            zncc_self_similarity_reach: None,
-            zncc_self_similarity_reach_middle: None,
             status: None,
         }
     }
@@ -348,7 +344,7 @@ pub struct TrackMeasurement {
     /// *Angle* column shows for a committed track.
     pub ray_angle_deg: Option<f64>,
     /// The ZNCC self-similarity radius of the observation's own tile, in
-    /// grid px: the length of the furthest whole-pixel shift at which
+    /// grid px: the semi-major axis of the ellipse of the shifts at which
     /// the `R×R` tile still matches itself within the tolerance a true match
     /// between two views allows, `0 ..= r`, with `r` read as "`r` or more",
     /// read the overlap way with no pixels from outside the tile
@@ -363,13 +359,22 @@ pub struct TrackMeasurement {
     /// three-by-three split of the same tile, `grid[row][col]` from the
     /// top-left cell. `None` wherever `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_radius_grid: Option<[[f64; 3]; 3]>,
-    /// For each cell of [`Self::zncc_self_similarity_radius_grid`], the
-    /// direction the cell's indistinguishable shifts line up in, `[x, y]` in
-    /// the grid frame (`x` column-right, `y` row-down), scaled by how
-    /// strongly they line up: near `1` along a straight edge, near `0` where
-    /// they spread evenly or there are none. Its sign means nothing. `None`
-    /// wherever `zncc_self_similarity_radius` is.
-    pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
+    /// The ellipse of the whole tile's self-similarity region
+    /// ([`SelfSimilarityEllipseUnits`]): in grid px, in source-image px
+    /// through the Jacobian of the tile's warp at its centre, and along the
+    /// patch's `u` and `v` axes in the scene's world-space unit (degrees for
+    /// a patch at infinity), all read through the keypoint-anchored placement
+    /// the tile was rendered through. `None` wherever
+    /// `zncc_self_similarity_radius` is; its `image_px` is `None` where the
+    /// tile's centre does not project.
+    pub zncc_self_similarity_ellipse: Option<SelfSimilarityEllipseUnits>,
+    /// The same for the middle square. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_ellipse_middle: Option<SelfSimilarityEllipseUnits>,
+    /// The ellipse of each cell of [`Self::zncc_self_similarity_radius_grid`],
+    /// in grid px (`x` column-right, `y` row-down). `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_ellipse_grid: Option<[[SelfSimilarityEllipse; 3]; 3]>,
     /// The whole tile's ZNCC against itself at every shift of the `(2r + 1)²`
     /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre, all
     /// `NaN` when the tile has no texture. `None` wherever
@@ -378,22 +383,10 @@ pub struct TrackMeasurement {
     /// The tolerance the tile was judged by, `ε + mean_c (n / s_c)²`: a shift
     /// whose ZNCC deficit is at or under it is indistinguishable from the
     /// true position, so `1 - tolerance` is the level of
-    /// [`Self::zncc_self_similarity_surface`] the radius is read at. `None`
+    /// [`Self::zncc_self_similarity_surface`] the ellipse is read at. `None`
     /// wherever `zncc_self_similarity_radius` is, and where the tile has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
-    /// How far the whole tile's self-similarity contour reaches
-    /// ([`SelfSimilarityReach`]): in grid px, in source-image px through the
-    /// Jacobian of the tile's warp at its centre, and along the patch's `u`
-    /// and `v` axes in the scene's world-space unit (degrees for a patch at
-    /// infinity), all read through the keypoint-anchored placement the tile
-    /// was rendered through. `None` wherever `zncc_self_similarity_radius`
-    /// is; its `image_radius` is `None` where the tile's centre does not
-    /// project.
-    pub zncc_self_similarity_reach: Option<SelfSimilarityReach>,
-    /// The same for the middle square. `None` wherever
-    /// `zncc_self_similarity_radius` is.
-    pub zncc_self_similarity_reach_middle: Option<SelfSimilarityReach>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
     /// therefore kept, in patch-grid px.

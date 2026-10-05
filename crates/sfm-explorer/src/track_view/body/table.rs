@@ -46,14 +46,14 @@
 //! cannot disagree.
 
 use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Thresholds, Verdict};
-use sfmtool_core::patch::self_similarity::SelfSimilarityReach;
+use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
-    row_grids, row_radius, row_reach, row_surface, self_similarity_cell_color,
-    self_similarity_reach_text, significant, zncc_cell_color, BodyMode, BoxHover, BoxesMoved,
+    row_ellipse, row_grids, row_radius, row_surface, self_similarity_cell_color,
+    self_similarity_ellipse_text, significant, zncc_cell_color, BodyMode, BoxHover, BoxesMoved,
     Judgement, RowGrids, TrackBody, TrackBodyResponse, MAX_PROJECTION_ERROR_LABEL,
     MAX_PROJECTION_ERROR_TIP, MAX_SELF_SIMILARITY_LABEL, MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL,
     MAX_SHIFT_TIP, MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL, MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
@@ -85,8 +85,8 @@ const SWITCH_SIZE: egui::Vec2 = egui::vec2(34.0, 18.0);
 /// The fill of an enabled *Keep* switch that is on. A greyed switch that is
 /// on is filled grey instead.
 pub(super) const KEEP_ON_FILL: egui::Color32 = egui::Color32::from_rgb(56, 150, 76);
-/// Side of one cell of a three-by-three grid a row draws: room for the slide
-/// line the self-similarity grid draws in a cell.
+/// Side of one cell of a three-by-three grid a row draws: room for the line
+/// along its ellipse's major axis the self-similarity grid draws in a cell.
 const GRID_CELL: f32 = 10.0;
 /// Side of a whole grid: three cells and the four lines of its border.
 const GRID_SIDE: f32 = 3.0 * GRID_CELL + 4.0;
@@ -130,12 +130,12 @@ pub(crate) struct RowSummary {
     /// The five measurement cells, as printed, a cell with two readings
     /// holding them on two lines.
     pub cells: [String; 5],
-    /// The whole and middle radii's reach, which the *Self-similarity* cell's
-    /// hover lays out under [`SELF_SIMILARITY_REACH_CAPTION`] in grid px,
-    /// image px and along the patch's axes
-    /// ([`super::self_similarity_reach_text`], built only while the cell is
+    /// The whole and middle readings' ellipses, which the *Self-similarity*
+    /// cell's hover lays out under [`SELF_SIMILARITY_ELLIPSE_CAPTION`] in grid
+    /// px, image px and along the patch's axes
+    /// ([`super::self_similarity_ellipse_text`], built only while the cell is
     /// hovered). Both `None` where the cell has no hover.
-    pub self_similarity_reach: [Option<SelfSimilarityReach>; 2],
+    pub self_similarity_ellipse: [Option<SelfSimilarityEllipseUnits>; 2],
     /// The Jacobian at the centre of the row's tile, in photograph pixels per
     /// patch-grid px at the reconstruction's patch resolution, computed
     /// without the photograph ([`super::tile::patch_jacobian`], which lists
@@ -604,16 +604,17 @@ pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels
 /// The self-similarity heading's hover text.
 pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: how far, in \
     patch-grid pixels, this observation's own tile can slide over itself and still match \
-    itself as well as a true match between two photographs would: where its ZNCC against \
-    itself, interpolated between whole-pixel shifts, falls through that level. \
+    itself as well as a true match between two photographs would: the semi-major axis of the \
+    ellipse fitted to the shifts where its ZNCC against itself, interpolated between \
+    whole-pixel shifts, stays at or above that level. \
     Under 1 means a match locks onto this position within a pixel, as on a corner or a busy \
     texture. 3+ means it still matched itself 3 pixels away and may slide further, as along a \
     straight edge or over a flat patch.\n\n\
     whole is the whole tile, mid its middle alone, the centred square half its width. The \
     grid beside them is each ninth of the tile alone, laid out as the tile is: \
     green under 1, yellow from 1 to 2, orange from 2 to 3, red at 3 or more. A line in a box is \
-    the direction that ninth can slide in, where its matching shifts line up along one. Hover \
-    the grid for the numbers.\n\n\
+    the direction that ninth can slide in, along its ellipse's major axis, where the ellipse \
+    is long and thin. Hover the grid for the numbers, and the cell for the ellipses.\n\n\
     The box under this heading is the bar that judges the whole tile's radius.";
 
 const STATUS_TIP: &str = "What the last evaluation or fit said about the row. At the \
@@ -1777,11 +1778,11 @@ impl TrackBody {
             });
             lines(x, cell, colors);
         }
-        // Hovering the self-similarity numbers shows how far the contour they
-        // are read from reaches, in grid px, image px and along the patch's
+        // Hovering the self-similarity numbers shows the ellipses they are
+        // the semi-major axes of, in grid px, image px and along the patch's
         // axes. The table is built only while the cell is hovered.
-        let self_similarity_reach = row_reach(row, stage, &self.evaluation);
-        if self_similarity_reach.iter().any(Option::is_some) {
+        let self_similarity_ellipse = row_ellipse(row, stage, &self.evaluation);
+        if self_similarity_ellipse.iter().any(Option::is_some) {
             let cell = egui::Rect::from_min_max(
                 egui::pos2(x0 + cols.self_similarity, rect.min.y),
                 egui::pos2(x0 + cols.self_similarity_grid - 4.0, rect.max.y),
@@ -1793,11 +1794,11 @@ impl TrackBody {
                 egui::Sense::hover(),
             )
             .on_hover_ui(|ui| {
-                let [whole, middle] = &self_similarity_reach;
+                let [whole, middle] = &self_similarity_ellipse;
                 if let Some(text) =
-                    self_similarity_reach_text(whole.as_ref(), middle.as_ref(), world_unit)
+                    self_similarity_ellipse_text(whole.as_ref(), middle.as_ref(), world_unit)
                 {
-                    ui.label(SELF_SIMILARITY_REACH_CAPTION);
+                    ui.label(SELF_SIMILARITY_ELLIPSE_CAPTION);
                     ui.label(egui::RichText::new(text).monospace());
                 }
             });
@@ -1838,8 +1839,8 @@ impl TrackBody {
                 cols.self_similarity_grid,
                 grids.radius,
                 grids
-                    .radius_slide
-                    .map(|slide| slide.map(|row| row.map(slide_mark))),
+                    .radius_ellipse
+                    .map(|ellipses| ellipses.map(|row| row.map(|e| ellipse_mark(&e)))),
                 &self_similarity_cell_color,
                 GridKind::SelfSimilarity,
             ),
@@ -1902,7 +1903,7 @@ impl TrackBody {
             tint,
             crop_caption,
             cells,
-            self_similarity_reach,
+            self_similarity_ellipse,
             jacobian,
             zoom_text,
             checks,
@@ -1915,13 +1916,14 @@ impl TrackBody {
 }
 
 /// The line over the *Self-similarity* cell's hover table.
-pub(super) const SELF_SIMILARITY_REACH_CAPTION: &str = "How far from the centre a match could \
-    land and still look like the true position, for the whole patch and its middle: the \
-    radius in patch-grid px and its reach along each grid axis, the radius in the \
-    photograph's pixels, and the reach along the patch's u and v axes. Grid x runs along u \
-    and grid y down v. A + is a lower bound, so the true reach may be larger: the match ran \
-    off the search square along that axis, ran off along the other axis and did not hold its \
-    width, met a shift with no reading, or reached the largest radius searched.";
+pub(super) const SELF_SIMILARITY_ELLIPSE_CAPTION: &str = "Where a match could land and still \
+    look like the true position, for the whole patch and its middle: the ellipse with the same \
+    spread about the true position as the shifts that match, as its semi-major axis \
+    × its semi-minor axis and the angle of the major axis. In patch-grid px, the semi-major \
+    axis is the radius, and the angle runs from grid x (right) towards grid y (down); in the \
+    photograph's pixels, from its x towards its y (down); along the patch, from u towards v. \
+    A + is a lower bound, so the true length may be larger: the match ran off the search \
+    square, met a shift with no reading, or reached the largest radius searched.";
 
 /// The words under the hover view of a surface plot: the radius and the
 /// level the contour is drawn at.
@@ -1978,27 +1980,34 @@ fn draw_grid(
 }
 
 /// What a self-similarity grid cell draws over its colour: the direction that
-/// ninth of the tile can slide in, or nothing.
+/// ninth of the tile can slide in, along its ellipse's major axis, or nothing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum CellMark {
     /// No direction stands out; the colour says the rest.
     Nothing,
     /// A match could slide along the line: the half line from the cell's
     /// centre, in screen points. The grid frame's `x` is the screen's right
-    /// and its `y` the screen's down, so the slide is drawn as it is.
+    /// and its `y` the screen's down, so the major axis is drawn as it is.
     Line(egui::Vec2),
 }
 
-/// The [`CellMark`] of a self-similarity cell with slide vector `slide`: a
-/// line along the slide where it is at least `0.5` long, so the cell's
-/// matching shifts line up along one direction, and nothing otherwise.
-pub(super) fn slide_mark(slide: [f64; 2]) -> CellMark {
-    let strength = slide[0].hypot(slide[1]);
-    if !strength.is_finite() || strength < 0.5 {
+/// The [`CellMark`] of a self-similarity cell with ellipse `ellipse`: a line
+/// along its major axis where the ellipse is long and thin, its elongation
+/// `1 − (minor / major)²` at least `0.5` (a minor axis at most 0.71 of the
+/// major), so the cell's matching shifts line up along one direction, and
+/// nothing otherwise, nor for a circle or a cell with no reading.
+pub(super) fn ellipse_mark(ellipse: &SelfSimilarityEllipse) -> CellMark {
+    let [major, minor] = ellipse.axes;
+    let angle = ellipse.major_angle;
+    if !(angle.is_finite() && major > 0.0) {
         return CellMark::Nothing;
     }
-    let along = egui::vec2(slide[0] as f32, slide[1] as f32) / strength as f32;
-    CellMark::Line(along * (GRID_CELL / 2.0 - 1.0))
+    let elongation = 1.0 - (minor / major).powi(2);
+    if elongation.is_nan() || elongation < 0.5 {
+        return CellMark::Nothing;
+    }
+    let (sin, cos) = angle.sin_cos();
+    CellMark::Line(egui::vec2(cos as f32, sin as f32) * (GRID_CELL / 2.0 - 1.0))
 }
 
 /// Which of a row's grids a value belongs to, which says how its hover text

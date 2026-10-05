@@ -28,10 +28,10 @@ use sfmtool_core::patch::self_similarity::{
 /// hold, and carry data on both sides, by the per-channel ZNCC averaged over
 /// the bitmap's textured channels. A shift is indistinguishable when ``1 -
 /// z(d) <= relative_tolerance + mean_c (noise / s_c)^2``, with ``s_c`` the
-/// bitmap's own spread in channel ``c``. The radius is how far from the centre
-/// that ZNCC, interpolated linearly between neighbouring shifts, falls through
-/// the level ``1 - tolerance`` at its furthest, capped at ``r``, which reads as
-/// "``r`` or more".
+/// bitmap's own spread in channel ``c``. The region of those shifts, the ZNCC
+/// taken as bilinear between whole-pixel shifts, is summarised by the ellipse
+/// with the same second moments per unit area about the true position; the radius
+/// is its semi-major axis, capped at ``r``, which reads as "``r`` or more".
 ///
 /// Args:
 ///     bitmap: An ``(R, R)`` single-channel bitmap or an ``(R, R, C)`` patch,
@@ -47,14 +47,23 @@ use sfmtool_core::patch::self_similarity::{
 /// Returns a dict: ``radius`` (float, the whole bitmap), ``radius_middle``
 /// (float, the middle square, rows and columns ``R/4 .. R - R/4``),
 /// ``radius_grid`` (``(3, 3)`` float64, each cell of the split at ``R/3`` and
-/// ``R - R/3``, from the top-left), ``slide`` (``(2,)`` float64, the direction
-/// the whole bitmap's indistinguishable shifts line up in, ``[x, y]`` with
-/// ``x`` column-right and ``y`` row-down, scaled by how strongly),
-/// ``slide_grid`` (``(3, 3, 2)`` float64, the same per cell), ``tolerance``
-/// (float, the whole bitmap's tolerance; infinite for a bitmap with no
-/// texture) and ``surface`` (``(2r + 1, 2r + 1)`` float64, the whole bitmap's
-/// ZNCC at every shift from ``(dx, dy) = (-r, -r)``, 1 at the centre). A
-/// bitmap with no sample carrying data has no reading, and its values are NaN.
+/// ``R - R/3``, from the top-left), ``radius_is_at_least`` (bool, whether the
+/// whole bitmap's true radius may be larger); the whole bitmap's ellipse as
+/// ``ellipse_axes`` (``(2,)`` float64, ``[semi-major, semi-minor]`` in bitmap
+/// pixels, each capped at ``r``), ``ellipse_axes_is_at_least`` (``(2,)`` bool,
+/// per axis whether the true length may be larger), ``ellipse_major_angle``
+/// (float, the major axis's angle in radians in ``[0, pi)`` from ``x``
+/// column-right towards ``y`` row-down, NaN for a circle) and
+/// ``ellipse_matrix`` (``(2, 2)`` float64, ``E`` with ``d^T E^-1 d = 1`` on the
+/// ellipse); the middle square's as ``ellipse_axes_middle``,
+/// ``ellipse_axes_is_at_least_middle`` and ``ellipse_major_angle_middle``, and
+/// each cell's as ``ellipse_axes_grid`` (``(3, 3, 2)``),
+/// ``ellipse_axes_is_at_least_grid`` (``(3, 3, 2)`` bool) and
+/// ``ellipse_major_angle_grid`` (``(3, 3)``); ``tolerance`` (float, the whole
+/// bitmap's tolerance; infinite for a bitmap with no texture) and ``surface``
+/// (``(2r + 1, 2r + 1)`` float64, the whole bitmap's ZNCC at every shift from
+/// ``(dx, dy) = (-r, -r)``, 1 at the centre). A bitmap with no sample carrying
+/// data has no reading, and its values are NaN and its flags false.
 ///
 /// Raises:
 ///     ValueError: If the bitmap is not a 2-D or 3-D uint8 or float32 array, is
@@ -124,13 +133,38 @@ pub fn zncc_self_similarity_parts<'py>(
         "radius_grid",
         grid(&|r, c| parts.grid[r][c].radius).into_pyarray(py),
     )?;
+    out.set_item("radius_is_at_least", parts.whole.radius_is_at_least())?;
+    for (suffix, part) in [("", &parts.whole), ("_middle", &parts.middle)] {
+        let e = &part.ellipse;
+        out.set_item(
+            format!("ellipse_axes{suffix}"),
+            Array1::from_vec(e.axes.to_vec()).into_pyarray(py),
+        )?;
+        out.set_item(
+            format!("ellipse_axes_is_at_least{suffix}"),
+            Array1::from_vec(e.axes_is_at_least.to_vec()).into_pyarray(py),
+        )?;
+        out.set_item(format!("ellipse_major_angle{suffix}"), e.major_angle)?;
+    }
     out.set_item(
-        "slide",
-        Array1::from_vec(parts.whole.slide.to_vec()).into_pyarray(py),
+        "ellipse_matrix",
+        Array2::from_shape_fn((2, 2), |(r, c)| parts.whole.ellipse.matrix[r][c]).into_pyarray(py),
     )?;
     out.set_item(
-        "slide_grid",
-        Array3::from_shape_fn((3, 3, 2), |(r, c, k)| parts.grid[r][c].slide[k]).into_pyarray(py),
+        "ellipse_axes_grid",
+        Array3::from_shape_fn((3, 3, 2), |(r, c, k)| parts.grid[r][c].ellipse.axes[k])
+            .into_pyarray(py),
+    )?;
+    out.set_item(
+        "ellipse_axes_is_at_least_grid",
+        Array3::from_shape_fn((3, 3, 2), |(r, c, k)| {
+            parts.grid[r][c].ellipse.axes_is_at_least[k]
+        })
+        .into_pyarray(py),
+    )?;
+    out.set_item(
+        "ellipse_major_angle_grid",
+        grid(&|r, c| parts.grid[r][c].ellipse.major_angle).into_pyarray(py),
     )?;
     out.set_item("tolerance", parts.whole.tolerance)?;
     let n = 2 * max_radius as usize + 1;
@@ -166,11 +200,15 @@ pub fn zncc_self_similarity_parts<'py>(
 /// Returns a dict of per-bitmap numpy arrays: ``radius`` (``(N,)`` float64,
 /// the whole bitmap), ``radius_middle`` (``(N,)``, rows and columns ``R/4 ..
 /// R - R/4``), ``radius_grid`` (``(N, 3, 3)``, each cell of the split at
-/// ``R/3`` and ``R - R/3``), ``slide`` (``(N, 2)``, the whole bitmap's),
-/// ``tolerance`` (``(N,)``, the whole bitmap's; infinite for a bitmap with no
-/// texture) and ``covered`` (``(N,)`` bool, whether any sample carries data).
-/// A bitmap with no sample carrying data has no reading: ``covered`` is false
-/// and its values are NaN.
+/// ``R/3`` and ``R - R/3``), ``radius_is_at_least`` (``(N,)`` bool, whether
+/// the whole bitmap's true radius may be larger), the whole bitmap's ellipse
+/// as ``ellipse_axes`` (``(N, 2)``, ``[semi-major, semi-minor]``),
+/// ``ellipse_axes_is_at_least`` (``(N, 2)`` bool) and ``ellipse_major_angle``
+/// (``(N,)``, radians in ``[0, pi)`` from ``x`` column-right towards ``y``
+/// row-down, NaN for a circle), ``tolerance`` (``(N,)``, the whole bitmap's;
+/// infinite for a bitmap with no texture) and ``covered`` (``(N,)`` bool,
+/// whether any sample carries data). A bitmap with no sample carrying data has
+/// no reading: ``covered`` is false, its values are NaN and its flags false.
 ///
 /// Raises:
 ///     ValueError: If the stack is not a 4-D uint8 or float32 array of square
@@ -255,8 +293,29 @@ pub fn zncc_self_similarity_parts_stack<'py>(
         Array3::from_shape_fn((n, 3, 3), |(i, r, c)| parts[i].grid[r][c].radius).into_pyarray(py),
     )?;
     out.set_item(
-        "slide",
-        Array2::from_shape_fn((n, 2), |(i, k)| parts[i].whole.slide[k]).into_pyarray(py),
+        "radius_is_at_least",
+        parts
+            .iter()
+            .map(|p| p.whole.radius_is_at_least())
+            .collect::<Vec<bool>>()
+            .into_pyarray(py),
+    )?;
+    out.set_item(
+        "ellipse_axes",
+        Array2::from_shape_fn((n, 2), |(i, k)| parts[i].whole.ellipse.axes[k]).into_pyarray(py),
+    )?;
+    out.set_item(
+        "ellipse_axes_is_at_least",
+        Array2::from_shape_fn((n, 2), |(i, k)| parts[i].whole.ellipse.axes_is_at_least[k])
+            .into_pyarray(py),
+    )?;
+    out.set_item(
+        "ellipse_major_angle",
+        parts
+            .iter()
+            .map(|p| p.whole.ellipse.major_angle)
+            .collect::<Vec<f64>>()
+            .into_pyarray(py),
     )?;
     out.set_item(
         "tolerance",

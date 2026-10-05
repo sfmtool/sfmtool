@@ -33,7 +33,9 @@ use serde_json::{json, Value};
 use sfmtool_core::bench::{
     Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Viewpoint,
 };
-use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach, SelfSimilarityReach};
+use sfmtool_core::patch::self_similarity::{
+    PatchEllipse, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
+};
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
@@ -1688,20 +1690,21 @@ fn cluster_measurement(observation: &Observation) -> Value {
         "shift_px": finite(measured.shift_px),
         // How far the tile can slide over itself and still match
         // itself, in grid px, 3 meaning 3 or more; over the middle and each
-        // ninth too, with each ninth's slide direction, and the tile's ZNCC
-        // against itself at every shift of the 7 x 7 square.
+        // ninth too, and the tile's ZNCC against itself at every shift of the
+        // 7 x 7 square.
         "zncc_self_similarity_radius": finite(measured.zncc_self_similarity_radius),
         "zncc_self_similarity_radius_middle": finite(measured.zncc_self_similarity_radius_middle),
         "zncc_self_similarity_radius_grid": grid(measured.zncc_self_similarity_radius_grid),
-        "zncc_self_similarity_slide_grid": slides(measured.zncc_self_similarity_slide_grid),
         "zncc_self_similarity_surface": surface(measured.zncc_self_similarity_surface.as_deref()),
-        // The deficit the core was judged by: the radius is read on the
-        // surface at 1 - tolerance.
+        // The deficit the core was judged by: the region of matching shifts
+        // is the surface at or above 1 - tolerance.
         "zncc_self_similarity_tolerance": finite(measured.zncc_self_similarity_tolerance),
-        // How far the contour the radius is read from reaches, whole and
-        // middle: in grid px, in image px, and along the patch's u and v.
-        "zncc_self_similarity_reach": reach(measured.zncc_self_similarity_reach, None),
-        "zncc_self_similarity_reach_middle": reach(measured.zncc_self_similarity_reach_middle, None),
+        // The ellipse of that region, whose semi-major axis is the radius,
+        // whole and middle: in grid px, in image px, and along the patch's u
+        // and v; and each ninth's, in grid px.
+        "zncc_self_similarity_ellipse": ellipse_units(measured.zncc_self_similarity_ellipse, None),
+        "zncc_self_similarity_ellipse_middle": ellipse_units(measured.zncc_self_similarity_ellipse_middle, None),
+        "zncc_self_similarity_ellipse_grid": ellipse_grid(measured.zncc_self_similarity_ellipse_grid),
         "status": measured.status.map(|status| format!("{status:?}")),
     })
 }
@@ -1732,20 +1735,21 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "ray_angle_deg": finite(measured.ray_angle_deg),
         // How far the tile can slide over itself and still match
         // itself, in grid px, 3 meaning 3 or more; over the middle and each
-        // ninth too, with each ninth's slide direction, and the tile's ZNCC
-        // against itself at every shift of the 7 x 7 square.
+        // ninth too, and the tile's ZNCC against itself at every shift of the
+        // 7 x 7 square.
         "zncc_self_similarity_radius": finite(measured.zncc_self_similarity_radius),
         "zncc_self_similarity_radius_middle": finite(measured.zncc_self_similarity_radius_middle),
         "zncc_self_similarity_radius_grid": grid(measured.zncc_self_similarity_radius_grid),
-        "zncc_self_similarity_slide_grid": slides(measured.zncc_self_similarity_slide_grid),
         "zncc_self_similarity_surface": surface(measured.zncc_self_similarity_surface.as_deref()),
-        // The deficit the core was judged by: the radius is read on the
-        // surface at 1 - tolerance.
+        // The deficit the core was judged by: the region of matching shifts
+        // is the surface at or above 1 - tolerance.
         "zncc_self_similarity_tolerance": finite(measured.zncc_self_similarity_tolerance),
-        // How far the contour the radius is read from reaches, whole and
-        // middle: in grid px, in image px, and along the patch's u and v.
-        "zncc_self_similarity_reach": reach(measured.zncc_self_similarity_reach, world_unit),
-        "zncc_self_similarity_reach_middle": reach(measured.zncc_self_similarity_reach_middle, world_unit),
+        // The ellipse of that region, whose semi-major axis is the radius,
+        // whole and middle: in grid px, in image px, and along the patch's u
+        // and v; and each ninth's, in grid px.
+        "zncc_self_similarity_ellipse": ellipse_units(measured.zncc_self_similarity_ellipse, world_unit),
+        "zncc_self_similarity_ellipse_middle": ellipse_units(measured.zncc_self_similarity_ellipse_middle, world_unit),
+        "zncc_self_similarity_ellipse_grid": ellipse_grid(measured.zncc_self_similarity_ellipse_grid),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the ZNCC the localizer scored there. Accepting the walk is
@@ -1774,53 +1778,71 @@ fn grid(value: Option<[[f64; 3]; 3]>) -> Option<[[Option<f64>; 3]; 3]> {
     value.map(|rows| rows.map(|row| row.map(|v| finite(Some(v)))))
 }
 
-/// A grid of slide vectors as three rows of three `[x, y]` pairs, top row
-/// first, with null in place of a cell that has no reading; or null for none.
-fn slides(value: Option<[[[f64; 2]; 3]; 3]>) -> Option<[[Option<[f64; 2]>; 3]; 3]> {
-    value.map(|rows| rows.map(|row| row.map(|v| v.iter().all(|x| x.is_finite()).then_some(v))))
+/// One self-similarity ellipse, or null for one with no reading: `axes`
+/// `[semi-major, semi-minor]`, `axes_is_at_least` per axis, true where the
+/// true length may be larger (the region at the level runs off the square of
+/// shifts searched, a gap with no reading beside it could hide more of it, or
+/// the length reached the largest radius searched), `major_angle` the major
+/// axis's angle in radians in `[0, π)` from the frame's first axis towards its
+/// second (null for a circle), and `matrix` the ellipse's 2×2 matrix `E`,
+/// `dᵀ E⁻¹ d = 1` on its boundary.
+fn ellipse(value: &SelfSimilarityEllipse) -> Value {
+    if !value.axes.iter().all(|a| a.is_finite()) {
+        return Value::Null;
+    }
+    json!({
+        "axes": value.axes,
+        "axes_is_at_least": value.axes_is_at_least,
+        "major_angle": finite(Some(value.major_angle)),
+        "matrix": value.matrix,
+    })
 }
 
-/// How far a self-similarity contour reaches, or null for none: each length as
-/// `{ "value", "at_least" }`, `at_least` true where the true length may be
-/// larger, because the region at the level runs off the square of shifts
-/// searched along that axis, runs off along the other axis without holding
-/// its width, borders a gap (a neighbour of a shift at the level with no
-/// reading), or reaches the largest radius searched (the cap). `grid_radius` is the radius in grid px and
-/// `grid_axes` the reach along the grid's `x` and `y`; `image_radius` is in the
-/// photograph's px, null where the tile's centre does not project;
-/// `patch_axes` is the reach along the patch's `u` and `v` axes, `[u, v]` in
-/// `along`, with `kind` `"length"` and `unit` the reconstruction's
-/// `world_space_unit` (`world_unit`; null for scene units), or `kind`
-/// `"angle"` and `unit` `"degrees"` for a patch at infinity. `patch_axes` is
-/// null at the cluster stage, which has no patch.
-fn reach(value: Option<SelfSimilarityReach>, world_unit: Option<&str>) -> Value {
-    let Some(reach) = value else {
+/// A self-similarity reading's ellipse in each unit, or null for none:
+/// `grid_px` in patch-grid px (`x` right, `y` down), its semi-major axis the
+/// radius; `image_px` in the photograph's px (`x` right, `y` down), null where
+/// the tile's centre does not project; and `patch` along the patch's `u` and
+/// `v` (angle from `u` towards `v`), as `{ "kind", "unit", "ellipse" }` with
+/// `kind` `"length"` and `unit` the reconstruction's `world_space_unit`
+/// (`world_unit`; null for scene units), or `kind` `"angle"` and `unit`
+/// `"degrees"` for a patch at infinity. `patch` is null at the cluster stage,
+/// which has no patch.
+fn ellipse_units(value: Option<SelfSimilarityEllipseUnits>, world_unit: Option<&str>) -> Value {
+    let Some(units) = value else {
         return Value::Null;
     };
-    let length = |r: BoundedLength| match finite(Some(r.value)) {
-        Some(value) => json!({ "value": value, "at_least": r.at_least }),
+    let patch = match units.patch {
         None => Value::Null,
-    };
-    let patch_axes = match reach.patch_axes {
-        None => Value::Null,
-        Some(axes) => {
-            let (kind, unit) = match axes {
-                PatchAxisReach::Length(_) => ("length", world_unit),
-                PatchAxisReach::Angle(_) => ("angle", Some("degrees")),
+        Some(on_patch) => {
+            let (kind, unit) = match on_patch {
+                PatchEllipse::Length(_) => ("length", world_unit),
+                PatchEllipse::Angle(_) => ("angle", Some("degrees")),
             };
             json!({
                 "kind": kind,
                 "unit": unit,
-                "along": axes.values().map(length),
+                "ellipse": ellipse(on_patch.ellipse()),
             })
         }
     };
     json!({
-        "grid_radius": length(reach.grid_radius),
-        "grid_axes": reach.grid_axes.map(length),
-        "image_radius": reach.image_radius.map_or(Value::Null, length),
-        "patch_axes": patch_axes,
+        "grid_px": ellipse(&units.grid_px),
+        "image_px": units.image_px.as_ref().map_or(Value::Null, ellipse),
+        "patch": patch,
     })
+}
+
+/// Each ninth's self-similarity ellipse in grid px as three rows of three,
+/// top row first, as [`ellipse`] writes each; or null for none.
+fn ellipse_grid(value: Option<[[SelfSimilarityEllipse; 3]; 3]>) -> Value {
+    match value {
+        None => Value::Null,
+        Some(rows) => Value::Array(
+            rows.iter()
+                .map(|row| Value::Array(row.iter().map(ellipse).collect()))
+                .collect(),
+        ),
+    }
 }
 
 /// A square ZNCC surface, stored row-major, as rows of numbers from the top

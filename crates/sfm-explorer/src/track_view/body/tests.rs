@@ -470,7 +470,7 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
     // Beside the ZNCC cell, the row draws its grid.
     assert!(rows[0].grids.zncc.is_some(), "no ZNCC grid drawn");
-    // And beside the self-similarity cell, its grid and its slides.
+    // And beside the self-similarity cell, its grid and its ellipses.
     assert!(
         rows[0].cells[3].contains(" px whole\n") && rows[0].cells[3].ends_with(" px mid"),
         "{}",
@@ -481,8 +481,8 @@ fn the_cells_follow_the_stage_the_track_is_in() {
         "no self-similarity grid drawn"
     );
     assert!(
-        rows[0].grids.radius_slide.is_some(),
-        "no self-similarity slides"
+        rows[0].grids.radius_ellipse.is_some(),
+        "no self-similarity ellipses"
     );
     // And the whole tile's surface plot.
     assert!(
@@ -2039,24 +2039,37 @@ fn self_similarity_cells_run_from_green_to_red() {
     assert_eq!(self_similarity_cell_color(f64::NAN), None);
 }
 
-/// A self-similarity cell draws a line along its slide where the slide is at
-/// least half a unit long, and nothing where it is shorter or absent.
+/// A self-similarity cell draws a line along its ellipse's major axis where
+/// the ellipse is long and thin, its minor axis at most 0.71 of its major,
+/// and nothing where it is rounder, a circle, or absent.
 #[test]
-fn a_self_similarity_cell_marks_its_slide() {
-    use super::table::{slide_mark, CellMark};
-    match slide_mark([0.9, 0.0]) {
+fn a_self_similarity_cell_marks_its_major_axis() {
+    use super::table::{ellipse_mark, CellMark};
+    match ellipse_mark(&hover_ellipse([3.0, 0.3], [true, false], 0.0)) {
         CellMark::Line(half) => {
             assert!(half.y.abs() < 1e-6 && half.x.abs() > 3.0, "{half:?}");
         }
         other => panic!("expected a line, got {other:?}"),
     }
-    match slide_mark([0.0, -0.5]) {
+    match ellipse_mark(&hover_ellipse([1.0, 0.7], [false, false], 90.0)) {
         CellMark::Line(half) => assert!(half.x.abs() < 1e-6 && half.y.abs() > 3.0),
         other => panic!("expected a line, got {other:?}"),
     }
-    assert_eq!(slide_mark([0.3, 0.3]), CellMark::Nothing);
-    assert_eq!(slide_mark([0.0, 0.0]), CellMark::Nothing);
-    assert_eq!(slide_mark([f64::NAN, 0.0]), CellMark::Nothing);
+    assert_eq!(
+        ellipse_mark(&hover_ellipse([1.0, 0.75], [false, false], 30.0)),
+        CellMark::Nothing
+    );
+    let circle = sfmtool_core::patch::self_similarity::SelfSimilarityEllipse {
+        major_angle: f64::NAN,
+        ..hover_ellipse([3.0, 3.0], [true, true], 0.0)
+    };
+    assert_eq!(ellipse_mark(&circle), CellMark::Nothing);
+    let none = sfmtool_core::patch::self_similarity::SelfSimilarityEllipse {
+        axes: [f64::NAN; 2],
+        major_angle: f64::NAN,
+        ..circle
+    };
+    assert_eq!(ellipse_mark(&none), CellMark::Nothing);
 }
 
 /// The self-similarity heading says what its numbers and grid are, and which
@@ -4873,94 +4886,133 @@ fn the_zoom_cell_picks_its_format_after_rounding() {
 
 mod viewed;
 
-/// The self-similarity cell's hover lays out the whole and middle radii's
-/// reach in three units, `u` and `v` named, with a `+` on a lower bound and
-/// `3+` for a grid value at the largest radius, as the cell prints it.
+/// An ellipse with semi-axes `[major, minor]`, their lower bounds, and its
+/// major axis at `degrees`, with the matrix that goes with them.
+fn hover_ellipse(
+    axes: [f64; 2],
+    axes_is_at_least: [bool; 2],
+    degrees: f64,
+) -> sfmtool_core::patch::self_similarity::SelfSimilarityEllipse {
+    let (s, c) = degrees.to_radians().sin_cos();
+    let (a2, b2) = (axes[0] * axes[0], axes[1] * axes[1]);
+    let xy = (a2 - b2) * c * s;
+    sfmtool_core::patch::self_similarity::SelfSimilarityEllipse {
+        axes,
+        axes_is_at_least,
+        major_angle: degrees.to_radians(),
+        matrix: [[a2 * c * c + b2 * s * s, xy], [xy, a2 * s * s + b2 * c * c]],
+    }
+}
+
+/// The two readings the hover tests lay out: a whole core that locks, and a
+/// middle that matched itself at the edge of the search along `x`.
+fn hover_ellipses() -> (
+    sfmtool_core::patch::self_similarity::SelfSimilarityEllipseUnits,
+    sfmtool_core::patch::self_similarity::SelfSimilarityEllipseUnits,
+) {
+    use sfmtool_core::patch::self_similarity::{PatchEllipse, SelfSimilarityEllipseUnits};
+    let (x, at_least) = (false, true);
+    let whole = SelfSimilarityEllipseUnits {
+        grid_px: hover_ellipse([0.42, 0.31], [x, x], 35.0),
+        image_px: Some(hover_ellipse([0.853, 0.6], [x, x], 41.0)),
+        patch: Some(PatchEllipse::Length(hover_ellipse(
+            [0.0031, 0.0022],
+            [x, x],
+            145.0,
+        ))),
+    };
+    let middle = SelfSimilarityEllipseUnits {
+        grid_px: hover_ellipse([3.0, 0.8], [at_least, x], 0.0),
+        image_px: Some(hover_ellipse([5.62, 1.6], [at_least, x], 2.0)),
+        patch: Some(PatchEllipse::Length(hover_ellipse(
+            [0.0291, 0.00781],
+            [at_least, x],
+            0.0,
+        ))),
+    };
+    (whole, middle)
+}
+
+/// The self-similarity cell's hover lays out the whole and middle readings'
+/// ellipses in three units, each as its semi-major × semi-minor axis and the
+/// major axis's angle, with a `+` on a lower bound and `3+` for a grid length
+/// at the largest radius, as the cell prints it.
 #[test]
-fn the_self_similarity_hover_shows_the_reach_in_three_units() {
-    use super::self_similarity_reach_text;
-    let (whole, middle) = hover_reaches();
-    let text = self_similarity_reach_text(Some(&whole), Some(&middle), Some("m")).expect("a reach");
+fn the_self_similarity_hover_shows_the_ellipse_in_three_units() {
+    use super::self_similarity_ellipse_text;
+    let (whole, middle) = hover_ellipses();
+    let text =
+        self_similarity_ellipse_text(Some(&whole), Some(&middle), Some("m")).expect("ellipses");
     assert_eq!(
         text,
         [
-            "           whole                mid",
-            "grid px    0.42                 3+",
-            "  along    u 0.31  v 0.40       u 3+  v 0.80",
-            "image px   0.85                 5.6+",
-            "world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm",
+            "           whole                  mid",
+            "grid px    0.42 \u{d7} 0.31 at 35\u{b0}     3+ \u{d7} 0.80 at 0\u{b0}",
+            "image px   0.85 \u{d7} 0.60 at 41\u{b0}     5.6+ \u{d7} 1.6 at 2\u{b0}",
+            "world      3.1 \u{d7} 2.2 mm at 145\u{b0}   29+ \u{d7} 7.8 mm at 0\u{b0}",
         ]
         .join("\n")
     );
 
     // With no unit on the file, the numbers are bare and the row says so.
-    let bare = self_similarity_reach_text(Some(&whole), None, None).expect("a reach");
+    let bare = self_similarity_ellipse_text(Some(&whole), None, None).expect("an ellipse");
     assert!(
-        bare.lines()
-            .any(|line| line.starts_with("scene units") && line.contains("u 0.0031  v 0.0040")),
+        bare.lines().any(|line| line.starts_with("scene units")
+            && line.contains("0.0031 \u{d7} 0.0022 at 145\u{b0}")),
         "{bare}"
     );
+    // A circle has no direction, so it prints no angle.
+    let circle = sfmtool_core::patch::self_similarity::SelfSimilarityEllipseUnits {
+        grid_px: sfmtool_core::patch::self_similarity::SelfSimilarityEllipse {
+            major_angle: f64::NAN,
+            ..hover_ellipse([3.0, 3.0], [true, true], 0.0)
+        },
+        image_px: None,
+        patch: None,
+    };
+    let text = self_similarity_ellipse_text(Some(&circle), None, None).expect("an ellipse");
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("grid px") && line.ends_with("3+ \u{d7} 3+   -")),
+        "{text}"
+    );
     // Nothing is printed where nothing was measured.
-    assert_eq!(self_similarity_reach_text(None, None, Some("m")), None);
+    assert_eq!(self_similarity_ellipse_text(None, None, Some("m")), None);
 }
 
-/// The two reaches the hover tests lay out: a whole core that locks, and a
-/// middle that matched itself at the edge of the search along `x`.
-fn hover_reaches() -> (
-    sfmtool_core::patch::self_similarity::SelfSimilarityReach,
-    sfmtool_core::patch::self_similarity::SelfSimilarityReach,
-) {
-    use sfmtool_core::patch::self_similarity::{
-        BoundedLength, PatchAxisReach, SelfSimilarityReach,
-    };
-    let exact = |value| BoundedLength {
-        value,
-        at_least: false,
-    };
-    let at_least = |value| BoundedLength {
-        value,
-        at_least: true,
-    };
-    let whole = SelfSimilarityReach {
-        grid_radius: exact(0.42),
-        grid_axes: [exact(0.31), exact(0.4)],
-        image_radius: Some(exact(0.853)),
-        patch_axes: Some(PatchAxisReach::Length([exact(0.0031), exact(0.004)])),
-    };
-    let middle = SelfSimilarityReach {
-        grid_radius: at_least(3.0),
-        grid_axes: [at_least(3.0), exact(0.8)],
-        image_radius: Some(at_least(5.62)),
-        patch_axes: Some(PatchAxisReach::Length([at_least(0.0291), exact(0.00781)])),
-    };
-    (whole, middle)
-}
-
-/// The world row of the self-similarity hover for a whole reach of `whole`
-/// and a middle one of `middle` along `u` and `v`, in a scene whose unit is
-/// `unit`. A `true` beside a value marks it a lower bound.
+/// The world row of the self-similarity hover for a whole ellipse along the
+/// patch of `whole` and a middle one of `middle`, each `[major, minor]`, in a
+/// scene whose unit is `unit`, its cells split apart. A `true` beside a value
+/// marks it a lower bound.
 fn hover_world_row(
     unit: Option<&str>,
     whole: [(f64, bool); 2],
     middle: [(f64, bool); 2],
-) -> String {
-    use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach};
-    let lengths = |values: [(f64, bool); 2]| {
-        Some(PatchAxisReach::Length(
-            values.map(|(value, at_least)| BoundedLength { value, at_least }),
-        ))
+) -> Vec<String> {
+    use sfmtool_core::patch::self_similarity::{PatchEllipse, SelfSimilarityEllipseUnits};
+    let on_patch = |values: [(f64, bool); 2], degrees: f64| {
+        Some(PatchEllipse::Length(hover_ellipse(
+            values.map(|(value, _)| value),
+            values.map(|(_, at_least)| at_least),
+            degrees,
+        )))
     };
-    let (w, m) = hover_reaches();
-    let w = sfmtool_core::patch::self_similarity::SelfSimilarityReach {
-        patch_axes: lengths(whole),
+    let (w, m) = hover_ellipses();
+    let w = SelfSimilarityEllipseUnits {
+        patch: on_patch(whole, 145.0),
         ..w
     };
-    let m = sfmtool_core::patch::self_similarity::SelfSimilarityReach {
-        patch_axes: lengths(middle),
+    let m = SelfSimilarityEllipseUnits {
+        patch: on_patch(middle, 0.0),
         ..m
     };
-    let text = super::self_similarity_reach_text(Some(&w), Some(&m), unit).expect("a reach");
-    text.lines().last().expect("a world row").to_string()
+    let text = super::self_similarity_ellipse_text(Some(&w), Some(&m), unit).expect("ellipses");
+    let row = text.lines().last().expect("a world row");
+    row.split("   ")
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The world row prints every length in one unit, chosen from the largest of
@@ -4971,14 +5023,19 @@ fn hover_world_row(
 #[test]
 fn the_self_similarity_hover_scales_the_world_lengths_to_one_unit() {
     let (x, at_least) = (false, true);
+    let row = |cells: [&str; 3]| cells.map(str::to_string).to_vec();
     // A metres scene prints in mm, the largest value setting the unit.
     assert_eq!(
         hover_world_row(
             Some("m"),
-            [(0.0031, x), (0.004, x)],
+            [(0.004, x), (0.0031, x)],
             [(0.0291, at_least), (0.00781, x)]
         ),
-        "world      u 3.1 mm  v 4.0 mm   u 29+ mm  v 7.8 mm"
+        row([
+            "world",
+            "4.0 \u{d7} 3.1 mm at 145\u{b0}",
+            "29+ \u{d7} 7.8 mm at 0\u{b0}"
+        ])
     );
     // Under a millimetre, the lengths print in micrometres.
     assert_eq!(
@@ -4987,43 +5044,67 @@ fn the_self_similarity_hover_scales_the_world_lengths_to_one_unit() {
             [(0.00054, x), (0.00012, x)],
             [(0.00031, x), (0.00002, at_least)]
         ),
-        "world      u 540 \u{b5}m  v 120 \u{b5}m   u 310 \u{b5}m  v 20+ \u{b5}m"
+        row([
+            "world",
+            "540 \u{d7} 120 \u{b5}m at 145\u{b0}",
+            "310 \u{d7} 20+ \u{b5}m at 0\u{b0}"
+        ])
     );
     // A centimetre scene whose lengths fit in centimetres stays in them.
     assert_eq!(
         hover_world_row(
             Some("cm"),
-            [(0.31, x), (0.4, x)],
+            [(0.4, x), (0.31, x)],
             [(2.9, at_least), (0.78, x)]
         ),
-        "world      u 0.31 cm  v 0.40 cm   u 2.9+ cm  v 0.78 cm"
+        row([
+            "world",
+            "0.40 \u{d7} 0.31 cm at 145\u{b0}",
+            "2.9+ \u{d7} 0.78 cm at 0\u{b0}"
+        ])
     );
     // Lengths past a kilometre take the nearer end of the list, m.
     assert_eq!(
         hover_world_row(
             Some("mm"),
-            [(3.1e6, x), (4.0e6, x)],
-            [(2.9e5, x), (7.8e5, x)]
+            [(4.0e6, x), (3.1e6, x)],
+            [(7.8e5, x), (2.9e5, x)]
         ),
-        "world      u 3100 m  v 4000 m   u 290 m  v 780 m"
+        row([
+            "world",
+            "4000 \u{d7} 3100 m at 145\u{b0}",
+            "780 \u{d7} 290 m at 0\u{b0}"
+        ])
     );
     // A scene in feet prints in inches while its largest length is under a
     // foot, and a scene in inches stays in inches.
     assert_eq!(
         hover_world_row(
             Some("ft"),
-            [(0.25, x), (0.5, at_least)],
+            [(0.5, at_least), (0.25, x)],
             [(0.1, x), (0.05, x)]
         ),
-        "world      u 3.0 in  v 6.0+ in   u 1.2 in  v 0.60 in"
+        row([
+            "world",
+            "6.0+ \u{d7} 3.0 in at 145\u{b0}",
+            "1.2 \u{d7} 0.60 in at 0\u{b0}"
+        ])
     );
     assert_eq!(
         hover_world_row(Some("ft"), [(1.5, x), (0.5, x)], [(0.1, x), (0.05, x)]),
-        "world      u 1.5 ft  v 0.50 ft   u 0.10 ft  v 0.050 ft"
+        row([
+            "world",
+            "1.5 \u{d7} 0.50 ft at 145\u{b0}",
+            "0.10 \u{d7} 0.050 ft at 0\u{b0}"
+        ])
     );
     assert_eq!(
         hover_world_row(Some("in"), [(25.0, x), (0.5, x)], [(0.1, x), (0.05, x)]),
-        "world      u 25 in  v 0.50 in   u 0.10 in  v 0.050 in"
+        row([
+            "world",
+            "25 \u{d7} 0.50 in at 145\u{b0}",
+            "0.10 \u{d7} 0.050 in at 0\u{b0}"
+        ])
     );
     // Bare scene units under 0.001 print in scientific form, every value.
     assert_eq!(
@@ -5032,51 +5113,52 @@ fn the_self_similarity_hover_scales_the_world_lengths_to_one_unit() {
             [(0.00054, x), (0.000123, at_least)],
             [(0.0009, x), (0.0000071, x)]
         ),
-        "scene units   u 5.4e-4  v 1.2e-4+   u 9.0e-4  v 7.1e-6"
+        row([
+            "scene units",
+            "5.4e-4 \u{d7} 1.2e-4+ at 145\u{b0}",
+            "9.0e-4 \u{d7} 7.1e-6 at 0\u{b0}"
+        ])
     );
     // From 0.001 up they stay plain.
     assert_eq!(
         hover_world_row(
             None,
             [(0.0031, x), (0.0004, x)],
-            [(0.0012, at_least), (0.0078, x)]
+            [(0.0078, at_least), (0.0012, x)]
         ),
-        "scene units   u 0.0031  v 0.00040   u 0.0012+  v 0.0078"
+        row([
+            "scene units",
+            "0.0031 \u{d7} 0.00040 at 145\u{b0}",
+            "0.0078+ \u{d7} 0.0012 at 0\u{b0}"
+        ])
     );
 }
 
-/// A patch at infinity reads its reach along `u` and `v` as an angle: the
-/// last row is labelled *angle* and each value carries a degree sign, a `+`
-/// before it on a lower bound. A part with no reach prints `-` in every row.
+/// A patch at infinity reads its ellipse along the patch as angles: the last
+/// row is labelled *angle* and each semi-axis carries a degree sign, a `+`
+/// before it on a lower bound. A part with no ellipse prints `-` in every
+/// row.
 #[test]
 fn the_self_similarity_hover_shows_a_bearing_in_degrees() {
-    use super::self_similarity_reach_text;
-    use sfmtool_core::patch::self_similarity::{
-        BoundedLength, PatchAxisReach, SelfSimilarityReach,
-    };
-    let (whole, _) = hover_reaches();
-    let bearing = SelfSimilarityReach {
-        patch_axes: Some(PatchAxisReach::Angle([
-            BoundedLength {
-                value: 0.12,
-                at_least: false,
-            },
-            BoundedLength {
-                value: 0.5,
-                at_least: true,
-            },
-        ])),
+    use super::self_similarity_ellipse_text;
+    use sfmtool_core::patch::self_similarity::{PatchEllipse, SelfSimilarityEllipseUnits};
+    let (whole, _) = hover_ellipses();
+    let bearing = SelfSimilarityEllipseUnits {
+        patch: Some(PatchEllipse::Angle(hover_ellipse(
+            [0.5, 0.12],
+            [true, false],
+            145.0,
+        ))),
         ..whole
     };
-    let text = self_similarity_reach_text(Some(&bearing), None, Some("m")).expect("a reach");
+    let text = self_similarity_ellipse_text(Some(&bearing), None, Some("m")).expect("an ellipse");
     assert_eq!(
         text,
         [
-            "           whole               mid",
-            "grid px    0.42                -",
-            "  along    u 0.31  v 0.40      -",
-            "image px   0.85                -",
-            "angle      u 0.12\u{b0}  v 0.50+\u{b0}   -",
+            "           whole                    mid",
+            "grid px    0.42 \u{d7} 0.31 at 35\u{b0}       -",
+            "image px   0.85 \u{d7} 0.60 at 41\u{b0}       -",
+            "angle      0.50+\u{b0} \u{d7} 0.12\u{b0} at 145\u{b0}   -",
         ]
         .join("\n")
     );
@@ -5086,37 +5168,38 @@ fn the_self_similarity_hover_shows_a_bearing_in_degrees() {
 /// both parts, while the grid and image rows carry their numbers.
 #[test]
 fn the_self_similarity_hover_prints_a_dash_where_there_is_no_patch() {
-    use super::self_similarity_reach_text;
-    let (whole, middle) = hover_reaches();
+    use super::self_similarity_ellipse_text;
+    use sfmtool_core::patch::self_similarity::SelfSimilarityEllipseUnits;
+    let (whole, middle) = hover_ellipses();
     let (whole, middle) = (
-        sfmtool_core::patch::self_similarity::SelfSimilarityReach {
-            patch_axes: None,
+        SelfSimilarityEllipseUnits {
+            patch: None,
             ..whole
         },
-        sfmtool_core::patch::self_similarity::SelfSimilarityReach {
-            patch_axes: None,
+        SelfSimilarityEllipseUnits {
+            patch: None,
             ..middle
         },
     );
-    let text = self_similarity_reach_text(Some(&whole), Some(&middle), Some("m")).expect("a reach");
+    let text =
+        self_similarity_ellipse_text(Some(&whole), Some(&middle), Some("m")).expect("ellipses");
     assert_eq!(
         text,
         [
-            "           whole            mid",
-            "grid px    0.42             3+",
-            "  along    u 0.31  v 0.40   u 3+  v 0.80",
-            "image px   0.85             5.6+",
-            "world      -                -",
+            "           whole                mid",
+            "grid px    0.42 \u{d7} 0.31 at 35\u{b0}   3+ \u{d7} 0.80 at 0\u{b0}",
+            "image px   0.85 \u{d7} 0.60 at 41\u{b0}   5.6+ \u{d7} 1.6 at 2\u{b0}",
+            "world      -                    -",
         ]
         .join("\n")
     );
 }
 
-/// A row evaluated at the track stage hovers the reach its measurement
+/// A row evaluated at the track stage hovers the ellipses its measurement
 /// carries, with every unit filled in, and the same at the cluster stage
-/// without the patch's axes.
+/// without the patch.
 #[test]
-fn an_evaluated_row_hovers_the_reach_its_measurement_carries_at_both_stages() {
+fn an_evaluated_row_hovers_the_ellipses_its_measurement_carries_at_both_stages() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
@@ -5130,19 +5213,19 @@ fn an_evaluated_row_hovers_the_reach_its_measurement_carries_at_both_stages() {
         .as_ref()
         .expect("a track slot");
     let (whole, middle) = (
-        m.zncc_self_similarity_reach.expect("a reach"),
-        m.zncc_self_similarity_reach_middle.expect("a reach"),
+        m.zncc_self_similarity_ellipse.expect("an ellipse"),
+        m.zncc_self_similarity_ellipse_middle.expect("an ellipse"),
     );
-    assert!(whole.image_radius.is_some() && whole.patch_axes.is_some());
+    assert!(whole.image_px.is_some() && whole.patch.is_some());
     let unit = crate::scene::node_by_id(&state.scene, id)
         .expect("the node")
         .recon()
         .metadata
         .world_space_unit
         .clone();
-    assert_eq!(row.self_similarity_reach, [Some(whole), Some(middle)]);
-    let hover = super::self_similarity_reach_text(Some(&whole), Some(&middle), unit.as_deref())
-        .expect("the cell hovers its reach");
+    assert_eq!(row.self_similarity_ellipse, [Some(whole), Some(middle)]);
+    let hover = super::self_similarity_ellipse_text(Some(&whole), Some(&middle), unit.as_deref())
+        .expect("the cell hovers its ellipses");
     let image = hover
         .lines()
         .find(|line| line.starts_with("image px"))
@@ -5151,8 +5234,7 @@ fn an_evaluated_row_hovers_the_reach_its_measurement_carries_at_both_stages() {
     assert!(
         hover.lines().any(
             |line| (line.starts_with("world") || line.starts_with("scene units"))
-                && line.contains("u ")
-                && line.contains("v ")
+                && line.contains(" \u{d7} ")
         ),
         "{hover}"
     );
@@ -5163,9 +5245,10 @@ fn an_evaluated_row_hovers_the_reach_its_measurement_carries_at_both_stages() {
     state.finish_background_task();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
-    let [whole, middle] = panel.rows()[0].self_similarity_reach;
-    let hover = super::self_similarity_reach_text(whole.as_ref(), middle.as_ref(), unit.as_deref())
-        .expect("a cluster row hovers its reach too");
+    let [whole, middle] = panel.rows()[0].self_similarity_ellipse;
+    let hover =
+        super::self_similarity_ellipse_text(whole.as_ref(), middle.as_ref(), unit.as_deref())
+            .expect("a cluster row hovers its ellipses too");
     assert!(
         hover
             .lines()

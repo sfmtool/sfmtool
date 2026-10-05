@@ -419,8 +419,14 @@ class TestEvaluating:
                 radii = entry["zncc_self_similarity_radius_grid"]
                 assert radii.shape == (3, 3) and radii.dtype == np.float64
                 assert ((radii >= 0.0) & (radii <= 3.0)).all()
-                slides = entry["zncc_self_similarity_slide_grid"]
-                assert slides.shape == (3, 3, 2) and slides.dtype == np.float64
+                ellipses = entry["zncc_self_similarity_ellipse_grid"]
+                assert ellipses["axes"].shape == (3, 3, 2)
+                assert ellipses["axes"].dtype == np.float64
+                # Each cell's radius is its ellipse's semi-major axis.
+                np.testing.assert_array_equal(ellipses["axes"][..., 0], radii)
+                assert ellipses["axes_is_at_least"].shape == (3, 3, 2)
+                assert ellipses["major_angle"].shape == (3, 3)
+                assert ellipses["matrix"].shape == (3, 3, 2, 2)
                 surface = entry["zncc_self_similarity_surface"]
                 assert surface.shape == (7, 7) and surface.dtype == np.float64
                 assert surface[3, 3] == 1.0 or np.isnan(surface).all()
@@ -430,20 +436,29 @@ class TestEvaluating:
                 if not np.isnan(surface).all():
                     assert 0.0 < entry["zncc_self_similarity_tolerance"] < 1.0
 
-    def test_an_evaluation_reports_the_self_similarity_reach(
+    def test_an_evaluation_reports_the_self_similarity_ellipse(
         self, edited, images, long_track_point
     ):
-        """Beside each self-similarity radius is its reach: the radius again in
-        grid px, the reach along the grid's x and y, the radius in the
-        photograph's px, and the reach along the patch's u and v, each length
-        a value and whether it is only a lower bound."""
+        """Beside each self-similarity radius is its ellipse: in grid px, its
+        semi-major axis the radius; in the photograph's px; and along the
+        patch's u and v. Each carries its two semi-axes, whether each is only a
+        lower bound, the major axis's angle and the 2 x 2 matrix."""
         _, track = create_track(Bench(), edited, long_track_point)
         measured, _ = evaluate(track, edited, images)
 
-        def check_length(length):
-            assert set(length) == {"value", "at_least"}
-            assert length["value"] >= 0.0
-            assert isinstance(length["at_least"], bool)
+        def check_ellipse(ellipse):
+            assert set(ellipse) == {"axes", "axes_is_at_least", "major_angle", "matrix"}
+            major, minor = ellipse["axes"]
+            assert 0.0 <= minor <= major
+            assert ellipse["axes_is_at_least"].dtype == np.bool_
+            angle = ellipse["major_angle"]
+            assert np.isnan(angle) or 0.0 <= angle < np.pi
+            np.testing.assert_allclose(
+                np.sort(np.linalg.eigvalsh(ellipse["matrix"]))[::-1],
+                ellipse["axes"] ** 2,
+                rtol=1e-6,
+                atol=1e-12,
+            )
 
         read = [
             o["track"]
@@ -453,41 +468,27 @@ class TestEvaluating:
         assert read
         for entry in read:
             for key, radius in [
-                ("zncc_self_similarity_reach", "zncc_self_similarity_radius"),
+                ("zncc_self_similarity_ellipse", "zncc_self_similarity_radius"),
                 (
-                    "zncc_self_similarity_reach_middle",
+                    "zncc_self_similarity_ellipse_middle",
                     "zncc_self_similarity_radius_middle",
                 ),
             ]:
-                reach = entry[key]
-                assert set(reach) == {
-                    "grid_radius",
-                    "grid_axes",
-                    "image_radius",
-                    "patch_axes",
-                }
-                # The grid radius is the radius itself, to the bit.
-                assert reach["grid_radius"]["value"] == entry[radius]
-                check_length(reach["grid_radius"])
-                assert len(reach["grid_axes"]) == 2
-                for length in reach["grid_axes"]:
-                    check_length(length)
-                # Every contour point lies inside the square of shifts and no
-                # further from the centre than the radius reads, so neither
-                # axis reaches further than the radius, even where the radius
-                # is capped at the largest radius searched.
-                for length in reach["grid_axes"]:
-                    assert length["value"] <= reach["grid_radius"]["value"] + 1e-12
-                check_length(reach["image_radius"])
-                # A finite point's patch reads lengths along u and v, scaled
-                # from the grid axes, and lower bounds where they are.
-                axes = reach["patch_axes"]
-                assert axes["kind"] == "length"
-                assert len(axes["along"]) == 2
-                for along, grid in zip(axes["along"], reach["grid_axes"]):
-                    check_length(along)
-                    assert along["at_least"] == grid["at_least"]
-                    assert (along["value"] == 0.0) == (grid["value"] == 0.0)
+                units = entry[key]
+                assert set(units) == {"grid_px", "image_px", "patch"}
+                # The semi-major axis in grid px is the radius itself, to the
+                # bit, and no longer than the largest radius searched.
+                assert units["grid_px"]["axes"][0] == entry[radius]
+                assert units["grid_px"]["axes"][0] <= 3.0
+                check_ellipse(units["grid_px"])
+                check_ellipse(units["image_px"])
+                # A finite point's patch reads lengths along u and v, lower
+                # bounds where the grid's are both exact only if they are.
+                patch = units["patch"]
+                assert patch["kind"] == "length"
+                check_ellipse(patch["ellipse"])
+                if units["grid_px"]["axes_is_at_least"].any():
+                    assert patch["ellipse"]["axes_is_at_least"][0]
 
     def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
         self, edited, images, long_track_point

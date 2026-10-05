@@ -77,6 +77,28 @@ fn surface_at(s: &SelfSimilarity, r: i64, dx: i64, dy: i64) -> f64 {
     s.surface[((dy + r) * side + dx + r) as usize]
 }
 
+/// The unit direction of a reading's major axis, `[x, y]` in the grid frame.
+fn major_direction(s: &SelfSimilarity) -> [f64; 2] {
+    let (sin, cos) = s.ellipse.major_angle.sin_cos();
+    [cos, sin]
+}
+
+/// How long and thin a reading's ellipse is: `1 − (minor / major)²`, 0 for a
+/// circle and near 1 for a long thin region.
+fn elongation(s: &SelfSimilarity) -> f64 {
+    let [a, b] = s.ellipse.axes;
+    1.0 - (b / a).powi(2)
+}
+
+/// Whether two readings' ellipse axes agree to `tolerance`.
+fn axes_close(a: &SelfSimilarity, b: &SelfSimilarity, tolerance: f64) -> bool {
+    a.ellipse
+        .axes
+        .iter()
+        .zip(&b.ellipse.axes)
+        .all(|(x, y)| x.is_nan() && y.is_nan() || (x - y).abs() < tolerance)
+}
+
 #[test]
 fn avx2_matches_scalar() {
     #[cfg(not(target_arch = "x86_64"))]
@@ -154,7 +176,12 @@ fn avx2_matches_scalar() {
                                 simd.radius,
                                 scalar.radius
                             );
-                            assert_eq!(simd.slide, scalar.slide, "r={r} core={core} c={channels}");
+                            assert!(
+                                axes_close(&simd, &scalar, 1e-3),
+                                "r={r} core={core} c={channels}: {:?} against {:?}",
+                                simd.ellipse,
+                                scalar.ellipse
+                            );
                             assert_eq!(simd.tolerance, scalar.tolerance);
                             cases += 1;
                         }
@@ -196,9 +223,9 @@ fn equal_luminance_colour_edge_scores_as_an_edge() {
     assert!(s.tolerance.is_finite(), "the colour edge carries texture");
     assert_eq!(s.radius, 3.0, "a vertical edge slides along itself");
     assert!(
-        s.slide[1].abs() > 0.99 && s.slide[0].abs() < 1e-9,
+        major_direction(&s)[1].abs() > 0.99 && elongation(&s) > 0.9,
         "{:?}",
-        s.slide
+        s.ellipse
     );
     // Across the edge, the shift is plainly distinguishable.
     assert!(1.0 - surface_at(&s, 3, 1, 0) > s.tolerance);
@@ -225,7 +252,12 @@ fn a_channel_flat_in_the_template_is_left_out() {
         a.radius,
         b.radius
     );
-    assert_eq!(a.slide, b.slide);
+    assert!(
+        axes_close(&a, &b, 1e-9),
+        "{:?} vs {:?}",
+        a.ellipse,
+        b.ellipse
+    );
     assert!((a.tolerance - b.tolerance).abs() < 1e-12);
     for (x, y) in a.surface.iter().zip(&b.surface) {
         assert!(x.is_nan() && y.is_nan() || (x - y).abs() < 1e-6);
@@ -253,15 +285,15 @@ fn grey_repeated_in_three_channels_scores_as_one() {
         one.radius,
         three.radius
     );
-    assert_eq!(one.slide, three.slide);
+    assert!(axes_close(&one, &three, 1e-9));
     assert!((one.tolerance - three.tolerance).abs() < 1e-12);
     for (x, y) in one.surface.iter().zip(&three.surface) {
         assert!(x.is_nan() && y.is_nan() || (x - y).abs() < 1e-9);
     }
 }
 
-/// A patch that locks reads the fraction of a pixel its peak takes to fall
-/// through the level: under one pixel, and more than nothing.
+/// A patch that locks reads a small region around its peak: an ellipse under
+/// one pixel, and more than nothing.
 #[test]
 fn a_corner_and_a_blob_score_under_a_pixel() {
     let size = 18;
@@ -272,7 +304,7 @@ fn a_corner_and_a_blob_score_under_a_pixel() {
     );
     let s = centred(&corner, 1, 12, 3);
     assert!(s.radius > 0.0 && s.radius < 1.0, "{s:?}");
-    assert_eq!(s.slide, [0.0, 0.0]);
+    assert!(s.ellipse.axes[1] > 0.0 && !s.radius_is_at_least(), "{s:?}");
 
     let blob = tile_of(size, 1, |_, x, y| {
         let (dx, dy) = (x - 8.5, y - 8.5);
@@ -283,7 +315,7 @@ fn a_corner_and_a_blob_score_under_a_pixel() {
 }
 
 #[test]
-fn a_straight_edge_scores_r_in_every_direction_and_slides_along_itself() {
+fn a_straight_edge_scores_r_in_every_direction_with_its_major_axis_along_itself() {
     // From r = 2 up: the r = 1 disk holds only the four axis shifts, so an
     // edge at 45° has no shift along itself to match at.
     for r in 2..=3u32 {
@@ -292,10 +324,15 @@ fn a_straight_edge_scores_r_in_every_direction_and_slides_along_itself() {
             let s = centred(&edge(size, angle), 1, 16, r);
             assert_eq!(s.radius, r as f64, "r={r} angle={angle}: {s:?}");
             let (sin, cos) = angle.to_radians().sin_cos();
-            let len = s.slide[0].hypot(s.slide[1]);
-            let along = (s.slide[0] * cos + s.slide[1] * sin).abs() / len;
-            assert!(len > 0.5, "r={r} angle={angle}: slide {:?}", s.slide);
-            assert!(along > 0.95, "r={r} angle={angle}: slide {:?}", s.slide);
+            let [x, y] = major_direction(&s);
+            let along = (x * cos + y * sin).abs();
+            assert!(elongation(&s) > 0.5, "r={r} angle={angle}: {:?}", s.ellipse);
+            assert!(along > 0.95, "r={r} angle={angle}: {:?}", s.ellipse);
+            assert!(
+                s.radius_is_at_least(),
+                "r={r} angle={angle}: {:?}",
+                s.ellipse
+            );
         }
     }
 }
@@ -306,7 +343,9 @@ fn flat_noise_and_a_sky_ramp_score_r() {
     let flat = tile_of(size, 3, |_, _, _| 128.0);
     let s = centred(&flat, 3, 12, 3);
     assert_eq!(s.radius, 3.0);
-    assert_eq!(s.slide, [0.0, 0.0]);
+    assert_eq!(s.ellipse.axes, [3.0, 3.0]);
+    assert_eq!(s.ellipse.axes_is_at_least, [true, true]);
+    assert!(s.ellipse.major_angle.is_nan());
     assert!(s.surface.iter().all(|v| v.is_nan()));
 
     let mut rng = Lcg(11);
@@ -320,7 +359,7 @@ fn flat_noise_and_a_sky_ramp_score_r() {
 }
 
 #[test]
-fn repeats_score_the_repeat_distance() {
+fn a_repeat_inside_the_square_lengthens_the_ellipse() {
     // Two random columns, repeated every 2 px along x.
     let mut rng = Lcg(5);
     let size = 20;
@@ -331,15 +370,18 @@ fn repeats_score_the_repeat_distance() {
         columns[(x as usize % 2) * size + y as usize]
     });
     let s = centred(&axis, 1, 14, 3);
-    // The repeat at 2 px matches, and the surface falls through the level a
-    // fraction of a pixel either side of it.
-    assert!(s.radius > 2.0 && s.radius < 2.3, "{s:?}");
-    assert!(s.slide[0].abs() > 0.99, "{:?}", s.slide);
+    // The repeats at ±2 px match as well as the centre does, so the region is
+    // three equal lobes along x, whose root mean square distance from the
+    // centre is 2·√(2/3): the semi-major axis, twice that, is past r.
+    assert_eq!(s.radius, 3.0, "{s:?}");
+    assert!(s.radius_is_at_least());
+    assert!(major_direction(&s)[0].abs() > 0.99, "{:?}", s.ellipse);
 
     // A random texture across the diagonal, constant along (1, 1) but for a
     // slow wave along it: the shift (1, 1) stays within the tolerance and
-    // (2, 2) does not. (An exact repeat every (1, 1) also repeats at (3, 3),
-    // on the square's border, and reads 3.)
+    // (2, 2) does not, so the region is a thin one along the diagonal through
+    // ±(1, 1), and the major axis runs along it. (An exact repeat every
+    // (1, 1) also repeats at (3, 3), on the square's border, and reads 3.)
     let size = 22;
     let stripe: Vec<f64> = (0..2 * size)
         .map(|_| 255.0 * rng.next_f32() as f64)
@@ -349,124 +391,11 @@ fn repeats_score_the_repeat_distance() {
         stripe[across as usize] + 60.0 * (std::f64::consts::TAU * (x + y) / 24.0).sin()
     });
     let s = centred(&diagonal, 1, 16, 3);
-    assert!(s.radius > 2f64.sqrt() && s.radius < 2.0, "{s:?}");
-}
-
-/// A `(2r + 1)²` surface from `z(dx, dy)`, row-major from `(−r, −r)`.
-fn surface_of(r: i64, z: impl Fn(i64, i64) -> f64) -> Vec<f64> {
-    (-r..=r)
-        .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
-        .map(|(dx, dy)| z(dx, dy))
-        .collect()
-}
-
-/// The crossing is where the ZNCC, interpolated linearly along a grid edge,
-/// equals the level.
-#[test]
-fn the_radius_is_where_the_surface_crosses_the_level() {
-    // A 5 x 5 surface (r = 2): the centre at 1, the shift (1, 0) at 0.9 and
-    // every other at 0.5, read at the level 0.8.
-    let surface = surface_of(2, |dx, dy| match (dx, dy) {
-        (0, 0) => 1.0,
-        (1, 0) => 0.9,
-        _ => 0.5,
-    });
-    // From (1, 0) outward to (2, 0), 0.9 to 0.5 crosses 0.8 a quarter of the
-    // way, at (1.25, 0); every other crossing is nearer the centre.
-    let radius = super::crossing_radius(&surface, 2, 0.8);
-    assert!((radius - 1.25).abs() < 1e-12, "{radius}");
-}
-
-/// A sighting on a real reconstruction whose one shift in the disk's outer
-/// ring, (−2, +1), clears the level by 0.0002 while every shift further out
-/// in that direction reads well under it. The furthest the surface crosses
-/// the level is just past that shift, √5 ≈ 2.24 from the centre.
-#[test]
-fn a_shift_just_clearing_the_level_reads_its_own_distance() {
-    #[rustfmt::skip]
-    let surface = vec![
-        0.514, 0.594, 0.661, 0.714, 0.748, 0.762, 0.758,
-        0.68,  0.755, 0.816, 0.86,  0.879, 0.877, 0.853,
-        0.804, 0.873, 0.927, 0.961, 0.963, 0.939, 0.896,
-        0.883, 0.94,  0.981, 1.0,   0.98,  0.935, 0.872,
-        0.908, 0.946, 0.965, 0.961, 0.923, 0.861, 0.783,
-        0.876, 0.891, 0.884, 0.856, 0.803, 0.729, 0.641,
-        0.79,  0.783, 0.754, 0.708, 0.641, 0.559, 0.464,
-    ];
-    let s = read_surface(surface, 3, 0.05421260937718174);
-    assert!((s.radius - 5f64.sqrt()).abs() < 0.01, "{}", s.radius);
-}
-
-/// A ridge along the diagonal reads the length along the diagonal where the
-/// surface crosses the level, not the grid's reach.
-#[test]
-fn a_ridge_along_the_diagonal_reads_its_crossing() {
-    // z = 1 − 0.5·across² − 0.02·along², with along and across the unit
-    // directions (1, 1)/√2 and (1, −1)/√2: at the level 0.95 the ridge
-    // reaches √2.5 ≈ 1.58 along the diagonal. (1, 1) at 0.96 is at the level
-    // and (2, 2) at 0.84 is not; the grid edges out of (1, 1) cross the level
-    // just past it.
-    let ridge = |dx: i64, dy: i64| {
-        let (x, y) = (dx as f64, dy as f64);
-        let (along, across) = ((x + y) / 2f64.sqrt(), (x - y) / 2f64.sqrt());
-        1.0 - 0.5 * across * across - 0.02 * along * along
-    };
-    let s = read_surface(surface_of(3, ridge), 3, 0.05);
-    assert!(s.radius > 2f64.sqrt() && s.radius < 1.6, "{}", s.radius);
-    let len = s.slide[0].hypot(s.slide[1]);
-    assert!(len > 0.9, "{:?}", s.slide);
-    assert!((s.slide[0] * s.slide[1]).signum() > 0.0, "{:?}", s.slide);
-}
-
-/// A region at the level that runs off the square reads `r`, along an axis
-/// and along the diagonal alike: the corners reach r√2, but the radius is
-/// capped at `r`.
-#[test]
-fn a_region_running_off_the_square_reads_r() {
-    for (ax, ay) in [(1.0f64, 0.0f64), (0.0, 1.0), (1.0, 1.0), (1.0, -1.0)] {
-        let norm = ax.hypot(ay);
-        let ridge = |dx: i64, dy: i64| {
-            let (x, y) = (dx as f64, dy as f64);
-            let across = (x * ay - y * ax) / norm;
-            let along = (x * ax + y * ay) / norm;
-            1.0 - 0.5 * across * across - 0.001 * along * along
-        };
-        let s = read_surface(surface_of(3, ridge), 3, 0.05);
-        assert_eq!(s.radius, 3.0, "along ({ax}, {ay})");
-    }
-    // One shift on the border at the level, with its inward neighbours under
-    // it, is enough: its crossing outward was not searched.
-    let lone = surface_of(3, |dx, dy| match (dx, dy) {
-        (0, 0) => 1.0,
-        (3, 1) => 0.97,
-        _ => 0.5,
-    });
-    assert_eq!(read_surface(lone, 3, 0.05).radius, 3.0);
-}
-
-/// A reading that is not finite is not a crossing, and a shift at the level
-/// beside one counts its own distance, as beside the square's border.
-#[test]
-fn a_shift_beside_a_missing_reading_counts_its_own_distance() {
-    let with_gap = surface_of(3, |dx, dy| match (dx, dy) {
-        (0, 0) => 1.0,
-        (1, 0) => 0.97,
-        (2, 0) => f64::NAN,
-        _ => 0.5,
-    });
-    // Toward (2, 0) the crossing is not known, so (1, 0) counts 1; the
-    // furthest crossing is on the edges to (1, ±1), 0.02 / 0.47 of the way.
-    let radius = super::crossing_radius(&with_gap, 3, 0.95);
-    let expected = 1f64.hypot(0.02 / 0.47);
-    assert!((radius - expected).abs() < 1e-12, "{radius}");
-    // With a reading of 0.5 at (2, 0) the crossing toward it lies further out.
-    let mut filled = with_gap.clone();
-    filled[3 * 7 + 5] = 0.5;
-    let further = super::crossing_radius(&filled, 3, 0.95);
-    assert!((further - (1.0 + 0.02 / 0.47)).abs() < 1e-12, "{further}");
-    // The missing reading itself is not at the level.
-    let s = read_surface(with_gap, 3, 0.05);
-    assert!((s.slide[0].abs() - 1.0).abs() < 1e-12, "{:?}", s.slide);
+    assert!(s.radius > 1.0 && s.radius < 2.5, "{s:?}");
+    assert!(elongation(&s) > 0.9, "{:?}", s.ellipse);
+    let [x, y] = major_direction(&s);
+    assert!((x * y - 0.5).abs() < 0.01, "{:?}", s.ellipse);
+    assert!(!s.radius_is_at_least(), "{:?}", s.ellipse);
 }
 
 #[test]
@@ -496,10 +425,7 @@ fn parts_agree_with_separate_calls() {
             part.radius,
             alone.radius
         );
-        assert!(
-            (part.slide[0] - alone.slide[0]).abs() < 1e-9
-                && (part.slide[1] - alone.slide[1]).abs() < 1e-9
-        );
+        assert!(axes_close(part, &alone, 1e-3), "{rect:?}");
         assert!((part.tolerance - alone.tolerance).abs() < 1e-9);
         for (a, b) in part.surface.iter().zip(&alone.surface) {
             assert!(
@@ -576,9 +502,17 @@ fn overlap_whole(
 /// Whether two readings are the same bit for bit, a `NaN` matching a `NaN`.
 fn same_reading(a: &SelfSimilarity, b: &SelfSimilarity) -> bool {
     let same = |x: f64, y: f64| x.to_bits() == y.to_bits();
+    let (e, f) = (&a.ellipse, &b.ellipse);
     same(a.radius, b.radius)
         && same(a.tolerance, b.tolerance)
-        && a.slide.iter().zip(&b.slide).all(|(&x, &y)| same(x, y))
+        && e.axes.iter().zip(&f.axes).all(|(&x, &y)| same(x, y))
+        && e.axes_is_at_least == f.axes_is_at_least
+        && same(e.major_angle, f.major_angle)
+        && e.matrix
+            .iter()
+            .flatten()
+            .zip(f.matrix.iter().flatten())
+            .all(|(&x, &y)| same(x, y))
         && a.surface.iter().zip(&b.surface).all(|(&x, &y)| same(x, y))
 }
 
@@ -612,18 +546,18 @@ fn overlap_a_corner_locks() {
 }
 
 #[test]
-fn overlap_an_edge_slides_along_itself() {
+fn overlap_an_edge_reads_its_major_axis_along_itself() {
     for angle in [0.0f64, 30.0, 45.0, 90.0] {
         let size = 24;
         let s = overlap_whole(&edge(size, angle), 1, size, None);
         assert_eq!(s.radius, 3.0, "angle={angle}: {s:?}");
         let (sin, cos) = angle.to_radians().sin_cos();
-        let len = s.slide[0].hypot(s.slide[1]);
-        let along = (s.slide[0] * cos + s.slide[1] * sin).abs() / len;
+        let [x, y] = major_direction(&s);
+        let along = (x * cos + y * sin).abs();
         assert!(
-            len > 0.5 && along > 0.95,
-            "angle={angle}: slide {:?}",
-            s.slide
+            elongation(&s) > 0.5 && along > 0.95,
+            "angle={angle}: {:?}",
+            s.ellipse
         );
     }
 }
@@ -634,7 +568,7 @@ fn overlap_a_flat_patch_reads_r() {
     let flat = tile_of(size, 3, |_, _, _| 128.0);
     let s = overlap_whole(&flat, 3, size, None);
     assert_eq!(s.radius, 3.0);
-    assert_eq!(s.slide, [0.0, 0.0]);
+    assert_eq!(s.ellipse.axes, [3.0, 3.0]);
     assert_eq!(s.tolerance, f64::INFINITY);
     assert!(s.surface.iter().all(|v| v.is_nan()));
 
@@ -692,7 +626,7 @@ fn overlap_samples_without_data_drop_out() {
     for row in &pa.grid {
         let cell = &row[0];
         assert!(cell.radius.is_nan() && cell.tolerance.is_nan(), "{cell:?}");
-        assert!(cell.slide.iter().all(|v| v.is_nan()));
+        assert!(cell.ellipse.axes.iter().all(|v| v.is_nan()));
         assert!(cell.surface.iter().all(|v| v.is_nan()));
     }
 }
@@ -704,6 +638,8 @@ fn overlap_a_bitmap_with_no_data_has_no_reading() {
     let data = vec![false; size * size];
     let s = overlap_whole(&texture, 3, size, Some(&data));
     assert!(s.radius.is_nan() && s.tolerance.is_nan());
+    assert!(s.ellipse.axes.iter().all(|v| v.is_nan()) && s.ellipse.major_angle.is_nan());
+    assert_eq!(s.ellipse.axes_is_at_least, [false, false]);
     let parts = zncc_self_similarity_parts(&tile(&texture, 3, size), Some(&data), &params(3));
     assert!(parts.whole.radius.is_nan() && parts.middle.radius.is_nan());
 }
@@ -941,7 +877,7 @@ fn a_window_constant_at_a_high_level_reads_flat_by_both_routes() {
         let masked = radius_with(&t, None, rect, &p, Route::Masked);
         assert!(
             (dense.radius - masked.radius).abs() < 1e-4
-                && dense.slide == masked.slide
+                && axes_close(&dense, &masked, 1e-4)
                 && (dense.tolerance - masked.tolerance).abs() <= 1e-5 * masked.tolerance.abs(),
             "{rect:?}: {dense:?} vs {masked:?}"
         );
@@ -971,7 +907,244 @@ fn data_from_interleaved_reads_alpha() {
     assert_eq!(PatchTile::data_from_interleaved(&patch[..6], 2, 1, 3), None);
 }
 
-// ---- The contour and its reach ---------------------------------------------
+// ---- The ellipse -------------------------------------------------------------
+
+/// A `(2r + 1)²` surface from `z(dx, dy)`, row-major from `(−r, −r)`.
+fn surface_of(r: i64, z: impl Fn(i64, i64) -> f64) -> Vec<f64> {
+    (-r..=r)
+        .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| z(dx, dy))
+        .collect()
+}
+
+/// An elliptical paraboloid, `z = 1 − 0.05·((along / a)² + (across / b)²)`,
+/// its long axis at `angle` from `x` towards `y`, over the square of shifts at
+/// `r`. Read at the level 0.95, its region is the ellipse with semi-axes `a`
+/// and `b`, as far as the bilinear surface between the shifts follows it.
+fn paraboloid(r: i64, a: f64, b: f64, angle: f64) -> SelfSimilarity {
+    let (s, c) = angle.sin_cos();
+    read_surface(
+        surface_of(r, |dx, dy| {
+            let (x, y) = (dx as f64, dy as f64);
+            let (along, across) = (x * c + y * s, -x * s + y * c);
+            1.0 - 0.05 * ((along / a).powi(2) + (across / b).powi(2))
+        }),
+        r as usize,
+        0.05,
+    )
+}
+
+/// The distance between two angles of an axis, which repeat every π.
+fn axis_angle_gap(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(std::f64::consts::PI);
+    d.min(std::f64::consts::PI - d)
+}
+
+/// A disc reads a circle whose semi-axis is the disc's radius. The bilinear
+/// surface between the shifts lowers a paraboloid by up to half a grid step
+/// squared, so the region is a little smaller than the disc, by under 0.05 px
+/// at a radius of 12.
+#[test]
+fn a_disc_reads_a_circle_of_its_radius() {
+    let s = paraboloid(20, 12.0, 12.0, 0.0);
+    let [a, b] = s.ellipse.axes;
+    assert!(
+        (a - 12.0).abs() < 0.05 && (b - 12.0).abs() < 0.05,
+        "{:?}",
+        s.ellipse
+    );
+    assert!((a - b).abs() < 1e-9, "{:?}", s.ellipse);
+    assert_eq!(s.ellipse.axes_is_at_least, [false, false]);
+    assert_eq!(s.radius.to_bits(), a.to_bits());
+    assert!(!s.radius_is_at_least());
+    // E = a²·I.
+    let m = s.ellipse.matrix;
+    assert!(
+        (m[0][0] - a * a).abs() < 1e-6 && m[0][1].abs() < 1e-6,
+        "{m:?}"
+    );
+}
+
+/// A region elongated along `x`, and the same turned by 30° and 120°, read
+/// their two semi-axes and the angle of the long one, from `x` towards `y`
+/// (row-down). The bilinear surface between the shifts falls a little faster
+/// than the paraboloid across each cell, so the axes read up to 1% short.
+#[test]
+fn an_elongated_region_reads_its_axes_and_angle() {
+    for degrees in [0.0f64, 30.0, 120.0] {
+        let angle = degrees.to_radians();
+        let s = paraboloid(16, 10.0, 4.0, angle);
+        let e = s.ellipse;
+        assert!(
+            (e.axes[0] - 10.0).abs() < 0.1 && (e.axes[1] - 4.0).abs() < 0.04,
+            "{degrees}°: {e:?}"
+        );
+        assert!(
+            axis_angle_gap(e.major_angle, angle) < 2e-3,
+            "{degrees}°: {e:?}"
+        );
+        assert!((0.0..std::f64::consts::PI).contains(&e.major_angle));
+        assert_eq!(e.axes_is_at_least, [false, false], "{degrees}°");
+        // The matrix is the ellipse: its quadratic form is 1 at the end of
+        // each semi-axis.
+        let (sin, cos) = e.major_angle.sin_cos();
+        let m = e.matrix;
+        let det = m[0][0] * m[1][1] - m[0][1] * m[0][1];
+        let inv = [
+            [m[1][1] / det, -m[0][1] / det],
+            [-m[0][1] / det, m[0][0] / det],
+        ];
+        for (len, [ux, uy]) in [(e.axes[0], [cos, sin]), (e.axes[1], [-sin, cos])] {
+            let (x, y) = (len * ux, len * uy);
+            let q = x * x * inv[0][0] + 2.0 * x * y * inv[0][1] + y * y * inv[1][1];
+            assert!((q - 1.0).abs() < 1e-9, "{degrees}°: {q}");
+        }
+    }
+}
+
+/// A separate lobe counts as far from the centre as it lies: the moments are
+/// about the true position, not the region's centroid.
+#[test]
+fn a_separate_lobe_lengthens_the_ellipse_towards_it() {
+    let lobe = |with: bool| {
+        read_surface(
+            surface_of(6, |dx, dy| match (dx, dy) {
+                (0, 0) => 1.0,
+                (4, 0) if with => 1.0,
+                _ => 0.5,
+            }),
+            6,
+            0.05,
+        )
+    };
+    let alone = lobe(false);
+    let both = lobe(true);
+    // Alone, the peak's diamond reads a small circle.
+    assert!(alone.radius < 0.2, "{:?}", alone.ellipse);
+    // Two equal lobes 4 apart: a root mean square distance of √8 along x.
+    assert!(
+        (both.radius - 2.0 * 8f64.sqrt()).abs() < 0.05,
+        "{:?}",
+        both.ellipse
+    );
+    assert!(axis_angle_gap(both.ellipse.major_angle, 0.0) < 1e-9);
+    assert!(both.ellipse.axes[1] < 0.2);
+}
+
+/// The region's area and moments match a dense midpoint sum of the bilinear
+/// surface on a real sighting's surface and on a random one, to what the sum
+/// resolves: its samples `1/400` px apart straddle the level's curve, which
+/// moves the sum by a part in 10⁴ or so. Clipping each cell to the polygon
+/// through the crossings on its sides, as marching squares draws it, misses
+/// by ten times that.
+#[test]
+fn the_region_moments_match_a_dense_sum_of_the_bilinear_surface() {
+    #[rustfmt::skip]
+    let real = vec![
+        0.514, 0.594, 0.661, 0.714, 0.748, 0.762, 0.758,
+        0.68,  0.755, 0.816, 0.86,  0.879, 0.877, 0.853,
+        0.804, 0.873, 0.927, 0.961, 0.963, 0.939, 0.896,
+        0.883, 0.94,  0.981, 1.0,   0.98,  0.935, 0.872,
+        0.908, 0.946, 0.965, 0.961, 0.923, 0.861, 0.783,
+        0.876, 0.891, 0.884, 0.856, 0.803, 0.729, 0.641,
+        0.79,  0.783, 0.754, 0.708, 0.641, 0.559, 0.464,
+    ];
+    let mut rng = Lcg(17);
+    let random: Vec<f64> = (0..49)
+        .map(|k| {
+            if k == 24 {
+                1.0
+            } else {
+                0.85 + 0.15 * f64::from(rng.next_f32())
+            }
+        })
+        .collect();
+    for (surface, level) in [(real, 1.0 - 0.05421260937718174), (random, 0.93)] {
+        let got = super::ellipse::region_moments(&surface, 3, level);
+        let n = 400usize;
+        let h = 1.0 / n as f64;
+        let mut want = [0.0f64; 4];
+        for cy in 0..6 {
+            for cx in 0..6 {
+                let at = |x: usize, y: usize| surface[y * 7 + x];
+                let (v00, v10, v01, v11) = (
+                    at(cx, cy),
+                    at(cx + 1, cy),
+                    at(cx, cy + 1),
+                    at(cx + 1, cy + 1),
+                );
+                for j in 0..n {
+                    for i in 0..n {
+                        let (u, w) = ((i as f64 + 0.5) * h, (j as f64 + 0.5) * h);
+                        let z = v00 * (1.0 - u) * (1.0 - w)
+                            + v10 * u * (1.0 - w)
+                            + v01 * (1.0 - u) * w
+                            + v11 * u * w;
+                        if z >= level {
+                            let (x, y) = (cx as f64 - 3.0 + u, cy as f64 - 3.0 + w);
+                            want[0] += h * h;
+                            want[1] += h * h * x * x;
+                            want[2] += h * h * x * y;
+                            want[3] += h * h * y * y;
+                        }
+                    }
+                }
+            }
+        }
+        let got = [got.area, got.sxx, got.sxy, got.syy];
+        for (g, w) in got.iter().zip(&want) {
+            assert!(
+                (g - w).abs() < 2e-4 * (w.abs() + want[0]),
+                "{got:?} against {want:?}"
+            );
+        }
+    }
+}
+
+/// The quadrature across each cell has converged: on random cells, saddles
+/// whose curve bends sharply included, the spans the reading uses, each no
+/// longer than its distance from the pole, give the moments that spans an
+/// eighth of that give, to `1e-10` of a cell's unit area.
+#[test]
+fn the_cell_quadrature_has_converged() {
+    use super::ellipse::LocalMoments;
+    let mut rng = Lcg(29);
+    let mut crossed = 0;
+    for _ in 0..2000 {
+        let values = [0; 4].map(|_| f64::from(rng.next_f32()));
+        let level = 0.2 + 0.6 * f64::from(rng.next_f32());
+        let above = values.iter().filter(|&&v| v >= level).count();
+        if above == 0 || above == 4 {
+            continue;
+        }
+        crossed += 1;
+        let used = LocalMoments::bilinear_part_graded(values, level, 1.0);
+        let fine = LocalMoments::bilinear_part_graded(values, level, 8.0);
+        for (a, b) in [
+            (used.area, fine.area),
+            (used.sp, fine.sp),
+            (used.sq, fine.sq),
+            (used.spp, fine.spp),
+            (used.spq, fine.spq),
+            (used.sqq, fine.sqq),
+        ] {
+            assert!((a - b).abs() < 1e-10, "{values:?} at {level}: {a} vs {b}");
+        }
+    }
+    assert!(crossed > 1000);
+}
+
+/// A strip whose surface falls linearly from its middle line is clipped
+/// exactly: its region is `|dx| ≤ 0.5` across the whole square.
+#[test]
+fn a_strip_integrates_exactly() {
+    let surface = surface_of(3, |dx, _| 1.0 - 0.1 * dx.abs() as f64);
+    let m = super::ellipse::region_moments(&surface, 3, 0.95);
+    assert!((m.area - 6.0).abs() < 1e-12, "{m:?}");
+    assert!((m.sxx - 6.0 * 2.0 * 0.125 / 3.0).abs() < 1e-12, "{m:?}");
+    assert!(m.sxy.abs() < 1e-12, "{m:?}");
+    assert!((m.syy - 2.0 * 27.0 / 3.0).abs() < 1e-12, "{m:?}");
+}
 
 /// Readings of the kinds the tests above build, and a few more, of templates
 /// with tile around them and of whole bitmaps.
@@ -1022,205 +1195,69 @@ fn fixture_readings() -> Vec<SelfSimilarity> {
         out.push(parts.whole);
         out.push(parts.middle);
         out.extend(parts.grid.into_iter().flatten());
-        let mut cut = Vec::with_capacity(3 * resolution * resolution);
-        for c in 0..3 {
-            for y in r..r + resolution {
-                for x in r..r + resolution {
-                    cut.push(smooth[c * size * size + y * size + x]);
-                }
-            }
-        }
-        let parts = zncc_self_similarity_parts(&tile(&cut, 3, resolution), None, &params(3));
-        out.push(parts.whole);
-        out.push(parts.middle);
-        out.extend(parts.grid.into_iter().flatten());
     }
     out
 }
 
-/// The contour's radius is the reading's radius to the bit, on every fixture,
-/// the flat template included.
+/// The radius is the ellipse's semi-major axis to the bit, capped at `r` with
+/// the minor axis no longer than it, and its lower bound is the major axis's.
 #[test]
-fn the_contour_reproduces_the_radius_exactly() {
+fn the_radius_is_the_semi_major_axis() {
     let readings = fixture_readings();
-    assert!(readings.len() > 60);
+    assert!(readings.len() > 30);
     for s in &readings {
-        let contour = s.contour().expect("every fixture has a reading");
-        assert_eq!(
-            contour.radius().value.to_bits(),
-            s.radius.to_bits(),
-            "{s:?}"
-        );
-        let r = contour.max_radius() as f64;
-        assert_eq!(contour.radius().at_least, s.radius >= r, "{s:?}");
-        assert!(!contour.points().is_empty());
-    }
-    // Two hand-built surfaces of the radius tests above.
-    #[rustfmt::skip]
-    let real = vec![
-        0.514, 0.594, 0.661, 0.714, 0.748, 0.762, 0.758,
-        0.68,  0.755, 0.816, 0.86,  0.879, 0.877, 0.853,
-        0.804, 0.873, 0.927, 0.961, 0.963, 0.939, 0.896,
-        0.883, 0.94,  0.981, 1.0,   0.98,  0.935, 0.872,
-        0.908, 0.946, 0.965, 0.961, 0.923, 0.861, 0.783,
-        0.876, 0.891, 0.884, 0.856, 0.803, 0.729, 0.641,
-        0.79,  0.783, 0.754, 0.708, 0.641, 0.559, 0.464,
-    ];
-    let gap = surface_of(3, |dx, dy| match (dx, dy) {
-        (0, 0) => 1.0,
-        (1, 0) => 0.97,
-        (2, 0) => f64::NAN,
-        _ => 0.5,
-    });
-    for s in [
-        read_surface(real, 3, 0.05421260937718174),
-        read_surface(gap, 3, 0.05),
-    ] {
-        let contour = s.contour().expect("a reading");
-        assert_eq!(contour.radius().value.to_bits(), s.radius.to_bits());
+        let e = &s.ellipse;
+        assert_eq!(s.radius.to_bits(), e.axes[0].to_bits(), "{s:?}");
+        assert_eq!(s.radius_is_at_least(), e.axes_is_at_least[0]);
+        let r = ((s.surface.len() as f64).sqrt() as usize - 1) / 2;
+        assert!(e.axes[0] <= r as f64 && e.axes[1] <= e.axes[0], "{e:?}");
+        if s.radius >= r as f64 {
+            assert!(s.radius_is_at_least(), "{e:?}");
+        }
     }
 }
 
-/// A ridge along `x`: z = 1 − 0.5·dy² − 0.02·dx², read at the level 0.95.
-fn ridge_along_x() -> SelfSimilarity {
-    read_surface(
-        surface_of(3, |dx, dy| {
-            let (x, y) = (dx as f64, dy as f64);
-            1.0 - 0.5 * y * y - 0.02 * x * x
-        }),
-        3,
-        0.05,
-    )
-}
-
-#[track_caller]
-fn assert_reach(got: BoundedLength, value: f64, at_least: bool) {
-    assert!(
-        (got.value - value).abs() < 1e-12 && got.at_least == at_least,
-        "{got:?}, not {value} with at_least {at_least}"
-    );
-}
-
-/// An elongated contour reaches further along its long axis: from (1, 0) at
-/// 0.98 to (2, 0) at 0.92 the surface falls through the level half way, 1.5;
-/// from the centre to (0, 1) at 0.5 it falls through a tenth of the way, 0.1.
+/// A region that runs off the square may go on past it: its major axis and the
+/// radius are lower bounds. A ridge along `x` that holds its width over its
+/// last two columns is taken to keep it past the border, so its minor axis,
+/// across, reads exact; one that widens towards the border may go on widening
+/// past it, so its minor axis is a lower bound too.
 #[test]
-fn the_contour_reaches_along_each_grid_axis() {
-    let contour = ridge_along_x().contour().expect("a reading");
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 1.5, false);
-    assert_reach(y, 0.1, false);
-    assert_reach(contour.radius(), 1.5, false);
-}
-
-/// A stretch of the image along `x` doubles the image radius of a contour
-/// elongated along `x`, and a stretch along `y` leaves it where it was.
-#[test]
-fn the_image_radius_follows_an_anisotropic_jacobian() {
-    let contour = ridge_along_x().contour().expect("a reading");
-    let identity = contour
-        .image_radius([[1.0, 0.0], [0.0, 1.0]])
-        .expect("a Jacobian");
-    assert_reach(identity, 1.5, false);
-    let along_x = contour
-        .image_radius([[2.0, 0.0], [0.0, 1.0]])
-        .expect("a Jacobian");
-    assert_reach(along_x, 3.0, false);
-    let along_y = contour
-        .image_radius([[1.0, 0.0], [0.0, 2.0]])
-        .expect("a Jacobian");
-    assert_reach(along_y, 1.5, false);
-    // A uniform scale scales the radius.
-    let scaled = contour
-        .image_radius([[0.4, 0.0], [0.0, 0.4]])
-        .expect("a Jacobian");
-    assert_reach(scaled, 0.6, false);
-    // A degenerate Jacobian has no image radius.
-    assert_eq!(contour.image_radius([[1.0, 2.0], [0.5, 1.0]]), None);
-    assert_eq!(contour.image_radius([[f64::NAN, 0.0], [0.0, 1.0]]), None);
-}
-
-/// One grid px along `x` is `2·half_extent[0] / R` along `u`, and along `y`
-/// is `2·half_extent[1] / R` along `v`.
-#[test]
-fn the_axis_reach_scales_by_each_half_extent() {
-    use nalgebra::{Point3, Vector3};
-    let contour = ridge_along_x().contour().expect("a reading");
-    let placement = crate::patch::cloud::OrientedPatch::new(
-        Point3::new(0.0, 0.0, -4.0),
-        Vector3::x(),
-        Vector3::y(),
-        [0.5, 2.0],
-    );
-    let Some(PatchAxisReach::Length([u, v])) = contour.patch_axis_reach(&placement, 24) else {
-        panic!("a finite patch reads in scene units");
+fn running_off_the_square_is_a_lower_bound_on_the_major_axis() {
+    let ridge = |widening: f64| {
+        read_surface(
+            surface_of(3, |dx, dy| {
+                let (x, y) = (dx as f64, dy as f64);
+                1.0 - 0.5 * y * y * (1.0 - widening * x) - 0.001 * x * x
+            }),
+            3,
+            0.05,
+        )
     };
-    assert_reach(u, 1.5 * 1.0 / 24.0, false);
-    assert_reach(v, 0.1 * 4.0 / 24.0, false);
-    assert_eq!(contour.patch_axis_reach(&placement, 0), None);
-}
-
-/// A patch at infinity has no length: an offset `a` on its tangent plane is
-/// the direction `atan(a)` from its centre's, in degrees.
-#[test]
-fn a_bearing_reads_its_axis_reach_in_degrees() {
-    use nalgebra::{Point3, Vector3};
-    let contour = ridge_along_x().contour().expect("a reading");
-    let placement = crate::patch::cloud::OrientedPatch::from_infinity_direction(
-        Point3::new(0.0, 0.0, -1.0),
-        Vector3::y(),
-        [0.01, 0.02],
+    let even = ridge(0.0);
+    assert_eq!(even.radius, 3.0);
+    assert_eq!(
+        even.ellipse.axes_is_at_least,
+        [true, false],
+        "{:?}",
+        even.ellipse
     );
-    let Some(PatchAxisReach::Angle([u, v])) = contour.patch_axis_reach(&placement, 24) else {
-        panic!("a bearing reads in degrees");
-    };
-    let (a_u, a_v): (f64, f64) = (1.5 * 0.02 / 24.0, 0.1 * 0.04 / 24.0);
-    assert_reach(u, a_u.atan().to_degrees(), false);
-    assert_reach(v, a_v.atan().to_degrees(), false);
-    // To first order, the offset in radians.
-    assert!((u.value - a_u.to_degrees()).abs() < 1e-6 * u.value);
-}
+    assert!(axis_angle_gap(even.ellipse.major_angle, 0.0) < 1e-9);
+    // The ridge's half-width, about 0.1, is spread evenly across it.
+    let b = even.ellipse.axes[1];
+    assert!(b > 0.1 && b < 0.12, "{:?}", even.ellipse);
 
-/// A ridge along `x` that runs off the square at `±x` reads its reach along
-/// `x` as a lower bound. Its width across, along `y`, is no wider on the
-/// border column than on the column inside it (the crossings are 0.082 and
-/// 0.092 from the ridge's middle), so the ridge is taken to keep that width
-/// past the border and its reach along `y` reads exactly.
-#[test]
-fn running_off_the_square_is_a_lower_bound_on_that_axis_only() {
-    let off_x = read_surface(
-        surface_of(3, |dx, dy| {
-            let (x, y) = (dx as f64, dy as f64);
-            1.0 - 0.5 * y * y - 0.001 * x * x
-        }),
-        3,
-        0.05,
+    let widening = ridge(0.1);
+    assert_eq!(
+        widening.ellipse.axes_is_at_least,
+        [true, true],
+        "{:?}",
+        widening.ellipse
     );
-    let contour = off_x.contour().expect("a reading");
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 3.0, true);
-    assert_reach(y, 0.1, false);
-    assert_reach(contour.radius(), 3.0, true);
-    let image = contour
-        .image_radius([[2.0, 0.0], [0.0, 1.0]])
-        .expect("a Jacobian");
-    assert_reach(image, 6.0, true);
-    let placement = crate::patch::cloud::OrientedPatch::new(
-        nalgebra::Point3::origin(),
-        nalgebra::Vector3::x(),
-        nalgebra::Vector3::y(),
-        [1.2, 1.2],
-    );
-    let [u, v] = contour
-        .patch_axis_reach(&placement, 24)
-        .expect("a placement")
-        .values();
-    assert_reach(u, 0.3, true);
-    assert_reach(v, 0.01, false);
 
-    // One border shift at the level: open along x, and with nothing at the
-    // level on the column inside it, nothing says which way the region goes
-    // past the border, so its reach along y is a lower bound too.
+    // One border shift at the level, with nothing at the level on the column
+    // inside it: the region may go on past the border in any direction. The
+    // two small lobes read a radius under r, which is only a lower bound.
     let lone = read_surface(
         surface_of(3, |dx, dy| match (dx, dy) {
             (0, 0) => 1.0,
@@ -1230,35 +1267,30 @@ fn running_off_the_square_is_a_lower_bound_on_that_axis_only() {
         3,
         0.05,
     );
-    let contour = lone.contour().expect("a reading");
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 3.0, true);
-    assert_reach(y, 1.0 + 0.02 / 0.47, true);
-    assert!(contour
-        .points()
-        .iter()
-        .any(|p| p.offset == [3.0, 1.0] && p.open_towards == Some([1, 0]) && p.is_open()));
-
-    // A template with no texture matched itself across the whole search.
-    let flat = centred(&tile_of(18, 1, |_, _, _| 128.0), 1, 12, 3);
-    let contour = flat.contour().expect("a flat template has a reading");
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 3.0, true);
-    assert_reach(y, 3.0, true);
-    assert_reach(contour.radius(), 3.0, true);
-    // Each point is brought in to r, so a uniform scale gives s·r.
-    let image = contour
-        .image_radius([[0.5, 0.0], [0.0, 0.5]])
-        .expect("a Jacobian");
-    assert_reach(image, 1.5, true);
+    assert!(lone.radius < 3.0, "{:?}", lone.ellipse);
+    assert!(lone.radius_is_at_least());
+    assert_eq!(lone.ellipse.axes_is_at_least, [true, true]);
+    // Its major axis points at the lobe.
+    let [x, y] = major_direction(&lone);
+    assert!((y / x - 1.0 / 3.0).abs() < 0.05, "{:?}", lone.ellipse);
 }
 
-/// A ridge slanted across the square, `z = 1 − 0.5·(dy − 3·dx)²` at the level
-/// 0.95, is at the level only at `(0, 0)` and `(±1, ±3)`, and runs off the
-/// square at `(1, 3)` towards `+y`. Its crossings reach about 1.01 along `x`,
-/// but the ridge goes on to `(2, 6)` past the border, so the reach along `x`
-/// is a lower bound as well as the reach along `y`, although the point that
-/// attains it was crossed along `x`.
+/// A ridge slanted across the square, `z = 1 − 0.5·(dy − 3·dx)²`, runs off the
+/// square at `(1, 3)` towards `+y` with nothing at the level on the line inside
+/// it, so it may turn either way past the border: both axes are lower bounds.
+#[test]
+fn a_slanted_ridge_running_off_the_square_is_a_lower_bound_on_both_axes() {
+    let s = read_surface(
+        surface_of(3, |dx, dy| {
+            let off = (dy - 3 * dx) as f64;
+            1.0 - 0.5 * off * off
+        }),
+        3,
+        0.05,
+    );
+    assert_eq!(s.ellipse.axes_is_at_least, [true, true], "{:?}", s.ellipse);
+}
+
 /// A tile of uniform stripes under a vertical lighting ramp, read by the
 /// kernels rather than given as a hand-built surface: the stripes vary along
 /// `x` only and ZNCC ignores the ramp, so the patch matches itself at every
@@ -1266,9 +1298,8 @@ fn running_off_the_square_is_a_lower_bound_on_that_axis_only() {
 /// off the square at `±y`. Its width along `x` is the same on every line in
 /// exact arithmetic, but the ramp makes each line's `f32` cross sums round
 /// differently, and the crossings on the border line and the line inside it
-/// differ by about 1e-7 grid px, outward on the colour tile. The width test
-/// allows for that, so the reach along `x` reads exact, while the reach along
-/// `y` is a lower bound.
+/// differ by about 1e-7 grid px. The width test allows for that, so the minor
+/// axis, across the column, reads exact, while the major axis is a lower bound.
 #[test]
 fn a_striped_tile_holds_its_width_across_the_run_off_through_f32_rounding() {
     let (core, r) = (24usize, 3u32);
@@ -1290,94 +1321,49 @@ fn a_striped_tile_holds_its_width_across_the_run_off_through_f32_rounding() {
                 assert_eq!(z >= level, dx == 0, "({dx}, {dy}): {z} against {level}");
             }
         }
-        let [x, y] = reading.contour().expect("a reading").grid_axes();
-        assert!(x.value > 0.0 && x.value < 1.0, "{x:?}");
-        assert!(!x.at_least, "channels {channels}: {x:?}");
-        assert_reach(y, 3.0, true);
+        let e = reading.ellipse;
+        assert!(e.axes[1] > 0.0 && e.axes[1] < 1.0, "{e:?}");
+        assert_eq!(
+            e.axes_is_at_least,
+            [true, false],
+            "channels {channels}: {e:?}"
+        );
+        assert_eq!(e.axes[0], 3.0);
     }
 }
 
+/// A shift with no reading beside the region at the level may hide more of
+/// it, in the cells around it. An axis is a lower bound where the gap's cells
+/// reach further from the centre than half that axis, past which added area
+/// lengthens it; a gap well inside a large region leaves both axes exact. A
+/// gap that reaches the square's border may hide a region running off it, so
+/// every axis is a lower bound.
 #[test]
-fn a_slanted_ridge_running_off_the_square_is_a_lower_bound_on_both_axes() {
-    let slanted = |r: i64| {
-        read_surface(
-            surface_of(r, |dx, dy| {
-                let off = (dy - 3 * dx) as f64;
-                1.0 - 0.5 * off * off
-            }),
-            r as usize,
-            0.05,
-        )
+fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_far_enough() {
+    let disc_with_gap = |gap: (i64, i64)| {
+        let mut surface = surface_of(8, |dx, dy| {
+            let d2 = (dx * dx + dy * dy) as f64;
+            1.0 - 0.05 * d2 / 36.0
+        });
+        surface[((gap.1 + 8) * 17 + gap.0 + 8) as usize] = f64::NAN;
+        read_surface(surface, 8, 0.05)
     };
-    let contour = slanted(3).contour().expect("a reading");
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 1.0 + 0.05 / 4.5, true);
-    assert_reach(y, 3.0, true);
-    assert_reach(contour.radius(), 3.0, true);
-    // Under a Jacobian that shrinks `y`, the crossed points along `x` give the
-    // largest image radius, and it is still a lower bound.
-    let image = contour
-        .image_radius([[1.0, 0.0], [0.0, 0.1]])
-        .expect("a Jacobian");
-    assert!(image.at_least, "{image:?}");
-    // A wider search shows the ridge does reach further along `x`.
-    let wider = slanted(6).contour().expect("a reading");
-    assert!(wider.grid_axes()[0].value >= 2.0, "{:?}", wider.grid_axes());
-}
-
-/// A ridge along `x` that widens towards the side it runs off, its crossings
-/// across 0.115 from its middle on the column inside the border and 0.117 on
-/// the border, may go on widening past it, so its reach along `y` is a lower
-/// bound.
-#[test]
-fn a_ridge_widening_towards_the_border_is_a_lower_bound_across() {
-    let widening = read_surface(
-        surface_of(3, |dx, dy| {
-            let (x, y) = (dx as f64, dy as f64);
-            1.0 - 0.5 * y * y * (1.0 - 0.1 * x) - 0.001 * x * x
-        }),
-        3,
-        0.05,
+    // The gap at (0, 1): its cells reach √5 from the centre, under half the
+    // disc's radius of about 6.
+    let near = disc_with_gap((0, 1));
+    assert!(near.radius > 5.5 && near.radius < 6.1, "{:?}", near.ellipse);
+    assert_eq!(
+        near.ellipse.axes_is_at_least,
+        [false, false],
+        "{:?}",
+        near.ellipse
     );
-    let [x, y] = widening.contour().expect("a reading").grid_axes();
-    assert_reach(x, 3.0, true);
-    assert_reach(y, 0.041 / 0.35, true);
-}
+    // The gap at (4, 0): its cells reach 5, past half the radius.
+    let far = disc_with_gap((4, 0));
+    assert!(far.radius_is_at_least(), "{:?}", far.ellipse);
 
-/// The image radius is a lower bound wherever a point was capped or open,
-/// even where the point that attains it was crossed. Under `J = diag(1, 0.1)`
-/// the open border shift `(0, 3)` maps to 0.3 image px, while the crossing
-/// near `(1.06, 0)` maps to 1.06; the region runs off the square at `(0, 3)`,
-/// so the image radius may be larger than 1.06.
-#[test]
-fn the_image_radius_is_a_lower_bound_under_an_anisotropic_jacobian() {
-    let s = read_surface(
-        surface_of(3, |dx, dy| match (dx, dy) {
-            (0, 0) => 1.0,
-            (1, 0) => 0.98,
-            (0, 3) => 0.97,
-            _ => 0.5,
-        }),
-        3,
-        0.05,
-    );
-    let contour = s.contour().expect("a reading");
-    let image = contour
-        .image_radius([[1.0, 0.0], [0.0, 0.1]])
-        .expect("a Jacobian");
-    assert_reach(image, 1.0 + 0.03 / 0.48, true);
-}
-
-/// A shift with no reading inside the square, beside the region at the level,
-/// leaves the contour open there: a crossing in the gap lies on a grid edge
-/// between the gap's shifts and the read shifts around it. Each length is a
-/// lower bound where those shifts reach further than it, and exact where they
-/// do not. The radius's value is the reading's either way.
-#[test]
-fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_further() {
-    // The gap at (0, 1) is beside the centre; the shifts around it reach
-    // √2 from the centre and 2 along y, past the crossing at 1.04 along x.
-    let near = read_surface(
+    // A small region with a gap beside it.
+    let small = read_surface(
         surface_of(3, |dx, dy| match (dx, dy) {
             (0, 0) => 1.0,
             (1, 0) => 0.97,
@@ -1387,46 +1373,30 @@ fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_further() {
         3,
         0.05,
     );
-    let contour = near.contour().expect("a reading");
-    assert_eq!(contour.radius().value.to_bits(), near.radius.to_bits());
-    assert_reach(contour.radius(), 1.0 + 0.02 / 0.47, true);
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 1.0 + 0.02 / 0.47, false);
-    assert_reach(y, 0.1, true);
-    assert!(
-        contour
-            .image_radius([[1.0, 0.0], [0.0, 1.0]])
-            .expect("a Jacobian")
-            .at_least
+    assert_eq!(
+        small.ellipse.axes_is_at_least,
+        [true, true],
+        "{:?}",
+        small.ellipse
     );
 
-    // A ridge reaching 2.04 along x outdistances the same gap: the radius and
-    // the reach along x are exact, and only the reach along y is open.
-    let far = read_surface(
-        surface_of(4, |dx, dy| match (dx, dy) {
+    // A gap no shift at the level touches is taken to be below the level.
+    let apart = read_surface(
+        surface_of(3, |dx, dy| match (dx, dy) {
             (0, 0) => 1.0,
-            (1, 0) | (2, 0) => 0.97,
-            (0, 1) => f64::NAN,
+            (3, 3) => f64::NAN,
             _ => 0.5,
         }),
-        4,
+        3,
         0.05,
     );
-    let contour = far.contour().expect("a reading");
-    assert_reach(contour.radius(), 2.0 + 0.02 / 0.47, false);
-    let [x, y] = contour.grid_axes();
-    assert_reach(x, 2.0 + 0.02 / 0.47, false);
-    assert_reach(y, 0.1, true);
-    assert_reach(
-        contour
-            .image_radius([[1.0, 0.0], [0.0, 1.0]])
-            .expect("a Jacobian"),
-        2.0 + 0.02 / 0.47,
-        false,
+    assert_eq!(
+        apart.ellipse.axes_is_at_least,
+        [false, false],
+        "{:?}",
+        apart.ellipse
     );
 
-    // A gap that reaches the square's border may hide a region running off
-    // it, so every length is a lower bound.
     let through = read_surface(
         surface_of(3, |dx, dy| match (dx, dy) {
             (0, 0) => 1.0,
@@ -1437,43 +1407,161 @@ fn a_gap_beside_the_region_is_a_lower_bound_where_it_reaches_further() {
         3,
         0.05,
     );
-    let contour = through.contour().expect("a reading");
-    assert!(contour.radius().at_least);
-    assert!(contour.grid_axes().iter().all(|a| a.at_least));
+    assert_eq!(through.ellipse.axes_is_at_least, [true, true]);
 }
 
-/// A reading with no data has no contour, and nothing to measure.
+/// A flat template reads a circle of radius `r`, at least along both axes,
+/// with no direction; a reading with no data is `NaN` throughout.
 #[test]
-fn no_reading_has_no_contour() {
+fn a_flat_template_and_no_data_read_their_ellipses() {
+    let flat = centred(&tile_of(18, 1, |_, _, _| 128.0), 1, 12, 3);
+    assert_eq!(flat.ellipse.axes, [3.0, 3.0]);
+    assert_eq!(flat.ellipse.axes_is_at_least, [true, true]);
+    assert!(flat.ellipse.major_angle.is_nan());
+    assert_eq!(flat.ellipse.matrix, [[9.0, 0.0], [0.0, 9.0]]);
+    assert!(flat.radius_is_at_least());
+
     let bitmap = tile_of(12, 1, |_, x, y| 10.0 * x + y);
     let data = vec![false; 144];
-    let s = zncc_self_similarity_radius(
+    let none = zncc_self_similarity_radius(
         &tile(&bitmap, 1, 12),
         Some(&data),
         [0, 0, 12, 12],
         &params(3),
     );
-    assert!(s.radius.is_nan());
-    assert_eq!(s.contour(), None);
-    assert_eq!(SelfSimilarityReach::read(&s, None, None, 24), None);
+    assert!(none.radius.is_nan());
+    assert!(none.ellipse.axes.iter().all(|v| v.is_nan()));
+    assert!(none.ellipse.matrix.iter().flatten().all(|v| v.is_nan()));
+    assert!(none.ellipse.major_angle.is_nan());
+    assert_eq!(none.ellipse.axes_is_at_least, [false, false]);
+    assert!(!none.radius_is_at_least());
+    assert_eq!(none.ellipse.mapped([[1.0, 0.0], [0.0, 1.0]]), None);
+    assert_eq!(
+        SelfSimilarityEllipseUnits::read(&none, None, None, 24),
+        None
+    );
 }
 
-/// The measurement carries what can be computed and nothing else.
+/// Through a linear map the ellipse is `L E Lᵀ`: a stretch along `x` doubles
+/// an ellipse long along `x` and leaves one long along `y` as long, and a
+/// rotation turns its angle.
 #[test]
-fn the_reach_reads_what_it_is_given() {
-    let s = ridge_along_x();
-    let bare = SelfSimilarityReach::read(&s, None, None, 24).expect("a reading");
-    assert_eq!(bare.grid_radius.value.to_bits(), s.radius.to_bits());
-    assert_eq!(bare.image_radius, None);
-    assert_eq!(bare.patch_axes, None);
+fn the_ellipse_maps_through_a_linear_map() {
+    let s = paraboloid(16, 10.0, 4.0, 0.0);
+    let e = s.ellipse;
+    let stretched = e.mapped([[2.0, 0.0], [0.0, 1.0]]).expect("a map");
+    assert!((stretched.axes[0] - 2.0 * e.axes[0]).abs() < 1e-9);
+    assert!((stretched.axes[1] - e.axes[1]).abs() < 1e-9);
+    let across = e.mapped([[1.0, 0.0], [0.0, 3.0]]).expect("a map");
+    assert!(
+        (across.axes[0] - 3.0 * e.axes[1]).abs() < 1e-9,
+        "{across:?}"
+    );
+    assert!((across.axes[1] - e.axes[0]).abs() < 1e-9, "{across:?}");
+    assert!(axis_angle_gap(across.major_angle, std::f64::consts::FRAC_PI_2) < 1e-9);
+    let turn = 0.4f64;
+    let (sin, cos) = turn.sin_cos();
+    let rotated = e
+        .mapped([[2.0 * cos, -2.0 * sin], [2.0 * sin, 2.0 * cos]])
+        .expect("a map");
+    assert!((rotated.axes[0] - 2.0 * e.axes[0]).abs() < 1e-9);
+    assert!(axis_angle_gap(rotated.major_angle, e.major_angle + turn) < 1e-9);
+    assert_eq!(e.mapped([[1.0, 2.0], [0.5, 1.0]]), None);
+    assert_eq!(e.mapped([[f64::NAN, 0.0], [0.0, 1.0]]), None);
+}
+
+/// The lower bounds carry through a map. A ridge along `x` running off the
+/// square, at least along its major axis and exact across, stays so under a
+/// map that keeps `x` its major direction, and under a shear that does not, its
+/// minor axis becomes a lower bound too, since lengthening the ridge along `x`
+/// would lengthen it.
+#[test]
+fn the_lower_bounds_carry_through_a_map() {
+    let s = read_surface(
+        surface_of(3, |dx, dy| {
+            let (x, y) = (dx as f64, dy as f64);
+            1.0 - 0.5 * y * y - 0.001 * x * x
+        }),
+        3,
+        0.05,
+    );
+    assert_eq!(s.ellipse.axes_is_at_least, [true, false]);
+    let kept = s.ellipse.mapped([[2.0, 0.0], [0.0, 0.5]]).expect("a map");
+    assert_eq!(kept.axes_is_at_least, [true, false], "{kept:?}");
+    let sheared = s.ellipse.mapped([[1.0, 0.0], [0.5, 1.0]]).expect("a map");
+    assert_eq!(sheared.axes_is_at_least, [true, true], "{sheared:?}");
+    // A minor axis at least makes both at least.
+    let mut open = s.ellipse;
+    open.axes_is_at_least = [false, true];
+    let mapped = open.mapped([[2.0, 0.0], [0.0, 0.5]]).expect("a map");
+    assert_eq!(mapped.axes_is_at_least, [true, true]);
+}
+
+/// Along the patch, one grid px along `x` is `2·half_extent[0]/R` along `u`
+/// and one along `y` is `2·half_extent[1]/R` along `−v`; a patch at infinity
+/// reads each semi-axis as the angle at the eye, in degrees.
+#[test]
+fn the_ellipse_on_the_patch_scales_by_each_half_extent() {
+    let s = paraboloid(16, 10.0, 4.0, 0.0);
+    let e = s.ellipse;
+    let mut placement = crate::patch::cloud::OrientedPatch::new(
+        nalgebra::Point3::origin(),
+        nalgebra::Vector3::x(),
+        nalgebra::Vector3::y(),
+        [0.5, 2.0],
+    );
+    let Some(PatchEllipse::Length(on)) = e.on_patch(&placement, 24) else {
+        panic!("a finite patch reads a length");
+    };
+    // 10 × 1/24 along u against 4 × 4/24 along v: the long axis is now v.
+    assert!((on.axes[0] - 4.0 * e.axes[1] / 24.0).abs() < 1e-9, "{on:?}");
+    assert!((on.axes[1] - e.axes[0] / 24.0).abs() < 1e-9, "{on:?}");
+    assert!(axis_angle_gap(on.major_angle, std::f64::consts::FRAC_PI_2) < 1e-9);
+    assert_eq!(e.on_patch(&placement, 0), None);
+
+    // A turned ellipse turns the other way along v, which runs up the rows.
+    let turned = paraboloid(16, 10.0, 4.0, 0.5).ellipse;
+    placement.half_extent = [1.2, 1.2];
+    let on = *turned
+        .on_patch(&placement, 24)
+        .expect("a placement")
+        .ellipse();
+    assert!(
+        axis_angle_gap(on.major_angle, -turned.major_angle) < 1e-9,
+        "{on:?}"
+    );
+    assert!((on.axes[0] - turned.axes[0] * 0.1).abs() < 1e-9);
+
+    placement.w = 0.0;
+    let Some(PatchEllipse::Angle(bearing)) = turned.on_patch(&placement, 24) else {
+        panic!("a patch at infinity reads an angle");
+    };
+    let tangent = turned.axes[0] * 0.1;
+    assert!((bearing.axes[0] - tangent.atan().to_degrees()).abs() < 1e-9);
+    // On a small patch the angle is the offset in radians, to first order.
+    placement.half_extent = [0.012, 0.012];
+    let small = turned.on_patch(&placement, 24).expect("a placement");
+    let tangent = turned.axes[0] * 0.001;
+    assert!((small.ellipse().axes[0] - tangent.to_degrees()).abs() < 1e-4 * tangent.to_degrees());
+}
+
+/// The units carry what can be computed and nothing else.
+#[test]
+fn the_units_read_what_they_are_given() {
+    let s = paraboloid(16, 10.0, 4.0, 0.0);
+    let bare = SelfSimilarityEllipseUnits::read(&s, None, None, 24).expect("a reading");
+    assert_eq!(bare.grid_px, s.ellipse);
+    assert_eq!(bare.image_px, None);
+    assert_eq!(bare.patch, None);
     let placement = crate::patch::cloud::OrientedPatch::new(
         nalgebra::Point3::origin(),
         nalgebra::Vector3::x(),
         nalgebra::Vector3::y(),
         [1.2, 1.2],
     );
-    let full = SelfSimilarityReach::read(&s, Some([[2.0, 0.0], [0.0, 1.0]]), Some(&placement), 24)
+    let jacobian = [[2.0, 0.0], [0.0, 1.0]];
+    let full = SelfSimilarityEllipseUnits::read(&s, Some(jacobian), Some(&placement), 24)
         .expect("a reading");
-    assert_reach(full.image_radius.expect("a Jacobian"), 3.0, false);
-    assert!(matches!(full.patch_axes, Some(PatchAxisReach::Length(_))));
+    assert_eq!(full.image_px, s.ellipse.mapped(jacobian));
+    assert!(matches!(full.patch, Some(PatchEllipse::Length(_))));
 }

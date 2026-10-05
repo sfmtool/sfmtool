@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Array4};
 use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -42,7 +42,9 @@ use sfmtool_core::bench::{
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
-use sfmtool_core::patch::self_similarity::{BoundedLength, PatchAxisReach, SelfSimilarityReach};
+use sfmtool_core::patch::self_similarity::{
+    PatchEllipse, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
+};
 use sfmtool_core::patch::view_selection::ViewSelectParams;
 use sfmtool_core::progress::Progress;
 
@@ -150,12 +152,6 @@ fn grid_array(grid: [[f64; 3]; 3]) -> Array2<f64> {
     Array2::from_shape_vec((3, 3), grid.concat()).expect("nine values in a 3x3")
 }
 
-/// A grid of slide vectors as the `(3, 3, 2)` array Python reads it as,
-/// `slide[row, col] = [x, y]` from the top-left cell.
-fn slide_array(slide: [[[f64; 2]; 3]; 3]) -> Array3<f64> {
-    Array3::from_shape_vec((3, 3, 2), slide.concat().concat()).expect("eighteen values in a 3x3x2")
-}
-
 /// A square ZNCC surface, stored row-major, as the `(side, side)` array Python
 /// reads it as, `surface[dy + r, dx + r]`.
 fn surface_array(surface: &[f64]) -> Array2<f64> {
@@ -163,47 +159,92 @@ fn surface_array(surface: &[f64]) -> Array2<f64> {
     Array2::from_shape_vec((side, side), surface.to_vec()).expect("a square surface")
 }
 
-/// A self-similarity reading's reach as the nested dict Python reads, in the
-/// shape `get_bench_track` reports it except that `patch_axes` carries no
-/// `unit`, since the dict does not carry the reconstruction: each length as `{"value", "at_least"}`,
-/// `at_least` true where the true length may be larger; `grid_radius` and
-/// `grid_axes` (`[x, y]`) in grid px; `image_radius` in the photograph's px,
-/// `None` without a Jacobian; and `patch_axes`, `None` without a placement,
-/// as `{"kind", "along"}` with `along` holding `[u, v]`: `kind` `"length"` in
-/// the reconstruction's `world_space_unit`, or `"angle"` in degrees for a
-/// patch at infinity.
-fn reach_to_dict<'py>(
+/// One self-similarity ellipse as the dict Python reads: `axes` (`(2,)`
+/// float64, `[semi-major, semi-minor]`), `axes_is_at_least` (`(2,)` bool, per
+/// axis whether the true length may be larger), `major_angle` (float, radians
+/// in `[0, pi)` from the frame's first axis towards its second, NaN for a
+/// circle) and `matrix` (`(2, 2)` float64, `E` with `dᵀ E⁻¹ d = 1` on the
+/// ellipse).
+fn ellipse_to_dict<'py>(
     py: Python<'py>,
-    reach: &SelfSimilarityReach,
+    ellipse: &SelfSimilarityEllipse,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let length = |r: BoundedLength| -> PyResult<Bound<'py, PyDict>> {
-        let d = PyDict::new(py);
-        d.set_item("value", r.value)?;
-        d.set_item("at_least", r.at_least)?;
-        Ok(d)
-    };
     let d = PyDict::new(py);
-    d.set_item("grid_radius", length(reach.grid_radius)?)?;
+    d.set_item("axes", PyArray1::from_vec(py, ellipse.axes.to_vec()))?;
     d.set_item(
-        "grid_axes",
-        vec![length(reach.grid_axes[0])?, length(reach.grid_axes[1])?],
+        "axes_is_at_least",
+        PyArray1::from_vec(py, ellipse.axes_is_at_least.to_vec()),
     )?;
-    d.set_item("image_radius", reach.image_radius.map(length).transpose()?)?;
-    let patch_axes = match reach.patch_axes {
+    d.set_item("major_angle", ellipse.major_angle)?;
+    d.set_item("matrix", shape_array(ellipse.matrix).into_pyarray(py))?;
+    Ok(d)
+}
+
+/// A self-similarity reading's ellipse in each unit as the nested dict Python
+/// reads, in the shape `get_bench_track` reports it except that `patch`
+/// carries no `unit`, since the dict does not carry the reconstruction:
+/// `grid_px` in grid px; `image_px` in the photograph's px, `None` without a
+/// Jacobian; and `patch`, `None` without a placement, as `{"kind",
+/// "ellipse"}`: `kind` `"length"` in the reconstruction's `world_space_unit`,
+/// or `"angle"` in degrees for a patch at infinity. Each ellipse is
+/// [`ellipse_to_dict`]'s.
+fn ellipse_units_to_dict<'py>(
+    py: Python<'py>,
+    units: &SelfSimilarityEllipseUnits,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("grid_px", ellipse_to_dict(py, &units.grid_px)?)?;
+    d.set_item(
+        "image_px",
+        units
+            .image_px
+            .as_ref()
+            .map(|e| ellipse_to_dict(py, e))
+            .transpose()?,
+    )?;
+    let patch = match units.patch {
         None => None,
-        Some(axes) => {
+        Some(on_patch) => {
             let a = PyDict::new(py);
-            let kind = match axes {
-                PatchAxisReach::Length(_) => "length",
-                PatchAxisReach::Angle(_) => "angle",
+            let kind = match on_patch {
+                PatchEllipse::Length(_) => "length",
+                PatchEllipse::Angle(_) => "angle",
             };
-            let [u, v] = axes.values();
             a.set_item("kind", kind)?;
-            a.set_item("along", vec![length(u)?, length(v)?])?;
+            a.set_item("ellipse", ellipse_to_dict(py, on_patch.ellipse())?)?;
             Some(a)
         }
     };
-    d.set_item("patch_axes", patch_axes)?;
+    d.set_item("patch", patch)?;
+    Ok(d)
+}
+
+/// Each cell's self-similarity ellipse as one dict of arrays, `[row, col]`
+/// from the top-left cell: `axes` (`(3, 3, 2)`), `axes_is_at_least`
+/// (`(3, 3, 2)` bool), `major_angle` (`(3, 3)`) and `matrix` (`(3, 3, 2, 2)`).
+fn ellipse_grid_to_dict<'py>(
+    py: Python<'py>,
+    grid: &[[SelfSimilarityEllipse; 3]; 3],
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(
+        "axes",
+        Array3::from_shape_fn((3, 3, 2), |(r, c, k)| grid[r][c].axes[k]).into_pyarray(py),
+    )?;
+    d.set_item(
+        "axes_is_at_least",
+        Array3::from_shape_fn((3, 3, 2), |(r, c, k)| grid[r][c].axes_is_at_least[k])
+            .into_pyarray(py),
+    )?;
+    d.set_item(
+        "major_angle",
+        Array2::from_shape_fn((3, 3), |(r, c)| grid[r][c].major_angle).into_pyarray(py),
+    )?;
+    d.set_item(
+        "matrix",
+        Array4::from_shape_fn((3, 3, 2, 2), |(r, c, i, j)| grid[r][c].matrix[i][j])
+            .into_pyarray(py),
+    )?;
     Ok(d)
 }
 
@@ -216,17 +257,17 @@ fn set_self_similarity<'py>(
     radius: Option<f64>,
     middle: Option<f64>,
     grid: Option<[[f64; 3]; 3]>,
-    slide: Option<[[[f64; 2]; 3]; 3]>,
+    ellipse_grid: Option<&[[SelfSimilarityEllipse; 3]; 3]>,
     surface: Option<&[f64]>,
     tolerance: Option<f64>,
-    reach: [Option<SelfSimilarityReach>; 2],
+    ellipses: [Option<SelfSimilarityEllipseUnits>; 2],
 ) -> PyResult<()> {
-    for (key, reach) in [
-        ("zncc_self_similarity_reach", reach[0]),
-        ("zncc_self_similarity_reach_middle", reach[1]),
+    for (key, units) in [
+        ("zncc_self_similarity_ellipse", ellipses[0]),
+        ("zncc_self_similarity_ellipse_middle", ellipses[1]),
     ] {
-        if let Some(reach) = reach {
-            d.set_item(key, reach_to_dict(py, &reach)?)?;
+        if let Some(units) = units {
+            d.set_item(key, ellipse_units_to_dict(py, &units)?)?;
         }
     }
     if let Some(v) = tolerance {
@@ -244,10 +285,10 @@ fn set_self_similarity<'py>(
             grid_array(g).into_pyarray(py),
         )?;
     }
-    if let Some(s) = slide {
+    if let Some(g) = ellipse_grid {
         d.set_item(
-            "zncc_self_similarity_slide_grid",
-            slide_array(s).into_pyarray(py),
+            "zncc_self_similarity_ellipse_grid",
+            ellipse_grid_to_dict(py, g)?,
         )?;
     }
     if let Some(s) = surface {
@@ -298,12 +339,12 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             m.zncc_self_similarity_radius,
             m.zncc_self_similarity_radius_middle,
             m.zncc_self_similarity_radius_grid,
-            m.zncc_self_similarity_slide_grid,
+            m.zncc_self_similarity_ellipse_grid.as_ref(),
             m.zncc_self_similarity_surface.as_deref(),
             m.zncc_self_similarity_tolerance,
             [
-                m.zncc_self_similarity_reach,
-                m.zncc_self_similarity_reach_middle,
+                m.zncc_self_similarity_ellipse,
+                m.zncc_self_similarity_ellipse_middle,
             ],
         )?;
         if let Some(s) = m.status {
@@ -350,12 +391,12 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             m.zncc_self_similarity_radius,
             m.zncc_self_similarity_radius_middle,
             m.zncc_self_similarity_radius_grid,
-            m.zncc_self_similarity_slide_grid,
+            m.zncc_self_similarity_ellipse_grid.as_ref(),
             m.zncc_self_similarity_surface.as_deref(),
             m.zncc_self_similarity_tolerance,
             [
-                m.zncc_self_similarity_reach,
-                m.zncc_self_similarity_reach_middle,
+                m.zncc_self_similarity_ellipse,
+                m.zncc_self_similarity_ellipse_middle,
             ],
         )?;
         // The pixel that walk would have reached: `sight_observation` there

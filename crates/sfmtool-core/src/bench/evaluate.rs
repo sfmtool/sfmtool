@@ -45,7 +45,8 @@ use crate::patch::keypoint_localize::{
 };
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::self_similarity::{
-    zncc_self_similarity_parts, PatchTile, SelfSimilarityParams, SelfSimilarityReach,
+    zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
+    SelfSimilarityParams,
 };
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
@@ -164,9 +165,9 @@ impl EvaluateOptions {
     /// [`Self::localize`]'s resolution.
     ///
     /// Every patch-grid px the track stage reports is one `R`-th of the
-    /// patch's side: the shift, the self-similarity radius and its reach. A
+    /// patch's side: the shift, the self-similarity radius and its ellipse. A
     /// caller that states a patch's zoom in grid px per photograph pixel uses
-    /// the same `R`, so the zoom and the reach are in one unit.
+    /// the same `R`, so the zoom and the ellipse are in one unit.
     ///
     /// ```no_run
     /// # use sfmtool_core::bench::EvaluateOptions;
@@ -752,11 +753,11 @@ pub(super) fn evaluate_cluster(
             next_measurement.zncc_self_similarity_radius = similarity.radius;
             next_measurement.zncc_self_similarity_radius_middle = similarity.middle;
             next_measurement.zncc_self_similarity_radius_grid = similarity.grid;
-            next_measurement.zncc_self_similarity_slide_grid = similarity.slide;
+            next_measurement.zncc_self_similarity_ellipse = similarity.ellipse;
+            next_measurement.zncc_self_similarity_ellipse_middle = similarity.ellipse_middle;
+            next_measurement.zncc_self_similarity_ellipse_grid = similarity.ellipse_grid;
             next_measurement.zncc_self_similarity_surface = similarity.surface;
             next_measurement.zncc_self_similarity_tolerance = similarity.tolerance;
-            next_measurement.zncc_self_similarity_reach = similarity.reach;
-            next_measurement.zncc_self_similarity_reach_middle = similarity.reach_middle;
         }
         progress_note!(phase, "{} observations", members.len());
     }
@@ -802,22 +803,23 @@ pub(super) fn evaluate_cluster(
     ))
 }
 
-/// One tile's ZNCC self-similarity readings, in grid px: the radius over the
-/// whole core, its middle and each cell of the grid's split, each cell's
-/// slide, and the whole core's ZNCC surface.
+/// One tile's ZNCC self-similarity readings: the radius over the whole core,
+/// its middle and each cell of the grid's split, in grid px, their ellipses,
+/// and the whole core's ZNCC surface.
 #[derive(Default)]
 struct TileSelfSimilarity {
     radius: Option<f64>,
     middle: Option<f64>,
     grid: Option<[[f64; 3]; 3]>,
-    slide: Option<[[[f64; 2]; 3]; 3]>,
+    /// The whole core's ellipse, in grid px, image px and along the patch's
+    /// axes, as far as each can be computed.
+    ellipse: Option<SelfSimilarityEllipseUnits>,
+    /// The same for the middle square.
+    ellipse_middle: Option<SelfSimilarityEllipseUnits>,
+    /// Each cell's ellipse, in grid px.
+    ellipse_grid: Option<[[SelfSimilarityEllipse; 3]; 3]>,
     surface: Option<Vec<f64>>,
     tolerance: Option<f64>,
-    /// How far the whole core's contour reaches, in grid px, image px and
-    /// along the patch's axes, as far as each can be computed.
-    reach: Option<SelfSimilarityReach>,
-    /// The same for the middle square's contour.
-    reach_middle: Option<SelfSimilarityReach>,
 }
 
 /// What a tile's grid is, for converting its self-similarity readings out of
@@ -830,7 +832,7 @@ struct TileGeometry<'a> {
 
 /// Read an interleaved `R × R × C` tile's self-similarity the overlap way,
 /// with the default parameters, and measure the whole tile's and the middle's
-/// contours through `geometry`.
+/// ellipses through `geometry`.
 ///
 /// The tile is read as it is, every sample as data, with no pixels from
 /// outside it: at each shift only the samples both windows hold are
@@ -853,12 +855,12 @@ fn score_self_similarity(
         height: resolution,
     };
     let parts = zncc_self_similarity_parts(&tile, None, &SelfSimilarityParams::default());
-    let reach = |reading| {
-        SelfSimilarityReach::read(reading, geometry.jacobian, geometry.placement, resolution)
+    let units = |reading| {
+        SelfSimilarityEllipseUnits::read(reading, geometry.jacobian, geometry.placement, resolution)
     };
     TileSelfSimilarity {
-        reach: reach(&parts.whole),
-        reach_middle: reach(&parts.middle),
+        ellipse: units(&parts.whole),
+        ellipse_middle: units(&parts.middle),
         radius: Some(parts.whole.radius),
         middle: Some(parts.middle.radius),
         grid: Some(
@@ -867,11 +869,11 @@ fn score_self_similarity(
                 .each_ref()
                 .map(|row| row.each_ref().map(|cell| cell.radius)),
         ),
-        slide: Some(
+        ellipse_grid: Some(
             parts
                 .grid
                 .each_ref()
-                .map(|row| row.each_ref().map(|cell| cell.slide)),
+                .map(|row| row.each_ref().map(|cell| cell.ellipse)),
         ),
         tolerance: finite(parts.whole.tolerance),
         surface: Some(parts.whole.surface),
@@ -1154,11 +1156,11 @@ fn evaluate_track(
             measurement.zncc_self_similarity_radius = None;
             measurement.zncc_self_similarity_radius_middle = None;
             measurement.zncc_self_similarity_radius_grid = None;
-            measurement.zncc_self_similarity_slide_grid = None;
+            measurement.zncc_self_similarity_ellipse = None;
+            measurement.zncc_self_similarity_ellipse_middle = None;
+            measurement.zncc_self_similarity_ellipse_grid = None;
             measurement.zncc_self_similarity_surface = None;
             measurement.zncc_self_similarity_tolerance = None;
-            measurement.zncc_self_similarity_reach = None;
-            measurement.zncc_self_similarity_reach_middle = None;
             if let Some(pixel) = seed_of(observation) {
                 // The offset is measured from the **patch's** projection,
                 // because that is the anchor the localizer renders its tile
@@ -1178,11 +1180,11 @@ fn evaluate_track(
                 measurement.zncc_self_similarity_radius = similarity.radius;
                 measurement.zncc_self_similarity_radius_middle = similarity.middle;
                 measurement.zncc_self_similarity_radius_grid = similarity.grid;
-                measurement.zncc_self_similarity_slide_grid = similarity.slide;
+                measurement.zncc_self_similarity_ellipse = similarity.ellipse;
+                measurement.zncc_self_similarity_ellipse_middle = similarity.ellipse_middle;
+                measurement.zncc_self_similarity_ellipse_grid = similarity.ellipse_grid;
                 measurement.zncc_self_similarity_surface = similarity.surface;
                 measurement.zncc_self_similarity_tolerance = similarity.tolerance;
-                measurement.zncc_self_similarity_reach = similarity.reach;
-                measurement.zncc_self_similarity_reach_middle = similarity.reach_middle;
             }
             if measurement.zncc.is_some() {
                 measured += 1;
@@ -1457,7 +1459,7 @@ pub(super) fn observation_metrics(
 ///
 /// It reads the `R×R` tile rendered through the keypoint-anchored frame
 /// ([`render_bitmap`], the grid every stored patch bitmap is rendered on), the
-/// overlap way, with no pixels from outside it. The contours are measured
+/// overlap way, with no pixels from outside it. The ellipses are measured
 /// through the same anchored placement at resolution `R`: the image px per
 /// grid px at its centre ([`patch_grid_jacobian`]) and its half-extents.
 fn patch_tile_readings(

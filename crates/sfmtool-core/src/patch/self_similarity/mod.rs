@@ -12,28 +12,27 @@
 //! moved by every shift `d` of the square `|dx|, |dy| ≤ r`, over only the
 //! samples inside the tile, and carrying data, on both sides (the overlap
 //! reading); counts a shift as indistinguishable when
-//! `1 − z(d) ≤ ε + mean_c (n / s_c)²`; and reports how far from the centre the
-//! surface crosses that level at its furthest (interpolated linearly along the
-//! grid edges between neighbouring shifts, and capped at `r`) and the
-//! direction the indistinguishable shifts line up in.
+//! `1 − z(d) ≤ ε + mean_c (n / s_c)²`; and summarises the region of those
+//! shifts, the surface taken as bilinear between them, by the ellipse with the
+//! same second moments per unit area about the true position, whose semi-major
+//! axis, capped at `r`, is the radius.
 //! [`zncc_self_similarity_parts`] reads a whole `R×R` bitmap, its
 //! middle square and the nine cells of the ZNCC grid's split, sharing the
 //! cross sums between them.
 //!
-//! [`SelfSimilarity::contour`] gives the points the radius is read from, and
-//! [`SelfSimilarityReach::read`] measures their reach: along each grid axis,
-//! in source-image px through
-//! [`crate::camera::warp_map::patch_grid_jacobian`], and along the patch's
-//! own axes in the scene's world-space unit.
+//! [`SelfSimilarityEllipse::mapped`] takes the ellipse into source-image px
+//! through [`crate::camera::warp_map::patch_grid_jacobian`], and
+//! [`SelfSimilarityEllipse::on_patch`] along the patch's own axes in the
+//! scene's world-space unit; [`SelfSimilarityEllipseUnits::read`] does both.
 //!
 //! Where every sample carries data (the dense route), each template is centred
 //! by its own mean per channel before the `f32` cross-sum kernel runs, so the
 //! products stay on the scale of the template's own spread, and the moments
 //! come from per-channel summed-area tables in `f64`. Where some sample carries
 //! no data (the masked route), every sum is taken in `f64` sample by sample.
-//! The combine, the tolerance test and the slide run in `f64` on both routes.
+//! The combine, the tolerance test and the ellipse run in `f64` on both routes.
 
-mod contour;
+mod ellipse;
 mod kernels;
 mod overlap;
 
@@ -42,9 +41,7 @@ mod tests;
 
 use crate::patch::normal_refine::{grid_bounds, middle_span, FLAT_NORM_SQ_EPS};
 
-pub use contour::{
-    BoundedLength, ContourPoint, PatchAxisReach, SelfSimilarityContour, SelfSimilarityReach,
-};
+pub use ellipse::{PatchEllipse, SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 pub use overlap::{zncc_self_similarity_parts, zncc_self_similarity_radius};
 
 /// The template spread, in grey levels, under which a channel carries no
@@ -80,30 +77,36 @@ impl Default for SelfSimilarityParams {
 /// One template's reading.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfSimilarity {
-    /// How far from the centre the ZNCC surface crosses the level `1 −
-    /// tolerance`, `0 ..= max_radius`, in tile pixels: over the grid edges of
-    /// the square of shifts between neighbouring shifts where one is at or
-    /// above the level and the other below, the furthest point where the ZNCC
-    /// interpolated linearly along the edge equals the level, capped at
-    /// `max_radius`. A shift at or above the level on the square's border
-    /// counts its own distance, at least `max_radius`, since the crossing past
-    /// it was not searched. `max_radius` reads "this far or further"; it is
-    /// also the reading of a template with no textured channel.
+    /// The ZNCC self-similarity radius, `0 ..= max_radius`, in tile pixels:
+    /// the semi-major axis of [`Self::ellipse`], capped at `max_radius` as
+    /// the ellipse's axes are, so `max_radius` reads "this far or further"; it
+    /// is also the reading of a template with no textured channel.
+    /// [`Self::radius_is_at_least`] says whether the true length may be
+    /// larger. `NaN` for a template with no data.
     pub radius: f64,
-    /// The direction of the indistinguishable shifts, in the grid frame (`x`
-    /// column-right, `y` row-down), scaled by how strongly they line up:
-    /// the unit eigenvector of their second moment's larger eigenvalue `μ₁`
-    /// times `1 − μ₂/μ₁`. `[0, 0]` when there are none, and for a template
-    /// with no textured channel. Its sign means nothing.
-    pub slide: [f64; 2],
+    /// The ellipse with the same second moments per unit area about `d = 0` as the
+    /// region of shifts where the surface, bilinear between the whole-pixel
+    /// shifts, is at or above `1 − tolerance`, in the grid frame (`x`
+    /// column-right, `y` row-down).
+    pub ellipse: SelfSimilarityEllipse,
     /// The tolerance τ the template was judged by; `f64::INFINITY` for a
     /// template with no textured channel, where every shift counts.
     pub tolerance: f64,
     /// The channel-averaged ZNCC `z(d)` for every shift of the `(2r + 1)²`
     /// square, row-major from `(dx, dy) = (−r, −r)`, `z(0, 0) = 1`: the
-    /// surface the radius and the slide are read from. Every value is `NaN`
-    /// for a template with no textured channel.
+    /// surface the ellipse is read from. Every value is `NaN` for a template
+    /// with no textured channel.
     pub surface: Vec<f64>,
+}
+
+impl SelfSimilarity {
+    /// Whether the true radius may be larger than [`Self::radius`]: the
+    /// ellipse's major axis is a lower bound (the region at the level runs off
+    /// the square of shifts, a gap with no reading beside it could hide more
+    /// of it, or it reached `max_radius`).
+    pub fn radius_is_at_least(&self) -> bool {
+        self.ellipse.axes_is_at_least[0]
+    }
 }
 
 /// A bitmap whole, its middle square and the nine cells of the ZNCC grid's
@@ -226,128 +229,39 @@ enum Kernel {
     Scalar,
 }
 
-/// The reading of a filled surface judged by `tolerance`: the radius, where
-/// the surface crosses `1 − tolerance` furthest from the centre, capped at `r`,
-/// and the slide of the indistinguishable shifts. Both read the whole square of
-/// shifts. The centre does not count as a shift.
+/// The reading of a filled surface judged by `tolerance`: the ellipse of the
+/// region at or above `1 − tolerance`, read over the whole square of shifts,
+/// and the radius, its semi-major axis.
 fn read_surface(surface: Vec<f64>, r: usize, tolerance: f64) -> SelfSimilarity {
-    let side = 2 * r + 1;
-    let ri = r as i64;
-    let level = 1.0 - tolerance;
-    let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
-    for dy in -ri..=ri {
-        for dx in -ri..=ri {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            // A `NaN` reading compares false and is not indistinguishable.
-            if surface[((dy + ri) as usize) * side + (dx + ri) as usize] >= level {
-                let (fx, fy) = (dx as f64, dy as f64);
-                sxx += fx * fx;
-                sxy += fx * fy;
-                syy += fy * fy;
-            }
-        }
-    }
+    let ellipse = ellipse::fit_ellipse(&surface, r, 1.0 - tolerance);
     SelfSimilarity {
-        radius: crossing_radius(&surface, r, level),
-        slide: slide_of(sxx, sxy, syy),
+        radius: ellipse.axes[0],
+        ellipse,
         tolerance,
         surface,
     }
 }
 
-/// How far from the centre the surface crosses `level`, capped at `r`.
-///
-/// Over every grid edge of the `(2r + 1)²` square between two neighbouring
-/// shifts where one is at or above the level and the other below it, the point
-/// where the ZNCC, interpolated linearly along the edge, equals the level; the
-/// largest distance of those points from the centre. A shift at or above the
-/// level whose neighbour was not read, because the neighbour lies past the
-/// square's border or its reading is not finite, has its crossing in that
-/// direction somewhere past itself, so its own distance counts as a lower
-/// bound. Every shift on the border is at least `r` from the centre, so a
-/// region at the level that reaches the border reads `r`. Tracked as a squared
-/// length, with one square root at the end. The centre is always at or above
-/// the level, so a patch that locks reads the fraction of a pixel its peak
-/// takes to fall through it.
-fn crossing_radius(surface: &[f64], r: usize, level: f64) -> f64 {
-    radius_of_points(&crossing_points(surface, r, level), r)
-}
-
-/// The largest distance of `points` from the centre, capped at `r`: the
-/// radius [`crossing_radius`] reads. Tracked as a squared length, with one
-/// square root at the end.
-fn radius_of_points(points: &[ContourPoint], r: usize) -> f64 {
-    let mut furthest = 0.0f64;
-    for point in points {
-        let [px, py] = point.offset;
-        furthest = furthest.max(px * px + py * py);
-    }
-    furthest.sqrt().min(r as f64)
-}
-
-/// The points of the contour where `surface` falls through `level`, the
-/// points [`crossing_radius`] reads its radius from: over every grid edge of
-/// the `(2r + 1)²` square between a shift at or above the level and a
-/// neighbour below it, the point where the ZNCC, interpolated linearly along
-/// the edge, equals the level; and for a shift at or above the level whose
-/// neighbour was not read (past the square's border, or not finite), the
-/// shift itself, open towards that neighbour. Each shift contributes its edges
-/// in the order `+x`, `−x`, `+y`, `−y`, and the shifts are visited row-major
-/// from `(−r, −r)`.
-fn crossing_points(surface: &[f64], r: usize, level: f64) -> Vec<ContourPoint> {
+/// The reading of a template with no sample carrying data: `NaN` throughout.
+fn no_reading(r: usize) -> SelfSimilarity {
     let side = 2 * r + 1;
-    let ri = r as i64;
-    let at = |dx: i64, dy: i64| -> Option<f64> {
-        if dx.abs() > ri || dy.abs() > ri {
-            return None;
-        }
-        let z = surface[((dy + ri) as usize) * side + (dx + ri) as usize];
-        z.is_finite().then_some(z)
-    };
-    let mut points = Vec::new();
-    for dy in -ri..=ri {
-        for dx in -ri..=ri {
-            let Some(z) = at(dx, dy) else { continue };
-            if z < level {
-                continue;
-            }
-            for (ex, ey) in [(1i8, 0i8), (-1, 0), (0, 1), (0, -1)] {
-                let point = match at(dx + i64::from(ex), dy + i64::from(ey)) {
-                    Some(zn) if zn >= level => continue,
-                    Some(zn) => {
-                        let t = (z - level) / (z - zn);
-                        ContourPoint {
-                            offset: [dx as f64 + t * f64::from(ex), dy as f64 + t * f64::from(ey)],
-                            open_towards: None,
-                        }
-                    }
-                    // Not read: the shift itself is as far as is known.
-                    None => ContourPoint {
-                        offset: [dx as f64, dy as f64],
-                        open_towards: Some([ex, ey]),
-                    },
-                };
-                points.push(point);
-            }
-        }
+    SelfSimilarity {
+        radius: f64::NAN,
+        ellipse: SelfSimilarityEllipse::no_data(),
+        tolerance: f64::NAN,
+        surface: vec![f64::NAN; side * side],
     }
-    points
 }
 
-/// The slide of a set of shifts from the sums of their second moments: the
-/// unit eigenvector of the larger eigenvalue `μ₁` scaled by `1 − μ₂/μ₁`, or
-/// `[0, 0]` for an empty set. The common `1/|A|` factor cancels, so the raw
-/// sums serve.
-fn slide_of(sxx: f64, sxy: f64, syy: f64) -> [f64; 2] {
-    let half_trace = 0.5 * (sxx + syy);
-    let spread = (0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy).sqrt();
-    let (mu1, mu2) = (half_trace + spread, half_trace - spread);
-    if mu1 <= 0.0 {
-        return [0.0; 2];
+/// The reading of a template with no textured channel: every shift counts, so
+/// the radius is `r`, a lower bound, the ellipse a circle of radius `r`, and
+/// the surface `NaN`.
+fn flat_reading(r: usize) -> SelfSimilarity {
+    let side = 2 * r + 1;
+    SelfSimilarity {
+        radius: r as f64,
+        ellipse: SelfSimilarityEllipse::flat(r),
+        tolerance: f64::INFINITY,
+        surface: vec![f64::NAN; side * side],
     }
-    let strength = (1.0 - mu2.max(0.0) / mu1).clamp(0.0, 1.0);
-    let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
-    [strength * theta.cos(), strength * theta.sin()]
 }
