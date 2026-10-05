@@ -70,5 +70,10 @@ def viewer_command(viewer_args: list[str]) -> list[str]:
     of this same Python interpreter, through ``python -m sfmtool._explorer``.
     It needs a process of its own: it takes over the process's main thread for
     its window event loop, and it ends the process on an error.
+
+    ``-P`` keeps the current directory off the front of ``sys.path``, where
+    ``python -m`` would otherwise put it, so a ``sfmtool.py`` or ``sfmtool/``
+    in the directory the command is run from cannot shadow the installed
+    package.
     """
-    return [sys.executable, "-m", VIEWER_MODULE, *viewer_args]
+    return [sys.executable, "-P", "-m", VIEWER_MODULE, *viewer_args]

@@ -9,7 +9,7 @@ is run for real through the built extension, but only with arguments the
 viewer answers before it creates a window: ``--help``, and an unknown option.
 """
 
-import importlib.util
+import importlib
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -36,21 +36,10 @@ def _invoke_with_fake_run(monkeypatch, args, returncode=0):
     return result, calls
 
 
-def test_viewer_module_exists():
-    assert explorer_module.VIEWER_MODULE == "sfmtool._explorer"
-    assert importlib.util.find_spec(explorer_module.VIEWER_MODULE) is not None
-
-
-def test_extension_has_run_explorer():
-    from sfmtool._sfmtool import run_explorer
-
-    assert callable(run_explorer)
-
-
 def test_no_arguments_runs_viewer_module(monkeypatch):
     result, calls = _invoke_with_fake_run(monkeypatch, [])
     assert result.exit_code == 0, result.output
-    assert calls == [[sys.executable, "-m", "sfmtool._explorer"]]
+    assert calls == [[sys.executable, "-P", "-m", "sfmtool._explorer"]]
 
 
 def test_options_then_files_in_order(monkeypatch, tmp_path):
@@ -65,6 +54,7 @@ def test_options_then_files_in_order(monkeypatch, tmp_path):
     assert calls == [
         [
             sys.executable,
+            "-P",
             "-m",
             "sfmtool._explorer",
             "--mcp",
@@ -81,7 +71,7 @@ def test_mcp_without_port_passes_default(monkeypatch, tmp_path):
     a.write_bytes(b"")
     result, calls = _invoke_with_fake_run(monkeypatch, [str(a), "--mcp"])
     assert result.exit_code == 0, result.output
-    assert calls[0][3:] == ["--mcp", str(explorer_module.DEFAULT_MCP_PORT), str(a)]
+    assert calls[0][4:] == ["--mcp", str(explorer_module.DEFAULT_MCP_PORT), str(a)]
 
 
 def test_exit_status_is_the_viewers(monkeypatch):
@@ -98,7 +88,7 @@ def test_missing_file_is_refused_before_launch(monkeypatch, tmp_path):
 
 def _run_viewer_module(*args):
     return subprocess.run(
-        [sys.executable, "-m", "sfmtool._explorer", *args],
+        [sys.executable, "-P", "-m", "sfmtool._explorer", *args],
         capture_output=True,
         text=True,
         timeout=120,
