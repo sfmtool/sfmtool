@@ -42,7 +42,7 @@
 
 mod axes;
 mod controls;
-mod field;
+mod distortion_field;
 mod hover;
 
 #[cfg(test)]
@@ -95,7 +95,7 @@ pub(super) struct View {
     /// Panel pixels per image pixel with the image *fitted* to the panel — the
     /// scale at zoom 1. The arrow exaggeration is fitted to this rather than to
     /// `scale`, so that zooming does not step it up and down the ladder; see
-    /// [`field::auto_scale`].
+    /// [`distortion_field::auto_scale`].
     pub fit: f32,
 }
 
@@ -204,10 +204,10 @@ pub(crate) struct Arrow {
     pub reference: [f64; 2],
     /// The model's pixel, and the grid node itself — the arrow's tail. The tail
     /// is the real pixel because the field is drawn on the real image; see
-    /// [`mod@field`].
+    /// [`mod@distortion_field`].
     pub pixel: [f64; 2],
     /// Whether the sampled ray is inside [`CameraLayer::limit_deg`], and so
-    /// whether this node is a measurement at all. See [`mod@field`].
+    /// whether this node is a measurement at all. See [`mod@distortion_field`].
     pub trusted: bool,
 }
 
@@ -310,9 +310,10 @@ impl super::ImageDetail {
         // measurement sitting in it. Both are still beneath the features.
         let mut lines = legend_lines(settings);
         if settings.distortion && !layer.arrows.is_empty() {
-            layer.auto_scale = field::auto_scale(layer.max_px, layer.cell_px(camera), view.fit);
+            layer.auto_scale =
+                distortion_field::auto_scale(layer.max_px, layer.cell_px(camera), view.fit);
             let scale = settings.distortion_scale.unwrap_or(layer.auto_scale);
-            lines.extend(field::draw(painter, layer, view, panel, scale));
+            lines.extend(distortion_field::draw(painter, layer, view, panel, scale));
         }
 
         draw_centre_offset(painter, camera, view, panel);

@@ -369,12 +369,12 @@ fn the_auto_scale_is_fitted_to_the_lens_and_not_to_the_fold() {
     // does.
     let fit = 0.3_f32;
 
-    let fitted_to_the_lens = super::field::auto_scale(layer.max_px, cell, fit);
+    let fitted_to_the_lens = super::distortion_field::auto_scale(layer.max_px, cell, fit);
     let unfiltered = sfmtool_core::camera::report::distortion_field(&camera, 16, 16)
         .iter()
         .map(|s| (s.pixel[0] - s.reference[0]).hypot(s.pixel[1] - s.reference[1]))
         .fold(0.0_f64, f64::max);
-    let fitted_to_the_fold = super::field::auto_scale(unfiltered, cell, fit);
+    let fitted_to_the_fold = super::distortion_field::auto_scale(unfiltered, cell, fit);
 
     assert_eq!(
         fitted_to_the_fold, 1.0,
@@ -395,7 +395,7 @@ fn no_arrow_outgrows_its_own_grid_cell() {
         let camera = simple_radial_camera();
         let layer = CameraLayer::compute(&camera, cols);
         let cell = f64::from(camera.width) / cols as f64;
-        let scale = super::field::auto_scale(layer.max_px, cell, 1.4);
+        let scale = super::distortion_field::auto_scale(layer.max_px, cell, 1.4);
         assert!(
             f64::from(scale) * layer.max_px <= cell || scale == 1.0,
             "at {cols} across, {scale} times {:.2} px exceeds the {cell:.1} px cell",
@@ -411,10 +411,10 @@ fn the_auto_scale_does_not_move_when_the_panel_zooms() {
     let camera = simple_radial_camera();
     let layer = CameraLayer::compute(&camera, 16);
     let cell = f64::from(camera.width) / 16.0;
-    let at_fit = super::field::auto_scale(layer.max_px, cell, 1.4);
+    let at_fit = super::distortion_field::auto_scale(layer.max_px, cell, 1.4);
     for zoom in [2.0, 8.0, 32.0] {
         assert_eq!(
-            super::field::auto_scale(layer.max_px, cell, 1.4),
+            super::distortion_field::auto_scale(layer.max_px, cell, 1.4),
             at_fit,
             "the scale is a function of the fit, not of the {zoom}× zoom"
         );

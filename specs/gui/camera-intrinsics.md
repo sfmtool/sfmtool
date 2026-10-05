@@ -496,7 +496,7 @@ pub zoom_to_camera: Option<CameraRef>,
 
 The layer is
 [`image_detail/intrinsics/`](../../crates/sfm-explorer/src/image_detail/intrinsics/mod.rs),
-split into `controls`, `axes`, `field` and `hover` under its `mod.rs`.
+split into `controls`, `axes`, `distortion_field` and `hover` under its `mod.rs`.
 
 The intrinsics overlay is an **independent layer**, not an `OverlayMode`
 variant. `OverlayMode` stays exactly as it is, with its seven mutually exclusive
