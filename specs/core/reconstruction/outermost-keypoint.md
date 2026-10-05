@@ -131,4 +131,4 @@ files (not asked to read, or moved away) nothing is detected; inline keypoints
 are observed without reading a file; a camera past the table is ignored. The
 switch and the bundle adjustment test their report entries in their own suites,
 and the bindings in
-`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`.
+`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`.

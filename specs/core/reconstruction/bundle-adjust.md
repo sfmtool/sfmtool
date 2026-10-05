@@ -518,7 +518,7 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
 - A patch frame scaling by the same ratio its placement distance did.
 - Every refusal, by its own variant.
 
-Bindings (`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`): the
+Bindings (`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`): the
 call's shape over a real reconstruction -- the poses moving, the residual median
 not getting worse, the report's populations and its per-camera entries, the value
 that came back being a new base with no overlay, and the object it came from

@@ -191,7 +191,7 @@ relative scale between neighbouring edges) or refuse it.
 The Rust tests are in
 [baseline_direction/tests.rs](../../../crates/sfmtool-core/src/geometry/baseline_direction/tests.rs)
 and the binding tests in
-[test_baseline_direction_rust_bindings.py](../../../tests/rust_bindings/test_baseline_direction_rust_bindings.py).
+[test_baseline_direction_rust_bindings.py](../../../tests/rust_bindings/geometry/test_baseline_direction_rust_bindings.py).
 They check that the direction matches synthetic centres, that the sign follows
 cheirality, that rows inside the bound are dropped, that an edge without
 parallax states nothing, that a whole graph is one call, that the output is

@@ -249,7 +249,7 @@ Core (`sfmtool-core`, headless): the four ways a track is settled, the frame
 rescale, the report and every refusal. See
 [`../../core/reconstruction/move-camera.md`](../../core/reconstruction/move-camera.md).
 
-Bindings (`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`): the
+Bindings (`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`): the
 call's shape over a real reconstruction, and the refusals.
 
 Explorer (`sfm-explorer` lib tests, headless):

@@ -411,7 +411,7 @@ are not row for row with the keypoints are refused. The constellation, over a
 to where the point projects in each other image and meets at the point, adds
 one candidate per keypoint queried from with `Keypoints`, and finds nothing
 under a bar no image reaches.
-[`tests/rust_bindings/test_nearby_sources_rust_bindings.py`](../../../tests/rust_bindings/test_nearby_sources_rust_bindings.py)
+[`tests/rust_bindings/bench/test_nearby_sources_rust_bindings.py`](../../../tests/rust_bindings/bench/test_nearby_sources_rust_bindings.py)
 checks the bindings on the seoul_bull fixture with its longest track held out.
 Parity with the harness's Python is measured by running the harness with
 `sources_impl=rust` and `sources_impl=python`.

@@ -211,7 +211,7 @@ Core (`sfmtool-core`, headless): the convergence, the write-back, the deletions
 and every refusal. See
 [`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md).
 
-Bindings (`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`): the
+Bindings (`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`): the
 call's shape over a real reconstruction, and the refusals.
 
 Explorer (`sfm-explorer` lib tests, headless):

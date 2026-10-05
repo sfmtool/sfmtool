@@ -304,7 +304,7 @@ deleted image discarded and named in the report, an empty track and a track
 in earlier images kept as the same `Arc`, every kept item keeping its ID, the
 dropped count and the per-item observation map, and a delete no item reaches
 changing nothing.
-[tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
+[tests/rust_bindings/bench/test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 covers the same through the bindings, `bench.id` (an `int`, kept by a rename,
 `None` for an unknown label), a discard taking off only its item, and the
 refusal of a label that names nothing, and that a step leaves the Python object it was called

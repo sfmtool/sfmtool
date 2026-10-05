@@ -595,7 +595,7 @@ permissive 0.85 gate, which then trips the shift gate instead.
 `consistency/tests.rs` covers the residual fit (oracle cameras fit exactly,
 absolute shapes reproduce the relative-warp residuals, a contaminated member
 scores highest, non-participants NaN, runs deterministic).
-`tests/rust_bindings/test_cluster_patches_rust_bindings.py` pins the dict schema,
+`tests/rust_bindings/matching/test_cluster_patches_rust_bindings.py` pins the dict schema,
 dtypes, progress ticks and every `ValueError` path.
 `tests/patch/test_cluster_patches.py` drives the command over the
 `isolated_seoul_bull_17_images` fixture through the real pipeline

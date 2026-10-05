@@ -421,7 +421,7 @@ runs; and the returned track carries a bitmap on the reconstruction's own
 bitmap grid, with the colour at its centre, which fusing again does not move.
 The arithmetic (the weighted affine, depth modes, the median) is tested
 directly.
-[`test_track_at_pixel_rust_bindings.py`](../../../tests/rust_bindings/test_track_at_pixel_rust_bindings.py)
+[`test_track_at_pixel_rust_bindings.py`](../../../tests/rust_bindings/bench/test_track_at_pixel_rust_bindings.py)
 runs the
 binding on the seoul_bull capture. The harness run over every point of seoul_bull
 is the test of fidelity to the Python cascade.

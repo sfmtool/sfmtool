@@ -314,7 +314,7 @@ numbers; best-three, prominence and average linkage on small cases; and a
 reading whose sightings are within a pixel of a kept one's, in the same images,
 dropped as repeating it, where one a pixel and a half off or seen by one
 image fewer is kept.
-[`tests/rust_bindings/test_far_field_sweep_rust_bindings.py`](../../../tests/rust_bindings/test_far_field_sweep_rust_bindings.py)
+[`tests/rust_bindings/bench/test_far_field_sweep_rust_bindings.py`](../../../tests/rust_bindings/bench/test_far_field_sweep_rust_bindings.py)
 checks the binding's keys, that an image list and a pyramid set read alike,
 the overrides and the refusals. Parity with the harness's Python
 implementation is measured by running the harness with `ff_impl=rust` and

@@ -336,6 +336,6 @@ the refusal of both COLMAP export paths in
 [colmap_io/tests.rs](../../crates/sfmtool-colmap/src/colmap_io/tests.rs), and
 the Python surface, including the models' absence from `CAMERA_MODEL_NAMES`,
 in
-[test_sfmtool_fisheye_rust_bindings.py](../../tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py)
+[test_sfmtool_fisheye_rust_bindings.py](../../tests/rust_bindings/geometry/test_sfmtool_fisheye_rust_bindings.py)
 and
-[test_sfmtool_pinhole_rust_bindings.py](../../tests/rust_bindings/test_sfmtool_pinhole_rust_bindings.py).
+[test_sfmtool_pinhole_rust_bindings.py](../../tests/rust_bindings/geometry/test_sfmtool_pinhole_rust_bindings.py).

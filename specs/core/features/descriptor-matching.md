@@ -315,7 +315,7 @@ sizes, [`tests.rs`](../../../crates/sfmtool-core/src/features/feature_match/test
 The Python side is
 [`tests/matching/test_sweep_matching.py`](../../../tests/matching/test_sweep_matching.py)
 and
-[`tests/rust_bindings/test_descriptor_rust_bindings.py`](../../../tests/rust_bindings/test_descriptor_rust_bindings.py).
+[`tests/rust_bindings/matching/test_descriptor_rust_bindings.py`](../../../tests/rust_bindings/matching/test_descriptor_rust_bindings.py).
 
 ## Non-goals
 

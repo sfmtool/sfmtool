@@ -280,7 +280,7 @@ focal_from_fundamental(
   down to 0.2 recover the generating epipolar geometry (Sampson residuals
   of the true inliers within tolerance); below `min_inliers` support the
   estimator returns `None`. The 0.2 end of that sweep runs in
-  `tests/rust_bindings/test_epipolar_estimation_rust_bindings.py`, against
+  `tests/rust_bindings/geometry/test_epipolar_estimation_rust_bindings.py`, against
   the release-built extension, because `w⁷` sampling needs ~5×10⁵ trials
   to reach 0.999 confidence at `w = 0.2`; the in-crate sweep in
   `epipolar_estimation/tests.rs` therefore floors at 0.35, the lowest

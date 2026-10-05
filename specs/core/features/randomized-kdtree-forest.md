@@ -398,7 +398,7 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
   `distance/tests.rs` covers the kernels separately: SIMD-vs-scalar parity
   (`u8_kernel_matches_scalar`, `simd_kernels_match_scalar`), saturating
   extremes, and cutoff rounding for both scalars.
-- **PyO3 surface test** (`tests/rust_bindings/test_kdtree_forest_rust_bindings.py`) exercising
+- **PyO3 surface test** (`tests/rust_bindings/spatial/test_kdtree_forest_rust_bindings.py`) exercising
   build/query and comparing against a NumPy brute-force reference.
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/kdtree_forest.rs`): build
   time vs `T`, query throughput vs `L_max`, and end-to-end image-pair matching

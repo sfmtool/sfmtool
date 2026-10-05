@@ -341,7 +341,7 @@ observations is a duplicate of the point; a plane far past
 the cameras' spread, with no sources, gets one far-field reading that keeps
 the sweep's range, a far layer and a built track, and nothing when the sweep
 is told never to run; the refusals; and the labels' letters and forms.
-[`tests/rust_bindings/test_nearby_tracks_rust_bindings.py`](../../../tests/rust_bindings/test_nearby_tracks_rust_bindings.py)
+[`tests/rust_bindings/bench/test_nearby_tracks_rust_bindings.py`](../../../tests/rust_bindings/bench/test_nearby_tracks_rust_bindings.py)
 checks on the seoul_bull fixture that every source finds what its own binding
 finds, in order, with the range bindings' ranges and classes, the far-field
 binding's readings after them, and the depth-layers binding's layers and

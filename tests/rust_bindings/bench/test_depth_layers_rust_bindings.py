@@ -49,7 +49,7 @@ EVIDENCE_KEYS = {
 @pytest.fixture(scope="module")
 def harness():
     """The harness's anchor finder, whose Python the binding ports."""
-    path = Path(__file__).resolve().parents[2] / "scripts" / "track_at_pixel"
+    path = Path(__file__).resolve().parents[3] / "scripts" / "track_at_pixel"
     sys.path.insert(0, str(path))
     try:
         import anchors

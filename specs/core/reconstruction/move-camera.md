@@ -286,7 +286,7 @@ point's frame is rescaled by its depth ratio, the stored error is rewritten, the
 report's counts partition the observed tracks, the residual pair falls to zero
 at the truth pose, and each refusal.
 
-`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py` covers the
+`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py` covers the
 call's shape over a real reconstruction: a camera put back where it stands
 changes nothing but the value, a moved one moves its own pose and no other, and
 the two refusals.

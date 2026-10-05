@@ -2977,7 +2977,7 @@ is a number the assertions can name.
   tests the allocation the memory bounds protect: a buffer of 256 TB comes back
   as `LocalizeError::OutOfMemory` rather than aborting the process, and the
   shift grids refuse a span no machine has the memory for.
-- [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
+- [tests/rust_bindings/bench/test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
   covers the same surface through the bindings, over the 17-image seoul_bull
   solve converted to `embedded_patches`.
 

@@ -516,7 +516,7 @@ identical runs because of its multithreaded RANSAC.
 Tests: [`cluster_match/tests.rs`](../../../crates/sfmtool-core/src/features/cluster_match/tests.rs)
 (planted clusters, partition invariants, pair expansion, validation errors,
 determinism, external neighbour tables),
-[`test_cluster_match_rust_bindings.py`](../../../tests/rust_bindings/test_cluster_match_rust_bindings.py),
+[`test_cluster_match_rust_bindings.py`](../../../tests/rust_bindings/matching/test_cluster_match_rust_bindings.py),
 [`test_cluster_matching.py`](../../../tests/matching/test_cluster_matching.py).
 
 ## Cost

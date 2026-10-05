@@ -162,7 +162,7 @@ end where the widest image moves it 1 px; a sighting 3 px off widens the
 tolerance to 3.5 px; a camera with the point behind it makes the range
 `[0, ∞]`; sightings in the queried image are not checked; the camera spread
 and the two classes on small cases.
-[`tests/rust_bindings/test_distance_range_rust_bindings.py`](../../../tests/rust_bindings/test_distance_range_rust_bindings.py)
+[`tests/rust_bindings/bench/test_distance_range_rust_bindings.py`](../../../tests/rust_bindings/bench/test_distance_range_rust_bindings.py)
 checks the bindings on the seoul_bull fixture's longest track. Parity with the
 harness's Python is measured by running the harness with `range_impl=rust`
 and `range_impl=python`.

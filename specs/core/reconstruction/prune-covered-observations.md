@@ -276,7 +276,7 @@ observation's projected radius is a known multiple of its neighbour's.
 - **A point with no frame of its own** is counted degenerate and read past,
   covering nothing.
 
-`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py` holds the
+`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py` holds the
 binding over the 17-image solve converted to `embedded_patches`: the report
 accounts for every row, a prune that retires nothing hands the value back, a
 prune that bites shortens tracks while moving no point and keeping the survivors

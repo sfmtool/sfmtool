@@ -681,7 +681,7 @@ callers keep working. In views mode the per-patch view lists have no track to
 come from, so `view_sets` / `view_indices` / `select_views(candidate_views=…)`
 become required — and `candidate_views` overrides the track-derived lists in
 reconstruction mode too. Python coverage is in
-`tests/rust_bindings/test_camera_views_rust_bindings.py`.
+`tests/rust_bindings/patches/test_camera_views_rust_bindings.py`.
 
 ## Routine: project an image onto a patch
 

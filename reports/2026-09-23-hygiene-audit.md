@@ -204,6 +204,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low to decide, medium to migrate. Risk: low.
 
 **Group binding tests by domain**
+> _Status (2026-10-05): **Done** — the 66 modules moved with `git mv` into one subpackage per `sfmtool._sfmtool` submodule (`analysis`, `bench`, `flow`, `geometry`, `io`, `matching`, `patches`, `reconstruction`, `sift`, `spatial`, `spherical`); the cross-cutting `test_fortran_order_bindings.py` stays at the top; spec links and AGENTS.md updated, branch `audit-fix-20-rust-bindings-tests-dirs`._
 - Location: `tests/rust_bindings/`, now 60 direct modules and 19,714 lines.
 - Problem: The directory is still flat and groups by the language boundary, while registration tests already divide the surface into analysis, geometry, matching, reconstruction, SIFT, spatial, spherical, and flow namespaces.
 - Proposed fix: Create domain subdirectories using those registration modules as indexes.

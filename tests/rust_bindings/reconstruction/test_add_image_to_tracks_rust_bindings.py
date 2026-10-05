@@ -18,7 +18,7 @@ from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruc
 from sfmtool._workspace_image import read_workspace_image
 
 GROUND_TRUTH = (
-    Path(__file__).parents[2]
+    Path(__file__).parents[3]
     / "test-data"
     / "images"
     / "seoul_bull_sculpture"

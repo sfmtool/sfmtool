@@ -267,7 +267,7 @@ one from the NumPy stage this was lifted out of:
 - **Refusals**: disagreeing lengths, a short protection mask, an owner out of
   range, an unusable threshold, a negative reach, and a cancelled reading.
 
-`tests/rust_bindings/test_covered_by_finer_rust_bindings.py` holds the binding
+`tests/rust_bindings/analysis/test_covered_by_finer_rust_bindings.py` holds the binding
 to a brute-force NumPy transcription of the same statement -- an `O(n^2)` double
 loop per image -- over seeded random rows of a few thousand. The generated
 population is built to sit on the rule's edges: radii are exact powers of two, so

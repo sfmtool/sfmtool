@@ -473,7 +473,7 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
 `forward_fold_deg` is tested in
 [report/tests.rs](../../../crates/sfmtool-core/src/camera/report/tests.rs). The
 bindings are tested in
-`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`.
+`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`.
 
 ## Non-goals
 

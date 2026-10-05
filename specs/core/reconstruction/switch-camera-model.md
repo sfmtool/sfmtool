@@ -265,7 +265,7 @@ exact projection, plus one point 95° off the first image's axis:
   fit instead; and a domain end past 180° refused, naming the camera;
 - an empty or out-of-range camera list refused.
 
-Bindings: `tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`
+Bindings: `tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`
 (`TestSwitchCameraModel`) and `tests/xform/test_switch_camera_model.py`, which
 includes a `sift_files` value read through its `.sift` files and one refused
 without them.

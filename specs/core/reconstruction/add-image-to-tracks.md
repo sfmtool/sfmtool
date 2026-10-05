@@ -286,7 +286,7 @@ different texture is refused by every rule; a point out of frame is
 place keep one observation; the confidence column grows in lockstep; a missing
 reference image leaves that reference out; the preconditions refuse by name.
 Binding tests in
-[test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/test_add_image_to_tracks_rust_bindings.py)
+[test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/reconstruction/test_add_image_to_tracks_rust_bindings.py)
 remove one image's observations from the seoul_bull ground truth and find them
 again at its ground-truth pose, and check that a self-similarity bar refuses as
 `unlocalizable` exactly the candidates whose radius is over it. The leave-one-image-out harness in

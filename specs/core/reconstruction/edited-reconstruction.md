@@ -710,7 +710,8 @@ on which half a column lives in.
 The overlay is covered by
 `crates/sfmtool-core/src/reconstruction/edited/tests.rs`, the row map by
 `crates/sfmtool-core/src/reconstruction/edited/row_map/tests.rs`, and, from
-Python, by `tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`.
+Python, by
+`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`.
 All three build on a reconstruction carrying every optional column, so a record
 that omits or invents one is a visible failure. What they pin:
 

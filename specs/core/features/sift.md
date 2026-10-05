@@ -777,7 +777,7 @@ backend, which derives them from its `KeyPoint`s via
 - **Rust unit tests:** known-extremum toy DoG, edge-response rejection on a synthetic
   ridge, descriptor unit-norm + 0.2-clamp invariants, orientation on a synthetic
   gradient.
-- **PyO3 surface test** (`tests/rust_bindings/test_sift_extract_rust_bindings.py`) exercising the bindings and
+- **PyO3 surface test** (`tests/rust_bindings/sift/test_sift_extract_rust_bindings.py`) exercising the bindings and
   round-tripping through `sfmtool-sift-format`.
 - **Describe-at-a-detection** (Rust, and mirrored in the PyO3 surface test):
   describing every detected keypoint at its own position, shape and size returns

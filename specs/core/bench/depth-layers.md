@@ -315,7 +315,7 @@ ranges; support needs different photographs and a usable, overlapping range;
 equal near ends keep the order given; a far layer is read from infinity in; a
 clear winner is more confident than a close one, and the key and confidence
 follow their constants; and the refusals.
-[`tests/rust_bindings/test_depth_layers_rust_bindings.py`](../../../tests/rust_bindings/test_depth_layers_rust_bindings.py)
+[`tests/rust_bindings/bench/test_depth_layers_rust_bindings.py`](../../../tests/rust_bindings/bench/test_depth_layers_rust_bindings.py)
 checks the binding's support, grouping, evidence and ranking against the
 harness's own Python on the seoul_bull fixture, the evidence from reads made
 with the `read_patch_along_ray` binding at the harness's distances; its keys,

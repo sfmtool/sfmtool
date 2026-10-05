@@ -685,7 +685,7 @@ The corpus uses a wide canvas deliberately: the odds of a wrong correspondence
 landing inside an eight-pixel threshold scale with the inverse of the image area,
 and an exact inlier count is only assertable when they are negligible.
 
-[`tests/rust_bindings/test_kdf_constellation_rust_bindings.py`](../../../tests/rust_bindings/test_kdf_constellation_rust_bindings.py)
+[`tests/rust_bindings/spatial/test_kdf_constellation_rust_bindings.py`](../../../tests/rust_bindings/spatial/test_kdf_constellation_rust_bindings.py)
 extracts SIFT once from the included Seoul Bull image and indexes those
 descriptors twice, the second copy at warped positions as a second image. It
 checks the dict surface key by key, that the recovered warp is the planted one,

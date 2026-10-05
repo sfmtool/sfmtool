@@ -152,7 +152,7 @@ out-of-range index passed to `reach` (where Rust panics), and for a non-finite
 Rust tests are in
 [covisibility/tests.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/tests.rs),
 and the binding tests in
-[test_cluster_covisibility_rust_bindings.py](../../../tests/rust_bindings/test_cluster_covisibility_rust_bindings.py).
+[test_cluster_covisibility_rust_bindings.py](../../../tests/rust_bindings/matching/test_cluster_covisibility_rust_bindings.py).
 
 - Displacement: a synthetic scene with known geometry yields the expected pair
   means; results repeat for a fixed seed; the mask limits which members are
