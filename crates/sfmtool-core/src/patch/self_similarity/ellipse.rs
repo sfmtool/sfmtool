@@ -169,8 +169,8 @@ impl SelfSimilarityEllipse {
     /// new major direction: lengthening the ellipse along a direction that
     /// does not map onto its new major axis lengthens its new minor axis too.
     ///
-    /// `None` for a map that is not finite or is singular, or an ellipse with
-    /// no data.
+    /// `None` for a map that is not finite or is singular, one so large that
+    /// `L E Lᵀ` overflows, or an ellipse with no data.
     pub fn mapped(&self, map: [[f64; 2]; 2]) -> Option<SelfSimilarityEllipse> {
         let [[a, b], [c, d]] = map;
         let det = a * d - b * c;
@@ -190,6 +190,11 @@ impl SelfSimilarityEllipse {
         let xy = le[0][0] * c + le[0][1] * d;
         let yy = le[1][0] * c + le[1][1] * d;
         let matrix = [[xx, xy], [xy, yy]];
+        // A map large enough to overflow `L E Lᵀ` gives no ellipse, rather
+        // than an infinite axis, or a `NaN` that `axes_of` would read as 0.
+        if !matrix.iter().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
         let (axes, major_angle) = axes_of(matrix);
         let [major_open, minor_open] = self.axes_is_at_least;
         let keeps_major = || {
@@ -206,7 +211,10 @@ impl SelfSimilarityEllipse {
             // the grid ellipse grows along v, and bounds its minor axis.
             let n = [-w[1] / len, w[0] / len];
             let across = n[0] * n[0] * xx + 2.0 * n[0] * n[1] * xy + n[1] * n[1] * yy;
-            across.max(0.0).sqrt() <= axes[1] * (1.0 + 1e-9) + 1e-12
+            // The allowance scales with the ellipse, so the test reads the same
+            // in any unit: a relative 1e-9 of the minor axis, and 1e-12 of the
+            // major axis for a minor axis at or near 0.
+            across.max(0.0).sqrt() <= axes[1] * (1.0 + 1e-9) + 1e-12 * axes[0]
         };
         Some(SelfSimilarityEllipse {
             axes,

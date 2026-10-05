@@ -1536,6 +1536,10 @@ fn the_ellipse_maps_through_a_linear_map() {
     assert!(axis_angle_gap(rotated.major_angle, e.major_angle + turn) < 1e-9);
     assert_eq!(e.mapped([[1.0, 2.0], [0.5, 1.0]]), None);
     assert_eq!(e.mapped([[f64::NAN, 0.0], [0.0, 1.0]]), None);
+    // A finite, non-singular map whose image overflows gives none, rather
+    // than an infinite axis and a minor axis of 0 read from `inf − inf`.
+    assert_eq!(e.mapped([[1e200, 1e200], [1e-200, 0.0]]), None);
+    assert_eq!(e.mapped([[1e200, 0.0], [0.0, 1e-200]]), None);
 }
 
 /// The lower bounds carry through a map. A ridge along `x` running off the
@@ -1558,6 +1562,24 @@ fn the_lower_bounds_carry_through_a_map() {
     assert_eq!(kept.axes_is_at_least, [true, false], "{kept:?}");
     let sheared = s.ellipse.mapped([[1.0, 0.0], [0.5, 1.0]]).expect("a map");
     assert_eq!(sheared.axes_is_at_least, [true, true], "{sheared:?}");
+    // The same in a unit a trillion times smaller: the test has no absolute
+    // allowance that would pass a minor axis of 1e-13 as exact.
+    for scale in [1e-12, 1e12] {
+        let kept = s
+            .ellipse
+            .mapped([[2.0 * scale, 0.0], [0.0, 0.5 * scale]])
+            .expect("a map");
+        assert_eq!(kept.axes_is_at_least, [true, false], "{scale}: {kept:?}");
+        let sheared = s
+            .ellipse
+            .mapped([[scale, 0.0], [0.5 * scale, scale]])
+            .expect("a map");
+        assert_eq!(
+            sheared.axes_is_at_least,
+            [true, true],
+            "{scale}: {sheared:?}"
+        );
+    }
     // A minor axis at least makes both at least.
     let mut open = s.ellipse;
     open.axes_is_at_least = [false, true];
