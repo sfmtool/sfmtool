@@ -8,6 +8,12 @@ from importlib import import_module
 import click
 from click.utils import make_default_short_help
 
+# Click 8.4 and later raise `NoSuchCommand` for an unknown command, with the
+# close matches among the group's loaded commands as suggestions. Earlier
+# versions raise a plain `UsageError` and suggest nothing; `except ()` then
+# catches nothing.
+_NO_SUCH_COMMAND = getattr(click.exceptions, "NoSuchCommand", ())
+
 # The order the categories are listed in by `--help`.
 CATEGORY_ORDER = (
     "Workspace",
@@ -57,6 +63,19 @@ class CategoryGroup(click.Group):
             cmd = getattr(import_module(module), attribute)
             self.add_command(cmd, name=cmd_name)
         return cmd
+
+    def resolve_command(self, ctx, args):
+        # Click suggests close matches from `self.commands`, which holds only
+        # the commands looked up so far, so the error is raised again with the
+        # suggestions taken from every command name.
+        try:
+            return super().resolve_command(ctx, args)
+        except _NO_SUCH_COMMAND as error:
+            raise _NO_SUCH_COMMAND(
+                error.command_name,
+                possibilities=self.list_commands(ctx),
+                ctx=error.ctx,
+            ) from None
 
     def command_short_help(self, ctx, name, limit):
         """The one-line help ``--help`` lists for the command ``name``."""

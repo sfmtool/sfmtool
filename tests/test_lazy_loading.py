@@ -9,12 +9,18 @@ looked up. The checks of what gets imported run in a fresh interpreter, so this
 process's own imports do not count.
 """
 
+import ast
+import importlib
+import pkgutil
 import subprocess
 import sys
+from pathlib import Path
 
 import click
+from click.testing import CliRunner
 
 import sfmtool
+import sfmtool._commands
 from sfmtool.cli import COMMANDS, main
 
 HEAVY = ("pycolmap", "cv2", "numpy")
@@ -123,3 +129,80 @@ def test_command_table_matches_the_commands():
                 short_help, limit
             ) == command.get_short_help_str(limit), (name, limit)
     assert set(main.list_commands(ctx)) == {c[0] for c in COMMANDS} | {"version"}
+
+
+def test_type_checking_imports_match_the_lazy_names():
+    """The `if TYPE_CHECKING:` imports in `sfmtool/__init__.py`, which type
+    checkers read, name the same names from the same modules as `_LAZY_NAMES`
+    and `_LAZY_SUBPACKAGES`, which `__getattr__` reads."""
+    tree = ast.parse(Path(sfmtool.__file__).read_text(encoding="utf-8"))
+    (block,) = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "TYPE_CHECKING"
+    ]
+    imported = set()
+    for node in block.body:
+        assert isinstance(node, ast.ImportFrom), ast.dump(node)
+        for alias in node.names:
+            assert alias.asname is None, alias.name
+            imported.add((node.module, alias.name))
+    expected = {
+        (module, name)
+        for module, names in sfmtool._LAZY_NAMES.items()
+        for name in names
+    } | {("sfmtool", name) for name in sfmtool._LAZY_SUBPACKAGES}
+    assert imported == expected
+
+
+def test_every_command_module_command_has_a_row():
+    """Every Click command defined at the top level of a `sfmtool._commands`
+    module is a row of `COMMANDS` or a sub-command of one, so a new command
+    module without a row fails here rather than going missing from `sfm`."""
+    defined = {}
+    for info in pkgutil.iter_modules(sfmtool._commands.__path__):
+        module = importlib.import_module(f"sfmtool._commands.{info.name}")
+        for attribute, value in vars(module).items():
+            if (
+                isinstance(value, click.Command)
+                and getattr(value.callback, "__module__", None) == module.__name__
+            ):
+                defined[(module.__name__, attribute)] = value
+    reachable = set()
+    pending = [
+        getattr(importlib.import_module(f"sfmtool._commands.{c[2]}"), c[3])
+        for c in COMMANDS
+    ]
+    while pending:
+        command = pending.pop()
+        reachable.add(command)
+        if isinstance(command, click.Group):
+            pending.extend(command.commands.values())
+    missing = sorted(key for key, cmd in defined.items() if cmd not in reachable)
+    assert missing == []
+
+
+def test_rows_category_is_the_help_section():
+    """Each command is listed in `sfm --help` under its row's category."""
+    output = CliRunner().invoke(main, ["--help"], terminal_width=200).output
+    section = None
+    listed = {}
+    for line in output.splitlines():
+        if line.endswith(" Commands:"):
+            section = line.removesuffix(" Commands:")
+        elif section and line.startswith("  ") and line.strip():
+            listed[line.split()[0]] = section
+    assert listed == {c[0]: c[1] for c in COMMANDS} | {"version": "Other"}
+
+
+def test_unknown_command_suggests_from_every_command():
+    """The suggestion for a misspelled command comes from every command name,
+    not only the ones looked up so far."""
+    code = "from sfmtool.cli import main\nmain(['solv'], prog_name='sfm')"
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 2
+    assert "Error: No such command 'solv'. Did you mean 'solve'?" in result.stderr

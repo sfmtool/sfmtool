@@ -16,6 +16,7 @@ import importlib
 import signal
 import subprocess
 import sys
+import threading
 
 from click.testing import CliRunner
 
@@ -87,7 +88,7 @@ def test_missing_file_is_refused_before_launch(monkeypatch, tmp_path):
     assert calls == []
 
 
-def test_ctrl_c_ends_the_process_while_the_viewer_runs(monkeypatch):
+def test_default_sigint_while_viewer_runs_and_python_handler_after(monkeypatch):
     # While the viewer holds the main thread, SIGINT has its default action, and
     # Python's handler is back once the viewer returns.
     seen = []
@@ -105,6 +106,23 @@ def test_ctrl_c_ends_the_process_while_the_viewer_runs(monkeypatch):
     assert result.exit_code == 0, result.output
     assert seen == [signal.SIG_DFL]
     assert restored is signal.default_int_handler
+
+
+def test_off_the_main_thread_is_refused(monkeypatch):
+    calls = []
+    monkeypatch.setattr(explorer_module, "run_explorer", calls.append)
+    results = []
+
+    def invoke():
+        results.append(CliRunner().invoke(main, ["explorer"]))
+
+    thread = threading.Thread(target=invoke)
+    thread.start()
+    thread.join()
+    (result,) = results
+    assert result.exit_code == 1
+    assert "main thread" in result.output
+    assert calls == []
 
 
 def test_explorer_imports_no_numpy_pycolmap_or_opencv():

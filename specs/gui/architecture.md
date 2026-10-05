@@ -5,10 +5,10 @@ SfM Explorer, the sfmtool 3D viewer, is a native Rust application in the
 and draws its panels with `egui` inside the same frame, running its own event
 loop rather than eframe's. `pixi run gui` runs the crate's `sfm-explorer`
 binary; `sfm explorer` calls the viewer in its own process through
-`run_explorer` in the `sfmtool._sfmtool` extension. Both reach `sfm_explorer::run_with_args`. `lib.rs` owns the window
-and the event loop, `app.rs` runs each frame, `dock.rs` routes the panels,
-`scene_renderer/` owns the GPU passes and `state.rs` holds the application
-state. This spec records why the viewer is built on this stack, what each
+`run_explorer` in the `sfmtool._sfmtool` extension. Both reach
+`sfm_explorer::run_with_args`. `lib.rs` owns the window and the event loop,
+`app.rs` runs each frame, `dock.rs` routes the panels, `scene_renderer/` owns
+the GPU passes and `state.rs` holds the application state. This spec records why the viewer is built on this stack, what each
 module is responsible for, the order of the render passes, how it is built and
 launched, its performance targets, what differs per platform, and how it is
 tested.

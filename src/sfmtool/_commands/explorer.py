@@ -3,6 +3,7 @@
 
 import signal
 import sys
+import threading
 
 import click
 
@@ -60,6 +61,8 @@ def explorer(mcp_port, no_default_layout, sfmr_files):
     args = [] if mcp_port is None else ["--mcp", str(mcp_port)]
     if no_default_layout:
         args.append("--no-default-layout")
+    if threading.current_thread() is not threading.main_thread():
+        raise click.ClickException("The viewer must run on the process's main thread.")
     sys.exit(run_viewer([*args, *sfmr_files]))
 
 
@@ -69,7 +72,16 @@ def run_viewer(viewer_args: list[str]) -> int:
 
     ``run_explorer`` takes over the main thread for the window's event loop
     until the window closes, so this is the last thing ``sfm explorer`` does.
+    Call it on the main thread: ``winit`` creates its event loop only there,
+    and Python changes signal handlers only there.
     """
+    # The viewer writes to the process's stdout and stderr directly, not through
+    # `sys.stdout` and `sys.stderr`, so anything still buffered on the Python
+    # side is written first to keep the two in order. Either is None when the
+    # process has no console (`pythonw`).
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:
+            stream.flush()
     # Python's own SIGINT handler only sets a flag for the interpreter to act
     # on, and the interpreter does not run while the viewer holds the main
     # thread, so Ctrl+C would do nothing. Restore the default, which ends the
@@ -80,11 +92,6 @@ def run_viewer(viewer_args: list[str]) -> int:
     python_handler = signal.getsignal(signal.SIGINT)
     if python_handler is signal.default_int_handler:
         signal.signal(signal.SIGINT, signal.SIG_DFL)
-    # The viewer writes to the process's stdout and stderr directly, not through
-    # `sys.stdout` and `sys.stderr`, so anything still buffered on the Python
-    # side is written first to keep the two in order.
-    sys.stdout.flush()
-    sys.stderr.flush()
     try:
         return run_explorer(viewer_args)
     finally:

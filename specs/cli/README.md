@@ -18,15 +18,19 @@ category from that table, so `sfm --help` imports no command module, and
 OpenCV or pycolmap. The package root works the same way:
 [`sfmtool/__init__.py`](../../src/sfmtool/__init__.py) binds the extension's
 names on import, which takes about 10 ms, and the names of its Python
-submodules on first use, through a module `__getattr__`.
+submodules on first use, through a module `__getattr__`. For an unknown
+command name `CategoryGroup` suggests the close matches among every command
+name (`sfm solv` gives "Did you mean 'solve'?"), not only among the commands
+loaded so far.
 
 So a command module does no work at import time beyond defining its command,
 and `sfmtool._commands/__init__.py` imports none of them. A new command is a
 row in `COMMANDS`, with the first sentence of its docstring as the one-line
 help; [test_lazy_loading.py](../../tests/test_lazy_loading.py) checks that each
 row names a command defined where the row says, under that name, with that
-help, and that `import sfmtool` and `sfm --help` import none of numpy, OpenCV,
-pycolmap and the command modules.
+help and category, that every command defined in a `sfmtool._commands`
+module has a row, and that `import sfmtool` and `sfm --help` import none of
+numpy, OpenCV, pycolmap and the command modules.
 
 ## Workspace
 

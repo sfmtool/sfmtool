@@ -109,12 +109,17 @@ process ends when it returns:
   the process's DPI awareness. An MCP endpoint's server thread also keeps
   running after the window closes, until the process ends.
 
-The command imports nothing it does not use. `sfmtool/__init__.py` binds the
-names of its Python submodules on first use, and `sfm` imports a command's
-module only when that command runs (see
+The command imports little beyond what the viewer needs.
+`sfmtool/__init__.py` binds the names of its Python submodules on first use,
+and `sfm` imports a command's module only when that command runs (see
 [cli/README.md](../README.md) § "How `sfm` loads its commands"), so `sfm
-explorer` loads Click, the extension and `explorer.py`, and not numpy, OpenCV
-or pycolmap.
+explorer` loads Click, the extension, `cli.py` with the small modules it
+imports on every run, and `explorer.py`, and not numpy, OpenCV or pycolmap.
+
+The command refuses to run off the process's main thread, which only happens
+when it is invoked from Python code in another thread, with a Click error
+saying the viewer must run on the main thread. `winit` would panic there, and
+Python changes signal handlers only on the main thread.
 
 `pixi run gui` runs the same viewer from a source checkout through a different
 entry point: the `sfm-explorer` crate's own `sfm-explorer` binary,
@@ -168,7 +173,8 @@ without opening a window and with `run_explorer` replaced in `explorer.py`,
 that the command passes its options and files to `run_explorer` in the order
 above, passes the default port for a bare `--mcp`, refuses an out-of-range port
 and a missing file without calling it, exits with the status it returns, and
-has the default `SIGINT` handler installed while it runs. It checks in a child
+has the default `SIGINT` handler installed while it runs, and that it refuses
+to run off the main thread. It checks in a child
 interpreter that `sfm explorer --help` imports none of numpy, OpenCV and
 pycolmap. It also calls the real `run_explorer` in the test process with
 `--help`, an unknown option and `--mcp 70000`, and checks that it returns 0, 2
