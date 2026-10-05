@@ -154,7 +154,9 @@ Do not open pull requests unless the user asks.
 > (`pixi run test -- tests/test_spec_links.py`) when specs or source citations
 > change; `pixi run fmt && pixi run check` plus the relevant tests for Python;
 > `pixi run cargo fmt --all`, the relevant `pixi run cargo test -p <crate>`,
-> `pixi run cargo clippy -p <crate> --all-targets` and `pixi run doc` for Rust;
+> `pixi run cargo clippy -p <crate> --all-targets` (add
+> `--features sfm-explorer/ui-tests` for `sfm-explorer`, or its `ui_basic`
+> tests are skipped) and `pixi run doc` for Rust;
 > `pixi run maturin develop --release` first when Rust changes and Python tests
 > need it. Leave no background processes running.
 >
