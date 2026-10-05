@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The command line:
-//! `sfm-explorer [--mcp [PORT]] [--no-default-layout] [--demo] [path.sfmr ...]`.
+//! `[--mcp [PORT]] [--no-default-layout] [--demo] [path.sfmr ...]`, after the
+//! program name, which differs between the `sfm-explorer` binary and
+//! `python -m sfmtool._explorer` and so is not named in the help or errors.
 //!
 //! Hand-rolled rather than `clap`, because there are three flags and a list of
-//! paths. A dozen lines keeps the binary's dependency tree as it was; reach for
+//! paths. A dozen lines keeps the viewer's dependency tree as it was; reach for
 //! an argument parser if this grows options that take values, not before.
 
 use std::path::PathBuf;
@@ -39,10 +41,10 @@ pub(crate) struct Args {
 
 /// What `--help` prints.
 pub(crate) const USAGE: &str = "\
-sfm-explorer — the SfM Tool 3D reconstruction viewer
+SfM Explorer — the SfM Tool 3D reconstruction viewer
 
 USAGE:
-    sfm-explorer [OPTIONS] [FILE.sfmr ...]
+    [OPTIONS] [FILE.sfmr ...]
 
 Every file given is loaded as its own node in the scene graph, so several
 reconstructions can be compared side by side in one 3D space.
@@ -94,7 +96,7 @@ pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, Stri
                     args.mcp_port = Some(port);
                 } else if other.starts_with('-') && other != "-" {
                     return Err(format!(
-                        "sfm-explorer has no option {other:?}. Run --help for what it takes."
+                        "SfM Explorer has no option {other:?}. Run --help for what it takes."
                     ));
                 } else {
                     args.paths.push(PathBuf::from(other));

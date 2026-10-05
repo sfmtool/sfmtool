@@ -138,11 +138,13 @@ pub fn run() {
 /// `sfm explorer` calls in a child Python process.
 ///
 /// **Call it only in a process that exists to run the viewer, and only on that
-/// process's main thread.** It ends the process with `std::process::exit` on an
-/// option it does not recognize (status 2), on `--mcp` in a build without the
-/// `mcp` feature (status 2), and when the MCP endpoint cannot bind its port
-/// (status 1). It initializes the global `env_logger` logger and, on Windows,
-/// sets the process's DPI awareness, so it can run once per process. The
+/// process's main thread.** It ends the process with `std::process::exit` with
+/// status 2 when the command line does not parse (an unknown option, or
+/// `--mcp=` followed by something that is not a port number) or asks for
+/// `--mcp` in a build without the `mcp` feature, and with status 1 when the MCP
+/// endpoint cannot bind its port. It initializes the global `env_logger` logger
+/// and, on Windows, sets the process's DPI awareness, so it can run only once
+/// per process. The
 /// `winit` event loop it creates must be created on the main thread on macOS,
 /// and `winit` refuses to create a second event loop in one process.
 pub fn run_with_args(args: impl IntoIterator<Item = String>) {
