@@ -115,7 +115,8 @@ empty-handed". Name the thing and say what it does.
   (the other subpackages have none). Look for `test_*_rust_bindings.py` modules
   that exercise the PyO3 surface. `tests/rust_bindings/` holds one subpackage
   per `sfmtool._sfmtool` submodule (`analysis/`, `bench/`, `geometry/`, …),
-  with that submodule's `test_*_registration.py` where it has one; a test that
+  with that submodule's `test_*_registration.py` where it has one (`patches`
+  shares `reconstruction/test_reconstruction_patches_registration.py`); a test that
   spans several submodules goes under the one its main subject is registered
   in, and the cross-cutting `test_fortran_order_bindings.py` stays at the top.
 - `specs/` — design specs, indexed by `specs/README.md`. Read the relevant file
