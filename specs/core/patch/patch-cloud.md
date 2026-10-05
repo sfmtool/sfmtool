@@ -466,16 +466,17 @@ keypoint scale `σ_i` in place of `radius_px`.
 
 All three of `min_pixel_scale`, `pixel_radius_to_world` and
 `pixel_radius_to_angle` are `CameraIntrinsics` methods living in
-`camera/distortion/projection.rs`, and the cloud builder reaches for them there rather than
-carrying a closed form of its own: `build_patch_cloud` calls the first pair for
-finite sizes, `push_infinity_patches` the angular one, and both `PixelRadius` and
-`FeatureSize` route through the same code. That is why the internal `PatchScene`
-carries a whole `CameraIntrinsics` per image and never a bare focal — a focal
-alone cannot say how a lens magnifies, so a family flag beside it would only
-approximate what the model already knows. The two applied rules are also exposed
-to Python as `CameraIntrinsics.pixel_radius_to_world_batch` /
-`.pixel_radius_to_angle_batch`, so a caller outside the patch cloud that needs
-this sizing gets the camera's own implementation.
+`camera/distortion/projection.rs`, and the cloud builder reaches for them there
+rather than carrying a closed form of its own: `build_patch_cloud` calls the
+first pair for finite sizes, `push_infinity_patches` the angular one, and both
+`PixelRadius` and `FeatureSize` route through the same code. That is why the
+internal `PatchScene` carries a whole `CameraIntrinsics` per image and never a
+bare focal — a focal alone cannot say how a lens magnifies, so a family flag
+beside it would only approximate what the model already knows. The two applied
+rules are also exposed to Python as
+`CameraIntrinsics.pixel_radius_to_world_batch` / `.pixel_radius_to_angle_batch`,
+so a caller outside the patch cloud that needs this sizing gets the camera's own
+implementation.
 
 **Points at infinity across patch operations.** `from_reconstruction` builds the
 tangent-sphere frame for points at infinity when asked
