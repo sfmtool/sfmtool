@@ -530,10 +530,12 @@ fn set_view_schema() -> Value {
                             .collect::<Vec<_>>(),
                         "description":
                             "The unit the distances are in. Omitted, they are in the view's \
-                             own unit, the view block's world_space_unit, which is null for \
+                             own unit, the view block's world_space_unit: the selected \
+                             reconstruction's unit as its display transform draws it, null for \
                              scene units. Given, they are converted to the view's unit, which \
-                             must then be a physical one: a unit on a view in scene units is \
-                             refused.",
+                             must then be a physical one: a unit on a view in scene units (no \
+                             selection, a selection with no unit, or a display scale between \
+                             the units) is refused.",
                     },
                 },
                 "required": [],

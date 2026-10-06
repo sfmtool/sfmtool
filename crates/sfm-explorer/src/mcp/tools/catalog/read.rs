@@ -15,8 +15,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           reconstruction carries the world_space_unit its file declares, and \
                           the view carries the unit its positions and distances are in; either \
                           is null for scene units, a length of whatever size the solve gave it. \
-                          The view has a unit only when every loaded reconstruction declares \
-                          one and their display transforms draw them all at the same scale. \
+                          The view's unit is the selected reconstruction's, as its display \
+                          transform draws it: null with no selection, for a selection that \
+                          declares none, or for a display scale that lands between the units. \
                           Counts only: \
                           no tool here returns point arrays or track tables in bulk, so read the \
                           .sfmr file itself (or `sfm inspect`) for data and ask the viewer for \

@@ -790,83 +790,131 @@ fn get_scene_reports_the_world_space_unit() {
     assert_eq!(scene["view"]["world_space_unit"], Value::Null);
 }
 
-/// The view's world is shared, and each reconstruction is drawn in it at its
-/// display transform's scale. The world has a unit only when every
-/// reconstruction gives one world length the same physical size: one in `m`
-/// and one in `mm` drawn at 0.001 agree on metres, while a display scale that
-/// stretches the only reconstruction leaves the world in scene units.
-#[test]
-fn the_view_has_a_unit_only_where_every_reconstruction_agrees_on_it() {
-    let rescale = |state: &mut AppState, viewer: &mut Viewer3D, label: &str, scale: f64| {
-        call(
-            state,
-            viewer,
-            "set_reconstruction_transform",
-            json!({
-                "reconstruction_label": label,
-                "transform": {
-                    "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
-                    "translation": [0.0, 0.0, 0.0],
-                    "scale": scale,
-                },
-            }),
-        );
-    };
-    let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
-    rescale(&mut state, &mut viewer, "metric", 2.0);
-    let scene = ok(&mut state, &mut viewer, Command::GetScene);
-    assert_eq!(scene["scene"][0]["world_space_unit"], "m");
-    assert_eq!(
-        scene["view"]["world_space_unit"],
-        Value::Null,
-        "m drawn at 2"
+/// Set `label`'s display transform to a bare scale.
+fn rescale(state: &mut AppState, viewer: &mut Viewer3D, label: &str, scale: f64) {
+    call(
+        state,
+        viewer,
+        "set_reconstruction_transform",
+        json!({
+            "reconstruction_label": label,
+            "transform": {
+                "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "translation": [0.0, 0.0, 0.0],
+                "scale": scale,
+            },
+        }),
     );
-
-    let mut millimetres = recon(8, "N");
-    millimetres.metadata.world_space_unit = Some("mm".to_string());
-    state.append_node(SceneNode::from_path(
-        std::path::Path::new("/runs/fine.sfmr"),
-        millimetres,
-    ));
-    rescale(&mut state, &mut viewer, "metric", 1.0);
-    let scene = ok(&mut state, &mut viewer, Command::GetScene);
-    assert_eq!(
-        scene["view"]["world_space_unit"],
-        Value::Null,
-        "m beside mm"
-    );
-    rescale(&mut state, &mut viewer, "fine", 0.001);
-    let scene = ok(&mut state, &mut viewer, Command::GetScene);
-    assert_eq!(scene["view"]["world_space_unit"], "m", "mm drawn at 0.001");
 }
 
-/// A distance in another physical unit is converted to the view's: ten feet in
-/// a scene in metres is 3.048 m.
+/// A second reconstruction, `fine`, in `unit`, beside `metric`, with `metric`
+/// selected again afterwards.
+fn add_fine(state: &mut AppState, unit: Option<&str>) {
+    let mut reconstruction = recon(8, "N");
+    reconstruction.metadata.world_space_unit = unit.map(str::to_string);
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/fine.sfmr"),
+        reconstruction,
+    ));
+    let metric = state.scene[0].id;
+    state.select_recon(metric);
+}
+
+/// The view's unit is the selected reconstruction's: selecting another
+/// reconstruction changes it, and with no selection it is scene units.
 #[test]
-fn a_move_in_feet_is_converted_to_the_view_in_metres() {
+fn the_view_takes_the_selected_reconstructions_unit() {
     let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
-    a_level_view(&mut state, &mut viewer);
-    let after = call(
+    add_fine(&mut state, None);
+    let view_unit = |state: &mut AppState, viewer: &mut Viewer3D| {
+        ok(state, viewer, Command::GetScene)["view"]["world_space_unit"].clone()
+    };
+    assert_eq!(view_unit(&mut state, &mut viewer), "m", "metric selected");
+
+    let fine = state.scene[1].id;
+    state.select_recon(fine);
+    assert_eq!(
+        view_unit(&mut state, &mut viewer),
+        Value::Null,
+        "fine, with no unit, selected"
+    );
+
+    state.selected_recon = None;
+    assert_eq!(
+        view_unit(&mut state, &mut viewer),
+        Value::Null,
+        "nothing selected"
+    );
+}
+
+/// The selected reconstruction is drawn at its display transform's scale, so
+/// one length of the view is `metres(unit) / scale`: a scale that lands on
+/// another unit names it (`mm` drawn at 0.001 is `m`), and one that lands
+/// between the units is scene units.
+#[test]
+fn a_display_scale_carries_the_selections_unit_or_leaves_scene_units() {
+    let (mut state, mut viewer) = one_reconstruction_in(Some("mm"));
+    rescale(&mut state, &mut viewer, "metric", 0.001);
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["scene"][0]["world_space_unit"], "mm");
+    assert_eq!(scene["view"]["world_space_unit"], "m", "mm drawn at 0.001");
+
+    rescale(&mut state, &mut viewer, "metric", 2.0);
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(
+        scene["view"]["world_space_unit"],
+        Value::Null,
+        "mm drawn at 2"
+    );
+    let error = refused_call(
         &mut state,
         &mut viewer,
         "set_view",
-        json!({ "move": { "forward": 10.0, "up": -1.0, "unit": "ft" } }),
-    )["view"]
-        .clone();
+        json!({ "move": { "forward": 1.0, "unit": "m" } }),
+    );
+    assert!(
+        error.0.contains(
+            "the selected reconstruction, metric, is in mm but drawn at a display scale of 2, \
+             which makes one length of the view 0.0005 m"
+        ),
+        "{error}"
+    );
+}
+
+/// A distance in another physical unit is converted to the selection's: ten
+/// feet with a reconstruction in metres selected is 3.048 m, while the same
+/// call with a reconstruction in feet selected moves ten of its units.
+#[test]
+fn a_move_in_feet_is_converted_to_the_selections_unit() {
+    let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
+    add_fine(&mut state, Some("ft"));
+    a_level_view(&mut state, &mut viewer);
+    let feet = json!({ "move": { "forward": 10.0, "up": -1.0, "unit": "ft" } });
+    let after = call(&mut state, &mut viewer, "set_view", feet.clone())["view"].clone();
     assert_close(
         vector_of(&after["position"]),
         [0.0, -5.0 + 3.048, 1.0 - 0.3048],
-        "ten feet forward and one down",
+        "ten feet forward and one down, in metres",
     );
     assert_eq!(
         last_log_text(&state).as_deref(),
         Some("Moved 10 ft forward and 1 ft down")
     );
+
+    let fine = state.scene[1].id;
+    state.select_recon(fine);
+    a_level_view(&mut state, &mut viewer);
+    let after = call(&mut state, &mut viewer, "set_view", feet)["view"].clone();
+    assert_close(
+        vector_of(&after["position"]),
+        [0.0, 5.0, 0.0],
+        "ten feet forward and one down, in feet",
+    );
 }
 
 /// A physical unit on a view in scene units has nothing to convert to, so it
-/// is refused before anything moves, naming why the view has no unit and the
-/// two ways forward.
+/// is refused before anything moves, naming the selected reconstruction and
+/// the three ways forward.
 #[test]
 fn a_physical_unit_on_a_view_in_scene_units_is_refused() {
     let (mut state, mut viewer) = one_reconstruction_in(None);
@@ -880,9 +928,10 @@ fn a_physical_unit_on_a_view_in_scene_units_is_refused() {
     assert_eq!(
         error.0,
         "move.unit \"m\" needs the view to be in a physical unit, and it is in scene units: \
-         metric declares no world_space_unit, so there is nothing to convert m to. Send the \
-         distances without unit, in scene units, or give the reconstruction a physical unit \
-         first with sfm xform --scale-by-measurements."
+         the selected reconstruction, metric, declares no world_space_unit, so there is \
+         nothing to convert m to. Select a reconstruction that declares a unit, send the \
+         distances without unit (in scene units), or give metric a physical unit with sfm \
+         xform --scale-by-measurements."
     );
     let after = ok(&mut state, &mut viewer, Command::GetScene)["view"].clone();
     assert_eq!(after["position"], before["position"]);
@@ -900,5 +949,27 @@ fn a_physical_unit_on_a_view_in_scene_units_is_refused() {
         vector_of(&after["position"]),
         [0.0, -3.0, 1.0],
         "two scene units forward",
+    );
+}
+
+/// With nothing selected there is no unit to convert to, even where a loaded
+/// reconstruction declares one, and the refusal says so.
+#[test]
+fn a_physical_unit_with_no_selection_is_refused() {
+    let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
+    state.selected_recon = None;
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "move": { "forward": 2.0, "unit": "m" } }),
+    );
+    assert_eq!(
+        error.0,
+        "move.unit \"m\" needs the view to be in a physical unit, and it is in scene units: \
+         no reconstruction is selected, so there is nothing to convert m to. Select a \
+         reconstruction that declares a unit, send the distances without unit (in scene \
+         units), or give the reconstruction a physical unit with sfm xform \
+         --scale-by-measurements."
     );
 }

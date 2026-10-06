@@ -381,12 +381,16 @@ fn move_unit(state: &AppState, movement: &Movement) -> Result<(f64, String), Too
             };
             Ok((metres(unit) / metres(view), unit.to_string()))
         }
-        (Some(unit), Err(reason)) => Err(ToolError::new(format!(
-            "move.unit {unit:?} needs the view to be in a physical unit, and it is in scene \
-             units: {reason}, so there is nothing to convert {unit} to. Send the distances \
-             without unit, in scene units, or give the reconstruction a physical unit first \
-             with sfm xform --scale-by-measurements."
-        ))),
+        (Some(unit), Err(render::NoViewUnit { reason, label })) => {
+            let which = label.unwrap_or_else(|| "the reconstruction".to_string());
+            Err(ToolError::new(format!(
+                "move.unit {unit:?} needs the view to be in a physical unit, and it is in \
+                 scene units: {reason}, so there is nothing to convert {unit} to. Select a \
+                 reconstruction that declares a unit, send the distances without unit (in \
+                 scene units), or give {which} a physical unit with sfm xform \
+                 --scale-by-measurements."
+            )))
+        }
     }
 }
 

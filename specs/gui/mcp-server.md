@@ -1277,21 +1277,28 @@ and not camera state: it is read from the scene
 and is `null` for scene units, as the self-similarity readings on the bench
 wire report theirs ([GLOSSARY](../GLOSSARY.md), **world-space unit**).
 
-The viewport's world is shared by every loaded reconstruction, and each is drawn
-in it through its display transform, a similarity whose scale `s` stretches
-every length. So according to a reconstruction that declares unit `U`, one
-length of the world is `metres(U) / s` metres. The world has a unit when every
-loaded reconstruction declares one, they all agree on that length, and the
-length is one of the format's five units; that unit is the answer. Two
-reconstructions in `m` drawn at scale 1 put the world in `m`, and so do one in
-`m` and one in `mm` drawn at 0.001. A reconstruction that declares no unit, two
-that disagree (`m` beside `mm`, both at scale 1), or a scale that lands between
-the units (`m` drawn at 2) leave the world in scene units, as does an empty
-scene. Hidden reconstructions count, since hiding one does not change the frame
-the view is in. The agreement is checked to a relative tolerance of 1e-9, so a
-scale that is a product of other scales still agrees with the unit it was
-meant to land on. The factors come from `sfmtool_core::WORLD_SPACE_UNITS`, the
-format's table of the five units and their lengths in metres.
+**The view's unit is the selected reconstruction's**, as that reconstruction
+is drawn. The viewport's world is shared by every loaded reconstruction, and
+each is drawn in it through its display transform, a similarity whose scale
+`s` stretches every length. So for a selected reconstruction that declares unit
+`U`, one length of the view is `metres(U) / s` metres, and when that length is
+one of the format's five units, that unit is the answer: at `s = 1` it is `U`
+itself, and a scale that maps one unit onto another names the unit it lands on
+(`mm` drawn at 0.001 reports `m`). The comparison allows a relative 1e-9, for
+the rounding a scale such as 0.001 carries. The factors come from
+`sfmtool_core::WORLD_SPACE_UNITS`, the format's table of the five units and
+their lengths in metres. Selecting another reconstruction changes the view's
+unit, as it changes what the other reads are about; the other reconstructions,
+which may be in other units or none, do not enter it.
+
+The view is in scene units, `null`, when nothing is selected, when the
+selected reconstruction declares no unit, and when its display scale lands
+between the units (`m` drawn at 2 makes one length of the view 0.5 m). The last
+case is reported as `null` rather than as a conversion factor because
+`world_space_unit` is a unit name, or `null`, everywhere on this surface: an
+agent reading it never has to tell a name from a number, and the one place the
+number matters, a `move` with a stated `unit`, is refused with a message that
+gives the scale and the length it makes (§ "The relative forms").
 
 ### `set_view`
 
@@ -1517,7 +1524,12 @@ converted to the view's unit through `sfmtool_core::WORLD_SPACE_UNITS`, so
 view in scene units has nothing to convert to and is refused, with the reason
 the view has no unit:
 
-> `move.unit "m" needs the view to be in a physical unit, and it is in scene units: bull declares no world_space_unit, so there is nothing to convert m to. Send the distances without unit, in scene units, or give the reconstruction a physical unit first with sfm xform --scale-by-measurements.`
+> `move.unit "m" needs the view to be in a physical unit, and it is in scene units: the selected reconstruction, bull, declares no world_space_unit, so there is nothing to convert m to. Select a reconstruction that declares a unit, send the distances without unit (in scene units), or give bull a physical unit with sfm xform --scale-by-measurements.`
+
+The reason in the middle is one of three: `no reconstruction is selected` (and
+the fix then says "the reconstruction"), the selected reconstruction declares
+no `world_space_unit`, or it `is in mm but drawn at a display scale of 2, which
+makes one length of the view 0.0005 m, none of mm, cm, m, in, ft`.
 
 A name outside the five is refused at the parse (`set_view.move wants unit to
 be one of mm, cm, m, in, ft — got "yd". Omit it to move in the view's own
@@ -4432,7 +4444,7 @@ shaped to avoid.
 ## Testing
 
 `crates/sfm-explorer/src/mcp/tests.rs` supplies shared headless fixtures; its
-`tests/` children group the 325 checks by read, display, view, write, log,
+`tests/` children group the 327 checks by read, display, view, write, log,
 layout, catalog, server, edit, bench, render, widget listing and input
 concerns. The catalog child
 keeps the exact name/classification and schema/parser fixtures together. These
@@ -4753,11 +4765,13 @@ where a test hands no host over.
   unknown unit are refused.
 - **The unit is reported and converted**: `get_scene` reports a file's
   `world_space_unit` on its node and on the view, and `null` for a file with
-  none; a display scale between the units, or `m` beside `mm`, leaves the view
-  in scene units, while `mm` drawn at 0.001 beside `m` puts it in `m`; ten feet
-  in a view in metres moves 3.048 m; and a physical unit on a view in scene
-  units is refused before anything moves, while the same distance without a
-  unit moves in scene units.
+  none; selecting another reconstruction changes the view's unit, and no
+  selection is `null`; `mm` drawn at 0.001 reports `m`, while `mm` drawn at 2
+  is `null` and a stated unit on it is refused naming the scale; ten feet moves
+  3.048 m with a reconstruction in metres selected and ten units with one in
+  feet; and a physical unit with no selection, or on a selection with no unit,
+  is refused before anything moves, while the same distance without a unit
+  moves in scene units.
 - **`animate` eases to where the instant call lands**: the reply is the end
   view while the camera still stands at the start, and landing the ease puts
   it at the reply's view; an animated look-through enters camera view when the

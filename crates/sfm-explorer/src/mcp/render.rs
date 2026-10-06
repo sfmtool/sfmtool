@@ -254,62 +254,69 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
     })
 }
 
-/// The physical unit the viewport's world is in, or why it has none, in words
-/// that follow "the view is in scene units:".
+/// Why the view is in scene units: what is wrong, and the label of the selected
+/// reconstruction it is wrong about, if there is one.
+pub(super) struct NoViewUnit {
+    /// Words that follow "the view is in scene units:".
+    pub(super) reason: String,
+    /// The selected reconstruction, for a refusal to name what to fix.
+    pub(super) label: Option<String>,
+}
+
+/// The physical unit the viewport's world is in: the **selected**
+/// reconstruction's, as that reconstruction is drawn.
 ///
-/// The viewport's world is shared: each reconstruction is drawn in it through
-/// its display transform, a similarity whose scale `s` stretches every length,
-/// so one length of the world is `metres(world_space_unit) / s` metres
-/// according to that reconstruction. The world has a unit when every loaded
-/// reconstruction declares one and they all agree on that length, and the
-/// length is one of the format's units: two reconstructions in `m` drawn at
-/// scale 1 are in `m`, and so are one in `m` and one in `mm` drawn at scale
-/// 0.001. Hidden reconstructions count, since hiding one does not change the
-/// frame the view is in. Anything else is scene units, which is also what the
-/// world is with nothing loaded.
-pub(super) fn view_world_space_unit(state: &AppState) -> Result<&'static str, String> {
-    // The same length, allowing for the rounding a product of scales picks up.
-    let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs());
-    let mut agreed: Option<(f64, &str)> = None;
-    for node in state.scene.iter() {
-        let label = node.label.as_str();
-        let Some(unit) = node.recon().metadata.world_space_unit.as_deref() else {
-            return Err(format!("{label} declares no world_space_unit"));
-        };
-        let Some(metres) = sfmtool_core::world_space_unit_in_metres(unit) else {
-            return Err(format!(
-                "{label}'s world_space_unit {unit:?} is not one of {}",
-                super::tools::world_space_unit_names()
-            ));
-        };
-        let scale = node.transform().scale;
-        if !(scale.is_finite() && scale > 0.0) {
-            return Err(format!("{label} is drawn at a scale of {scale}"));
-        }
-        let length = metres / scale;
-        match agreed {
-            None => agreed = Some((length, label)),
-            Some((first, first_label)) if !same(first, length) => {
-                return Err(format!(
-                    "{first_label} and {label} are drawn at different scales (their \
-                     world_space_unit or the scale of their display transform differs)"
-                ))
-            }
-            Some(_) => {}
-        }
-    }
-    let Some((length, label)) = agreed else {
-        return Err("no reconstruction is loaded".to_string());
+/// The viewport's world is shared, and each reconstruction is drawn in it
+/// through its display transform, a similarity whose scale `s` stretches every
+/// length. So for a selected reconstruction that declares unit `U`, one length
+/// of the world is `metres(U) / s` metres. That is the view's unit when it is
+/// one of the format's five units, which at `s = 1` it always is, and a scale
+/// that maps one unit onto another (`mm` drawn at 0.001 is `m`) names the unit
+/// it lands on. A scale that lands between the units, no selection, and a
+/// selection that declares no unit are scene units, `null` on the wire.
+///
+/// A rescaled selection is reported as `null` rather than as a factor, because
+/// the field is a unit name on every other reply of this surface and an agent
+/// reading it should not have to tell a name from a number; the refusal a
+/// physical `move.unit` gets then says what the scale is.
+pub(super) fn view_world_space_unit(state: &AppState) -> Result<&'static str, NoViewUnit> {
+    let Some(node) = state.selected_recon.and_then(|id| state.node(id)) else {
+        return Err(NoViewUnit {
+            reason: "no reconstruction is selected".to_string(),
+            label: None,
+        });
     };
+    let label = node.label.as_str();
+    let no_unit = |reason: String| NoViewUnit {
+        reason,
+        label: Some(label.to_string()),
+    };
+    let Some(unit) = node.recon().metadata.world_space_unit.as_deref() else {
+        return Err(no_unit(format!(
+            "the selected reconstruction, {label}, declares no world_space_unit"
+        )));
+    };
+    let Some(metres) = sfmtool_core::world_space_unit_in_metres(unit) else {
+        return Err(no_unit(format!(
+            "the selected reconstruction, {label}, declares world_space_unit {unit:?}, which \
+             is not one of {}",
+            super::tools::world_space_unit_names()
+        )));
+    };
+    let scale = node.transform().scale;
+    let length = metres / scale;
+    // The same length, allowing for the rounding a scale such as 0.001 picks up.
+    let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs());
     sfmtool_core::WORLD_SPACE_UNITS
         .iter()
-        .find(|&&(_, metres)| same(metres, length))
+        .find(|&&(_, metres)| length.is_finite() && same(metres, length))
         .map(|&(name, _)| name)
         .ok_or_else(|| {
-            format!(
-                "{label}'s display transform scales it to a length that is none of {}",
+            no_unit(format!(
+                "the selected reconstruction, {label}, is in {unit} but drawn at a display \
+                 scale of {scale}, which makes one length of the view {length} m, none of {}",
                 super::tools::world_space_unit_names()
-            )
+            ))
         })
 }
 
