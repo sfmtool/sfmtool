@@ -1,13 +1,19 @@
 name: Publish to PyPI
 
 # A published GitHub release uploads to PyPI. A manual run builds the same
-# files and uploads them to TestPyPI instead, to check the whole workflow,
-# upload included, before tagging a release. TestPyPI refuses a file that is
-# already there, so a manual run only uploads a version TestPyPI does not have.
+# files and keeps them as run artifacts, to check the builds before tagging a
+# release; with `upload-to-testpypi` ticked it also uploads them to TestPyPI,
+# to check the upload step too. TestPyPI refuses a file that is already there,
+# so an upload only succeeds for a version TestPyPI does not have.
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      upload-to-testpypi:
+        description: Upload the built files to TestPyPI
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -91,6 +97,7 @@ jobs:
 
   publish:
     needs: [build-linux, build-windows, build-macos, build-sdist]
+    if: github.event_name == 'release' || inputs.upload-to-testpypi
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'release' && 'pypi' || 'testpypi' }}
     permissions:
