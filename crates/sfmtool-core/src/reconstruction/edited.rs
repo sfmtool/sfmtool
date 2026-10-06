@@ -1078,7 +1078,7 @@ impl EditedReconstruction {
     /// Re-deriving them would also answer a subtly different question. It says
     /// what a *save of this value* would store, which is not the same thing
     /// after a convention upgrade, and it is the file on disk that a point id
-    /// or a lineage entry has to name.
+    /// has to name.
     ///
     /// Checking the stored hashes against the bytes is verification, and
     /// verification is [`sfmtool_sfmr_format::verify_sfmr`]'s job, asked for

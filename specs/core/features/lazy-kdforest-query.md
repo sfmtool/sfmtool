@@ -386,7 +386,7 @@ repeated patch searches to evict blocks they immediately need again. In a
 supplied 50 descriptors. With `k=32` and 512 leaf checks, the
 median time for an identical second search was 374 ms at 256 MiB, 10 ms at
 512 MiB, and 10 ms at 1 GiB. This check reads `.sift` descriptors and the
-`.kdf` index only; it loads no reconstruction or lineage. The result locates
+`.kdf` index only; it loads no reconstruction. The result locates
 the working-set knee for this file and query shape, not a universal cache
 default. Callers with a large index should compare repeated-query latency at
 several budgets before attributing that latency to forest search itself.

@@ -139,7 +139,7 @@ impl AppState {
     /// `sfm xform --minimal` writes, with the viewer as its tool.
     ///
     /// No thumbnails, no patch bitmaps (the file's own or ones the open
-    /// rendered for display), no `lineage`, an empty `workspace.absolute_path`,
+    /// rendered for display), an empty `workspace.absolute_path`,
     /// `workspace.relative_path` from `path`'s directory unless `workspace_path`
     /// states one, and `operation`
     /// `minimal` by `sfm-explorer` with empty `tool_options`

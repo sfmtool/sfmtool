@@ -7,9 +7,8 @@
 //! the file's own location ([`SfmrReconstruction::stamp_save`]), or from the
 //! path the caller states ([`SaveStamp::workspace_path`]). A **minimal**
 //! file is the smallest file that still holds the whole reconstruction: no
-//! thumbnails, no patch bitmaps, no `lineage`, no recorded
-//! `workspace.absolute_path`, and `tool_options` holding only the options of the
-//! operation that wrote it. `sfm xform --minimal` and the viewer's
+//! thumbnails, no patch bitmaps, no recorded `workspace.absolute_path`, and
+//! `tool_options` holding only the options of the operation that wrote it. `sfm xform --minimal` and the viewer's
 //! `File > Save As Minimal...` both write it through this module, so there is one
 //! definition of what a minimal file leaves out
 //! (`specs/cli/reconstruction/xform/xform-command.md` section "`--minimal`").
@@ -140,8 +139,8 @@ impl SfmrReconstruction {
     /// Clear the metadata a minimal file does not carry.
     ///
     /// Empties `workspace.absolute_path` (an empty value means none was
-    /// recorded), drops every `lineage` entry, and empties `tool_options`, which
-    /// the caller then fills with the options of the operation writing the file.
+    /// recorded) and empties `tool_options`, which the caller then fills with
+    /// the options of the operation writing the file.
     /// Everything else stays: `workspace.relative_path` and
     /// `workspace.contents` are how a reader finds the workspace and its
     /// features, and the rest is the reconstruction or a format fact.
@@ -151,7 +150,6 @@ impl SfmrReconstruction {
     pub fn clear_minimal_metadata(&mut self) {
         let meta = &mut self.metadata;
         meta.workspace.absolute_path.clear();
-        meta.lineage.clear();
         meta.tool_options.clear();
     }
 

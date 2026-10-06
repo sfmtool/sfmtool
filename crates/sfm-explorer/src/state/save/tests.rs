@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use sfmtool_core::{LineageMap, SfmrReconstruction};
+use sfmtool_core::SfmrReconstruction;
 
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::state::AppState;
@@ -120,75 +120,6 @@ fn a_save_stamps_the_provenance_it_hashed() {
     assert_eq!(metadata.operation, "edit");
     assert_eq!(metadata.tool, "sfm-explorer");
     assert_eq!(metadata.version, sfmtool_sfmr_format::SFMR_FORMAT_VERSION);
-}
-
-#[test]
-fn a_saved_file_records_no_lineage() {
-    // A save writes the rows it has and nothing about where they came from. The
-    // walk that used to compose a map per ancestor cost one pass over the whole
-    // ancestry per save, which is quadratic over a session, and it bought only
-    // an id minted in an *earlier* session: within this one the version graph
-    // already holds every map.
-    let dir = temp_dir("lineage");
-    let (mut state, id, path) = state_from_file(&dir);
-    let ancestor = state.scene[0]
-        .edited()
-        .base_content_hash()
-        .expect("hashable")
-        .content_xxh128
-        .clone();
-
-    state
-        .delete_point(PointRef::new(id, 3))
-        .expect("a live point");
-    state.save_node(id).expect("a writable path");
-
-    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
-    assert!(
-        metadata.lineage.is_empty(),
-        "a save wrote ancestry: {:?}",
-        metadata.lineage,
-    );
-    // Not even the base the session started from, which is the one entry the
-    // walk always produced.
-    assert!(!metadata.lineage.iter().any(|e| e.hash == ancestor));
-}
-
-#[test]
-fn an_id_from_a_loaded_files_lineage_still_resolves_after_a_save() {
-    // Reading lineage stays: a file written elsewhere records where an earlier
-    // content's rows went, and that record is one of the three places an id is
-    // looked up in. A save of the node does not drop it, because the version it
-    // came in on is still a version of the graph; the walk from there to the
-    // cursor is the ordinary one.
-    let dir = temp_dir("compose");
-    let (mut state, id, _) = state_from_file(&dir);
-    let grandparent = "aaaabbbbccccddddeeeeffff00001111";
-    // Row 0 of the grandparent is gone and rows 1..=64 are rows 0..=63 of the
-    // base the node holds, so grandparent row 41 is base row 40.
-    state.scene[0].recon_mut().metadata.lineage = vec![sfmtool_sfmr_format::LineageEntry {
-        hash: grandparent.to_string(),
-        kind: sfmtool_sfmr_format::LINEAGE_KIND_BASE.to_string(),
-        map: LineageMap::Monotone {
-            source_rows: 65,
-            deleted: vec![0],
-            created: vec![],
-        },
-    }];
-
-    state
-        .delete_point(PointRef::new(id, 3))
-        .expect("a live point");
-    state.save_node(id).expect("a writable path");
-
-    // The deletion moved base row 40 down to 39, and the id minted two contents
-    // ago lands on it.
-    let node = &state.scene[0];
-    assert_eq!(crate::point_ids::resolve(node, grandparent, 41), Ok(39));
-    // What the loaded map said was already gone stays gone, and the refusal says
-    // so rather than pretending the hash is unknown.
-    let error = crate::point_ids::resolve(node, grandparent, 0).expect_err("row 0 went");
-    assert!(error.contains("is not in it"), "{error}");
 }
 
 #[test]
@@ -469,12 +400,4 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
     let rest = minted.strip_prefix("pt3d_").expect("the id's one form");
     let (hash, _) = rest.split_once('_').expect("hash and index");
     assert_eq!(crate::point_ids::resolve(node, hash, 0), Ok(row));
-    // The file itself says nothing about the edit: a reader of it sees the point
-    // as a row of the content it just read, under that content's own hash.
-    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
-    assert!(
-        metadata.lineage.is_empty(),
-        "a save wrote ancestry: {:?}",
-        metadata.lineage,
-    );
 }

@@ -175,7 +175,7 @@ from ..xform._arg_parser import (
     help=(
         "Write the smallest file that still holds the whole reconstruction: "
         "--drop-patch-bitmaps --drop-thumbnails at this position, and a save "
-        "with an empty absolute workspace path, no lineage, and tool_options "
+        "with an empty absolute workspace path and tool_options "
         "holding only this invocation's transforms. Optional "
         "'wspath=<path>' records that as the relative workspace path instead of "
         "measuring one, e.g. wspath=. for an output written inside its workspace."

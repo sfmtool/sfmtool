@@ -1617,7 +1617,6 @@ fn save_reconstruction_minimal_writes_a_copy_and_leaves_the_node() {
     assert_eq!(reply["path"], copy.display().to_string());
     let written = sfmtool_sfmr_format::read_sfmr(&copy).expect("a readable copy");
     assert!(written.thumbnails_y_x_rgb.is_none());
-    assert!(written.metadata.lineage.is_empty());
     assert!(written.metadata.workspace.absolute_path.is_empty());
     assert_eq!(written.metadata.operation, "minimal");
     assert_eq!(written.metadata.point_count as usize, points);

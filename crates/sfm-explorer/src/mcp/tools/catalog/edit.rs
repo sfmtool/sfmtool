@@ -56,7 +56,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the one at the cursor, and it becomes the version the history calls \
                           clean. With minimal: true and a path, it instead writes a minimal copy \
                           there, the file sfm xform --minimal writes: no thumbnails, no patch \
-                          bitmaps, no lineage and no absolute workspace path. The node keeps its \
+                          bitmaps and no absolute workspace path. The node keeps its \
                           path, label and history, and is no cleaner than before; a minimal copy \
                           over the node's own file is refused. workspace_path states the \
                           workspace.relative_path the file records instead of the measured one.",

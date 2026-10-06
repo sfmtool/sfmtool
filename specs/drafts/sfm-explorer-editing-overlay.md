@@ -26,7 +26,7 @@ The point-id version graph, with its minting and resolution rules, is
 [`../gui/goto-point.md`](../gui/goto-point.md) § "The ID forms and the version
 graph", [`../gui/edit-history.md`](../gui/edit-history.md) § "The version graph",
 and
-[the format spec's Point ID and Lineage sections](../formats/sfmr-file-format.md#point-id-portable-3d-point-references).
+[the format spec's Point ID section](../formats/sfmr-file-format.md#point-id-portable-3d-point-references).
 
 What is left here is one question.
 

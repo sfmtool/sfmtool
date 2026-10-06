@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.io import read_sfmr, read_sfmr_metadata, verify_sfmr, write_sfmr
+from sfmtool._sfmtool.io import read_sfmr, read_sfmr_metadata, verify_sfmr
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.sift.file import get_sift_path_from_recon
@@ -356,27 +356,8 @@ def test_add_patch_bitmaps_requires_embedded_patches(seoul_bull_workspace):
 # ── --minimal ───────────────────────────────────────────────────────────────
 
 
-def _with_lineage(path: Path, out: Path) -> Path:
-    data = read_sfmr(path)
-    data["metadata"]["lineage"] = [
-        {
-            "hash": "0123456789abcdef0123456789abcdef",
-            "kind": "base",
-            "map": {
-                "form": "monotone",
-                "source_rows": data["metadata"]["point_count"] + 1,
-                "deleted": [0],
-                "created": [],
-            },
-        }
-    ]
-    write_sfmr(out, data)
-    return out
-
-
 def test_minimal_writes_the_whole_reconstruction_and_no_history(embedded_sfmr):
-    source = _with_lineage(embedded_sfmr, embedded_sfmr.with_name("lineage.sfmr"))
-    assert "lineage" in read_sfmr_metadata(source)
+    source = embedded_sfmr
     out_dir = embedded_sfmr.parent / "published"
     out = out_dir / "minimal.sfmr"
     _xform(source, out, "--minimal")
@@ -387,7 +368,6 @@ def test_minimal_writes_the_whole_reconstruction_and_no_history(embedded_sfmr):
     meta = after["metadata"]
     assert meta["workspace"]["absolute_path"] == ""
     assert meta["workspace"]["relative_path"] == ".."
-    assert "lineage" not in meta
     assert meta["tool_options"] == {
         "transforms": ["Minimal (drop patch bitmaps and thumbnails; minimal metadata)"]
     }

@@ -215,7 +215,7 @@ The rule is **the version on disk first, and the earliest content otherwise**.
   (`History::disk_serial`, [saving.md](saving.md)). If the point's identity
   reaches it and the point is a row of its base, that base's hash and that row
   are the ID. This is the ID a reader of the file on disk uses as it stands,
-  with no lineage to consult and no other file to find, and reaching the file on
+  with no other file to find, and reaching the file on
   disk is what someone copying an ID almost always wants it for.
 - **The earliest content** otherwise. A step that says it created the point ends
   the walk, and the ID is that edit's content hash with the point's place among
@@ -235,9 +235,10 @@ ID a user already wrote down goes on working here after the save that moved the
 displayed ID off it.
 
 **Resolving** finds the hash first and walks second. The hash is looked for
-among, in order: the point edits' hashes, the bases of the versions that still
-hold values (the computed hash, or the stored one a loaded file carries), and
-those bases' recorded lineage. From wherever it was found, `History::follow`
+among, in order: the point edits' hashes, then the bases of the versions that
+still hold values (the computed hash, or the stored one a loaded file carries).
+An ID minted in an earlier session against content that neither holds names
+nothing here. From wherever it was found, `History::follow`
 walks to the cursor -- back to the last version the two share, inverting each
 step's map, then forward -- and `Err` carries the version the walk stopped at.
 So there are **two distinct failures**, and the messages separate them: the node

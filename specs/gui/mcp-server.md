@@ -2868,8 +2868,8 @@ version like any other, so the serial in the reply can be one the call itself
 made ([saving.md](saving.md) § "Materialise on save").
 
 With `minimal: true` it is `AppState::save_minimal_copy`, File > Save As
-Minimal: a copy without thumbnails, patch bitmaps, `lineage` or an absolute
-workspace path, the file `sfm xform --minimal` writes
+Minimal: a copy without thumbnails, patch bitmaps or an absolute workspace
+path, the file `sfm xform --minimal` writes
 ([saving.md](saving.md) § "Save As Minimal"). The node is **not** re-pointed
 and **not** marked clean, so the reply's `path` is the copy's and its `serial`
 is the version at the cursor. It needs a path, refusing without one with *"A
@@ -4654,7 +4654,7 @@ where a test hands no host over.
   over that same file; a node that came from no file is refused a pathless save
   in the File menu's own words.
 - **`save_reconstruction` with `minimal` writes a copy and leaves the node**:
-  the copy has no thumbnails, lineage or absolute path and the viewer's
+  the copy has no thumbnails or absolute path and carries the viewer's
   provenance, the node keeps its path and its dirty mark, and a minimal save
   without a path is refused.
 - **`save_reconstruction` with `workspace_path` states the path**: the file

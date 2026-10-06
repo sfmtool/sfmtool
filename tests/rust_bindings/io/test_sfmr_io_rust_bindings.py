@@ -404,25 +404,16 @@ class TestSharedColumnsAreReadOnly:
         assert np.array_equal(np.asarray(clone.thumbnails_y_x_rgb), before)
 
 
-class TestLineage:
-    """A file records which earlier contents its point rows came from, so a
-    Point ID minted against one of them still resolves against this file.
+class TestRetiredLineage:
+    """Versions 9 to 11 of the format defined an optional top-level ``lineage``
+    key. The format no longer defines it: a file that carries one reads with
+    the key skipped, and nothing writes one."""
 
-    The entries reach Python the way every other metadata key does, through
-    ``metadata()`` and ``read_sfmr``'s ``metadata`` dict."""
-
-    def test_metadata_has_no_lineage_key_without_an_ancestor(
-        self, seoul_bull_sfmr_only
-    ):
-        # The ordinary state: nothing was edited into this file, so it records
-        # no ancestor and the key is absent rather than an empty list.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        assert "lineage" not in recon.metadata()
-
-    def test_lineage_round_trips_and_shows_up_in_metadata(
+    def test_a_lineage_key_in_the_metadata_dict_is_not_written(
         self, seoul_bull_sfmr_only, tmp_path
     ):
-        lineage = [
+        data = read_sfmr(seoul_bull_sfmr_only)
+        data["metadata"]["lineage"] = [
             {
                 "hash": "0123456789abcdef0123456789abcdef",
                 "kind": "base",
@@ -432,23 +423,16 @@ class TestLineage:
                     "deleted": [3],
                     "created": [],
                 },
-            },
-            {
-                "hash": "fedcba9876543210fedcba9876543210",
-                "kind": "point_edit",
-                "map": {"form": "dense", "rows": [0, None]},
-            },
+            }
         ]
-        data = read_sfmr(seoul_bull_sfmr_only)
-        data["metadata"]["lineage"] = lineage
 
         out = tmp_path / "with_lineage.sfmr"
         write_sfmr(out, data)
 
         ok, errors = verify_sfmr(out)
         assert ok, errors
-        assert read_sfmr(out)["metadata"]["lineage"] == lineage
-        assert SfmrReconstruction.load(out).metadata()["lineage"] == lineage
+        assert "lineage" not in read_sfmr_metadata(out)
+        assert "lineage" not in SfmrReconstruction.load(out).metadata()
 
 
 class TestOptionalThumbnails:
@@ -533,7 +517,6 @@ class TestMinimalSave:
         )
         meta = read_sfmr_metadata(out)
         assert meta["workspace"]["absolute_path"] == ""
-        assert "lineage" not in meta
         assert meta["tool_options"] == {"transforms": ["Minimal"]}
         assert meta["operation"] == "xform"
         assert meta["tool"] == "sfmtool"

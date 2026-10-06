@@ -96,8 +96,8 @@ pub(super) fn show(
                 let save_minimal = ui
                     .add_enabled(target.is_some(), egui::Button::new("Save As Minimal..."))
                     .on_hover_text(
-                        "Write a copy without thumbnails, patch bitmaps, lineage or an \
-                         absolute workspace path; the open reconstruction is unchanged",
+                        "Write a copy without thumbnails, patch bitmaps or an absolute \
+                         workspace path; the open reconstruction is unchanged",
                     )
                     .on_disabled_hover_text("Select a reconstruction to save it");
                 if save_minimal.clicked() {

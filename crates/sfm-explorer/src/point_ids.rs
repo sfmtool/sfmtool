@@ -21,8 +21,8 @@
 //!   consult. **Otherwise the earliest rule**: the walk goes back through the
 //!   version graph's maps as far as the point's identity reaches and names the
 //!   base, or the point edit, it stops at.
-//! - [`resolve`] walks the other way. It finds the hash among the node's bases,
-//!   its point edits and its bases' recorded lineage, and follows the point from
+//! - [`resolve`] walks the other way. It finds the hash among the node's bases
+//!   and its point edits, and follows the point from
 //!   there to the cursor -- backward out of a branch an undo discarded and then
 //!   forward, when the minting version is not an ancestor of the cursor's.
 //!
@@ -73,8 +73,7 @@ fn full_base_hash(edited: &EditedReconstruction) -> Option<&str> {
 /// **The version on disk first.** If the point's identity reaches the version
 /// the node was loaded at or last saved as, and it is a row of that version's
 /// base, the id is that base's hash and that row. That is the id a reader of the
-/// file on disk uses as it stands, with no lineage to consult and no other file
-/// to find, which is what someone copying an id out of the viewer almost always
+/// file on disk uses as it stands, with no other file to find, which is what someone copying an id out of the viewer almost always
 /// wants it for.
 ///
 /// **The earliest content otherwise**, which is the case for a point created
@@ -241,12 +240,6 @@ pub fn holds_hash(node: &SceneNode, hash: &str) -> bool {
             let stored = &value.base.content_hash.content_xxh128;
             starts_with(full_base_hash(value).unwrap_or_default(), hash)
                 || (!stored.is_empty() && starts_with(stored, hash))
-                || value
-                    .base
-                    .metadata
-                    .lineage
-                    .iter()
-                    .any(|entry| starts_with(&entry.hash, hash))
         })
     })
 }
@@ -254,11 +247,10 @@ pub fn holds_hash(node: &SceneNode, hash: &str) -> bool {
 /// The version `hash` names and the index `index` is in it, or `None` when this
 /// node has never held that content.
 ///
-/// Three places carry a hash a live id can name, and they are searched in the
-/// order that costs least: the point edits, whose hashes are held outright; the
-/// bases of the versions that still have values; and those bases' recorded
-/// lineage, which is how an id minted in an earlier session against content that
-/// was materialised away still lands.
+/// Two places carry a hash a live id can name, and they are searched in the
+/// order that costs least: the point edits, whose hashes are held outright, and
+/// the bases of the versions that still have values. An id minted in an earlier
+/// session against content that is in neither names nothing here.
 ///
 /// `Err` is the one case where the hash was found and the index was not a row of
 /// what it named.
@@ -300,19 +292,6 @@ fn locate(
                 ));
             }
             return Ok(Some((version.serial, index)));
-        }
-        for entry in &value.base.metadata.lineage {
-            if !starts_with(&entry.hash, hash) {
-                continue;
-            }
-            return match entry.map.forward(index) {
-                Some(row) => Ok(Some((version.serial, row))),
-                None => Err(format!(
-                    "{} records where the content with hash {hash} went, and row {index} is not \
-                     in it.",
-                    node.label
-                )),
-            };
         }
     }
 

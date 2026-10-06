@@ -745,10 +745,7 @@ subset with an obliquity weight, so a file whose bitmaps came from
 
 #### What the four steps do not touch
 
-None of the four moves a point, renumbers a row or changes a keypoint, so the
-input's `lineage`, which maps ancestor points onto this file's rows, stays valid
-across them, and they keep `xform`'s ordinary lineage behaviour: the input's
-list is written into the output unchanged, and no entry is added. The
+None of the four moves a point, renumbers a row or changes a keypoint. The
 `derived/` section is recomputed by the save as always.
 
 #### `--minimal`
@@ -818,13 +815,6 @@ binding argument behind it is
 `SfmrReconstruction.save(..., workspace_path=<path>)`, which needs an `operation`
 because the stamp is what writes the field.
 
-**`--minimal` drops `lineage` entirely.** The output is a new file with no
-ancestry: it carries none of the input's entries and gains none for the input.
-Point IDs minted against the input or any earlier version therefore do not
-resolve in the minimal file. A minimal file is a root, typically published
-somewhere its ancestors are not, so an entry could never lead a reader to an
-ancestor file.
-
 What it clears and what it keeps:
 
 | Field | `--minimal` | Why |
@@ -832,7 +822,6 @@ What it clears and what it keeps:
 | `metadata.json` `workspace.absolute_path` | **cleared** to `""` | Names one machine's filesystem, and sits in `metadata_xxh128`, so the same reconstruction written on two machines would hash differently. An empty value means none was recorded. |
 | `workspace.relative_path` | recomputed by the save, from the output's directory to the workspace, as every `xform` save does, or recorded as `wspath` states it | It is how a reader finds the workspace from where the file is. |
 | `workspace.contents` | kept | States which extractor and settings the features came from; `feature_prefix_dir` is how every `.sift`-reading step and the viewer's SIFT index build locate the features. |
-| `lineage` | **dropped**, and no entry added | Above. |
 | `tool_options` | **replaced** by `{"transforms": [...]}`, this invocation's own step list | An ordinary save *merges* its `transforms` record into the input's options, so a file accumulates the options of every operation behind it. The inherited keys describe an ancestor, which a root does not have. |
 | `operation`, `tool`, `tool_version` | rewritten by the save as for any `xform` (`xform`, `sfmtool`, its version) | They describe the operation that wrote this file. |
 | `version`, `feature_source`, the counts | kept, recomputed by the save | Format facts. |
@@ -918,11 +907,10 @@ The write is `SfmrReconstruction.save(path, operation="xform",
 tool_options={"transforms": [...]})`, which stamps `operation`, `tool`,
 `tool_version` and the counts, recomputes both workspace paths from the output's
 location, with both directories resolved to their real locations before the
-relative one is measured between them, merges `transforms` into the inherited
-`tool_options`, and passes
-`lineage` through unchanged. The stamp is `SfmrReconstruction::stamp_save` in
+relative one is measured between them, and merges `transforms` into the
+inherited `tool_options`. The stamp is `SfmrReconstruction::stamp_save` in
 sfmtool-core. With `minimal=True`, set when `--minimal` is in the chain, it then
-clears `absolute_path`, drops `lineage` and replaces `tool_options` through
+clears `absolute_path` and replaces `tool_options` through
 `clear_minimal_metadata` (see [`--minimal`](#--minimal)). With
 `workspace_path=<path>`, set by `--minimal wspath=<path>`, the stamp records that
 path as `workspace.relative_path` and measures nothing

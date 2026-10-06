@@ -202,12 +202,10 @@ at, which is what a save moves.
 ## Part 3: saving
 
 Built and standing: [`../gui/saving.md`](../gui/saving.md) for Save and Save As,
-the materialisation a save of an edited value performs and the provenance and
-lineage stamped onto it before it is hashed, the disk serial the Edit History
+the materialisation a save of an edited value performs and the provenance
+stamped onto it before it is hashed, the disk serial the Edit History
 panel marks, the dirty marker in the tree row and the window title, and the
-unsaved-changes prompt a close puts up. The lineage a save writes is the format
-spec's ([`../formats/sfmr-file-format.md`](../formats/sfmr-file-format.md),
-version 9), and the point ids it keeps resolving are
+unsaved-changes prompt a close puts up. The point ids a save keeps resolving are
 [`../gui/goto-point.md`](../gui/goto-point.md).
 
 ---

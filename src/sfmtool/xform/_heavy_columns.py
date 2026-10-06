@@ -61,8 +61,8 @@ class MinimalTransform:
     """``--minimal``: drop both heavy columns here, and save minimal metadata.
 
     The column part runs at this step's position in the chain. The metadata
-    part (an empty ``workspace.absolute_path``, no ``lineage``, ``tool_options``
-    holding only this invocation's ``transforms``) is a property of the save,
+    part (an empty ``workspace.absolute_path`` and ``tool_options`` holding
+    only this invocation's ``transforms``) is a property of the save,
     which the command applies when any step in the chain is this one.
 
     ``workspace_path``, from ``wspath=<path>``, is carried to that save as well:

@@ -6,7 +6,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ndarray::{Array2, Array4};
-use sfmtool_sfmr_format::{LineageEntry, LineageMap, LINEAGE_KIND_BASE};
 
 use super::SaveStamp;
 use crate::progress::Progress;
@@ -20,7 +19,7 @@ const STAMP: SaveStamp<'static> = SaveStamp {
 };
 
 /// A demo value with everything `to_minimal` drops or clears: both heavy
-/// columns, a patch frame per point, a lineage entry, an absolute path and an
+/// columns, a patch frame per point, an absolute path and an
 /// inherited option, over a workspace at `workspace`, which is
 /// created with its marker so a file written beside it resolves it.
 fn heavy(workspace: &Path) -> SfmrReconstruction {
@@ -44,13 +43,6 @@ fn heavy(workspace: &Path) -> SfmrReconstruction {
     recon.point_set.patch_v_halfvec_xyz = Some(v);
     recon.point_set.patch_bitmaps_y_x_rgba =
         Some(Arc::new(Array4::from_elem((points, 4, 4, 4), 200u8)));
-    recon.metadata.lineage.push(LineageEntry {
-        hash: "0123456789abcdef0123456789abcdef".to_string(),
-        kind: LINEAGE_KIND_BASE.to_string(),
-        map: LineageMap::Dense {
-            rows: (0..points as u32).map(Some).collect(),
-        },
-    });
     recon.metadata.workspace.absolute_path = "/some/other/machine".to_string();
     recon
         .metadata
@@ -83,7 +75,6 @@ fn stamp_save_records_the_tool_and_the_workspace_from_the_output() {
     );
     assert_eq!(recon.metadata.point_count as usize, recon.point_count());
     // Nothing a minimal save clears is touched by the stamp alone.
-    assert_eq!(recon.metadata.lineage.len(), 1);
     assert!(recon.metadata.tool_options.contains_key("inherited"));
 }
 
@@ -104,14 +95,12 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     assert!(minimal.point_set.patch_v_halfvec_xyz.is_some());
     assert!(minimal.metadata.workspace.absolute_path.is_empty());
     assert_eq!(minimal.metadata.workspace.relative_path, "../ws");
-    assert!(minimal.metadata.lineage.is_empty());
     assert_eq!(minimal.metadata.tool_options, options);
     assert_eq!(minimal.metadata.operation, "minimal");
     // Not the content the input was read as.
     assert!(minimal.content_hash.content_xxh128.is_empty());
     // The input is untouched.
     assert!(recon.image_table.thumbnails_y_x_rgb.is_some());
-    assert_eq!(recon.metadata.lineage.len(), 1);
 
     minimal.save(&out).unwrap();
     let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
@@ -119,7 +108,6 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     assert!(read.point_set.patch_bitmaps_y_x_rgba.is_none());
     assert!(read.point_set.patch_u_halfvec_xyz.is_some());
     assert!(read.metadata.workspace.absolute_path.is_empty());
-    assert!(read.metadata.lineage.is_empty());
 }
 
 /// A stated workspace path is what the file records, and no measurement runs:

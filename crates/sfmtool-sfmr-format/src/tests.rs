@@ -52,7 +52,6 @@ fn make_test_data() -> SfmrData {
             frame_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
-            lineage: Vec::new(),
         },
         content_hash: ContentHash {
             derived_xxh128: None,
@@ -1004,7 +1003,6 @@ fn test_empty_reconstruction() {
             frame_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
-            lineage: Vec::new(),
         },
         content_hash: ContentHash {
             derived_xxh128: None,
@@ -3467,139 +3465,91 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ── Lineage (version 9) ─────────────────────────────────────────────────
+// ── The retired `lineage` key ───────────────────────────────────────────
 
 #[test]
-fn a_monotone_map_says_where_every_surviving_row_went() {
-    // Ancestor rows 0..5 with row 2 gone, and a row of this file (row 1) that
-    // no ancestor row landed in.
-    let map = LineageMap::Monotone {
-        source_rows: 5,
-        deleted: vec![2],
-        created: vec![1],
-    };
-    assert_eq!(map.source_rows(), 5);
-    assert_eq!(map.forward(0), Some(0));
-    assert_eq!(map.forward(1), Some(2));
-    assert_eq!(map.forward(2), None);
-    assert_eq!(map.forward(3), Some(3));
-    assert_eq!(map.forward(4), Some(4));
-}
+fn a_file_carrying_the_retired_lineage_key_reads_verifies_and_drops_it_on_a_save() {
+    // Versions 9 to 11 defined an optional top-level `lineage` array, and files
+    // written then may carry one. Author such a file from a current write: the
+    // same metadata with the key added, and the metadata and content hashes
+    // re-derived the way the writer derives them, so the file is internally
+    // consistent exactly as one of those files is.
+    use sfmtool_archive_io::{format_hash, SectionDigests};
 
-#[test]
-fn a_monotone_map_refuses_a_row_at_or_past_its_source_count() {
-    // `deleted` and `created` name only the rows that changed, so they do not
-    // imply how many rows the ancestor had. `source_rows` is what says where the
-    // map's domain ends: without it row 5 below would answer `Some(5)`, naming a
-    // row of this file for an ancestor row that never existed.
-    let map = LineageMap::Monotone {
-        source_rows: 5,
-        deleted: vec![2],
-        created: vec![1],
-    };
-    assert_eq!(map.forward(4), Some(4));
-    assert_eq!(map.forward(5), None);
-    assert_eq!(map.forward(6), None);
-    assert_eq!(map.forward(u32::MAX), None);
-
-    // The degenerate case the same rule covers: a map over no rows at all
-    // describes no row, rather than describing row zero.
-    let empty = LineageMap::Monotone {
-        source_rows: 0,
-        deleted: vec![],
-        created: vec![],
-    };
-    assert_eq!(empty.source_rows(), 0);
-    assert_eq!(empty.forward(0), None);
-}
-
-#[test]
-fn a_dense_map_says_it_row_by_row_and_may_reorder() {
-    let map = LineageMap::Dense {
-        rows: vec![Some(2), None, Some(0)],
-    };
-    assert_eq!(map.forward(0), Some(2));
-    assert_eq!(map.forward(1), None);
-    assert_eq!(map.forward(2), Some(0));
-    // Past the end is not a row of the ancestor at all.
-    assert_eq!(map.source_rows(), 3);
-    assert_eq!(map.forward(3), None);
-}
-
-#[test]
-fn lineage_round_trips_through_a_write_and_reaches_the_content_hash() {
-    let dir = std::env::temp_dir().join("sfmr_test_lineage");
+    let dir = std::env::temp_dir().join("sfmr_test_retired_lineage");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    let plain = dir.join("plain.sfmr");
+    let with = dir.join("with_lineage.sfmr");
+    let resaved = dir.join("resaved.sfmr");
 
-    let lineage = vec![
-        LineageEntry {
-            hash: "0123456789abcdef0123456789abcdef".to_string(),
-            kind: LINEAGE_KIND_BASE.to_string(),
-            map: LineageMap::Monotone {
-                source_rows: 4,
-                deleted: vec![1],
-                created: vec![],
-            },
-        },
-        LineageEntry {
-            hash: "fedcba9876543210fedcba9876543210".to_string(),
-            kind: LINEAGE_KIND_POINT_EDIT.to_string(),
-            map: LineageMap::Dense {
-                rows: vec![Some(0), None],
-            },
-        },
-    ];
-
-    let bare = dir.join("bare.sfmr");
     let mut data = make_test_data();
-    write_sfmr(&bare, &mut data).unwrap();
-    let bare_hash = read_sfmr_content_hash(&bare).unwrap();
+    write_sfmr(&plain, &mut data).unwrap();
+    let stored = read_sfmr_content_hash(&plain).unwrap();
+    assert!(stored.rigs_xxh128.is_none() && stored.frames_xxh128.is_none());
 
-    let with = dir.join("with.sfmr");
-    let mut data = make_test_data();
-    data.metadata.lineage = lineage.clone();
-    write_sfmr(&with, &mut data).unwrap();
+    let raw_metadata = |path: &std::path::Path| -> Vec<u8> {
+        let file = std::fs::File::open(path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        sfmtool_archive_io::read_zst_entry(&mut archive, "metadata.json.zst").unwrap()
+    };
+    let mut metadata: serde_json::Value = serde_json::from_slice(&raw_metadata(&plain)).unwrap();
+    metadata["lineage"] = serde_json::json!([
+        { "hash": "0123456789abcdef0123456789abcdef", "kind": "base",
+          "map": { "form": "monotone", "source_rows": 6, "deleted": [1], "created": [] } },
+        { "hash": "fedcba9876543210fedcba9876543210", "kind": "point_edit",
+          "map": { "form": "dense", "rows": [4, null] } },
+    ]);
+    let metadata_bytes = serde_json::to_vec(&metadata).unwrap();
+    let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
+    let mut digests = SectionDigests::new();
+    for digest in [
+        metadata_hash,
+        u128::from_str_radix(&stored.cameras_xxh128, 16).unwrap(),
+        u128::from_str_radix(&stored.images_xxh128, 16).unwrap(),
+        u128::from_str_radix(&stored.points3d_xxh128, 16).unwrap(),
+        u128::from_str_radix(&stored.tracks_xxh128, 16).unwrap(),
+    ] {
+        digests.push(digest);
+    }
+    let with_hash = ContentHash {
+        metadata_xxh128: format_hash(metadata_hash),
+        content_xxh128: format_hash(digests.finish()),
+        ..stored.clone()
+    };
+    let content_hash_bytes = serde_json::to_vec(&with_hash).unwrap();
+    rewrite_entries(&plain, &with, |name, _| match name {
+        "metadata.json.zst" => Some(metadata_bytes.clone()),
+        "content_hash.json.zst" => Some(content_hash_bytes.clone()),
+        _ => None,
+    });
+    assert_ne!(with_hash.content_xxh128, stored.content_xxh128);
 
-    // It comes back exactly as it went in, and the file verifies.
-    let loaded = read_sfmr(&with).unwrap();
-    assert_eq!(loaded.metadata.lineage, lineage);
-    assert_eq!(loaded.metadata.version, SFMR_FORMAT_VERSION);
+    // It verifies: `metadata_xxh128` is over the bytes stored, key and all.
     let (ok, errors) = verify_sfmr(&with).unwrap();
-    assert!(ok, "{errors:?}");
+    assert!(ok, "a file carrying lineage verifies: {errors:?}");
 
-    // And it is content: the same reconstruction with a different account of
-    // where its rows came from is a different file.
-    let with_hash = read_sfmr_content_hash(&with).unwrap();
-    assert_ne!(with_hash.metadata_xxh128, bare_hash.metadata_xxh128);
-    assert_ne!(with_hash.content_xxh128, bare_hash.content_xxh128);
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn metadata_with_no_lineage_key_reads_as_an_empty_list() {
-    // What every file below version 9 carries, and what a version 9 file with
-    // no ancestor writes: the key is absent rather than an empty array, so an
-    // unedited file's metadata bytes did not change with the bump.
-    let mut data = make_test_data();
-    let json = serde_json::to_string(&data.metadata).unwrap();
+    // It reads, the key skipped, under the hashes it stores.
+    assert_eq!(
+        read_sfmr_metadata(&with).unwrap().point_count,
+        data.metadata.point_count
+    );
+    let mut loaded = read_sfmr(&with).unwrap();
+    assert_eq!(loaded.content_hash.content_xxh128, with_hash.content_xxh128);
+    let json = serde_json::to_string(&loaded.metadata).unwrap();
     assert!(!json.contains("lineage"), "{json}");
 
-    let parsed: SfmrMetadata = serde_json::from_str(&json).unwrap();
-    assert!(parsed.lineage.is_empty());
+    // A save of what was read leaves the key out. The content is then the
+    // file without it, so it hashes as that file does.
+    write_sfmr(&resaved, &mut loaded).unwrap();
+    let text = String::from_utf8(raw_metadata(&resaved)).unwrap();
+    assert!(!text.contains("lineage"), "{text}");
+    let resaved_hash = read_sfmr_content_hash(&resaved).unwrap();
+    assert_eq!(resaved_hash.content_xxh128, stored.content_xxh128);
+    let (ok, errors) = verify_sfmr(&resaved).unwrap();
+    assert!(ok, "{errors:?}");
 
-    data.metadata.lineage = vec![LineageEntry {
-        hash: "0123456789abcdef0123456789abcdef".to_string(),
-        kind: LINEAGE_KIND_BASE.to_string(),
-        map: LineageMap::Monotone {
-            source_rows: 1,
-            deleted: vec![],
-            created: vec![],
-        },
-    }];
-    let json = serde_json::to_string(&data.metadata).unwrap();
-    assert!(json.contains("\"form\":\"monotone\""), "{json}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── Atomic writes ───────────────────────────────────────────────────────

@@ -331,7 +331,6 @@ fn save_as_minimal_writes_the_minimal_file_and_leaves_the_node() {
     assert!(written.thumbnails_y_x_rgb.is_none());
     assert!(written.patch_bitmaps_y_x_rgba.is_none());
     assert!(written.patch_u_halfvec_xyz.is_some(), "the frames stay");
-    assert!(written.metadata.lineage.is_empty());
     assert!(written.metadata.workspace.absolute_path.is_empty());
     assert_eq!(written.metadata.workspace.relative_path, "..");
     assert_eq!(written.metadata.operation, "minimal");

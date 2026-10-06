@@ -117,7 +117,7 @@ the binding's `save(minimal=True)` shares through `stamp_save` and
 `clear_minimal_metadata`
 ([xform-command.md](../cli/reconstruction/xform/xform-command.md#--minimal)). It
 carries no thumbnails and no patch bitmaps, whether the file's own or ones the
-open rendered for display; no `lineage`; an empty `workspace.absolute_path`;
+open rendered for display; an empty `workspace.absolute_path`;
 `workspace.relative_path` computed from the chosen file's directory, with both
 that directory and the workspace resolved to their real locations before the path
 between them is measured; `operation`
@@ -279,7 +279,7 @@ changes nothing; and that the window title marks the first node while it is
 dirty.
 
 `crates/sfm-explorer/src/state/open/tests.rs` covers Save As Minimal: that it
-writes a file with neither heavy column, no lineage, no absolute path, a
+writes a file with neither heavy column, no absolute path, a
 relative path from its own directory and the viewer's provenance, while the node
 keeps its path, label, versions, disk serial and dirty mark and the row names
 the copy; that it is refused over the node's own file, which is left untouched;
@@ -344,10 +344,8 @@ content the reopened file is not gets the usual refusal, that the node has never
 held content with that hash, because neither the file nor the fresh graph knows
 where that content's rows went.
 
-**Reading ancestry stays.** The `.sfmr` format keeps its optional `lineage` key,
-described in
-[the format spec's lineage section](../formats/sfmr-file-format.md#lineage-version-9),
-and a loaded file that carries one is searched for a hash like any other place
-an id can be found. So a file recording ancestry goes on resolving the ids that
-ancestry names, in this session and in any later one. What the viewer no longer
-does is write such a record into the files it saves.
+**No file records ancestry.** The `.sfmr` format no longer defines the
+`lineage` key that versions 9 to 11 allowed. A file written earlier that carries
+one loads with the key skipped
+([the format spec's version 8 to 9 notes](../formats/sfmr-file-format.md#version-8--version-9)),
+so an id that only that record could have resolved gets the same refusal.

@@ -108,9 +108,9 @@ impl PySfmrReconstruction {
     ///     tool_options: Optional dict of operation-specific metadata to merge
     ///         into ``metadata.tool_options``.
     ///     minimal: Write the metadata a file meant to travel between machines
-    ///         carries: an empty ``workspace.absolute_path`` (none recorded), no
-    ///         ``lineage``, and ``tool_options`` replaced by the ``tool_options``
-    ///         given here rather than merged into the inherited ones. What
+    ///         carries: an empty ``workspace.absolute_path`` (none recorded) and
+    ///         ``tool_options`` replaced by the ``tool_options`` given here
+    ///         rather than merged into the inherited ones. What
     ///         ``sfm xform --minimal`` saves with. The in-memory value keeps
     ///         whatever the save wrote, like the other metadata a save stamps.
     ///     workspace_path: Record this as ``workspace.relative_path`` instead of
@@ -245,9 +245,9 @@ impl PySfmrReconstruction {
 
     /// Reconstruction metadata as a Python dict (serialized via JSON).
     ///
-    /// Every stored key, including `lineage` when the file records where its
-    /// point rows came from -- the key is absent when it records nothing, which
-    /// is every file with no edited ancestor.
+    /// The keys are the top-level metadata fields the format defines. A key it
+    /// does not define, such as the retired `lineage` an older file may carry,
+    /// is skipped on read and does not appear.
     fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         serde_to_py(py, &self.inner.metadata)
     }
