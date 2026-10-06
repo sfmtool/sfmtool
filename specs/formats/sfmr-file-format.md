@@ -1481,7 +1481,9 @@ either, or none of them. A writer refuses to write a combination that breaks one
 of these rules, and a reader and a verifier refuse a file whose
 `points3d/metadata.json` flags state one: `has_patch_bitmaps` without
 `has_uv_frames`, or `has_normal_confidence` without `has_normals` (a version 1 or
-2 file always has normals).
+2 file always has normals). The flags decide what a reader and a verifier look
+at: an optional entry whose flag is `false` or absent is not read, so these
+rules are checked on the flags alone.
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
 

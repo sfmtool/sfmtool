@@ -2645,6 +2645,49 @@ fn test_embedded_patches_without_frame_refused_on_read_and_verify() {
 }
 
 #[test]
+fn test_verify_reports_every_broken_presence_rule() {
+    // A file whose flags break two rules: the reader stops at the first, the
+    // verifier reports both.
+    let dir = std::env::temp_dir().join("sfmr_test_verify_two_presence_rules");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut data = make_test_data();
+    data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255, 0, 128]));
+    data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
+    data.patch_v_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.25));
+    data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
+    let path = dir.join("valid.sfmr");
+    let options = WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    write_sfmr_with_options(&path, &mut data, &options).unwrap();
+    let edited = dir.join("edited.sfmr");
+    rewrite_points3d_metadata(&path, &edited, |meta| {
+        meta["has_normals"] = serde_json::json!(false);
+        meta["has_uv_frames"] = serde_json::json!(false);
+    });
+
+    assert!(matches!(
+        read_sfmr(&edited),
+        Err(SfmrError::InvalidFormat(_))
+    ));
+    let (valid, errors) = verify_sfmr(&edited).unwrap();
+    assert!(!valid);
+    for expected in [
+        "normal_confidence requires normals_xyz",
+        "patch_bitmaps_y_x_rgba requires the patch frame",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.contains(expected)),
+            "missing {expected:?} in {errors:?}"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_world_space_unit_checked_on_write_read_and_verify() {
     let dir = std::env::temp_dir().join("sfmr_test_world_space_unit");
     let _ = std::fs::remove_dir_all(&dir);
