@@ -9,9 +9,9 @@
 //! holding only the surviving clusters and members, with images, member
 //! indexes, and cluster numbering densely renumbered. The derivation is
 //! recorded in the output metadata (`matching_options["cluster_selection"]`).
-//! The operation is specified in `specs/formats/cluster-selection.md`, and the
-//! derived file's contract in `specs/formats/matches-file-format.md` §
-//! "Cluster Selection (Derived Files)".
+//! The operation is specified in `specs/core/features/cluster-selection.md`,
+//! and the derived file's contract in `specs/formats/matches-file-format.md`
+//! § "Cluster Selection (Derived Files)".
 
 use ndarray::{Array1, Array2, Array3};
 
@@ -127,7 +127,7 @@ impl MatchesData {
     /// range.
     ///
     /// The steps, their order and the provenance record are specified in
-    /// `specs/formats/cluster-selection.md`.
+    /// `specs/core/features/cluster-selection.md`.
     pub fn select_clusters(&self, opts: &ClusterSelect) -> Result<MatchesData, MatchesError> {
         let clusters = self.clusters.as_ref().ok_or_else(|| {
             MatchesError::InvalidFormat(

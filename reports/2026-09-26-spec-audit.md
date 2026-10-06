@@ -294,6 +294,7 @@ Eight specs open with "This document describes/specifies…":
 | sfmtool-camera-models.md | 5 | 2 | 7 findings |
 | sift-file-format.md | 1 | 4 | 7 findings, plus a wrong field definition |
 
+> _Status (2026-10-05): **Done** for the `cluster-selection.md` row — the spec moved to `specs/core/features/`; see its section below, branch `decision-fix-02-cluster-selection-to-core`._
 > _Status (2026-10-04): **Done** for `sfmtool-camera-models.md` — its code names now sit in an Implementations section; see that spec's section below, branch `report-fix-07-camera-models-contradiction`._
 > _Status (2026-10-04): **Done** for archive-container.md — the crate API, implementation notes and tests moved to `specs/formats/archive-io-crate.md`, and the container spec now names code only in a short Implementations section, branch `report-fix-08-archive-container`._
 > _Status (2026-10-04): **Done** for sift-file-format.md — it now has an Implementations section and the normative text names no crate, constant or extraction backend (it links `sfm undistort` as the example of a derived file); see its section below. Branch `report-fix-17-sift-format-checks`._
@@ -732,7 +733,7 @@ most of the per-sentence findings.
 **Recommendation:** update spec. **Update code** so the writer and verifier enforce NaN-free geometry and the verifier bounds-checks config indices.
 > _Status (2026-10-04): **Partially done** — every inconsistency and format-independence item above is done, branch `report-fix-19-matches-format-definitions` for the last of them. Not done: the third copies (the provenance example in `cluster-selection.md` and the `refine_radius` rule in `select.rs`), and the check-6 question of whether `member_status` codes need a legend stored in the file, which is a format decision for a maintainer._
 
-### specs/formats/cluster-selection.md
+### specs/core/features/cluster-selection.md
 **Summary:** The options, semantics, errors and provenance match `select.rs`. The document specifies an *operation and reader API*, not an on-disk format, so it is filed in the wrong place.
 **Implementing code:** `sfmtool-matches-format/src/select.rs` (`ClusterSelect`, `select_clusters`, `refine_radius`, `cluster_worst_consistency`); `sfmtool-py/src/io/matches_file.rs:311,340,378`.
 **Inconsistencies:**
@@ -746,6 +747,8 @@ most of the per-sentence findings.
 **Recommendation:** discuss. Move it to `specs/core/` in template shape, and leave the provenance record's format contract in `matches-file-format.md`.
 
 > _Status (2026-10-05): **Partially done** — the spec now states the three behaviours it left out (the `restrict_cluster_ids` record is sorted and deduplicated, and repeated names or ids count once; a dropped reference member from `accepted_statuses` without `reference` also gets the `0xFFFFFFFF` sentinel; the worst-consistency accessor returns `None` in Rust and raises in Python without `cluster_patches/`, and `refine_radius` returns `None` when neither key is recorded), the opening paragraph says what the operation is and what it is for, the API names moved to a new *Interface* section with links to the code, the :92-94 residue is gone (also in the `provenance` doc), and the six-step copy in the `select_clusters` doc is now a short summary that points at the spec, branch `audit-fix-02-cluster-selection`. Not done: moving the spec from `formats/` to `specs/core/`, which is a maintainer decision._
+
+> _Status (2026-10-05): **Done** — the maintainer decided to move it, and the spec is now `specs/core/features/cluster-selection.md` (it was `specs/formats/cluster-selection.md` when audited; the heading above names the new path). It sits under `features/` because it narrows the cluster backbone that cluster matching writes; the code stays in `sfmtool-matches-format`, which the core and features READMEs now say. The row moved from `specs/formats/README.md` to `specs/core/features/README.md`, and the links from `matches-file-format.md` and `cluster-patches.md` and the doc comments in `select.rs` and `matches_file.rs` point at the new path. The provenance record's format contract stays in `matches-file-format.md`, branch `decision-fix-02-cluster-selection-to-core`._
 
 ### specs/formats/kdf-file-format.md
 **Summary:** The entries, metadata, chunk byte layout, hash tree, defaults and version 3 match. The reader enforces two rules the spec does not state, and about 200 lines of version-1 study still refer to a "version-2" writer.
@@ -1086,6 +1089,7 @@ replaced by `gui/track-view.md`.)
    Another tool writing these files would get them wrong.
 3. **Format specs are not independent of the code.** Six of the seven format specs with hits have no *Implementations* section. Adding one to each is the fix that resolves most of the 45 or so failure-6 findings. `archive-container.md` should split its crate API into its own spec, and `cluster-selection.md` should move out of `formats/`.
    > _Status (2026-10-04): **Partially done** — `archive-container.md` is split: its crate API is in `specs/formats/archive-io-crate.md` and the container spec has an Implementations section, branch `report-fix-08-archive-container`. The other format specs and `cluster-selection.md` are not addressed here._
+   > _Status (2026-10-05): **Done** for `cluster-selection.md` — it moved to `specs/core/features/cluster-selection.md`; see its section, branch `decision-fix-02-cluster-selection-to-core`._
 4. **Standing specs that describe code which is not there:**
    - `cluster-census.md` § Callers and `flag_threshold` refer to an unmerged branch.
      > _Status (2026-10-03): **Done** — both deleted, PR #684._

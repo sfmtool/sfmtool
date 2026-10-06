@@ -353,7 +353,7 @@ impl PyMatchesFile {
     /// the selection, densely renumbered. This handle is left unchanged and
     /// nothing is written; call `save` to write the result. The steps, the
     /// `0xFFFFFFFF` absent-reference sentinel and the provenance record are
-    /// specified in `specs/formats/cluster-selection.md`.
+    /// specified in `specs/core/features/cluster-selection.md`.
     ///
     /// Raises ValueError on a pairwise file, on `min_span < 2`, on a
     /// `restrict_images` name not in this file's image table, or on a

@@ -238,7 +238,7 @@ numerics and tests — is specified in
 These read a cluster-patches file and count only the `reference` and `kept`
 members unless a caller asks otherwise:
 
-- [Cluster selection](../../formats/cluster-selection.md) derives a smaller
+- [Cluster selection](../features/cluster-selection.md) derives a smaller
   cluster file by status, image and span predicates (file contract in
   [matches-file-format.md](../../formats/matches-file-format.md#cluster-selection-derived-files)).
   Consumers that admit a subset of clusters use it.

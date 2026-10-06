@@ -30,5 +30,4 @@ sfmtool's data rather than defining a format.
 | [sift-file-format.md](sift-file-format.md) | `sfmtool-sift-format` | The `.sift` feature file: the zip entries holding keypoints, descriptors and thumbnail, their descending-size ordering, and the hashes that identify the extraction. |
 | [camrig-file-format.md](camrig-file-format.md) | `sfmtool-camrig-format` | The `.camrig` camera-rig description and its pattern matching. |
 | [sfmtool-camera-models.md](sfmtool-camera-models.md) | — | The `SFMTOOL_PINHOLE` and `SFMTOOL_FISHEYE` camera models as they appear on disk. Kernels in [../core/camera/](../core/camera/README.md). |
-| [cluster-selection.md](cluster-selection.md) | `sfmtool-matches-format` | `MatchesData::select_clusters`: deriving a smaller, self-contained `.matches` working set. |
 | [colmap-interop.md](colmap-interop.md) | `sfmtool-colmap` | Reading and writing COLMAP's binary model and SQLite database: ID remapping, the camera models it translates, and where the coordinate conversion happens. |

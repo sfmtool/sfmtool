@@ -6,7 +6,10 @@ that implements it.
 
 A few specs here describe Python pipelines in `src/sfmtool/` that orchestrate
 these kernels rather than an `sfmtool-core` module of their own; they are filed
-under the module they drive.
+under the module they drive. One,
+[cluster selection](features/cluster-selection.md), describes an operation of
+the `sfmtool-matches-format` crate and is filed under the module whose output
+it narrows.
 
 The Python bindings to these modules are indexed by submodule in
 [../python-bindings.md](../python-bindings.md), which names the spec for each.

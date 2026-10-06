@@ -912,7 +912,7 @@ file is an ordinary `.matches` file — every constraint in this specification
 applies unchanged, and it reads back through the ordinary reader. How the
 subset is chosen is not this specification's concern; the selection
 operation is specified in
-[cluster-selection.md](cluster-selection.md). What this
+[cluster-selection.md](../core/features/cluster-selection.md). What this
 specification defines is the file-level contract a derived file carries.
 
 **Provenance record.** A derived file is identified by a record in the
@@ -943,8 +943,8 @@ top-level metadata under `matching_options["cluster_selection"]`:
   cluster: the requested cluster ids of the source, sorted and without
   duplicates
 
-[cluster-selection.md](cluster-selection.md) defines how the operation applies
-them. All other metadata — including the timestamp — is
+[cluster-selection.md](../core/features/cluster-selection.md) defines how
+the operation applies them. All other metadata — including the timestamp — is
 inherited from the source; the derived file's content hashes are its own,
 computed at write time. The source file is never modified.
 

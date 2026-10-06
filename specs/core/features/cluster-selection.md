@@ -11,17 +11,17 @@ from the selected arrays.
 
 The output is an ordinary `.matches` file whose file-level contract —
 provenance record, sentinel scoping, verifiability — is specified in
-[matches-file-format.md](matches-file-format.md#cluster-selection-derived-files).
+[matches-file-format.md](../../formats/matches-file-format.md#cluster-selection-derived-files).
 This document specifies the operation itself.
 
 ## Interface
 
 The operation is `MatchesData::select_clusters(&ClusterSelect)` in
-[`select.rs`](../../crates/sfmtool-matches-format/src/select.rs) of the
+[`select.rs`](../../../crates/sfmtool-matches-format/src/select.rs) of the
 `sfmtool-matches-format` crate. It returns a new `MatchesData` and leaves the
 source untouched; writing the result is the caller's choice. Python reaches it
 as `MatchesFile.select_clusters` in
-[`matches_file.rs`](../../crates/sfmtool-py/src/io/matches_file.rs), which
+[`matches_file.rs`](../../../crates/sfmtool-py/src/io/matches_file.rs), which
 returns a new `MatchesFile` handle. `select.rs` also holds the decode
 accessors described [below](#decode-accessors).
 
@@ -91,7 +91,7 @@ The operation records its source and the options it was called with in the
 derived file's top-level metadata, as the provenance record under
 `matching_options["cluster_selection"]`. The record's keys, an example, and the
 `source_selection` nesting are defined once, in
-[matches-file-format.md](matches-file-format.md#cluster-selection-derived-files).
+[matches-file-format.md](../../formats/matches-file-format.md#cluster-selection-derived-files).
 
 A selection may itself be selected again, narrowing a working set the caller
 already holds without re-deriving it from the archive. The source is then an
@@ -125,7 +125,7 @@ otherwise re-implement:
   the Python one raises `ValueError`
 - `refine_radius` — the refinement patch half-width, read from either
   `refine_options` key by the rule under
-  [`cluster_patches/metadata.json.zst`](matches-file-format.md#cluster_patchesmetadatajsonzst);
+  [`cluster_patches/metadata.json.zst`](../../formats/matches-file-format.md#cluster_patchesmetadatajsonzst);
   `None` when `refine_options` holds neither key as a number
 
 ## Errors
