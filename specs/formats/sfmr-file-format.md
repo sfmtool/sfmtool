@@ -2033,7 +2033,7 @@ Potential additions while maintaining backward compatibility:
      render, with their reach along the patch's axes, whether each value is
      only a lower bound, and the view angle and zoom of the render they were
      read on, proposed in
-     [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) § "Part 6"
+     [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) § "Part 7"
 
 2. **Metadata extensions**:
    - GPS coordinates per image

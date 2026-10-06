@@ -1,12 +1,12 @@
 # Sharper Patch Bitmap
 
 **Status:** Draft. Decided:
-- the patch bitmap, stored and used as the template views are scored against, is computed from the views that hold the most detail, judged by each view's sharpness (its ZNCC self-similarity radius) and its resolution in the patch grid (its zoom), not by agreement with the mean alone. The leading candidate is to take the single best view's bitmap rather than averaging, because a mean over differently exposed photographs is unreliable without a model of their brightness and colour shifts. A weighted mean is kept for comparison (Part 4);
+- the patch bitmap, stored and used as the template views are scored against, is computed from the views that hold the most detail, judged by each view's sharpness (its ZNCC self-similarity radius) and its resolution in the patch grid (its zoom), not by agreement with the mean alone. The leading candidate is to take the single best view's bitmap rather than averaging, because a mean over differently exposed photographs is unreliable without a model of their brightness and colour shifts. A weighted mean is kept for comparison (Part 5);
 - the angle between the view's ray and the patch normal is a third input, with its own two axes: the view foreshortens the patch by `cos θ` along the tilt direction and not across it. It is kept separate from the anisotropy of the Jacobian:
   - the Jacobian measures resolution, whether it is compressed by obliquity or by lens distortion;
   - the angle measures how sensitive the view is to errors in the patch model, and along which direction;
-- the sampler is chosen per view from the Jacobian's anisotropy, so an oblique or distorted view keeps the detail along its less compressed axis;
-- the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 6);
+- the sampler is chosen per view from the Jacobian's anisotropy, so an oblique or distorted view keeps the detail along its less compressed axis (Part 3);
+- the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 7);
 - the self-similarity reading summarises its region by an ellipse, whose semi-major axis is the radius, in place of the contour's furthest point, the slide and the reach (Part 2). That step is built;
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built.
 
@@ -86,31 +86,11 @@ The bench, both member gates and the culls read the ZNCC self-similarity radius 
 
 The self-similarity reading summarises the region of shifts that match the tile by the ellipse with the same second moments about the true position, with its semi-axes, the angle of its major axis, a flag on each axis where the true length may be larger, and its 2×2 matrix, for the whole tile, its middle and each ninth. The radius is the ellipse's semi-major axis. The ellipse maps into image px through the tile's Jacobian and onto the patch through its half-extents, and the bench, the Track View's hover, the MCP fields and the Python bindings carry it in place of the furthest-point radius, the slide and the reach, as [core/patch/zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md) § "The region, its ellipse and the radius" describes; the 2.5 bar was re-measured there and kept. What else it could serve is left to later work: a radius longer than the zoom predicts as a sign of blur in the photograph, the ellipse through the Jacobian as a per-observation, direction-dependent weight for bundle adjustment, and limiting the localizer's moves along the major axis, the direction congealing drifts along on a grain.
 
-## Part 3: what each view can contribute
+## Part 3: choosing the sampler per view
 
-A sharper template needs to know, for each view, how much detail its tile carries and how well it lines up with the others. This part takes stock of what we can measure on the views' bitmaps that serves that goal, and notes what else each measurement serves. A measurement is then made once, stored (Part 6), and read by every consumer. The weights (Part 4) are one of those consumers.
+Every measurement in Part 4 reads a rendered tile, and the sampler decides how much of the photograph's detail reaches it. Today each consumer renders every view with one sampler, `BilinearMip` by default, which reads one mip level for both axes. An oblique or distorted view therefore loses detail along its less compressed axis before anything measures it. This part chooses the sampler per view from the zoom alone, so it does not depend on the later parts.
 
-### What we can measure
-
-- **The ZNCC self-similarity grid.** The tile correlated with itself at each small shift. A sharp tile stops matching itself within a fraction of a pixel, and a blurry one keeps matching further. Its values are computed only from the patch bitmap's pixels, so they measure the patch itself.
-  - We judge the bitmap with a radius that is the semi-major axis of an ellipse fitted to the region where the ZNCC is at or above `1 − τ`, where `τ` adapts to the bitmap's contrast (`1 − τ` is about 0.95 on a high-contrast bitmap and lower on a faint one). When the semi-minor axis is much shorter, the patch can slide one way but is held in place perpendicular to it (Part 2).
-  - Reading it costs one shift search per view. The localizer's gate and the bench already read it, and a stored value (Part 6) saves reading it again.
-- **The zoom.** The Jacobian of the patch grid's map into the photograph, at the patch centre. Like the self-similarity, it has a major and a minor axis: its singular values give the least and the most zoom, in grid px per photograph px, along two perpendicular directions. Its values are computed only from the camera and the patch geometry, not from any pixels.
-  - Where the zoom along an axis is above 1, one photograph pixel covers more than one grid pixel. The zoom is then an upper bound on how sharp the bitmap can be along that axis. Below 1, the sampler reads the mip level that matches, so the bitmap can be as sharp as its grid.
-- **The viewing angle.** The angle `θ` between the view's ray through the keypoint and the patch normal. It also has a major and a minor axis. Along the tilt direction (the ray projected into the patch plane) the view foreshortens the patch by `cos θ`, and across it not at all. Its values are computed only from the camera pose and the patch geometry, not from any pixels.
-  - Along the tilt direction the tile depends most on the patch model being right. An error in the normal shears the tile by an amount that grows with `tan θ`, and an error in depth or relief on the surface shifts it. Across the tilt direction the view is insensitive to both.
-  - The foreshortening is the part of the zoom's anisotropy that comes from obliquity. The angle is the same whatever lens took the view, so it separates obliquity from lens distortion.
-- **Coverage.** The fraction of the tile that carries image data. A tile whose patch crosses the photograph's border has samples with nothing behind them. Its values are computed from the tile's data flags. [Member-coherence validation](../core/patch/member-coherence-validation.md) already gates on it (`min_valid_fraction`).
-  - A partial tile holds less of the patch, and cannot be a single reference on its own.
-  - Masks on the photographs, when they are added, affect it the same way: a masked sample carries no data, just as a sample past the border does. The self-similarity reading already leaves out samples without data, and member coherence correlates pairs only over the samples both views cover.
-- **Clipped pixels.** The share of the tile at the limits of the photograph's range, 0 or the maximum in any channel. Specular highlights and blown-out sky clip, and a clipped region has neither texture nor its true colour. It is read from the photograph's own pixels, since the sampler's blending moves a clipped value off the limit.
-- **Brightness and colour.** Each tile's mean and spread per channel, which the ZNCC's normalization computes and then discards. A view in shadow, overexposed or under a different white balance correlates as well as the others, but its colours differ. Compared across a track's views, they say which views are typical in exposure and colour.
-- **The ZNCC between observation bitmaps.** Two views' tiles correlated directly, with no bitmap built from them in between. Its values are computed from the pixels of the two views.
-  - It says which views agree with which, not only with a mean, so it can judge a candidate reference without the mean's bias toward blur. [Member-coherence validation](../core/patch/member-coherence-validation.md) builds the full matrix over a point's members, to find tracks that mix two surfaces.
-  - It is also read on parts: the 3×3 grid of ZNCC says where in the tile two views disagree (an occluder, a highlight, a corner off the plane), and the coarser grids member coherence reads say whether they disagree only in fine detail, which is what blur does.
-  - The full matrix grows with the square of the number of views, so a long track needs a choice of which pairs to correlate (Part 4).
-
-### What the tile could hold: the footprint, from the zoom
+### The footprint, from the zoom
 
 The Jacobian `J_v` of the patch grid's map into the photograph at the patch centre, at the patch resolution `R` (`patch_grid_jacobian` in [camera/warp_map.rs](../../crates/sfmtool-core/src/camera/warp_map.rs)), has singular values `σ_major ≥ σ_minor`. These are photograph pixels per grid pixel. Under `BilinearMip` the sampler reads level `l = round(log2 max(σ_major, 1))`, whose pixels are `2^l` photograph pixels wide. One sample therefore spans, in grid pixels along each singular direction:
 
@@ -124,17 +104,7 @@ The view's **footprint** `φ_v = max(φ_major, φ_minor, 1)` is the scale, in gr
 
 The `Anisotropic` sampler sets the level from `σ_minor` and takes several samples along the major axis, up to its `max_anisotropy` cap. Under it the footprint is close to `max(1, 1/σ_a)` per axis.
 
-**What else the zoom serves:**
-- **The sampler** for each view (next section).
-- **Matched-bandwidth scoring** (Part 5).
-- **The baseline for focus:** the radius a view's sampling alone would give, against which a longer radius points to the photograph.
-- **Choosing `R`** per track: views above 1× zoom mean the grid discards detail they hold.
-- **Converting** grid px to image px, as the Track View's hover does.
-- **Ranking views** before spending a shift search on them.
-
-**Cost.** It needs four projections and a 2×2 singular value decomposition, so it is free next to a render.
-
-### Choosing the sampler from the anisotropy
+### When the anisotropic sampler pays
 
 **What `BilinearMip` loses.** The two zooms `1/σ_major` and `1/σ_minor` differ when the patch is seen at an angle or through a distorting lens. Under `BilinearMip` the lower zoom sets the level for both axes. The axis with the higher zoom is therefore read at a level coarser than it needs:
 - its footprint `2^l / σ_minor` is larger than the `max(1, 2^l_minor) / σ_minor` it would have at its own level `l_minor = round(log2 max(σ_minor, 1))`;
@@ -149,11 +119,73 @@ The `Anisotropic` sampler keeps that detail, at 1.6–3× the cost of a single s
 **The rule.** Each view is rendered with `Anisotropic` when `σ_major ≥ √2` and `L ≥ a`, and with `BilinearMip` otherwise.
 - **The threshold `a`** is measured. About 1.5 is the starting value: above the √2 that level rounding alone produces, so isotropic views stay on `BilinearMip`.
 - **Cost.** The rule needs only the Jacobian, which is computed before the render, so it adds no work to views that stay on `BilinearMip`.
-- **Consistency.** Every consumer that renders a view applies the same rule, so the bench, the gates, the fuse and congealing see the same tile for the same view. A stored radius records which sampler its render used (Part 6).
+- **Consistency.** Every consumer that renders a view applies the same rule, so the bench, the gates, the fuse and congealing see the same tile for the same view. The rule reads only the zoom and `a`, so a stored reading needs no column for its sampler: the file stores the zoom of the render and the `a` it was rendered under, and a reader applies the rule to them (Part 7).
 
 On the 25-view track, at `a = 1.5`, the rule moves 10 of the 25 views: the two nearest views read at level 1, and the far views whose two zooms differ by 1.15× or more.
 
 **Why the cause of anisotropy does not matter here.** The tile depends only on the sampling. A fisheye view near the edge of the image and a pinhole view of a patch at 70° with the same Jacobian are therefore rendered the same way.
+
+### What the implementation includes
+
+**Progress.** The work reports through the [`Progress`](../../crates/sfmtool-progress/src/lib.rs) parameter the patch batches already take. A batch that renders views under the rule reports its counts through it and calls `check_cancel` between patches, so a cancelled run stops and returns `Cancelled`. A batch that renders views and does not take a `&Progress` yet gains one. A per-tile helper does not take one.
+
+**Timing through detail phases.** The renders record their cost with `Progress::detail_phase`. These phases record only when the caller sets `Progress::detailed(true)`, and do nothing otherwise, so they stay in the code at no cost. There is one phase for each sampler's renders, and its note gives the number of views rendered. A detailed run therefore gives the time per render under each sampler and the share of views the rule moves.
+
+**Measuring the difference.** Before a consumer adopts the rule, the work compares the rule against `BilinearMip` for every view, from detailed runs on a range of samples:
+- **Samples.** The seoul_bull and kerry_park ground truths, and the dino_dog_toy tracks. Together they cover views that face the patch, oblique views, views near the edge of a fisheye image, magnified views and distant views.
+- **Time.** Per render under each sampler, and per batch, for embed-patches and a bench evaluation.
+- **Changes to the patches.** Views the rule leaves on `BilinearMip` render the same bitmap as before, bit for bit. For each view the rule moves, the tile is rendered both ways and compared:
+  - its self-similarity ellipse axes (shorter means more detail kept);
+  - its ZNCC against the track's other views;
+  - the largest and mean pixel difference between the two renders.
+
+  For a whole run, it also records the change in the stored patch bitmaps and in the verdicts at the current bars.
+
+The threshold `a` is set from these numbers.
+
+**AVX2 kernels.** The two samplers in [camera/remap.rs](../../crates/sfmtool-core/src/camera/remap.rs) are scalar today. The self-similarity, localization search and cluster refinement kernels have AVX2 versions. Where the timing shows that a render's cost matters to its batch, the work adds an AVX2 kernel in the same way:
+- chosen at run time with `is_x86_feature_detected!`;
+- the scalar path kept as the reference and as the fallback on other CPUs;
+- a test that the two agree within a stated tolerance.
+
+`Anisotropic`, at 1.6–3× the cost of a single sample, is the first candidate.
+
+**Rayon.** The batches run in parallel over patches, and each patch-sized render runs sequentially inside that. `parallelize_rows` in [camera/warp_map.rs](../../crates/sfmtool-core/src/camera/warp_map.rs) makes that decision: rows run in parallel only for a large output outside a rayon worker. The per-view choice keeps this structure and adds no parallel layer of its own.
+
+## Part 4: what each view can contribute
+
+A sharper template needs to know, for each view, how much detail its tile carries and how well it lines up with the others. This part takes stock of what we can measure on the views' bitmaps that serves that goal, and notes what else each measurement serves. A measurement is then made once, stored (Part 7), and read by every consumer. The weights (Part 5) are one of those consumers.
+
+### What we can measure
+
+- **The ZNCC self-similarity grid.** The tile correlated with itself at each small shift. A sharp tile stops matching itself within a fraction of a pixel, and a blurry one keeps matching further. Its values are computed only from the patch bitmap's pixels, so they measure the patch itself.
+  - We judge the bitmap with a radius that is the semi-major axis of an ellipse fitted to the region where the ZNCC is at or above `1 − τ`, where `τ` adapts to the bitmap's contrast (`1 − τ` is about 0.95 on a high-contrast bitmap and lower on a faint one). When the semi-minor axis is much shorter, the patch can slide one way but is held in place perpendicular to it (Part 2).
+  - Reading it costs one shift search per view. The localizer's gate and the bench already read it, and a stored value (Part 7) saves reading it again.
+- **The zoom.** The Jacobian of the patch grid's map into the photograph, at the patch centre. Like the self-similarity, it has a major and a minor axis: its singular values give the least and the most zoom, in grid px per photograph px, along two perpendicular directions. Its values are computed only from the camera and the patch geometry, not from any pixels.
+  - Where the zoom along an axis is above 1, one photograph pixel covers more than one grid pixel. The zoom is then an upper bound on how sharp the bitmap can be along that axis. Below 1, the sampler reads the mip level that matches, so the bitmap can be as sharp as its grid (Part 3).
+- **The viewing angle.** The angle `θ` between the view's ray through the keypoint and the patch normal. It also has a major and a minor axis. Along the tilt direction (the ray projected into the patch plane) the view foreshortens the patch by `cos θ`, and across it not at all. Its values are computed only from the camera pose and the patch geometry, not from any pixels.
+  - Along the tilt direction the tile depends most on the patch model being right. An error in the normal shears the tile by an amount that grows with `tan θ`, and an error in depth or relief on the surface shifts it. Across the tilt direction the view is insensitive to both.
+  - The foreshortening is the part of the zoom's anisotropy that comes from obliquity. The angle is the same whatever lens took the view, so it separates obliquity from lens distortion.
+- **Coverage.** The fraction of the tile that carries image data. A tile whose patch crosses the photograph's border has samples with nothing behind them. Its values are computed from the tile's data flags. [Member-coherence validation](../core/patch/member-coherence-validation.md) already gates on it (`min_valid_fraction`).
+  - A partial tile holds less of the patch, and cannot be a single reference on its own.
+  - Masks on the photographs, when they are added, affect it the same way: a masked sample carries no data, just as a sample past the border does. The self-similarity reading already leaves out samples without data, and member coherence correlates pairs only over the samples both views cover.
+- **Clipped pixels.** The share of the tile at the limits of the photograph's range, 0 or the maximum in any channel. Specular highlights and blown-out sky clip, and a clipped region has neither texture nor its true colour. It is read from the photograph's own pixels, since the sampler's blending moves a clipped value off the limit.
+- **Brightness and colour.** Each tile's mean and spread per channel, which the ZNCC's normalization computes and then discards. A view in shadow, overexposed or under a different white balance correlates as well as the others, but its colours differ. Compared across a track's views, they say which views are typical in exposure and colour.
+- **The ZNCC between observation bitmaps.** Two views' tiles correlated directly, with no bitmap built from them in between. Its values are computed from the pixels of the two views.
+  - It says which views agree with which, not only with a mean, so it can judge a candidate reference without the mean's bias toward blur. [Member-coherence validation](../core/patch/member-coherence-validation.md) builds the full matrix over a point's members, to find tracks that mix two surfaces.
+  - It is also read on parts: the 3×3 grid of ZNCC says where in the tile two views disagree (an occluder, a highlight, a corner off the plane), and the coarser grids member coherence reads say whether they disagree only in fine detail, which is what blur does.
+  - The full matrix grows with the square of the number of views, so a long track needs a choice of which pairs to correlate (Part 5).
+
+### What else the zoom serves
+
+The zoom and the footprint it gives (Part 3) also serve:
+- **Matched-bandwidth scoring** (Part 6).
+- **The baseline for focus:** the radius a view's sampling alone would give, against which a longer radius points to the photograph.
+- **Choosing `R`** per track: views above 1× zoom mean the grid discards detail they hold.
+- **Converting** grid px to image px, as the Track View's hover does.
+- **Ranking views** before spending a shift search on them.
+
+**Cost.** It needs four projections and a 2×2 singular value decomposition, so it is free next to a render.
 
 ### How much the tile depends on the patch model: the viewing angle
 
@@ -185,9 +217,9 @@ Obliquity and lens distortion both make the Jacobian anisotropic. For a small pa
 
 So the weights read obliquity only from the angle, never from the Jacobian's anisotropy, and read resolution only from the footprint and the radius, never from the angle. That keeps an oblique view from being penalised twice.
 
-## Part 4: computing the patch bitmap
+## Part 5: computing the patch bitmap
 
-The pipeline computes the patch bitmap today as a weighted mean of the views, a consensus. The measurements in Part 3 rank the views by what they can contribute, which serves other ways to compute it as well.
+The pipeline computes the patch bitmap today as a weighted mean of the views, a consensus. The measurements in Part 4 rank the views by what they can contribute, which serves other ways to compute it as well.
 
 **The leading candidate is a single reference view.** The bitmap is the tile of the one view the measurements rank best:
 - a short self-similarity radius, with a zoom near 1 and a view facing the patch;
@@ -205,7 +237,7 @@ The pipeline computes the patch bitmap today as a weighted mean of the views, a 
 ### Which pairs of views to correlate
 
 Choosing a reference, and checking a mean's members against each other, read the ZNCC between observation bitmaps. The full matrix of `k` views costs `k(k−1)/2` correlations: 300 for the 25-view track, about 5000 for a track of 100. Each is cheap at `R×R`, but the cost grows with the square of the track. Strategies that read fewer pairs:
-- **Candidates against all.** Rank the views by the Part 3 measurements, which cost one reading per view. Correlate only the top few candidates with every view, `m·k` pairs. The reference is the candidate that agrees best with the rest.
+- **Candidates against all.** Rank the views by the Part 4 measurements, which cost one reading per view. Correlate only the top few candidates with every view, `m·k` pairs. The reference is the candidate that agrees best with the rest.
 - **Neighbours in viewing direction.** Views with similar rays and zoom should agree most. Correlating each view with its nearest few gives a sparse graph that still shows a group of views that disagrees with the rest.
 - **Coarse first.** Read all pairs on the coarse grid, which costs a fraction of the full one, and the full grid only for the pairs the decision turns on.
 - **Incremental.** A view added to a track (Add Image to Tracks, a bench geometry search) is correlated with the reference and the top candidates only.
@@ -220,7 +252,7 @@ Each view's weight in the mean becomes
 w_v ∝ w_v^IRLS · f(φ_v) · g(ρ_v) · h(θ_v)
 ```
 
-- **`w_v^IRLS`** is the Tukey/MAD weight from the view's residual, computed against the template at matched bandwidth (Part 5). That way a blurry view no longer earns weight by sitting close to a blurry mean.
+- **`w_v^IRLS`** is the Tukey/MAD weight from the view's residual, computed against the template at matched bandwidth (Part 6). That way a blurry view no longer earns weight by sitting close to a blurry mean.
 - **`f`** falls with the footprint relative to the track's smallest: `f = (φ_min / φ_v)^p`. A view at twice the smallest footprint carries half the detail per axis. For views that shrink the photograph `φ` stays between 1 and √2 (Part 3), so `f` mostly falls for views that magnify it. The radius already reads long on those tiles, so whether `f` adds anything beside `g` is measured.
 - **`g`** falls with the radius relative to the track's shortest: `g = (ρ_min / ρ_v)^q`, computed when the view is weighted. The radius is compared only within one track, since it also depends on the texture.
 - **`h`** falls with the viewing angle: `h = |cos θ_v|^k`. This is the same term as normal refinement's obliquity prior (`obliquity_weight_power`, off by default there), used here in every consumer. It is the isotropic form. The angle's sensitivity lies along the tilt direction, so the directional form weights the view by `|cos θ_v|^k` along `t̂_v` and fully across it. That needs per-axis weighting of the template (see [Open questions](#open-questions)).
@@ -238,7 +270,7 @@ The exponents `p`, `q` and `k` are measured (see [Evaluation](#evaluation)). `f`
 - **The add-image-to-tracks reference consensus.**
 - **Normal refinement's weighted consensus Φ.** Weighting changes the objective the normal is chosen by, so it adopts the weights last and only after its own measurement.
 
-## Part 5: scoring at matched bandwidth
+## Part 6: scoring at matched bandwidth
 
 A sharper template makes the fifth effect worse unless scoring changes with it. A view with footprint `φ_v` is scored against the template low-passed to that footprint:
 
@@ -257,9 +289,9 @@ The view is scored against `T_v`: its ZNCC, its leave-one-out score and its IRLS
 - **What it does not correct.** The footprint does not include blur in the photograph. A view out of focus still scores lower against a sharp template. That is intended: the low score reflects the view, and its sharpness weight `g` already lowers its influence.
 - **Variant.** Fold the view's own self-similarity into `φ_v`, so an out-of-focus view is also scored at its own bandwidth. This is an [open question](#open-questions), since it would hide focus misses from the ZNCC bars.
 
-**Effect on the bars.** ZNCC values change: far views score higher against a template blurred to their footprint. The bench's `min_zncc` bars (whole and middle) and the localizer's `min_absolute_zncc` / `min_relative_zncc` are re-measured once Part 5 lands.
+**Effect on the bars.** ZNCC values change: far views score higher against a template blurred to their footprint. The bench's `min_zncc` bars (whole and middle) and the localizer's `min_absolute_zncc` / `min_relative_zncc` are re-measured once Part 6 lands.
 
-## Part 6: storing the self-similarity radii in the `.sfmr` file
+## Part 7: storing the self-similarity radii in the `.sfmr` file
 
 Each observation's self-similarity radius is the one input to the weights that needs the photograph and a shift search. The other inputs need no photograph: the footprint and the viewing angle come from geometry, and the IRLS agreement is cheap once the views are rendered. So the file stores the radii, and every operation that re-renders a point's bitmap reads them instead of measuring again. These operations include:
 - `embed-patches`;
@@ -296,7 +328,7 @@ Optional columns, parallel to the other `tracks/*` arrays. Their names follow th
   - **Why store them.** All need the camera model to recompute. The angle and the tilt direction need the keypoint unprojected, and the zoom needs the projection's derivative. Storing them gives a reader the exact measured values without implementing the camera models.
 - **The fallback render.** Where the keypoint's ray cannot meet the patch plane (parallel to it, or the plane behind the camera), the render uses the stored patch without re-anchoring, and `d̂` is the ray to the stored patch's centre. Such a view is at or past grazing, so its value is near zero or negative either way.
 - **Not measured.** `NaN` in the ellipse axes means the observation was not measured. Its angles and zoom are then `NaN` and its flags 0.
-- **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own.
+- **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own. It also records the sampler threshold `a` the renders were made under (Part 3), from which a reader works out each render's sampler from its stored zoom.
 - **Grid px.** The grid px are those of the point's `R` (`points3d/metadata.json`'s `patch_bitmap_resolution`), so the radius converts to scene units through the point's patch half-extents, as the ellipse does.
 
 The middle-square and per-cell readings are left out. They are cheap to recompute once a render exists, and nothing proposed here reads them without one.
@@ -339,27 +371,26 @@ Which one is part of this work. The radius columns do not depend on the choice.
   - the fisheye points should gain from the sampler rule and lose nothing to `h`;
   - the oblique points should gain from the sampler rule and be down-weighted by `h`.
 
-**Measures, for each configuration** (current; Part 4's weighted mean in the fuse only; Part 4's single reference in the fuse only; then with Part 5; then each further consumer):
+**Measures, for each configuration** (current; Part 5's weighted mean in the fuse only; Part 5's single reference in the fuse only; then with Part 6; then each further consumer):
 
 1. **Sharpness of the stored bitmap**: its own overlap-reading radius and its gradient energy, per point.
 2. **ZNCC of each view against the patch bitmap, by footprint and by sharpness.** The current pattern, sharp views below blurry ones at equal zoom, should go away.
 3. **Keypoint error against ground truth**: reprojection of the ground-truth point, per view, split by footprint.
 4. **Drift along a directional texture.** On the wood-grain track, how far Fit moves observations along the grain, and their ZNCC after.
-5. **Verdict changes at the current bars**, to size the re-tuning in Part 5.
-6. **Time per point** for embed-patches on kerry_park, and the share of views the sampler rule moves to `Anisotropic`.
-7. **Sharpness and ZNCC of the views the sampler rule moves**, rendered both ways, to set the threshold `a`.
+5. **Verdict changes at the current bars**, to size the re-tuning in Part 6.
+6. **The sampler rule's time and changes to the patches**, measured as Part 3 sets out.
 
 ## Open questions
 
-- **The staleness tolerances** a consumer applies to the stored angle and zoom (Part 6), and the keypoint distance past which a writer clears a stored radius.
-- **`observation_confidence`**: refill it from the radius as the quantized ratio `ρ_min / ρ_v`, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 6).
+- **The staleness tolerances** a consumer applies to the stored angle and zoom (Part 7), and the keypoint distance past which a writer clears a stored radius.
+- **`observation_confidence`**: refill it from the radius as the quantized ratio `ρ_min / ρ_v`, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 7).
 
-- **Which pairs to correlate** (Part 4), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
+- **Which pairs to correlate** (Part 5), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?
-- **Folding the radius into `φ_v`** for matched-bandwidth scoring (Part 5, variant). Fairer to out-of-focus views, but it hides their blur from the ZNCC bars.
+- **Folding the radius into `φ_v`** for matched-bandwidth scoring (Part 6, variant). Fairer to out-of-focus views, but it hides their blur from the ZNCC bars.
 - **The sampler threshold `a`**, and whether the rule should also consider the view's weight. A view with a small weight contributes little to the template, so rendering it with the more expensive sampler may not pay.
-- **Directional angle terms.** The angle's sensitivity lies along the tilt direction (Part 3). Weighting the template along `t̂_v` by `|cos θ_v|^k` and fully across it is the directional form of `h`, and belongs with per-axis weighting.
+- **Directional angle terms.** The angle's sensitivity lies along the tilt direction (Part 4). Weighting the template along `t̂_v` by `|cos θ_v|^k` and fully across it is the directional form of `h`, and belongs with per-axis weighting.
 - **The patch resolution.** On the 25-view track most views are far below 1× zoom, so the 24-px grid discards detail the near views hold and the far views cannot. Choosing `R` per track from its footprints is a separate change. It interacts with this one, because a larger `R` widens the range of `φ`.
 - **Normal refinement.** Whether its objective should take these weights at all, or keep the agreement weights and only the matched-bandwidth scoring.
 
