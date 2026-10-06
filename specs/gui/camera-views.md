@@ -1555,6 +1555,12 @@ before.
 | Alt+pinch | `target_push_pull()` | No | Yes | Yes: the target only |
 | Home | resets orientation | N/A | No (explicit reset) | Refused, with a status line |
 
+The MCP `set_view` tool's relative forms follow the same table, since each goes
+through the method of the gesture it stands for: `turn` is `nodal_pan_by` and
+keeps camera view (and the lock), while `move` and `orbit` move the center and
+leave it, the lock ending first as a commit
+([mcp-server.md](mcp-server.md#the-relative-forms)).
+
 **The Move Camera lock** is camera view with the camera coming along: while it is
 held, the pose the viewport is at *is* the pending pose of the image being looked
 through, so no input leaves camera view: every **No** in the fourth column's

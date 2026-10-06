@@ -874,7 +874,7 @@ pub(crate) enum ResizeTarget {
     },
 }
 
-/// The five things `set_view` can be asked for.
+/// The things `set_view` can be asked for.
 ///
 /// One enum rather than a bag of optional fields, because these are *intents*
 /// and not representations: "frame the scene" and "put the camera exactly
@@ -910,6 +910,66 @@ pub(crate) enum ViewCommand {
     Place(Placement),
     /// The field of view alone.
     Fov { fov_short_axis_deg: f64 },
+    /// A move, a turn and an orbit from where the view stands, applied in
+    /// that order, any of them absent.
+    Relative(RelativeView),
+}
+
+impl ViewCommand {
+    /// Whether this form leaves camera view, and so ends a Move Camera lock
+    /// before it runs, as `,` and `.` do.
+    ///
+    /// Two forms keep camera view: the field of view alone, and a relative
+    /// form that only turns. A turn is the free look a drag in camera view
+    /// makes, which leaves the camera where it is.
+    pub(crate) fn leaves_camera_view(&self) -> bool {
+        match self {
+            ViewCommand::Fov { .. } => false,
+            ViewCommand::Relative(relative) => {
+                relative.movement.is_some() || relative.orbit.is_some()
+            }
+            _ => true,
+        }
+    }
+}
+
+/// `set_view`'s relative forms, as one call carried them.
+///
+/// One command rather than three, because the forms may ride together and the
+/// order they are applied in is part of what the call means: see
+/// `view::relative` for the order and why.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct RelativeView {
+    /// `move`, the distances along the level axes.
+    pub(crate) movement: Option<Movement>,
+    /// `turn`, the camera turned in place.
+    pub(crate) turn: Option<Angles>,
+    /// `orbit`, the camera swung around the orbit target.
+    pub(crate) orbit: Option<Angles>,
+    pub(crate) fov_short_axis_deg: Option<f64>,
+}
+
+/// `set_view`'s `move`: distances forward, right and up along the level axes
+/// (`ViewportCamera::move_level`), in `unit` or, without one, in the view's own
+/// unit.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Movement {
+    pub(crate) forward: f64,
+    pub(crate) right: f64,
+    pub(crate) up: f64,
+    /// One of `sfmtool_core::WORLD_SPACE_UNITS`, checked at the parse.
+    pub(crate) unit: Option<&'static str>,
+}
+
+/// `set_view`'s `turn` and `orbit`: two angles in degrees. A positive yaw is
+/// counter-clockwise about `world_up` seen from above, and a positive pitch
+/// turns toward `world_up` -- the view direction for a turn, so the camera
+/// looks up, and the camera's bearing from the target for an orbit, so the
+/// camera rises.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Angles {
+    pub(crate) yaw_deg: f64,
+    pub(crate) pitch_deg: f64,
 }
 
 /// The explicit camera -- a position, an orientation and a target distance --
@@ -2220,12 +2280,12 @@ pub(crate) fn apply_as_agent(
                 edits.and_then(|id| crate::camera_lock::exit_implicitly_for(viewer, state, id)),
             );
             // A view command that leaves camera view (a fit, a look-through, a
-            // placement, an explicit exit) is a step away from a camera in
-            // hand, exactly as `,` and `.` are: the lock ends first, as a
-            // commit when it has been moved. A field-of-view change keeps
-            // camera view and so keeps the lock, as the zoom controls do.
-            if matches!(command, Command::SetView { view: ref v, .. } if !matches!(v, ViewCommand::Fov { .. }))
-            {
+            // placement, an explicit exit, a move or an orbit) is a step away
+            // from a camera in hand, exactly as `,` and `.` are: the lock ends
+            // first, as a commit when it has been moved. A field-of-view change
+            // and a turn keep camera view and so keep the lock, as the zoom
+            // controls and a free-look drag do.
+            if matches!(command, Command::SetView { view: ref v, .. } if v.leaves_camera_view()) {
                 stale.extend(crate::camera_lock::exit_implicitly(viewer, state));
             }
             let before = state.action_log.revision();

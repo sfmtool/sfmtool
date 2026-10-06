@@ -1443,11 +1443,8 @@ impl LengthDisplay {
                 ..as_is
             },
             Some(scene @ ("mm" | "cm" | "m")) => {
-                let metres = match scene {
-                    "mm" => 1e-3,
-                    "cm" => 1e-2,
-                    _ => 1.0,
-                };
+                let metres = sfmtool_core::world_space_unit_in_metres(scene)
+                    .expect("mm, cm and m are world-space units");
                 let in_metres = largest * metres;
                 let (name, size) = if fits(largest) {
                     (scene, metres)

@@ -541,7 +541,7 @@ fn every_advertised_tool_refuses_an_unknown_top_level_argument() {
     }
 }
 
-/// Exercise the three nested objects parsed by `Args` using the valid catalog
+/// Exercise the nested objects parsed by `Args` using the valid catalog
 /// calls. The schema supplies the probe names; the parser must recognize each
 /// advertised name and reject a name absent from the schema.
 #[test]
@@ -551,6 +551,9 @@ fn nested_argument_names_agree_with_the_catalog() {
         ("set_reconstruction_transform", "transform"),
         ("move_camera_image", "world_from_camera"),
         ("set_view", "look_through"),
+        ("set_view", "move"),
+        ("set_view", "turn"),
+        ("set_view", "orbit"),
     ] {
         let spec = tools::catalog()
             .iter()
@@ -560,7 +563,11 @@ fn nested_argument_names_agree_with_the_catalog() {
         assert_eq!(schema["additionalProperties"], false, "{tool}.{field}");
         let properties = schema["properties"].as_object().expect("nested object");
         let base = if tool == "set_view" {
-            json!({ "look_through": { "camera_image": 0 } })
+            match field {
+                "look_through" => json!({ "look_through": { "camera_image": 0 } }),
+                "move" => json!({ "move": { "forward": 1.0 } }),
+                _ => json!({ field: { "yaw_deg": 1.0 } }),
+            }
         } else {
             calls
                 .iter()

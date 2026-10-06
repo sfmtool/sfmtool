@@ -591,6 +591,31 @@ pub const SFMR_WRITE_RECORD_VERSION: u32 = 8;
 /// consumer of this constant).
 pub const SFMR_CANONICAL_CONVENTION_VERSION: u32 = 5;
 
+/// The units [`SfmrMetadata::world_space_unit`] may name, each with its length
+/// in metres.
+///
+/// The one table of them in the Rust workspace, so a consumer that converts a
+/// length between two of them (the viewer's `set_view` `move.unit`, Track
+/// View's length display) reads the factors from where the format declares the
+/// list. The Python side keeps its own copy in
+/// `sfmtool.xform._scale_by_measurements`.
+pub const WORLD_SPACE_UNITS: [(&str, f64); 5] = [
+    ("mm", 0.001),
+    ("cm", 0.01),
+    ("m", 1.0),
+    ("in", 0.0254),
+    ("ft", 0.3048),
+];
+
+/// The length of one `unit` in metres, or `None` for a name that is not one of
+/// [`WORLD_SPACE_UNITS`].
+pub fn world_space_unit_in_metres(unit: &str) -> Option<f64> {
+    WORLD_SPACE_UNITS
+        .iter()
+        .find(|(name, _)| *name == unit)
+        .map(|&(_, metres)| metres)
+}
+
 /// `feature_source` value: observations reference external `.sift` files.
 pub const FEATURE_SOURCE_SIFT_FILES: &str = "sift_files";
 /// `feature_source` value: per-observation keypoints stored inline in the

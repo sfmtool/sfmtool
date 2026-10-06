@@ -2005,6 +2005,11 @@ the physical unit of 3D coordinates (point positions and camera translations) in
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
 solve.
 
+The five units and their lengths in metres are
+[`WORLD_SPACE_UNITS`](../../crates/sfmtool-sfmr-format/src/types.rs) (with
+`world_space_unit_in_metres` to look one up), re-exported by `sfmtool-core`, so
+a Rust consumer converting between them reads the same table.
+
 **Semantics:**
 
 - All 3D point positions (`points3d/positions_xyzw`) are in this unit. The unit

@@ -11,7 +11,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "The whole scene graph: every loaded reconstruction with its counts and \
                           display state, the current selection, which reconstruction is soloed, \
                           the 3D viewport camera, and the window title. Call this first — the \
-                          labels it reports are the handles every other tool takes. Counts only: \
+                          labels it reports are the handles every other tool takes. Each \
+                          reconstruction carries the world_space_unit its file declares, and \
+                          the view carries the unit its positions and distances are in; either \
+                          is null for scene units, a length of whatever size the solve gave it. \
+                          The view has a unit only when every loaded reconstruction declares \
+                          one and their display transforms draw them all at the same scale. \
+                          Counts only: \
                           no tool here returns point arrays or track tables in bulk, so read the \
                           .sfmr file itself (or `sfm inspect`) for data and ask the viewer for \
                           state.",

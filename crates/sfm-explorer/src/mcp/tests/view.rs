@@ -467,3 +467,438 @@ fn animating_an_exit_from_camera_view_is_refused() {
     let error = tools::parse("set_view", Some(&map)).expect_err("refused");
     assert!(error.0.contains("no move to animate"), "{error}");
 }
+
+// ── set_view: the relative forms ────────────────────────────────────────
+
+/// A level view to move from: at `[0, -5, 1]` looking along +y at
+/// `[0, 0, 1]`, five away, with `world_up` +Z.
+fn a_level_view(state: &mut AppState, viewer: &mut Viewer3D) -> Value {
+    call(
+        state,
+        viewer,
+        "set_view",
+        json!({ "position": [0.0, -5.0, 1.0], "target": [0.0, 0.0, 1.0], "up": [0.0, 0.0, 1.0] }),
+    )["view"]
+        .clone()
+}
+
+/// A vector field of the view block as an array.
+#[track_caller]
+fn vector_of(value: &Value) -> [f64; 3] {
+    let numbers: Vec<f64> = value
+        .as_array()
+        .expect("a vector")
+        .iter()
+        .map(|n| n.as_f64().expect("a number"))
+        .collect();
+    [numbers[0], numbers[1], numbers[2]]
+}
+
+/// The text of the Action Log's last entry.
+fn last_log_text(state: &AppState) -> Option<String> {
+    state
+        .action_log
+        .entries()
+        .last()
+        .map(|entry| entry.text.clone())
+}
+
+/// One reconstruction, `metric`, whose file declares `unit` (or none).
+fn one_reconstruction_in(unit: Option<&str>) -> (AppState, Viewer3D) {
+    let mut reconstruction = recon(8, "M");
+    reconstruction.metadata.world_space_unit = unit.map(str::to_string);
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/metric.sfmr"),
+        reconstruction,
+    ));
+    let id = state.scene[0].id;
+    state.select_recon(id);
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    state.window = Some(FakeWindow::default().info());
+    (state, viewer)
+}
+
+/// `move` goes along the level axes: forward is the view direction laid flat,
+/// so a camera looking down at its target moves over the ground rather than
+/// into it, right is level, and up is +Z. The orientation and the target
+/// distance stay, so the target comes along.
+#[test]
+fn a_move_goes_along_the_level_axes() {
+    let (mut state, mut viewer) = two_reconstructions();
+    // Looking down at the origin from behind and above.
+    let before = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "position": [0.0, -5.0, 2.0], "target": [0.0, 0.0, 0.0] }),
+    )["view"]
+        .clone();
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "move": { "forward": 1.0, "right": 2.0, "up": 0.5 } }),
+    )["view"]
+        .clone();
+
+    let (position, target, distance) = placement_of(&after);
+    assert_close(position, [2.0, -4.0, 2.5], "the moved camera");
+    assert_close(target, [2.0, 1.0, 0.5], "the target, carried along");
+    assert_eq!(distance, placement_of(&before).2);
+    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+}
+
+/// A positive yaw turns the camera left, counter-clockwise seen from above; a
+/// negative one turns it right; a positive pitch looks up. The camera does not
+/// move.
+#[test]
+fn a_turn_turns_the_camera_in_place() {
+    let (mut state, mut viewer) = two_reconstructions();
+    a_level_view(&mut state, &mut viewer);
+    let left = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "turn": { "yaw_deg": 90.0 } }),
+    )["view"]
+        .clone();
+    assert_close(vector_of(&left["position"]), [0.0, -5.0, 1.0], "stayed put");
+    assert_close(
+        vector_of(&left["derived"]["forward"]),
+        [-1.0, 0.0, 0.0],
+        "turned left, to -x",
+    );
+    assert_close(
+        vector_of(&left["derived"]["target"]),
+        [-5.0, -5.0, 1.0],
+        "the target swung round the camera",
+    );
+
+    a_level_view(&mut state, &mut viewer);
+    let right = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "turn": { "yaw_deg": -35.0, "pitch_deg": 30.0 } }),
+    )["view"]
+        .clone();
+    let (sin_yaw, cos_yaw) = 35f64.to_radians().sin_cos();
+    let (sin_pitch, cos_pitch) = 30f64.to_radians().sin_cos();
+    assert_close(
+        vector_of(&right["derived"]["forward"]),
+        [sin_yaw * cos_pitch, cos_yaw * cos_pitch, sin_pitch],
+        "turned right and up",
+    );
+    assert_close(
+        vector_of(&right["position"]),
+        [0.0, -5.0, 1.0],
+        "stayed put",
+    );
+}
+
+/// An orbit swings the camera around the target, which stays: a positive yaw
+/// carries the camera counter-clockwise seen from above, to its own right, and
+/// a positive pitch raises it.
+#[test]
+fn an_orbit_swings_the_camera_around_the_target() {
+    let (mut state, mut viewer) = two_reconstructions();
+    a_level_view(&mut state, &mut viewer);
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "orbit": { "yaw_deg": 90.0 } }),
+    )["view"]
+        .clone();
+    let (position, target, distance) = placement_of(&after);
+    assert_close(position, [5.0, 0.0, 1.0], "swung onto the +x side");
+    assert_close(target, [0.0, 0.0, 1.0], "the target stays");
+    assert!((distance - 5.0).abs() < 1e-9, "distance {distance}");
+
+    a_level_view(&mut state, &mut viewer);
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "orbit": { "pitch_deg": 30.0 } }),
+    )["view"]
+        .clone();
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let (position, target, _) = placement_of(&after);
+    assert_close(position, [0.0, -5.0 * cos, 1.0 + 5.0 * sin], "raised");
+    assert_close(target, [0.0, 0.0, 1.0], "the target stays");
+}
+
+/// The relative forms ride together in the order move, turn, orbit, each from
+/// where the one before left the camera, whatever order the call spells them
+/// in: the move goes along the direction the camera faced when the call
+/// arrived, and the orbit pivots on the target the turn swung round.
+#[test]
+fn the_relative_forms_apply_in_the_order_move_turn_orbit() {
+    let (mut state, mut viewer) = two_reconstructions();
+    a_level_view(&mut state, &mut viewer);
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({
+            "orbit": { "yaw_deg": 90.0 },
+            "turn": { "yaw_deg": 90.0 },
+            "move": { "forward": 1.0 },
+            "fov_short_axis_deg": 50.0,
+        }),
+    )["view"]
+        .clone();
+    // Moved to [0, -4, 1] along +y; turned to face -x, so the target is at
+    // [-5, -4, 1]; orbited a quarter turn counter-clockwise around it.
+    let (position, target, _) = placement_of(&after);
+    assert_close(
+        position,
+        [-5.0, 1.0, 1.0],
+        "where the three left the camera",
+    );
+    assert_close(target, [-5.0, -4.0, 1.0], "the target the turn swung round");
+    assert_close(
+        vector_of(&after["derived"]["forward"]),
+        [0.0, -1.0, 0.0],
+        "facing back down -y",
+    );
+    let fov = after["fov_short_axis_deg"].as_f64().expect("a number");
+    assert!((fov - 50.0).abs() < 1e-9, "fov {fov}");
+    assert_eq!(
+        last_log_text(&state).as_deref(),
+        Some(
+            "Moved 1 scene unit forward, then turned 90° left, then orbited 90° \
+             counter-clockwise, then field of view 50.0°"
+        )
+    );
+}
+
+/// A turn in camera view is the free look a drag makes there: the camera
+/// turns about the looked-through camera's up and camera view holds. A move
+/// and an orbit leave it, as a fly key and an Alt-drag do.
+#[test]
+fn a_turn_keeps_camera_view_and_a_move_or_an_orbit_leaves_it() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let look_through = json!({ "look_through": { "camera_image": "images/A_003.jpg" } });
+    let through = call(&mut state, &mut viewer, "set_view", look_through.clone())["view"].clone();
+    let turned = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "turn": { "yaw_deg": -20.0 } }),
+    )["view"]
+        .clone();
+    assert_eq!(turned["looking_through"]["camera_image_index"], 3);
+    assert_eq!(turned["position"], through["position"]);
+    let up = nalgebra::Vector3::from(vector_of(&through["world_up"]));
+    let before = nalgebra::Vector3::from(vector_of(&through["derived"]["forward"]));
+    let after = nalgebra::Vector3::from(vector_of(&turned["derived"]["forward"]));
+    let angle = before.angle(&after).to_degrees();
+    assert!((angle - 20.0).abs() < 1e-6, "turned {angle}°");
+    assert!(
+        before.cross(&after).dot(&up) < 0.0,
+        "a negative yaw turns right"
+    );
+
+    for (form, arguments) in [
+        ("move", json!({ "move": { "up": 0.1 } })),
+        ("orbit", json!({ "orbit": { "yaw_deg": 5.0 } })),
+    ] {
+        call(&mut state, &mut viewer, "set_view", look_through.clone());
+        let out = call(&mut state, &mut viewer, "set_view", arguments);
+        assert_eq!(out["view"]["looking_through"], Value::Null, "{form}");
+    }
+}
+
+/// The relative forms start from the view as it stands, so none of them may
+/// ride with an absolute form, and the refusal says what to do instead.
+#[test]
+fn a_relative_form_beside_an_absolute_one_is_refused() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = a_level_view(&mut state, &mut viewer);
+    for (arguments, named) in [
+        (
+            json!({ "move": { "forward": 1.0 }, "position": [1.0, 2.0, 3.0] }),
+            "was given move and position at once",
+        ),
+        (
+            json!({ "turn": { "yaw_deg": 10.0 }, "fit": null }),
+            "was given turn and fit at once",
+        ),
+        (
+            json!({ "orbit": { "yaw_deg": 10.0 }, "look_through": { "camera_image": 0 } }),
+            "was given orbit and look_through at once",
+        ),
+    ] {
+        let error = refused_call(&mut state, &mut viewer, "set_view", arguments);
+        assert!(error.0.contains(named), "{error}");
+        assert!(
+            error
+                .0
+                .contains("combine only with one another, fov_short_axis_deg and animate"),
+            "{error}"
+        );
+        assert!(error.0.contains("in a call of its own first"), "{error}");
+    }
+    let after = ok(&mut state, &mut viewer, Command::GetScene)["view"].clone();
+    assert_eq!(after["position"], before["position"]);
+}
+
+/// A relative form with nothing in it, and a unit the format does not know,
+/// are refused rather than read as no move.
+#[test]
+fn an_empty_relative_form_and_an_unknown_unit_are_refused() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let error = refused_call(&mut state, &mut viewer, "set_view", json!({ "move": {} }));
+    assert_eq!(
+        error.0,
+        "set_view.move was given no distance — pass forward, right or up."
+    );
+    let error = refused_call(&mut state, &mut viewer, "set_view", json!({ "turn": {} }));
+    assert_eq!(
+        error.0,
+        "set_view.turn was given no angle — pass yaw_deg or pitch_deg."
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "move": { "forward": 1.0, "unit": "yd" } }),
+    );
+    assert_eq!(
+        error.0,
+        "set_view.move wants unit to be one of mm, cm, m, in, ft — got \"yd\". Omit it to \
+         move in the view's own unit."
+    );
+}
+
+/// `get_scene` reports the unit each file declares, and the unit the view is
+/// in; both are null for scene units.
+#[test]
+fn get_scene_reports_the_world_space_unit() {
+    let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["scene"][0]["world_space_unit"], "m");
+    assert_eq!(scene["view"]["world_space_unit"], "m");
+
+    let (mut state, mut viewer) = one_reconstruction_in(None);
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["scene"][0]["world_space_unit"], Value::Null);
+    assert_eq!(scene["view"]["world_space_unit"], Value::Null);
+}
+
+/// The view's world is shared, and each reconstruction is drawn in it at its
+/// display transform's scale. The world has a unit only when every
+/// reconstruction gives one world length the same physical size: one in `m`
+/// and one in `mm` drawn at 0.001 agree on metres, while a display scale that
+/// stretches the only reconstruction leaves the world in scene units.
+#[test]
+fn the_view_has_a_unit_only_where_every_reconstruction_agrees_on_it() {
+    let rescale = |state: &mut AppState, viewer: &mut Viewer3D, label: &str, scale: f64| {
+        call(
+            state,
+            viewer,
+            "set_reconstruction_transform",
+            json!({
+                "reconstruction_label": label,
+                "transform": {
+                    "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
+                    "translation": [0.0, 0.0, 0.0],
+                    "scale": scale,
+                },
+            }),
+        );
+    };
+    let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
+    rescale(&mut state, &mut viewer, "metric", 2.0);
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["scene"][0]["world_space_unit"], "m");
+    assert_eq!(
+        scene["view"]["world_space_unit"],
+        Value::Null,
+        "m drawn at 2"
+    );
+
+    let mut millimetres = recon(8, "N");
+    millimetres.metadata.world_space_unit = Some("mm".to_string());
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/fine.sfmr"),
+        millimetres,
+    ));
+    rescale(&mut state, &mut viewer, "metric", 1.0);
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(
+        scene["view"]["world_space_unit"],
+        Value::Null,
+        "m beside mm"
+    );
+    rescale(&mut state, &mut viewer, "fine", 0.001);
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["view"]["world_space_unit"], "m", "mm drawn at 0.001");
+}
+
+/// A distance in another physical unit is converted to the view's: ten feet in
+/// a scene in metres is 3.048 m.
+#[test]
+fn a_move_in_feet_is_converted_to_the_view_in_metres() {
+    let (mut state, mut viewer) = one_reconstruction_in(Some("m"));
+    a_level_view(&mut state, &mut viewer);
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "move": { "forward": 10.0, "up": -1.0, "unit": "ft" } }),
+    )["view"]
+        .clone();
+    assert_close(
+        vector_of(&after["position"]),
+        [0.0, -5.0 + 3.048, 1.0 - 0.3048],
+        "ten feet forward and one down",
+    );
+    assert_eq!(
+        last_log_text(&state).as_deref(),
+        Some("Moved 10 ft forward and 1 ft down")
+    );
+}
+
+/// A physical unit on a view in scene units has nothing to convert to, so it
+/// is refused before anything moves, naming why the view has no unit and the
+/// two ways forward.
+#[test]
+fn a_physical_unit_on_a_view_in_scene_units_is_refused() {
+    let (mut state, mut viewer) = one_reconstruction_in(None);
+    let before = a_level_view(&mut state, &mut viewer);
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "move": { "forward": 2.0, "unit": "m" }, "turn": { "yaw_deg": 10.0 } }),
+    );
+    assert_eq!(
+        error.0,
+        "move.unit \"m\" needs the view to be in a physical unit, and it is in scene units: \
+         metric declares no world_space_unit, so there is nothing to convert m to. Send the \
+         distances without unit, in scene units, or give the reconstruction a physical unit \
+         first with sfm xform --scale-by-measurements."
+    );
+    let after = ok(&mut state, &mut viewer, Command::GetScene)["view"].clone();
+    assert_eq!(after["position"], before["position"]);
+    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+
+    // Without a unit the same distance is in scene units, and moves.
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "move": { "forward": 2.0 } }),
+    )["view"]
+        .clone();
+    assert_close(
+        vector_of(&after["position"]),
+        [0.0, -3.0, 1.0],
+        "two scene units forward",
+    );
+}

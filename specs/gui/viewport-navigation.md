@@ -370,6 +370,17 @@ This complements orbit navigation well: orbit to examine something from
 different angles, then fly to reposition to a completely different part
 of the scene.
 
+The fly keys move along the camera's own axes (`ViewportCamera::fly_move`).
+The MCP `set_view` tool's `move` moves along the level axes instead
+(`ViewportCamera::move_level`): forward is the view direction laid flat on the
+XY plane, right is level (the right `D` strafes along while `world_up` is +Z),
+and up is +Z, so an
+instruction such as "move forward 2 m and rise 1 m" means the same thing
+whichever way the camera is pitched. Its `turn` and `orbit` are the nodal pan
+and the orbit by angles rather than by pixels (`nodal_pan_by`, `orbit_by`, the
+methods the drags go through). See
+[mcp-server.md](mcp-server.md#the-relative-forms).
+
 ### Tilt / Roll
 
 Q and E rotate the camera's `world_up` direction around the view axis. This

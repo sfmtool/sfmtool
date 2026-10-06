@@ -23,8 +23,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde_json::json;
 
 use super::{
-    render, resolve_camera_image, resolve_point, resolve_reconstruction, JsonReply, Placement,
-    ToolError, ViewCommand,
+    render, resolve_camera_image, resolve_point, resolve_reconstruction, Angles, JsonReply,
+    Movement, Placement, RelativeView, ToolError, ViewCommand,
 };
 use crate::action_log::Kind;
 use crate::state::AppState;
@@ -95,6 +95,9 @@ pub(super) fn set_view(
             )
         }
         ViewCommand::Place(placement) => (Some("camera"), place(viewer, placement)?),
+        ViewCommand::Relative(relative_view) => {
+            (Some("camera"), relative(state, viewer, &relative_view)?)
+        }
         ViewCommand::Fov { fov_short_axis_deg } => {
             set_fov(viewer, Some(fov_short_axis_deg))?;
             (
@@ -104,8 +107,8 @@ pub(super) fn set_view(
         }
     };
 
-    // The one entry `set_view` writes, in the catalogue's own words: the five
-    // forms all end here, and `jump_to_camera_view` records nothing of its own
+    // The one entry `set_view` writes, in the catalogue's own words: every
+    // form ends here, and `jump_to_camera_view` records nothing of its own
     // so that a look-through is one line and not two.
     match run {
         Some(run) => state.action_log.record_run(Kind::View, run, what),
@@ -286,6 +289,159 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
     } else {
         "Camera placed".to_string()
     })
+}
+
+/// The relative forms, from the view as it stands: the move, then the turn,
+/// then the orbit, each from where the one before left the camera.
+///
+/// That order is the order an instruction is read in ("step back 2 m, then
+/// turn right 35°"), and it puts each form where its axes are the ones the
+/// caller saw: the move goes along the direction the camera faced when the
+/// call arrived, the turn happens at the place the move reached, and the orbit
+/// swings around the target the move and the turn left in front of the camera.
+///
+/// - **move** goes along the level axes (`ViewportCamera::move_level`):
+///   forward is the view direction laid flat on the XY plane, right is level,
+///   and up is +Z. A distance is in `move.unit` converted to the view's unit
+///   (`render::view_world_space_unit`), or in the view's unit where the call
+///   names none. It leaves camera view, as a fly key does.
+/// - **turn** is the free look (`ViewportCamera::nodal_pan_by`), about
+///   `world_up`, and keeps camera view, as a drag in camera view does.
+/// - **orbit** is the orbit (`ViewportCamera::orbit_by`), about `world_up`
+///   through the target, and leaves camera view, as an Alt-drag in camera view
+///   does.
+///
+/// Everything that can refuse -- a unit the view cannot convert to, a field of
+/// view out of range -- is checked before anything moves.
+fn relative(
+    state: &AppState,
+    viewer: &mut Viewer3D,
+    relative: &RelativeView,
+) -> Result<String, ToolError> {
+    let movement = match &relative.movement {
+        Some(movement) => Some((movement, move_unit(state, movement)?)),
+        None => None,
+    };
+    // Refuses before it writes, and the field of view enters none of the
+    // arithmetic below, so it can go first.
+    set_fov(viewer, relative.fov_short_axis_deg)?;
+
+    let mut done: Vec<String> = Vec::new();
+    if let Some((movement, (factor, unit))) = movement {
+        viewer.camera_view = None;
+        viewer.camera.move_level(
+            movement.forward * factor,
+            movement.right * factor,
+            movement.up * factor,
+        );
+        done.push(describe_move(movement, &unit));
+    }
+    if let Some(turn) = &relative.turn {
+        viewer
+            .camera
+            .nodal_pan_by(turn.yaw_deg.to_radians(), turn.pitch_deg.to_radians());
+        done.push(describe_angles("turned", turn, ("left", "right")));
+    }
+    if let Some(orbit) = &relative.orbit {
+        viewer.camera_view = None;
+        viewer
+            .camera
+            .orbit_by(orbit.yaw_deg.to_radians(), orbit.pitch_deg.to_radians());
+        done.push(describe_angles(
+            "orbited",
+            orbit,
+            ("counter-clockwise", "clockwise"),
+        ));
+    }
+    if let Some(fov) = relative.fov_short_axis_deg {
+        done.push(format!("field of view {fov:.1}°"));
+    }
+    let mut text = done.join(", then ");
+    if let Some(first) = text.get(..1).map(str::to_uppercase) {
+        text.replace_range(..1, &first);
+    }
+    Ok(text)
+}
+
+/// The factor that takes `movement`'s distances to the view's unit, and the
+/// unit they were given in as the Action Log names it.
+///
+/// Without `move.unit` the distances are already in the view's unit, known or
+/// not. With one, the view must be in a physical unit too, or there is nothing
+/// to convert to.
+fn move_unit(state: &AppState, movement: &Movement) -> Result<(f64, String), ToolError> {
+    let view_unit = render::view_world_space_unit(state);
+    match (movement.unit, view_unit) {
+        (None, Ok(view)) => Ok((1.0, view.to_string())),
+        (None, Err(_)) => Ok((1.0, "scene units".to_string())),
+        (Some(unit), Ok(view)) => {
+            let metres = |name: &str| {
+                sfmtool_core::world_space_unit_in_metres(name)
+                    .expect("both units were checked against the table")
+            };
+            Ok((metres(unit) / metres(view), unit.to_string()))
+        }
+        (Some(unit), Err(reason)) => Err(ToolError::new(format!(
+            "move.unit {unit:?} needs the view to be in a physical unit, and it is in scene \
+             units: {reason}, so there is nothing to convert {unit} to. Send the distances \
+             without unit, in scene units, or give the reconstruction a physical unit first \
+             with sfm xform --scale-by-measurements."
+        ))),
+    }
+}
+
+/// "moved 2 m back and 1 m up", naming only the axes the move went along.
+fn describe_move(movement: &Movement, unit: &str) -> String {
+    let parts: Vec<String> = [
+        (movement.forward, "forward", "back"),
+        (movement.right, "right", "left"),
+        (movement.up, "up", "down"),
+    ]
+    .into_iter()
+    .filter(|(distance, _, _)| *distance != 0.0)
+    .map(|(distance, positive, negative)| {
+        let way = if distance > 0.0 { positive } else { negative };
+        let amount = amount(distance.abs());
+        let unit = match (unit, amount.as_str()) {
+            ("scene units", "1") => "scene unit",
+            _ => unit,
+        };
+        format!("{amount} {unit} {way}")
+    })
+    .collect();
+    if parts.is_empty() {
+        "moved nowhere".to_string()
+    } else {
+        format!("moved {}", parts.join(" and "))
+    }
+}
+
+/// "turned 35° right and 10° up", naming only the angles that were turned
+/// through. `yaw_words` names a positive yaw, then a negative one.
+fn describe_angles(verb: &str, angles: &Angles, yaw_words: (&str, &str)) -> String {
+    let parts: Vec<String> = [
+        (angles.yaw_deg, yaw_words.0, yaw_words.1),
+        (angles.pitch_deg, "up", "down"),
+    ]
+    .into_iter()
+    .filter(|(degrees, _, _)| *degrees != 0.0)
+    .map(|(degrees, positive, negative)| {
+        let way = if degrees > 0.0 { positive } else { negative };
+        format!("{}° {way}", amount(degrees.abs()))
+    })
+    .collect();
+    if parts.is_empty() {
+        format!("{verb} through no angle")
+    } else {
+        format!("{verb} {}", parts.join(" and "))
+    }
+}
+
+/// A distance or an angle as a person would write it: up to three decimals,
+/// with no trailing zeros (`2`, `0.5`, `1.234`).
+fn amount(value: f64) -> String {
+    let rounded = (value * 1000.0).round() / 1000.0;
+    format!("{rounded}")
 }
 
 /// Which way the camera ends up facing, and how that was arrived at.

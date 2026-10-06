@@ -107,6 +107,10 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, index_file
             "show_points_at_infinity": node.show_points_at_infinity,
             "tint": tint_name(node),
         },
+        // The unit the file declares its lengths in, null for scene units.
+        // The unit the *view* is in is the view block's, since the display
+        // transform can draw this node at another scale.
+        "world_space_unit": recon.metadata.world_space_unit,
         "transformed": node.has_transform(),
         // The display transform in force, always present and reading as the
         // identity for a node that carries none, so an agent that wants the
@@ -228,6 +232,9 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
         "world_up": vector(&camera.world_up),
         "fov_short_axis_deg": camera.fov.to_degrees(),
         "near": camera.near,
+        // What the lengths above are in, and what `set_view`'s `move`
+        // converts a stated unit to: null for scene units.
+        "world_space_unit": view_world_space_unit(state).ok(),
         "derived": {
             "target": point(&target),
             "forward": vector(&forward),
@@ -245,6 +252,65 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
                 .map(|im| im.name.clone()),
         })),
     })
+}
+
+/// The physical unit the viewport's world is in, or why it has none, in words
+/// that follow "the view is in scene units:".
+///
+/// The viewport's world is shared: each reconstruction is drawn in it through
+/// its display transform, a similarity whose scale `s` stretches every length,
+/// so one length of the world is `metres(world_space_unit) / s` metres
+/// according to that reconstruction. The world has a unit when every loaded
+/// reconstruction declares one and they all agree on that length, and the
+/// length is one of the format's units: two reconstructions in `m` drawn at
+/// scale 1 are in `m`, and so are one in `m` and one in `mm` drawn at scale
+/// 0.001. Hidden reconstructions count, since hiding one does not change the
+/// frame the view is in. Anything else is scene units, which is also what the
+/// world is with nothing loaded.
+pub(super) fn view_world_space_unit(state: &AppState) -> Result<&'static str, String> {
+    // The same length, allowing for the rounding a product of scales picks up.
+    let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs());
+    let mut agreed: Option<(f64, &str)> = None;
+    for node in state.scene.iter() {
+        let label = node.label.as_str();
+        let Some(unit) = node.recon().metadata.world_space_unit.as_deref() else {
+            return Err(format!("{label} declares no world_space_unit"));
+        };
+        let Some(metres) = sfmtool_core::world_space_unit_in_metres(unit) else {
+            return Err(format!(
+                "{label}'s world_space_unit {unit:?} is not one of {}",
+                super::tools::world_space_unit_names()
+            ));
+        };
+        let scale = node.transform().scale;
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(format!("{label} is drawn at a scale of {scale}"));
+        }
+        let length = metres / scale;
+        match agreed {
+            None => agreed = Some((length, label)),
+            Some((first, first_label)) if !same(first, length) => {
+                return Err(format!(
+                    "{first_label} and {label} are drawn at different scales (their \
+                     world_space_unit or the scale of their display transform differs)"
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    let Some((length, label)) = agreed else {
+        return Err("no reconstruction is loaded".to_string());
+    };
+    sfmtool_core::WORLD_SPACE_UNITS
+        .iter()
+        .find(|&&(_, metres)| same(metres, length))
+        .map(|&(name, _)| name)
+        .ok_or_else(|| {
+            format!(
+                "{label}'s display transform scales it to a length that is none of {}",
+                super::tools::world_space_unit_names()
+            )
+        })
 }
 
 /// One row of `list_camera_images`.

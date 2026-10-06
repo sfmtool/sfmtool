@@ -21,8 +21,8 @@ use sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions;
 
 use super::input::{InputCommand, ModifierKeys, PointerTarget};
 use super::{
-    CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
-    ViewCommand,
+    Angles, CameraImageSel, CloseTarget, Command, DisplayChange, Movement, Placement, RelativeView,
+    SelectionScope, ToolError, ViewCommand,
 };
 use crate::action_log::Actor;
 use crate::dock::Tab;
@@ -724,7 +724,8 @@ fn parse_seed(args: &Args) -> Result<crate::bench::Seed, ToolError> {
     })
 }
 
-/// `set_view`: one of its seven forms, and whether to ease into it.
+/// `set_view`: one of its absolute forms or the relative family, and whether
+/// to ease into it.
 ///
 /// `animate` applies to every form that moves the camera, which is every form
 /// but `exit_camera_view`: leaving camera view keeps the camera where it is, so
@@ -742,13 +743,17 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
     Ok(Command::SetView { view, animate })
 }
 
-/// `set_view`'s seven forms, told apart by which field is present.
+/// `set_view`'s forms, told apart by which field is present.
 ///
-/// The forms are exclusive and the check is up front, because they are
-/// *intents* rather than representations: a call carrying both `fit` and
+/// The absolute forms are exclusive and the check is up front, because they
+/// are *intents* rather than representations: a call carrying both `fit` and
 /// `position` has no answer, and guessing one would move the camera somewhere
 /// the agent did not ask for. The explicit camera is one form however many of
-/// its pieces a call carries, so any of them puts the call in it.
+/// its pieces a call carries, so any of them puts the call in it. The relative
+/// forms (`move`, `turn`, `orbit`) each start from where the view stands, so
+/// they may ride together, in the fixed order `view::relative` applies them,
+/// but not beside an absolute form, which would leave them nothing to start
+/// from that the caller could have seen.
 fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
     let present = |key: &str| args.map.contains_key(key);
     let explicit: Vec<&str> = PLACEMENT_KEYS
@@ -766,6 +771,18 @@ fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
     .filter(|key| present(key))
     .chain(explicit.first().copied())
     .collect();
+    let relative: Vec<&str> = RELATIVE_KEYS
+        .into_iter()
+        .filter(|key| present(key))
+        .collect();
+    if let (Some(relative), Some(absolute)) = (relative.first(), forms.first()) {
+        return Err(args.error(format!(
+            "was given {relative} and {absolute} at once — the relative forms (move, turn, \
+             orbit) start from the view as it stands, so they combine only with one another, \
+             fov_short_axis_deg and animate. Send {absolute} in a call of its own first, then \
+             {relative}."
+        )));
+    }
     if forms.len() > 1 {
         return Err(args.error(format!(
             "was given {} at once — fit, look_through, exit_camera_view, point, \
@@ -832,14 +849,109 @@ fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
     if !explicit.is_empty() {
         return Ok(ViewCommand::Place(parse_placement(args, fov)?));
     }
+    if !relative.is_empty() {
+        return Ok(ViewCommand::Relative(RelativeView {
+            movement: parse_movement(args)?,
+            turn: parse_angles(args, "turn")?,
+            orbit: parse_angles(args, "orbit")?,
+            fov_short_axis_deg: fov,
+        }));
+    }
     match fov {
         Some(fov_short_axis_deg) => Ok(ViewCommand::Fov { fov_short_axis_deg }),
         None => Err(args.error(
             "was given nothing to do — pass fit, look_through, exit_camera_view, point, \
              bench_observation, a piece of the explicit camera (position, target, forward, \
-             target_distance or orientation_wxyz), or fov_short_axis_deg alone.",
+             target_distance or orientation_wxyz), a relative move, turn or orbit, or \
+             fov_short_axis_deg alone.",
         )),
     }
+}
+
+/// The arguments that put a `set_view` call in the relative family, in the
+/// order they are applied.
+const RELATIVE_KEYS: [&str; 3] = ["move", "turn", "orbit"];
+
+/// `set_view`'s `move`, if the call carried one.
+///
+/// A unit is checked against the format's list here; whether it can be
+/// converted to the view's unit depends on the scene, and is settled when the
+/// call is applied.
+fn parse_movement(args: &Args) -> Result<Option<Movement>, ToolError> {
+    let Some(value) = args.map.get("move") else {
+        return Ok(None);
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| args.error("wants move to be an object of distances."))?;
+    let inner = Args {
+        tool: "set_view.move",
+        map,
+    };
+    inner.reject_unknown_nested()?;
+    let distance = |key: &str| inner.optional_f64(key);
+    let (forward, right, up) = (distance("forward")?, distance("right")?, distance("up")?);
+    if forward.is_none() && right.is_none() && up.is_none() {
+        return Err(inner.error("was given no distance — pass forward, right or up."));
+    }
+    let unit = match inner.optional_string("unit")? {
+        None => None,
+        Some(unit) => Some(
+            sfmtool_core::WORLD_SPACE_UNITS
+                .iter()
+                .map(|&(name, _)| name)
+                .find(|name| *name == unit)
+                .ok_or_else(|| {
+                    inner.error(format!(
+                        "wants unit to be one of {} — got {unit:?}. Omit it to move in the \
+                         view's own unit.",
+                        world_space_unit_names()
+                    ))
+                })?,
+        ),
+    };
+    Ok(Some(Movement {
+        forward: forward.unwrap_or(0.0),
+        right: right.unwrap_or(0.0),
+        up: up.unwrap_or(0.0),
+        unit,
+    }))
+}
+
+/// `set_view`'s `turn` or `orbit`, if the call carried it.
+fn parse_angles(args: &Args, key: &'static str) -> Result<Option<Angles>, ToolError> {
+    let Some(value) = args.map.get(key) else {
+        return Ok(None);
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| args.error(format!("wants {key} to be an object of angles.")))?;
+    let tool = match key {
+        "turn" => "set_view.turn",
+        _ => "set_view.orbit",
+    };
+    let inner = Args { tool, map };
+    inner.reject_unknown_nested()?;
+    let (yaw_deg, pitch_deg) = (
+        inner.optional_f64("yaw_deg")?,
+        inner.optional_f64("pitch_deg")?,
+    );
+    if yaw_deg.is_none() && pitch_deg.is_none() {
+        return Err(inner.error("was given no angle — pass yaw_deg or pitch_deg."));
+    }
+    Ok(Some(Angles {
+        yaw_deg: yaw_deg.unwrap_or(0.0),
+        pitch_deg: pitch_deg.unwrap_or(0.0),
+    }))
+}
+
+/// The world-space unit names, as a refusal lists them: `mm, cm, m, in, ft`.
+pub(super) fn world_space_unit_names() -> String {
+    sfmtool_core::WORLD_SPACE_UNITS
+        .iter()
+        .map(|&(name, _)| name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Every argument that puts a `set_view` call in the explicit camera form.

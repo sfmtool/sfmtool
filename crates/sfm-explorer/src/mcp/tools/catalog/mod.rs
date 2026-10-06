@@ -506,6 +506,94 @@ fn set_view_schema() -> Value {
                 "Navigation up, which carries the roll, for the exact form. Elsewhere the roll \
                  is up.",
             ),
+            "move": {
+                "type": "object",
+                "description":
+                    "Relative form: move the camera and its target from where they stand, \
+                     keeping the orientation, along the level axes of the world. forward is \
+                     the direction the camera faces laid flat on the XY plane (its Z part taken \
+                     out), so a camera looking down moves forward over the ground rather than \
+                     into it; right is level and to the camera's right; up is world +Z, \
+                     whatever the view's roll. Negative distances go back, left and down. \
+                     Leaves camera view, as a fly key does. Applied first when it rides with \
+                     turn or orbit, so forward is the way the camera faced when the call \
+                     arrived.",
+                "properties": {
+                    "forward": { "type": "number", "description": "Distance forward; negative moves back. Default 0." },
+                    "right": { "type": "number", "description": "Distance to the right; negative moves left. Default 0." },
+                    "up": { "type": "number", "description": "Distance along +Z; negative moves down. Default 0." },
+                    "unit": {
+                        "type": "string",
+                        "enum": sfmtool_core::WORLD_SPACE_UNITS
+                            .iter()
+                            .map(|&(name, _)| name)
+                            .collect::<Vec<_>>(),
+                        "description":
+                            "The unit the distances are in. Omitted, they are in the view's \
+                             own unit, the view block's world_space_unit, which is null for \
+                             scene units. Given, they are converted to the view's unit, which \
+                             must then be a physical one: a unit on a view in scene units is \
+                             refused.",
+                    },
+                },
+                "required": [],
+                "additionalProperties": false,
+            },
+            "turn": {
+                "type": "object",
+                "description":
+                    "Relative form: turn the camera in place, as a free-look drag does. The \
+                     position does not move and the target swings around the camera at the \
+                     same distance. In camera view it stays in camera view and the photograph \
+                     stays up, exactly as dragging in camera view does. Angles are about the \
+                     view's world_up, which in camera view is that camera's own up. Applied \
+                     after move and before orbit.",
+                "properties": {
+                    "yaw_deg": {
+                        "type": "number",
+                        "description":
+                            "Degrees about world_up, counter-clockwise seen from above: \
+                             positive turns the camera left, negative turns it right. Default 0.",
+                    },
+                    "pitch_deg": {
+                        "type": "number",
+                        "description":
+                            "Degrees toward world_up: positive looks up, negative looks down. \
+                             Stops just short of straight up or down. Default 0.",
+                    },
+                },
+                "required": [],
+                "additionalProperties": false,
+            },
+            "orbit": {
+                "type": "object",
+                "description":
+                    "Relative form: swing the camera around the orbit target (the view block's \
+                     derived.target) at the same distance, as a left-drag does outside camera \
+                     view. The target does not move. Leaves camera view, as an Alt-drag in \
+                     camera view does. Angles are about the view's world_up through the target. \
+                     Applied last, around the target move and turn left in front of the \
+                     camera.",
+                "properties": {
+                    "yaw_deg": {
+                        "type": "number",
+                        "description":
+                            "Degrees about world_up through the target, counter-clockwise seen \
+                             from above: positive carries the camera to its own right around \
+                             the target (so the view turns left), negative to its left. \
+                             Default 0.",
+                    },
+                    "pitch_deg": {
+                        "type": "number",
+                        "description":
+                            "Degrees toward world_up: positive raises the camera so it looks \
+                             down on the target more steeply, negative lowers it. Stops just \
+                             short of directly above or below the target. Default 0.",
+                    },
+                },
+                "required": [],
+                "additionalProperties": false,
+            },
             "animate": {
                 "type": "boolean",
                 "description":
@@ -523,7 +611,7 @@ fn set_view_schema() -> Value {
                 "description":
                     "Field of view of the shorter viewport dimension — vertical in a landscape \
                      window, horizontal in a portrait one. May accompany an explicit camera \
-                     placement, or be sent alone.",
+                     placement or the relative forms, or be sent alone.",
             },
         },
         "additionalProperties": false,

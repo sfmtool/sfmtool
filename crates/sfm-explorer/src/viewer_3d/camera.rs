@@ -71,46 +71,28 @@ impl ViewportCamera {
     /// Uses spherical coordinates relative to `world_up`: horizontal drag
     /// rotates around the up axis, vertical drag tilts toward/away from it.
     pub fn orbit(&mut self, delta_x: f64, delta_y: f64) {
+        self.orbit_by(
+            -delta_x * RADIANS_PER_DRAG_PX,
+            delta_y * RADIANS_PER_DRAG_PX,
+        );
+    }
+
+    /// Orbit the camera around the target point by two angles, in radians.
+    ///
+    /// `yaw` swings the camera about the `world_up` axis through the target,
+    /// counter-clockwise seen from the `world_up` side, which carries the
+    /// camera to its own right and turns the view to the left. A positive
+    /// `pitch` raises the camera toward `world_up`, so it looks down on the
+    /// target more steeply. The angle from `world_up` stops 0.01 rad short of
+    /// either pole, and the target and the target distance do not change.
+    /// [`Self::orbit`] is this with a drag's pixels read at the drag
+    /// sensitivity.
+    pub(crate) fn orbit_by(&mut self, yaw: f64, pitch: f64) {
         let pivot = self.camera.target();
         let radius = self.camera.target_distance;
         let dir = (self.camera.position - pivot).normalize();
-
-        // Decompose dir into spherical coordinates relative to world_up.
-        // theta = angle from world_up axis, phi = angle in the perpendicular plane.
-        let up = self.world_up;
-        let cos_theta = dir.dot(&up);
-        let theta = cos_theta.acos();
-
-        // Project dir onto the plane perpendicular to world_up
-        let dir_flat = dir - up * cos_theta;
-        let flat_norm = dir_flat.norm();
-
-        // Build an orthonormal basis in the perpendicular plane
-        let (basis_x, basis_y) = if flat_norm > 1e-10 {
-            let bx = dir_flat / flat_norm;
-            let by = up.cross(&bx);
-            (bx, by)
-        } else {
-            // Camera is at a pole — pick arbitrary perpendicular axes
-            let arbitrary = if up.x.abs() < 0.9 {
-                Vector3::x()
-            } else {
-                Vector3::y()
-            };
-            let bx = up.cross(&arbitrary).normalize();
-            let by = up.cross(&bx);
-            (bx, by)
-        };
-
-        let phi = dir_flat.dot(&basis_y).atan2(dir_flat.dot(&basis_x));
-
-        let new_phi = phi - delta_x * 0.01;
-        let new_theta = (theta - delta_y * 0.01).clamp(0.01, std::f64::consts::PI - 0.01);
-
-        let new_dir = up * new_theta.cos()
-            + (basis_x * new_phi.cos() + basis_y * new_phi.sin()) * new_theta.sin();
-
-        self.camera.position = pivot + new_dir.normalize() * radius;
+        let new_dir = Spherical::of(dir, self.world_up).turned(yaw, -pitch);
+        self.camera.position = pivot + new_dir * radius;
         let forward = (pivot - self.camera.position).normalize();
         self.set_orientation_from_forward(forward);
     }
@@ -153,39 +135,25 @@ impl ViewportCamera {
     /// This is the dual of [`Self::orbit`]: orbit moves the camera around a
     /// fixed target, while nodal pan moves the target around a fixed camera.
     pub fn nodal_pan(&mut self, delta_x: f64, delta_y: f64) {
+        self.nodal_pan_by(
+            -delta_x * RADIANS_PER_DRAG_PX,
+            -delta_y * RADIANS_PER_DRAG_PX,
+        );
+    }
+
+    /// Nodal pan by two angles, in radians: turn the camera in place.
+    ///
+    /// `yaw` turns the view direction about `world_up`, counter-clockwise seen
+    /// from the `world_up` side, so a positive one turns the camera to the
+    /// left. A positive `pitch` tilts the view direction toward `world_up`, so
+    /// the camera looks up. The angle from `world_up` stops 0.01 rad short of
+    /// either pole, and the position and the target distance do not change.
+    /// [`Self::nodal_pan`] is this with a drag's pixels read at the drag
+    /// sensitivity.
+    pub(crate) fn nodal_pan_by(&mut self, yaw: f64, pitch: f64) {
         let forward = self.camera.forward();
-        let up = self.world_up;
-
-        // Decompose forward into spherical coordinates relative to world_up
-        let cos_theta = forward.dot(&up);
-        let theta = cos_theta.acos();
-        let fwd_flat = forward - up * cos_theta;
-        let flat_norm = fwd_flat.norm();
-
-        let (basis_x, basis_y) = if flat_norm > 1e-10 {
-            let bx = fwd_flat / flat_norm;
-            let by = up.cross(&bx);
-            (bx, by)
-        } else {
-            let arbitrary = if up.x.abs() < 0.9 {
-                Vector3::x()
-            } else {
-                Vector3::y()
-            };
-            let bx = up.cross(&arbitrary).normalize();
-            let by = up.cross(&bx);
-            (bx, by)
-        };
-
-        let phi = fwd_flat.dot(&basis_y).atan2(fwd_flat.dot(&basis_x));
-
-        let new_phi = phi - delta_x * 0.01;
-        let new_theta = (theta + delta_y * 0.01).clamp(0.01, std::f64::consts::PI - 0.01);
-
-        let new_forward = up * new_theta.cos()
-            + (basis_x * new_phi.cos() + basis_y * new_phi.sin()) * new_theta.sin();
-
-        self.set_orientation_from_forward(new_forward.normalize());
+        let new_forward = Spherical::of(forward, self.world_up).turned(yaw, -pitch);
+        self.set_orientation_from_forward(new_forward);
     }
 
     /// Push/pull the target point closer or further from the camera.
@@ -193,6 +161,32 @@ impl ViewportCamera {
     /// Camera position and orientation remain unchanged; only target_distance is adjusted.
     pub fn target_push_pull(&mut self, delta: f64) {
         self.camera.target_distance = (self.camera.target_distance * (1.0 + delta * 0.1)).max(0.1);
+    }
+
+    /// Move the camera and its target along the level axes of the world.
+    ///
+    /// `forward` is along the view direction with its Z component taken out
+    /// (the way the camera faces, laid flat on the XY plane), `right` is along
+    /// `forward × +Z`, and `up` is along +Z. So a camera looking down at the
+    /// ground moves forward over it rather than into it, and up is +Z whatever
+    /// the view's roll. Looking straight up or down, where the view direction
+    /// has no level part, `right` is the camera's own right laid flat and
+    /// `forward` is `+Z × right`. The orientation and the target distance do
+    /// not change.
+    ///
+    /// The level counterpart of [`Self::fly_move`], whose axes are the
+    /// camera's own; this is the move `set_view`'s `move` makes.
+    pub(crate) fn move_level(&mut self, forward: f64, right: f64, up: f64) {
+        let z = Vector3::z();
+        let level_right = self.camera.forward().cross(&z);
+        let level_right = if level_right.norm() > 1e-10 {
+            level_right.normalize()
+        } else {
+            let right = self.camera.right();
+            (right - z * right.dot(&z)).normalize()
+        };
+        let level_forward = z.cross(&level_right);
+        self.camera.position += level_forward * forward + level_right * right + z * up;
     }
 
     /// Move the camera in first-person fly mode.
@@ -502,6 +496,72 @@ impl ViewportCamera {
         // View space to world space
         self.camera
             .camera_to_world(&Point3::new(view_x, view_y, view_z))
+    }
+}
+
+/// How far an orbit or a nodal pan turns per pixel of drag, in radians.
+const RADIANS_PER_DRAG_PX: f64 = 0.01;
+
+/// The closest an orbit or a nodal pan comes to either pole of `world_up`, in
+/// radians, so the view direction never becomes parallel to it and the roll
+/// stays defined.
+const POLE_MARGIN: f64 = 0.01;
+
+/// A unit direction in spherical coordinates about an up axis: `theta` the angle
+/// from the axis, `phi` the angle about it, counter-clockwise seen from the
+/// axis's side, measured in the plane `basis_x`, `basis_y`.
+///
+/// The one decomposition orbit and nodal pan share, since they are the same
+/// turn of a direction with the camera and the target in swapped roles.
+struct Spherical {
+    up: Vector3<f64>,
+    theta: f64,
+    phi: f64,
+    basis_x: Vector3<f64>,
+    basis_y: Vector3<f64>,
+}
+
+impl Spherical {
+    /// `dir` about `up`, both unit vectors.
+    fn of(dir: Vector3<f64>, up: Vector3<f64>) -> Self {
+        let cos_theta = dir.dot(&up);
+        let theta = cos_theta.acos();
+        let dir_flat = dir - up * cos_theta;
+        let flat_norm = dir_flat.norm();
+        let (basis_x, basis_y) = if flat_norm > 1e-10 {
+            let bx = dir_flat / flat_norm;
+            let by = up.cross(&bx);
+            (bx, by)
+        } else {
+            // The direction is at a pole: any pair of perpendicular axes serves.
+            let arbitrary = if up.x.abs() < 0.9 {
+                Vector3::x()
+            } else {
+                Vector3::y()
+            };
+            let bx = up.cross(&arbitrary).normalize();
+            let by = up.cross(&bx);
+            (bx, by)
+        };
+        let phi = dir_flat.dot(&basis_y).atan2(dir_flat.dot(&basis_x));
+        Self {
+            up,
+            theta,
+            phi,
+            basis_x,
+            basis_y,
+        }
+    }
+
+    /// The direction with `d_phi` added to its angle about the axis and
+    /// `d_theta` to its angle from it, the latter held [`POLE_MARGIN`] away
+    /// from either pole. A unit vector.
+    fn turned(&self, d_phi: f64, d_theta: f64) -> Vector3<f64> {
+        let phi = self.phi + d_phi;
+        let theta = (self.theta + d_theta).clamp(POLE_MARGIN, std::f64::consts::PI - POLE_MARGIN);
+        (self.up * theta.cos()
+            + (self.basis_x * phi.cos() + self.basis_y * phi.sin()) * theta.sin())
+        .normalize()
     }
 }
 

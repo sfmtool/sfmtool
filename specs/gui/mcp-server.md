@@ -149,7 +149,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
-| `set_view` | write | Frame the scene, look through a camera image, bring a point or a bench observation to the middle of the view, or set the viewport camera outright |
+| `set_view` | write | Frame the scene, look through a camera image, bring a point or a bench observation to the middle of the view, set the viewport camera outright, or move, turn and orbit it from where it stands |
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
@@ -455,6 +455,7 @@ addressable. No arguments.
                    "show_points": true, "show_camera_images": true,
                    "show_patches": true, "show_points_at_infinity": true,
                    "tint": null },
+      "world_space_unit": "m",            // what the file declares; null for scene units
       "transformed": false,               // SceneNode::has_transform
       "transform": {                      // the display transform in force
         "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
@@ -495,6 +496,7 @@ addressable. No arguments.
     "world_up": [0.0, 0.0, 1.0],          // navigation up; carries roll
     "fov_short_axis_deg": 45.0,           // the *shorter* viewport dimension
     "near": 0.081,                        // adaptive, recomputed every frame
+    "world_space_unit": "m",              // what the lengths here are in; null for scene units
     "derived": {                          // all recoverable from the above
       "target": [0.00, 0.00, 0.30],       // position + forward · target_distance
       "forward": [-0.26, 0.87, -0.42],
@@ -577,6 +579,13 @@ order every other quaternion on this surface is in. `transformed` stays beside
 it because it is the rule the Scene panel greys `Reset Transform` and
 `Bake Transform` with, and one boolean is cheaper to poll than a comparison
 against the identity that would have to choose its own tolerance.
+
+**`world_space_unit` is what the file declares** -- one of `mm`, `cm`, `m`,
+`in`, `ft` ([the format's World-Space Unit](../formats/sfmr-file-format.md#world-space-unit)),
+or `null` for scene units, where the file names none. It says what the node's
+own coordinates are in. What the *view's* coordinates are in is the view
+block's `world_space_unit`, which can differ, because the display transform
+draws the node at its own scale (§ "The view block").
 
 `get_history`'s rows carry no transform. A reframe is a version like any other,
 and its `label` says what it was; the only transform anyone is looking at is the
@@ -1261,15 +1270,40 @@ once, since there is no aspect ratio to compute them against.
 `near` is reported and **not settable**: `update_clip_planes` recomputes it every
 frame from the scene bounds.
 
+**`world_space_unit` is the unit the block's positions and distances are in**,
+and the unit `set_view`'s `move` converts a stated unit to. It is not settable
+and not camera state: it is read from the scene
+([`render::view_world_space_unit`](../../crates/sfm-explorer/src/mcp/render.rs)),
+and is `null` for scene units, as the self-similarity readings on the bench
+wire report theirs ([GLOSSARY](../GLOSSARY.md), **world-space unit**).
+
+The viewport's world is shared by every loaded reconstruction, and each is drawn
+in it through its display transform, a similarity whose scale `s` stretches
+every length. So according to a reconstruction that declares unit `U`, one
+length of the world is `metres(U) / s` metres. The world has a unit when every
+loaded reconstruction declares one, they all agree on that length, and the
+length is one of the format's five units; that unit is the answer. Two
+reconstructions in `m` drawn at scale 1 put the world in `m`, and so do one in
+`m` and one in `mm` drawn at 0.001. A reconstruction that declares no unit, two
+that disagree (`m` beside `mm`, both at scale 1), or a scale that lands between
+the units (`m` drawn at 2) leave the world in scene units, as does an empty
+scene. Hidden reconstructions count, since hiding one does not change the frame
+the view is in. The agreement is checked to a relative tolerance of 1e-9, so a
+scale that is a product of other scales still agrees with the unit it was
+meant to land on. The factors come from `sfmtool_core::WORLD_SPACE_UNITS`, the
+format's table of the five units and their lengths in metres.
+
 ### `set_view`
 
 The tool an agent calls immediately before `screenshot`.
 
 A form that leaves camera view (a fit, a look-through, a placement, an explicit
-exit) is a step away from a camera the human holds in hand
+exit, a `move`, an `orbit`) is a step away from a camera the human holds in hand
 ([edits/move-camera.md](edits/move-camera.md)), exactly as `,` and `.` are: the
-lock ends first, as a commit when it has been moved. `fov_short_axis_deg` keeps
-camera view and so keeps the lock.
+lock ends first, as a commit when it has been moved. `fov_short_axis_deg` and a
+`turn` keep camera view and so keep the lock, as the zoom controls and a
+free-look drag do; a turn under the lock turns the camera in hand, as the drag
+does (`ViewCommand::leaves_camera_view`).
 
 ```jsonc
 { "fit": null }                             // frame everything drawn
@@ -1302,14 +1336,21 @@ camera view and so keeps the lock.
 
 // either explicit form may carry it, and it may also be sent alone
 { "fov_short_axis_deg": 50 }
+
+// relative forms: from the view as it stands, any of the three, applied in
+// the order move, turn, orbit
+{ "move": { "forward": -2, "up": 1, "unit": "m" }, "turn": { "yaw_deg": -35 } }
+{ "turn": { "yaw_deg": 10, "pitch_deg": -5 } }   // free look; keeps camera view
+{ "orbit": { "yaw_deg": 30 } }                   // around derived.target
 ```
 
 The reply is `{ "view": … }`, the same block `get_scene` embeds.
 
-The forms are **exclusive**, one per call, and the check is up front. These are
+The absolute forms (everything above but the last three examples) are
+**exclusive**, one per call, and the check is up front. These are
 *intents* rather than representations: a call carrying both `fit` and `position`
 has no answer, and guessing one would move the camera somewhere the agent did
-not ask for. The look-at form takes `up` as the roll, defaulting to the current
+not ask for. The relative forms are covered in § "The relative forms" below. The look-at form takes `up` as the roll, defaulting to the current
 `world_up`; a different one re-rolls the view exactly as `tilt` does. The exact
 form restores a view verbatim, which is what `orientation_wxyz` and
 `target_distance` are reported for.
@@ -1392,6 +1433,96 @@ the top of the one the agent asked for. `Viewer3D::jump_to_camera_view` is
 `enter_camera_view`'s end state assigned rather than eased toward; the two share
 one derivation (`compute_camera_view`) so they cannot drift apart on where a
 camera looks from.
+
+#### The relative forms
+
+`move`, `turn` and `orbit` change the view from where it stands, so an
+instruction written for a person -- "step back about 2 m, rise 1 m and turn
+right about 35°" -- is one call, with no arithmetic on the view block first:
+
+```jsonc
+{ "move": { "forward": -2, "up": 1, "unit": "m" }, "turn": { "yaw_deg": -35 } }
+```
+
+| Form | Fields (each optional, default 0) | What moves | Camera view |
+|------|-----------------------------------|------------|-------------|
+| `move` | `forward`, `right`, `up`, and `unit` | The camera and its target, along the level axes; the orientation and distance stay | Left, as a fly key leaves it |
+| `turn` | `yaw_deg`, `pitch_deg` | The view direction, about the camera; the position and distance stay | **Kept**, as a free-look drag keeps it |
+| `orbit` | `yaw_deg`, `pitch_deg` | The camera, around the orbit target (`derived.target`); the target and distance stay | Left, as an Alt-drag in camera view leaves it |
+
+Each form must carry at least one of its fields, so `{ "move": {} }` is refused
+rather than read as no move.
+
+**`move` goes along the level axes of the world**
+([`ViewportCamera::move_level`](../../crates/sfm-explorer/src/viewer_3d/camera.rs)):
+`forward` is the view direction with its Z component taken out, `right` is
+`forward × +Z`, and `up` is +Z. Negative distances go back, left and down. This
+is deliberately not the fly keys' frame. `W` and `R` move along the camera's own
+forward and visual up (`fly_move`), which is right for a person steering with
+the view in front of them, but an instruction is written about the world: "move
+forward 2 m" from a camera pitched 30° down would take it 1 m into the ground
+along the camera's forward, and "rise 1 m" along a pitched camera's up would
+also carry it backward. The axis is the world's +Z rather than the view's
+`world_up` for the same reason: in camera view `world_up` is the looked-through
+camera's own up, which tilts with its pitch, and a view rolled with Q and E has
+its own up too. Looking straight up or down, where the view direction has no
+level part, `right` is the camera's own right laid flat and `forward` is
+`+Z × right`. The right axis is the same one `D` strafes along whenever
+`world_up` is +Z.
+
+**`turn` is the free look** (`ViewportCamera::nodal_pan_by`, which
+`nodal_pan`'s drag also goes through), about the view's `world_up`: the camera
+stays where it is and the target swings around it at the same distance. In
+camera view it is exactly a drag in camera view: camera view and the photograph
+stay up, and the axes are the looked-through camera's up, which is what
+`world_up` is there.
+
+**`orbit` is the orbit** (`ViewportCamera::orbit_by`, which `orbit`'s drag
+also goes through), about the view's `world_up` through the target. In camera
+view it is the Alt-drag, which leaves camera view; outside it, it is the
+left-drag.
+
+**Signs.** Every yaw is counter-clockwise about `world_up` seen from above, the
+right-hand rule about the up axis. For a `turn` a positive yaw turns the camera
+left and a negative one right, so "turn right 35°" is `yaw_deg: -35`. For an
+`orbit` a positive yaw carries the camera counter-clockwise around the target,
+which takes it to its own right while the view turns left -- the same rotation
+of the camera as a turn's, about an axis through the target rather than through
+the camera. Every pitch is toward `world_up`: a turn's positive pitch looks up,
+and an orbit's raises the camera so it looks down on the target more steeply.
+Both stop 0.01 rad short of `world_up` and its opposite, as a drag does, so the
+roll stays defined; the reply says where the view ended.
+
+**They combine with one another, `fov_short_axis_deg` and `animate`, in a fixed
+order: move, then turn, then orbit**, each from where the one before left the
+camera, whatever order the call spells them in. That is the order an
+instruction is read in, and it gives each form the axes the caller saw: the
+move goes along the direction the camera faced when the call arrived, the turn
+happens at the place the move reached, and the orbit swings around the target
+the move and the turn left in front of the camera. The Action Log entry names
+the steps in that order, `Moved 2 m back and 1 m up, then turned 35° right`, as
+one `camera` run with the explicit camera's placements.
+
+**They do not combine with an absolute form.** A relative form starts from the
+view as it stands, and beside `fit` or `position` it would start from a view the
+caller never saw. The refusal names the pair and what to do:
+
+> `set_view was given move and position at once — the relative forms (move, turn, orbit) start from the view as it stands, so they combine only with one another, fov_short_axis_deg and animate. Send position in a call of its own first, then move.`
+
+**Distances are in the view's unit unless `move.unit` says otherwise.** Without
+`unit`, `forward`, `right` and `up` are in the view block's `world_space_unit`,
+physical or scene units. With one of `mm`, `cm`, `m`, `in`, `ft`, they are
+converted to the view's unit through `sfmtool_core::WORLD_SPACE_UNITS`, so
+`{ "forward": 10, "unit": "ft" }` in a view in metres moves 3.048 m. A unit on a
+view in scene units has nothing to convert to and is refused, with the reason
+the view has no unit:
+
+> `move.unit "m" needs the view to be in a physical unit, and it is in scene units: bull declares no world_space_unit, so there is nothing to convert m to. Send the distances without unit, in scene units, or give the reconstruction a physical unit first with sfm xform --scale-by-measurements.`
+
+A name outside the five is refused at the parse (`set_view.move wants unit to
+be one of mm, cm, m, in, ft — got "yd". Omit it to move in the view's own
+unit.`). Every refusal comes before anything moves, so a refused call leaves
+the view as it was, field of view included.
 
 ### `get_action_log`
 
@@ -4301,7 +4432,7 @@ shaped to avoid.
 ## Testing
 
 `crates/sfm-explorer/src/mcp/tests.rs` supplies shared headless fixtures; its
-`tests/` children group the 292 checks by read, display, view, write, log,
+`tests/` children group the 325 checks by read, display, view, write, log,
 layout, catalog, server, edit, bench, render, widget listing and input
 concerns. The catalog child
 keeps the exact name/classification and schema/parser fixtures together. These
@@ -4611,6 +4742,22 @@ where a test hands no host over.
   selection, and is refused beside `fov_short_axis_deg` or a second form;
   `bench_observation` looks through the camera image the observation is in,
   and an index past the end of the list is refused.
+- **The relative forms land where their axes and signs say**: `move` goes
+  along the level axes from a camera looking down, `turn` with a positive yaw
+  faces left and with a negative yaw and a positive pitch faces right and up,
+  and `orbit` with a positive yaw swings the camera to its right around a
+  target that stays, all checked numerically; given together they apply as
+  move, turn, orbit whatever order the call spells them in; a turn in camera
+  view keeps it and turns about the camera's up, while a move or an orbit
+  leaves it; a relative form beside an absolute one, an empty one and an
+  unknown unit are refused.
+- **The unit is reported and converted**: `get_scene` reports a file's
+  `world_space_unit` on its node and on the view, and `null` for a file with
+  none; a display scale between the units, or `m` beside `mm`, leaves the view
+  in scene units, while `mm` drawn at 0.001 beside `m` puts it in `m`; ten feet
+  in a view in metres moves 3.048 m; and a physical unit on a view in scene
+  units is refused before anything moves, while the same distance without a
+  unit moves in scene units.
 - **`animate` eases to where the instant call lands**: the reply is the end
   view while the camera still stands at the start, and landing the ease puts
   it at the reply's view; an animated look-through enters camera view when the
@@ -4886,6 +5033,8 @@ Other candidates, in rough order of value:
 | Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_task`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
 | `set_view` `fov_short_axis_deg` | `5`–`160` degrees (`view::MIN_FOV_DEG`, `view::MAX_FOV_DEG`) | Accepted range, matching what interactive FOV zoom clamps to. |
+| `set_view` `turn` / `orbit` pitch limit | `0.01` rad from `world_up` and its opposite (`camera::POLE_MARGIN`) | Where a pitch stops, as a drag's does, so the roll stays defined. |
+| `set_view` `move` `unit` | none: the view's own unit | One of `mm`, `cm`, `m`, `in`, `ft` (`sfmtool_core::WORLD_SPACE_UNITS`). |
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |

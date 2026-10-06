@@ -84,6 +84,11 @@ pub use sfmtool_sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
+/// The units a reconstruction's `world_space_unit` may name, with their lengths
+/// in metres. Re-exported because the metadata field is reached through
+/// [`SfmrReconstruction`], and a consumer converting a length out of it needs
+/// the table without depending on `sfmtool-sfmr-format` itself.
+pub use sfmtool_sfmr_format::{world_space_unit_in_metres, WORLD_SPACE_UNITS};
 /// The lineage a saved reconstruction records: which earlier contents its point
 /// rows came from, so a Point ID minted against one of them still resolves.
 ///
