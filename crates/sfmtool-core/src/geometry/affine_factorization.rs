@@ -15,7 +15,8 @@
 //! least-squares sub-solves, no randomness, no iteration-order dependence in
 //! the results. The trimming quantile uses linear interpolation between
 //! order statistics (numpy's default `quantile` method) — this is
-//! contractual; consumer parity depends on it.
+//! contractual; parity with the numpy reference implementation in the
+//! binding test depends on it.
 //!
 //! See `specs/core/geometry/affine-factorization.md` for the design.
 
