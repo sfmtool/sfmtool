@@ -97,12 +97,11 @@ A selection may itself be selected again, narrowing a working set the caller
 already holds without re-deriving it from the archive. The source is then an
 unwritten derivation whose `content_xxh128` is empty, which is why the record
 nests the source's own record: the chain still names the archive it started
-from. A `restrict_cluster_ids` key is written only when a cluster-id
-restriction was requested, so a selection without one writes the same record
-as before that option existed. The counts, the section flags and the format
-version describe the derived file; all other metadata, the timestamp included,
-is inherited from the source. The derived file's own content hashes are
-computed when it is written. The source file is never modified.
+from. The operation writes a `restrict_cluster_ids` key only when a cluster-id
+restriction was requested. The counts, the section flags and the format version
+describe the derived file; all other metadata, the timestamp included, is
+inherited from the source. The derived file's own content hashes are empty
+until it is written, and are computed then. The source file is never modified.
 
 A selection is a working view, not a replacement archive: non-accepted
 members are gone, so per-member evidence for re-gating is absent from the
