@@ -81,6 +81,11 @@ names.
 > for a point with no patch frame (reprojection error, ray angle, feature
 > index and size need no frame), or have the tutorial convert to embedded
 > patches first and describe the table as it is now._
+>
+> _Status (2026-10-06): **Not done** — decided: the tutorial adds a Convert to
+> Embedded Patches step before the Track View steps and describes the table's
+> current columns. Track View keeps showing no per-observation readings for a
+> point with no patch frame._
 
 The tutorial's "Viewing 3D Point Tracks" step says the Track View table "shows
 the SIFT feature sizes and reprojection error in both pixels and degrees".
@@ -254,6 +259,13 @@ would touch.
 > one point in one image are expected from a GLOMAP solve, and whether the
 > tutorial's "long track" example should be chosen after
 > `prune_covered_observations`._
+>
+> _Status (2026-10-06): **Not done** — decided: several observations of one
+> point in one image are expected from a GLOMAP solve. Cleanup for them is
+> still to be built: in the COLMAP import, or as a viewer menu action. One
+> option is to have Prune Covered Observations remove them as part of its
+> run; its spec (`specs/gui/edits/prune-covered-observations.md`) does not
+> cover repeated observations of the same point today._
 
 Point 9873 of `dino`, the longest track at 57 observations, has three
 observations in image 3, three in image 12 and three in image 25, and two in
