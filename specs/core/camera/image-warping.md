@@ -119,9 +119,9 @@ pub struct WarpMapSvd {
     sigma_major: Vec<f32>,
     /// Minor singular value per pixel. Length = width * height.
     sigma_minor: Vec<f32>,
-    /// Major axis direction as (dx, dy) unit vectors, interleaved.
-    /// Length = 2 * width * height.
-    major_dir: Vec<f32>,
+    /// Major axis direction in the source image, as (dx, dy) unit vectors,
+    /// interleaved. Length = 2 * width * height.
+    source_major_dir: Vec<f32>,
 }
 ```
 
@@ -130,6 +130,23 @@ differences, then decomposed via 2x2 SVD (closed-form, no iteration needed).
 At the edge of the map the difference is one-sided; where a neighbour it needs
 is NaN, values are set to `(1, 1, (1, 0))` — the identity, causing the
 resampler to fall back to a single bilinear sample.
+
+With `J = U·S·Vᵀ`, the stored direction is `u`, the column of `U` for
+`sigma_major`: the direction in the **source** image along which one
+destination pixel's footprint is longest. The matching column `v` of `V` is a
+direction in the destination grid, and a destination step along it moves the
+source position by `J·v = sigma_major·u`. The anisotropic sampler adds its
+offsets to a source position, so it needs `u`; adding `v` there instead walks
+a direction turned from the footprint by the angle between the destination
+grid and the source image, which at the middle of the patch tiles the sampler
+rule moves is a median of 3–28° on most samples and up to 88° (§ "How `a = 1.5`
+was set").
+`u` is taken as the eigenvector of `J·Jᵀ` for its larger eigenvalue, from
+whichever of the two closed forms adds terms of the same sign, so it is well
+defined wherever the singular values differ, including where the rows or the
+columns of `J` are perpendicular. Where they are equal every direction is a
+major direction and `(1, 0)` is stored; where they nearly are, the footprint is
+nearly round, and any direction describes it.
 
 An equirectangular source image's x wraps at the longitude ±180°, a period of
 `2π·fx` px. A destination texel beside that seam has neighbours near `x = 0` and
@@ -505,9 +522,11 @@ filtering, using the precomputed SVD data from `WarpMapSvd`:
    of the elliptical footprint: `level = log2(sigma_minor)`, clamped to `[0, max_level]`.
 3. **Sample multiple points along the major axis.** The number of samples is the
    anisotropy ratio `N = ceil(sigma_major / sigma_minor)`, capped at a maximum
-   (e.g. 16). The samples are evenly spaced along the major axis direction in
-   destination space, mapped to source coordinates, and bilinearly sampled from
-   the selected pyramid level.
+   (e.g. 16). The samples are evenly spaced over one destination pixel along
+   the destination direction `v` that compresses most, which in source
+   coordinates is a line of length `sigma_major` along `source_major_dir`
+   (`J·v = sigma_major·u`), and bilinearly sampled from the selected pyramid
+   level.
 4. **Average the samples.** The output pixel value is the mean of the N samples.
 
 When `sigma_major <= 1` (no compression in any direction), this reduces to a single
@@ -515,7 +534,7 @@ bilinear sample from the base level — the same as `remap_bilinear`.
 
 ```
 For each destination pixel (col, row):
-  (sigma_major, sigma_minor, major_dir) = svd.get(col, row)
+  (sigma_major, sigma_minor, source_major_dir) = svd.get(col, row)
 
   level_f = log2(max(1, sigma_minor))
   level_lo = floor(level_f)
@@ -527,7 +546,7 @@ For each destination pixel (col, row):
   sum_lo = 0, sum_hi = 0
   for i in 0..N:
     t = (i + 0.5) / N - 0.5               // offset along major axis [-0.5, 0.5)
-    (sx, sy) = map.get(col, row) + t * sigma_major * major_dir
+    (sx, sy) = map.get(col, row) + t * sigma_major * source_major_dir
     sum_lo += sample_bilinear(pyramid[level_lo], sx / 2^level_lo, sy / 2^level_lo)
     sum_hi += sample_bilinear(pyramid[level_hi], sx / 2^level_hi, sy / 2^level_hi)
 
@@ -774,23 +793,23 @@ read.
 
 | Sample | views | moved at `a = 1.5` | self-similarity semi-major axis, moved views, p50 `BilinearMip` → `Anisotropic` (grid px) | moved view's ZNCC against the track's other views, mean change |
 |---|---|---|---|---|
-| seoul_bull | 1277 | 15.0% | 0.90 → 0.50 | −0.010 |
-| kerry_park | 3767 | 6.6% | 0.86 → 0.49 | −0.005 |
-| dino_dog_toy | 2371 | 31.2% | 1.32 → 1.12 | +0.012 |
-| museum masks | 3325 | 19.9% | 1.71 → 1.58 | −0.002 |
+| seoul_bull | 1277 | 15.0% | 0.90 → 0.49 | −0.009 |
+| kerry_park | 3767 | 6.6% | 0.86 → 0.47 | −0.005 |
+| dino_dog_toy | 2371 | 31.2% | 1.32 → 1.09 | +0.012 |
+| museum masks | 3325 | 19.9% | 1.71 → 1.57 | −0.002 |
 | gallery sculpture | 1948 | 51.5% | 0.82 → 0.52 | −0.001 |
-| tree stump | 3013 | 24.0% | 1.24 → 1.06 | −0.005 |
+| tree stump | 3013 | 24.0% | 1.24 → 1.04 | −0.005 |
 | fisheye rig | 4931 | 5.3% | 1.27 → 0.96 | −0.011 |
 | 360° rig, coast | 4698 | 14.9% | 0.78 → 0.52 | −0.006 |
-| 360° rig, temple | 6915 | 9.9% | 0.96 → 0.73 | −0.001 |
-| badlands | 3398 | 31.2% | 1.48 → 0.81 | +0.043 |
+| 360° rig, temple | 6915 | 9.9% | 0.96 → 0.74 | −0.001 |
+| badlands | 3398 | 31.2% | 1.48 → 0.75 | +0.059 |
 | mossy railing | 2032 | 4.9% | 1.14 → 1.02 | −0.002 |
 
 - **Every band of `L` above √2 sharpens the moved views.** Split by the views
   each step of the threshold adds, the mean shortening of the semi-major axis
-  is 0.21–0.66 grid px for `L ≥ 2` (leaving out the mossy railing's three such views), 0.19–0.44 for `1.75 ≤ L < 2`, 0.11–0.32 for
-  `1.5 ≤ L < 1.75` and 0.08–0.23 for `1.42 ≤ L < 1.5`, with the moved view's
-  ZNCC against the others changing by under 0.014 on average in the two lower
+  is 0.23–0.72 grid px for `L ≥ 2` (leaving out the mossy railing's three such views), 0.19–0.45 for `1.75 ≤ L < 2`, 0.11–0.33 for
+  `1.5 ≤ L < 1.75` and 0.08–0.25 for `1.42 ≤ L < 1.5`, with the moved view's
+  ZNCC against the others changing by under 0.015 on average in the two lower
   bands. `1.5` keeps the bands down to 1.5 and leaves a margin above the √2
   that rounding alone gives a view compressed alike on both axes.
 - **The ZNCC drops slightly where the gain is largest.** A sharper tile carries
@@ -800,16 +819,31 @@ read.
   close to 0 below. On the badlands
   sample, whose far views compress the photograph 10 to 50 times along one
   axis, `BilinearMip` reads a level clamped at the top of the pyramid and
-  aliases, and the anisotropic sampler raises the ZNCC by 0.043.
+  aliases, and the anisotropic sampler raises the ZNCC by 0.059.
 - **A view the rule leaves on `BilinearMip` renders the same tile, bit for
   bit**, so a point none of whose views moves keeps its fused bitmap: none of
   the 2,549 such points across the samples changed. The fused bitmaps of the
   points with a moved view change by a median mean absolute difference of
-  0.3–3.2 grey levels.
+  0.3–4.0 grey levels.
 - **No bench verdict changes at the current bars** (in 0, out 0 over 3,828
-  observations). The number of points member coherence does not keep whole
-  changes by 0 to 9 of 400 per sample, and view selection admits 0–3% fewer
-  views.
+  observations), at any of the thresholds 1.42, 1.5, 1.75 and 2. The number
+  of points member coherence does not keep whole changes by 0 to 6 of 400 per
+  sample, and view selection admits 0–3% fewer views.
+- **The walk's direction matters to the tiles, little to the scores.** The
+  samples along the major axis lie along `u`, the direction in the photograph
+  the map compresses most. Walking along `v`, the grid direction that
+  compresses most, read as a direction in the photograph, turns the walk from
+  the footprint by the angle between the grid and the photograph: at the
+  middle of the moved views' tiles a median of 3–28° per sample, 82° on the
+  tree stump, and up to 88° at the 90th percentile. Rendered that way, the
+  moved views' tiles differ from these by a median mean absolute difference of
+  0.01–0.72 grey levels per sample (1.70 on the badlands), their
+  self-similarity semi-major axis is longer by 0.00–0.02 grid px on average
+  (0.06 on the badlands), and the mean ZNCC of a moved view against the
+  track's other views, each rendered the same way, changes by under 0.001.
+  The bands above read the same either way to within 0.09 grid px and 0.02
+  ZNCC, and no bench verdict changes either way, so the choice of `a` does
+  not depend on the direction.
 
 #### Cost, and the AVX2 kernel
 
@@ -834,22 +868,25 @@ another, with a second local harness that is not in the repository either, at ev
 local samples (the gallery sculpture, 2,631 points, 12,844 views, and the
 badlands panorama, 1,171 points, 9,951 views; `R = 24`, three renders per view
 and sampler, the warp map built outside the timed call and its SVD inside it).
-Mean µs per render:
+The process was held to one logical processor of a performance core: the
+machine's CPU also has efficiency cores, on which the same renders take about
+twice as long, and an unpinned thread can land on either. Mean µs per render,
+averaged over two runs that agreed to within 8%:
 
 | Render | gallery sculpture, moved views | badlands, moved views | badlands, unmoved views |
 |---|---|---|---|
-| `Bilinear` | 12 | 20 | 13 |
-| `BilinearMip` | 33 | 32 | 32 |
-| `Anisotropic`, AVX2 kernel | 22 | 50 | 22 |
-| `Anisotropic`, scalar path | 54 | 129 | 65 |
-| value+gradient `BilinearMip` | 34 | 33 | 33 |
-| value+gradient `Anisotropic` (scalar) | 94 | 226 | 94 |
+| `Bilinear` | 11 | 19 | 12 |
+| `BilinearMip` | 31 | 29 | 31 |
+| `Anisotropic`, AVX2 kernel | 20 | 45 | 21 |
+| `Anisotropic`, scalar path | 56 | 120 | 56 |
+| value+gradient `BilinearMip` | 32 | 30 | 31 |
+| value+gradient `Anisotropic` (scalar) | 88 | 210 | 89 |
 
-The SVD is about 9 µs of each render that reads it. With the AVX2 kernel an
+The SVD is about 8 µs of each render that reads it. With the AVX2 kernel an
 anisotropic render costs about what a `BilinearMip` one does, and less where
 its views take few samples; the badlands sample's moved views compress the
 photograph 10 to 50 times along one axis and take up to the full 16 samples.
-On the scalar path it costs 1.6 to 4 times a `BilinearMip` render, and the
+On the scalar path it costs 1.8 to 4 times a `BilinearMip` render, and the
 value+gradient anisotropic render 2.8 to 7 times. Earlier timings of these
 renders taken inside the batches' parallel loops, through detail phases
 reported to a shared sink, read 41–57 µs for a `BilinearMip` render; that
@@ -865,23 +902,22 @@ table above.
 
 | Batch | gallery sculpture (two runs) | badlands |
 |---|---|---|
-| view selection | 1.05, 1.05 | 1.24 |
-| normal refinement | 1.00, 1.36 | 1.06 |
-| localizer | 1.02, 1.00 | 1.12 |
-| member coherence | 0.97, 0.98 | 1.19 |
-| fuse | 1.00, 0.99 | 1.31 |
+| view selection | 1.06, 1.05 | 1.22 |
+| normal refinement | 1.00, 1.02 | 1.03 |
+| localizer | 0.99, 1.00 | 1.08 |
+| member coherence | 1.02, 1.00 | 1.19 |
+| fuse | 0.98, 0.82 | 1.24 |
 
-The times of one batch spread by 1–24% over its five runs, and by up to 51%:
-the badlands fuse spread by 41% under both samplers, so its 1.31 is uncertain
-(an earlier run of the code before the view selection fast path, with spreads
-of 4–6%, read 1.22), and the 1.36 for normal refinement is one run whose fastest `BilinearMip` time,
-1.60 s, was 25% below every other `BilinearMip` run of it (2.16–2.55 s), and
-both samplers do the same evaluations and renders per point. Run one after
-another on one thread, view selection over the gallery sculpture takes 4.43 s
-and 4.46 s under `BilinearMip` and 4.54 s and 4.47 s under the rule (best of
-five, two runs; spread 14–42% within a run). On the badlands sample the
-moved views' renders take most of their samples, and every batch that renders
-them is 6–31% slower under the rule. The bench's evaluation, measured earlier
+The times of one batch spread by 2–42% over its five runs, by 30% or more
+for the gallery sculpture's localizer and normal refinement in one run each,
+its fuse in the second run and the badlands' normal refinement under the
+rule. The fuse's 0.82 therefore says only that the two samplers are close
+there, since both do the same evaluations and renders per point. Run one after another on one
+thread, view selection over the gallery sculpture takes 3.93 s and 4.11 s
+under `BilinearMip` and 4.18 s and 4.24 s under the rule (best of five, two
+runs; spread 8–21% within a run, since that thread was not held to one kind
+of core). On the badlands sample the moved views' renders take most of their
+samples, and every batch that renders them is 3–24% slower under the rule. The bench's evaluation, measured earlier
 with three runs on each of the eleven samples, runs within 6% of its
 `BilinearMip` time (16% on dino_dog_toy).
 
@@ -989,6 +1025,17 @@ method on `CameraModel` in `crates/sfmtool-core/src/camera/distortion.rs`.
   compression along one axis, 1x along the other). Verify that `remap_aniso` produces
   a smooth result along the compressed axis without over-blurring the other axis,
   while `remap_bilinear` shows aliasing.
+- **Walk direction**: Every anisotropic path (the scalar remap, the AVX2
+  kernel, the value+gradient render and view selection's affine fast path)
+  walks along the source direction the map compresses most. Over stripes that
+  run along that direction, a map compressed along it and turned from the
+  destination grid renders the same as a single bilinear tap to within the
+  interpolation (`aniso_walks_along_the_image_axis_the_map_compresses`,
+  `affine_aniso_walks_along_the_image_axis_the_map_compresses`), and turning
+  the photograph and the map together by 90° leaves the tile unchanged to
+  within a rounding (`aniso_tile_is_unchanged_when_photograph_and_map_turn_together`).
+  `svd_2x2` returns the left singular vector, including for perpendicular rows
+  or columns (`svd_2x2_direction_is_the_left_singular_vector`).
 - **Anisotropy ratio capping**: Verify that the number of samples along the major
   axis is capped at `max_anisotropy` and that the result degrades gracefully.
 - **Pyramid level selection**: For a known 2x isotropic compression, verify that

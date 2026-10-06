@@ -1172,3 +1172,178 @@ fn aniso_avx2_matches_scalar_bit_for_bit() {
         }
     }
 }
+
+// -----------------------------------------------------------------------
+// The direction of the anisotropic walk
+// -----------------------------------------------------------------------
+
+/// The Jacobian `rot(θ) · diag(major, minor) · rot(φ)ᵀ`: a destination step
+/// along `(cos φ, sin φ)` moves `major` image px along `(cos θ, sin θ)`, the
+/// image direction the map compresses most.
+fn turned_jacobian(major: f32, minor: f32, theta: f32, phi: f32) -> [[f32; 2]; 2] {
+    let (st, ct) = theta.sin_cos();
+    let (sp, cp) = phi.sin_cos();
+    [
+        [
+            ct * major * cp + st * minor * sp,
+            ct * major * sp - st * minor * cp,
+        ],
+        [
+            st * major * cp - ct * minor * sp,
+            st * major * sp + ct * minor * cp,
+        ],
+    ]
+}
+
+/// A `size × size` warp map with the constant Jacobian `j`, whose middle maps
+/// to `centre`, with its SVD computed.
+fn affine_warp_map(size: u32, j: [[f32; 2]; 2], centre: [f32; 2]) -> WarpMap {
+    let mut data = Vec::with_capacity(2 * (size * size) as usize);
+    let half = size as f32 / 2.0;
+    for row in 0..size {
+        for col in 0..size {
+            let (c, r) = (col as f32 + 0.5 - half, row as f32 + 0.5 - half);
+            data.push(centre[0] + j[0][0] * c + j[0][1] * r);
+            data.push(centre[1] + j[1][0] * c + j[1][1] * r);
+        }
+    }
+    let mut map = WarpMap::new(size, size, data);
+    map.compute_svd();
+    map
+}
+
+/// A one-channel `size × size` image of sinusoidal stripes that run along the
+/// unit direction `along`: constant along it, with a period of `period` px
+/// across it.
+fn stripes_along(size: u32, along: [f32; 2], period: f32) -> ImageU8 {
+    let across = [-along[1], along[0]];
+    let mut data = Vec::with_capacity((size * size) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let d = (x as f32 + 0.5) * across[0] + (y as f32 + 0.5) * across[1];
+            let v = 128.0 + 100.0 * (std::f32::consts::TAU * d / period).sin();
+            data.push(v.round() as u8);
+        }
+    }
+    ImageU8::new(size, size, 1, data)
+}
+
+/// Maps compressed along a turned image axis, `(major, theta, phi)` with
+/// `minor = 1`, so the walk reads level 0 alone. The destination direction
+/// `phi` that compresses most is turned from the image direction `theta` it
+/// compresses, by 0.8 to 1.57 rad; the second and fourth have perpendicular
+/// columns, a pure rotation composed with a scale along one axis.
+const TURNED_WALKS: [(f32, f32, f32); 4] = [
+    (6.0, 1.0, 0.2),
+    (6.0, 1.0, 0.0),
+    (8.0, -0.6, 0.9),
+    (5.0, std::f32::consts::FRAC_PI_2, 0.0),
+];
+
+/// The largest difference between the anisotropic tile `got` and the bilinear
+/// tile of the same map over stripes that run along the axis the map
+/// compresses: every sample of a walk along that axis reads the same stripe,
+/// so the two differ only by bilinear interpolation, while a walk turned off
+/// the axis averages across the stripes.
+fn max_walk_blur(got: &[f32], bilinear: &ImageU8) -> f32 {
+    got.iter()
+        .zip(bilinear.data())
+        .map(|(&a, &b)| (a - b as f32).abs())
+        .fold(0.0, f32::max)
+}
+
+/// The bound on [`max_walk_blur`] for a walk along the compressed axis. A
+/// walk turned 0.8 rad off it, across stripes 12 px apart, differs by 20 or
+/// more.
+const WALK_BLUR_BOUND: f32 = 6.0;
+
+/// Every anisotropic path walks along the image direction the map compresses
+/// most, the left singular vector of the Jacobian, and not along the
+/// destination direction that compresses most, the right one. The two differ
+/// wherever the patch is turned relative to the image.
+#[test]
+fn aniso_walks_along_the_image_axis_the_map_compresses() {
+    let size = 256u32;
+    for (k, &(major, theta, phi)) in TURNED_WALKS.iter().enumerate() {
+        let src = stripes_along(size, [theta.cos(), theta.sin()], 12.0);
+        let pyramid = ImageU8Pyramid::build(&src, 6);
+        // 16 × 16 grid px reach at most 8 · 8 + 8 image px from the middle,
+        // so every walk stays inside the image.
+        let map = affine_warp_map(16, turned_jacobian(major, 1.0, theta, phi), [128.0, 128.0]);
+        let bilinear = remap_bilinear(&src, &map);
+        let as_f32 = |img: &ImageU8| img.data().iter().map(|&v| v as f32).collect::<Vec<_>>();
+
+        let (scalar, _) = remap_aniso_dispatch(&pyramid, &map, 16, false);
+        let blur = max_walk_blur(&as_f32(&scalar), &bilinear);
+        assert!(blur <= WALK_BLUR_BOUND, "map {k}, scalar: {blur}");
+
+        if aniso_avx2::available() {
+            let (simd, groups) = remap_aniso_dispatch(&pyramid, &map, 16, true);
+            assert!(groups > 0, "map {k}: the AVX2 kernel rendered no group");
+            let blur = max_walk_blur(&as_f32(&simd), &bilinear);
+            assert!(blur <= WALK_BLUR_BOUND, "map {k}, AVX2: {blur}");
+        }
+
+        let with_grad = remap_aniso_with_grad(&pyramid, &map, 16);
+        let blur = max_walk_blur(&with_grad.value, &bilinear);
+        assert!(blur <= WALK_BLUR_BOUND, "map {k}, value+gradient: {blur}");
+    }
+}
+
+/// Turning the photograph by 90° and the map with it turns nothing in the
+/// tile: the anisotropic tile of a map compressed along the image's x axis
+/// equals, within a rounding, the tile of the same map turned by 90° over the
+/// photograph turned by 90°. The turned map's Jacobian has perpendicular
+/// columns, the case where the major direction was read from rounding.
+#[test]
+fn aniso_tile_is_unchanged_when_photograph_and_map_turn_together() {
+    let w = 128u32;
+    let src = textured_src(w, w, 3);
+    // `turned(x', y') = src(w − y', x')`: pixel (col i, row j) of the turned
+    // image is pixel (col w − 1 − j, row i) of the photograph.
+    let mut turned = vec![0u8; src.data().len()];
+    for j in 0..w as usize {
+        for i in 0..w as usize {
+            let from = (i * w as usize + (w as usize - 1 - j)) * 3;
+            let to = (j * w as usize + i) * 3;
+            turned[to..to + 3].copy_from_slice(&src.data()[from..from + 3]);
+        }
+    }
+    let turned = ImageU8::new(w, w, 3, turned);
+    let pyr = ImageU8Pyramid::build(&src, 6);
+    let pyr_turned = ImageU8Pyramid::build(&turned, 6);
+    for (major, minor) in [(5.0f32, 1.0f32), (6.0, 1.5), (9.0, 2.5)] {
+        // The photograph's point `(x, y)` is the turned image's `(y, w − x)`.
+        let j = [[major, 0.0], [0.0, minor]];
+        let j_turned = [[0.0, minor], [-major, 0.0]];
+        let map = affine_warp_map(32, j, [61.0, 67.0]);
+        let map_turned = affine_warp_map(32, j_turned, [67.0, w as f32 - 61.0]);
+        for simd in [false, true] {
+            let (want, _) = remap_aniso_dispatch(&pyr, &map, 16, simd);
+            let (got, _) = remap_aniso_dispatch(&pyr_turned, &map_turned, 16, simd);
+            let max_d = got
+                .data()
+                .iter()
+                .zip(want.data())
+                .map(|(&a, &b)| (a as i32 - b as i32).abs())
+                .max()
+                .unwrap();
+            assert!(
+                max_d <= 1,
+                "{major}x{minor}, simd {simd}: differ by {max_d}"
+            );
+        }
+        let want = remap_aniso_with_grad(&pyr, &map, 16);
+        let got = remap_aniso_with_grad(&pyr_turned, &map_turned, 16);
+        let max_d = got
+            .value
+            .iter()
+            .zip(&want.value)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            max_d <= 0.01,
+            "{major}x{minor}, value+gradient: differ by {max_d}"
+        );
+    }
+}

@@ -169,7 +169,8 @@ unsafe fn group(
         let v_i = _mm256_set1_ps(i as f32);
         // Lanes that have taken all their samples add nothing.
         let active = _mm256_cmp_ps::<_CMP_LT_OQ>(v_i, v_n);
-        // t = (i + 0.5) / n - 0.5, sample = s + t * sigma_major * dir.
+        // t = (i + 0.5) / n - 0.5, sample = s + t * sigma_major * dir, with
+        // dir the major direction in the source image.
         let t = _mm256_sub_ps(_mm256_div_ps(_mm256_add_ps(v_i, half), v_n), half);
         let ts = _mm256_mul_ps(t, v_smaj);
         let x = _mm256_add_ps(v_sx, _mm256_mul_ps(ts, v_dx));

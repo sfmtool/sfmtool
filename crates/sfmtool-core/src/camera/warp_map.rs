@@ -126,16 +126,22 @@ fn build_rows(cols: u32, rows: u32, fill_row: impl Fn(u32, &mut [f32]) + Sync) -
 ///
 /// For each pixel the Jacobian of the warp is decomposed as `J = U * S * V^T`
 /// where `S = diag(sigma_major, sigma_minor)` with `sigma_major >= sigma_minor`.
-/// `major_dir` stores the column of `V` corresponding to `sigma_major` (the
-/// direction in destination space that maps to the largest stretch in source space).
+/// `source_major_dir` stores the column of `U` corresponding to `sigma_major`:
+/// the unit direction **in the source image** along which the warp's footprint
+/// is longest. A destination step along the matching right singular vector `v`
+/// moves the source position by `J·v = sigma_major·u`, so an anisotropic
+/// sampler walks the footprint by adding multiples of `sigma_major·u` to the
+/// source position. `v` itself is not stored: it is a direction in the
+/// destination grid, and adding it to a source position walks the wrong way
+/// wherever the destination is turned relative to the source.
 pub struct WarpMapSvd {
     /// Major singular value per pixel. Length = width * height.
     pub sigma_major: Vec<f32>,
     /// Minor singular value per pixel. Length = width * height.
     pub sigma_minor: Vec<f32>,
-    /// Interleaved (dx, dy) direction of the major singular vector in
-    /// destination space. Length = 2 * width * height.
-    pub major_dir: Vec<f32>,
+    /// Interleaved `(dx, dy)` unit direction, in source pixels, of the left
+    /// singular vector for `sigma_major`. Length = 2 * width * height.
+    pub source_major_dir: Vec<f32>,
 }
 
 impl WarpMap {
@@ -461,7 +467,9 @@ impl WarpMap {
 
     /// Look up the precomputed SVD at a single pixel.
     ///
-    /// Returns `(sigma_major, sigma_minor, major_dx, major_dy)`.
+    /// Returns `(sigma_major, sigma_minor, major_dx, major_dy)`, where
+    /// `(major_dx, major_dy)` is [`WarpMapSvd::source_major_dir`], a unit
+    /// direction in source pixels.
     ///
     /// # Panics
     ///
@@ -476,8 +484,8 @@ impl WarpMap {
         (
             svd.sigma_major[idx],
             svd.sigma_minor[idx],
-            svd.major_dir[dir_idx],
-            svd.major_dir[dir_idx + 1],
+            svd.source_major_dir[dir_idx],
+            svd.source_major_dir[dir_idx + 1],
         )
     }
 
@@ -500,7 +508,7 @@ impl WarpMap {
     /// difference (so a non-identity warp still gets its actual scale at the
     /// frame edge, not a wrong identity); where any required neighbour is NaN,
     /// the identity Jacobian is used (`sigma_major = sigma_minor = 1`,
-    /// `major_dir = (1, 0)`) — see `jacobian_at`. A map whose source camera is
+    /// `source_major_dir = (1, 0)`) — see `jacobian_at`. A map whose source camera is
     /// equirectangular takes each `x` difference the short way round the
     /// `±180°` seam, so the texels beside it are not read as one panorama
     /// width wide. Idempotent:
@@ -522,22 +530,22 @@ impl WarpMap {
             (j, s_maj, s_min, dx, dy)
         };
 
-        let (sigma_major, sigma_minor, major_dir, jacobians) = if !parallelize_rows(n) {
+        let (sigma_major, sigma_minor, source_major_dir, jacobians) = if !parallelize_rows(n) {
             let mut sigma_major = Vec::with_capacity(n);
             let mut sigma_minor = Vec::with_capacity(n);
-            let mut major_dir = Vec::with_capacity(2 * n);
+            let mut source_major_dir = Vec::with_capacity(2 * n);
             let mut jacobians = Vec::with_capacity(4 * n);
             for row in 0..h {
                 for col in 0..w {
                     let (j, s_maj, s_min, dx, dy) = per_pixel(col, row);
                     sigma_major.push(s_maj);
                     sigma_minor.push(s_min);
-                    major_dir.push(dx);
-                    major_dir.push(dy);
+                    source_major_dir.push(dx);
+                    source_major_dir.push(dy);
                     jacobians.extend_from_slice(&j);
                 }
             }
-            (sigma_major, sigma_minor, major_dir, jacobians)
+            (sigma_major, sigma_minor, source_major_dir, jacobians)
         } else {
             (0..h)
                 .into_par_iter()
@@ -579,7 +587,7 @@ impl WarpMap {
         self.svd = Some(WarpMapSvd {
             sigma_major,
             sigma_minor,
-            major_dir,
+            source_major_dir,
         });
         self.jacobians = Some(jacobians);
     }
@@ -805,9 +813,23 @@ pub fn singular_values_2x2(m: [[f64; 2]; 2]) -> [f64; 2] {
 
 /// Closed-form SVD of a 2x2 matrix `[[a, b], [c, d]]`.
 ///
-/// Returns `(sigma_major, sigma_minor, v_major_x, v_major_y)` where
-/// `sigma_major >= sigma_minor >= 0` and `(v_major_x, v_major_y)` is the
-/// right singular vector corresponding to `sigma_major`.
+/// Returns `(sigma_major, sigma_minor, u_major_x, u_major_y)` where
+/// `sigma_major >= sigma_minor >= 0` and `(u_major_x, u_major_y)` is the unit
+/// **left** singular vector for `sigma_major`: for a warp Jacobian, the
+/// direction in the source image along which one destination pixel's
+/// footprint is longest.
+///
+/// The direction is the eigenvector of `M·Mᵀ = [[p, q], [q, r]]` for its
+/// larger eigenvalue, taken from whichever of the two equivalent closed forms
+/// `(p − r + root, 2q)` and `(2q, r − p + root)`, with
+/// `root = √((p − r)² + 4q²)`, adds two terms of the same sign, so neither
+/// form subtracts nearly equal numbers. It is well defined wherever the
+/// singular values differ, including where the rows or the columns of `M` are
+/// perpendicular. Where they are equal (`p = r` and `q = 0`), every direction
+/// is a major direction and the function returns `(1, 0)`; where they nearly
+/// are, the direction follows the rounding of `p − r` and `q`, which does not
+/// matter, because the footprint is then nearly round and any direction
+/// describes it.
 ///
 /// The singular values alone, in `f64`, are the public
 /// [`singular_values_2x2`]; this one keeps its own `f32` arithmetic, which the
@@ -828,45 +850,28 @@ pub(crate) fn svd_2x2(a: f32, b: f32, c: f32, d: f32) -> (f32, f32, f32, f32) {
     let sigma_major = (((s1 + s2) * 0.5).max(0.0)).sqrt() as f32;
     let sigma_minor = (((s1 - s2) * 0.5).max(0.0)).sqrt() as f32;
 
-    // Right singular vector for sigma_major from M^T M.
-    // M^T M = [[a^2+c^2, a*b+c*d], [a*b+c*d, b^2+d^2]]
-    // The eigenvector for the larger eigenvalue (sigma_major^2) satisfies:
-    //   (M^T M - sigma_major^2 I) v = 0
-    let mtm00 = (a * a + c * c) as f64;
-    let mtm01 = (a * b + c * d) as f64;
-    let mtm11 = (b * b + d * d) as f64;
-    let lambda = (sigma_major as f64) * (sigma_major as f64);
-
-    // Use the row that has larger off-diagonal contribution to avoid
-    // numerical issues when one row is near-zero.
-    let (vx, vy) = if (mtm00 - lambda).abs() <= (mtm11 - lambda).abs() {
-        // From first row: (mtm00 - lambda) * vx + mtm01 * vy = 0
-        // => v proportional to (mtm01, lambda - mtm00)
-        if mtm01.abs() < 1e-15 && (mtm00 - lambda).abs() < 1e-15 {
-            (1.0_f64, 0.0_f64)
-        } else {
-            (mtm01, lambda - mtm00)
-        }
+    // The left singular vector for sigma_major, from M·Mᵀ in f64, where the
+    // product of two f32 values is exact.
+    let (a, b, c, d) = (a as f64, b as f64, c as f64, d as f64);
+    let p_minus_r = (a * a + b * b) - (c * c + d * d);
+    let q = a * c + b * d;
+    let root = (p_minus_r * p_minus_r + 4.0 * q * q).sqrt();
+    let (ux, uy) = if p_minus_r >= 0.0 {
+        (p_minus_r + root, 2.0 * q)
     } else {
-        // From second row: mtm01 * vx + (mtm11 - lambda) * vy = 0
-        // => v proportional to (lambda - mtm11, mtm01)
-        if mtm01.abs() < 1e-15 && (mtm11 - lambda).abs() < 1e-15 {
-            (1.0_f64, 0.0_f64)
-        } else {
-            (lambda - mtm11, mtm01)
-        }
+        (2.0 * q, root - p_minus_r)
     };
 
-    let len = (vx * vx + vy * vy).sqrt();
-    if len < 1e-30 {
-        (sigma_major, sigma_minor, 1.0, 0.0)
-    } else {
+    let len = (ux * ux + uy * uy).sqrt();
+    if len > 0.0 && len.is_finite() {
         (
             sigma_major,
             sigma_minor,
-            (vx / len) as f32,
-            (vy / len) as f32,
+            (ux / len) as f32,
+            (uy / len) as f32,
         )
+    } else {
+        (sigma_major, sigma_minor, 1.0, 0.0)
     }
 }
 

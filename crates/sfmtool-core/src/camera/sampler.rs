@@ -79,7 +79,7 @@ pub enum Sampler {
     /// along the major axis, de-aliasing oblique / grazing views and keeping
     /// the detail along their less compressed axis. With the AVX2 kernel a
     /// patch tile costs about what a `BilinearMip` one does; the scalar path,
-    /// on a CPU without AVX2, 1.6 to 4 times as much, and the value+gradient
+    /// on a CPU without AVX2, 1.8 to 4 times as much, and the value+gradient
     /// render the sub-pixel refiner reads, which is scalar everywhere, 2.8 to
     /// 7 times. What the sampler rule picks for a view it moves.
     Anisotropic,

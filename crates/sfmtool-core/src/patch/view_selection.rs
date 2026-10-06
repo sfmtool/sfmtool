@@ -572,17 +572,16 @@ fn sample_support_affine(
 /// at every pixel, so one SVD ([`svd_2x2`], the arithmetic
 /// [`WarpMap::compute_svd`](crate::camera::WarpMap::compute_svd) applies per
 /// pixel) gives the footprint of every sample: the level from `σ_minor` and
-/// the samples along one major axis. Each support pixel then takes
-/// [`aniso_sample`] at its affine position, rounded to `f32` as a warp map
-/// stores it, which is the per-pixel path's sample for that position and
-/// SVD. On a map that is exactly affine the two paths differ only where the
-/// per-pixel SVD, read from finite differences of the stored `f32`
-/// positions, lands on the other side of a level or sample-count boundary
-/// from the constant one, or where the Jacobian's columns are perpendicular,
-/// which leaves `svd_2x2` reading the major direction from rounding on both
-/// paths (`affine_aniso_sampling_matches_the_per_pixel_path`). On a real
-/// view the affine position error adds to that, as it does for the bilinear
-/// samplers (`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`).
+/// the samples along one major axis, the image direction the map compresses
+/// most. Each support pixel then takes [`aniso_sample`] at its affine
+/// position, rounded to `f32` as a warp map stores it, which is the per-pixel
+/// path's sample for that position and SVD. On a map that is exactly affine
+/// the two paths differ only where the per-pixel SVD, read from finite
+/// differences of the stored `f32` positions, lands on the other side of a
+/// level or sample-count boundary from the constant one
+/// (`affine_aniso_sampling_matches_the_per_pixel_path`). On a real view the
+/// affine position error adds to that, as it does for the bilinear samplers
+/// (`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`).
 fn sample_support_affine_aniso(
     pyramid: &ImageU8Pyramid,
     map: &AffineCoreMap,

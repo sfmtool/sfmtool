@@ -209,17 +209,23 @@ admission-flip loss below.
 level-0 px. Its Jacobian is constant over the patch, so one SVD of it, with the
 same `f32` arithmetic `WarpMap::compute_svd` applies per pixel (`svd_2x2`),
 gives every support pixel the same footprint: the levels from `σ_minor` and
-the samples along one major axis. Each support pixel then takes the per-pixel
+the samples along one major axis, the direction in the photograph the map
+compresses most (the Jacobian's left singular vector). Each support pixel then takes the per-pixel
 path's anisotropic sample (`remap::aniso_sample`, the body of the scalar
 remap) at its affine position, rounded to `f32` as a warp map stores it
 (`sample_support_affine_aniso`). On a map that is exactly affine the two paths
 give the same bytes wherever the per-pixel SVD, read from finite differences of
 the stored positions, lands on the same side of every level and sample-count
 boundary as the constant one (`affine_aniso_sampling_matches_the_per_pixel_path`
-holds five such maps to bit identity). On a real view the affine position
+holds seven such maps to bit identity, two of them a rotation composed with a
+scale along one axis, whose Jacobian has perpendicular columns). Over stripes
+that run along the compressed direction every sample of a walk reads the same
+stripe, which `affine_aniso_walks_along_the_image_axis_the_map_compresses`
+checks on maps where that direction is turned 0.8 to 1.57 rad from the grid
+direction that compresses most. On a real view the affine position
 error adds to that as it does for the bilinear samplers: on a long-focus view
 of a square turned 70° the support samples differ from the exact anisotropic
-render by at most 2 grey levels, 0.40 on average
+render by at most 2 grey levels, 0.39 on average
 (`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`, held to the
 bilinear pairs' bound of 4 and 0.8). The walk along the major axis can read up
 to `σ_major / 2` source px past the quad; those taps are clamped at the frame

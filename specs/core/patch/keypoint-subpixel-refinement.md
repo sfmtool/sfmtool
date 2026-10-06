@@ -437,7 +437,9 @@ What already exists (`crates/sfmtool-core/src/camera/`):
 - **Warp Jacobian.** `WarpMap::compute_svd` already forms
   `J = [[dx/dcol, dx/drow], [dy/dcol, dy/drow]]` per pixel (central differences on
   the warp coords) and stores its SVD; `WarpMap::get_svd` exposes
-  `(sigma_major, sigma_minor, major_dx, major_dy)` — what the aniso sampler reads.
+  `(sigma_major, sigma_minor, major_dx, major_dy)`, the major direction a unit
+  vector in source px (`WarpMapSvd::source_major_dir`) — what the aniso sampler
+  reads.
 
 New interface functions to add:
 

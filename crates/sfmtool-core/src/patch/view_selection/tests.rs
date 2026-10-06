@@ -1142,9 +1142,9 @@ fn affine_aniso_score_matches_exact_aniso_score() {
 }
 
 /// Exactly affine maps `J = rot(θ) · diag(major, minor) · rot(φ)ᵀ`, compressed
-/// along a turned axis at several scales. `φ` is never a multiple of 90°, so
-/// the Jacobian's columns are not perpendicular: where they are, `svd_2x2`
-/// reads the major direction from rounding noise, on either path.
+/// along a turned axis at several scales. The last two have `φ = 0`, so the
+/// Jacobian's columns are perpendicular: a rotation composed with a scale
+/// along one axis.
 fn affine_aniso_maps() -> Vec<AffineCoreMap> {
     [
         (4.0f64, 1.2f64, 0.3f64, 0.4f64),
@@ -1152,6 +1152,8 @@ fn affine_aniso_maps() -> Vec<AffineCoreMap> {
         (5.0, 2.6, 1.2, -0.6),
         (12.0, 3.1, 2.4, 0.25),
         (40.0, 2.0, 0.7, -1.3),
+        (6.3, 1.1, 1.0, 0.0),
+        (5.2, 1.5, std::f64::consts::FRAC_PI_2, 0.0),
     ]
     .iter()
     .map(|&(major, minor, theta, phi)| {
@@ -1215,6 +1217,71 @@ fn affine_aniso_sampling_matches_the_per_pixel_path() {
     }
 }
 
+/// The affine fast path walks along the image direction its map compresses
+/// most, the left singular vector of the Jacobian. Over stripes that run along
+/// that direction every sample of a walk reads the same stripe, so the fast
+/// path's samples match a single bilinear tap at each position to within the
+/// bilinear interpolation; a walk along the grid direction that compresses
+/// most, turned 0.8 to 1.57 rad from it on these maps, averages across the
+/// stripes and differs by 20 or more.
+#[test]
+fn affine_aniso_walks_along_the_image_axis_the_map_compresses() {
+    let size = 240u32;
+    let resolution = 24usize;
+    let pixels: Vec<usize> = (0..resolution * resolution).collect();
+    for (k, &(major, theta, phi)) in [
+        (6.0f64, 1.0f64, 0.2f64),
+        (6.0, 1.0, 0.0),
+        (8.0, -0.6, 0.9),
+        (5.0, std::f64::consts::FRAC_PI_2, 0.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (st, ct) = theta.sin_cos();
+        let (sp, cp) = phi.sin_cos();
+        // rot(θ) · diag(major, 1) · rot(φ)ᵀ, the grid's middle at (120, 120).
+        let j = [
+            ct * major * cp + st * sp,
+            ct * major * sp - st * cp,
+            st * major * cp - ct * sp,
+            st * major * sp + ct * cp,
+        ];
+        let mid = (resolution as f64 - 1.0) / 2.0;
+        let a = [
+            j[0],
+            j[1],
+            120.0 - mid * (j[0] + j[1]),
+            j[2],
+            j[3],
+            120.0 - mid * (j[2] + j[3]),
+        ];
+        // Stripes along (cos θ, sin θ), 12 px apart across them.
+        let mut data = Vec::with_capacity((size * size) as usize);
+        for y in 0..size {
+            for x in 0..size {
+                let d = -(x as f64 + 0.5) * st + (y as f64 + 0.5) * ct;
+                data.push((128.0 + 100.0 * (std::f64::consts::TAU * d / 12.0).sin()).round() as u8);
+            }
+        }
+        let img = ImageU8::new(size, size, 1, data);
+        let pyr = ImageU8Pyramid::build(&img, 6);
+        let map = AffineCoreMap { a };
+        let mut fast = vec![0f32; pixels.len()];
+        sample_support_affine_aniso(&pyr, &map, &pixels, resolution, &mut fast);
+        let mut max_d = 0.0f32;
+        let mut tap = [0u8; 1];
+        for (i, &p) in pixels.iter().enumerate() {
+            let (col, row) = ((p % resolution) as f64, (p / resolution) as f64);
+            let x = (a[0] * col + a[1] * row + a[2]) as f32;
+            let y = (a[3] * col + a[4] * row + a[5]) as f32;
+            sample_bilinear_u8_all(pyr.level(0), x, y, &mut tap);
+            max_d = max_d.max((fast[i] - tap[0] as f32).abs());
+        }
+        assert!(max_d <= 6.0, "map {k}: the walk blurs by up to {max_d}");
+    }
+}
+
 #[test]
 fn affine_aniso_sampling_matches_exact_render_on_an_oblique_view() {
     // A long-focus camera far from a square turned 70°: the map over the
@@ -1242,8 +1309,9 @@ fn affine_aniso_sampling_matches_exact_render_on_an_oblique_view() {
         cam_from_world: &pose,
         pyramid: &pyr,
     };
-    // Turned about an axis at 30° to the patch's own, so the Jacobian's
-    // columns are not perpendicular (see `affine_aniso_maps`).
+    // Turned about an axis at 30° to the patch's own, so the patch is turned
+    // relative to the image and the walk's direction in the image differs
+    // from its direction in the grid.
     let (t, psi) = (70f64.to_radians(), 30f64.to_radians());
     let patch = OrientedPatch::from_center_normal(
         Point3::new(0.0, 0.0, PLANE_Z),

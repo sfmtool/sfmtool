@@ -200,7 +200,7 @@ fn compute_svd_runs_without_panic() {
     let n = 32 * 24;
     assert_eq!(svd.sigma_major.len(), n);
     assert_eq!(svd.sigma_minor.len(), n);
-    assert_eq!(svd.major_dir.len(), 2 * n);
+    assert_eq!(svd.source_major_dir.len(), 2 * n);
 }
 
 #[test]
@@ -322,6 +322,79 @@ fn svd_2x2_rotation() {
     let (s1, s2, _, _) = svd_2x2(angle.cos(), -angle.sin(), angle.sin(), angle.cos());
     assert!((s1 - 1.0).abs() < 1e-5, "s1 = {s1}");
     assert!((s2 - 1.0).abs() < 1e-5, "s2 = {s2}");
+}
+
+/// `rot(θ) · diag(major, minor) · rot(φ)ᵀ` as `[a, b, c, d]`, in `f64`.
+fn turned_2x2(major: f64, minor: f64, theta: f64, phi: f64) -> [f64; 4] {
+    let (st, ct) = theta.sin_cos();
+    let (sp, cp) = phi.sin_cos();
+    [
+        ct * major * cp + st * minor * sp,
+        ct * major * sp - st * minor * cp,
+        st * major * cp - ct * minor * sp,
+        st * major * sp + ct * minor * cp,
+    ]
+}
+
+/// The direction `svd_2x2` returns is the left singular vector, the image
+/// direction `rot(θ)·(1, 0)` the matrix stretches most, and not the right
+/// one, `rot(φ)·(1, 0)`. The cases include perpendicular columns (`φ = 0`),
+/// perpendicular rows (`θ = 0`), both, and a stretch along each image axis.
+#[test]
+fn svd_2x2_direction_is_the_left_singular_vector() {
+    use std::f64::consts::FRAC_PI_2;
+    for (major, minor, theta, phi) in [
+        (4.0, 1.2, 0.3, 0.4),
+        (6.0, 1.0, 1.0, 0.0),
+        (6.0, 1.0, 0.0, 1.0),
+        (5.0, 1.5, FRAC_PI_2, 0.0),
+        (5.0, 1.5, 0.0, 0.0),
+        (3.0, 2.9, -2.5, 0.7),
+        (40.0, 2.0, 0.7, -1.3),
+        (1.0001, 1.0, 0.9, -0.4),
+    ] {
+        let m = turned_2x2(major, minor, theta, phi);
+        let (s1, s2, ux, uy) = svd_2x2(m[0] as f32, m[1] as f32, m[2] as f32, m[3] as f32);
+        assert!(
+            (s1 as f64 - major).abs() < 1e-4 * major,
+            "{major} {minor}: {s1}"
+        );
+        assert!(
+            (s2 as f64 - minor).abs() < 1e-4 * major,
+            "{major} {minor}: {s2}"
+        );
+        // Up to sign, (ux, uy) is (cos θ, sin θ).
+        let along = (ux as f64 * theta.cos() + uy as f64 * theta.sin()).abs();
+        let tolerance = if major / minor < 1.01 { 1e-2 } else { 1e-6 };
+        assert!(
+            1.0 - along < tolerance,
+            "({major}, {minor}, θ {theta}, φ {phi}): ({ux}, {uy}), |cos| {along}"
+        );
+        // And M·Mᵀ·u = σ_major²·u, the defining property.
+        let (ux, uy) = (ux as f64, uy as f64);
+        let mmt = [
+            m[0] * m[0] + m[1] * m[1],
+            m[0] * m[2] + m[1] * m[3],
+            m[2] * m[2] + m[3] * m[3],
+        ];
+        let l = major * major;
+        let rx = mmt[0] * ux + mmt[1] * uy - l * ux;
+        let ry = mmt[1] * ux + mmt[2] * uy - l * uy;
+        assert!(
+            rx.hypot(ry) < 1e-3 * l,
+            "({major}, {minor}): residual {rx}, {ry}"
+        );
+    }
+}
+
+/// Where the singular values are equal every direction is a major direction,
+/// and `svd_2x2` returns `(1, 0)` rather than one read from rounding.
+#[test]
+fn svd_2x2_direction_of_a_round_footprint_is_x() {
+    for m in [[2.0f32, 0.0, 0.0, 2.0], [0.0, 3.0, -3.0, 0.0], [0.0; 4]] {
+        let (_, _, ux, uy) = svd_2x2(m[0], m[1], m[2], m[3]);
+        assert_eq!((ux, uy), (1.0, 0.0), "{m:?}");
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -858,7 +931,7 @@ fn serial_and_parallel_paths_are_bit_identical() {
             m.data.clone(),
             svd.sigma_major.clone(),
             svd.sigma_minor.clone(),
-            svd.major_dir.clone(),
+            svd.source_major_dir.clone(),
             m.jacobians.clone().expect("svd populates jacobians"),
             j.jacobians.clone().expect("computed"),
         )
@@ -871,7 +944,7 @@ fn serial_and_parallel_paths_are_bit_identical() {
     assert_eq!(par.0, ser.0, "warp coords");
     assert_eq!(par.1, ser.1, "sigma_major");
     assert_eq!(par.2, ser.2, "sigma_minor");
-    assert_eq!(par.3, ser.3, "major_dir");
+    assert_eq!(par.3, ser.3, "source_major_dir");
     assert_eq!(par.4, ser.4, "jacobians (via compute_svd)");
     assert_eq!(par.5, ser.5, "jacobians (via compute_jacobians)");
 }

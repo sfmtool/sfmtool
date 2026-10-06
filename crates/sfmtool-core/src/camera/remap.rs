@@ -324,7 +324,7 @@ pub(crate) fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize 
 /// cross-scale views where one camera is much closer) and
 /// [`remap_aniso_with_pyramid`] (Jacobian-SVD mip selection + multi-tap along
 /// the major axis — de-aliases; about the same cost with its AVX2 kernel,
-/// 1.6–4× on the scalar path): pick the closest pyramid
+/// 1.8–4× on the scalar path): pick the closest pyramid
 /// level from the warp's local compression and take a single bilinear sample
 /// there — aliasing bounded, cost ≈ bilinear.
 ///
@@ -391,7 +391,10 @@ pub fn remap_bilinear_mip(pyramid: &ImageU8Pyramid, map: &WarpMap) -> ImageU8 {
 /// Builds a Gaussian pyramid of the source image. For each output pixel,
 /// reads the precomputed SVD of the local Jacobian, selects the pyramid level
 /// from the minor singular value, and takes multiple trilinearly-blended
-/// samples along the major axis direction. Falls back to a single bilinear
+/// samples along the major axis: the direction in the source image along
+/// which the pixel's footprint is longest
+/// ([`WarpMapSvd::source_major_dir`](crate::camera::warp_map::WarpMapSvd::source_major_dir)),
+/// over the footprint's length `sigma_major`. Falls back to a single bilinear
 /// sample when the mapping is non-compressive (`sigma_major <= 1`).
 ///
 /// `max_anisotropy` caps the number of samples along the major axis.
@@ -570,6 +573,12 @@ pub(crate) fn aniso_pixel(
 /// major_dy)`, as [`WarpMap::get_svd`] returns it), written to `out`, one
 /// byte per channel.
 ///
+/// `(major_dx, major_dy)` is the unit direction **in the source image** along
+/// which the footprint is longest, the Jacobian's left singular vector `u`:
+/// the samples lie at `(sx, sy) + t·σ_major·u` for `t` spread evenly over
+/// `[−½, ½]`, which is the source position moved by `t` destination pixels
+/// along the right singular vector `v`, since `J·v = σ_major·u`.
+///
 /// The body of [`aniso_pixel`], shared with view selection's affine fast
 /// path, which has no warp map and passes the SVD of its constant Jacobian:
 /// given the same position and SVD the two write the same bytes. Takes any
@@ -684,8 +693,9 @@ fn accumulate_bilinear(img: &ImageU8, x: f32, y: f32, first: usize, sums: &mut [
 /// `∂I/∂x_0 = (∂I/∂x_level) / 2^level`.
 ///
 /// `(sx, sy)` is the level-0 source coordinate; `(sigma_major, sigma_minor,
-/// major_dx, major_dy)` comes from `WarpMap::get_svd`. Caller is responsible for
-/// the NaN-guard on `(sx, sy)`.
+/// major_dx, major_dy)` comes from `WarpMap::get_svd`, the major direction a
+/// unit vector in source pixels as `aniso_sample` walks it. Caller is
+/// responsible for the NaN-guard on `(sx, sy)`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn sample_aniso_with_grad(
