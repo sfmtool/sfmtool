@@ -69,7 +69,7 @@ recognition.
 The custom event loop creates the winit window directly and integrates egui
 via `eframe::egui_wgpu` (the wgpu renderer from the eframe crate, used
 standalone without eframe's event loop), giving full control over
-DirectManipulation initialization order. See [viewport-navigation.md](viewport-navigation.md#windows-precision-touchpad-support)
+DirectManipulation initialization order. See [windows-precision-touchpad.md](windows-precision-touchpad.md)
 for the DirectManipulation details.
 
 ---
@@ -454,7 +454,7 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 
 - **DirectManipulation API**: Precision touchpad gesture recognition (pan,
   pinch, inertia). Requires specific initialization order relative to winit.
-  See [viewport-navigation.md](viewport-navigation.md#windows-precision-touchpad-support).
+  See [windows-precision-touchpad.md](windows-precision-touchpad.md).
 - **Trackpad scroll in `ScrollArea`s**: DM claims the touchpad contacts for the
   whole window, so Windows never synthesises a `WM_MOUSEWHEEL` for a two-finger
   scroll and egui's own scroll areas — the scene graph tree and its inner

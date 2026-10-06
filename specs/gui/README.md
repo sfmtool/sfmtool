@@ -8,7 +8,8 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | Document | Description |
 |----------|-------------|
 | [user-experience.md](user-experience.md) | Vision, design principles, and product design. Start here to understand what the viewer is and why it's built this way. |
-| [viewport-navigation.md](viewport-navigation.md) | Orbit camera model, input controls (mouse, trackpad, keyboard), and the Alt-mode target control system. Includes Windows DirectManipulation touchpad integration. |
+| [viewport-navigation.md](viewport-navigation.md) | Orbit camera model, input controls (mouse, trackpad, keyboard), and the Alt-mode target control system. |
+| [windows-precision-touchpad.md](windows-precision-touchpad.md) | Windows precision touchpad gestures through the DirectManipulation API: why winit alone is not enough, the setup order beside the winit window and event loop, how a gesture is routed to the panel under the cursor, the feature-gated reference examples, and why eframe's window creation is not used. |
 | [point-cloud-rendering.md](point-cloud-rendering.md) | Point splat rendering, Eye-Dome Lighting post-processing, target indicator (rotating compass), and supernova lighting effect. |
 | [patch-rendering.md](patch-rendering.md) | Embedded-patch (surfel) rendering: textured oriented quads in the 3D viewport, one per 3D point carrying a patch frame. Mirrors the camera image-quad pipeline; front-face culled. |
 | [camera-views.md](camera-views.md) | Camera frustum wireframes, image texture projection onto frustum far planes, GPU pick buffer, selection/hover interaction, and distorted frustum rendering. |

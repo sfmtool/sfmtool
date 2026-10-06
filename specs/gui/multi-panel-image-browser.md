@@ -1206,7 +1206,7 @@ panel reads below it then describes a rectangle reaching into the
 That rect is load-bearing twice over: the image is fitted and centred in it, and
 `platform::pointer_in_rect` tests it to decide whether a trackpad gesture is
 addressed to this panel (see
-[viewport-navigation.md](viewport-navigation.md#which-panel-a-gesture-is-addressed-to)).
+[windows-precision-touchpad.md](windows-precision-touchpad.md#which-panel-a-gesture-is-addressed-to)).
 An overhang therefore both mis-lays-out the image and steals gestures aimed at
 whatever sits to the right — scrolling the Camera Intrinsics panel beside it
 panned the image, for exactly as far into that panel as the overhang reached,

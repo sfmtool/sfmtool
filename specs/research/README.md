@@ -8,4 +8,4 @@ to read for that — and it links back here where the background is worth having
 
 | Study | Subject |
 |-------|---------|
-| [blender-viewport-navigation-implementation-overview.md](blender-viewport-navigation-implementation-overview.md) | How Blender implements precision trackpad navigation on Windows through the DirectManipulation API. Background for [gui/viewport-navigation.md](../gui/viewport-navigation.md). |
+| [blender-viewport-navigation-implementation-overview.md](blender-viewport-navigation-implementation-overview.md) | How Blender implements precision trackpad navigation on Windows through the DirectManipulation API. Background for [gui/windows-precision-touchpad.md](../gui/windows-precision-touchpad.md). |
