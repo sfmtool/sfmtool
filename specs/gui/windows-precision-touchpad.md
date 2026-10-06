@@ -4,7 +4,8 @@ On Windows, SfM Explorer reads two-finger pans and pinches on a precision
 touchpad through Microsoft's DirectManipulation API, which recognizes the
 gestures and smooths them, instead of through the windowing library, which does
 not report them well. The 3D viewport turns these gestures into orbit, pan and
-zoom, and the other panels turn them into scrolling. This spec covers why the API
+zoom, the Image Detail panel into panning and zooming its image, and the other
+panels into scrolling. This spec covers why the API
 is needed, the order in which it has to be set up beside the winit window and
 event loop, how a gesture is routed to the panel under the cursor, and the
 examples that reproduce the setup on its own. What each gesture does in the 3D
