@@ -40,7 +40,7 @@ def test_parse_empty_runs_defaults():
     assert t.resolution == 24
     assert t.window == "gaussian_disk"
     assert t.window_sigma == 0.6
-    assert t.sampler == "bilinear_mip"
+    assert t.sampler == "per_view"
     assert t.robust_iters == 3
     assert t.convergence_px == 0.05
     assert t.search_resolution_multiplier == 1.0

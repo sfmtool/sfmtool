@@ -200,6 +200,13 @@ pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTr
                 "track": track_measurement(observation, world_unit),
                 "patch_jacobian": jacobian.map(|jacobian| jacobian.0),
                 "patch_zoom": jacobian.and_then(|jacobian| jacobian.zoom_range()),
+                // The sampler the view's tile is rendered with, chosen by the
+                // sampler rule from the same Jacobian, and the loss `L` the
+                // rule compares with its threshold. Null where the Jacobian is.
+                "sampler": jacobian.map(|jacobian| jacobian.sampler().name()),
+                "sampler_minor_axis_loss": jacobian
+                    .map(|jacobian| jacobian.minor_axis_loss())
+                    .filter(|loss| loss.is_finite()),
             })
         })
         .collect()

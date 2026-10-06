@@ -251,13 +251,16 @@ from .._cli_utils import timed_command
 )
 @click.option(
     "--sampler",
-    type=click.Choice(["bilinear", "bilinear_mip", "anisotropic"]),
-    default="bilinear_mip",
+    type=click.Choice(["per_view", "bilinear", "bilinear_mip", "anisotropic"]),
+    default="per_view",
     show_default=True,
     help=(
         "Pyramid sampler for every photometric kernel in the pipeline (normal "
         "refinement, view selection, keypoint localization, sub-pixel "
-        "refinement). 'bilinear_mip' taps the mip level nearest the warp's "
+        "refinement). 'per_view' applies the sampler rule to each view: "
+        "'anisotropic' where 'bilinear_mip' would read the view's less "
+        "compressed axis too coarsely, 'bilinear_mip' otherwise. The other "
+        "three render every view with one sampler. 'bilinear_mip' taps the mip level nearest the warp's "
         "compression, bounding aliasing on cross-scale views at ~bilinear "
         "cost; 'anisotropic' also resolves oblique footprints at 1.6-3x the "
         "cost; 'bilinear' taps the full-resolution level only."
@@ -313,6 +316,7 @@ def embed_patches_command(
             --max-iters 3 --search 4 --min-relative-zncc 0.75
     """
     from .._embed_patches import embed_patches
+    from .._sfmtool.patches import DEFAULT_ANISOTROPIC_THRESHOLD
     from .._sfmtool.reconstruction import SfmrReconstruction
     from .._workspace_image import read_workspace_image
     from ..xform._arg_parser import auto_output_path
@@ -430,6 +434,12 @@ def embed_patches_command(
                 "localize_search_strategy": localize_search_strategy,
                 "localize_basis_views": localize_basis_views,
                 "sampler": sampler,
+                # The sampler rule's threshold the renders were made under,
+                # from which a reader works out each render's sampler from its
+                # zoom; none for a fixed sampler.
+                "anisotropic_threshold": (
+                    DEFAULT_ANISOTROPIC_THRESHOLD if sampler == "per_view" else None
+                ),
             },
         )
         click.echo("\nWrote embedded_patches reconstruction:")

@@ -425,12 +425,13 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     let sfmr_image = &recon.image_table.images[row.image as usize];
     let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
     let cam_from_world = crate::scene::cam_from_world(sfmr_image);
+    let sampler = super::tile::tile_sampler(recon, &track, candidate);
     let at_the_seed =
-        super::patch::patch_color_image(&frame, camera, &cam_from_world, Some(site), &src);
+        super::patch::patch_color_image(&frame, camera, &cam_from_world, Some(site), &src, sampler);
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
     let at_the_projection =
-        super::patch::patch_color_image(&frame, camera, &cam_from_world, None, &src);
+        super::patch::patch_color_image(&frame, camera, &cam_from_world, None, &src, sampler);
     assert_ne!(
         drawn, at_the_projection,
         "the tile is the point's own projection rather than the sighting's place"
@@ -4463,8 +4464,13 @@ fn opaque(image: &ImageU8) -> egui::ColorImage {
     )
 }
 
-/// The tile is one bilinear sample per texel from the mip level the warp's
-/// compression picks. A patch 250 px wide over 64 texels shrinks the
+/// The sampler a facing view's tile is drawn with: the sampler rule leaves a
+/// view facing the patch on it.
+const MIP: sfmtool_core::camera::sampler::Sampler =
+    sfmtool_core::camera::sampler::Sampler::BilinearMip;
+
+/// Under `bilinear_mip` the tile is one bilinear sample per texel from the mip
+/// level the warp's compression picks. A patch 250 px wide over 64 texels shrinks the
 /// photograph about 3.9 times at every texel, which is level 2, so the whole
 /// tile is plain bilinear on level 2 of the pyramid at the warp's coordinates
 /// divided by 4. A patch 62.5 px wide shrinks nothing, so every texel reads
@@ -4501,7 +4507,7 @@ fn a_tile_reads_the_mip_level_its_warp_shrinks_the_photograph_to() {
         src.level(2),
         &WarpMap::new(w, h, at_level_2),
     ));
-    let tile = super::patch::patch_color_image(&near, &camera, &pose, None, &src);
+    let tile = super::patch::patch_color_image(&near, &camera, &pose, None, &src, MIP);
     assert_eq!(tile, want, "the shrinking tile is not level 2 throughout");
     assert_ne!(
         tile,
@@ -4513,7 +4519,7 @@ fn a_tile_reads_the_mip_level_its_warp_shrinks_the_photograph_to() {
     // pixel, so every texel reads level 0.
     let far = facing_patch([0.0, 0.0, -8.0]);
     let map = tile_map(&far, &camera, &pose);
-    let tile = super::patch::patch_color_image(&far, &camera, &pose, None, &src);
+    let tile = super::patch::patch_color_image(&far, &camera, &pose, None, &src, MIP);
     assert_eq!(
         tile,
         opaque(&remap_bilinear(src.level(0), &map)),
@@ -4547,6 +4553,45 @@ fn a_tilted_patch_prints_a_range_of_zooms() {
     assert_eq!(super::table::zoom_text(Some(jacobian)), "0.19/0.38\u{d7}");
     let mean = jacobian.mean_zoom().expect("a mean zoom");
     assert!(((low * high).sqrt() - mean).abs() < 1e-9);
+}
+
+/// The sampler rule reads the same Jacobian the *Zoom* cell prints. The
+/// facing patch at depth 4 compresses both axes alike (5.2 photograph px per
+/// grid px) and stays on `bilinear_mip`; turned 60° it compresses one axis
+/// twice as much as the other, `bilinear_mip` would read the other axis at
+/// level 2, 4 / 2.6 = 1.5× too coarsely, and the view moves to the
+/// anisotropic sampler, which draws a different tile.
+#[test]
+fn a_tilted_patch_is_drawn_with_the_anisotropic_sampler() {
+    use nalgebra::{Point3, Vector3};
+    use sfmtool_core::camera::sampler::Sampler;
+    let (camera, pose) = pinhole_at_origin();
+    let facing = facing_patch([0.0, 0.0, -4.0]);
+    let jacobian = patch_centre_jacobian(&facing, &camera, &pose).expect("a Jacobian");
+    assert_eq!(jacobian.sampler(), Sampler::BilinearMip);
+    assert!(super::table::zoom_sampler_text(&jacobian).contains("bilinear_mip"));
+
+    let (s, c) = 60f64.to_radians().sin_cos();
+    let tilted = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::new(s, 0.0, c),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.5, 0.5],
+    );
+    let jacobian = patch_centre_jacobian(&tilted, &camera, &pose).expect("a Jacobian");
+    assert!(
+        jacobian.minor_axis_loss() >= 1.5,
+        "{}",
+        jacobian.minor_axis_loss()
+    );
+    assert_eq!(jacobian.sampler(), Sampler::Anisotropic);
+    assert!(super::table::zoom_sampler_text(&jacobian).contains("anisotropic"));
+
+    let src = textured_pyramid();
+    let aniso =
+        super::patch::patch_color_image(&tilted, &camera, &pose, None, &src, Sampler::Anisotropic);
+    let mip = super::patch::patch_color_image(&tilted, &camera, &pose, None, &src, MIP);
+    assert_ne!(aniso, mip, "the two samplers drew the same tile");
 }
 
 /// The zoom is geometry alone: a patch whose centre projects has one even

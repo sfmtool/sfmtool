@@ -430,7 +430,16 @@ fn batch_matches_per_patch() {
     };
     let track_views = vec![vec![0u32, 1], vec![0u32, 1]];
 
-    let batch = select_patch_cloud_views(&cloud, &views, &track_views, None, &params(), None);
+    let batch = select_patch_cloud_views(
+        &cloud,
+        &views,
+        &track_views,
+        None,
+        &params(),
+        None,
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     assert_eq!(batch.len(), 2);
     for (i, sel) in batch.iter().enumerate() {
         let single = select(&cloud.patches[i], &views, &track_views[i], None, &params());
@@ -782,9 +791,16 @@ fn affine_sampling_matches_exact_render_on_mild_distortion() {
         &mut aff,
     );
 
-    let (exact, channels) =
-        normalized_stack(&patch, &ctx, &[view], resolution, Sampler::Bilinear, None)
-            .expect("patch renders in frame");
+    let (exact, channels) = normalized_stack(
+        &patch,
+        &ctx,
+        &[view],
+        resolution,
+        ViewSamplers::Frozen(&[Sampler::Bilinear]),
+        None,
+        &Progress::none(),
+    )
+    .expect("patch renders in frame");
     assert_eq!(channels, 1);
 
     let mut max_d = 0.0f32;
@@ -845,12 +861,20 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
     let views = scene.views();
     let patch = plane_patch();
     let p = ViewSelectParams {
-        sampler,
+        sampler: sampler.into(),
         ..params()
     };
     let w_full = window_weights(p.window, p.resolution);
-    let (reference, _agree) = build_reference(&patch, &views, &[0, 1, 2], None, &w_full, &p)
-        .expect("track builds a reference");
+    let (reference, _agree) = build_reference(
+        &patch,
+        &views,
+        &[0, 1, 2],
+        None,
+        &w_full,
+        &p,
+        &Progress::none(),
+    )
+    .expect("track builds a reference");
     let single_ctx = LevelContext {
         kept: vec![0],
         pixels: reference.ctx.pixels.clone(),
@@ -874,6 +898,14 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
         &sqrt_weights,
         &p,
         &mut scratch,
+        p.sampler.for_observation(
+            &patch,
+            views[3].camera,
+            views[3].cam_from_world,
+            None,
+            p.resolution,
+        ),
+        &Progress::none(),
     )
     .expect("candidate scores");
 
@@ -883,8 +915,9 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
         &single_ctx,
         &[views[3]],
         p.resolution,
-        p.sampler,
+        ViewSamplers::Each(p.sampler),
         None,
+        &Progress::none(),
     )
     .expect("candidate renders in frame");
     let exact_score =
@@ -931,8 +964,9 @@ fn affine_mip_sampling_matches_exact_mip_render() {
         &ctx,
         &[views[0]],
         resolution,
-        Sampler::BilinearMip,
+        ViewSamplers::Frozen(&[Sampler::BilinearMip]),
         None,
+        &Progress::none(),
     )
     .expect("patch renders in frame");
     assert_eq!(channels, 1);
@@ -983,8 +1017,9 @@ fn affine_mip_selection_matches_exact_selection() {
     // params, so the exact path is driven directly here).
     let p = params();
     let w_full = window_weights(p.window, p.resolution);
-    let (reference, _agree) = build_reference(&patch, &views, &track, None, &w_full, &p)
-        .expect("track builds a reference");
+    let (reference, _agree) =
+        build_reference(&patch, &views, &track, None, &w_full, &p, &Progress::none())
+            .expect("track builds a reference");
     let single_ctx = LevelContext {
         kept: vec![0],
         pixels: reference.ctx.pixels.clone(),
@@ -1002,8 +1037,9 @@ fn affine_mip_selection_matches_exact_selection() {
             &single_ctx,
             &[views[v as usize]],
             p.resolution,
-            p.sampler,
+            ViewSamplers::Each(p.sampler),
             None,
+            &Progress::none(),
         )
         .expect("admitted view renders in frame");
         let exact =
@@ -1206,9 +1242,26 @@ fn batch_with_all_none_keypoints_matches_unanchored() {
     let track_views = vec![vec![0u32, 1], vec![0u32, 1]];
     let kps: Vec<Vec<Option<[f64; 2]>>> = vec![vec![None, None], vec![None, None]];
 
-    let anchored =
-        select_patch_cloud_views(&cloud, &views, &track_views, Some(&kps), &params(), None);
-    let plain = select_patch_cloud_views(&cloud, &views, &track_views, None, &params(), None);
+    let anchored = select_patch_cloud_views(
+        &cloud,
+        &views,
+        &track_views,
+        Some(&kps),
+        &params(),
+        None,
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
+    let plain = select_patch_cloud_views(
+        &cloud,
+        &views,
+        &track_views,
+        None,
+        &params(),
+        None,
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     assert_eq!(anchored.len(), plain.len());
     for (a, b) in anchored.iter().zip(&plain) {
         assert_eq!(a.admitted, b.admitted);
@@ -1474,7 +1527,7 @@ fn culled_views_as_placeholders_select_identically() {
         Sampler::Anisotropic,
     ] {
         let p = ViewSelectParams {
-            sampler,
+            sampler: sampler.into(),
             ..params()
         };
         let full = select(&patch, &views, &track, None, &p);

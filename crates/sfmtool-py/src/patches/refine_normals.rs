@@ -17,6 +17,7 @@ use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
+use sfmtool_core::progress::Progress;
 
 #[pymethods]
 impl PyPatchCloud {
@@ -38,12 +39,17 @@ impl PyPatchCloud {
     ///         ``"mean"`` (unweighted all-pairs consensus).
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
-    ///     sampler: How to sample the source pyramids — ``"bilinear_mip"``
-    ///         (default; single bilinear tap from the nearest mip level, bounding
-    ///         the aliasing plain bilinear suffers on cross-scale views at
-    ///         ~bilinear cost), ``"bilinear"`` (fastest tap, full-resolution
-    ///         level only), or ``"anisotropic"`` (anti-aliased oblique views;
-    ///         keeps the reported Φ/confidence unbiased, ~1.6-3x slower).
+    ///     sampler: How to sample the source pyramids — ``"per_view"``
+    ///         (default; the sampler rule picks ``"anisotropic"`` for a view
+    ///         whose less compressed axis ``"bilinear_mip"`` would read too
+    ///         coarsely, and ``"bilinear_mip"`` otherwise, once per view from the
+    ///         starting normal), or one sampler for every view:
+    ///         ``"bilinear_mip"`` (single bilinear tap from the nearest mip
+    ///         level, bounding the aliasing plain bilinear suffers on
+    ///         cross-scale views at ~bilinear cost), ``"bilinear"`` (fastest
+    ///         tap, full-resolution level only), or ``"anisotropic"``
+    ///         (anti-aliased oblique views; keeps the reported Φ/confidence
+    ///         unbiased, ~1.6-3x slower).
     ///     point_indexes: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.
@@ -117,7 +123,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
-        window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear_mip",
+        window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="per_view",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
         search_robust_iters=None, obliquity_weight_power=0.0, fronto_prior_weight=0.0,
         max_refine_views=0, point_indexes=None, view_indices=None,
@@ -316,7 +322,9 @@ impl PyPatchCloud {
                 &params,
                 patch_view_keypoints.as_deref(),
                 progress_handle.as_deref(),
+                &Progress::none(),
             )
+            .expect("Progress::none never cancels")
         });
 
         let n = results.len();

@@ -6,14 +6,15 @@
 //! ([`znormalize_into`] / [`znormalize_into_kept`]), and the AVX2 moment /
 //! write kernels they dispatch to.
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
+use crate::camera::sampler::render_tiles;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
+use crate::progress::Progress;
 
 use super::level::LevelContext;
-use super::params::{ProjectedImage, Sampler, FLAT_NORM_SQ_EPS, MAX_ANISOTROPY};
+use super::params::{ProjectedImage, FLAT_NORM_SQ_EPS};
 use super::prof;
-use super::support::view_render_patch;
+use super::support::{view_render_patch, ViewSamplers};
 
 /// Render the kept views of `patch` and z-normalize each colour channel over
 /// the windowed common support. Returns `xs[view][channel][pixel]`, each
@@ -27,8 +28,9 @@ pub(in crate::patch) fn normalized_stack(
     ctx: &LevelContext,
     views: &[ProjectedImage<'_>],
     resolution: u32,
-    sampler: Sampler,
+    samplers: ViewSamplers<'_>,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
+    progress: &Progress<'_>,
 ) -> Option<(Vec<f32>, usize)> {
     let n_views = ctx.kept.len();
     let channels = ctx
@@ -44,10 +46,13 @@ pub(in crate::patch) fn normalized_stack(
 
     prof::count(&prof::N_RENDER, n_views as u64);
 
-    // Raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
-    // `ctx.pixels` order — the same layout the cache fills and the consensus reads.
-    let mut raw = vec![0f32; n_views * channels * n];
-    for (vk, &vi) in ctx.kept.iter().enumerate() {
+    // Every kept view's warp first, so a candidate that leaves the frame is
+    // rejected before anything is resampled, then the renders, grouped by
+    // sampler so a detailed run times each sampler's renders in one phase.
+    let mut maps = Vec::with_capacity(n_views);
+    let mut chosen = Vec::with_capacity(n_views);
+    let mut pyramids = Vec::with_capacity(n_views);
+    for &vi in &ctx.kept {
         let view = &views[vi];
         let rpatch = view_render_patch(patch, view, view_keypoints.and_then(|k| k[vi]));
         let mut map = prof::WARP
@@ -66,17 +71,26 @@ pub(in crate::patch) fn normalized_stack(
             prof::count(&prof::N_REJECT, 1);
             return None;
         }
-        let img = match sampler {
-            Sampler::Anisotropic => {
-                prof::SVD.time(|| map.compute_svd());
-                prof::REMAP.time(|| remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY))
-            }
-            Sampler::BilinearMip => {
-                prof::SVD.time(|| map.compute_svd());
-                prof::REMAP.time(|| remap_bilinear_mip(view.pyramid, &map))
-            }
-            Sampler::Bilinear => prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map)),
-        };
+        let sampler = samplers.get(
+            vi,
+            patch,
+            view,
+            view_keypoints.and_then(|k| k[vi]),
+            resolution,
+        );
+        if sampler.needs_svd() {
+            prof::SVD.time(|| map.compute_svd());
+        }
+        maps.push(map);
+        chosen.push(sampler);
+        pyramids.push(view.pyramid);
+    }
+    let images = prof::REMAP.time(|| render_tiles(&pyramids, &mut maps, &chosen, progress));
+
+    // Raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
+    // `ctx.pixels` order — the same layout the cache fills and the consensus reads.
+    let mut raw = vec![0f32; n_views * channels * n];
+    for (vk, img) in images.iter().enumerate() {
         prof::ZNORM.time(|| {
             for c in 0..channels {
                 let base = (vk * channels + c) * n;

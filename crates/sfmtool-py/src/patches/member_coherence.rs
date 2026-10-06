@@ -20,6 +20,7 @@ use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
+use sfmtool_core::progress::Progress;
 
 /// The `verdict` string a [`MemberVerdict`] reports as.
 fn verdict_name(v: MemberVerdict) -> &'static str {
@@ -90,8 +91,10 @@ impl PyPatchCloud {
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"``, or
-    ///         ``"anisotropic"``.
+    ///     sampler: ``"per_view"`` (default: the sampler rule picks
+    ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
+    ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
+    ///         ``"bilinear"`` or ``"anisotropic"``.
     ///     min_valid_fraction: Per-member floor on the window-weighted valid-pixel
     ///         fraction; a member below it is left unscored.
     ///     min_support_pixels: Floor on the **common** support — the pixels valid
@@ -161,7 +164,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5, exoneration_ratio=0.90,
         resolution=24,
-        window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
+        window="gaussian_disk", window_sigma=0.6, sampler="per_view",
         min_valid_fraction=0.6, min_support_pixels=8,
         point_indexes=None, member_views=None, keypoint_anchor=true, return_matrix=false,
         progress=None
@@ -286,7 +289,9 @@ impl PyPatchCloud {
                 keypoints.as_deref(),
                 &params,
                 progress_handle.as_deref(),
+                &Progress::none(),
             )
+            .expect("Progress::none never cancels")
         });
 
         let mut out = Vec::new();

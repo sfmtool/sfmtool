@@ -423,7 +423,7 @@ how rayon schedules them.
 | `exoneration_ratio` | `0.90` | retained deficit at or below which a relative-flagged member is spared; `0` disables exoneration |
 | `resolution` (R) | `24` | patch grid members are rendered and correlated on |
 | `window` | `gaussian_disk` (σ 0.6) | per-pixel scoring weight |
-| `sampler` | `bilinear_mip` | source-pyramid sampling |
+| `sampler` | `per_view` | source-pyramid sampling: the sampler rule, `anisotropic` for a member it moves and `bilinear_mip` otherwise ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per view") |
 | `min_valid_fraction` | `0.6` | per-member floor on the window-weighted valid-pixel fraction |
 | `min_support_pixels` | `8` | floor on the common support `n_support`; below it the track is unscored |
 
@@ -492,7 +492,7 @@ pub struct MemberCoherenceParams {
     pub margin_gate: f64,         // 0.05
     pub resolution: u32,          // 24
     pub window: PatchWindow,      // GaussianDisk { sigma: 0.6 }
-    pub sampler: Sampler,         // BilinearMip
+    pub sampler: SamplerChoice,   // the sampler rule, SamplerChoice::per_view()
     pub min_valid_fraction: f64,  // 0.6
     pub min_support_pixels: u32,  // 8
     pub self_bar_k: f64,          // 1.5; 0 disables the relative term
@@ -565,8 +565,8 @@ pub fn validate_member_coherence(
 pub fn validate_patch_cloud_member_coherence(
     cloud: &PatchCloud, views: &[ProjectedImage<'_>], member_views: &[Vec<u32>],
     member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
-    params: &MemberCoherenceParams, progress: Option<&AtomicUsize>,
-) -> Vec<MemberCoherence>;
+    params: &MemberCoherenceParams, done: Option<&AtomicUsize>, progress: &Progress<'_>,
+) -> Result<Vec<MemberCoherence>, Cancelled>; // Cancelled when `progress` was
 
 pub fn member_views_from_reconstruction(recon, cloud) -> Vec<Vec<u32>>;
 // The stored keypoint of each of those members, in the same order; all `None`
@@ -585,7 +585,7 @@ The Python binding mirrors `PatchCloud.select_views`:
 PatchCloud.validate_member_coherence(
     recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5,
     exoneration_ratio=0.90, resolution=24,
-    window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
+    window="gaussian_disk", window_sigma=0.6, sampler="per_view",
     min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
     member_views=None, keypoint_anchor=True, return_matrix=False, progress=None,
 ) -> list[dict]

@@ -665,6 +665,8 @@ one at the cursor, and this block reports it.
                         "track": { /* get_bench_track's track measurement */ },
                         "patch_jacobian": [[5.2, 0.0], [0.0, 5.2]],
                         "patch_zoom": [0.19, 0.19],
+                        "sampler": "bilinear_mip",
+                        "sampler_minor_axis_loss": 0.77,
                         "verdict_by_bars": "out" } ] } }
 ```
 
@@ -3599,7 +3601,15 @@ grid the shift and the `grid_px` ellipses are in, and not the 64 texels Track Vi
 draws a tile at. Both are null at the cluster stage, on a track with no patch yet, for a
 row with nothing saying where it sits, and for a patch whose centre is behind
 the camera or outside the camera model's domain; `patch_zoom` is null as well for
-a patch seen edge on ([`bench.md`](bench.md) § "The wire"). The
+a patch seen edge on ([`bench.md`](bench.md) § "The wire"). Each row also
+carries `sampler`, the sampler its tile is rendered with by the evaluation, the
+fuse and Track View, which the sampler rule reads from `patch_jacobian`:
+`anisotropic` where one mip level for both axes would read the less compressed
+axis `sampler_minor_axis_loss` times too coarsely, that is at least `1.5`, and
+the larger singular value is at least `√2`, and `bilinear_mip` otherwise; both
+are null where `patch_jacobian` is
+([`../core/camera/image-warping.md`](../core/camera/image-warping.md) §
+"Choosing the sampler per view"). The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a

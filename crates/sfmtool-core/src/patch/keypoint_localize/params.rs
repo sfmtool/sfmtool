@@ -7,7 +7,7 @@
 //! knobs on [`KeypointLocalizeParams`] mirror
 //! [`NormalRefineParams`](crate::patch::normal_refine::NormalRefineParams).
 
-use crate::patch::normal_refine::{PatchWindow, Sampler};
+use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
 
 /// How the per-(view, round) shift grid is traversed inside `search_shift`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -123,8 +123,9 @@ pub struct KeypointLocalizeParams {
     pub resolution: u32,
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
-    /// How to sample the source pyramids when rendering patch tiles.
-    pub sampler: Sampler,
+    /// Which sampler renders each view's tiles: the sampler rule by default
+    /// ([`SamplerChoice::per_view`]), applied to each context tile's placement.
+    pub sampler: SamplerChoice,
     /// IRLS reweighting passes for the robust consensus.
     pub robust_iters: u32,
     /// Convergence threshold: stop once a round's mean **round-over-round
@@ -211,7 +212,7 @@ impl Default for KeypointLocalizeParams {
             min_grazing_cos: 0.1,
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
-            sampler: Sampler::BilinearMip,
+            sampler: SamplerChoice::per_view(),
             robust_iters: 3,
             convergence_px: 0.05,
             search_resolution_multiplier: 1.0,

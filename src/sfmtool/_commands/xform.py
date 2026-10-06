@@ -163,7 +163,7 @@ from ..xform._arg_parser import (
     help=(
         "Render the patch bitmap column at the stored frames and keypoints, "
         "moving nothing. Optional 'resolution=<R>,sampler=<S>' (defaults 24 and "
-        "bilinear_mip). Requires an embedded_patches reconstruction; reads the "
+        "per_view). Requires an embedded_patches reconstruction; reads the "
         "workspace source images. A no-op when bitmaps are present."
     ),
 )

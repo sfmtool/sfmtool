@@ -63,5 +63,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS",
         sfmtool_core::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
     )?;
+    // The sampler rule's threshold `a` that `sampler="per_view"` applies, so a
+    // caller can record what its renders were made under.
+    m.add(
+        "DEFAULT_ANISOTROPIC_THRESHOLD",
+        sfmtool_core::camera::sampler::DEFAULT_ANISOTROPIC_THRESHOLD,
+    )?;
     Ok(())
 }

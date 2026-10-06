@@ -5,15 +5,16 @@
 //! view of a patch once, then score it ([`PatchViewStack::score`]) and fuse the
 //! representative RGBA texture ([`PatchViewStack::fuse`]) without re-rendering.
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
+use crate::camera::sampler::render_tiles;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
+use crate::progress::Progress;
 
 use super::consensus::{consensus_phi_with_weights, ConsensusScratch};
 use super::level::LevelContext;
-use super::params::{NormalRefineParams, ProjectedImage, Sampler, MAX_ANISOTROPY};
+use super::params::{NormalRefineParams, ProjectedImage};
 use super::prof;
-use super::support::view_render_patch;
+use super::support::{view_render_patch, ViewSamplers};
 use super::znorm::znormalize_into;
 
 /// Contrast scale (in 0–255 colour units) of the per-pixel agreement confidence:
@@ -69,14 +70,17 @@ pub(in crate::patch) struct PatchViewStack {
 }
 
 impl PatchViewStack {
-    /// Render `patch` into every view in `kept` (full grid + per-pixel validity).
+    /// Render `patch` into every view in `kept` (full grid + per-pixel validity),
+    /// each with the sampler `samplers` gives it, the renders of each sampler
+    /// timed in one detail phase of `progress`.
     pub(in crate::patch) fn render(
         patch: &OrientedPatch,
         views: &[ProjectedImage<'_>],
         kept: &[usize],
         resolution: u32,
-        sampler: Sampler,
+        samplers: ViewSamplers<'_>,
         view_keypoints: Option<&[Option<[f64; 2]>]>,
+        progress: &Progress<'_>,
     ) -> Self {
         let r = resolution as usize;
         let npix = r * r;
@@ -88,7 +92,9 @@ impl PatchViewStack {
             .map(|&vi| views[vi].pyramid.level(0).channels() as usize)
             .min()
             .unwrap_or(0);
-        let mut images = Vec::with_capacity(kept.len());
+        let mut maps = Vec::with_capacity(kept.len());
+        let mut chosen = Vec::with_capacity(kept.len());
+        let mut pyramids = Vec::with_capacity(kept.len());
         let mut valid = Vec::with_capacity(kept.len());
         for &vi in kept {
             let view = &views[vi];
@@ -102,23 +108,22 @@ impl PatchViewStack {
                     vmask[(row * resolution + col) as usize] = map.is_valid(col, row);
                 }
             }
-            let img = match sampler {
-                Sampler::Anisotropic => {
-                    prof::SVD.time(|| map.compute_svd());
-                    prof::REMAP
-                        .time(|| remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY))
-                }
-                Sampler::BilinearMip => {
-                    prof::SVD.time(|| map.compute_svd());
-                    prof::REMAP.time(|| remap_bilinear_mip(view.pyramid, &map))
-                }
-                Sampler::Bilinear => {
-                    prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map))
-                }
-            };
-            images.push(img);
+            let sampler = samplers.get(
+                vi,
+                patch,
+                view,
+                view_keypoints.and_then(|k| k[vi]),
+                resolution,
+            );
+            if sampler.needs_svd() {
+                prof::SVD.time(|| map.compute_svd());
+            }
+            maps.push(map);
+            chosen.push(sampler);
+            pyramids.push(view.pyramid);
             valid.push(vmask);
         }
+        let images = prof::REMAP.time(|| render_tiles(&pyramids, &mut maps, &chosen, progress));
         Self {
             resolution,
             images,

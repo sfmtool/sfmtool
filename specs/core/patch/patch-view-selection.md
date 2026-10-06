@@ -117,11 +117,18 @@ selection.
 There is one entry point rather than a reporting one beside a plain one,
 because two would be two places for the gates to drift apart. A caller with no
 one watching passes `Progress::none()`, which reports nothing and never
-cancels: that is what `select_patch_cloud_views` hands each patch, since the
-batch's own reporting is its per-patch counter and its rayon fan-out would
-otherwise have dozens of threads writing phases over each other. The PyO3
-binding and the `embed-patches` pipeline go through that batch, so their
-behavior is unchanged.
+cancels. `select_patch_cloud_views` takes a `Progress` of its own, beside the
+`done` counter a Python poller reads: it counts `patches`, polls for
+cancellation before each patch (a cancelled batch returns `Cancelled`), and
+hands each patch's body that `Progress` only for the detail phases that time
+its renders under each sampler. Each patch's own phases and view counts go to
+nothing, since dozens of rayon threads writing them into one bar would
+overwrite each other.
+
+Each view is rendered with the sampler the sampler rule picks for it
+([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per
+view"): a track view at its keypoint, a candidate at its projection, as every
+other kernel picks it for the same observation.
 
 `projected_patch_frame` is the selector consumer's projection companion: it
 returns an admitted view's centre pixel and projected `u`/`v` half-frame under
@@ -177,6 +184,9 @@ patch corners, sampling only the reference-support pixels at the affine
 positions (same bilinear taps and `u8` rounding as `remap_bilinear`, so values
 match wherever the positions do). Track-view diagnostic scores share the same
 path.
+
+A view takes this path when its sampler is `Bilinear` or `BilinearMip`; under
+the default sampler rule that is every view the rule leaves on `BilinearMip`.
 
 **Mip levels.** Under `BilinearMip` the affine map is additionally composed
 with the pyramid level it minifies into, so the fast path reads the same level
@@ -267,7 +277,8 @@ point with two observations in one image does not double-weight that view. The
 self-agreement is the track views' mean ZNCC to the reference; when it is below
 `min_self_agreement` (default 0.3) the track is admitted verbatim with no
 expansion. The affine fast path covers `Sampler::Bilinear` and
-`Sampler::BilinearMip` (the default); `Sampler::Anisotropic` always takes the
+`Sampler::BilinearMip`; a view rendered with `Sampler::Anisotropic`, whether
+the sampler rule moved it or the caller fixed that sampler, always takes the
 exact warp. A point whose valid track-view count is below `min_track_views`
 (default 2) likewise admits its track views verbatim. The render → z-normalize →
 robust-consensus primitives are shared with `normal_refine` (`pub(super)`), not

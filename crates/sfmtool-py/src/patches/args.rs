@@ -11,7 +11,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
-use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler};
+use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler, SamplerChoice};
 
 /// Map a window name + sigma to the shared [`PatchWindow`] kernel.
 pub(crate) fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWindow> {
@@ -25,16 +25,19 @@ pub(crate) fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWind
     }
 }
 
-/// Map a sampler name to the shared [`Sampler`] the patch kernels resample
-/// through. The companion to [`parse_patch_window`]: every binding that takes
-/// a `window` takes a `sampler` beside it.
-pub(super) fn parse_sampler(sampler: &str) -> PyResult<Sampler> {
+/// Map a sampler name to the shared [`SamplerChoice`] the patch kernels
+/// resample through: `per_view` is the sampler rule at its default threshold,
+/// and the three sampler names render every view with that sampler. The
+/// companion to [`parse_patch_window`]: every binding that takes a `window`
+/// takes a `sampler` beside it.
+pub(super) fn parse_sampler(sampler: &str) -> PyResult<SamplerChoice> {
     match sampler {
-        "bilinear" => Ok(Sampler::Bilinear),
-        "bilinear_mip" => Ok(Sampler::BilinearMip),
-        "anisotropic" => Ok(Sampler::Anisotropic),
+        "per_view" => Ok(SamplerChoice::per_view()),
+        "bilinear" => Ok(Sampler::Bilinear.into()),
+        "bilinear_mip" => Ok(Sampler::BilinearMip.into()),
+        "anisotropic" => Ok(Sampler::Anisotropic.into()),
         other => Err(PyValueError::new_err(format!(
-            "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
+            "unknown sampler: {other:?} (expected per_view|bilinear|bilinear_mip|anisotropic)"
         ))),
     }
 }

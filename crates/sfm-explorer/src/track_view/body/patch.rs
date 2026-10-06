@@ -8,8 +8,11 @@
 //! re-anchored on the observation's keypoint first ([`render_frame`]), and
 //! [`frame_color_image`] is its body for a frame already where it should be,
 //! which the tile's hover view renders a wider frame through. The tile and its
-//! hover view are each a single bilinear sample per texel from the mip level
-//! the warp's compression picks at that texel (`remap_bilinear_mip`).
+//! hover view are rendered with the sampler the bench's kernels render the
+//! same view with: the sampler rule applied to the view's Jacobian at `R`
+//! ([`PatchJacobian::sampler`]), so a view the rule moves is drawn with the
+//! anisotropic sampler and every other view with one bilinear sample per texel
+//! from the mip level the warp's compression picks at that texel.
 //! [`PatchJacobian`] holds the Jacobian at the tile's centre of the warp from
 //! the patch grid at the reconstruction's patch resolution `R` -- not the
 //! tile's display resolution -- which the table's *Zoom* column prints the
@@ -21,7 +24,7 @@
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::remap::remap_bilinear_mip;
+use sfmtool_core::camera::sampler::{minor_axis_loss, render_tile, Sampler, SamplerChoice};
 use sfmtool_core::camera::warp_map::singular_values_2x2;
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
@@ -37,8 +40,8 @@ pub(crate) const PATCH_RES: u32 = 64;
 
 /// One observation's patch tile, as an RGBA picture: `src` warped through
 /// `frame` re-anchored on `keypoint` ([`render_frame`]) at [`PATCH_RES`]
-/// texels a side, so the tile shows the surface as *this* sighting sees it
-/// rather than as the point's residual leaves it.
+/// texels a side with `sampler`, so the tile shows the surface as *this*
+/// sighting sees it rather than as the point's residual leaves it.
 ///
 /// The warp itself, with no `egui::Context` in it, so what a tile shows is
 /// testable without a texture manager -- which is what lets a headless test
@@ -49,9 +52,10 @@ pub(crate) fn patch_color_image(
     cam_from_world: &RigidTransform,
     keypoint: Option<[f64; 2]>,
     src: &ImageU8Pyramid,
+    sampler: Sampler,
 ) -> egui::ColorImage {
     let frame = render_frame(frame, camera, cam_from_world, keypoint);
-    frame_color_image(&frame, camera, cam_from_world, src, PATCH_RES)
+    frame_color_image(&frame, camera, cam_from_world, src, PATCH_RES, sampler)
 }
 
 /// `frame` warped out of `src` at `resolution` texels a side, as an RGBA
@@ -62,24 +66,27 @@ pub(crate) fn patch_color_image(
 /// tile -- a frame `k` times as wide at `k` times the resolution -- which is
 /// what the tile shows in its hover view.
 ///
-/// Each texel is one bilinear sample from the pyramid level the warp's local
-/// compression picks, `round(log2(s_major))` for the larger singular value
-/// `s_major` of the warp's Jacobian at that texel (`remap_bilinear_mip`), so
-/// the level is chosen texel by texel. Where a texel shrinks the photograph by
-/// more than about 1.4 times (`s_major` of `sqrt(2)` or more), it reads a
-/// level averaged down towards its own sampling rather than aliasing the
-/// full-resolution pixels. Where no texel does, every texel reads level 0 and
-/// the picture is exactly plain bilinear.
+/// Under [`Sampler::BilinearMip`] each texel is one bilinear sample from the
+/// pyramid level the warp's local compression picks, `round(log2(s_major))`
+/// for the larger singular value `s_major` of the warp's Jacobian at that
+/// texel, so the level is chosen texel by texel. Where a texel shrinks the
+/// photograph by more than about 1.4 times (`s_major` of `sqrt(2)` or more), it
+/// reads a level averaged down towards its own sampling rather than aliasing
+/// the full-resolution pixels. Where no texel does, every texel reads level 0
+/// and the picture is exactly plain bilinear. Under [`Sampler::Anisotropic`]
+/// the level follows the smaller singular value and several samples are
+/// averaged along the more compressed direction, so the less compressed one
+/// keeps its detail.
 pub(crate) fn frame_color_image(
     frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     src: &ImageU8Pyramid,
     resolution: u32,
+    sampler: Sampler,
 ) -> egui::ColorImage {
     let mut map = WarpMap::from_patch(frame, camera, cam_from_world, resolution);
-    map.compute_svd();
-    let tile = remap_bilinear_mip(src, &map);
+    let tile = render_tile(src, &mut map, sampler);
     // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
     let (w, h) = (tile.width() as usize, tile.height() as usize);
     let mut rgba = Vec::with_capacity(w * h * 4);
@@ -128,7 +135,25 @@ impl PatchJacobian {
     pub(crate) fn mean_zoom(&self) -> Option<f64> {
         self.zoom_range().map(|[low, high]| (low * high).sqrt())
     }
+
+    /// The sampler the view's tile is rendered with: the sampler rule at its
+    /// default threshold applied to this Jacobian, the choice every kernel of
+    /// the bench makes for the same view ([`SamplerChoice::per_view`]).
+    pub(crate) fn sampler(&self) -> Sampler {
+        SamplerChoice::per_view().for_jacobian(Some(self.0))
+    }
+
+    /// How many times coarser `bilinear_mip` would read the view's less
+    /// compressed axis than that axis needs, the `L` the sampler rule compares
+    /// with its threshold ([`minor_axis_loss`]).
+    pub(crate) fn minor_axis_loss(&self) -> f64 {
+        minor_axis_loss(singular_values_2x2(self.0))
+    }
 }
+
+/// The sampler a tile with no Jacobian is rendered with, as the bench's
+/// kernels render such a view.
+pub(crate) const FALLBACK_SAMPLER: Sampler = Sampler::BilinearMip;
 
 /// The frame one observation's tile is rendered through: the point's patch
 /// re-anchored so its centre projects onto `keypoint`, or the stored geometric

@@ -28,6 +28,7 @@ use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
     ConsensusScratch, ProjectedImage, Support,
 };
+use crate::progress::Progress;
 
 /// Below this windowed norm² a channel of one core is flat and contributes `0`
 /// to a ZNCC rather than a normalised noise pattern. The value the localizer's
@@ -152,7 +153,14 @@ impl ReferenceConsensus {
                 wpp[1],
                 resolution,
                 resolution,
-                params.sampler,
+                params.sampler.for_observation(
+                    patch,
+                    view.camera,
+                    view.cam_from_world,
+                    Some(kp),
+                    resolution,
+                ),
+                &Progress::none(),
             ) else {
                 continue;
             };
@@ -334,7 +342,14 @@ impl ReferenceConsensus {
             self.wpp[1],
             self.resolution,
             self.resolution + 2 * margin as u32,
-            params.sampler,
+            params.sampler.for_observation(
+                patch,
+                view.camera,
+                view.cam_from_world,
+                seed,
+                self.resolution,
+            ),
+            &Progress::none(),
         )?;
         let c0 = margin as usize;
         out.zncc_self_similarity_radius =
@@ -422,7 +437,14 @@ impl ReferenceConsensus {
             self.wpp[1],
             self.resolution,
             self.resolution,
-            params.sampler,
+            params.sampler.for_observation(
+                patch,
+                view.camera,
+                view.cam_from_world,
+                Some(keypoint),
+                self.resolution,
+            ),
+            &Progress::none(),
         )
         .ok()?;
         let mut raw = vec![0f32; tile.channels * n];

@@ -91,7 +91,7 @@ class RefineNormalsTransform:
         search_robust_iters: int | None = None,
         window: str = "gaussian_disk",
         window_sigma: float = 0.6,
-        sampler: str = "bilinear_mip",
+        sampler: str = "per_view",
         min_valid_fraction: float = 0.6,
         min_views: int = 3,
         cache: str = "fronto",

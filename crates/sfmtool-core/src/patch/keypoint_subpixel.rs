@@ -105,6 +105,9 @@ mod params;
 pub use params::{ConsensusRefresh, KeypointRefinement, KeypointSubpixelParams};
 
 // Rendering + scoring kernels consumed by the Gauss–Newton orchestration below.
+use crate::camera::sampler::render_phase;
+use crate::patch::normal_refine::{Sampler, ViewSamplers};
+use crate::patch::PatchCounter;
 use kernels::{
     core_value, core_value_with_jg, ecc_score, solve_2x2, try_render_refine_tile, view_jacobian,
     znorm_core, RefineTile,
@@ -139,6 +142,12 @@ struct ViewState {
     proj: [f64; 2],
     /// Final ECC score (NaN until scored).
     score: f64,
+    /// The sampler every render of this view uses, chosen once by the rule for
+    /// the observation at its seed keypoint
+    /// ([`SamplerChoice::for_observation`](crate::camera::sampler::SamplerChoice::for_observation)),
+    /// so the GN steps, the consensus and the fused bitmap all read the view
+    /// through one sampler.
+    sampler: Sampler,
 }
 
 /// Refine the per-view keypoints of one oriented patch by forward-additive ECC
@@ -160,8 +169,31 @@ pub fn refine_patch_keypoints(
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &KeypointSubpixelParams,
 ) -> KeypointRefinement {
-    prof::TOTAL
-        .time(|| refine_patch_keypoints_impl(patch, views, view_set, starting_keypoints, params))
+    refine_patch_keypoints_reporting(
+        patch,
+        views,
+        view_set,
+        starting_keypoints,
+        params,
+        &Progress::none(),
+    )
+}
+
+/// [`refine_patch_keypoints`] reporting to `progress`: a detailed `progress`
+/// times the renders of each sampler in its own detail phase
+/// ([`crate::camera::sampler::render_phase`]). Nothing here polls for
+/// cancellation; the batch callers do, between patches.
+pub fn refine_patch_keypoints_reporting(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    params: &KeypointSubpixelParams,
+    progress: &Progress<'_>,
+) -> KeypointRefinement {
+    prof::TOTAL.time(|| {
+        refine_patch_keypoints_impl(patch, views, view_set, starting_keypoints, params, progress)
+    })
 }
 
 /// Untimed body of [`refine_patch_keypoints`] (split so the enclosing
@@ -173,6 +205,7 @@ fn refine_patch_keypoints_impl(
     view_set: &[u32],
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &KeypointSubpixelParams,
+    progress: &Progress<'_>,
 ) -> KeypointRefinement {
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
@@ -195,16 +228,25 @@ fn refine_patch_keypoints_impl(
         let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
-        let off = match starting_keypoints.and_then(|seeds| seeds[k]) {
+        let seed = starting_keypoints.and_then(|seeds| seeds[k]);
+        let off = match seed {
             Some(kp) => seed_offset(patch, view, kp, wpp_u, wpp_v).unwrap_or([0.0, 0.0]),
             None => [0.0, 0.0],
         };
+        let sampler = params.sampler.for_observation(
+            patch,
+            view.camera,
+            view.cam_from_world,
+            seed,
+            resolution,
+        );
         states.push(ViewState {
             idx: i,
             seed: off,
             off,
             proj: [proj.0, proj.1],
             score: f64::NAN,
+            sampler,
         });
     }
 
@@ -234,6 +276,7 @@ fn refine_patch_keypoints_impl(
     let tiles: Vec<Option<RefineTile>> = states
         .iter()
         .map(|st| {
+            let _phase = render_phase(progress, st.sampler, 1);
             try_render_refine_tile(
                 patch,
                 &views[st.idx as usize],
@@ -242,7 +285,7 @@ fn refine_patch_keypoints_impl(
                 wpp_v,
                 resolution,
                 pad,
-                params.sampler,
+                st.sampler,
                 &mut scratch.img,
             )
         })
@@ -284,7 +327,7 @@ fn refine_patch_keypoints_impl(
                 wpp_u,
                 wpp_v,
                 resolution,
-                params.sampler,
+                st.sampler,
                 &support,
                 channels,
                 &mut raw,
@@ -378,7 +421,7 @@ fn refine_patch_keypoints_impl(
     let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
     if params.render_bitmaps {
         out.representative = render_representative(
-            patch, views, &states, &tiles, &support, wpp_u, wpp_v, params,
+            patch, views, &states, &tiles, &support, wpp_u, wpp_v, params, progress,
         );
     }
     out
@@ -403,6 +446,7 @@ fn render_representative(
     wpp_u: f64,
     wpp_v: f64,
     params: &KeypointSubpixelParams,
+    progress: &Progress<'_>,
 ) -> Option<Vec<u8>> {
     if states.len() < 2 {
         return None;
@@ -424,7 +468,7 @@ fn render_representative(
             wpp_u,
             wpp_v,
             resolution,
-            params.sampler,
+            st.sampler,
             support,
             channels,
             &mut raw,
@@ -457,9 +501,13 @@ fn render_representative(
     // `shifted_center → project` (with projection fallback) `finalize` reports, so
     // the stored bitmap matches the keypoints the caller writes out.
     let mut view_keypoints: Vec<Option<[f64; 2]>> = vec![None; views.len()];
+    // Each live view's own sampler, so the fused render reads it as the cores
+    // that weighted it did.
+    let mut samplers: Vec<Sampler> = vec![Sampler::BilinearMip; views.len()];
     let mut kept: Vec<usize> = Vec::with_capacity(live.len());
     for &si in &live {
         let st = &states[si];
+        samplers[st.idx as usize] = st.sampler;
         let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
         let (kx, ky) =
             project(&views[st.idx as usize], &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
@@ -472,8 +520,9 @@ fn render_representative(
             views,
             &kept,
             resolution,
-            params.sampler,
+            ViewSamplers::Frozen(&samplers),
             Some(&view_keypoints),
+            progress,
         );
         stack.fuse(&weights, AGREEMENT_SIGMA)
     }))
@@ -657,22 +706,13 @@ fn refine_one_view(
         img,
     } = scratch;
     let n = support.pixels.len();
+    let sampler = st.sampler;
 
     // Score at a candidate offset; `None` if the core left the frame.
     let score_at = |off: [f64; 2], g: &mut [f32], zbuf: &mut [f32]| -> Option<f64> {
         if !core_value(
-            patch,
-            view,
-            tile,
-            off[0],
-            off[1],
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g,
+            patch, view, tile, off[0], off[1], wpp_u, wpp_v, resolution, sampler, support,
+            channels, g,
         ) {
             return None;
         }
@@ -697,21 +737,8 @@ fn refine_one_view(
         // the no-tile / out-of-coverage path. If any support pixel is out of
         // frame the local Jacobian is ill-defined here: stop.
         if !core_value_with_jg(
-            patch,
-            view,
-            tile,
-            cur[0],
-            cur[1],
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g,
-            jg_u,
-            jg_v,
-            img,
+            patch, view, tile, cur[0], cur[1], wpp_u, wpp_v, resolution, sampler, support,
+            channels, g, jg_u, jg_v, img,
         ) {
             break;
         }
@@ -764,18 +791,8 @@ fn refine_one_view(
     // the path that needs the value.
     if matches!(params.consensus_refresh, ConsensusRefresh::PerMove)
         && core_value(
-            patch,
-            view,
-            tile,
-            cur[0],
-            cur[1],
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g,
+            patch, view, tile, cur[0], cur[1], wpp_u, wpp_v, resolution, sampler, support,
+            channels, g,
         )
     {
         znorm_core(g, support, channels, zbuf);
@@ -863,19 +880,16 @@ pub fn refine_view_against_references(
         let Some(off) = seed_offset(patch, view, kp, wpp_u, wpp_v) else {
             continue;
         };
-        if core_value(
+        let sampler = params.sampler.for_observation(
             patch,
-            view,
-            None,
-            off[0],
-            off[1],
-            wpp_u,
-            wpp_v,
+            view.camera,
+            view.cam_from_world,
+            Some(kp),
             resolution,
-            params.sampler,
-            &support,
-            channels,
-            &mut raw,
+        );
+        if core_value(
+            patch, view, None, off[0], off[1], wpp_u, wpp_v, resolution, sampler, &support,
+            channels, &mut raw,
         ) {
             znorm_core(&raw, &support, channels, &mut znorm);
             xs.extend_from_slice(&znorm);
@@ -898,6 +912,13 @@ pub fn refine_view_against_references(
         off: seed,
         proj: [proj.0, proj.1],
         score: f64::NAN,
+        sampler: params.sampler.for_observation(
+            patch,
+            target_view.camera,
+            target_view.cam_from_world,
+            Some(target_keypoint),
+            resolution,
+        ),
     };
     let mut scratch = GnScratch::new(channels * n);
     let pad = (params.max_offset_px.max(0.0).ceil() as u32).max(1) + 2;
@@ -909,7 +930,7 @@ pub fn refine_view_against_references(
         wpp_v,
         resolution,
         pad,
-        params.sampler,
+        state.sampler,
         &mut scratch.img,
     );
     refine_one_view(
@@ -947,6 +968,14 @@ pub fn refine_view_against_references(
 /// allocation the binding can avoid. This entry stays as the cloud-level API
 /// for Rust callers that already have a parallel-to-cloud seed slice in hand.
 ///
+/// `progress` receives a `patches` count about every hundredth of the way
+/// through, is polled for cancellation before each patch, and, when detailed,
+/// times the renders of each sampler in its own detail phase.
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled before every patch was refined.
+///
 /// # Panics
 ///
 /// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` is given
@@ -957,7 +986,8 @@ pub fn refine_patch_cloud_keypoints(
     view_sets: &[Vec<u32>],
     starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &KeypointSubpixelParams,
-) -> Vec<KeypointRefinement> {
+    progress: &Progress<'_>,
+) -> Result<Vec<KeypointRefinement>, Cancelled> {
     assert_eq!(
         view_sets.len(),
         cloud.len(),
@@ -972,17 +1002,34 @@ pub fn refine_patch_cloud_keypoints(
     }
     prof::reset();
     let wall_start = std::time::Instant::now();
-    let out = cloud
+    let counter = PatchCounter::new(cloud.len(), None, progress);
+    let out: Vec<Option<KeypointRefinement>> = cloud
         .patches
         .par_iter()
         .enumerate()
         .map(|(i, patch)| {
+            if progress.is_cancelled() {
+                return None;
+            }
             let seeds = starting_keypoints.map(|s| s[i].as_slice());
-            refine_patch_keypoints(patch, views, &view_sets[i], seeds, params)
+            let out = refine_patch_keypoints_reporting(
+                patch,
+                views,
+                &view_sets[i],
+                seeds,
+                params,
+                progress,
+            );
+            counter.finished();
+            Some(out)
         })
         .collect();
     prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
-    out
+    progress.check_cancel()?;
+    Ok(out
+        .into_iter()
+        .map(|o| o.expect("every patch ran when nothing was cancelled"))
+        .collect())
 }
 
 /// Fuse `patch`'s RGBA representative from `views` at `keypoints`, moving
@@ -1007,6 +1054,23 @@ pub fn fuse_patch_bitmap(
     keypoints: &[[f64; 2]],
     params: &KeypointSubpixelParams,
 ) -> Option<Vec<u8>> {
+    fuse_patch_bitmap_reporting(patch, views, view_set, keypoints, params, &Progress::none())
+}
+
+/// [`fuse_patch_bitmap`] reporting to `progress`: a detailed `progress` times
+/// the renders of each sampler in its own detail phase.
+///
+/// # Panics
+///
+/// As [`fuse_patch_bitmap`].
+pub fn fuse_patch_bitmap_reporting(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    keypoints: &[[f64; 2]],
+    params: &KeypointSubpixelParams,
+    progress: &Progress<'_>,
+) -> Option<Vec<u8>> {
     assert_eq!(
         keypoints.len(),
         view_set.len(),
@@ -1020,7 +1084,8 @@ pub fn fuse_patch_bitmap(
         render_bitmaps: true,
         ..params.clone()
     };
-    refine_patch_keypoints(patch, views, view_set, Some(&seeds), &params).representative
+    refine_patch_keypoints_reporting(patch, views, view_set, Some(&seeds), &params, progress)
+        .representative
 }
 
 /// [`fuse_patch_bitmap`] over every patch of `cloud`, parallel across patches
@@ -1099,7 +1164,9 @@ pub fn fuse_patch_cloud_bitmaps(
                     f64::from(keypoints_xy[[j, 1]]),
                 ]);
             }
-            let bitmap = fuse_patch_bitmap(patch, &present, &view_set, &keypoints, params);
+            let bitmap = fuse_patch_bitmap_reporting(
+                patch, &present, &view_set, &keypoints, params, progress,
+            );
             if let Some(counter) = done {
                 counter.fetch_add(1, Ordering::Relaxed);
             }

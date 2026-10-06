@@ -1294,11 +1294,24 @@ row as `patch_zoom`, and the Jacobian it is read from as `patch_jacobian`, a
 diagnostic the table does not print; `get_bench_track`'s `stage_data` reports
 `R` as `patch_resolution`.
 
+**The zoom also decides which sampler draws the tile.** The sampler rule
+([image-warping.md](../core/camera/image-warping.md) § "Choosing the sampler
+per view") reads the same Jacobian at `R` and renders the row's tile and its
+hover view with the anisotropic sampler where one mip level for both axes would
+read the less compressed axis at least 1.5 times too coarsely
+(`PatchJacobian::sampler`, `tile::tile_sampler`), and with `bilinear_mip`
+otherwise, so a view is drawn with the sampler the bench's evaluation and the
+fuse render it with. Hovering a *Zoom* cell names the sampler and that loss
+(`table::zoom_sampler_text`). `get_bench_track` and `get_point`'s evaluation
+block report each row's `sampler` (`anisotropic` or `bilinear_mip`) and
+`sampler_minor_axis_loss`, both null where `patch_jacobian` is.
+
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its
 stage registers, through the code that registers it: at the track stage the
 patch warped into this view and re-anchored where the observation sits
-(`patch::patch_color_image`, `WarpMap::from_patch` and `remap_bilinear_mip` at
+(`patch::patch_color_image`, `WarpMap::from_patch` and the sampler the rule
+picks for the row, at
 64 by 64, shown at 48 points with nearest filtering; the 64 is a display
 resolution, `patch::PATCH_RES`, and no reading is taken from the tile); at the
 cluster stage the
@@ -1311,8 +1324,9 @@ row with nothing to render draws an empty frame of the same size, so the columns
 beside it never shift. A patch not visible in a view warps to an all-black tile,
 which is drawn as such.
 
-**A track-stage tile is one bilinear sample per texel from the mip level the
-warp picks there.** The warp map's SVD is computed (`WarpMap::compute_svd`), and
+**Under `bilinear_mip` a track-stage tile is one bilinear sample per texel from
+the mip level the warp picks there.** This is how every row the sampler rule
+does not move is drawn. The warp map's SVD is computed (`WarpMap::compute_svd`), and
 each texel reads the level `round(log2(s_major))` of the photograph's pyramid,
 `s_major` being the larger singular value of the warp's Jacobian at that texel,
 clamped to the pyramid's levels (`remap_bilinear_mip`). The pyramid is the one
@@ -1322,10 +1336,14 @@ and it is above 0 only where a texel shrinks the photograph by more than about
 down towards its own sampling instead of picking scattered full-resolution
 pixels, which would alias a fine texture into a pattern the photograph does not
 have. Where no texel spans more than about 1.4 photograph pixels every texel
-reads level 0, and the tile is exactly plain bilinear. The hover view renders
-its wider patch the same way, at the tile's sampling, so each texel picks the
-level the tile's own texel there does and the tile is still the middle of the
-picture texel for texel.
+reads level 0, and the tile is exactly plain bilinear. A row the rule moves is
+drawn with the anisotropic sampler instead, whose level follows the smaller
+singular value and which averages several samples along the more compressed
+direction. The choice is made at `R`, not at the display resolution, so it is
+the bench's choice for the same observation. The hover view renders
+its wider patch the same way, with the row's sampler and at the tile's
+sampling, so each texel picks the level the tile's own texel there does and the
+tile is still the middle of the picture texel for texel.
 
 **The track-stage frame is re-anchored on the observation's keypoint**
 (`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):

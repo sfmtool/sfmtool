@@ -4,7 +4,9 @@
 """Shared validation for photometric patch sampling parameters."""
 
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
-_SAMPLERS = ("bilinear", "bilinear_mip", "anisotropic")
+# `per_view` applies the sampler rule to each view; the other three render
+# every view with one sampler.
+_SAMPLERS = ("per_view", "bilinear", "bilinear_mip", "anisotropic")
 
 
 def validate_patch_params(*, window: str, window_sigma: float, sampler: str) -> None:

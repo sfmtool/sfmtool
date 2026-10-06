@@ -576,11 +576,8 @@ gradient twin returns `(∂I/∂x, ∂I/∂y)` rescaled to full-resolution sourc
 coords (a level-`l` bilinear gradient is per level-pixel, so it is divided by
 `2^l`).
 
-Each patch consumer picks one sampler for every view through its `sampler`
-parameter. Choosing it per view instead, `remap_aniso` where the Jacobian's
-anisotropy makes the single tap over-blur the minor axis and this path
-elsewhere, is proposed in
-[sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md).
+The patch kernels choose between this path and the anisotropic one per view,
+by the rule in § "Choosing the sampler per view".
 
 #### Pyramid Construction
 
@@ -593,6 +590,220 @@ This filtering is primarily useful for undistorting fisheye images where the
 periphery represents a much larger field of view per pixel than the center. For
 standard perspective cameras with mild radial distortion, `remap_bilinear` alone
 is usually sufficient.
+
+### Choosing the sampler per view
+
+A patch kernel renders each view of a point into the point's `R×R` grid, and
+the sampler decides how much of the photograph's detail reaches the tile.
+`BilinearMip` reads one mip level for both axes, chosen by the more compressed
+one, so a view that sees the patch at an angle, or through a distorting lens,
+loses the detail it holds along its less compressed axis before anything reads
+the tile. The anisotropic sampler keeps that detail. The **sampler rule**
+renders each view with the anisotropic sampler where the single level would
+read the less compressed axis too coarsely, and with `BilinearMip` everywhere
+else, so every kernel that renders the same observation renders it with the
+same sampler.
+
+#### Interface
+
+[camera/sampler.rs](../../../crates/sfmtool-core/src/camera/sampler.rs) holds
+the `Sampler` enum (`Bilinear`, `BilinearMip`, `Anisotropic`), the rule and
+the one render dispatch every patch kernel goes through.
+
+```rust
+pub enum SamplerChoice {
+    Fixed(Sampler),                              // every view, one sampler
+    PerView { anisotropic_threshold: f64 },      // the rule, with its threshold `a`
+}
+impl Default for SamplerChoice { /* PerView at DEFAULT_ANISOTROPIC_THRESHOLD = 1.5 */ }
+
+impl SamplerChoice {
+    pub fn for_observation(self, patch: &OrientedPatch, camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform, keypoint: Option<[f64; 2]>, resolution: u32) -> Sampler;
+    pub fn for_placement(self, placement: &OrientedPatch, /* camera, pose, resolution */) -> Sampler;
+    pub fn for_jacobian(self, jacobian: Option<[[f64; 2]; 2]>) -> Sampler;
+    pub fn for_singular_values(self, singular_values: Option<[f64; 2]>) -> Sampler;
+}
+
+pub fn rule_sampler(singular_values: [f64; 2], threshold: f64) -> Sampler;
+pub fn minor_axis_loss(singular_values: [f64; 2]) -> f64;      // L
+pub fn render_tile(pyramid: &ImageU8Pyramid, map: &mut WarpMap, sampler: Sampler) -> ImageU8;
+pub fn render_tile_with_grad_into(/* … */);
+pub fn render_tiles(pyramids: &[&ImageU8Pyramid], maps: &mut [WarpMap],
+    samplers: &[Sampler], progress: &Progress<'_>) -> Vec<ImageU8>;
+```
+
+```rust
+let choice = SamplerChoice::default();
+let sampler = choice.for_observation(&patch, view.camera, view.cam_from_world, Some(keypoint), 24);
+let mut map = WarpMap::from_patch(&anchored, view.camera, view.cam_from_world, 24);
+let tile = render_tile(view.pyramid, &mut map, sampler);
+```
+
+- **Why a choice rather than a sampler.** Every patch kernel's parameters
+  (`NormalRefineParams`, `ViewSelectParams`, `KeypointLocalizeParams`,
+  `KeypointSubpixelParams`, `MemberCoherenceParams`) carry a `SamplerChoice`,
+  the rule by default. `Fixed` keeps one sampler for every view, for comparison
+  runs and for a caller that needs one; `Sampler::X.into()` gives it. The
+  bindings and the command line spell the rule `per_view` beside the three
+  sampler names.
+- **Why one placement.** `for_observation` reads the rule from the patch
+  re-anchored on the observation's keypoint
+  (`OrientedPatch::anchored_at_keypoint`), at the patch resolution `R`, as the
+  stored frame has it. The kernels render through frames of their own: the
+  localizer a context tile wider than `R` and centred on the projection, the
+  sub-pixel refiner a tile padded for its drift, and the refiners an
+  orthonormal frame rebuilt around the stored `v` axis, which differs from the
+  stored one where the stored axes are not perpendicular. Reading the rule from
+  any of those would let two kernels choose differently for one observation,
+  so none of them does. The bench's evaluation, Track View
+  (`PatchJacobian::sampler`) and the MCP fields read the same Jacobian
+  (`patch_grid_jacobian` of the anchored patch at `R`).
+- **Why a kernel that iterates chooses once.** Normal refinement fixes each
+  view's sampler from the patch it starts from (`view_samplers`), since the
+  Jacobian changes with the candidate normal and a choice per candidate would
+  make `Φ` jump where a candidate carries a view across the threshold. The
+  localizer and the sub-pixel refiner choose once per view, at its seed
+  keypoint, since their tiles only slide in the patch's plane.
+- **Timing.** `render_tiles` renders a multi-view stack grouped by sampler, and
+  each group runs in a `Progress::detail_phase` named `render bilinear_mip` or
+  `render anisotropic` whose note gives the number of views; the single-view
+  kernels open the same phases per render (`render_phase`). The phases record
+  only under `Progress::detailed(true)`. The batches that render views
+  (`refine_patch_cloud_normals`, `select_patch_cloud_views`,
+  `localize_patch_cloud_keypoints`, `refine_patch_cloud_keypoints`,
+  `validate_patch_cloud_member_coherence`, `fuse_patch_cloud_bitmaps` and the
+  bench's `evaluate` and `fit`) take a `&Progress`, count `patches`, poll for
+  cancellation between patches and return `Cancelled` when it is set.
+
+#### The footprint, and what `BilinearMip` loses
+
+The Jacobian of the patch grid's map into the photograph at the tile's centre
+has singular values `σ_major ≥ σ_minor`, in photograph px per grid px.
+`BilinearMip` reads level `l = round(log2 max(σ_major, 1))`, whose pixels are
+`2^l` photograph pixels wide, so one sample spans `φ_a = max(2^l, 1) / σ_a`
+grid px along each singular direction. The view's **footprint**
+`φ_v = max(φ_major, φ_minor, 1)` is the scale in grid px below which its tile
+holds no detail. A view that shrinks the photograph equally on both axes is
+read at the level that matches, so its footprint stays between 1 and √2
+however far away it is; a view that magnifies the photograph has a footprint
+equal to its zoom. Under the anisotropic sampler the footprint is close to
+`max(1, 1/σ_a)` per axis, since it takes the level from `σ_minor` and several
+samples along the major axis.
+
+The loss along the minor axis is
+
+```
+L = 2^l / max(σ_minor, 1)
+```
+
+how much coarser `BilinearMip` reads that axis than its own compression needs.
+A minor axis that magnifies the photograph (`σ_minor < 1`) can only lose detail
+down to one photograph pixel, hence the floor.
+
+#### The rule
+
+A view renders with `Anisotropic` when **`σ_major ≥ √2` and `L ≥ a`**, and with
+`BilinearMip` otherwise (`rule_sampler`).
+
+- Below `σ_major = √2` `BilinearMip` reads level 0 for both axes, and a view
+  whose lower zoom is above about 0.71× loses nothing to it.
+- `L` above 1 also arises from the level rounding alone: a view compressed
+  alike on both axes reads `L` up to √2 just under a level boundary. `a` is
+  above √2 so that those views stay on `BilinearMip`.
+- A view with no Jacobian (its centre does not project) stays on `BilinearMip`.
+- The cause of the anisotropy does not enter. A view near the edge of a fisheye
+  image and a pinhole view of a patch at 70° with the same Jacobian render the
+  same way.
+
+#### How `a = 1.5` was set
+
+The rule was compared against `BilinearMip` everywhere with detailed runs of a
+measurement harness on eleven samples: the checked-in seoul_bull and
+kerry_park ground truths, and from local datasets the dino_dog_toy seed
+reconstruction, two museum captures (masks, a tree stump exhibit), a gallery
+sculpture, a mossy railing, a distant badlands panorama, a 48-image fisheye rig
+(KerryPark480) and two 12-camera 360° rigs (OmniCoast, OmniTemple1); up to 400
+points per sample, all their views, and 40 tracks of each on the bench. The
+48-image fisheye rig's lenses carry extreme `k2`/`k3` terms and its data near
+the edge of the image circle is unreliable, so its views near that edge say
+little about the rule; the kerry_park ground truth is the fisheye sample to
+read.
+
+| Sample | views | moved at `a = 1.5` | self-similarity semi-major axis, moved views, p50 `BilinearMip` → `Anisotropic` (grid px) | moved view's ZNCC against the track's other views, mean change |
+|---|---|---|---|---|
+| seoul_bull | 1277 | 15.0% | 0.90 → 0.50 | −0.010 |
+| kerry_park | 3767 | 6.6% | 0.86 → 0.49 | −0.005 |
+| dino_dog_toy | 2371 | 31.2% | 1.32 → 1.12 | +0.012 |
+| museum masks | 3325 | 19.9% | 1.71 → 1.58 | −0.002 |
+| gallery sculpture | 1948 | 51.5% | 0.82 → 0.52 | −0.001 |
+| tree stump | 3013 | 24.0% | 1.24 → 1.06 | −0.005 |
+| fisheye rig | 4931 | 5.3% | 1.27 → 0.96 | −0.011 |
+| 360° rig, coast | 4698 | 14.9% | 0.78 → 0.52 | −0.006 |
+| 360° rig, temple | 6915 | 9.9% | 0.96 → 0.73 | −0.001 |
+| badlands | 3398 | 31.2% | 1.48 → 0.81 | +0.043 |
+| mossy railing | 2032 | 4.9% | 1.14 → 1.02 | −0.002 |
+
+- **Every band of `L` above √2 sharpens the moved views.** Split by the views
+  each step of the threshold adds, the mean shortening of the semi-major axis
+  is 0.21–0.66 grid px for `L ≥ 2` (leaving out the mossy railing's three such views), 0.19–0.44 for `1.75 ≤ L < 2`, 0.11–0.32 for
+  `1.5 ≤ L < 1.75` and 0.08–0.23 for `1.42 ≤ L < 1.5`, with the moved view's
+  ZNCC against the others changing by under 0.014 on average in the two lower
+  bands. `1.5` keeps the bands down to 1.5 and leaves a margin above the √2
+  that rounding alone gives a view compressed alike on both axes.
+- **The ZNCC drops slightly where the gain is largest.** A sharper tile carries
+  detail the other views' tiles lack, which normalized correlation charges for
+  (sharper-patch-bitmap draft, § "Why the mean is blurry"); for `L ≥ 2` the mean change of a
+  moved view's ZNCC is between −0.018 and +0.014 on the other samples, and
+  close to 0 below. On the badlands
+  sample, whose far views compress the photograph 10 to 50 times along one
+  axis, `BilinearMip` reads a level clamped at the top of the pyramid and
+  aliases, and the anisotropic sampler raises the ZNCC by 0.043.
+- **A view the rule leaves on `BilinearMip` renders the same tile, bit for
+  bit**, so a point none of whose views moves keeps its fused bitmap: none of
+  the 2,549 such points across the samples changed. The fused bitmaps of the
+  points with a moved view change by a median mean absolute difference of
+  0.3–3.2 grey levels.
+- **No bench verdict changes at the current bars** (in 0, out 0 over 3,828
+  observations). The number of points member coherence does not keep whole
+  changes by 0 to 9 of 400 per sample, and view selection admits 0–3% fewer
+  views.
+
+#### Cost, and the AVX2 kernel
+
+With the scalar sampler an anisotropic `R×R` render cost 2.3–2.7 times a
+`BilinearMip` one (79–93 µs against 31–39 µs including the warp map's SVD;
+6 times on the badlands sample, whose views take the full 16 samples), which
+raised the view selection batch by 20–120% and the localizer's by 3–60% (by 100–200% on the
+badlands sample). `remap_aniso_with_pyramid` therefore has an AVX2 kernel
+([camera/remap/aniso_avx2.rs](../../../crates/sfmtool-core/src/camera/remap/aniso_avx2.rs)), chosen at run time with
+`is_x86_feature_detected!("avx2")`: eight output pixels of a row at a time
+wherever they read the same two pyramid levels, each lane with its own
+position, direction, sample count and level blend, and the corners fetched
+with one 32-bit gather per corner for all channels. It does the scalar path's
+`f32` operations in the same order, with no fused multiply-add, so its output
+is identical to the scalar path's bit for bit (`aniso_avx2_matches_scalar_bit_for_bit`),
+and the scalar path, which computes a sample's corner geometry once for all
+channels, is identical to the per-channel algorithm
+(`aniso_scalar_matches_the_per_channel_reference`). With it an anisotropic
+`R×R` render takes 20–28 µs, below a `BilinearMip` render's 26–40 µs (42 µs
+against 34 µs on the badlands sample), and on whole reconstructions (the best of three
+runs, up to 2,780 points) the fuse, the localizer and member coherence run
+within 10% of their `BilinearMip` times, the bench's evaluation within 6%
+(16% on dino_dog_toy), and normal refinement and view selection within 5%
+except on the two samples the rule moves most views of: the gallery sculpture
+(57% moved; +40% and +26%) and the badlands panorama (37% moved, many with the
+full 16 samples; +10% to +22% in every batch). The value+gradient
+anisotropic sampler the sub-pixel refiner's tile reads is scalar.
+
+#### Storing what a render was made under
+
+The rule reads only the zoom and `a`, so a stored reading needs no record of
+its sampler: `sfm embed-patches` records `anisotropic_threshold` beside
+`sampler` in the file's `tool_options`, and a reader that knows a render's zoom
+works out its sampler. Storing `a` beside per-observation readings in the
+`.sfmr` is proposed with those readings in
+[sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md) (Part 7).
 
 ## Python Bindings
 
@@ -635,6 +846,8 @@ crates/sfmtool-core/src/camera/
 ├── warp_map.rs          # WarpMap struct, from_cameras(), Jacobian estimation
 ├── image.rs             # ImageU8, ImageU8Pyramid, ImageF32WithGrad
 ├── remap.rs             # remap_bilinear(), remap_aniso() and variants
+├── remap/aniso_avx2.rs  # the AVX2 kernel of remap_aniso_with_pyramid()
+├── sampler.rs           # Sampler, SamplerChoice, the sampler rule, render_tile()
 ```
 
 In `sfmtool-py`:

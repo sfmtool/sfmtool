@@ -30,7 +30,7 @@ use crate::patch::keypoint_localize::{
     try_localize_patch_keypoints, KeypointLocalizeParams, LocalizeError,
 };
 use crate::patch::keypoint_subpixel::{
-    fuse_patch_bitmap, refine_patch_keypoints, KeypointSubpixelParams,
+    fuse_patch_bitmap_reporting, refine_patch_keypoints_reporting, KeypointSubpixelParams,
 };
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
@@ -461,7 +461,15 @@ fn fused_in_place(
         return track.clone();
     };
     let ins = track.in_observations();
-    let (bitmap, color) = fuse_bitmap(track, edited, images, placement, &ins, options);
+    let (bitmap, color) = fuse_bitmap(
+        track,
+        edited,
+        images,
+        placement,
+        &ins,
+        options,
+        &Progress::none(),
+    );
     let Some(bitmap) = bitmap else {
         return track.clone();
     };
@@ -828,7 +836,7 @@ pub(super) fn fit_track(
     );
     let (bitmap, color) = {
         let mut phase = progress.phase("fuse");
-        let fused = fuse_bitmap(&next, edited, images, &placed, &ins, options);
+        let fused = fuse_bitmap(&next, edited, images, &placed, &ins, options, &phase);
         progress_note!(phase, "{} observations", ins.len());
         fused
     };
@@ -921,7 +929,7 @@ fn fit_round(
     };
     let refined = {
         let mut phase = progress.phase("refine");
-        let refined = refine_patch_keypoints(
+        let refined = refine_patch_keypoints_reporting(
             frame,
             images,
             &localized.views,
@@ -933,6 +941,7 @@ fn fit_round(
                     .collect::<Vec<_>>(),
             ),
             &options.refine,
+            &phase,
         );
         progress_note!(phase, "{} views", refined.views.len());
         refined
@@ -1094,7 +1103,7 @@ pub(super) fn triangulate_rays(
 /// Fuse the `in` observations into one consensus tile at their final keypoints,
 /// and read the point's colour off its centre.
 ///
-/// The fuse is [`fuse_patch_bitmap`], the sub-pixel kernel's own fuse run with
+/// The fuse is [`fuse_patch_bitmap_reporting`], the sub-pixel kernel's own fuse run with
 /// no Gauss-Newton step so it moves nothing: the keypoints are the ones the fit
 /// already settled, and this pass only renders and blends them. The grid is the
 /// reconstruction's own bitmap grid where it stores one, so what is fused is a
@@ -1106,6 +1115,7 @@ fn fuse_bitmap(
     patch: &OrientedPatch,
     ins: &[usize],
     options: &FitOptions,
+    progress: &Progress<'_>,
 ) -> (Option<Array3<u8>>, Option<[u8; 3]>) {
     let stored = edited.base.point_set.patch_bitmaps_y_x_rgba.as_ref();
     let (resolution, channels) = match stored {
@@ -1129,7 +1139,9 @@ fn fuse_bitmap(
         resolution: resolution as u32,
         ..options.refine.clone()
     };
-    let Some(fused) = fuse_patch_bitmap(patch, images, &view_set, &keypoints, &params) else {
+    let Some(fused) =
+        fuse_patch_bitmap_reporting(patch, images, &view_set, &keypoints, &params, progress)
+    else {
         return (None, None);
     };
     // The kernel fuses RGBA; the column takes as many channels as it carries.

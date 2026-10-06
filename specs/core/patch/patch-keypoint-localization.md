@@ -251,7 +251,16 @@ existing patch machinery:
 
 - Patch rendering per view reuses `WarpMap::from_patch`
   and the patch cloud ([patch-cloud.md](patch-cloud.md)) — already camera-model
-  agnostic via `ray_to_pixel`.
+  agnostic via `ray_to_pixel`. Each view's context tile is rendered with the
+  sampler the `sampler` choice picks once for the observation at its seed
+  keypoint and the patch resolution `R` (the sampler rule by default,
+  [image-warping.md](../camera/image-warping.md) § "Choosing the sampler per
+  view"), so the localizer reads a view through the sampler the bench and the
+  fuse read it through.
+- `localize_patch_cloud_keypoints` takes a `done` counter for a Python poller
+  and a `Progress`: it counts `patches`, is polled for cancellation before each
+  patch and between a patch's rounds (a cancelled batch returns `Cancelled`),
+  and, when detailed, times each sampler's renders in its own detail phase.
 - The robust consensus reuses the IRLS template from patch-normal refinement.
 - The per-view sub-pixel ZNCC shift search is the new kernel it
   adds, in the same crate alongside the rendering and consensus it sits between.
@@ -273,7 +282,7 @@ existing patch machinery:
 | `search_strategy` | `PlusDescent` | per-(view, round) shift-grid traversal: `PlusDescent` (default, local "+"-descent) or `Exhaustive` (full-grid global-argmax fallback); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 | `search_resolution_multiplier` | 1.0 | discrete-search resolution multiplier `m` (`1.0` = no-op); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 
-(plus `window` and `sampler`, shared with [normal refinement](patch-normal-refinement.md).)
+(plus `window` and `sampler`, shared with [normal refinement](patch-normal-refinement.md); `sampler` defaults to the sampler rule.)
 
 The patch size is carried by the frame the algorithm is handed (the `(u, v)`
 half-vectors).

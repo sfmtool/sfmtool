@@ -55,27 +55,7 @@ pub enum PatchWindow {
     // (spec item 6); deferred until a producer exists.
 }
 
-/// How to sample a [`ProjectedImage`]'s pyramid when rendering a patch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sampler {
-    /// Plain bilinear from the full-resolution level: the cheapest tap, and
-    /// within ~1° of anisotropic on fronto-parallel pinhole views — but it
-    /// aliases on compressive warps (e.g. cross-scale views with one camera
-    /// much closer), which corrupts the score surface the refiners descend.
-    Bilinear,
-    /// Single bilinear sample from the pyramid level nearest the warp's local
-    /// compression (`round(log2(sigma_major))` per pixel, from the Jacobian
-    /// SVD). The **default**: the mip level bounds the aliasing `Bilinear`
-    /// suffers on compressive warps at ≈ bilinear cost — at the price of
-    /// blurring oblique views, whose anisotropic footprint only
-    /// `Anisotropic`'s multi-tap walk resolves.
-    BilinearMip,
-    /// Anisotropic sampling over the pyramid — the patch warp's Jacobian SVD picks
-    /// the level, de-aliasing oblique / grazing views. Costs ~1.6–3× more but keeps
-    /// the reported `Φ`/confidence unbiased (bilinear depresses `Φ` on oblique
-    /// views) and helps slightly on distorted/fisheye rigs.
-    Anisotropic,
-}
+pub use crate::camera::sampler::{Sampler, SamplerChoice};
 
 /// How candidate normals are scored: re-rendered from the source images, or
 /// resampled from a cached base patch (see
@@ -116,8 +96,11 @@ pub struct NormalRefineParams {
     /// Minimum number of (effective) views; below it the candidate / patch is
     /// not refined.
     pub min_views: u32,
-    /// How to sample the source pyramids when rendering candidates.
-    pub sampler: Sampler,
+    /// Which sampler renders each view: the sampler rule by default
+    /// ([`SamplerChoice::per_view`]). Under the rule each view's sampler is
+    /// chosen once, from the patch the refinement starts from, and every
+    /// candidate normal renders the view with it.
+    pub sampler: SamplerChoice,
     /// Candidate-scoring strategy (source re-render vs. fronto-parallel cache).
     pub cache: CacheMode,
     /// Base-patch supersample factor for the cache (≥ 1; `1.0` = candidate
@@ -209,7 +192,7 @@ impl Default for NormalRefineParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             min_valid_fraction: 0.6,
             min_views: 3,
-            sampler: Sampler::BilinearMip,
+            sampler: SamplerChoice::per_view(),
             cache: CacheMode::FrontoParallel,
             cache_supersample: 2.0,
             compute_confidence: false,
@@ -269,6 +252,3 @@ pub(in crate::patch) const MIN_MASK_PIXELS: usize = 8;
 /// a clean `V == min_views` track (weights near- but not exactly uniform, hence
 /// `1/Σwᵢ² < V`) still scores.
 pub(super) const MIN_EFFECTIVE_VIEWS: f64 = 2.0;
-
-/// `remap_aniso` sample cap along the major axis.
-pub(super) const MAX_ANISOTROPY: u32 = 16;

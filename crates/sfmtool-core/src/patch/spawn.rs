@@ -34,6 +34,7 @@ use super::keypoint_localize::{
 };
 use super::keypoint_subpixel::{refine_patch_cloud_keypoints, KeypointSubpixelParams};
 use super::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 use crate::reconstruction::triangulation::triangulate_batch;
 
 /// Tunables for [`spawn_candidate_tracks`]. The defaults are the spec's.
@@ -227,7 +228,9 @@ pub fn spawn_candidate_tracks(
         None,
         &localize_params,
         None,
-    );
+        &Progress::none(),
+    )
+    .expect("Progress::none never cancels");
 
     // The view floor decides what the later stages spend anything on: a candidate
     // below it gets an empty refinement/triangulation set and never renders again.
@@ -265,7 +268,9 @@ pub fn spawn_candidate_tracks(
             &refine_sets,
             Some(&seeds),
             &refine_params,
+            &Progress::none(),
         )
+        .expect("Progress::none never cancels")
         .into_iter()
         .map(|r| (r.views, r.keypoints))
         .collect()

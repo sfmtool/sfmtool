@@ -1427,7 +1427,12 @@ observation sits, so neither waits for a photograph, and a tile whose middle is
 off the photograph has both. Both are null at the cluster stage, on a track with
 no patch yet, for an observation with nothing saying where it sits, and for a
 patch whose centre is behind the camera or outside the camera model's domain;
-`patch_zoom` is null as well for a patch seen edge on. The track stage's own data
+`patch_zoom` is null as well for a patch seen edge on. Each row also carries
+`sampler`, the sampler the sampler rule picks from `patch_jacobian` and the one
+its tile is rendered with by the evaluation, the fuse and Track View
+(`anisotropic` or `bilinear_mip`), and `sampler_minor_axis_loss`, the loss the
+rule compares with its threshold; both are null where `patch_jacobian` is. The
+track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the
 other null, for the reason Track View's edit header carries a word in front of it:
 the same three numbers are a place or a bearing depending on `w`, and an agent

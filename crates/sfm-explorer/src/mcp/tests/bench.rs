@@ -1377,6 +1377,17 @@ fn every_track_stage_row_reports_its_patch_jacobian_and_zoom() {
             (low * high * det - 1.0).abs() < 1e-2,
             "the zooms {low} and {high} do not multiply to 1 / {det}: {row}"
         );
+
+        // The sampler is the rule's choice from the same Jacobian.
+        let want_sampler = sfmtool_core::camera::sampler::SamplerChoice::per_view()
+            .for_jacobian(Some(got))
+            .name();
+        assert_eq!(row["sampler"], json!(want_sampler), "{row}");
+        let loss = row["sampler_minor_axis_loss"].as_f64().expect("a loss");
+        let want_loss = sfmtool_core::camera::sampler::minor_axis_loss(
+            sfmtool_core::camera::warp_map::singular_values_2x2(got),
+        );
+        assert!((loss - want_loss).abs() < 1e-12, "{row}");
     }
 }
 
@@ -1408,6 +1419,8 @@ fn a_cluster_stage_row_reports_no_patch_jacobian_or_zoom() {
     for row in rows {
         assert_eq!(row["patch_jacobian"], Value::Null, "{row}");
         assert_eq!(row["patch_zoom"], Value::Null, "{row}");
+        assert_eq!(row["sampler"], Value::Null, "{row}");
+        assert_eq!(row["sampler_minor_axis_loss"], Value::Null, "{row}");
     }
 }
 

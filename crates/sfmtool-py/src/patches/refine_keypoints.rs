@@ -46,8 +46,10 @@ impl PyPatchCloud {
     ///     resolution: The R×R patch grid the consensus / ECC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"``, or
-    ///         ``"anisotropic"`` (value and gradient are rendered with the same
+    ///     sampler: ``"per_view"`` (default: the sampler rule picks
+    ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
+    ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
+    ///         ``"bilinear"`` or ``"anisotropic"`` (value and gradient are rendered with the same
     ///         sampler).
     ///     robust_iters: IRLS passes for the robust consensus.
     ///     max_outer_sweeps: Max outer sweeps of the alternating loop (refresh
@@ -129,7 +131,7 @@ impl PyPatchCloud {
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, max_outer_sweeps=1,
+        window_sigma=0.6, sampler="per_view", robust_iters=3, max_outer_sweeps=1,
         outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
         max_offset_px=2.0, consensus_refresh="per_sweep", point_indexes=None,
         starting_keypoints=None, render_bitmaps=false, progress=None

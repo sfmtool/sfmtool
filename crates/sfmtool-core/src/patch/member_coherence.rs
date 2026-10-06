@@ -39,7 +39,9 @@
 use rayon::prelude::*;
 
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::normal_refine::{PatchWindow, ProjectedImage, Sampler, MIN_MASK_PIXELS};
+use crate::patch::normal_refine::{PatchWindow, ProjectedImage, SamplerChoice, MIN_MASK_PIXELS};
+use crate::patch::PatchCounter;
+use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::SfmrReconstruction;
 
 /// Tunables for [`validate_member_coherence`].
@@ -64,8 +66,9 @@ pub struct MemberCoherenceParams {
     pub resolution: u32,
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
-    /// How to sample the source pyramids when rendering patches.
-    pub sampler: Sampler,
+    /// Which sampler renders each member's tile: the sampler rule by default
+    /// ([`SamplerChoice::per_view`]), applied to each member's placement.
+    pub sampler: SamplerChoice,
     /// Per-member floor on the window-weighted valid-pixel fraction; a member
     /// below it does not cover enough of the patch to be correlated and is left
     /// unscored (its row and column stay `NaN`).
@@ -153,7 +156,7 @@ impl Default for MemberCoherenceParams {
             margin_gate: 0.05,
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
-            sampler: Sampler::BilinearMip,
+            sampler: SamplerChoice::per_view(),
             min_valid_fraction: 0.6,
             min_support_pixels: MIN_MASK_PIXELS as u32,
             self_bar_k: 1.5,
@@ -440,7 +443,7 @@ mod decide;
 mod matrix;
 
 pub use decide::{core_coherence, core_deficit, decide_member_coherence};
-pub use matrix::{coarse_factors_for, member_zncc_matrix};
+pub use matrix::{coarse_factors_for, member_zncc_matrix, member_zncc_matrix_reporting};
 
 /// Validate one point's track: build its pairwise member matrix and read the
 /// verdict off it. `member_keypoints` anchors the members' renders — see
@@ -465,6 +468,17 @@ pub fn validate_member_coherence(
 /// [`member_keypoints_from_reconstruction`]). Results are returned in cloud
 /// order — the kernel is per point, so nothing depends on thread scheduling.
 ///
+/// `done`, when given, is bumped once per patch, for a caller polling progress
+/// from another thread. `progress` receives a `patches` count about every
+/// hundredth of the way through, is polled for cancellation before each patch,
+/// and, when detailed, times the members' renders under each sampler in its own
+/// detail phase.
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled before every patch was
+/// validated.
+///
 /// # Panics
 ///
 /// Panics if `member_views.len() != cloud.len()`, if `member_keypoints` is given
@@ -475,8 +489,9 @@ pub fn validate_patch_cloud_member_coherence(
     member_views: &[Vec<u32>],
     member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams,
-    progress: Option<&std::sync::atomic::AtomicUsize>,
-) -> Vec<MemberCoherence> {
+    done: Option<&std::sync::atomic::AtomicUsize>,
+    progress: &Progress<'_>,
+) -> Result<Vec<MemberCoherence>, Cancelled> {
     assert_eq!(
         member_views.len(),
         cloud.len(),
@@ -489,20 +504,28 @@ pub fn validate_patch_cloud_member_coherence(
             "member_keypoints must be parallel to member_views"
         );
     }
-    cloud
+    let counter = PatchCounter::new(cloud.len(), done, progress);
+    let out: Vec<Option<MemberCoherence>> = cloud
         .patches
         .par_iter()
         .enumerate()
         .zip(member_views.par_iter())
         .map(|((i, patch), mv)| {
-            let kps = member_keypoints.map(|k| k[i].as_slice());
-            let out = validate_member_coherence(patch, views, mv, kps, params);
-            if let Some(c) = progress {
-                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if progress.is_cancelled() {
+                return None;
             }
-            out
+            let kps = member_keypoints.map(|k| k[i].as_slice());
+            let matrix = member_zncc_matrix_reporting(patch, views, mv, kps, params, progress);
+            let decision = decide_member_coherence(&matrix, params);
+            counter.finished();
+            Some(MemberCoherence { matrix, decision })
         })
-        .collect()
+        .collect();
+    progress.check_cancel()?;
+    Ok(out
+        .into_iter()
+        .map(|o| o.expect("every patch ran when nothing was cancelled"))
+        .collect())
 }
 
 /// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track

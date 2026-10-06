@@ -50,10 +50,14 @@
 //! The tile and its hover view are rendered at display resolutions
 //! ([`super::patch::PATCH_RES`], and [`CONTEXT_FACTOR`] times it), which only
 //! decide how many texels are drawn: no number in a cell, a caption or a
-//! report is read from them.
+//! report is read from them. **Which sampler draws them** is decided at `R`,
+//! not at the display resolution ([`tile_sampler`]): the sampler rule applied
+//! to the same Jacobian the *Zoom* column reads, so a view is drawn with the
+//! sampler the bench's kernels render it with.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::sampler::Sampler;
 use sfmtool_core::camera::warp_map::patch_grid_jacobian;
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
@@ -102,6 +106,20 @@ pub(crate) fn patch_jacobian(
     let frame = super::patch::render_frame(placement, camera, &pose, Some(keypoint));
     let resolution = crate::bench::patch_resolution(recon) as usize;
     patch_grid_jacobian(&frame, camera, &pose, resolution).map(PatchJacobian)
+}
+
+/// The sampler one observation's track-stage tile and its hover view are
+/// rendered with: the sampler rule applied to [`patch_jacobian`], the choice
+/// the bench's kernels make for the same view, or
+/// [`super::patch::FALLBACK_SAMPLER`] where there is no Jacobian.
+pub(crate) fn tile_sampler(
+    recon: &SfmrReconstruction,
+    track: &EditableTrack,
+    observation: usize,
+) -> Sampler {
+    patch_jacobian(recon, track, observation).map_or(super::patch::FALLBACK_SAMPLER, |jacobian| {
+        jacobian.sampler()
+    })
 }
 
 /// What a track-stage row's tile is warped through: the track's patch, the
@@ -159,6 +177,7 @@ pub(super) fn image(
                 &pose,
                 Some(keypoint),
                 src,
+                tile_sampler(recon, track, observation),
             ))
         }
         Stage::Cluster(payload) => {
@@ -259,7 +278,14 @@ pub(super) fn context(
             let mut wide = anchored.clone().unwrap_or_else(|| frame.clone());
             wide.half_extent = wide.half_extent.map(|h| h * f64::from(k));
             let side = super::patch::PATCH_RES * k;
-            let picture = super::patch::frame_color_image(&wide, camera, &pose, src, side);
+            let picture = super::patch::frame_color_image(
+                &wide,
+                camera,
+                &pose,
+                src,
+                side,
+                tile_sampler(recon, track, observation),
+            );
             let side = side as f32;
             // The pixel of the photograph at `pixel`, as a place in the
             // picture: its ray met with the widened frame's plane, read on the

@@ -749,8 +749,17 @@ fn batch_matches_per_patch() {
     };
     let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 
-    let batch =
-        localize_patch_cloud_keypoints(&cloud, &views, &view_sets, None, None, &params(), None);
+    let batch = localize_patch_cloud_keypoints(
+        &cloud,
+        &views,
+        &view_sets,
+        None,
+        None,
+        &params(),
+        None,
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     assert_eq!(batch.len(), 2);
     for (i, res) in batch.iter().enumerate() {
         let single =
@@ -951,7 +960,9 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
         None,
         &params(),
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
 
     let single0 = localize_patch_keypoints(
         &cloud.patches[0],
@@ -2464,7 +2475,9 @@ fn batch_threads_the_basis_inputs_per_patch() {
         Some(&inputs),
         &capped(3),
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
 
     // Patch 0 ranks the leading views highest, patch 1 the trailing ones — so
     // the per-patch scores really did reach the pick.
@@ -2635,7 +2648,9 @@ fn empty_view_scores_fall_back_to_the_grazing_rank() {
         Some(&inputs),
         &capped(3),
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     assert_eq!(batch[0].views, none.views);
     assert_eq!(batch[0].is_basis, none.is_basis);
 }

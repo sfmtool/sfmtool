@@ -143,7 +143,7 @@ fn test_params(objective: Objective) -> NormalRefineParams {
         window: PatchWindow::GaussianDisk { sigma: 0.6 },
         min_valid_fraction: 0.5,
         min_views: 2,
-        sampler: Sampler::Bilinear,
+        sampler: Sampler::Bilinear.into(),
         // The refine tests exercise the confidence stencil (off in production).
         compute_confidence: true,
         ..NormalRefineParams::default()
@@ -672,7 +672,7 @@ fn bilinear_mip_sampler_recovers_normal_end_to_end() {
     let init_n = exp_map_normal(&truth, [15.0f64.to_radians(), 0.0]);
     let patch = plane_patch(init_n);
     let params = NormalRefineParams {
-        sampler: Sampler::BilinearMip,
+        sampler: Sampler::BilinearMip.into(),
         cache: CacheMode::Off,
         ..test_params(Objective::MeanPairwise)
     };
@@ -1114,7 +1114,9 @@ fn refine_patch_cloud_normals_refines_in_place() {
         &test_params(Objective::MeanPairwise),
         None,
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
 
     assert_eq!(results.len(), 3);
     for (i, r) in results.iter().enumerate() {
@@ -1175,7 +1177,9 @@ fn max_refine_views_caps_basis_close_to_full_result() {
         &params,
         None,
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
 
     let capped_params = NormalRefineParams {
         max_refine_views: 4,
@@ -1190,7 +1194,9 @@ fn max_refine_views_caps_basis_close_to_full_result() {
         &capped_params,
         None,
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     for (i, (f, c)) in full.iter().zip(&capped).enumerate() {
         // The subset reports the basis it refined over, not the full set.
         assert!(c.valid_view_count <= 4, "patch {i} basis not capped");
@@ -1217,7 +1223,9 @@ fn max_refine_views_caps_basis_close_to_full_result() {
         &noop_params,
         None,
         None,
-    );
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     for (f, n) in full.iter().zip(&noop) {
         assert_eq!(f.patch.normal(), n.patch.normal());
         assert_eq!(f.photoconsistency, n.photoconsistency);

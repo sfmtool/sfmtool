@@ -226,7 +226,7 @@ class AddPatchBitmapsTransform:
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
     required_feature_source = "embedded_patches"
 
-    def __init__(self, *, resolution: int = 24, sampler: str = "bilinear_mip"):
+    def __init__(self, *, resolution: int = 24, sampler: str = "per_view"):
         if resolution < 2:
             raise ValueError(f"resolution must be >= 2, got {resolution}")
         validate_patch_params(window="gaussian_disk", window_sigma=1.0, sampler=sampler)

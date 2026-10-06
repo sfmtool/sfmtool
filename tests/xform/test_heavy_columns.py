@@ -100,7 +100,7 @@ def test_add_after_minimal_is_marked_as_restoring():
 
 def test_add_patch_bitmaps_params():
     t = parse_add_patch_bitmaps_params("")
-    assert (t.resolution, t.sampler) == (24, "bilinear_mip")
+    assert (t.resolution, t.sampler) == (24, "per_view")
     t = parse_add_patch_bitmaps_params("resolution=32,sampler=anisotropic")
     assert (t.resolution, t.sampler) == (32, "anisotropic")
     with pytest.raises(Exception, match="Unknown --add-patch-bitmaps key"):

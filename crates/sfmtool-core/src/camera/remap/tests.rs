@@ -968,3 +968,174 @@ fn remap_rows_f32x3_serial_and_parallel_paths_are_bit_identical() {
     assert_eq!(par.1, ser.1, "grad_x");
     assert_eq!(par.2, ser.2, "grad_y");
 }
+
+// -----------------------------------------------------------------------
+// The anisotropic remap's scalar and AVX2 paths
+// -----------------------------------------------------------------------
+
+/// The anisotropic remap as it was written channel by channel, each sample's
+/// corner geometry computed per channel: the reference both paths are held to.
+fn aniso_per_channel_reference(pyramid: &ImageU8Pyramid, map: &WarpMap, max_aniso: u32) -> ImageU8 {
+    let (w, h) = (map.width(), map.height());
+    let c = pyramid.level(0).channels();
+    let num_levels = pyramid.num_levels();
+    let mut data = vec![0u8; (w * h * c) as usize];
+    for row in 0..h {
+        for col in 0..w {
+            let (sx, sy) = map.get(col, row);
+            if sx.is_nan() || sy.is_nan() {
+                continue;
+            }
+            let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
+            let base = ((row * w + col) * c) as usize;
+            if sigma_major <= 1.0 {
+                for ch in 0..c {
+                    let v = sample_bilinear_u8(pyramid.level(0), sx, sy, ch);
+                    data[base + ch as usize] = (v + 0.5).clamp(0.0, 255.0) as u8;
+                }
+                continue;
+            }
+            let level_f = sigma_minor.max(1.0_f32).log2();
+            let level_lo = (level_f.floor() as usize).min(num_levels - 1);
+            let level_hi = (level_lo + 1).min(num_levels - 1);
+            let frac = if level_lo == level_hi {
+                0.0
+            } else {
+                level_f - level_lo as f32
+            };
+            let ratio = sigma_major / sigma_minor.max(1.0);
+            let n = (ratio.ceil() as u32).clamp(1, max_aniso);
+            let scale_lo = (1u32 << level_lo) as f32;
+            let scale_hi = (1u32 << level_hi) as f32;
+            for ch in 0..c {
+                let mut sum_lo = 0.0f32;
+                let mut sum_hi = 0.0f32;
+                for i in 0..n {
+                    let t = (i as f32 + 0.5) / n as f32 - 0.5;
+                    let x = sx + t * sigma_major * major_dx;
+                    let y = sy + t * sigma_major * major_dy;
+                    sum_lo +=
+                        sample_bilinear_u8(pyramid.level(level_lo), x / scale_lo, y / scale_lo, ch);
+                    if frac > 0.0 {
+                        sum_hi += sample_bilinear_u8(
+                            pyramid.level(level_hi),
+                            x / scale_hi,
+                            y / scale_hi,
+                            ch,
+                        );
+                    }
+                }
+                let val = sum_lo / n as f32 * (1.0 - frac) + sum_hi / n as f32 * frac;
+                data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    ImageU8::new(w, h, c, data)
+}
+
+/// A textured `w × h` image of `channels` channels.
+fn textured_image(w: u32, h: u32, channels: u32) -> ImageU8 {
+    let mut data = Vec::with_capacity((w * h * channels) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            for ch in 0..channels {
+                let v = (x * 7 + y * 13 + ch * 31) ^ (x * y + ch);
+                data.push((v % 253) as u8);
+            }
+        }
+    }
+    ImageU8::new(w, h, channels, data)
+}
+
+/// Warp maps that exercise every branch of the anisotropic walk: a map that
+/// compresses nothing (the single-tap path), maps compressed along a turned
+/// axis at several anisotropies and scales (one level and two blended levels,
+/// the sample count varying across a row), one compressed past the pyramid's
+/// last level, one running off every edge of the image, and NaN entries.
+fn aniso_test_maps() -> Vec<WarpMap> {
+    let mut maps = Vec::new();
+    let (w, h) = (37u32, 21u32);
+    let affine = |a: [f32; 6], nan_every: usize| {
+        let mut data = vec![0.0f32; 2 * (w * h) as usize];
+        for row in 0..h {
+            for col in 0..w {
+                let i = (row * w + col) as usize;
+                let (c, r) = (col as f32 + 0.5, row as f32 + 0.5);
+                // A gentle curvature, so the Jacobian varies across the map.
+                let bend = 0.002 * c * c;
+                data[2 * i] = a[0] * c + a[1] * r + a[2] + bend;
+                data[2 * i + 1] = a[3] * c + a[4] * r + a[5] - bend;
+                if nan_every > 0 && i % nan_every == 3 {
+                    data[2 * i] = f32::NAN;
+                    data[2 * i + 1] = f32::NAN;
+                }
+            }
+        }
+        let mut map = WarpMap::new(w, h, data);
+        map.compute_svd();
+        map
+    };
+    // Uncompressed.
+    maps.push(affine([0.8, 0.1, 20.0, -0.1, 0.7, 30.0], 0));
+    // Anisotropic, turned, at several scales.
+    for (major, minor, angle) in [
+        (2.5f32, 1.0f32, 0.3f32),
+        (3.2, 1.6, 1.1),
+        (6.0, 1.3, -0.7),
+        (9.0, 3.5, 0.2),
+        (20.0, 2.2, 2.0),
+        (40.0, 9.0, -1.3),
+    ] {
+        let (s, c) = angle.sin_cos();
+        maps.push(affine(
+            [major * c, -minor * s, 60.0, major * s, minor * c, 70.0],
+            0,
+        ));
+    }
+    // Compressed past the last level, and off every edge.
+    maps.push(affine([300.0, 10.0, -50.0, -20.0, 250.0, -40.0], 0));
+    maps.push(affine([30.0, 5.0, -300.0, 4.0, 25.0, -200.0], 0));
+    // NaN entries among compressed pixels.
+    maps.push(affine([5.0, 1.0, 40.0, -1.0, 2.0, 50.0], 7));
+    maps
+}
+
+/// The scalar anisotropic path computes each sample's corner geometry once
+/// for all channels, and gives the per-channel algorithm's output bit for bit.
+#[test]
+fn aniso_scalar_matches_the_per_channel_reference() {
+    for channels in [1u32, 3, 4] {
+        let pyramid = ImageU8Pyramid::build(&textured_image(160, 120, channels), 8);
+        for (m, map) in aniso_test_maps().iter().enumerate() {
+            let want = aniso_per_channel_reference(&pyramid, map, 16);
+            let got = remap_aniso_dispatch(&pyramid, map, 16, false);
+            assert_eq!(got.data(), want.data(), "map {m}, {channels} channels");
+        }
+    }
+}
+
+/// The AVX2 kernel gives the scalar path's output bit for bit, on every map,
+/// for every channel count it takes, including a pyramid whose last levels
+/// hold fewer than four bytes. Skipped on a CPU without AVX2.
+#[test]
+fn aniso_avx2_matches_scalar_bit_for_bit() {
+    if !aniso_avx2::available() {
+        return;
+    }
+    for channels in [1u32, 2, 3, 4] {
+        for (w, h) in [(160u32, 120u32), (9, 7)] {
+            let pyramid = ImageU8Pyramid::build(&textured_image(w, h, channels), 8);
+            for (m, map) in aniso_test_maps().iter().enumerate() {
+                for max_aniso in [4u32, 16] {
+                    let scalar = remap_aniso_dispatch(&pyramid, map, max_aniso, false);
+                    let simd = remap_aniso_dispatch(&pyramid, map, max_aniso, true);
+                    assert_eq!(
+                        simd.data(),
+                        scalar.data(),
+                        "map {m}, {w}x{h}, {channels} channels, max {max_aniso}"
+                    );
+                }
+            }
+        }
+    }
+}

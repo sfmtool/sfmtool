@@ -102,8 +102,8 @@ average without blurring detail away), which sharpens the objective in turn.
 - An optional **reference patch** to start from — its `R×R` grid sets the scoring
   resolution (the views' sampled cores match it). If omitted, it is built (at a
   chosen resolution) from the seed-aligned views.
-- The **`Sampler`** (interpolation: `Bilinear` / `Anisotropic`) to sample the
-  source pyramid with — see "Sampling."
+- The **`SamplerChoice`** (the sampler rule per view, or one `Sampler` for every
+  view) to sample the source pyramid with — see "Sampling."
 
 ## Algorithm: ECC (forward-additive Gauss–Newton)
 
@@ -204,12 +204,19 @@ The refiner samples each view's patch core from the **source pyramid** at the
 current fractional `δ`, using the **existing** machinery — not a new sampler
 abstraction.
 
-- **Interpolation** is the existing `Sampler` enum (`Bilinear` / `BilinearMip` /
-  `Anisotropic`) — the same knob `refine-normals` and `localize` already take.
-  Anisotropic suits grazing / foreshortened views where bilinear under-samples;
-  `BilinearMip` (one bilinear tap from the mip level nearest the warp's
-  compression) bounds cross-scale aliasing at ≈ bilinear cost; bilinear is the
-  cheap default. This enum is "the sampling parameter."
+- **Interpolation** is the `SamplerChoice` every patch kernel takes
+  (`refine-normals` and `localize` take the same knob): the sampler rule by
+  default, or one `Sampler` (`Bilinear` / `BilinearMip` / `Anisotropic`) for
+  every view. Anisotropic suits grazing / foreshortened views where a single
+  tap under-samples; `BilinearMip` (one bilinear tap from the mip level nearest
+  the warp's compression) bounds cross-scale aliasing at ≈ bilinear cost;
+  bilinear is the cheapest tap. The rule picks `Anisotropic` for a view whose
+  less compressed axis the single mip tap would read too coarsely and
+  `BilinearMip` otherwise ([image-warping.md](../camera/image-warping.md) §
+  "Choosing the sampler per view"). **Each view's sampler is chosen once**, for
+  the observation at its seed keypoint, and the refine tile, every core read and
+  the fused representative use it: the core only slides in the patch's plane,
+  so its Jacobian, and the choice, hardly change as it moves.
 - **Rendering** reuses `WarpMap::from_patch` + `remap_bilinear` /
   `remap_bilinear_mip` / `remap_aniso_with_pyramid`. Gradients come from
   value+gradient variants of those functions (Design details), giving the
@@ -280,11 +287,13 @@ this is where the pipeline's stored reference bitmaps come from (they previously
 came from normal refinement and lagged the final sub-pixel refinement by one
 round). Two properties matter to consumers:
 
-- **The representative render uses the refine `sampler`** — the same knob the
-  refine loop samples with (bilinear by default, anisotropic when requested). The
-  stored texture and the cores the IRLS weights are scored against are then
-  sampled the same way, so the fused reference bitmap matches the pixels that
-  drove the refinement.
+- **The representative render uses the refine `sampler`**: each view with the
+  sampler its refinement read it with. The stored texture and the cores the IRLS
+  weights are scored against are then sampled the same way, so the fused
+  reference bitmap matches the pixels that drove the refinement. Under the
+  default sampler rule a view the rule leaves on `BilinearMip` contributes the
+  same tile, bit for bit, as under a fixed `BilinearMip`, so a point none of
+  whose views the rule moves fuses the same bitmap.
 - **`None` is the uniform culled-point signal.** A point whose final-offset
   renders leave fewer than two usable views has no cross-view consensus and gets
   no representative — finite and infinity alike (a `w = 0` point renders through
@@ -408,8 +417,6 @@ estimate, so it is *not* validated by equivalence to one:
   drift more than the self-pollution it removes. The self-pollution at
   sub-pixel scale turns out to be a damping term that helps. LOO remains a
   one-line cost change if a future large-N measurement shifts the verdict.
-- Which `Sampler` — does bilinear suffice, or do grazing / foreshortened views
-  need anisotropic? Pick the default.
 - Per-view vs. joint — does the joint bundle beat per-view enough to justify the
   coupling?
 

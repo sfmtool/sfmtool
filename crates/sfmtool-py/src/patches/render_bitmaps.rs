@@ -35,8 +35,10 @@ impl PyPatchCloud {
     ///     images: One source image (HxWxC uint8 numpy array) per
     ///         reconstruction image, or an :class:`ImagePyramidSet`.
     ///     resolution: The R×R grid of each bitmap.
-    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"`` or
-    ///         ``"anisotropic"``, as :meth:`refine_keypoints` takes it.
+    ///     sampler: ``"per_view"`` (default: the sampler rule picks
+    ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
+    ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
+    ///         ``"bilinear"`` or ``"anisotropic"``, as :meth:`refine_keypoints` takes it.
     ///     progress: Optional progress counter, bumped once per patch.
     ///
     /// Returns:
@@ -48,7 +50,7 @@ impl PyPatchCloud {
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
-    #[pyo3(signature = (recon, images, *, resolution=24, sampler="bilinear_mip", progress=None))]
+    #[pyo3(signature = (recon, images, *, resolution=24, sampler="per_view", progress=None))]
     fn render_bitmaps<'py>(
         &self,
         py: Python<'py>,

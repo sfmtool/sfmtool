@@ -3,14 +3,15 @@
 
 //! Patch window kernel, the frozen `R×R` scoring [`Support`], and the
 //! patch-placement helpers ([`repose_patch`], [`view_render_patch`]) shared by
-//! the refinement and the per-point patch operations.
+//! the refinement and the per-point patch operations, and which sampler each
+//! view of a multi-view render uses ([`ViewSamplers`]).
 
 use nalgebra::Vector3;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize;
 
-use super::params::{PatchWindow, ProjectedImage, FLAT_NORM_SQ_EPS};
+use super::params::{PatchWindow, ProjectedImage, Sampler, SamplerChoice, FLAT_NORM_SQ_EPS};
 
 /// Per-pixel window weight over the `R×R` patch grid, in row-major order.
 pub(in crate::patch) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
@@ -344,4 +345,74 @@ pub(in crate::patch) fn view_render_patch<'a>(
         OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
     shifted.w = patch.w;
     Cow::Owned(shifted)
+}
+
+/// Which sampler each view of a multi-view render uses.
+///
+/// A render that runs once per call ([`super::PatchViewStack::render`] for a
+/// fuse, a member gate's matrix, view selection's reference) applies the
+/// caller's [`SamplerChoice`] to each observation
+/// ([`SamplerChoice::for_observation`]). Normal refinement
+/// renders the same views under many candidate normals, and the Jacobian a
+/// view's choice reads changes with the normal, so it fixes each view's sampler
+/// once from the patch it starts from ([`view_samplers`]) and every candidate
+/// renders the view with that sampler. That keeps the objective from jumping
+/// where a candidate carries a view across the rule's threshold.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::patch) enum ViewSamplers<'a> {
+    /// Apply the choice to each observation: the render's patch re-anchored on
+    /// the view's keypoint.
+    Each(SamplerChoice),
+    /// One sampler per view, parallel to the render's `views` slice.
+    Frozen(&'a [Sampler]),
+}
+
+impl ViewSamplers<'_> {
+    /// The sampler for view `index` of the render's `views`, which sees
+    /// `patch` at `keypoint` (or at its projection, for `None`), at the patch
+    /// resolution `resolution`.
+    pub(in crate::patch) fn get(
+        &self,
+        index: usize,
+        patch: &OrientedPatch,
+        view: &ProjectedImage<'_>,
+        keypoint: Option<[f64; 2]>,
+        resolution: u32,
+    ) -> Sampler {
+        match self {
+            ViewSamplers::Each(choice) => choice.for_observation(
+                patch,
+                view.camera,
+                view.cam_from_world,
+                keypoint,
+                resolution,
+            ),
+            ViewSamplers::Frozen(samplers) => samplers[index],
+        }
+    }
+}
+
+/// `choice` applied to each of `views` observing `patch` at `resolution`, at
+/// the view's keypoint where `view_keypoints` gives one
+/// ([`SamplerChoice::for_observation`]): what [`ViewSamplers::Frozen`] holds.
+pub(in crate::patch) fn view_samplers(
+    choice: SamplerChoice,
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
+    resolution: u32,
+) -> Vec<Sampler> {
+    views
+        .iter()
+        .enumerate()
+        .map(|(i, view)| {
+            choice.for_observation(
+                patch,
+                view.camera,
+                view.cam_from_world,
+                view_keypoints.and_then(|k| k[i]),
+                resolution,
+            )
+        })
+        .collect()
 }

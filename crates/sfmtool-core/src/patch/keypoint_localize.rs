@@ -43,7 +43,7 @@ mod reference;
 mod search;
 mod tail;
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
+use crate::camera::sampler::{render_phase, render_tile};
 use crate::camera::WarpMap;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
@@ -52,6 +52,7 @@ use crate::patch::normal_refine::{
     FLAT_NORM_SQ_EPS,
 };
 use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
+use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper;
 // the reference LOO-template test also needs the window enum.
@@ -91,9 +92,6 @@ use kernels::{
     compute_channel_grids, compute_channel_grids_scalar, score_cell_one_channel,
     score_cell_one_channel_scalar,
 };
-
-/// `remap_aniso` sample cap along the major axis (mirrors `normal_refine`).
-const MAX_ANISOTROPY: u32 = 16;
 
 /// `f32` lanes per destination pixel the render scratch behind one context tile
 /// holds: the warp map's interleaved `(x, y)`, its per-pixel 2x2 Jacobian, and
@@ -362,6 +360,7 @@ fn render_context(
     resolution: u32,
     context_res: u32,
     sampler: Sampler,
+    progress: &Progress<'_>,
 ) -> Result<ContextTile, LocalizeError> {
     // The tile the round loop will read, allocated **before** the render: the
     // warp map and the remapped image are of the same order, and asking for
@@ -417,13 +416,12 @@ fn render_context(
     ctx_patch.w = patch.w;
     let mut map = prof::RENDER_PROJECT
         .time(|| WarpMap::from_patch(&ctx_patch, view.camera, view.cam_from_world, context_res));
-    if matches!(sampler, Sampler::Anisotropic | Sampler::BilinearMip) {
+    if sampler.needs_svd() {
         prof::RENDER_SVD.time(|| map.compute_svd());
     }
-    let img = prof::RENDER_REMAP.time(|| match sampler {
-        Sampler::Anisotropic => remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY),
-        Sampler::BilinearMip => remap_bilinear_mip(view.pyramid, &map),
-        Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
+    let img = prof::RENDER_REMAP.time(|| {
+        let _phase = render_phase(progress, sampler, 1);
+        render_tile(view.pyramid, &mut map, sampler)
     });
     debug_assert_eq!(channels, img.channels() as usize);
 
@@ -824,6 +822,10 @@ struct ViewState {
     /// [`part_zncc`]). `NaN` wherever `loo` is, and where the template is flat
     /// over a part.
     loo_parts: PartZncc,
+    /// The sampler every render of this view uses: the rule applied to the
+    /// observation at its seed keypoint, at the patch resolution
+    /// ([`SamplerChoice::for_observation`](crate::camera::sampler::SamplerChoice::for_observation)).
+    sampler: Sampler,
 }
 
 impl ViewState {
@@ -1110,10 +1112,14 @@ pub fn try_localize_patch_keypoints_with_basis(
         // into the integer read accumulator (clipped to the cache's drift bound)
         // and a sub-pixel residual — the residual keeps a lone-view seed exact
         // through `finalize` while the congealing read position stays integer.
-        let off = starting_keypoints
-            .and_then(|seeds| seeds[k])
+        let seed = starting_keypoints.and_then(|seeds| seeds[k]);
+        let off = seed
             .and_then(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v))
             .unwrap_or([0.0, 0.0]);
+        let sampler =
+            params
+                .sampler
+                .for_observation(patch, view.camera, view.cam_from_world, seed, base_res);
         // `off = [u, v]` (u-axis, v-axis components, in `R_s`-grid steps). Split each
         // axis into the clamped integer read accumulator and a pure sub-pixel
         // residual — the residual keeps a lone-view seed exact through `finalize`; a
@@ -1138,6 +1144,7 @@ pub fn try_localize_patch_keypoints_with_basis(
             proj: [proj.0, proj.1],
             loo: f64::NAN,
             loo_parts: PartZncc::NAN,
+            sampler,
         });
     }
 
@@ -1197,7 +1204,8 @@ pub fn try_localize_patch_keypoints_with_basis(
                 wpp_v,
                 resolution,
                 context_res,
-                params.sampler,
+                st.sampler,
+                progress,
             )?);
         }
         Ok(())
@@ -1588,10 +1596,23 @@ pub struct BasisInputs<'a> {
 /// evidence the [consensus-basis cap](KeypointLocalizeParams::basis_max_views)
 /// consumes (unread when the cap is off). Results are returned in cloud order.
 ///
+/// `done`, when given, is bumped once per patch, for a caller polling progress
+/// from another thread. `progress` receives a `patches` count about every
+/// hundredth of the way through, is polled for cancellation before each patch
+/// and between a patch's rounds, and, when detailed, times the renders of each
+/// sampler in its own detail phase.
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled before every patch was
+/// localized.
+///
 /// # Panics
 ///
 /// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` / the
-/// `basis` arrays are given and not parallel), or an index is out of range.
+/// `basis` arrays are given and not parallel), if an index is out of range, or
+/// if a search buffer cannot be allocated.
+#[allow(clippy::too_many_arguments)]
 pub fn localize_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
@@ -1599,8 +1620,9 @@ pub fn localize_patch_cloud_keypoints(
     starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     basis: Option<&BasisInputs<'_>>,
     params: &KeypointLocalizeParams,
-    progress: Option<&std::sync::atomic::AtomicUsize>,
-) -> Vec<KeypointLocalization> {
+    done: Option<&std::sync::atomic::AtomicUsize>,
+    progress: &Progress<'_>,
+) -> Result<Vec<KeypointLocalization>, Cancelled> {
     assert_eq!(
         view_sets.len(),
         cloud.len(),
@@ -1633,11 +1655,15 @@ pub fn localize_patch_cloud_keypoints(
         prof::reset();
     }
     let wall_start = std::time::Instant::now();
-    let out: Vec<KeypointLocalization> = cloud
+    let counter = PatchCounter::new(cloud.len(), done, progress);
+    let out: Vec<Option<KeypointLocalization>> = cloud
         .patches
         .par_iter()
         .enumerate()
         .map(|(i, patch)| {
+            if progress.is_cancelled() {
+                return None;
+            }
             let seeds = starting_keypoints
                 .map(|s| s[i].as_slice())
                 .filter(|s| !s.is_empty());
@@ -1648,26 +1674,34 @@ pub fn localize_patch_cloud_keypoints(
                     .map_or(0, |t| t[i] as usize),
             };
             let out = prof::TOTAL.time(|| {
-                localize_patch_keypoints_with_basis(
+                try_localize_patch_keypoints_with_basis(
                     patch,
                     views,
                     &view_sets[i],
                     seeds,
                     evidence,
                     params,
+                    progress,
                 )
             });
-            // Bump the shared work counter per patch for a Python progress poller.
-            if let Some(c) = progress {
-                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            out
+            let out = match out {
+                Ok(out) => out,
+                // A cancellation mid-patch: the check below returns it.
+                Err(LocalizeError::Cancelled) => return None,
+                Err(e) => panic!("the localizer's buffers fit: {e}"),
+            };
+            counter.finished();
+            Some(out)
         })
         .collect();
     if prof::enabled() {
         prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
     }
-    out
+    progress.check_cancel()?;
+    Ok(out
+        .into_iter()
+        .map(|o| o.expect("every patch ran when nothing was cancelled"))
+        .collect())
 }
 
 /// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track image

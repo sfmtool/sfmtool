@@ -731,7 +731,7 @@ runs the sub-pixel kernel with no Gauss-Newton step and a single sweep, and
 one view per image as an `Option`, leaving a `None` view out of every patch's
 view set, and a `Progress` that counts `patches` and can cancel it. It is bound
 as `PatchCloud.render_bitmaps(recon, images, resolution=24,
-sampler="bilinear_mip", progress=None)`, which returns the `(P, R, R, 4)` array
+sampler="per_view", progress=None)`, which returns the `(P, R, R, 4)` array
 `clone_with_changes(patch_bitmaps=...)` takes. The bench commit
 (`bench::fit::fuse_bitmap`) calls the same function for one track, and the
 viewer's open runs the whole-cloud form for a file whose bitmaps are absent.

@@ -18,6 +18,7 @@ use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
+use sfmtool_core::progress::Progress;
 
 #[pymethods]
 impl PyPatchCloud {
@@ -74,8 +75,10 @@ impl PyPatchCloud {
     ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"``, or
-    ///         ``"anisotropic"``.
+    ///     sampler: ``"per_view"`` (default: the sampler rule picks
+    ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
+    ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
+    ///         ``"bilinear"`` or ``"anisotropic"``.
     ///     robust_iters: IRLS passes for the robust consensus.
     ///     convergence_px: Stop once a round's mean round-over-round change of
     ///         the per-view refined positions is below this many patch-grid px.
@@ -160,7 +163,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=2.5,
         min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
+        window_sigma=0.6, sampler="per_view", robust_iters=3, convergence_px=0.05,
         point_indexes=None, starting_keypoints=None, search_resolution_multiplier=1.0,
         search_strategy="plus_descent", basis_max_views=8, basis_force_track_views=true,
         basis_pick="top_score", view_scores=None, track_view_counts=None, progress=None
@@ -395,7 +398,9 @@ impl PyPatchCloud {
                 Some(&basis_inputs),
                 &params,
                 progress_handle.as_deref(),
+                &Progress::none(),
             )
+            .expect("Progress::none never cancels")
         });
 
         let mut out = Vec::new();

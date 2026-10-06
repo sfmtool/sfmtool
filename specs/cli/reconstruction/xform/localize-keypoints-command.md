@@ -124,7 +124,7 @@ threshold consumed by `compact_to_embedded_patches`.
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |
 | `window`                       | `gaussian_disk` | `localize_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`                 | `0.6`           | `localize_keypoints`                           |
-| `sampler`                      | `bilinear_mip`  | `localize_keypoints` (`bilinear`/`bilinear_mip`/`anisotropic`; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression, bounding the aliasing `bilinear` suffers on cross-scale views at the same cost; `anisotropic` resolves oblique footprints at 1.6–3× the cost) |
+| `sampler`                      | `per_view`      | `localize_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` applies the sampler rule to each view, `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and `bilinear_mip` otherwise; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression, bounding the aliasing `bilinear` suffers on cross-scale views at the same cost; `anisotropic` resolves oblique footprints at 1.6–3× the cost) |
 | `robust_iters`                 | `3`             | `localize_keypoints` (IRLS passes for the consensus) |
 | `convergence_px`               | `0.05`          | `localize_keypoints` (round-level stop, patch-grid px) |
 | `search_resolution_multiplier` | `1.0`           | `localize_keypoints` (supersampled search grid; `> 1` resolves sub-pixel offsets at ~m² cost) |

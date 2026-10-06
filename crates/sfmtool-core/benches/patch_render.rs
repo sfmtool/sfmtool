@@ -301,7 +301,7 @@ fn bench_refine(crit: &mut Criterion) {
         ("bilinear", Sampler::Bilinear),
     ] {
         let params = NormalRefineParams {
-            sampler,
+            sampler: sampler.into(),
             // Benchmark the full per-patch cost (confidence is off by default).
             compute_confidence: true,
             ..NormalRefineParams::default()

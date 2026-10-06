@@ -503,6 +503,30 @@ pub(super) fn zoom_text(jacobian: Option<PatchJacobian>) -> String {
     format!("{}/{}\u{d7}", significant(low), significant(high))
 }
 
+/// The *Zoom* cell's hover text: the sampler the row's tile is rendered with,
+/// and the loss along the less compressed axis the sampler rule chose it by.
+pub(super) fn zoom_sampler_text(jacobian: &PatchJacobian) -> String {
+    let loss = jacobian.minor_axis_loss();
+    let loss = if loss.is_finite() {
+        format!("{loss:.2}")
+    } else {
+        "-".to_string()
+    };
+    match jacobian.sampler() {
+        sfmtool_core::camera::sampler::Sampler::Anisotropic => format!(
+            "Rendered with the anisotropic sampler: one mip level for both axes would read \
+             the less compressed axis {loss}\u{d7} too coarsely."
+        ),
+        _ => format!(
+            "Rendered with the bilinear_mip sampler: one mip level for both axes reads the \
+             less compressed axis {loss}\u{d7} too coarsely, under the {}\u{d7} that moves \
+             a view to the anisotropic sampler, or the view is not compressed enough for \
+             the level to matter.",
+            sfmtool_core::camera::sampler::DEFAULT_ANISOTROPIC_THRESHOLD
+        ),
+    }
+}
+
 /// The *Verdict* heading's hover text, in Viewed mode.
 pub(super) const VERDICT_TIP: &str = "What the thresholds say about the observation: in where \
     it clears every bar and holds its image, out where it does not, and - where nothing has \
@@ -584,6 +608,10 @@ pub(super) const ZOOM_TIP: &str = "How much the patch magnifies the photograph a
     The warp can stretch one direction more than another, so the cell gives the least zoom \
     over the most, 0.71/1.3\u{d7}, and gives both even where the two agree, \
     0.51/0.51\u{d7}. Each carries two significant digits.\n\n\
+    The zoom also decides how the tile is drawn, as the bench's own renders decide it: \
+    where one mip level for both axes would read the less compressed axis at least 1.5\u{d7} \
+    too coarsely, the tile is rendered with the anisotropic sampler. Hover a cell to see \
+    which.\n\n\
     A - is a row at the cluster stage, whose tile is not drawn through a warp; a track with \
     no patch yet; an observation with nothing saying where it sits; a patch whose centre is \
     behind the camera or outside the camera model's domain; or a patch seen edge on.\n\n\
@@ -1820,6 +1848,20 @@ impl TrackBody {
         let jacobian = self.ensure_jacobian(recon, track, observation);
         let zoom_text = zoom_text(jacobian);
         text(cols.zoom, &zoom_text, text_color);
+        // Hovering the zoom says which sampler the tile is rendered with,
+        // since the sampler rule reads it from the same Jacobian.
+        if let Some(jacobian) = jacobian {
+            let cell = egui::Rect::from_min_max(
+                egui::pos2(x0 + cols.zoom, rect.min.y),
+                egui::pos2(x0 + cols.status - 4.0, rect.max.y),
+            );
+            ui.interact(
+                cell,
+                ui.id().with(("track_view_zoom", observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(zoom_sampler_text(&jacobian));
+        }
         if edited {
             text(cols.from, &provenance_text(row.provenance), weak);
         }

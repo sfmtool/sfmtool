@@ -426,7 +426,7 @@ fn recovers_planted_subpixel_offset_two_views() {
     );
 
     let bl = KeypointSubpixelParams {
-        sampler: Sampler::Bilinear,
+        sampler: Sampler::Bilinear.into(),
         ..params()
     };
     let res = refine_patch_keypoints(&patch, &views, &[0, 1], None, &bl);
@@ -809,7 +809,15 @@ fn batch_matches_per_patch() {
     };
     let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 
-    let batch = refine_patch_cloud_keypoints(&cloud, &views, &view_sets, None, &params());
+    let batch = refine_patch_cloud_keypoints(
+        &cloud,
+        &views,
+        &view_sets,
+        None,
+        &params(),
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
     assert_eq!(batch.len(), 2);
     for (i, res) in batch.iter().enumerate() {
         let single =
@@ -1780,7 +1788,7 @@ fn coarse_grid_gate_routes_around_the_tile() {
             cw_v,
             p.resolution,
             4,
-            p.sampler,
+            Sampler::BilinearMip,
             &mut img,
         )
         .is_none(),
@@ -1810,7 +1818,7 @@ fn coarse_grid_gate_routes_around_the_tile() {
             fw_v,
             p.resolution,
             4,
-            p.sampler,
+            Sampler::BilinearMip,
             &mut img,
         )
         .is_some(),
@@ -1838,7 +1846,7 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
         wpp_v,
         p.resolution,
         4,
-        p.sampler,
+        Sampler::BilinearMip,
         &mut img,
     );
     let mut got = vec![0f32; n];
@@ -1859,7 +1867,7 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
             wpp_u,
             wpp_v,
             p.resolution,
-            p.sampler,
+            Sampler::BilinearMip,
             &support,
             1,
             &mut want,
@@ -1896,7 +1904,7 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
         wpp_v,
         p.resolution,
         4,
-        p.sampler,
+        Sampler::BilinearMip,
         &mut img,
     );
     let (mut g_t, mut ju_t, mut jv_t) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
@@ -1928,7 +1936,7 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
             wpp_u,
             wpp_v,
             p.resolution,
-            p.sampler,
+            Sampler::BilinearMip,
             &support,
             1,
             &mut g_d,
@@ -2005,7 +2013,7 @@ fn tile_gradient_matches_finite_differences() {
         wpp_v,
         p.resolution,
         4,
-        p.sampler,
+        Sampler::BilinearMip,
         &mut img,
     );
     let (au, av) = (seed[0] + 0.43, seed[1] - 0.68);
@@ -2117,7 +2125,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         wpp_v,
         p.resolution,
         4,
-        p.sampler,
+        Sampler::BilinearMip,
         &mut img,
     );
     let (au, av) = (seed[0] + 10.0, seed[1]);
@@ -2138,7 +2146,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         wpp_u,
         wpp_v,
         p.resolution,
-        p.sampler,
+        Sampler::BilinearMip,
         &support,
         1,
         &mut got,
@@ -2151,7 +2159,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         wpp_u,
         wpp_v,
         p.resolution,
-        p.sampler,
+        Sampler::BilinearMip,
         &support,
         1,
         &mut want,

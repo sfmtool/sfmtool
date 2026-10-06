@@ -11,19 +11,13 @@
 
 use crate::camera::image::ImageF32WithGrad;
 
-use crate::camera::remap::{
-    remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip,
-    remap_bilinear_mip_with_grad_into, remap_bilinear_with_grad_into,
-};
+use crate::camera::sampler::{render_tile, render_tile_with_grad_into};
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::shifted_center;
 use crate::patch::normal_refine::{ProjectedImage, Sampler, Support};
 
 use crate::patch::keypoint_subpixel::prof;
-
-/// `remap_aniso` sample cap along the major axis (mirrors `normal_refine`).
-const MAX_ANISOTROPY: u32 = 16;
 
 /// Render one view's `R×R` core at in-plane offset `(au, av)` (patch-grid px) into
 /// `out` (flat `[channel * n + support_index]`), reading only the window-support
@@ -61,17 +55,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
         core_patch.w = patch.w;
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-        let img = match sampler {
-            Sampler::Anisotropic => {
-                map.compute_svd();
-                remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY)
-            }
-            Sampler::BilinearMip => {
-                map.compute_svd();
-                remap_bilinear_mip(view.pyramid, &map)
-            }
-            Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
-        };
+        let img = render_tile(view.pyramid, &mut map, sampler);
         let n = support.pixels.len();
         for (k, &p) in support.pixels.iter().enumerate() {
             let col = (p % resolution as usize) as u32;
@@ -135,20 +119,8 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
         core_patch.w = patch.w;
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-        match sampler {
-            Sampler::Anisotropic => {
-                map.compute_svd(); // also populates jacobians as a by-product
-                remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img_scratch);
-            }
-            Sampler::BilinearMip => {
-                map.compute_svd(); // also populates jacobians as a by-product
-                remap_bilinear_mip_with_grad_into(view.pyramid, &map, img_scratch);
-            }
-            Sampler::Bilinear => {
-                map.compute_jacobians();
-                remap_bilinear_with_grad_into(view.pyramid.level(0), &map, img_scratch);
-            }
-        };
+        // Also fills the map's per-pixel Jacobians, which the composition reads.
+        render_tile_with_grad_into(view.pyramid, &mut map, sampler, img_scratch);
         let n = support.pixels.len();
         let stride = img_scratch.width() as usize * channels;
         let value = img_scratch.value();
@@ -653,20 +625,8 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
         // direction patch, exactly as the direct render paths do.
         tile_patch.w = patch.w;
         let mut map = WarpMap::from_patch(&tile_patch, view.camera, view.cam_from_world, tile_res);
-        match sampler {
-            Sampler::Anisotropic => {
-                map.compute_svd(); // also populates jacobians as a by-product
-                remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img);
-            }
-            Sampler::BilinearMip => {
-                map.compute_svd(); // also populates jacobians as a by-product
-                remap_bilinear_mip_with_grad_into(view.pyramid, &map, img);
-            }
-            Sampler::Bilinear => {
-                map.compute_jacobians();
-                remap_bilinear_with_grad_into(view.pyramid.level(0), &map, img);
-            }
-        }
+        // Also fills the map's per-pixel Jacobians, which the composition reads.
+        render_tile_with_grad_into(view.pyramid, &mut map, sampler, img);
         let t = tile_res as usize;
         let ch = img.channels() as usize;
         let area = t * t;

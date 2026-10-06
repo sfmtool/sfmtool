@@ -22,6 +22,8 @@ use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
 use crate::patch::cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
+use crate::patch::PatchCounter;
+use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::SfmrReconstruction;
 
 mod consensus;
@@ -41,7 +43,7 @@ mod znorm;
 pub use parameterization::{exp_map_normal, tangent_basis};
 pub use params::{
     CacheMode, NormalRefineParams, NormalRefineResult, Objective, PatchWindow, ProjectedImage,
-    Sampler,
+    Sampler, SamplerChoice,
 };
 
 // Patch-internal helpers consumed by sibling `patch` modules (keypoint_localize,
@@ -54,8 +56,8 @@ pub(in crate::patch) use consensus::{
 pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::{FLAT_NORM_SQ_EPS, MIN_MASK_PIXELS};
 pub(in crate::patch) use support::{
-    build_support, grid_bounds, middle_span, view_render_patch, window_weights, PartZncc, Parts,
-    Support,
+    build_support, grid_bounds, middle_span, view_render_patch, view_samplers, window_weights,
+    PartZncc, Parts, Support, ViewSamplers,
 };
 pub(in crate::patch) use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
 pub(in crate::patch) use znorm::{
@@ -102,7 +104,30 @@ pub fn refine_patch_normal(
     params: &NormalRefineParams,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> NormalRefineResult {
-    prof::TOTAL.time(|| refine_patch_normal_impl(patch, views, resolution, params, view_keypoints))
+    refine_patch_normal_reporting(
+        patch,
+        views,
+        resolution,
+        params,
+        view_keypoints,
+        &Progress::none(),
+    )
+}
+
+/// [`refine_patch_normal`] reporting to `progress`: a detailed `progress`
+/// times the renders of each sampler in its own detail phase
+/// ([`crate::camera::sampler::render_phase`]).
+pub fn refine_patch_normal_reporting(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    resolution: u32,
+    params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
+    progress: &Progress<'_>,
+) -> NormalRefineResult {
+    prof::TOTAL.time(|| {
+        refine_patch_normal_impl(patch, views, resolution, params, view_keypoints, progress)
+    })
 }
 
 fn refine_patch_normal_impl(
@@ -111,6 +136,7 @@ fn refine_patch_normal_impl(
     resolution: u32,
     params: &NormalRefineParams,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
+    progress: &Progress<'_>,
 ) -> NormalRefineResult {
     let resolution = resolution.max(2);
     if let Some(kps) = view_keypoints {
@@ -213,6 +239,11 @@ fn refine_patch_normal_impl(
             view_dirs = sub_dirs;
         }
     }
+    // Each view's sampler, fixed from the patch the refinement starts from, so
+    // that no candidate normal carries a view across the sampler rule's
+    // threshold and the objective stays a function of the geometry alone.
+    let frozen = view_samplers(params.sampler, patch, views, view_keypoints, resolution);
+    let samplers = ViewSamplers::Frozen(&frozen);
     let mean_view = mean_viewing_normal(&patch.center, &centers);
     if mean_view.dot(&init_n) < (0.5f64).to_radians().cos() {
         seeds.push(mean_view);
@@ -230,6 +261,8 @@ fn refine_patch_normal_impl(
             &w_full,
             params,
             view_keypoints,
+            samplers,
+            progress,
         ) {
             winners.push(n);
         }
@@ -266,8 +299,9 @@ fn refine_patch_normal_impl(
                 views,
                 &ctx.kept,
                 resolution,
-                params.sampler,
+                samplers,
                 view_keypoints,
+                progress,
             );
             // Obliquity view-weight (A) for this candidate, in the stack's (=
             // ctx.kept) view order; the fused representative reuses these weights.
@@ -295,6 +329,8 @@ fn refine_patch_normal_impl(
                 params,
                 params.objective,
                 view_keypoints,
+                samplers,
+                progress,
             )?;
             Some((phi, None))
         }
@@ -351,6 +387,8 @@ fn refine_patch_normal_impl(
                 params,
                 h,
                 view_keypoints,
+                samplers,
+                progress,
             )
         })
     } else {
@@ -392,10 +430,22 @@ fn refine_patch_normal_impl(
 /// that view's patch at the keypoint; `None` leaves it at the point center.
 /// Passing `None` is byte-for-byte the no-keypoint behavior.
 ///
+/// `done`, when given, is bumped once per patch refined, for a caller polling
+/// progress from another thread. `progress` receives a `patches` count about
+/// every hundredth of the way through, is polled for cancellation before each
+/// patch, and, when detailed, times the renders of each sampler in its own
+/// detail phase.
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled before every patch was refined.
+/// The cloud is then left as it was.
+///
 /// # Panics
 ///
 /// Panics if `patch_views.len() != cloud.len()` (or `patch_view_keypoints` is
 /// given and not parallel to the cloud) or an index is out of range.
+#[allow(clippy::too_many_arguments)]
 pub fn refine_patch_cloud_normals(
     cloud: &mut PatchCloud,
     views: &[ProjectedImage<'_>],
@@ -403,8 +453,9 @@ pub fn refine_patch_cloud_normals(
     resolution: u32,
     params: &NormalRefineParams,
     patch_view_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
-    progress: Option<&std::sync::atomic::AtomicUsize>,
-) -> Vec<NormalRefineResult> {
+    done: Option<&std::sync::atomic::AtomicUsize>,
+    progress: &Progress<'_>,
+) -> Result<Vec<NormalRefineResult>, Cancelled> {
     assert_eq!(
         patch_views.len(),
         cloud.len(),
@@ -421,30 +472,35 @@ pub fn refine_patch_cloud_normals(
         prof::reset();
     }
     let wall_start = std::time::Instant::now();
-    let results: Vec<NormalRefineResult> = cloud
+    let counter = PatchCounter::new(cloud.len(), done, progress);
+    let results: Vec<Option<NormalRefineResult>> = cloud
         .patches
         .par_iter()
         .enumerate()
         .zip(patch_views.par_iter())
         .map(|((i, patch), vidx)| {
+            if progress.is_cancelled() {
+                return None;
+            }
             let pv: Vec<ProjectedImage<'_>> = vidx.iter().map(|&i| views[i as usize]).collect();
             let kps = patch_view_keypoints.map(|k| k[i].as_slice());
-            let out = refine_patch_normal(patch, &pv, resolution, params, kps);
-            // Bump the shared work counter as each patch finishes, so a Python
-            // poller can report intra-pass progress while the GIL is released.
-            if let Some(c) = progress {
-                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            out
+            let out = refine_patch_normal_reporting(patch, &pv, resolution, params, kps, progress);
+            counter.finished();
+            Some(out)
         })
         .collect();
     if prof::enabled() {
         prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
     }
+    progress.check_cancel()?;
+    let results: Vec<NormalRefineResult> = results
+        .into_iter()
+        .map(|r| r.expect("every patch ran when nothing was cancelled"))
+        .collect();
     for (p, r) in cloud.patches.iter_mut().zip(&results) {
         *p = r.patch.clone();
     }
-    results
+    Ok(results)
 }
 
 /// For each patch of `cloud` (linked to `recon` via `point_indexes`), the image

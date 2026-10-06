@@ -7,7 +7,7 @@
 //! The render/window knobs on [`KeypointSubpixelParams`] mirror
 //! [`KeypointLocalizeParams`](crate::patch::keypoint_localize::KeypointLocalizeParams).
 
-use crate::patch::normal_refine::{PatchWindow, Sampler};
+use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
 
 /// Within-sweep granularity of consensus refresh — the spec's "Consensus
 /// refresh granularity" axis. Across sweeps the consensus is always rebuilt
@@ -62,18 +62,19 @@ pub struct KeypointSubpixelParams {
     pub resolution: u32,
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
-    /// How to sample the source pyramids when rendering patch tiles. The GN inner
+    /// Which sampler renders each view's tiles: the sampler rule by default
+    /// ([`SamplerChoice::per_view`]), applied to each render's placement. The GN inner
     /// step uses the **value+gradient** variant of the chosen sampler — one render
     /// returns `(value, ∂I/∂x, ∂I/∂y)` per support pixel and channel — composed
     /// per-pixel with the warp Jacobian `J = WarpMap::get_jacobian(col, row)` to
     /// give the analytic `∂I/∂δ` the GN normal equations need. The
-    /// [`Sampler::Anisotropic`] and [`Sampler::BilinearMip`] gradients are
+    /// `Sampler::Anisotropic` and `Sampler::BilinearMip` gradients are
     /// computed at the same LOD(s) / footprint as the value (per-level bilinear
     /// gradient **divided** by the level's `2^level` to convert from level-pixel
     /// to level-0 source-pixel coords; the anisotropic path additionally blends
     /// with the same `frac` the value uses), so value and gradient stay
     /// LOD-consistent.
-    pub sampler: Sampler,
+    pub sampler: SamplerChoice,
     /// IRLS reweighting passes for the robust consensus.
     pub robust_iters: u32,
     /// Maximum **outer sweeps** of the alternating loop (refresh consensus → move
@@ -142,7 +143,7 @@ impl Default for KeypointSubpixelParams {
         Self {
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
-            sampler: Sampler::BilinearMip,
+            sampler: SamplerChoice::per_view(),
             robust_iters: 3,
             max_outer_sweeps: 1,
             outer_convergence_px: 0.005,

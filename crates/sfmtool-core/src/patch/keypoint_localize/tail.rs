@@ -232,7 +232,8 @@ pub(super) fn register_tail(
                 geom.wpp_v,
                 geom.resolution,
                 tail_res,
-                params.sampler,
+                st.sampler,
+                progress,
             )
         })?;
         // Member self-similarity gate, the loop's verbatim: read this view's

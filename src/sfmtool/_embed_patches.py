@@ -41,7 +41,7 @@ def _refine_subpixel(
     *,
     sweeps: int,
     resolution: int,
-    sampler: str = "bilinear_mip",
+    sampler: str = "per_view",
     render_bitmaps: bool = False,
     progress: Any = None,
 ) -> tuple[list[dict[str, Any]], np.ndarray | None, np.ndarray | None]:
@@ -376,7 +376,7 @@ def embed_patches(
     max_zncc_self_similarity_radius: float = DEFAULT_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
     localize_search_strategy: str = "plus_descent",
     localize_basis_views: int = 8,
-    sampler: str = "bilinear_mip",
+    sampler: str = "per_view",
     progress: Any = None,
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
@@ -446,8 +446,10 @@ def embed_patches(
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
             (normal refinement, view selection, the discrete localizer, and the
-            sub-pixel refiner): ``"bilinear_mip"`` (default), ``"bilinear"``, or
-            ``"anisotropic"``.
+            sub-pixel refiner): ``"per_view"`` (default: the sampler rule picks
+            ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
+            zoom), or one sampler for every view, ``"bilinear_mip"``,
+            ``"bilinear"`` or ``"anisotropic"``.
         search_resolution_multiplier: ``m`` for the discrete cross-view search in
             :meth:`PatchCloud.localize_keypoints` (step 3). ``1.0`` (default) is the
             no-op; ``> 1`` runs the supersampled grid (cost grows ~``m²``) — see

@@ -17,6 +17,7 @@ use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
+use sfmtool_core::progress::Progress;
 
 #[pymethods]
 impl PyPatchCloud {
@@ -42,8 +43,10 @@ impl PyPatchCloud {
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"``, or
-    ///         ``"anisotropic"``.
+    ///     sampler: ``"per_view"`` (default: the sampler rule picks
+    ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
+    ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
+    ///         ``"bilinear"`` or ``"anisotropic"``.
     ///     min_valid_fraction: Per-view floor on the window-weighted valid-pixel
     ///         fraction; a view below it does not cover enough of the patch.
     ///     min_track_views: Minimum number of *valid* track views to build a
@@ -84,7 +87,7 @@ impl PyPatchCloud {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, min_track_views=2,
+        window_sigma=0.6, sampler="per_view", min_valid_fraction=0.6, min_track_views=2,
         robust_iters=3, min_self_agreement=0.3, point_indexes=None, candidate_views=None,
         keypoint_anchor=false, progress=None
     ))]
@@ -206,7 +209,9 @@ impl PyPatchCloud {
                 keypoints.as_deref(),
                 &params,
                 progress_handle.as_deref(),
+                &Progress::none(),
             )
+            .expect("Progress::none never cancels")
         });
 
         let mut out = Vec::new();

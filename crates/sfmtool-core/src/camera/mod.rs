@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Camera model: SfM camera intrinsics, distortion, frustum / epipolar geometry,
-//! rectification, image warping and the image containers it reads and writes
+//! rectification, image warping, the per-view choice of sampler ([`sampler`]),
+//! the image containers it reads and writes
 //! ([`image`]), the derived quantities a set of intrinsics
 //! implies ([`report`]), a byte-bounded cache of decoded photograph pyramids
 //! ([`PhotographCache`]), plus a 3D-viewport [`Camera`] for orbit-style
@@ -18,6 +19,7 @@ pub mod rectification;
 pub mod refit_intrinsics;
 pub mod remap;
 pub mod report;
+pub mod sampler;
 pub mod viewport;
 pub mod warp_map;
 

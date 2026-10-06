@@ -112,6 +112,33 @@ def test_bilinear_mip_sampler_runs_end_to_end(seoul_bull_workspace: Path):
         cloud.refine_normals(recon, images, point_indexes=sample, sampler="bogus")
 
 
+def test_per_view_sampler_is_the_default(seoul_bull_workspace: Path):
+    """``sampler="per_view"``, the sampler rule, is what the binding renders
+    with when no sampler is named, and it carries a refinement end-to-end."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = load_images(recon)
+
+    def cloud():
+        return PatchCloud.from_reconstruction(
+            recon, normal="mean_viewing", extent_value=5.0
+        )
+
+    sample = sample_point_ids(cloud(), n=50)
+    kwargs = dict(point_indexes=sample, resolution=12, init_steps=5, refine_levels=2)
+
+    # Each call refines its own cloud, since a refinement moves the normals.
+    named = cloud().refine_normals(recon, images, sampler="per_view", **kwargs)
+    default = cloud().refine_normals(recon, images, **kwargs)
+    np.testing.assert_array_equal(
+        named["photoconsistency"], default["photoconsistency"]
+    )
+    photo = named["photoconsistency"]
+    init = named["init_photoconsistency"]
+    scored = np.isfinite(photo) & np.isfinite(init)
+    assert scored.sum() > 0
+    assert np.all(photo[scored] >= init[scored] - 1e-9)
+
+
 def test_confidence_is_opt_in(seoul_bull_workspace: Path):
     """Confidence is NaN unless ``compute_confidence=True`` (off by default)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)

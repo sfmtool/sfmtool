@@ -33,7 +33,7 @@ use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
 
-use crate::camera::remap::remap_bilinear_mip;
+use crate::camera::sampler::{render_phase, render_tile, Sampler, SamplerChoice};
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
@@ -1178,7 +1178,14 @@ fn evaluate_track(
                     measurement.reprojection_error = finite(error);
                     measurement.ray_angle_deg = finite(angle);
                 }
-                let similarity = patch_tile_readings(&frame, view, pixel, resolution);
+                let similarity = patch_tile_readings(
+                    &frame,
+                    view,
+                    pixel,
+                    resolution,
+                    options.localize.sampler,
+                    &phase,
+                );
                 measurement.zncc_self_similarity_radius = similarity.radius;
                 measurement.zncc_self_similarity_radius_middle = similarity.middle;
                 measurement.zncc_self_similarity_radius_grid = similarity.grid;
@@ -1463,27 +1470,36 @@ pub(super) fn observation_metrics(
 /// ([`render_bitmap`], the grid every stored patch bitmap is rendered on), the
 /// overlap way, with no pixels from outside it. The ellipses are measured
 /// through the same anchored placement at resolution `R`: the image px per
-/// grid px at its centre ([`patch_grid_jacobian`]) and its half-extents.
+/// grid px at its centre ([`patch_grid_jacobian`]) and its half-extents. The
+/// tile is rendered with the sampler `sampler` picks from that same Jacobian,
+/// timed in its detail phase of `progress`.
 fn patch_tile_readings(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     keypoint: [f64; 2],
     resolution: usize,
+    sampler: SamplerChoice,
+    progress: &Progress<'_>,
 ) -> TileSelfSimilarity {
     let anchored = patch.anchored_at_keypoint(view.camera, view.cam_from_world, keypoint);
     let frame = anchored.as_ref().unwrap_or(patch);
     let channels = view.pyramid.level(0).channels() as usize;
     let to_f32 = |tile: Array3<u8>| tile.iter().map(|&v| f32::from(v)).collect::<Vec<f32>>();
-    let samples = to_f32(render_bitmap(frame, view, resolution, channels));
+    let jacobian = patch_grid_jacobian(frame, view.camera, view.cam_from_world, resolution);
+    let sampler = sampler.for_jacobian(jacobian);
+    let samples = {
+        let _phase = render_phase(progress, sampler, 1);
+        to_f32(render_bitmap(frame, view, resolution, channels, sampler))
+    };
     let geometry = TileGeometry {
-        jacobian: patch_grid_jacobian(frame, view.camera, view.cam_from_world, resolution),
+        jacobian,
         placement: Some(frame),
     };
     score_self_similarity(&samples, channels, resolution, &geometry)
 }
 
-/// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame, the
-/// way every stored patch bitmap is rendered.
+/// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame with
+/// `sampler`, the way every stored patch bitmap is rendered.
 ///
 /// A pixel the warp cannot sample is left black, and the alpha channel -- the
 /// fourth, when the caller asks for one -- is opaque everywhere, because the
@@ -1493,10 +1509,10 @@ fn render_bitmap(
     view: &ProjectedImage<'_>,
     resolution: usize,
     channels: usize,
+    sampler: Sampler,
 ) -> Array3<u8> {
     let mut map = WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution as u32);
-    map.compute_svd();
-    let tile = remap_bilinear_mip(view.pyramid, &map);
+    let tile = render_tile(view.pyramid, &mut map, sampler);
     let src_channels = tile.channels();
     let mut out = Array3::<u8>::zeros((resolution, resolution, channels));
     for row in 0..resolution {

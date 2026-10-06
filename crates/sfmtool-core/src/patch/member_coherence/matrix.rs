@@ -16,8 +16,10 @@ use super::{
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
-    znormalize_into_kept, NormalRefineParams, PatchWindow, ProjectedImage, FLAT_NORM_SQ_EPS,
+    znormalize_into_kept, NormalRefineParams, PatchWindow, ProjectedImage, ViewSamplers,
+    FLAT_NORM_SQ_EPS,
 };
+use crate::progress::Progress;
 
 /// A `NormalRefineParams` shim carrying just the gating knobs
 /// [`build_level_context`] and [`normalized_stack`] read, so the matrix drives the
@@ -95,6 +97,30 @@ pub fn member_zncc_matrix(
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
 ) -> MemberMatrix {
+    member_zncc_matrix_reporting(
+        patch,
+        views,
+        members,
+        member_keypoints,
+        params,
+        &Progress::none(),
+    )
+}
+
+/// [`member_zncc_matrix`] reporting to `progress`: a detailed `progress` times
+/// the members' renders under each sampler in its own detail phase.
+///
+/// # Panics
+///
+/// As [`member_zncc_matrix`].
+pub fn member_zncc_matrix_reporting(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    members: &[u32],
+    member_keypoints: Option<&[Option<[f64; 2]>]>,
+    params: &MemberCoherenceParams,
+    progress: &Progress<'_>,
+) -> MemberMatrix {
     let resolution = params.resolution.max(2);
 
     if let Some(kps) = member_keypoints {
@@ -141,6 +167,7 @@ pub fn member_zncc_matrix(
             &mut zncc,
             &coarse_factors,
             &mut zncc_coarse,
+            progress,
         )
     } else {
         0
@@ -188,6 +215,7 @@ fn fill_member_zncc(
     zncc: &mut [f64],
     coarse_factors: &[u32],
     zncc_coarse: &mut [Vec<f64>],
+    progress: &Progress<'_>,
 ) -> u32 {
     let k = members.len();
     let w_full = window_weights(params.window, resolution);
@@ -221,8 +249,9 @@ fn fill_member_zncc(
         &ctx,
         &member_proj,
         resolution,
-        params.sampler,
+        ViewSamplers::Each(params.sampler),
         member_keypoints,
+        progress,
     ) else {
         return n_support;
     };

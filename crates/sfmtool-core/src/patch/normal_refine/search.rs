@@ -9,13 +9,14 @@
 use nalgebra::Vector3;
 
 use crate::patch::cloud::OrientedPatch;
+use crate::progress::Progress;
 
 use super::consensus::{consensus_phi, ConsensusScratch};
 use super::level::{build_level_context, view_valid_mask, LevelContext};
 use super::obliquity::{fill_kept_obliquity_priors, fronto_prior};
 use super::parameterization::{exp_map_in_basis, tangent_basis};
 use super::params::{CacheMode, NormalRefineParams, Objective, ProjectedImage, MIN_MASK_PIXELS};
-use super::support::repose_patch;
+use super::support::{repose_patch, ViewSamplers};
 use super::znorm::{normalized_stack, znormalize_into};
 use super::{fronto_cache, prof};
 
@@ -34,6 +35,8 @@ pub(super) fn eval_phi(
     params: &NormalRefineParams,
     objective: Objective,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
+    samplers: ViewSamplers<'_>,
+    progress: &Progress<'_>,
 ) -> Option<f64> {
     prof::count(&prof::N_EVAL, 1);
     let patch = repose_patch(base, n);
@@ -54,8 +57,9 @@ pub(super) fn eval_phi(
         ctx,
         views,
         resolution,
-        params.sampler,
+        samplers,
         view_keypoints,
+        progress,
     )?;
     let n = ctx.pixels.len();
     let total_weight: f64 = ctx.weights.iter().sum();
@@ -97,6 +101,8 @@ pub(super) fn coarse_to_fine(
     w_full: &[f64],
     params: &NormalRefineParams,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
+    samplers: ViewSamplers<'_>,
+    progress: &Progress<'_>,
 ) -> Option<Vector3<f64>> {
     // At least 3 grid samples per axis: with 2 the only nonzero candidates land
     // on the disk corners and are clamped away, leaving the center as the sole
@@ -196,6 +202,8 @@ pub(super) fn coarse_to_fine(
                     params,
                     search_obj,
                     view_keypoints,
+                    samplers,
+                    progress,
                 ),
             }?;
             Some(phi + fronto_prior(view_dirs, n, params.fronto_prior_weight))
@@ -325,6 +333,8 @@ pub(super) fn grid_confidence(
     params: &NormalRefineParams,
     h: f64,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
+    samplers: ViewSamplers<'_>,
+    progress: &Progress<'_>,
 ) -> f64 {
     let (u, v) = tangent_basis(n);
     // Pure-Φ curvature: the obliquity view-weight (A) is part of the objective and
@@ -342,6 +352,8 @@ pub(super) fn grid_confidence(
             params,
             params.objective,
             view_keypoints,
+            samplers,
+            progress,
         )
     };
     let stencil = [
