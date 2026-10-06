@@ -254,6 +254,19 @@ between GPU and CPU. These differences can cause DIS patches in later levels to
 converge to different local minima in occluded regions, amplifying the error for
 large frame gaps. In well-conditioned regions the error is negligible.
 
+## Testing
+
+The GPU tests in
+[`gpu/tests.rs`](../../../crates/sfmtool-core/src/features/optical_flow/gpu/tests.rs)
+compare GPU and CPU output on synthetic and checked-in images. On a machine
+with no GPU adapter each test prints a skip message and passes without
+running. Setting `SFMTOOL_REQUIRE_GPU` (to anything but empty or `0`) makes a
+missing adapter a test failure instead. The Linux `test-linux-rust` CI job
+installs `mesa-vulkan-drivers`, so the tests run on lavapipe, Mesa's software
+Vulkan driver, and sets that variable so the job cannot pass by skipping
+them. On a Linux machine without a GPU, installing the same package is enough
+to run them.
+
 ## Jacobi Kernel — the binding contract
 
 The kernel itself is

@@ -24,10 +24,27 @@ fn load_test_image(filename: &str) -> GrayImage {
     GrayImage::from_u8(w, h, img.as_raw())
 }
 
+/// The GPU context for a test, or `None` when the machine has no adapter, in
+/// which case the test returns early and passes. With `SFMTOOL_REQUIRE_GPU`
+/// set (to anything but empty or `0`), a missing adapter fails the test
+/// instead, so a CI job that installs a driver cannot pass by skipping.
+fn gpu_or_skip() -> Option<GpuFlowContext> {
+    let gpu = GpuFlowContext::new();
+    if gpu.is_none() {
+        let required =
+            std::env::var("SFMTOOL_REQUIRE_GPU").is_ok_and(|v| !v.is_empty() && v != "0");
+        assert!(
+            !required,
+            "SFMTOOL_REQUIRE_GPU is set but no GPU adapter is available"
+        );
+        eprintln!("Skipping GPU test: no GPU available");
+    }
+    gpu
+}
+
 #[test]
 fn test_gpu_variational_identical_images() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -58,8 +75,7 @@ fn test_gpu_variational_identical_images() {
 
 #[test]
 fn test_gpu_vs_cpu_variational() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -110,8 +126,7 @@ fn flow_rmse(a: &FlowField, b: &FlowField) -> (f64, f32) {
 
 #[test]
 fn test_gpu_vs_cpu_full_pipeline_shifted() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -135,8 +150,7 @@ fn test_gpu_vs_cpu_full_pipeline_shifted() {
 
 #[test]
 fn test_gpu_vs_cpu_full_pipeline_identical() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -157,8 +171,7 @@ fn test_gpu_vs_cpu_full_pipeline_identical() {
 
 #[test]
 fn test_gpu_vs_cpu_seoul_bull_consecutive() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -179,8 +192,7 @@ fn test_gpu_vs_cpu_seoul_bull_consecutive() {
 
 #[test]
 fn test_gpu_vs_cpu_seoul_bull_wider_baseline() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -201,8 +213,7 @@ fn test_gpu_vs_cpu_seoul_bull_wider_baseline() {
 
 #[test]
 fn test_gpu_vs_cpu_seattle_backyard_consecutive() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -224,8 +235,7 @@ fn test_gpu_vs_cpu_seattle_backyard_consecutive() {
 #[test]
 #[ignore] // slow diagnostic test — run manually with: cargo test -p sfmtool-core --lib gpu::tests::diagnostic -- --ignored --nocapture
 fn test_gpu_vs_cpu_seattle_backyard_panning_diagnostic() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -393,8 +403,7 @@ fn test_gpu_vs_cpu_seattle_backyard_panning_diagnostic() {
 
 #[test]
 fn test_gpu_vs_cpu_seattle_backyard_panning() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -427,8 +436,7 @@ fn test_gpu_vs_cpu_seattle_backyard_panning() {
 
 #[test]
 fn test_gpu_dis_identical_images() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -451,8 +459,7 @@ fn test_gpu_dis_identical_images() {
 
 #[test]
 fn test_gpu_dis_shifted_image() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -478,8 +485,7 @@ fn test_gpu_dis_shifted_image() {
 
 #[test]
 fn test_gpu_dis_real_images() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 
@@ -503,8 +509,7 @@ fn test_gpu_dis_real_images() {
 
 #[test]
 fn test_gpu_pyramid_vs_cpu_pyramid() {
-    let Some(gpu) = GpuFlowContext::new() else {
-        eprintln!("Skipping GPU test: no GPU available");
+    let Some(gpu) = gpu_or_skip() else {
         return;
     };
 

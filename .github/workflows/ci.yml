@@ -326,11 +326,24 @@ jobs:
           # for 1.7 GB of the shared cache budget. See the lint job.
           cache: false
 
+      # lavapipe, Mesa's software Vulkan driver, gives the GPU optical flow
+      # tests in sfmtool-core an adapter to run on. Without one they return
+      # early and pass without testing anything.
+      - name: Install Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            mesa-vulkan-drivers
+
       - name: Run Rust tests with coverage
         # The script, not the `coverage-all` task: that task is bound to the
         # `test` environment alone so the bare `pixi run coverage-all` stays
         # unambiguous locally (see the task-feature note in pixi.toml).
         # `test-ci` carries every dependency it needs, just not the name.
+        # SFMTOOL_REQUIRE_GPU turns a missing adapter into a test failure, so
+        # this job cannot go green by skipping the GPU tests.
+        env:
+          SFMTOOL_REQUIRE_GPU: "1"
         run: pixi run -e test-ci bash scripts/coverage.sh rust
 
       - name: Upload coverage
