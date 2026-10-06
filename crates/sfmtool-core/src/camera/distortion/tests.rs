@@ -1826,8 +1826,8 @@ fn coarse_grid_jacobian_degradation() {
                     jmag_sse += (ef as f64).powi(2);
                     n += 1;
 
-                    let (smaj_c, smin_c, vx_c, vy_c) = cw.get_svd(col, row);
-                    let (smaj_e, smin_e, vx_e, vy_e) = ew.get_svd(col, row);
+                    let (smaj_c, smin_c, dx_c, dy_c) = cw.get_svd(col, row);
+                    let (smaj_e, smin_e, dx_e, dy_e) = ew.get_svd(col, row);
                     sig_maj_rel_max =
                         sig_maj_rel_max.max((smaj_c - smaj_e).abs() / smaj_e.max(1e-6));
                     let an_c = smaj_c / smin_c.max(1e-6);
@@ -1837,11 +1837,12 @@ fn coarse_grid_jacobian_degradation() {
                     if (an_c >= MAX_ANISOTROPY) != (an_e >= MAX_ANISOTROPY) {
                         aniso_cross += 1;
                     }
-                    // Major-direction angle error (only meaningful when anisotropic).
+                    // Angle between the source-image major directions, with
+                    // either sign (only meaningful when anisotropic).
                     if an_e > 1.2 {
-                        let cross = vx_c * vy_e - vy_c * vx_e;
-                        let dot = vx_c * vx_e + vy_c * vy_e;
-                        ang_max = ang_max.max(cross.atan2(dot).abs().to_degrees());
+                        let cross = dx_c * dy_e - dy_c * dx_e;
+                        let dot = dx_c * dx_e + dy_c * dy_e;
+                        ang_max = ang_max.max(cross.atan2(dot.abs()).abs().to_degrees());
                     }
 
                     let seam = col % 8 == 0 || row % 8 == 0;

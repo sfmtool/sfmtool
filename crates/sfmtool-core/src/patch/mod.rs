@@ -22,17 +22,22 @@ mod sampler_rule_tests;
 pub use cloud::{PatchCloud, PatchCloudError};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use crate::progress::Progress;
 
 /// How a batch over a patch cloud reports the patches it has finished: a bump
 /// of the caller's `done` counter per patch, for a poller on another thread,
 /// and a `patches` count to `progress` about every hundredth of the way
-/// through.
+/// through. The counts reported never decrease, whichever thread reaches a
+/// step first.
 pub(crate) struct PatchCounter<'a, 'p> {
     total: usize,
     step: usize,
     finished: AtomicUsize,
+    /// The last count reported to `progress`, held while reporting so two
+    /// threads' reports cannot arrive out of order.
+    reported: Mutex<usize>,
     done: Option<&'a AtomicUsize>,
     progress: &'a Progress<'p>,
 }
@@ -48,6 +53,7 @@ impl<'a, 'p> PatchCounter<'a, 'p> {
             total,
             step: (total / 100).max(1),
             finished: AtomicUsize::new(0),
+            reported: Mutex::new(0),
             done,
             progress,
         }
@@ -60,8 +66,14 @@ impl<'a, 'p> PatchCounter<'a, 'p> {
         }
         let n = self.finished.fetch_add(1, Ordering::Relaxed) + 1;
         if n.is_multiple_of(self.step) || n == self.total {
-            self.progress
-                .count(n as u64, Some(self.total as u64), "patches");
+            // A thread that reached a step after another thread reached a
+            // later one reports nothing.
+            let mut reported = self.reported.lock().unwrap_or_else(|e| e.into_inner());
+            if n > *reported {
+                *reported = n;
+                self.progress
+                    .count(n as u64, Some(self.total as u64), "patches");
+            }
         }
     }
 }

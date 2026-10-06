@@ -4594,6 +4594,67 @@ fn a_tilted_patch_is_drawn_with_the_anisotropic_sampler() {
     assert_ne!(aniso, mip, "the two samplers drew the same tile");
 }
 
+/// The *Zoom* cell's and heading's hover texts describe the sampler choice
+/// they are given. The patch turned 60° loses 1.5 to 2 times along its less
+/// compressed axis, so it moves to the anisotropic sampler at the default
+/// threshold and stays on `bilinear_mip` at 2; the facing patch at depth 20
+/// is compressed less than √2 and reads the full-resolution level; and under a
+/// fixed choice every view names the fixed sampler.
+#[test]
+fn the_zoom_hover_texts_describe_the_sampler_choice() {
+    use super::table::{zoom_sampler_text_for, zoom_tip};
+    use nalgebra::{Point3, Vector3};
+    use sfmtool_core::camera::sampler::{Sampler, SamplerChoice};
+    let (camera, pose) = pinhole_at_origin();
+    let (s, c) = 60f64.to_radians().sin_cos();
+    let tilted = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::new(s, 0.0, c),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.5, 0.5],
+    );
+    let tilted = patch_centre_jacobian(&tilted, &camera, &pose).expect("a Jacobian");
+    let far = patch_centre_jacobian(&facing_patch([0.0, 0.0, -20.0]), &camera, &pose)
+        .expect("a Jacobian");
+
+    let rule = SamplerChoice::per_view();
+    let text = zoom_sampler_text_for(rule, &tilted);
+    assert!(
+        text.starts_with("Rendered with the anisotropic sampler") && text.contains("1.5\u{d7}"),
+        "{text}"
+    );
+    let text = zoom_sampler_text_for(rule, &far);
+    assert!(
+        text.starts_with("Rendered with the bilinear_mip sampler")
+            && text.contains("full-resolution level"),
+        "{text}"
+    );
+
+    let strict = SamplerChoice::PerView {
+        anisotropic_threshold: 2.0,
+    };
+    let text = zoom_sampler_text_for(strict, &tilted);
+    assert!(
+        text.starts_with("Rendered with the bilinear_mip sampler")
+            && text.contains("under the 2\u{d7}"),
+        "{text}"
+    );
+    assert!(zoom_tip(strict).contains("at least 2\u{d7} too coarsely"));
+
+    let fixed = SamplerChoice::Fixed(Sampler::Bilinear);
+    let text = zoom_sampler_text_for(fixed, &tilted);
+    assert!(
+        text.starts_with("Rendered with the bilinear sampler, which the bench renders every"),
+        "{text}"
+    );
+    let tip = zoom_tip(fixed);
+    assert!(
+        tip.contains("every tile with the bilinear sampler"),
+        "{tip}"
+    );
+    assert!(!tip.contains("1.5\u{d7}"), "{tip}");
+}
+
 /// The zoom is geometry alone: a patch whose centre projects has one even
 /// where the middle of its tile is off the photograph. Only a patch whose
 /// centre does not project, here behind the camera, has none, and the *Zoom*

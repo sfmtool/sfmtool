@@ -23,7 +23,8 @@
 //! corner for all of a pixel's channels: the four bytes read end at the
 //! pixel's last channel (or start at the buffer's first byte), so a gather
 //! never reads outside the image, and each channel is shifted out of the
-//! word.
+//! word. The offsets are `i32`, so a group that reads a pyramid level of more
+//! than `i32::MAX` bytes, or of fewer than four, goes through the scalar path.
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -235,10 +236,20 @@ unsafe fn group(
     true
 }
 
+/// Whether a pyramid level of `len` bytes can be read with the kernel's
+/// gathers. A gather reads a whole 32-bit word, which a level of fewer than
+/// four bytes does not hold, and takes its byte offsets as `i32`, which wrap
+/// past `i32::MAX`.
+#[cfg(target_arch = "x86_64")]
+pub(super) fn gatherable(len: usize) -> bool {
+    (4..=i32::MAX as usize).contains(&len)
+}
+
 /// Add the bilinear samples of `img` at the eight `(x, y)` (level pixels) to
 /// `sums`, per channel, in the lanes `active` sets, with the products and
 /// sums of the scalar `sample_bilinear_u8`. `false`, adding nothing, where a
-/// coordinate is past [`MAX_COORD`] or not a number.
+/// coordinate is past [`MAX_COORD`] or not a number, or where the level is not
+/// [`gatherable`].
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[inline]
@@ -250,9 +261,7 @@ unsafe fn accumulate(
     c: usize,
     sums: &mut [__m256; 4],
 ) -> bool {
-    // A gather reads a whole 32-bit word, which an image of fewer than four
-    // bytes does not hold.
-    if img.data.len() < 4 {
+    if !gatherable(img.data.len()) {
         return false;
     }
     let gx = _mm256_sub_ps(x, _mm256_set1_ps(0.5));

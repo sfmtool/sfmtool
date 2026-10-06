@@ -1179,8 +1179,9 @@ fn affine_aniso_sampling_matches_the_per_pixel_path() {
     // it once from the coefficients, the per-pixel path from finite
     // differences of the stored positions, which carry the positions' `f32`
     // rounding. That could move a pixel across a level or sample-count
-    // boundary; on these maps, whose singular values sit away from the
-    // boundaries, it moves none.
+    // boundary, or move a tap enough to change a rounded value by one; on
+    // these maps, whose singular values sit away from the boundaries, it does
+    // neither.
     let img = render_plane_view([0.2, -0.1, 0.0], texture);
     let pyr = ImageU8Pyramid::build(&img, 6);
     let resolution = 24usize;

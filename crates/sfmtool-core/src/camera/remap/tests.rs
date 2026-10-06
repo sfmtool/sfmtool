@@ -1159,7 +1159,8 @@ fn aniso_avx2_matches_scalar_bit_for_bit() {
                     if w == 160 && (1..=6).contains(&m) {
                         assert!(
                             groups > 0,
-                            "map {m}, {channels} channels, max {max_aniso}:                              the AVX2 kernel rendered no group"
+                            "map {m}, {channels} channels, max {max_aniso}: \
+                             the AVX2 kernel rendered no group"
                         );
                     }
                     groups_on_image += groups;
@@ -1171,6 +1172,18 @@ fn aniso_avx2_matches_scalar_bit_for_bit() {
             );
         }
     }
+}
+
+/// The kernel takes a pyramid level only where its gathers can read it: at
+/// least one 32-bit word, and byte offsets that fit in an `i32`.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn aniso_avx2_gathers_only_levels_that_fit_i32_offsets() {
+    assert!(!aniso_avx2::gatherable(0));
+    assert!(!aniso_avx2::gatherable(3));
+    assert!(aniso_avx2::gatherable(4));
+    assert!(aniso_avx2::gatherable(i32::MAX as usize));
+    assert!(!aniso_avx2::gatherable(i32::MAX as usize + 1));
 }
 
 // -----------------------------------------------------------------------

@@ -125,6 +125,17 @@ its renders under each sampler. Each patch's own phases and view counts go to
 nothing, since dozens of rayon threads writing them into one bar would
 overwrite each other.
 
+The per-patch kernels of the other batches are different, and each has a plain
+function beside a `_reporting` one that takes a `Progress`:
+`refine_patch_normal`, `refine_patch_keypoints`, `fuse_patch_bitmap` and
+`member_zncc_matrix`. None of them checks for cancellation or reports phases
+or counts of its own; the `Progress` only times its renders under each sampler
+in detail phases. The plain function is a single call of the `_reporting` one
+with `Progress::none()`, so there is one body and no gate that could differ
+between the two. The plain function serves the many callers with no
+`Progress` to pass, most of them tests; the batch functions and the bench's
+fit call the `_reporting` one.
+
 Each view is rendered with the sampler the sampler rule picks for it
 ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per
 view"): a track view at its keypoint, a candidate at its projection, as every

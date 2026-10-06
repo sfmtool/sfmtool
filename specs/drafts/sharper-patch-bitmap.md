@@ -31,7 +31,7 @@ The sharpest views then correlate worst with it, because the detail they carry h
 - how far the view's own tile can slide over itself and still match (the ZNCC self-similarity radius);
 - the angle between the view's ray and the patch normal.
 
-Each view is now rendered with the single-sample mip sampler or the anisotropic sampler, chosen per view from how much coarser the mip sampler would read its less compressed axis than that axis needs (Part 3, built). A view seen at an angle or through a distorting lens then keeps the detail it holds along its better axis.
+It renders each view with the single-sample mip sampler or the anisotropic sampler, chosen per view from how much coarser the mip sampler would read its less compressed axis than that axis needs (Part 3), so a view seen at an angle or through a distorting lens keeps the detail it holds along its better axis.
 
 It also proposes scoring each view against the template at a resolution the view can actually show. A sharp template then does not penalise a far or blurry view for detail it could never have had.
 
@@ -328,7 +328,7 @@ Which one is part of this work. The radius columns do not depend on the choice.
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?
 - **Folding the radius into `φ_v`** for matched-bandwidth scoring (Part 6, variant). Fairer to out-of-focus views, but it hides their blur from the ZNCC bars.
-- **Whether the sampler rule should also consider the view's weight.** A view with a small weight contributes little to the template, so rendering it with the anisotropic sampler may not pay. With the AVX2 kernel an anisotropic render costs about what a `BilinearMip` one does, so this matters only on a CPU without it.
+- **Whether the sampler rule should also consider the view's weight.** A view with a small weight contributes little to the template, so rendering it with the anisotropic sampler may not pay. With the AVX2 kernel an anisotropic render costs 0.65 to 1.55 times what a `BilinearMip` one does, the most on views compressed 10 times or more along one axis, which take the most samples; on a CPU without AVX2 it costs 1.8 to 4 times as much. The question matters most on such views and on such CPUs.
 - **Directional angle terms.** The angle's sensitivity lies along the tilt direction (Part 4). Weighting the template along `t̂_v` by `|cos θ_v|^k` and fully across it is the directional form of `h`, and belongs with per-axis weighting.
 - **The patch resolution.** On the 25-view track most views are far below 1× zoom, so the 24-px grid discards detail the near views hold and the far views cannot. Choosing `R` per track from its footprints is a separate change. It interacts with this one, because a larger `R` widens the range of `φ`.
 - **Normal refinement.** Whether its objective should take these weights at all, or keep the agreement weights and only the matched-bandwidth scoring.

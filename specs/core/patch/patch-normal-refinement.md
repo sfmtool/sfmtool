@@ -389,7 +389,7 @@ pub enum Sampler {
     BilinearMip,
     /// Anisotropic over the pyramid (the warp's Jacobian SVD picks the level),
     /// de-aliasing oblique / grazing views. With the AVX2 kernel a tile costs
-    /// about what a `BilinearMip` one does (1.8–4× on the scalar path);
+    /// 0.65–1.55× what a `BilinearMip` one does (1.8–4× on the scalar path);
     /// keeps the reported `Φ`/confidence unbiased and helps slightly on
     /// distorted/fisheye rigs. What the sampler rule picks for a view it moves.
     Anisotropic,
@@ -512,8 +512,9 @@ unnecessary. What remains open:
    `a` times too coarsely, so a view facing the patch keeps `BilinearMip`.
    Rendering every view with it (`SamplerChoice::Fixed(Sampler::Anisotropic)`)
    gives a normal that differs by ≲ 1° on pinhole views. With the AVX2 kernel
-   it costs about what `BilinearMip` does (1.8–4× on a CPU without
-   AVX2); what stays open is whether the unbiased `Φ` it reports on the views
+   it costs 0.65–1.55× what `BilinearMip` does, the most on views compressed
+   10 times or more along one axis (1.8–4× on a CPU without AVX2); what stays
+   open is whether the unbiased `Φ` it reports on the views
    the rule leaves on `BilinearMip` is worth changing those views' renders on
    distorted / fisheye rigs, where the measured benefit is small but real.
 

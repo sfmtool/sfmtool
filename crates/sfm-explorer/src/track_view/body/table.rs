@@ -45,7 +45,11 @@
 //! `verdicts_if_unpinned`), so the colours and the verdicts a release applies
 //! cannot disagree.
 
+use std::sync::LazyLock;
+
 use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Thresholds, Verdict};
+use sfmtool_core::camera::sampler::{Sampler, SamplerChoice};
+use sfmtool_core::camera::warp_map::singular_values_2x2;
 use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 use sfmtool_core::SfmrReconstruction;
 
@@ -289,7 +293,7 @@ impl ColumnLayout {
             ),
             (self.offset, "Proj. err", PROJECTION_ERROR_TIP),
             (self.shift, "Shift", SHIFT_TIP),
-            (self.zoom, "Zoom", ZOOM_TIP),
+            (self.zoom, "Zoom", ZOOM_TIP.as_str()),
             (self.status, "Status", STATUS_TIP),
         ];
         if mode == BodyMode::Edited {
@@ -504,26 +508,51 @@ pub(super) fn zoom_text(jacobian: Option<PatchJacobian>) -> String {
 }
 
 /// The *Zoom* cell's hover text: the sampler the row's tile is rendered with,
-/// and the loss along the less compressed axis the sampler rule chose it by.
+/// under the bench's sampler choice (`crate::bench::sampler_choice`), and
+/// why that choice picked it.
 pub(super) fn zoom_sampler_text(jacobian: &PatchJacobian) -> String {
+    zoom_sampler_text_for(crate::bench::sampler_choice(), jacobian)
+}
+
+/// [`zoom_sampler_text`] under the sampler choice `choice`: the fixed sampler,
+/// or the sampler the rule picks, with the loss along the less compressed axis
+/// it compared with the choice's threshold.
+pub(super) fn zoom_sampler_text_for(choice: SamplerChoice, jacobian: &PatchJacobian) -> String {
+    let SamplerChoice::PerView {
+        anisotropic_threshold,
+    } = choice
+    else {
+        return format!(
+            "Rendered with the {} sampler, which the bench renders every view with.",
+            choice.name()
+        );
+    };
     let loss = jacobian.minor_axis_loss();
     let loss = if loss.is_finite() {
         format!("{loss:.2}")
     } else {
         "-".to_string()
     };
-    match jacobian.sampler() {
-        sfmtool_core::camera::sampler::Sampler::Anisotropic => format!(
-            "Rendered with the anisotropic sampler: one mip level for both axes would read \
-             the less compressed axis {loss}\u{d7} too coarsely."
-        ),
-        _ => format!(
-            "Rendered with the bilinear_mip sampler: one mip level for both axes reads the \
-             less compressed axis {loss}\u{d7} too coarsely, under the {}\u{d7} that moves \
-             a view to the anisotropic sampler, or the view is not compressed enough for \
-             the level to matter.",
-            sfmtool_core::camera::sampler::DEFAULT_ANISOTROPIC_THRESHOLD
-        ),
+    let sampler = choice.for_jacobian(Some(jacobian.0));
+    let name = sampler.name();
+    let [major, _] = singular_values_2x2(jacobian.0);
+    if sampler == Sampler::Anisotropic {
+        format!(
+            "Rendered with the {name} sampler: one mip level for both axes would read the \
+             less compressed axis {loss}\u{d7} too coarsely, at least the \
+             {anisotropic_threshold}\u{d7} that moves a view to it."
+        )
+    } else if major < std::f64::consts::SQRT_2 {
+        format!(
+            "Rendered with the {name} sampler: the view is compressed less than \
+             \u{221a}2\u{d7} along both axes, so it reads the full-resolution level."
+        )
+    } else {
+        format!(
+            "Rendered with the {name} sampler: one mip level for both axes reads the less \
+             compressed axis {loss}\u{d7} too coarsely, under the \
+             {anisotropic_threshold}\u{d7} that moves a view to the anisotropic sampler."
+        )
     }
 }
 
@@ -595,8 +624,33 @@ pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where
     At the cluster stage it is how far the refinement moved the member off its seed.\n\n\
     The box under this heading is the shift bar, which judges it.";
 
-/// The *Zoom* heading's hover text.
-pub(super) const ZOOM_TIP: &str = "How much the patch magnifies the photograph at its \
+/// The *Zoom* heading's hover text, under the bench's sampler choice.
+pub(super) static ZOOM_TIP: LazyLock<String> =
+    LazyLock::new(|| zoom_tip(crate::bench::sampler_choice()));
+
+/// The *Zoom* heading's hover text under the sampler choice `choice`, which
+/// its paragraph on how the tile is drawn describes.
+pub(super) fn zoom_tip(choice: SamplerChoice) -> String {
+    let sampler = match choice {
+        SamplerChoice::PerView {
+            anisotropic_threshold,
+        } => format!(
+            "The zoom also decides how the tile is drawn, as the bench's own renders decide \
+             it: where one mip level for both axes would read the less compressed axis at \
+             least {anisotropic_threshold}\u{d7} too coarsely, the tile is rendered with the \
+             anisotropic sampler, and otherwise with bilinear_mip. Hover a cell to see which."
+        ),
+        SamplerChoice::Fixed(sampler) => format!(
+            "The bench renders every tile with the {} sampler, whatever the zoom, and so \
+             does this table.",
+            sampler.name()
+        ),
+    };
+    format!("{ZOOM_TIP_HEAD}\n\n{sampler}\n\n{ZOOM_TIP_TAIL}")
+}
+
+/// The paragraphs of [`ZOOM_TIP`] before the one on the sampler.
+const ZOOM_TIP_HEAD: &str = "How much the patch magnifies the photograph at its \
     centre: patch-grid px per pixel of the photograph, read from the Jacobian of the warp \
     from the patch to the photograph. The grid is the reconstruction's own patch resolution, \
     the one its patch bitmaps are stored at (24 px a side unless the file says otherwise), \
@@ -607,12 +661,11 @@ pub(super) const ZOOM_TIP: &str = "How much the patch magnifies the photograph a
     photograph, and a tile whose middle is off the photograph still has one.\n\n\
     The warp can stretch one direction more than another, so the cell gives the least zoom \
     over the most, 0.71/1.3\u{d7}, and gives both even where the two agree, \
-    0.51/0.51\u{d7}. Each carries two significant digits.\n\n\
-    The zoom also decides how the tile is drawn, as the bench's own renders decide it: \
-    where one mip level for both axes would read the less compressed axis at least 1.5\u{d7} \
-    too coarsely, the tile is rendered with the anisotropic sampler. Hover a cell to see \
-    which.\n\n\
-    A - is a row at the cluster stage, whose tile is not drawn through a warp; a track with \
+    0.51/0.51\u{d7}. Each carries two significant digits.";
+
+/// The paragraphs of [`ZOOM_TIP`] after the one on the sampler.
+const ZOOM_TIP_TAIL: &str =
+    "A - is a row at the cluster stage, whose tile is not drawn through a warp; a track with \
     no patch yet; an observation with nothing saying where it sits; a patch whose centre is \
     behind the camera or outside the camera model's domain; or a patch seen edge on.\n\n\
     Ordering by this column orders by the geometric mean of the two.";

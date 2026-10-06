@@ -1302,8 +1302,12 @@ hover view with the anisotropic sampler where one mip level for both axes would
 read the less compressed axis at least 1.5 times too coarsely
 (`PatchJacobian::sampler`, `tile::tile_sampler`), and with `bilinear_mip`
 otherwise, so a view is drawn with the sampler the bench's evaluation and the
-fuse render it with. Hovering a *Zoom* cell names the sampler and that loss
-(`table::zoom_sampler_text`). `get_bench_track` and `get_point`'s evaluation
+fuse render it with. Hovering a *Zoom* cell names the sampler and why the
+choice picked it (`table::zoom_sampler_text`): under the rule, the loss against
+the rule's threshold, or that the view is compressed less than √2 along both
+axes; under a fixed choice, that the bench renders every view with that
+sampler. The *Zoom* heading's hover describes the same choice
+(`table::zoom_tip`). `get_bench_track` and `get_point`'s evaluation
 block report each row's `sampler` (`anisotropic` or `bilinear_mip`) and
 `sampler_minor_axis_loss`, both null where `patch_jacobian` is, and the loss
 null as well where it is not finite.

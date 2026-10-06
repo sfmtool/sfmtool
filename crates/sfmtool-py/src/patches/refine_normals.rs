@@ -49,8 +49,8 @@ impl PyPatchCloud {
     ///         cross-scale views at ~bilinear cost), ``"bilinear"`` (fastest
     ///         tap, full-resolution level only), or ``"anisotropic"``
     ///         (anti-aliased oblique views; keeps the reported Φ/confidence
-    ///         unbiased; about the cost of ``"bilinear_mip"`` with the AVX2
-    ///         kernel, 1.6-4x it without).
+    ///         unbiased; 0.65-1.55x the cost of ``"bilinear_mip"`` with the
+    ///         AVX2 kernel, 1.8-4x it without).
     ///     point_indexes: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.

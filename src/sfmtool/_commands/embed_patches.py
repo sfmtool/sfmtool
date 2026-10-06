@@ -262,8 +262,8 @@ from .._cli_utils import timed_command
         "compressed axis too coarsely, 'bilinear_mip' otherwise. The other "
         "three render every view with one sampler. 'bilinear_mip' taps the mip level nearest the warp's "
         "compression, bounding aliasing on cross-scale views at ~bilinear "
-        "cost; 'anisotropic' also resolves oblique footprints, at about the "
-        "cost of 'bilinear_mip' with the AVX2 kernel and 1.6-4x it without; "
+        "cost; 'anisotropic' also resolves oblique footprints, at 0.65-1.55x "
+        "the cost of 'bilinear_mip' with the AVX2 kernel and 1.8-4x it without; "
         "'bilinear' taps the full-resolution level only."
     ),
 )

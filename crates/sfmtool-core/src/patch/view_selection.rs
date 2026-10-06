@@ -576,9 +576,10 @@ fn sample_support_affine(
 /// most. Each support pixel then takes [`aniso_sample`] at its affine
 /// position, rounded to `f32` as a warp map stores it, which is the per-pixel
 /// path's sample for that position and SVD. On a map that is exactly affine
-/// the two paths differ only where the per-pixel SVD, read from finite
-/// differences of the stored `f32` positions, lands on the other side of a
-/// level or sample-count boundary from the constant one
+/// the two paths differ only through the per-pixel SVD, read from finite
+/// differences of the stored `f32` positions: where it lands on the other
+/// side of a level or sample-count boundary from the constant one, and by one
+/// where its rounding moves a tap enough to change the rounded value
 /// (`affine_aniso_sampling_matches_the_per_pixel_path`). On a real view the
 /// affine position error adds to that, as it does for the bilinear samplers
 /// (`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`).

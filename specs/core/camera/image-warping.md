@@ -139,8 +139,8 @@ source position by `J·v = sigma_major·u`. The anisotropic sampler adds its
 offsets to a source position, so it needs `u`; adding `v` there instead walks
 a direction turned from the footprint by the angle between the destination
 grid and the source image, which at the middle of the patch tiles the sampler
-rule moves is a median of 3–28° on most samples and up to 88° (§ "How `a = 1.5`
-was set").
+rule moves is a median of 3–28° on most samples, 82° on one, and up to 88° at
+the 90th percentile (§ "How `a = 1.5` was set").
 `u` is taken as the eigenvector of `J·Jᵀ` for its larger eigenvalue, from
 whichever of the two closed forms adds terms of the same sign, so it is well
 defined wherever the singular values differ, including where the rows or the
@@ -515,8 +515,8 @@ filter the radial direction.
 The sampling strategy follows the same principle as GPU hardware anisotropic texture
 filtering, using the precomputed SVD data from `WarpMapSvd`:
 
-1. **Look up the precomputed SVD** — `sigma_major`, `sigma_minor`, and `major_dir`
-   for this pixel.
+1. **Look up the precomputed SVD** — `sigma_major`, `sigma_minor`, and
+   `source_major_dir`, a direction in the source image, for this pixel.
 2. **Select the pyramid level** based on `sigma_minor` (the minor singular value).
    This is the pre-filtering level that prevents aliasing along the *narrow* axis
    of the elliptical footprint: `level = log2(sigma_minor)`, clamped to `[0, max_level]`.
@@ -883,14 +883,15 @@ averaged over two runs that agreed to within 8%:
 | value+gradient `Anisotropic` (scalar) | 88 | 210 | 89 |
 
 The SVD is about 8 µs of each render that reads it. With the AVX2 kernel an
-anisotropic render costs about what a `BilinearMip` one does, and less where
-its views take few samples; the badlands sample's moved views compress the
-photograph 10 to 50 times along one axis and take up to the full 16 samples.
+anisotropic render costs 0.65 to 1.55 times a `BilinearMip` one: 0.65 on the
+gallery sculpture's moved views, which take few samples, and 1.55 on the
+badlands sample's, which compress the photograph 10 to 50 times along one axis
+and take up to the full 16 samples.
 On the scalar path it costs 1.8 to 4 times a `BilinearMip` render, and the
-value+gradient anisotropic render 2.8 to 7 times. Earlier timings of these
-renders taken inside the batches' parallel loops, through detail phases
-reported to a shared sink, read 41–57 µs for a `BilinearMip` render; that
-measured the contention of the loop and the sink, not the render.
+value+gradient anisotropic render 2.8 to 7 times. Timings taken inside the
+batches' parallel loops, through detail phases reported to a shared sink, read
+longer than these, because they include the contention of the loop and the
+sink.
 
 **Per batch.** Each batch ran on all 32 threads over the same points, five
 times under `Fixed(BilinearMip)` and five times under the rule, alternating
@@ -917,15 +918,17 @@ thread, view selection over the gallery sculpture takes 3.93 s and 4.11 s
 under `BilinearMip` and 4.18 s and 4.24 s under the rule (best of five, two
 runs; spread 8–21% within a run, since that thread was not held to one kind
 of core). On the badlands sample the moved views' renders take most of their
-samples, and every batch that renders them is 3–24% slower under the rule. The bench's evaluation, measured earlier
-with three runs on each of the eleven samples, runs within 6% of its
-`BilinearMip` time (16% on dino_dog_toy).
-
+samples, and every batch that renders them is 3–24% slower under the rule.
 View selection scores the views the rule moves through its affine fast path
 too ([patch-view-selection.md](../patch/patch-view-selection.md) § "Affine
-candidate scoring"). Before that path took the anisotropic sampler, the
-gallery sculpture's view selection was 18–20% slower under the rule as a batch
-and 14–15% slower on one thread.
+candidate scoring").
+
+**The bench's evaluation.** The bench evaluated the 40 tracks of each of the
+eleven samples on one logical processor of a performance core, nine times
+under each choice, alternating which went first. The best time under the rule
+is 0.92 to 1.02 times the best under `BilinearMip`. One sample's runs spread
+by 4% to several times their best, so the ratios say that the two are close,
+not which is faster.
 
 #### Storing what a render was made under
 
