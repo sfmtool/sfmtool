@@ -51,6 +51,12 @@ than defects; they carry **docs** in place of a severity.
 > `orbit` forms and the scene unit in `get_scene` are being implemented on
 > branch `mcp-relative-view-moves`._
 
+> _Status (2026-10-06): **Done** — `set_view` takes relative `move`
+> (level axes, optional `unit`), `turn` (keeps camera view) and `orbit` forms,
+> applied in that order, and `get_scene` reports each file's
+> `world_space_unit` and the view's unit (the selected reconstruction's), PR
+> #804._
+
 `set_view` takes only absolute forms. To carry out "step back 2 m, rise 1 m,
 turn right 35°" the caller has to read `get_scene`'s view block, compute the
 new position and a rotated forward vector itself, and send the look-at form.
