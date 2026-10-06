@@ -3607,7 +3607,8 @@ fuse and Track View, which the sampler rule reads from `patch_jacobian`:
 `anisotropic` where one mip level for both axes would read the less compressed
 axis `sampler_minor_axis_loss` times too coarsely, that is at least `1.5`, and
 the larger singular value is at least `√2`, and `bilinear_mip` otherwise; both
-are null where `patch_jacobian` is
+are null where `patch_jacobian` is, and `sampler_minor_axis_loss` is null as
+well where it is not finite
 ([`../core/camera/image-warping.md`](../core/camera/image-warping.md) §
 "Choosing the sampler per view"). The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:

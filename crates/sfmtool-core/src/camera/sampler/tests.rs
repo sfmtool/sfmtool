@@ -78,6 +78,18 @@ fn a_magnifying_minor_axis_counts_as_one_photograph_pixel() {
     assert_eq!(rule_sampler([3.0, 2.9], A), Sampler::BilinearMip);
 }
 
+/// An infinite `σ_major` reads an infinite loss rather than the `0.5` an
+/// overflowing level would give, and moves the view; a huge finite one gives
+/// a huge loss.
+#[test]
+fn an_infinite_major_axis_reads_an_infinite_loss() {
+    assert_eq!(bilinear_mip_level(f64::INFINITY), u32::MAX);
+    assert_eq!(minor_axis_loss([f64::INFINITY, 2.0]), f64::INFINITY);
+    assert_eq!(rule_sampler([f64::INFINITY, 2.0], A), Sampler::Anisotropic);
+    assert_eq!(minor_axis_loss([1e300, 1.0]), 2f64.powi(997));
+    assert!(minor_axis_loss([f64::INFINITY, f64::INFINITY]).is_nan());
+}
+
 /// The threshold is the bar `L` must reach, inclusive.
 #[test]
 fn the_threshold_is_inclusive() {

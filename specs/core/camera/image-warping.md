@@ -636,6 +636,10 @@ pub fn render_tiles(pyramids: &[&ImageU8Pyramid], maps: &mut [WarpMap],
 ```rust
 let choice = SamplerChoice::default();
 let sampler = choice.for_observation(&patch, view.camera, view.cam_from_world, Some(keypoint), 24);
+// The tile itself, rendered through the patch re-anchored on the keypoint.
+let anchored = patch
+    .anchored_at_keypoint(view.camera, view.cam_from_world, keypoint)
+    .unwrap_or_else(|| patch.clone());
 let mut map = WarpMap::from_patch(&anchored, view.camera, view.cam_from_world, 24);
 let tile = render_tile(view.pyramid, &mut map, sampler);
 ```
@@ -658,23 +662,50 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
   any of those would let two kernels choose differently for one observation,
   so none of them does. The bench's evaluation, Track View
   (`PatchJacobian::sampler`) and the MCP fields read the same Jacobian
-  (`patch_grid_jacobian` of the anchored patch at `R`).
+  (`patch_grid_jacobian` of the anchored patch at `R`), and Track View and the
+  MCP fields apply the bench evaluation's own `SamplerChoice`
+  (`EvaluateOptions::localize.sampler`), so they show the sampler the bench
+  used.
+- **Which keypoint.** Each kernel reads the rule at the keypoint it starts
+  from: the fuse, the member gates and view selection's track views at the
+  stored keypoint, the bench and the localizer at the seed of the round, the
+  sub-pixel refiner at the seed the localizer hands it, and view selection's
+  candidates, which have no keypoint, at the projection. Within one pipeline
+  run these differ by the localizer's and the refiner's shifts, a few pixels,
+  which change the Jacobian by a small fraction. Two kernels can therefore
+  choose differently for one observation only when its `L` lies within that
+  fraction of `a`, or its `σ_major` within it of a level boundary
+  `2^(l + 0.5)`, where `L` doubles. Reading every kernel's choice at one
+  keypoint would mean carrying that keypoint through each kernel beside the one
+  it renders at, and a kernel that has moved a view should render it as it now
+  sits, so the choice is read where each kernel starts.
 - **Why a kernel that iterates chooses once.** Normal refinement fixes each
   view's sampler from the patch it starts from (`view_samplers`), since the
   Jacobian changes with the candidate normal and a choice per candidate would
-  make `Φ` jump where a candidate carries a view across the threshold. The
-  localizer and the sub-pixel refiner choose once per view, at its seed
-  keypoint, since their tiles only slide in the patch's plane.
+  make `Φ` jump where a candidate carries a view across the threshold. Every
+  render of a view from its photograph then uses that sampler. Under the
+  default `CacheMode::FrontoParallel` the search does not render candidates
+  from the photographs: it scores them from the fronto-parallel cache, whose
+  base tiles are rendered with plain bilinear, so the sampler reaches only the
+  final scoring of the starting normal and the search's survivors, the
+  confidence stencil and the representative bitmap. With `CacheMode::Off` it
+  reaches every candidate. The localizer and the sub-pixel refiner choose once
+  per view, at its seed keypoint, since their tiles only slide in the patch's
+  plane.
 - **Timing.** `render_tiles` renders a multi-view stack grouped by sampler, and
-  each group runs in a `Progress::detail_phase` named `render bilinear_mip` or
-  `render anisotropic` whose note gives the number of views; the single-view
-  kernels open the same phases per render (`render_phase`). The phases record
-  only under `Progress::detailed(true)`. The batches that render views
-  (`refine_patch_cloud_normals`, `select_patch_cloud_views`,
-  `localize_patch_cloud_keypoints`, `refine_patch_cloud_keypoints`,
-  `validate_patch_cloud_member_coherence`, `fuse_patch_cloud_bitmaps` and the
-  bench's `evaluate` and `fit`) take a `&Progress`, count `patches`, poll for
-  cancellation between patches and return `Cancelled` when it is set.
+  each group runs in a `Progress::detail_phase` named `render bilinear`,
+  `render bilinear_mip` or `render anisotropic` whose note gives the number of
+  views; the single-view kernels open the same phases per render
+  (`render_phase`). The phases record only under `Progress::detailed(true)`.
+  The batches that render views (`refine_patch_cloud_normals`,
+  `select_patch_cloud_views`, `localize_patch_cloud_keypoints`,
+  `refine_patch_cloud_keypoints`, `validate_patch_cloud_member_coherence` and
+  `fuse_patch_cloud_bitmaps`) take a `&Progress`, count `patches`, poll for
+  cancellation before each patch and return `Cancelled` when it is set, rather
+  than the patches they finished; normal refinement then leaves the cloud as
+  it was. The bench's `evaluate` and `fit` work on one track; they take a
+  `&Progress` too, open the same detail phases and return
+  `EvaluateError::Cancelled` / `FitError::Cancelled`.
 
 #### The footprint, and what `BilinearMip` loses
 
@@ -701,6 +732,16 @@ how much coarser `BilinearMip` reads that axis than its own compression needs.
 A minor axis that magnifies the photograph (`σ_minor < 1`) can only lose detail
 down to one photograph pixel, hence the floor.
 
+`l` here is not clamped to the pyramid's depth, although `BilinearMip` clamps
+it to the top level `K` it has. Past `σ_major = 2^(K − 0.5)` the minor axis is
+read at `2^K / max(σ_minor, 1)`, less than `L`, and the major axis aliases by
+`σ_major / 2^K` instead. The rule reads `L` unclamped: the anisotropic sampler
+is the better of the two there too, since its samples along the major axis
+reduce that aliasing, and the depth differs between callers (the command line
+builds every level, SfM Explorer six), while the rule has to choose the same
+sampler for one observation in every kernel and caller. An infinite `σ_major`
+gives an infinite `L`.
+
 #### The rule
 
 A view renders with `Anisotropic` when **`σ_major ≥ √2` and `L ≥ a`**, and with
@@ -718,14 +759,15 @@ A view renders with `Anisotropic` when **`σ_major ≥ √2` and `L ≥ a`**, an
 
 #### How `a = 1.5` was set
 
-The rule was compared against `BilinearMip` everywhere with detailed runs of a
-measurement harness on eleven samples: the checked-in seoul_bull and
-kerry_park ground truths, and from local datasets the dino_dog_toy seed
-reconstruction, two museum captures (masks, a tree stump exhibit), a gallery
-sculpture, a mossy railing, a distant badlands panorama, a 48-image fisheye rig
-(KerryPark480) and two 12-camera 360° rigs (OmniCoast, OmniTemple1); up to 400
-points per sample, all their views, and 40 tracks of each on the bench. The
-48-image fisheye rig's lenses carry extreme `k2`/`k3` terms and its data near
+The rule was compared against `BilinearMip` everywhere on eleven samples, with
+a measurement harness that was written for this comparison and is not in the
+repository: up to 400 points per sample, all their views, and 40 tracks of
+each on the bench. Two samples are in the repository, the seoul_bull and
+kerry_park ground truths in `test-data/images/`. The other nine are local
+datasets that are not: a seed reconstruction of dino_dog_toy, two museum
+captures (masks, a tree stump exhibit), a gallery sculpture, a mossy railing,
+a distant badlands panorama, a 48-image fisheye rig (KerryPark480) and two
+12-camera 360° rigs (OmniCoast, OmniTemple1). The 48-image fisheye rig's lenses carry extreme `k2`/`k3` terms and its data near
 the edge of the image circle is unreliable, so its views near that edge say
 little about the rule; the kerry_park ground truth is the fisheye sample to
 read.
@@ -771,30 +813,83 @@ read.
 
 #### Cost, and the AVX2 kernel
 
-With the scalar sampler an anisotropic `R×R` render cost 2.3–2.7 times a
-`BilinearMip` one (79–93 µs against 31–39 µs including the warp map's SVD;
-6 times on the badlands sample, whose views take the full 16 samples), which
-raised the view selection batch by 20–120% and the localizer's by 3–60% (by 100–200% on the
-badlands sample). `remap_aniso_with_pyramid` therefore has an AVX2 kernel
-([camera/remap/aniso_avx2.rs](../../../crates/sfmtool-core/src/camera/remap/aniso_avx2.rs)), chosen at run time with
-`is_x86_feature_detected!("avx2")`: eight output pixels of a row at a time
-wherever they read the same two pyramid levels, each lane with its own
-position, direction, sample count and level blend, and the corners fetched
-with one 32-bit gather per corner for all channels. It does the scalar path's
-`f32` operations in the same order, with no fused multiply-add, so its output
-is identical to the scalar path's bit for bit (`aniso_avx2_matches_scalar_bit_for_bit`),
-and the scalar path, which computes a sample's corner geometry once for all
-channels, is identical to the per-channel algorithm
-(`aniso_scalar_matches_the_per_channel_reference`). With it an anisotropic
-`R×R` render takes 20–28 µs, below a `BilinearMip` render's 26–40 µs (42 µs
-against 34 µs on the badlands sample), and on whole reconstructions (the best of three
-runs, up to 2,780 points) the fuse, the localizer and member coherence run
-within 10% of their `BilinearMip` times, the bench's evaluation within 6%
-(16% on dino_dog_toy), and normal refinement and view selection within 5%
-except on the two samples the rule moves most views of: the gallery sculpture
-(57% moved; +40% and +26%) and the badlands panorama (37% moved, many with the
-full 16 samples; +10% to +22% in every batch). The value+gradient
-anisotropic sampler the sub-pixel refiner's tile reads is scalar.
+`remap_aniso_with_pyramid` has an AVX2 kernel
+([camera/remap/aniso_avx2.rs](../../../crates/sfmtool-core/src/camera/remap/aniso_avx2.rs)),
+chosen at run time with `is_x86_feature_detected!("avx2")`: eight output
+pixels of a row at a time wherever they read the same two pyramid levels, each
+lane with its own position, direction, sample count and level blend, and the
+corners fetched with one 32-bit gather per corner for all channels. It does the
+scalar path's `f32` operations in the same order, with no fused multiply-add,
+so its output is identical to the scalar path's bit for bit
+(`aniso_avx2_matches_scalar_bit_for_bit`, which also checks that the kernel
+rendered groups), and the scalar path, which computes a sample's corner
+geometry once for all channels, is identical to the per-channel algorithm for
+any channel count (`aniso_scalar_matches_the_per_channel_reference`). The
+kernel takes 1 to 4 channels; an image of more goes through the scalar path.
+The value+gradient anisotropic sampler the sub-pixel refiner's tile reads has
+no AVX2 kernel.
+
+**Per render.** Each `R×R` tile was rendered on one thread, one render after
+another, with a second local harness that is not in the repository either, at every view of every point of two
+local samples (the gallery sculpture, 2,631 points, 12,844 views, and the
+badlands panorama, 1,171 points, 9,951 views; `R = 24`, three renders per view
+and sampler, the warp map built outside the timed call and its SVD inside it).
+Mean µs per render:
+
+| Render | gallery sculpture, moved views | badlands, moved views | badlands, unmoved views |
+|---|---|---|---|
+| `Bilinear` | 12 | 20 | 13 |
+| `BilinearMip` | 33 | 32 | 32 |
+| `Anisotropic`, AVX2 kernel | 22 | 50 | 22 |
+| `Anisotropic`, scalar path | 54 | 129 | 65 |
+| value+gradient `BilinearMip` | 34 | 33 | 33 |
+| value+gradient `Anisotropic` (scalar) | 94 | 226 | 94 |
+
+The SVD is about 9 µs of each render that reads it. With the AVX2 kernel an
+anisotropic render costs about what a `BilinearMip` one does, and less where
+its views take few samples; the badlands sample's moved views compress the
+photograph 10 to 50 times along one axis and take up to the full 16 samples.
+On the scalar path it costs 1.6 to 4 times a `BilinearMip` render, and the
+value+gradient anisotropic render 2.8 to 7 times. Earlier timings of these
+renders taken inside the batches' parallel loops, through detail phases
+reported to a shared sink, read 41–57 µs for a `BilinearMip` render; that
+measured the contention of the loop and the sink, not the render.
+
+**Per batch.** Each batch ran on all 32 threads over the same points, five
+times under `Fixed(BilinearMip)` and five times under the rule, alternating
+which went first, after one run to warm up; the table gives the best time
+under the rule over the best under `BilinearMip`. The rule moves 57% of the
+gallery sculpture's views and 37% of the badlands panorama's over these whole
+reconstructions, more than the 51.5% and 31.2% of the 400-point subsets in the
+table above.
+
+| Batch | gallery sculpture (two runs) | badlands |
+|---|---|---|
+| view selection | 1.05, 1.05 | 1.24 |
+| normal refinement | 1.00, 1.36 | 1.06 |
+| localizer | 1.02, 1.00 | 1.12 |
+| member coherence | 0.97, 0.98 | 1.19 |
+| fuse | 1.00, 0.99 | 1.31 |
+
+The times of one batch spread by 1–24% over its five runs, and by up to 51%:
+the badlands fuse spread by 41% under both samplers, so its 1.31 is uncertain
+(an earlier run of the code before the view selection fast path, with spreads
+of 4–6%, read 1.22), and the 1.36 for normal refinement is one run whose fastest `BilinearMip` time,
+1.60 s, was 25% below every other `BilinearMip` run of it (2.16–2.55 s), and
+both samplers do the same evaluations and renders per point. Run one after
+another on one thread, view selection over the gallery sculpture takes 4.43 s
+and 4.46 s under `BilinearMip` and 4.54 s and 4.47 s under the rule (best of
+five, two runs; spread 14–42% within a run). On the badlands sample the
+moved views' renders take most of their samples, and every batch that renders
+them is 6–31% slower under the rule. The bench's evaluation, measured earlier
+with three runs on each of the eleven samples, runs within 6% of its
+`BilinearMip` time (16% on dino_dog_toy).
+
+View selection scores the views the rule moves through its affine fast path
+too ([patch-view-selection.md](../patch/patch-view-selection.md) § "Affine
+candidate scoring"). Before that path took the anisotropic sampler, the
+gallery sculpture's view selection was 18–20% slower under the rule as a batch
+and 14–15% slower on one thread.
 
 #### Storing what a render was made under
 

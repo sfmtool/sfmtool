@@ -19,24 +19,28 @@
 //!
 //! **Affine candidate scoring.** The gate score exists only to admit/reject —
 //! nothing downstream reuses the candidate render — so scoring a view does not
-//! need the full per-pixel projective warp. Under either bilinear sampler a
-//! candidate is scored through an **affine** patch→image map fit on its four
+//! need the full per-pixel projective warp. Under every sampler a candidate is
+//! scored through an **affine** patch→image map fit on its four
 //! exactly-projected patch corners (`affine_core_map`), sampling only the
-//! reference-support pixels; under [`Sampler::BilinearMip`] that map is first
+//! reference-support pixels. Under [`Sampler::BilinearMip`] that map is first
 //! composed with the pyramid level the map's own compression selects, so the
-//! samples come from the same level the per-pixel path would read. The exact
-//! warp remains the fallback whenever the 4th-corner residual shows the affine
-//! fit is poor (wide-angle / heavy distortion), a corner fails to project, or
-//! the patch comes close to the frame border (where the exact path owns the
-//! out-of-frame rejection semantics); [`Sampler::Anisotropic`] has no affine
-//! shortcut and always takes the exact warp. See
-//! `specs/core/patch/patch-view-selection.md` for the accepted admission-flip loss
-//! and the measured numbers.
+//! samples come from the same level the per-pixel path would read. Under
+//! [`Sampler::Anisotropic`] the map's Jacobian is constant, so its footprint is
+//! too: one SVD gives the level from `σ_minor` and the samples along one fixed
+//! major axis, and each support pixel takes the anisotropic sample of the
+//! per-pixel path at its affine position (`sample_support_affine_aniso`). The
+//! exact warp remains the fallback whenever the 4th-corner residual shows the
+//! affine fit is poor (wide-angle / heavy distortion), a corner fails to
+//! project, or the patch comes close to the frame border (where the exact path
+//! owns the out-of-frame rejection semantics). See
+//! `specs/core/patch/patch-view-selection.md` for the accepted admission-flip
+//! loss and the measured numbers.
 
-use crate::camera::image::ImageU8;
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 
-use crate::camera::remap::mip_level_for_sigma;
-use crate::camera::sampler::render_phase;
+use crate::camera::remap::{aniso_sample, mip_level_for_sigma, AnisoTally};
+use crate::camera::sampler::{render_phase, MAX_ANISOTROPY};
+use crate::camera::warp_map::svd_2x2;
 use crate::camera::CameraIntrinsics;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
@@ -67,7 +71,11 @@ pub struct ViewSelectParams {
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
     /// Which sampler renders each view's tile: the sampler rule by default
-    /// ([`SamplerChoice::per_view`]), applied to each view's placement.
+    /// ([`SamplerChoice::per_view`]). Under the rule each view's sampler is
+    /// chosen once, from the patch re-anchored on the view's keypoint at the
+    /// patch resolution ([`SamplerChoice::for_observation`]): a track view's
+    /// stored keypoint where one is given, and the projection for a
+    /// candidate, which has none.
     pub sampler: SamplerChoice,
     /// Per-view floor on the window-weighted valid-pixel fraction; a candidate
     /// (or track view) below it does not cover enough of the patch to be scored.
@@ -396,9 +404,12 @@ impl AffineCoreMap {
 /// curvature, and a source-px bound is the conservative one to apply when the
 /// samples are read from a coarser level.
 ///
-/// Any other sampler resolves to level 0. [`Sampler::Anisotropic`] has no
-/// affine shortcut at all (its footprint walk is not a single tap) and is
-/// gated out by the caller before reaching here.
+/// Any other sampler resolves to level 0: [`Sampler::Bilinear`] reads it, and
+/// [`Sampler::Anisotropic`] takes its levels from the map's own footprint per
+/// sample ([`sample_support_affine_aniso`]), so its map stays in level-0 px.
+/// Its walk along the major axis can read up to `σ_major / 2` source px past
+/// the quad; those taps are clamped at the frame edge exactly as the per-pixel
+/// path clamps them, so the border gate needs no wider margin for it.
 fn affine_core_map(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
@@ -552,6 +563,60 @@ fn sample_support_affine(
     crate::camera::remap::prof::add(&crate::camera::remap::prof::TAPS, (n * ch) as u64);
 }
 
+/// Sample the reference-support pixels of `pyramid` through the affine map
+/// with the anisotropic sampler, into the planar `out` (`[channel · n +
+/// support_index]`, `f32`).
+///
+/// `map` is in level-0 px ([`affine_core_map`] under
+/// [`Sampler::Anisotropic`]). Its Jacobian `[[a0, a1], [a3, a4]]` is the same
+/// at every pixel, so one SVD ([`svd_2x2`], the arithmetic
+/// [`WarpMap::compute_svd`](crate::camera::WarpMap::compute_svd) applies per
+/// pixel) gives the footprint of every sample: the level from `σ_minor` and
+/// the samples along one major axis. Each support pixel then takes
+/// [`aniso_sample`] at its affine position, rounded to `f32` as a warp map
+/// stores it, which is the per-pixel path's sample for that position and
+/// SVD. On a map that is exactly affine the two paths differ only where the
+/// per-pixel SVD, read from finite differences of the stored `f32`
+/// positions, lands on the other side of a level or sample-count boundary
+/// from the constant one, or where the Jacobian's columns are perpendicular,
+/// which leaves `svd_2x2` reading the major direction from rounding on both
+/// paths (`affine_aniso_sampling_matches_the_per_pixel_path`). On a real
+/// view the affine position error adds to that, as it does for the bilinear
+/// samplers (`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`).
+fn sample_support_affine_aniso(
+    pyramid: &ImageU8Pyramid,
+    map: &AffineCoreMap,
+    pixels: &[usize],
+    resolution: usize,
+    out: &mut [f32],
+) {
+    let n = pixels.len();
+    let ch = pyramid.level(0).channels() as usize;
+    let a = &map.a;
+    let svd = svd_2x2(a[0] as f32, a[1] as f32, a[3] as f32, a[4] as f32);
+    let mut tally = AnisoTally::default();
+    let mut sample = vec![0u8; ch];
+    for (k, &p) in pixels.iter().enumerate() {
+        let col = (p % resolution) as f64;
+        let row = (p / resolution) as f64;
+        let x = (a[0] * col + a[1] * row + a[2]) as f32;
+        let y = (a[3] * col + a[4] * row + a[5]) as f32;
+        aniso_sample(pyramid, x, y, svd, MAX_ANISOTROPY, &mut sample, &mut tally);
+        for (c, &v) in sample.iter().enumerate() {
+            out[c * n + k] = v as f32;
+        }
+    }
+    // The shared resample counters, as `remap_aniso_with_pyramid` keeps them.
+    use crate::camera::remap::prof;
+    prof::add(&prof::CALLS, 1);
+    prof::add(&prof::PX_TOTAL, n as u64);
+    prof::add(&prof::PX_SAMPLED, n as u64);
+    prof::add(&prof::TAPS, tally.taps);
+    prof::add(&prof::ANISO_FAST, tally.fast);
+    prof::add(&prof::ANISO_MULTI, tally.multi);
+    prof::add(&prof::ANISO_SUM_N, tally.sum_n);
+}
+
 /// Whether `camera` can see `patch`'s centre from `cam_from_world`.
 ///
 /// **Perspective family** — camera-frame depth `−z > 0` (the canonical camera
@@ -692,48 +757,52 @@ fn candidate_zncc(
     sampler: Sampler,
     renders: &Progress<'_>,
 ) -> Option<f64> {
-    // Affine fast path (both bilinear samplers — the anisotropic footprint has
-    // no affine shortcut): project the four patch corners exactly, fit the
-    // affine patch→image map, compose it with the pyramid level that map's own
-    // compression selects (level 0 for `Bilinear`), and sample the reference
-    // support through it — skipping the per-pixel camera projection +
-    // distortion of the full warp. A view the fit declines (corner fails to
-    // project, residual over the curvature bound, or too close to the sampled
-    // level's frame border) is scored by the exact warp below, so the fast
-    // path never decides rejection on its own.
-    if matches!(sampler, Sampler::Bilinear | Sampler::BilinearMip) {
-        let fit =
-            prof::AFFINE_MAP.time(|| affine_core_map(patch, view, params.resolution, sampler));
-        if let Some((map, level)) = fit {
-            let _phase = render_phase(renders, sampler, 1);
-            prof::count(&prof::N_AFFINE, 1);
-            if level > 0 {
-                prof::count(&prof::N_AFFINE_MIP, 1);
-            }
-            let img = view.pyramid.level(level);
-            let channels = img.channels() as usize;
-            let n = reference.n;
-            raw_scratch.clear();
-            raw_scratch.resize(channels * n, 0.0);
-            prof::AFFINE_SAMPLE.time(|| {
-                sample_support_affine(
-                    img,
+    // Affine fast path: project the four patch corners exactly, fit the
+    // affine patch→image map, and sample the reference support through it —
+    // skipping the per-pixel camera projection + distortion of the full warp
+    // and, for the samplers that read the Jacobian, its per-pixel SVD. The
+    // bilinear samplers compose the map with the pyramid level its own
+    // compression selects (level 0 for `Bilinear`); the anisotropic sampler
+    // walks the map's constant footprint. A view the fit declines (corner
+    // fails to project, residual over the curvature bound, or too close to the
+    // sampled level's frame border) is scored by the exact warp below, so the
+    // fast path never decides rejection on its own.
+    let fit = prof::AFFINE_MAP.time(|| affine_core_map(patch, view, params.resolution, sampler));
+    if let Some((map, level)) = fit {
+        let _phase = render_phase(renders, sampler, 1);
+        prof::count(&prof::N_AFFINE, 1);
+        if level > 0 {
+            prof::count(&prof::N_AFFINE_MIP, 1);
+        }
+        let img = view.pyramid.level(level);
+        let channels = img.channels() as usize;
+        let n = reference.n;
+        raw_scratch.clear();
+        raw_scratch.resize(channels * n, 0.0);
+        let resolution = params.resolution as usize;
+        prof::AFFINE_SAMPLE.time(|| {
+            if sampler == Sampler::Anisotropic {
+                prof::count(&prof::N_AFFINE_ANISO, 1);
+                sample_support_affine_aniso(
+                    view.pyramid,
                     &map,
                     &single_ctx.pixels,
-                    params.resolution as usize,
+                    resolution,
                     raw_scratch,
                 )
-            });
-            return score_raw_against_reference(
-                raw_scratch,
-                channels,
-                reference,
-                single_ctx,
-                sqrt_weights,
-            );
-        }
-        prof::count(&prof::N_AFFINE_FALLBACK, 1);
+            } else {
+                sample_support_affine(img, &map, &single_ctx.pixels, resolution, raw_scratch)
+            }
+        });
+        return score_raw_against_reference(
+            raw_scratch,
+            channels,
+            reference,
+            single_ctx,
+            sqrt_weights,
+        );
     }
+    prof::count(&prof::N_AFFINE_FALLBACK, 1);
 
     let single = [*view];
     // Render over the reference's frozen support. `normalized_stack` returns the

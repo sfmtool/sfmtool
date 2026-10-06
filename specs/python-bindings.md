@@ -104,7 +104,7 @@ Paths in the *Source* column are relative to
 | [patches/refine_keypoints.rs](../crates/sfmtool-py/src/patches/refine_keypoints.rs) | `PatchCloud.refine_keypoints` | [keypoint-subpixel-refinement.md](core/patch/keypoint-subpixel-refinement.md) |
 | [patches/member_coherence.rs](../crates/sfmtool-py/src/patches/member_coherence.rs) | `PatchCloud.validate_member_coherence` | [member-coherence-validation.md](core/patch/member-coherence-validation.md) |
 | [patches/spawn.rs](../crates/sfmtool-py/src/patches/spawn.rs) | `spawn_candidate_tracks` | [candidate-track-spawning.md](core/patch/candidate-track-spawning.md) |
-| [patches/self_similarity.rs](../crates/sfmtool-py/src/patches/self_similarity.rs), [mod.rs](../crates/sfmtool-py/src/patches/mod.rs) | `zncc_self_similarity_parts`, `zncc_self_similarity_parts_stack`, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS` | [zncc-self-similarity-radius.md](core/patch/zncc-self-similarity-radius.md) |
+| [patches/self_similarity.rs](../crates/sfmtool-py/src/patches/self_similarity.rs), [mod.rs](../crates/sfmtool-py/src/patches/mod.rs) | `zncc_self_similarity_parts`, `zncc_self_similarity_parts_stack`, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, `DEFAULT_ANISOTROPIC_THRESHOLD` | [zncc-self-similarity-radius.md](core/patch/zncc-self-similarity-radius.md) |
 | [patches/photometric_ransac.rs](../crates/sfmtool-py/src/patches/photometric_ransac.rs) | `refine_photometric_ransac`, `RansacPhotometricOutput` | [photometric-subsets-ransac.md](core/spherical/photometric-subsets-ransac.md) |
 | [patches/consensus_atlas.rs](../crates/sfmtool-py/src/patches/consensus_atlas.rs) | `render_consensus_atlas` | [tile-batched-consensus-atlas.md](core/spherical/tile-batched-consensus-atlas.md) |
 

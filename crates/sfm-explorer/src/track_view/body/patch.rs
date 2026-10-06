@@ -8,8 +8,9 @@
 //! re-anchored on the observation's keypoint first ([`render_frame`]), and
 //! [`frame_color_image`] is its body for a frame already where it should be,
 //! which the tile's hover view renders a wider frame through. The tile and its
-//! hover view are rendered with the sampler the bench's kernels render the
-//! same view with: the sampler rule applied to the view's Jacobian at `R`
+//! hover view are rendered with the sampler the bench's evaluation renders the
+//! same view with: its sampler choice (`crate::bench::sampler_choice`, the
+//! sampler rule by default) applied to the view's Jacobian at `R`
 //! ([`PatchJacobian::sampler`]), so a view the rule moves is drawn with the
 //! anisotropic sampler and every other view with one bilinear sample per texel
 //! from the mip level the warp's compression picks at that texel.
@@ -24,7 +25,7 @@
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::sampler::{minor_axis_loss, render_tile, Sampler, SamplerChoice};
+use sfmtool_core::camera::sampler::{minor_axis_loss, render_tile, Sampler};
 use sfmtool_core::camera::warp_map::singular_values_2x2;
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
@@ -136,11 +137,11 @@ impl PatchJacobian {
         self.zoom_range().map(|[low, high]| (low * high).sqrt())
     }
 
-    /// The sampler the view's tile is rendered with: the sampler rule at its
-    /// default threshold applied to this Jacobian, the choice every kernel of
-    /// the bench makes for the same view ([`SamplerChoice::per_view`]).
+    /// The sampler the view's tile is rendered with: the bench evaluation's
+    /// sampler choice (`crate::bench::sampler_choice`) applied to this
+    /// Jacobian, the choice the bench makes for the same view.
     pub(crate) fn sampler(&self) -> Sampler {
-        SamplerChoice::per_view().for_jacobian(Some(self.0))
+        crate::bench::sampler_choice().for_jacobian(Some(self.0))
     }
 
     /// How many times coarser `bilinear_mip` would read the view's less

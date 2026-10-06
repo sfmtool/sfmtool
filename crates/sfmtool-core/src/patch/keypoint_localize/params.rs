@@ -124,7 +124,10 @@ pub struct KeypointLocalizeParams {
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
     /// Which sampler renders each view's tiles: the sampler rule by default
-    /// ([`SamplerChoice::per_view`]), applied to each context tile's placement.
+    /// ([`SamplerChoice::per_view`]). Under the rule each view's sampler is
+    /// chosen once, at its seed keypoint, from the patch re-anchored there at
+    /// the patch resolution ([`SamplerChoice::for_observation`]), and every
+    /// tile of the view, the wider context tile included, is rendered with it.
     pub sampler: SamplerChoice,
     /// IRLS reweighting passes for the robust consensus.
     pub robust_iters: u32,

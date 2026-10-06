@@ -1294,9 +1294,10 @@ row as `patch_zoom`, and the Jacobian it is read from as `patch_jacobian`, a
 diagnostic the table does not print; `get_bench_track`'s `stage_data` reports
 `R` as `patch_resolution`.
 
-**The zoom also decides which sampler draws the tile.** The sampler rule
+**The zoom also decides which sampler draws the tile.** The bench evaluation's
+sampler choice (`crate::bench::sampler_choice`), the sampler rule by default
 ([image-warping.md](../core/camera/image-warping.md) § "Choosing the sampler
-per view") reads the same Jacobian at `R` and renders the row's tile and its
+per view"), reads the same Jacobian at `R` and renders the row's tile and its
 hover view with the anisotropic sampler where one mip level for both axes would
 read the less compressed axis at least 1.5 times too coarsely
 (`PatchJacobian::sampler`, `tile::tile_sampler`), and with `bilinear_mip`
@@ -1304,7 +1305,8 @@ otherwise, so a view is drawn with the sampler the bench's evaluation and the
 fuse render it with. Hovering a *Zoom* cell names the sampler and that loss
 (`table::zoom_sampler_text`). `get_bench_track` and `get_point`'s evaluation
 block report each row's `sampler` (`anisotropic` or `bilinear_mip`) and
-`sampler_minor_axis_loss`, both null where `patch_jacobian` is.
+`sampler_minor_axis_loss`, both null where `patch_jacobian` is, and the loss
+null as well where it is not finite.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its

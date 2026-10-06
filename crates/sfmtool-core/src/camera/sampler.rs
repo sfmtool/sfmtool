@@ -77,8 +77,11 @@ pub enum Sampler {
     /// Anisotropic sampling over the pyramid — the patch warp's Jacobian SVD picks
     /// the level from the minor axis and walks up to [`MAX_ANISOTROPY`] samples
     /// along the major axis, de-aliasing oblique / grazing views and keeping
-    /// the detail along their less compressed axis. Costs ~1.6–3× more. What
-    /// the sampler rule picks for a view it moves.
+    /// the detail along their less compressed axis. With the AVX2 kernel a
+    /// patch tile costs about what a `BilinearMip` one does; the scalar path,
+    /// on a CPU without AVX2, 1.6 to 4 times as much, and the value+gradient
+    /// render the sub-pixel refiner reads, which is scalar everywhere, 2.8 to
+    /// 7 times. What the sampler rule picks for a view it moves.
     Anisotropic,
 }
 
@@ -113,7 +116,7 @@ impl Sampler {
 /// every patch kernel renders with.
 pub const MAX_ANISOTROPY: u32 = 16;
 
-/// The starting value of the sampler rule's threshold `a`: a view moves to
+/// The default threshold `a` of the sampler rule: a view moves to
 /// [`Sampler::Anisotropic`] when its minor axis would be read at least this
 /// many times coarser than its own compression needs.
 ///
@@ -126,7 +129,7 @@ pub const DEFAULT_ANISOTROPIC_THRESHOLD: f64 = 1.5;
 /// The mip level `l = round(log2 max(σ_major, 1))` that
 /// [`Sampler::BilinearMip`] reads for a pixel whose Jacobian's larger singular
 /// value is `sigma_major`, before any clamp to the pyramid's depth. `0` for a
-/// `sigma_major` that is not a number.
+/// `sigma_major` that is not a number, and `u32::MAX` for an infinite one.
 pub fn bilinear_mip_level(sigma_major: f64) -> u32 {
     if sigma_major.is_nan() {
         return 0;
@@ -141,14 +144,27 @@ pub fn bilinear_mip_level(sigma_major: f64) -> u32 {
 /// `singular_values` is `[σ_major, σ_minor]` of the patch grid's Jacobian, in
 /// photograph px per grid px. A minor axis that magnifies the photograph
 /// (`σ_minor < 1`) can only lose detail down to one photograph pixel, hence the
-/// floor at 1. `NaN` where either value is not a number.
+/// floor at 1. `NaN` where either value is not a number, and infinite where
+/// `σ_major` is infinite and `σ_minor` is not.
+///
+/// `l` is not clamped to a pyramid's depth. Past `σ_major = 2^(K − 0.5)`, with
+/// `K` the top level of the pyramid a kernel reads, `BilinearMip` reads level
+/// `K`, so its loss along the minor axis is `2^K / max(σ_minor, 1)`, less than
+/// `L`, and it aliases along the major axis instead, by `σ_major / 2^K`. The
+/// rule reads `L` unclamped for two reasons. The anisotropic sampler is the
+/// better of the two there as well, since its samples along the major axis
+/// reduce that aliasing. And the depth differs between callers (the command
+/// line builds every level, SfM Explorer six), while the rule must choose the
+/// same sampler for the same observation in every kernel and caller.
 pub fn minor_axis_loss(singular_values: [f64; 2]) -> f64 {
     let [major, minor] = singular_values;
     if major.is_nan() || minor.is_nan() {
         return f64::NAN;
     }
+    // `exp2` of the level rather than `powi`: an infinite `σ_major` gives the
+    // level `u32::MAX`, which `powi` would read as `-1` through its `i32`.
     let level = bilinear_mip_level(major);
-    2f64.powi(level as i32) / minor.max(1.0)
+    f64::from(level).exp2() / minor.max(1.0)
 }
 
 /// The sampler rule: [`Sampler::Anisotropic`] when `σ_major ≥ √2` and
@@ -236,8 +252,10 @@ impl SamplerChoice {
         }
     }
 
-    /// The sampler for a view whose Jacobian has `singular_values`
-    /// (`[σ_major, σ_minor]`), or `None` where it has no Jacobian.
+    /// The sampler for a view whose Jacobian has the singular values
+    /// `singular_values` (`[σ_major, σ_minor]`). Pass `None` for a view with
+    /// no Jacobian (its tile's centre does not project); the rule then keeps
+    /// [`Sampler::BilinearMip`].
     pub fn for_singular_values(self, singular_values: Option<[f64; 2]>) -> Sampler {
         match self {
             Self::Fixed(sampler) => sampler,
@@ -293,10 +311,19 @@ impl SamplerChoice {
     /// The one placement every kernel reads the rule from, whatever frame it
     /// then renders through: the bench's tiles, the fuse, the localizer's and
     /// the refiner's search tiles, the gates and Track View all choose a
-    /// view's sampler here, so they choose the same one for the same
-    /// observation. A kernel that rebuilds the frame it renders (an
-    /// orthonormal one, a wider one, one shifted by a search) does not change
-    /// that choice.
+    /// view's sampler here, once per view, so they choose the same one for
+    /// the same observation at the same keypoint. A kernel that rebuilds the
+    /// frame it renders (an orthonormal one, a wider one, one shifted by a
+    /// search) does not change that choice.
+    ///
+    /// Each kernel passes the keypoint it starts from: the fuse, the gates and
+    /// view selection's track views the stored keypoint, the bench and the
+    /// localizer the seed of the round, the sub-pixel refiner the seed the
+    /// localizer handed it, and view selection's candidates, which have no
+    /// keypoint, `None`. Moving the keypoint by a few pixels changes the
+    /// Jacobian by a small fraction, so two of these can choose differently
+    /// only for a view whose `L` lies that close to `a`, or whose `σ_major`
+    /// lies that close to a level boundary `2^(l + 0.5)`, where `L` doubles.
     pub fn for_observation(
         self,
         patch: &OrientedPatch,

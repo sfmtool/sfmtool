@@ -323,7 +323,8 @@ pub(crate) fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize 
 /// full-resolution image — aliases when the warp compresses the source, e.g.
 /// cross-scale views where one camera is much closer) and
 /// [`remap_aniso_with_pyramid`] (Jacobian-SVD mip selection + multi-tap along
-/// the major axis — de-aliases but costs 1.6–3×): pick the closest pyramid
+/// the major axis — de-aliases; about the same cost with its AVX2 kernel,
+/// 1.6–4× on the scalar path): pick the closest pyramid
 /// level from the warp's local compression and take a single bilinear sample
 /// there — aliasing bounded, cost ≈ bilinear.
 ///
@@ -418,17 +419,19 @@ pub fn remap_aniso_with_pyramid(
     map: &WarpMap,
     max_anisotropy: u32,
 ) -> ImageU8 {
-    remap_aniso_dispatch(pyramid, map, max_anisotropy, true)
+    remap_aniso_dispatch(pyramid, map, max_anisotropy, true).0
 }
 
 /// [`remap_aniso_with_pyramid`], using the AVX2 kernel only where `simd` is
 /// true and the CPU has it, so a test can run the scalar path on any CPU.
+/// Returns the image and the number of eight-pixel groups the AVX2 kernel
+/// rendered, so a test can tell that the kernel ran.
 pub(crate) fn remap_aniso_dispatch(
     pyramid: &ImageU8Pyramid,
     map: &WarpMap,
     max_anisotropy: u32,
     simd: bool,
-) -> ImageU8 {
+) -> (ImageU8, u64) {
     assert!(
         map.has_svd(),
         "remap_aniso requires WarpMap SVD data; call compute_svd() first"
@@ -438,6 +441,7 @@ pub(crate) fn remap_aniso_dispatch(
     let out_h = map.height();
     let c = pyramid.level(0).channels();
     let simd = simd && aniso_avx2::available() && (1..=4).contains(&c);
+    let simd_groups = std::sync::atomic::AtomicU64::new(0);
 
     let data = remap_rows(out_w, out_h, c, |row, row_data| {
         let mut tally = AnisoTally::default();
@@ -458,17 +462,19 @@ pub(crate) fn remap_aniso_dispatch(
         prof::add(&prof::ANISO_FAST, tally.fast);
         prof::add(&prof::ANISO_MULTI, tally.multi);
         prof::add(&prof::ANISO_SUM_N, tally.sum_n);
+        simd_groups.fetch_add(tally.simd_groups, std::sync::atomic::Ordering::Relaxed);
     });
 
     prof::add(&prof::CALLS, 1);
     prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
 
-    ImageU8 {
+    let image = ImageU8 {
         width: out_w,
         height: out_h,
         channels: c,
         data,
-    }
+    };
+    (image, simd_groups.into_inner())
 }
 
 /// What one row of an anisotropic remap did, for the `SFMTOOL_PROFILE`
@@ -480,6 +486,8 @@ pub(crate) struct AnisoTally {
     pub(crate) multi: u64,
     pub(crate) sum_n: u64,
     pub(crate) taps: u64,
+    /// Eight-pixel groups the AVX2 kernel rendered.
+    pub(crate) simd_groups: u64,
 }
 
 /// The footprint walk of one output pixel: which pyramid levels it reads,
@@ -546,9 +554,38 @@ pub(crate) fn aniso_pixel(
     tally.sampled += 1;
     let c = pyramid.level(0).channels() as usize;
     let base = col as usize * c;
-    let out = &mut row_data[base..base + c];
+    aniso_sample(
+        pyramid,
+        sx,
+        sy,
+        map.get_svd(col, row),
+        max_anisotropy,
+        &mut row_data[base..base + c],
+        tally,
+    );
+}
 
-    let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
+/// The anisotropic sample at the level-0 source position `(sx, sy)` of a
+/// pixel whose Jacobian has the SVD `svd` (`(σ_major, σ_minor, major_dx,
+/// major_dy)`, as [`WarpMap::get_svd`] returns it), written to `out`, one
+/// byte per channel.
+///
+/// The body of [`aniso_pixel`], shared with view selection's affine fast
+/// path, which has no warp map and passes the SVD of its constant Jacobian:
+/// given the same position and SVD the two write the same bytes. Takes any
+/// channel count; the channels are summed four at a time.
+#[inline]
+pub(crate) fn aniso_sample(
+    pyramid: &ImageU8Pyramid,
+    sx: f32,
+    sy: f32,
+    svd: (f32, f32, f32, f32),
+    max_anisotropy: u32,
+    out: &mut [u8],
+    tally: &mut AnisoTally,
+) {
+    let c = pyramid.level(0).channels() as usize;
+    let (sigma_major, sigma_minor, major_dx, major_dy) = svd;
 
     // Non-compressive case: single bilinear sample from level 0.
     if sigma_major <= 1.0 {
@@ -578,34 +615,54 @@ pub(crate) fn aniso_pixel(
 
     let lo = pyramid.level(fp.level_lo);
     let hi = pyramid.level(fp.level_hi);
-    let mut sum_lo = [0.0f32; 4];
-    let mut sum_hi = [0.0f32; 4];
-    for i in 0..n {
-        let t = (i as f32 + 0.5) / n as f32 - 0.5;
-        let sample_x = sx + t * sigma_major * major_dx;
-        let sample_y = sy + t * sigma_major * major_dy;
-        accumulate_bilinear(lo, sample_x / scale_lo, sample_y / scale_lo, &mut sum_lo);
-        if need_hi {
-            accumulate_bilinear(hi, sample_x / scale_hi, sample_y / scale_hi, &mut sum_hi);
+    // Four channels per walk along the major axis: one walk for the 1 to 4
+    // channels of a photograph, and as many as it takes for more. Each
+    // channel's sum is the same whichever walk carries it.
+    for first in (0..c).step_by(4) {
+        let mut sum_lo = [0.0f32; 4];
+        let mut sum_hi = [0.0f32; 4];
+        for i in 0..n {
+            let t = (i as f32 + 0.5) / n as f32 - 0.5;
+            let sample_x = sx + t * sigma_major * major_dx;
+            let sample_y = sy + t * sigma_major * major_dy;
+            accumulate_bilinear(
+                lo,
+                sample_x / scale_lo,
+                sample_y / scale_lo,
+                first,
+                &mut sum_lo,
+            );
+            if need_hi {
+                accumulate_bilinear(
+                    hi,
+                    sample_x / scale_hi,
+                    sample_y / scale_hi,
+                    first,
+                    &mut sum_hi,
+                );
+            }
         }
-    }
-    for (ch, slot) in out.iter_mut().enumerate() {
-        let avg_lo = sum_lo[ch] / n as f32;
-        let avg_hi = sum_hi[ch] / n as f32;
-        let val = avg_lo * (1.0 - fp.frac) + avg_hi * fp.frac;
-        *slot = (val + 0.5).clamp(0.0, 255.0) as u8;
+        let slots = &mut out[first..c.min(first + 4)];
+        for (ch, slot) in slots.iter_mut().enumerate() {
+            let avg_lo = sum_lo[ch] / n as f32;
+            let avg_hi = sum_hi[ch] / n as f32;
+            let val = avg_lo * (1.0 - fp.frac) + avg_hi * fp.frac;
+            *slot = (val + 0.5).clamp(0.0, 255.0) as u8;
+        }
     }
 }
 
-/// Add the bilinear sample of every channel of `img` at `(x, y)` to `sums`:
-/// [`sample_bilinear_u8`]'s value per channel, its corner geometry computed
-/// once.
+/// Add the bilinear sample of channels `first..first + 4` of `img` (those it
+/// has) at `(x, y)` to `sums`: [`sample_bilinear_u8`]'s value per channel, its
+/// corner geometry computed once.
 #[inline]
-fn accumulate_bilinear(img: &ImageU8, x: f32, y: f32, sums: &mut [f32; 4]) {
+fn accumulate_bilinear(img: &ImageU8, x: f32, y: f32, first: usize, sums: &mut [f32; 4]) {
     let (idx, fx, fy) = bilinear_geometry(img, x, y);
     let data = &img.data;
     let c = img.channels as usize;
-    for (ch, sum) in sums.iter_mut().take(c).enumerate() {
+    let count = c.saturating_sub(first).min(4);
+    for (k, sum) in sums.iter_mut().take(count).enumerate() {
+        let ch = first + k;
         let v00 = data[idx[0] + ch] as f32;
         let v10 = data[idx[1] + ch] as f32;
         let v01 = data[idx[2] + ch] as f32;

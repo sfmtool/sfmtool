@@ -67,7 +67,10 @@ pub struct MemberCoherenceParams {
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
     /// Which sampler renders each member's tile: the sampler rule by default
-    /// ([`SamplerChoice::per_view`]), applied to each member's placement.
+    /// ([`SamplerChoice::per_view`]). Under the rule each member's sampler is
+    /// chosen once, from the patch re-anchored on its keypoint at the patch
+    /// resolution ([`SamplerChoice::for_observation`]), or at the projection
+    /// for a member with no keypoint.
     pub sampler: SamplerChoice,
     /// Per-member floor on the window-weighted valid-pixel fraction; a member
     /// below it does not cover enough of the patch to be correlated and is left

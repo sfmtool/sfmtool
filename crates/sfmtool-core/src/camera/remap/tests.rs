@@ -1101,22 +1101,41 @@ fn aniso_test_maps() -> Vec<WarpMap> {
 }
 
 /// The scalar anisotropic path computes each sample's corner geometry once
-/// for all channels, and gives the per-channel algorithm's output bit for bit.
+/// for all channels, and gives the per-channel algorithm's output bit for bit,
+/// for any channel count, including more than the four it sums at once.
 #[test]
 fn aniso_scalar_matches_the_per_channel_reference() {
-    for channels in [1u32, 3, 4] {
+    for channels in [1u32, 2, 3, 4, 5, 6, 9] {
         let pyramid = ImageU8Pyramid::build(&textured_image(160, 120, channels), 8);
         for (m, map) in aniso_test_maps().iter().enumerate() {
             let want = aniso_per_channel_reference(&pyramid, map, 16);
-            let got = remap_aniso_dispatch(&pyramid, map, 16, false);
+            let (got, _) = remap_aniso_dispatch(&pyramid, map, 16, false);
             assert_eq!(got.data(), want.data(), "map {m}, {channels} channels");
         }
+    }
+}
+
+/// The public entry takes an image of more than four channels, which the AVX2
+/// kernel does not, through the scalar path.
+#[test]
+fn aniso_renders_more_than_four_channels() {
+    let pyramid = ImageU8Pyramid::build(&textured_image(160, 120, 6), 8);
+    for (m, map) in aniso_test_maps().iter().enumerate() {
+        let want = aniso_per_channel_reference(&pyramid, map, 16);
+        let got = remap_aniso_with_pyramid(&pyramid, map, 16);
+        assert_eq!(got.data(), want.data(), "map {m}");
     }
 }
 
 /// The AVX2 kernel gives the scalar path's output bit for bit, on every map,
 /// for every channel count it takes, including a pyramid whose last levels
 /// hold fewer than four bytes. Skipped on a CPU without AVX2.
+///
+/// The kernel takes a group of eight pixels only where all of them qualify,
+/// so the test also counts the groups it rendered: on the large image every
+/// compressed map (maps 1 to 6) sends groups through it, and the scalar
+/// dispatch sends none, so the comparison is between the two paths and not
+/// the scalar path against itself.
 #[test]
 fn aniso_avx2_matches_scalar_bit_for_bit() {
     if !aniso_avx2::available() {
@@ -1125,17 +1144,31 @@ fn aniso_avx2_matches_scalar_bit_for_bit() {
     for channels in [1u32, 2, 3, 4] {
         for (w, h) in [(160u32, 120u32), (9, 7)] {
             let pyramid = ImageU8Pyramid::build(&textured_image(w, h, channels), 8);
+            let mut groups_on_image = 0;
             for (m, map) in aniso_test_maps().iter().enumerate() {
                 for max_aniso in [4u32, 16] {
-                    let scalar = remap_aniso_dispatch(&pyramid, map, max_aniso, false);
-                    let simd = remap_aniso_dispatch(&pyramid, map, max_aniso, true);
+                    let (scalar, scalar_groups) =
+                        remap_aniso_dispatch(&pyramid, map, max_aniso, false);
+                    let (simd, groups) = remap_aniso_dispatch(&pyramid, map, max_aniso, true);
+                    assert_eq!(scalar_groups, 0, "the scalar dispatch ran the kernel");
                     assert_eq!(
                         simd.data(),
                         scalar.data(),
                         "map {m}, {w}x{h}, {channels} channels, max {max_aniso}"
                     );
+                    if w == 160 && (1..=6).contains(&m) {
+                        assert!(
+                            groups > 0,
+                            "map {m}, {channels} channels, max {max_aniso}:                              the AVX2 kernel rendered no group"
+                        );
+                    }
+                    groups_on_image += groups;
                 }
             }
+            assert!(
+                groups_on_image > 0,
+                "{w}x{h}, {channels} channels: the AVX2 kernel rendered no group"
+            );
         }
     }
 }

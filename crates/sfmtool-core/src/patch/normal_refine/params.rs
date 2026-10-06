@@ -96,10 +96,16 @@ pub struct NormalRefineParams {
     /// Minimum number of (effective) views; below it the candidate / patch is
     /// not refined.
     pub min_views: u32,
-    /// Which sampler renders each view: the sampler rule by default
-    /// ([`SamplerChoice::per_view`]). Under the rule each view's sampler is
-    /// chosen once, from the patch the refinement starts from, and every
-    /// candidate normal renders the view with it.
+    /// Which sampler renders each view from its photograph: the sampler rule by
+    /// default ([`SamplerChoice::per_view`]). Under the rule each view's sampler
+    /// is chosen once, from the patch the refinement starts from, and every
+    /// render of the view from its photograph uses it. Under the default
+    /// [`CacheMode::FrontoParallel`] the search scores its candidate normals
+    /// from the fronto-parallel cache, whose base tiles are rendered with plain
+    /// bilinear, so this sampler reaches only the final scoring of the
+    /// starting normal and the search's survivors, the confidence stencil and
+    /// the representative bitmap. With [`CacheMode::Off`] every candidate is
+    /// rendered from the photographs with it.
     pub sampler: SamplerChoice,
     /// Candidate-scoring strategy (source re-render vs. fronto-parallel cache).
     pub cache: CacheMode,

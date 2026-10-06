@@ -352,12 +352,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           a patch seen edge on, whose smaller singular value is at most 1e-9 of \
                           the larger. Each observation also carries sampler, the sampler its \
                           tile is rendered with by the evaluation, the fuse and Track View: \
-                          anisotropic where the sampler rule moves the view, because \
-                          bilinear_mip would read its less compressed axis \
+                          under the default sampler rule, anisotropic where the rule moves the \
+                          view, because bilinear_mip would read its less compressed axis \
                           sampler_minor_axis_loss times too coarsely and that is at least the \
                           threshold 1.5 with the larger singular value at least sqrt 2, and \
                           bilinear_mip otherwise; both are read from patch_jacobian and are null \
-                          where it is. A track-stage \
+                          where it is, and sampler_minor_axis_loss is null as well where it is \
+                          not finite. A track-stage \
                           observation the last \
                           fit kept at its seed carries walked_px (how far the fit wanted to move \
                           it), walked_to (the pixel it would have reached), walked_zncc (the \

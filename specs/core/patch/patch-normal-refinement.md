@@ -388,9 +388,10 @@ pub enum Sampler {
     /// sample grid. What the sampler rule keeps for a view it does not move.
     BilinearMip,
     /// Anisotropic over the pyramid (the warp's Jacobian SVD picks the level),
-    /// de-aliasing oblique / grazing views. Costs ~1.6–3× more; keeps the reported
-    /// `Φ`/confidence unbiased and helps slightly on distorted/fisheye rigs. What
-    /// the sampler rule picks for a view it moves.
+    /// de-aliasing oblique / grazing views. With the AVX2 kernel a tile costs
+    /// about what a `BilinearMip` one does (1.6–4× on the scalar path);
+    /// keeps the reported `Φ`/confidence unbiased and helps slightly on
+    /// distorted/fisheye rigs. What the sampler rule picks for a view it moves.
     Anisotropic,
 }
 
@@ -510,10 +511,11 @@ unnecessary. What remains open:
    its Jacobian makes the single mip tap read the less compressed axis at least
    `a` times too coarsely, so a view facing the patch keeps `BilinearMip`.
    Rendering every view with it (`SamplerChoice::Fixed(Sampler::Anisotropic)`)
-   costs 1.6–3× for a normal that differs by ≲ 1° on pinhole views; what stays
-   open is whether the unbiased `Φ` it reports on the views the rule leaves on
-   `BilinearMip` is worth that on distorted / fisheye rigs, where the measured
-   benefit is small but real.
+   gives a normal that differs by ≲ 1° on pinhole views. With the AVX2 kernel
+   it costs about what `BilinearMip` does (1.6–4× on a CPU without
+   AVX2); what stays open is whether the unbiased `Φ` it reports on the views
+   the rule leaves on `BilinearMip` is worth changing those views' renders on
+   distorted / fisheye rigs, where the measured benefit is small but real.
 
 2. **Back-face / grazing culling + good-view iteration.** Cull **back-facing**
    views (`is_front_facing`), past-grazing views, and views where the patch
@@ -653,18 +655,22 @@ cannot drift:
 | `render_bitmap` | `false` | no `representative` texture |
 | `max_refine_views` | `0` | refinement basis uncapped |
 
-The sampler default is the sampler rule rather than `Anisotropic` for every
-view because the found normal barely moves (≲ 1° on pinhole views) at 1.6–3×
-the cost; the rule spends that cost only on the views whose less compressed
-axis the single mip tap would blur, and `Fixed(Sampler::Anisotropic)` stays an
+The sampler default is the sampler rule for the detail it keeps, not for
+cost: it renders with `Anisotropic` the views whose less compressed axis the
+single mip tap would blur, and leaves every other view's render bit for bit as
+`BilinearMip` makes it, since rendering those with `Anisotropic` moves the
+found normal by ≲ 1° on pinhole views. `Fixed(Sampler::Anisotropic)` stays an
 opt-in for an unbiased `Φ` and confidence. **Each view's sampler is chosen once
 per patch**, from the patch the refinement starts from and the view's keypoint
-(`view_samplers`), and every candidate normal renders the view with it: the
-rule reads the view's Jacobian, which changes with the candidate, and a choice
-made per candidate would let `Φ` jump where a candidate carries a view across
-the threshold. The fronto-parallel cache renders its base with plain bilinear
-at its own supersampled density, so under the default `CacheMode` the sampler
-shapes the final scoring pass and the representative, not the search. The measurements behind
+(`view_samplers`), and every render of the view from its photograph uses it:
+the rule reads the view's Jacobian, which changes with the candidate normal,
+and a choice made per candidate would let `Φ` jump where a candidate carries a
+view across the threshold. The fronto-parallel cache renders its base with
+plain bilinear at its own supersampled density, so under the default
+`CacheMode` the search ranks its candidates without the sampler, which reaches
+only the final scoring of the starting normal and the survivors, the
+confidence stencil and the representative; with `CacheMode::Off` every
+candidate is rendered from the photographs with it. The measurements behind
 that (a 2026-06-13 performance report, retired and kept in git history) — phase
 breakdown and per-knob perf-vs-benefit — are reproducible with
 `scripts/bench_normal_refine.py` and the `patch_render` criterion bench;

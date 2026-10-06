@@ -15,6 +15,8 @@ pub mod spawn;
 pub mod view_selection;
 
 #[cfg(test)]
+mod batch_cancel_tests;
+#[cfg(test)]
 mod sampler_rule_tests;
 
 pub use cloud::{PatchCloud, PatchCloudError};

@@ -178,15 +178,16 @@ hold it to that.
 The candidate gate score exists only to admit/reject — nothing downstream
 reuses the candidate render — so scoring does not need the full per-pixel
 projective warp (previously ~86% of selection CPU, one `WarpMap::from_patch` +
-`remap_bilinear` per candidate). Under either bilinear sampler a candidate is
+`remap_bilinear` per candidate). Under every sampler a candidate is
 scored through an **affine** patch→image map fit on its four exactly-projected
 patch corners, sampling only the reference-support pixels at the affine
 positions (same bilinear taps and `u8` rounding as `remap_bilinear`, so values
 match wherever the positions do). Track-view diagnostic scores share the same
 path.
 
-A view takes this path when its sampler is `Bilinear` or `BilinearMip`; under
-the default sampler rule that is every view the rule leaves on `BilinearMip`.
+A view takes this path whatever its sampler, so under the default sampler rule
+both the views the rule leaves on `BilinearMip` and the views it moves to
+`Anisotropic` do.
 
 **Mip levels.** Under `BilinearMip` the affine map is additionally composed
 with the pyramid level it minifies into, so the fast path reads the same level
@@ -202,8 +203,28 @@ does per pixel. One level covers the whole patch where the per-pixel path may
 straddle a boundary; that, and `σ_major` computed from the affine fit rather
 than per-pixel central differences, are the two places the mip fast path can
 differ from the slow one, and both fold into the same accepted
-admission-flip loss below. `Anisotropic` has no affine shortcut (its footprint
-walk is not a single tap) and always takes the exact warp.
+admission-flip loss below.
+
+**The anisotropic footprint.** Under `Anisotropic` the affine map stays in
+level-0 px. Its Jacobian is constant over the patch, so one SVD of it, with the
+same `f32` arithmetic `WarpMap::compute_svd` applies per pixel (`svd_2x2`),
+gives every support pixel the same footprint: the levels from `σ_minor` and
+the samples along one major axis. Each support pixel then takes the per-pixel
+path's anisotropic sample (`remap::aniso_sample`, the body of the scalar
+remap) at its affine position, rounded to `f32` as a warp map stores it
+(`sample_support_affine_aniso`). On a map that is exactly affine the two paths
+give the same bytes wherever the per-pixel SVD, read from finite differences of
+the stored positions, lands on the same side of every level and sample-count
+boundary as the constant one (`affine_aniso_sampling_matches_the_per_pixel_path`
+holds five such maps to bit identity). On a real view the affine position
+error adds to that as it does for the bilinear samplers: on a long-focus view
+of a square turned 70° the support samples differ from the exact anisotropic
+render by at most 2 grey levels, 0.40 on average
+(`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`, held to the
+bilinear pairs' bound of 4 and 0.8). The walk along the major axis can read up
+to `σ_major / 2` source px past the quad; those taps are clamped at the frame
+edge exactly as the per-pixel path clamps them, so the border gate is the
+level-0 one.
 
 The **exact warp remains the fallback** — and the sole authority on
 rejection — whenever:
@@ -276,10 +297,9 @@ projection can map behind-camera points in-frame), and the footprint test. The t
 point with two observations in one image does not double-weight that view. The
 self-agreement is the track views' mean ZNCC to the reference; when it is below
 `min_self_agreement` (default 0.3) the track is admitted verbatim with no
-expansion. The affine fast path covers `Sampler::Bilinear` and
-`Sampler::BilinearMip`; a view rendered with `Sampler::Anisotropic`, whether
-the sampler rule moved it or the caller fixed that sampler, always takes the
-exact warp. A point whose valid track-view count is below `min_track_views`
+expansion. The affine fast path covers every sampler: `Sampler::Bilinear`,
+`Sampler::BilinearMip`, and `Sampler::Anisotropic`, whether the sampler rule
+moved the view or the caller fixed that sampler. A point whose valid track-view count is below `min_track_views`
 (default 2) likewise admits its track views verbatim. The render → z-normalize →
 robust-consensus primitives are shared with `normal_refine` (`pub(super)`), not
 duplicated.

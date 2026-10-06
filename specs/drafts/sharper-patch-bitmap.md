@@ -31,7 +31,7 @@ The sharpest views then correlate worst with it, because the detail they carry h
 - how far the view's own tile can slide over itself and still match (the ZNCC self-similarity radius);
 - the angle between the view's ray and the patch normal.
 
-It also proposes choosing, per view, between the single-sample mip sampler and the anisotropic sampler, from how unequal the two zooms are. A view seen at an angle or through a distorting lens then keeps the detail it holds along its better axis.
+Each view is now rendered with the single-sample mip sampler or the anisotropic sampler, chosen per view from how much coarser the mip sampler would read its less compressed axis than that axis needs (Part 3, built). A view seen at an angle or through a distorting lens then keeps the detail it holds along its better axis.
 
 It also proposes scoring each view against the template at a resolution the view can actually show. A sharp template then does not penalise a far or blurry view for detail it could never have had.
 
@@ -65,6 +65,8 @@ That is the congealing drift the template's blur along the grain allows.
 
 ### Why the mean is blurry
 
+The measurements above were made before Part 3, with `BilinearMip` rendering every view.
+
 The template is the Tukey/MAD IRLS weighted mean of z-normalized cores (`irls_view_weights`, `weighted_unit_template_into` and `PatchViewStack::fuse` in [normal_refine/](../../crates/sfmtool-core/src/patch/normal_refine/)). Five effects combine:
 
 1. **Misregistration.** A mean of views offset by sub-pixel amounts is the surface convolved with the spread of those offsets. On a directional texture the spread is largest along the direction the views can slide.
@@ -87,7 +89,7 @@ The self-similarity reading summarises the region of shifts that match the tile 
 
 ## Part 3 (built): choosing the sampler per view
 
-Every kernel that renders a view's tile, the bench's evaluation, the member gates, view selection, normal refinement, congealing, the sub-pixel refiner, the fuse and Track View, renders it with the sampler the sampler rule picks for that observation: `Anisotropic` when `σ_major ≥ √2` and `L = 2^l / max(σ_minor, 1) ≥ a`, with `l = round(log2 max(σ_major, 1))`, read from the Jacobian of the patch re-anchored on the keypoint at the patch resolution, and `BilinearMip` otherwise, with `a = 1.5`. A view the rule leaves on `BilinearMip` renders the same tile as before, bit for bit. The renders are timed in detail phases, the batches that render views take a `Progress` and can be cancelled, and the anisotropic sampler has an AVX2 kernel that matches its scalar path bit for bit. The rule, the measurements `a` was set from and the kernel are in [core/camera/image-warping.md](../core/camera/image-warping.md) § "Choosing the sampler per view", and so is the view's **footprint** `φ_v`, the scale in grid px below which its tile holds no detail, which Parts 4 to 6 weight and blur by: `φ_a = max(2^l, 1) / σ_a` along each singular direction under `BilinearMip`, close to `max(1, 1/σ_a)` under `Anisotropic`, and `φ_v = max(φ_major, φ_minor, 1)`. Storing `a` beside the self-similarity readings, so a reader can tell each stored reading's sampler from its zoom, is part of Part 7; `sfm embed-patches` records it in the file's `tool_options` as `anisotropic_threshold`.
+Every kernel that renders a view's tile, the bench's evaluation, the member gates, view selection, normal refinement, congealing, the sub-pixel refiner, the fuse and Track View, renders it with the sampler the sampler rule picks for that observation: `Anisotropic` when `σ_major ≥ √2` and `L = 2^l / max(σ_minor, 1) ≥ a`, with `l = round(log2 max(σ_major, 1))`, read from the Jacobian of the patch re-anchored on the keypoint at the patch resolution, and `BilinearMip` otherwise, with `a = 1.5`. A view the rule leaves on `BilinearMip` renders the same tile as under `Fixed(BilinearMip)`, bit for bit. The renders are timed in detail phases, the batches that render views take a `Progress` and can be cancelled, and the anisotropic sampler has an AVX2 kernel that matches its scalar path bit for bit. The rule, the measurements `a` was set from and the kernel are in [core/camera/image-warping.md](../core/camera/image-warping.md) § "Choosing the sampler per view", and so is the view's **footprint** `φ_v`, the scale in grid px below which its tile holds no detail, which Parts 4 to 6 weight and blur by: `φ_a = max(2^l, 1) / σ_a` along each singular direction under `BilinearMip`, close to `max(1, 1/σ_a)` under `Anisotropic`, and `φ_v = max(φ_major, φ_minor, 1)`. Storing `a` beside the self-similarity readings, so a reader can tell each stored reading's sampler from its zoom, is part of Part 7; `sfm embed-patches` records it in the file's `tool_options` as `anisotropic_threshold`.
 
 ## Part 4: what each view can contribute
 
@@ -265,7 +267,7 @@ Optional columns, parallel to the other `tracks/*` arrays. Their names follow th
   - **Why store them.** All need the camera model to recompute. The angle and the tilt direction need the keypoint unprojected, and the zoom needs the projection's derivative. Storing them gives a reader the exact measured values without implementing the camera models.
 - **The fallback render.** Where the keypoint's ray cannot meet the patch plane (parallel to it, or the plane behind the camera), the render uses the stored patch without re-anchoring, and `d̂` is the ray to the stored patch's centre. Such a view is at or past grazing, so its value is near zero or negative either way.
 - **Not measured.** `NaN` in the ellipse axes means the observation was not measured. Its angles and zoom are then `NaN` and its flags 0.
-- **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own. It also records the sampler threshold `a` the renders were made under (Part 3), from which a reader works out each render's sampler from its stored zoom.
+- **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own. It also records the sampler threshold `a` the renders were made under (Part 3), from which a reader works out each render's sampler from its stored zoom. `sfm embed-patches` already records `anisotropic_threshold` in the file's `tool_options`, but `tool_options` describes one tool run, and a later re-render of the radii, such as `sfm xform --add-patch-bitmaps sampler=per_view`, records no threshold there, so the radii need their own record.
 - **Grid px.** The grid px are those of the point's `R` (`points3d/metadata.json`'s `patch_bitmap_resolution`), so the radius converts to scene units through the point's patch half-extents, as the ellipse does.
 
 The middle-square and per-cell readings are left out. They are cheap to recompute once a render exists, and nothing proposed here reads them without one.
@@ -315,7 +317,7 @@ Which one is part of this work. The radius columns do not depend on the choice.
 3. **Keypoint error against ground truth**: reprojection of the ground-truth point, per view, split by footprint.
 4. **Drift along a directional texture.** On the wood-grain track, how far Fit moves observations along the grain, and their ZNCC after.
 5. **Verdict changes at the current bars**, to size the re-tuning in Part 6.
-6. **The sampler rule's time and changes to the patches**, measured as Part 3 sets out.
+6. **The sampler rule's time and changes to the patches.** Measured, and filed in [image-warping.md](../core/camera/image-warping.md) § "How `a = 1.5` was set" and § "Cost, and the AVX2 kernel".
 
 ## Open questions
 

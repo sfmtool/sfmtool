@@ -811,8 +811,10 @@ pub fn singular_values_2x2(m: [[f64; 2]; 2]) -> [f64; 2] {
 ///
 /// The singular values alone, in `f64`, are the public
 /// [`singular_values_2x2`]; this one keeps its own `f32` arithmetic, which the
-/// stored per-pixel SVD has always used.
-fn svd_2x2(a: f32, b: f32, c: f32, d: f32) -> (f32, f32, f32, f32) {
+/// stored per-pixel SVD has always used. `pub(crate)` so view selection's
+/// affine fast path takes the anisotropic footprint of its constant Jacobian
+/// with the same arithmetic as [`WarpMap::compute_svd`].
+pub(crate) fn svd_2x2(a: f32, b: f32, c: f32, d: f32) -> (f32, f32, f32, f32) {
     // Using the standard closed-form for 2x2 SVD via the quantities:
     //   s1 = a^2 + b^2 + c^2 + d^2  (= ||M||_F^2)
     //   s2 = sqrt((a^2 + b^2 - c^2 - d^2)^2 + 4*(a*c + b*d)^2)

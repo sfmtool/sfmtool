@@ -257,13 +257,14 @@ from .._cli_utils import timed_command
     help=(
         "Pyramid sampler for every photometric kernel in the pipeline (normal "
         "refinement, view selection, keypoint localization, sub-pixel "
-        "refinement). 'per_view' applies the sampler rule to each view: "
+        "refinement, the fuse). 'per_view' applies the sampler rule to each view: "
         "'anisotropic' where 'bilinear_mip' would read the view's less "
         "compressed axis too coarsely, 'bilinear_mip' otherwise. The other "
         "three render every view with one sampler. 'bilinear_mip' taps the mip level nearest the warp's "
         "compression, bounding aliasing on cross-scale views at ~bilinear "
-        "cost; 'anisotropic' also resolves oblique footprints at 1.6-3x the "
-        "cost; 'bilinear' taps the full-resolution level only."
+        "cost; 'anisotropic' also resolves oblique footprints, at about the "
+        "cost of 'bilinear_mip' with the AVX2 kernel and 1.6-4x it without; "
+        "'bilinear' taps the full-resolution level only."
     ),
 )
 def embed_patches_command(

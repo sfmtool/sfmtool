@@ -2492,6 +2492,17 @@ pub(crate) fn patch_resolution(recon: &sfmtool_core::SfmrReconstruction) -> u32 
     EvaluateOptions::default().patch_resolution(recon)
 }
 
+/// The sampler choice the bench's evaluation renders each view's tile with
+/// (`EvaluateOptions::localize`'s `sampler`, under the options
+/// [`evaluate_job`] runs with): the sampler rule by default.
+///
+/// Track View draws a row's tile with the sampler this picks for the row's
+/// Jacobian, and `get_bench_track` and `get_point` report it, so what the
+/// viewer shows is what the bench used.
+pub(crate) fn sampler_choice() -> sfmtool_core::camera::sampler::SamplerChoice {
+    EvaluateOptions::default().localize.sampler
+}
+
 /// The evaluation of `track` as a function of the `Progress` it polls its
 /// cancellation through: what [`AppState::bench_evaluate_job`] hands the live
 /// evaluation for a bench track, and what the viewed track's evaluation runs

@@ -63,7 +63,10 @@ pub struct KeypointSubpixelParams {
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
     /// Which sampler renders each view's tiles: the sampler rule by default
-    /// ([`SamplerChoice::per_view`]), applied to each render's placement. The GN inner
+    /// ([`SamplerChoice::per_view`]). Under the rule each view's sampler is
+    /// chosen once, at its seed keypoint, from the patch re-anchored there at
+    /// the patch resolution ([`SamplerChoice::for_observation`]), and every
+    /// render of the view as the refiner moves it uses that sampler. The GN inner
     /// step uses the **value+gradient** variant of the chosen sampler — one render
     /// returns `(value, ∂I/∂x, ∂I/∂y)` per support pixel and channel — composed
     /// per-pixel with the warp Jacobian `J = WarpMap::get_jacobian(col, row)` to

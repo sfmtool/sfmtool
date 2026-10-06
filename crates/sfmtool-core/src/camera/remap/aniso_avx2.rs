@@ -226,6 +226,7 @@ unsafe fn group(
 
     tally.sampled += 8;
     tally.multi += 8;
+    tally.simd_groups += 1;
     for k in 0..8 {
         tally.sum_n += ni[k] as u64;
         tally.taps += c as u64 * ni[k] as u64 * if frac[k] > 0.0 { 2 } else { 1 };

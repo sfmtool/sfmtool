@@ -562,11 +562,13 @@ pub fn validate_member_coherence(
 ) -> MemberCoherence;
 
 // Batch over a cloud, rayon-parallel across points, results in cloud order.
+// `Err(Cancelled)` when `progress` was cancelled before every point was
+// validated, rather than the points it finished.
 pub fn validate_patch_cloud_member_coherence(
     cloud: &PatchCloud, views: &[ProjectedImage<'_>], member_views: &[Vec<u32>],
     member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams, done: Option<&AtomicUsize>, progress: &Progress<'_>,
-) -> Result<Vec<MemberCoherence>, Cancelled>; // Cancelled when `progress` was
+) -> Result<Vec<MemberCoherence>, Cancelled>;
 
 pub fn member_views_from_reconstruction(recon, cloud) -> Vec<Vec<u32>>;
 // The stored keypoint of each of those members, in the same order; all `None`
