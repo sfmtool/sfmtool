@@ -266,11 +266,9 @@ the node inside the history budget, or the write itself failed.
 that a loaded node starts clean and an edit makes it dirty, and that a node from
 no file offers only Save As; that a save with an overlay
 materialises into a version the cursor sits on and stamps the provenance it
-hashed; that the file it writes records no ancestry; that a point id minted
+hashed; that a point id minted
 before a save still resolves after it through the version graph, while the id
-the panels *show* moves onto the file just written, and that an id a loaded
-file's own recorded ancestry names keeps resolving across a save of the node;
-that a save with no overlay writes the value and mints nothing; that
+the panels *show* moves onto the file just written; that a save with no overlay writes the value and mints nothing; that
 Save As writes elsewhere and re-points the node; that a Save As stating a
 workspace path records it and mints the version that carries it, so the value the
 session holds hashes to the file; that a save writes one log entry

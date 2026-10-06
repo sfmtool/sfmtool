@@ -8,9 +8,10 @@
 //! path the caller states ([`SaveStamp::workspace_path`]). A **minimal**
 //! file is the smallest file that still holds the whole reconstruction: no
 //! thumbnails, no patch bitmaps, no recorded `workspace.absolute_path`, and
-//! `tool_options` holding only the options of the operation that wrote it. `sfm xform --minimal` and the viewer's
-//! `File > Save As Minimal...` both write it through this module, so there is one
-//! definition of what a minimal file leaves out
+//! `tool_options` holding only the options of the operation that wrote it.
+//! `sfm xform --minimal` and the viewer's `File > Save As Minimal...` both
+//! write it through this module, so there is one definition of what a minimal
+//! file leaves out
 //! (`specs/cli/reconstruction/xform/xform-command.md` section "`--minimal`").
 //!
 //! The two halves are separate methods because `xform` applies them at

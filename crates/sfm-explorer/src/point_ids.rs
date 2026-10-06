@@ -22,9 +22,9 @@
 //!   version graph's maps as far as the point's identity reaches and names the
 //!   base, or the point edit, it stops at.
 //! - [`resolve`] walks the other way. It finds the hash among the node's bases
-//!   and its point edits, and follows the point from
-//!   there to the cursor -- backward out of a branch an undo discarded and then
-//!   forward, when the minting version is not an ancestor of the cursor's.
+//!   and its point edits, and follows the point from there to the cursor --
+//!   backward out of a branch an undo discarded and then forward, when the
+//!   minting version is not an ancestor of the cursor's.
 //!
 //! Every hash here is computed from a value rather than read off a file, so a
 //! node that was never saved -- demo data -- has ids exactly like one that was.
@@ -73,8 +73,8 @@ fn full_base_hash(edited: &EditedReconstruction) -> Option<&str> {
 /// **The version on disk first.** If the point's identity reaches the version
 /// the node was loaded at or last saved as, and it is a row of that version's
 /// base, the id is that base's hash and that row. That is the id a reader of the
-/// file on disk uses as it stands, with no other file to find, which is what someone copying an id out of the viewer almost always
-/// wants it for.
+/// file on disk uses as it stands, with no other file to find, which is what
+/// someone copying an id out of the viewer almost always wants it for.
 ///
 /// **The earliest content otherwise**, which is the case for a point created
 /// since the last save (named by the edit that created it), for a cursor on a
