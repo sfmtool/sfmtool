@@ -332,7 +332,7 @@ def _write_clusters_matches(
     out_abs = Path(os.path.abspath(out_path))
     data = {
         "metadata": {
-            "version": 6,
+            "version": 7,
             "matching_method": "cluster",
             "matching_tool": "sfmtool",
             "matching_tool_version": get_version("sfmtool"),

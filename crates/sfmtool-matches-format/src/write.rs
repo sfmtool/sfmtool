@@ -28,7 +28,10 @@ use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entr
 /// `image_dims` is mandatory (format version 4): `(N, 2)` width/height with
 /// every value ≥ 1. A cluster-backbone file additionally requires the
 /// members' detections (format version 6): `member_positions` `(M, 2)` and
-/// `member_affine_shapes` `(M, 2, 2)`.
+/// `member_affine_shapes` `(M, 2, 2)`. A `cluster_patches` section's
+/// `member_status` holds canonical [`ClusterMemberStatus`] discriminants, and
+/// the writer states the canonical `member_status_names` legend beside them
+/// (format version 7).
 pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result<(), MatchesError> {
     let image_count = data.metadata.image_count as usize;
 
@@ -373,10 +376,12 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
             &mut cp_hasher,
         )?;
 
-        // cluster_patches/metadata.json
+        // cluster_patches/metadata.json, with the whole canonical legend the
+        // member_status codes index (validated against it above).
         let cp_meta = serde_json::json!({
             "cluster_count": cluster_count,
             "member_count": member_count,
+            "member_status_names": ClusterMemberStatus::NAMES,
             "refine_options": cp.refine_options,
         });
         let bytes = write_json_entry(

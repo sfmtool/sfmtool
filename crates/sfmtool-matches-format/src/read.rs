@@ -74,6 +74,12 @@ pub fn read_matches_image_names(
 /// regenerate with `sfm match --cluster`, then `sfm cluster-patches` if the
 /// file was enriched.
 ///
+/// `cluster_patches/member_status` codes are resolved through the file's
+/// `member_status_names` legend and returned in the canonical
+/// [`ClusterMemberStatus`] numbering; a version 6 file carries no legend and is
+/// read through the canonical one. A code past the legend's end, or a legend
+/// naming a status the format does not define, is rejected.
+///
 /// Pairwise-backbone files keep their full version compatibility; version ≤ 3
 /// ones never store `images/image_dims`, so they load with
 /// [`MatchesData::image_dims`] as `None`.
@@ -213,7 +219,11 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
 
     // === Cluster patches (optional) ===
     let cluster_patches = if metadata.has_cluster_patches {
-        Some(read_cluster_patches_section(&decoded, &metadata)?)
+        Some(read_cluster_patches_section(
+            &decoded,
+            &metadata,
+            stored_version,
+        )?)
     } else {
         None
     };
@@ -381,9 +391,15 @@ fn read_clusters_section(
     })
 }
 
+/// Read `cluster_patches/`, resolving `member_status` through the file's legend.
+///
+/// `stored_version` is the file's own version, not the upgraded one: it decides
+/// whether the legend is read from the metadata or is the canonical one a
+/// version 6 file's fixed numbering amounts to.
 fn read_cluster_patches_section(
     decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
+    stored_version: u32,
 ) -> Result<ClusterPatchData, MatchesError> {
     let cluster_count = metadata.cluster_count.unwrap_or(0) as usize;
     let member_count = metadata.cluster_member_count.unwrap_or(0) as usize;
@@ -406,6 +422,8 @@ fn read_cluster_patches_section(
         .get("refine_options")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let status_legend =
+        read_member_status_legend(&cp_meta, stored_version).map_err(MatchesError::InvalidFormat)?;
 
     let reference_members_vec: Vec<u32> = decoded.binary_array(
         &entries::cluster_patches_reference_members(cluster_count),
@@ -413,10 +431,14 @@ fn read_cluster_patches_section(
     )?;
     let reference_members = Array1::from_vec(reference_members_vec);
 
-    let member_status_vec: Vec<u8> = decoded.binary_array(
+    let mut member_status_vec: Vec<u8> = decoded.binary_array(
         &entries::cluster_patches_member_status(member_count),
         member_count,
     )?;
+    // The file's own numbering stops here: everything above the reader holds
+    // the canonical `ClusterMemberStatus` discriminants.
+    normalize_member_statuses(&mut member_status_vec, &status_legend)
+        .map_err(MatchesError::InvalidFormat)?;
     let member_status = Array1::from_vec(member_status_vec);
 
     let member_zncc_vec: Vec<f32> = decoded.binary_array(

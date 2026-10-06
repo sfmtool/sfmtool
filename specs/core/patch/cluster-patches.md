@@ -161,12 +161,12 @@ detection the input carried for every member it did not. `member_status` says
 which. The reference member's shape is `S_ref`, so the reference→member warp is
 `W = S·S_ref⁻¹` and `x_member = W·(x − x_ref) + p`.
 
-`member_status` values: `0 reference`, `1 kept`, `2 rejected_low_zncc`,
-`3 rejected_shift`, `4 duplicate_image` (a kept member already covers this
-image with higher ZNCC), `5 not_evaluated` (degenerate shape, unusable
-template, out of frame). A patch cluster = the reference plus its `kept`
-members; statuses preserve the rejected members so consumers can re-gate
-without re-running (the ZNCC/shift arrays are the signals, mirroring how
+`member_status` holds one code per member, resolved through the
+`member_status_names` legend in the section's metadata; the status names and
+what each means are defined under
+[`cluster_patches/member_status`](../../formats/matches-file-format.md#cluster_patchesmember_statuskuint8zst).
+A patch cluster = the reference plus its `kept` members; statuses preserve the
+rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays are the signals, mirroring how
 `match_descriptor_distances` enables descriptor re-filtering).
 
 The affine is stored fully absolute (a 2×3 in pixel coordinates) rather than

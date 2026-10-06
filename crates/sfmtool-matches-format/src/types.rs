@@ -67,6 +67,14 @@ pub use sfmtool_archive_io::WorkspaceMetadata;
 /// Current `.matches` format version. [`crate::write_matches`] always writes
 /// this version; [`crate::read_matches`] accepts any version up to it.
 ///
+/// Version 7 gives `cluster_patches/member_status` a legend:
+/// `cluster_patches/metadata.json` carries `member_status_names`, and a stored
+/// code is an index into that list. The writer states the canonical legend
+/// ([`ClusterMemberStatus::NAMES`]), so the bytes of the column are unchanged;
+/// the reader accepts any legend and normalises the codes onto the canonical
+/// numbering. A version 6 file carries no legend and is read through the
+/// canonical one, which is the fixed numbering its writer used.
+///
 /// Version 6 gives the cluster backbone one place for its members' geometry:
 /// `clusters/` gains a mandatory `member_positions.{K}.2.float32` and
 /// `member_affine_shapes.{K}.2.2.float32` pair, and
@@ -122,7 +130,7 @@ pub use sfmtool_archive_io::WorkspaceMetadata;
 /// or renamed. Version 1 files hold COLMAP-convention relative poses and are
 /// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
 /// pixel-space F/E/H matrices are identical in both versions.
-pub const MATCHES_FORMAT_VERSION: u32 = 6;
+pub const MATCHES_FORMAT_VERSION: u32 = 7;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -435,8 +443,16 @@ pub struct ClustersData {
 /// could not be refined (no usable reference member).
 pub const CLUSTER_REFERENCE_UNREFINABLE: u32 = u32::MAX;
 
-/// Per-member status in the `cluster_patches/` section
-/// (`member_status` discriminants).
+/// Per-member status in the `cluster_patches/` section — the meaning behind a
+/// `cluster_patches/member_status` code.
+///
+/// Since format version 7 the stored code is an index into the
+/// `member_status_names` legend in `cluster_patches/metadata.json`, not a
+/// number the format fixes. [`crate::read_matches`] resolves every code
+/// through the file's legend and hands back the **canonical** numbering this
+/// enum's discriminants define, and [`crate::write_matches`] states that same
+/// canonical legend ([`Self::NAMES`]). So in memory there is one numbering,
+/// and [`ClusterPatchData::member_status`] holds these discriminants.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClusterMemberStatus {
@@ -463,32 +479,41 @@ pub enum ClusterMemberStatus {
 }
 
 impl ClusterMemberStatus {
-    /// The canonical lowercase name used in metadata JSON (e.g. the
-    /// cluster-selection provenance) and the spec's status listing.
+    /// Every status this format defines, in canonical order: a status's
+    /// position here is its discriminant, and this is the legend a writer
+    /// states and a reader normalises onto.
+    pub const ALL: [ClusterMemberStatus; 7] = [
+        Self::Reference,
+        Self::Kept,
+        Self::RejectedLowZncc,
+        Self::RejectedShift,
+        Self::DuplicateImage,
+        Self::NotEvaluated,
+        Self::RejectedUnlocalizable,
+    ];
+
+    /// The canonical `member_status_names` legend, one name per entry of
+    /// [`Self::ALL`].
+    pub const NAMES: [&'static str; 7] = [
+        "reference",
+        "kept",
+        "rejected_low_zncc",
+        "rejected_shift",
+        "duplicate_image",
+        "not_evaluated",
+        "rejected_unlocalizable",
+    ];
+
+    /// The canonical lowercase name used in metadata JSON (the
+    /// `member_status_names` legend and the cluster-selection provenance) and
+    /// the spec's status listing.
     pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Reference => "reference",
-            Self::Kept => "kept",
-            Self::RejectedLowZncc => "rejected_low_zncc",
-            Self::RejectedShift => "rejected_shift",
-            Self::DuplicateImage => "duplicate_image",
-            Self::NotEvaluated => "not_evaluated",
-            Self::RejectedUnlocalizable => "rejected_unlocalizable",
-        }
+        Self::NAMES[*self as usize]
     }
 
     /// Decode a stored discriminant; `None` when out of range.
     pub fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Reference),
-            1 => Some(Self::Kept),
-            2 => Some(Self::RejectedLowZncc),
-            3 => Some(Self::RejectedShift),
-            4 => Some(Self::DuplicateImage),
-            5 => Some(Self::NotEvaluated),
-            6 => Some(Self::RejectedUnlocalizable),
-            _ => None,
-        }
+        Self::ALL.get(value as usize).copied()
     }
 }
 
@@ -496,18 +521,12 @@ impl FromStr for ClusterMemberStatus {
     type Err = MatchesError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "reference" => Ok(Self::Reference),
-            "kept" => Ok(Self::Kept),
-            "rejected_low_zncc" => Ok(Self::RejectedLowZncc),
-            "rejected_shift" => Ok(Self::RejectedShift),
-            "duplicate_image" => Ok(Self::DuplicateImage),
-            "not_evaluated" => Ok(Self::NotEvaluated),
-            "rejected_unlocalizable" => Ok(Self::RejectedUnlocalizable),
-            _ => Err(MatchesError::InvalidFormat(format!(
-                "Unknown ClusterMemberStatus: {s:?}"
-            ))),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == s)
+            .ok_or_else(|| {
+                MatchesError::InvalidFormat(format!("Unknown ClusterMemberStatus: {s:?}"))
+            })
     }
 }
 
@@ -515,6 +534,114 @@ impl fmt::Display for ClusterMemberStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// The first format version whose `cluster_patches/metadata.json` carries the
+/// `member_status_names` legend. A version 6 file has none: its codes were the
+/// fixed numbering of [`ClusterMemberStatus::ALL`], so that is the legend it is
+/// read through.
+pub(crate) const MEMBER_STATUS_LEGEND_VERSION: u32 = 7;
+
+/// The status each legend name denotes, in the order given — the legend a
+/// stored `member_status` code indexes.
+///
+/// A legend has to name at least one status, name only statuses this format
+/// defines, and name each of them once: a repeat would give one status two
+/// codes. Read and verify both resolve their codes through a legend this
+/// accepted.
+pub(crate) fn parse_member_status_names<S: AsRef<str>>(
+    names: &[S],
+) -> Result<Vec<ClusterMemberStatus>, String> {
+    if names.is_empty() {
+        return Err("member_status_names is empty, so it names no status at all".into());
+    }
+    let mut legend = Vec::with_capacity(names.len());
+    for (i, name) in names.iter().enumerate() {
+        let name = name.as_ref();
+        let status: ClusterMemberStatus = name.parse().map_err(|_| {
+            format!(
+                "member_status_names[{i}] is {name:?}, not one of {:?}",
+                ClusterMemberStatus::NAMES
+            )
+        })?;
+        if legend.contains(&status) {
+            return Err(format!(
+                "member_status_names[{i}] repeats {name:?}, which already has a code"
+            ));
+        }
+        legend.push(status);
+    }
+    Ok(legend)
+}
+
+/// The legend a file's `member_status` codes index, read from its
+/// `cluster_patches/metadata.json`.
+///
+/// From [`MEMBER_STATUS_LEGEND_VERSION`] on the metadata must carry
+/// `member_status_names`. A version 6 file must not — the key did not exist —
+/// and is read through the canonical legend its writer's fixed numbering
+/// amounts to. The legend rides inside that metadata entry, which is hashed
+/// into the `cluster_patches` section digest, so it is covered by the same
+/// integrity envelope as the column it describes.
+pub(crate) fn read_member_status_legend(
+    cp_meta: &serde_json::Value,
+    version: u32,
+) -> Result<Vec<ClusterMemberStatus>, String> {
+    let value = cp_meta.get("member_status_names");
+    if version < MEMBER_STATUS_LEGEND_VERSION {
+        return match value {
+            None => Ok(ClusterMemberStatus::ALL.to_vec()),
+            Some(_) => Err(format!(
+                "version {version} file carries cluster_patches/metadata.json \
+                 member_status_names (introduced in version {MEMBER_STATUS_LEGEND_VERSION})"
+            )),
+        };
+    }
+    let value = value.ok_or_else(|| {
+        "cluster_patches/metadata.json carries no member_status_names to read the \
+         member_status codes through"
+            .to_string()
+    })?;
+    let names: Vec<String> = value
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|v| Some(v.as_str()?.to_string()))
+                .collect::<Option<Vec<String>>>()
+        })
+        .ok_or_else(|| {
+            format!(
+                "cluster_patches/metadata.json's member_status_names is {value}, not a list of \
+                 names"
+            )
+        })?;
+    parse_member_status_names(&names)
+}
+
+/// Rewrite stored `member_status` codes in place onto the canonical numbering,
+/// resolving each through `legend`.
+///
+/// A code past the legend's end is the one thing a legend cannot explain, so it
+/// is rejected rather than guessed at; the codes are left untouched then.
+pub(crate) fn normalize_member_statuses(
+    codes: &mut [u8],
+    legend: &[ClusterMemberStatus],
+) -> Result<(), String> {
+    if let Some((k, &code)) = codes
+        .iter()
+        .enumerate()
+        .find(|(_, &code)| code as usize >= legend.len())
+    {
+        return Err(format!(
+            "member_status[{k}] is {code}, past the {} names its legend gives",
+            legend.len()
+        ));
+    }
+    for code in codes.iter_mut() {
+        *code = legend[*code as usize] as u8;
+    }
+    Ok(())
 }
 
 /// Optional cluster-patch enrichment (`cluster_patches/` section; requires

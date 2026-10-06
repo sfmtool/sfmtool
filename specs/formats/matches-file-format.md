@@ -132,9 +132,9 @@ match-output-file.matches (ZIP archive)
 │   ├── member_positions.{K}.2.float32.zst         # Keypoint position per member, at this file's stage
 │   └── member_affine_shapes.{K}.2.2.float32.zst   # Affine shape per member, at this file's stage
 ├── cluster_patches/                               # (Optional section, requires clusters/)
-│   ├── metadata.json.zst                          # Refinement options + summary counts
+│   ├── metadata.json.zst                          # Refinement options, summary counts, status legend
 │   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
-│   ├── member_status.{K}.uint8.zst                # Status code per member (0..=6, listed below)
+│   ├── member_status.{K}.uint8.zst                # Status code per member, an index into the legend
 │   ├── member_consistency_residual.{K}.float32.zst # Warp-consistency residual (NaN if not fitted)
 │   ├── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
 │   └── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
@@ -171,7 +171,7 @@ always store the pairwise backbone.
 
 ```json
 {
-  "version": 6,
+  "version": 7,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -505,7 +505,8 @@ apart:
   `.sift` `features/positions_xy` and `features/affine_shapes` arrays of image
   `member_images[k]`. See the [.sift file format](sift-file-format.md).
 - A file **with** `cluster_patches/` is at the refinement stage: for every
-  member the refinement **measured** (status `0`-`3`, below) the arrays hold
+  member the refinement **measured** (status `reference`, `kept`,
+  `rejected_low_zncc` or `rejected_shift`, below) the arrays hold
   its answer, and for every member it never fitted they hold the detection the
   input carried, untouched. The refinement writes a **new** file (the
   write-once workflow), so the detection-stage file it read is kept beside
@@ -595,6 +596,10 @@ refinement measured and which members stand.
 {
   "cluster_count": 5200,
   "member_count": 14100,
+  "member_status_names": [
+    "reference", "kept", "rejected_low_zncc", "rejected_shift",
+    "duplicate_image", "not_evaluated", "rejected_unlocalizable"
+  ],
   "refine_options": {
     "patch_size": 8.0,
     "resolution": 15,
@@ -607,6 +612,12 @@ refinement measured and which members stand.
 **Field descriptions:**
 - `cluster_count` / `member_count`: Must equal the top-level `cluster_count` /
   `cluster_member_count` (and therefore the clusters section counts)
+- `member_status_names`: (version 7+) The legend `member_status` indexes, one
+  name per code in code order. Always present in a version 7+ file; absent in a
+  version 6 file, which is read through the canonical legend (see
+  [`member_status`](#cluster_patchesmember_statuskuint8zst)). A writer always
+  states the whole list in the canonical order; a reader accepts any legend and
+  normalises the column onto that order
 - `refine_options`: The refinement parameters used. The patch extent appears
   under one of two keys across writer generations: `patch_size` (the full
   patch edge in pixels, current) or the legacy `radius` (a half-width).
@@ -627,35 +638,58 @@ refinement measured and which members stand.
   also mean the reference member fell outside the selection; see
   [Cluster Selection](#cluster-selection-derived-files) for the scoping
 - **Constraint**: When not `0xFFFFFFFF`, `reference_members[c]` lies in cluster `c`'s
-  member range and that member's status is `0` (reference)
+  member range and that member's status is `reference`
 
 #### `cluster_patches/member_status.{K}.uint8.zst`
 
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `uint8`
-- Per-member status:
-  - `0 reference` — the cluster's reference member. It is not refined: its
+- **Format**: an index into `cluster_patches/metadata.json`'s
+  `member_status_names`, which is the file's own legend for this column. A code
+  past the end of that list is invalid; nothing else about the numbering is
+  fixed by this format, so a reader resolves every code through the list the
+  file carries.
+- **Names**: these are the only names this format defines, and each says what
+  became of the member:
+  - `reference` — the cluster's reference member. It is not refined: its
     geometry is its detection, so its reference→member warp is the identity,
     its `member_zncc` is 1.0 and its `member_shift_px` is 0
-  - `1 kept` — refined and vetted successfully
-  - `2 rejected_low_zncc` — achieved ZNCC below the acceptance threshold
-  - `3 rejected_shift` — translation drifted too far from the SIFT seed
-  - `4 duplicate_image` — outscored by another kept member in the same image, or
+  - `kept` — refined and vetted successfully
+  - `rejected_low_zncc` — achieved ZNCC below the acceptance threshold
+  - `rejected_shift` — translation drifted too far from the SIFT seed
+  - `duplicate_image` — outscored by another kept member in the same image, or
     shares the reference's image
-  - `5 not_evaluated` — degenerate shape, template/seed support out of frame, or the
+  - `not_evaluated` — degenerate shape, template/seed support out of frame, or the
     cluster itself was unrefinable
-  - `6 rejected_unlocalizable` — the member's own patch does not pin a position
+  - `rejected_unlocalizable` — the member's own patch does not pin a position
     (its ZNCC self-similarity radius is above the member gate's bar), so it was
     excluded before reference selection and refinement (see
     [`cluster-patch-refinement.md`](../core/patch/cluster-patch-refinement.md)).
     Files written before that gate read the radius hold members refused by
     an earlier score of the same patch with the same status
+- **Canonical order**: a writer always states the whole legend in the order
+  listed above, so a conforming writer stores `0` reference, `1` kept, `2`
+  rejected_low_zncc, `3` rejected_shift, `4` duplicate_image, `5`
+  not_evaluated, `6` rejected_unlocalizable. A reader accepts any legend, in any
+  order and naming any subset of the defined names, and **normalises the column
+  onto the canonical order as it loads**, so a file's own numbering stops at the
+  I/O boundary. A version 6 file carries no legend: its codes are that fixed
+  canonical numbering, so it is read through the canonical legend.
 - A patch cluster = the reference plus its `kept` members; statuses preserve the
   rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
   are the signals, mirroring how `match_descriptor_distances` enables descriptor
   re-filtering)
-- **Constraint**: Every value is a valid discriminant (`0..=6`)
-- **Constraint**: At most one member with status `0` or `1` per (cluster, image)
+- **Constraint**: The legend is present (version 7+), is a non-empty list of
+  names, names only statuses this format defines, and names none twice — a
+  repeat would give one status two codes
+- **Constraint**: Every value is below the legend's length, and so names one of
+  its entries
+- **Constraint**: At most one member with status `reference` or `kept` per
+  (cluster, image)
+- **Integrity**: the legend lives in `cluster_patches/metadata.json`, which is
+  hashed into `cluster_patches_xxh128` with the section's other files, so it
+  needs no hash slot of its own: an edited legend changes the section digest
+  exactly as an edited column does
 
 #### `cluster_patches/member_zncc.{K}.float32.zst`
 
@@ -884,9 +918,11 @@ the backbone — a file never carries both sets.
    arrays above, and free of `NaN`
 5. **Cluster patches parallel**: The `cluster_patches/` arrays have lengths `C`
    (`reference_members`) and `K` (member arrays) matching the clusters section
-6. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=6`);
-   `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s member range with
-   status `0`; at most one status-`0`-or-`1` member per (cluster, image)
+6. **Statuses valid**: The `member_status_names` legend is well formed, every
+   `member_status` value is below its length, and the rules below read each code
+   through it; `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s
+   member range with status `reference`; at most one `reference`-or-`kept`
+   member per (cluster, image)
 7. **Reference shapes non-singular**: For every refinable cluster, the reference
    member's `member_affine_shapes` entry is non-singular — its value is that
    feature's own detector affine shape `S_ref`, which every reference-relative
@@ -982,7 +1018,7 @@ cluster's members then carry real statuses, absolute positions and warps
 the record the sentinel retains its single meaning — the cluster could not
 be refined. Structural constraints are identical in both cases: the sentinel
 is always permitted, and a non-sentinel entry must point at an in-range
-member with status `0`.
+member with status `reference`.
 
 **Working view, not an archive.** A selection drops non-accepted members, so
 the per-member evidence that enables re-gating (rejected statuses and their
@@ -1127,9 +1163,13 @@ The code that reads, writes and verifies `.matches` files is:
   `sfmtool._sfmtool.io.MatchesFile`, which opens a file for the cluster
   queries ([bindings](../../crates/sfmtool-py/src/io/matches_file.rs)).
 
-The member status codes are the `ClusterMemberStatus` enum and the
-`0xFFFFFFFF` reference sentinel is `CLUSTER_REFERENCE_UNREFINABLE`, both in
-[`types.rs`](../../crates/sfmtool-matches-format/src/types.rs).
+The member statuses are the `ClusterMemberStatus` enum, whose discriminants
+are the canonical codes and whose `NAMES` is the canonical
+`member_status_names` legend, and the `0xFFFFFFFF` reference sentinel is
+`CLUSTER_REFERENCE_UNREFINABLE`, both in
+[`types.rs`](../../crates/sfmtool-matches-format/src/types.rs). The Rust and
+Python readers hand back `member_status` in the canonical numbering, whatever
+legend the file stated.
 `ClusterPatchData::refine_radius` (and `MatchesFile.refine_radius` in Python)
 returns the patch half-width from either `refine_options` key. The expansion of
 clusters into pairs is `clusters_to_pair_matches` in
@@ -1184,11 +1224,35 @@ the pairs that pass verification, their matches and the
 
 ## Versioning and Migration
 
-The format has six released versions (`1` through `6`). The format is versioned
+The format has seven released versions (`1` through `7`). The format is versioned
 (`metadata.json` `version`) precisely so that changes like the ones below can upgrade
 on load instead of breaking old files. Writers always emit the current version;
 readers accept any version up to it, with one exception — a cluster-backbone
 file below version 6, which is refused.
+
+### Version 6 → Version 7
+
+| Change | Detail |
+|---|---|
+| `cluster_patches/metadata.json` `member_status_names` | New key, present exactly when `cluster_patches/` is: the legend `cluster_patches/member_status` indexes. It rides inside `metadata.json`, which is already hashed into `cluster_patches_xxh128`, so no hash slot changes. |
+| `cluster_patches/member_status` | A code is now an index into that legend rather than a number the format fixes. |
+
+Version 7 makes `member_status` follow the pattern a per-element enumeration
+takes in the `.sfmr` format (`point_constraints` and its
+`point_constraint_names` legend): a numeric column, and a `*_names` legend in
+the same section's metadata that every code is resolved through. A writer
+states the canonical legend, so the column's bytes are the same as a version 6
+writer's; only the legend and the metadata `version` are new.
+
+**A version 6 file reads unchanged.** Every version 6 writer stored the fixed
+numbering `0` reference through `6` rejected_unlocalizable, which is exactly the
+canonical legend, so a version 6 `cluster_patches/` section is read through that
+legend and its codes keep their meaning. A version 6 file that carries
+`member_status_names` is refused, since no version 6 writer wrote one; a version
+7 file without it is refused, since it would leave its codes unexplained.
+Integrity verification follows the same rule. A re-written file is a new
+version 7 file that states the legend, with new hashes. Pairwise files have no
+`cluster_patches/` section, so only their metadata `version` moves.
 
 ### Version 5 → Version 6
 
@@ -1284,6 +1348,12 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
+- **Version 7**: Status legend — `cluster_patches/metadata.json` carries
+  `member_status_names`, and a `member_status` code is an index into it. A
+  writer states the canonical legend; a reader accepts any legend and
+  normalises the codes onto the canonical order. Version 6 files carry no
+  legend and are read through the canonical one, which is the fixed numbering
+  they were written with.
 - **Version 6**: One geometry per member — `clusters/` gains a mandatory
   `member_positions` / `member_affine_shapes` pair and
   `cluster_patches/member_affines` is removed, so a cluster file holds exactly

@@ -230,8 +230,13 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         section_digests.push(clusters_hash);
 
         if metadata.has_cluster_patches {
-            let cp_hash =
-                verify_cluster_patches_section(&mut archive, &backbone, &stored, &mut errors)?;
+            let cp_hash = verify_cluster_patches_section(
+                &mut archive,
+                metadata.version,
+                &backbone,
+                &stored,
+                &mut errors,
+            )?;
             section_digests.push(cp_hash);
         }
     }
@@ -887,8 +892,14 @@ struct ClusterPatchRaw {
 
 /// Hash `cluster_patches/` and check the refinement record it stores against
 /// the cluster backbone it enriches.
+///
+/// The `member_status` codes are resolved through the file's legend (the
+/// canonical one for a `version` 6 file, which carries none) before the
+/// per-cluster checks read them, so those checks see the canonical numbering
+/// whatever order the file stated its legend in.
 fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     archive: &mut ZipArchive<R>,
+    version: u32,
     backbone: &ClusterBackbone,
     stored: &MatchesContentHash,
     errors: &mut Vec<String>,
@@ -959,7 +970,17 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
         );
     }
 
-    let raw = ClusterPatchRaw {
+    // The legend the member_status codes index. Without a readable one the
+    // codes say nothing, so the checks that read them are skipped.
+    let status_legend = match read_member_status_legend(&cp_meta, version) {
+        Ok(legend) => Some(legend),
+        Err(e) => {
+            errors.push(e);
+            None
+        }
+    };
+
+    let mut raw = ClusterPatchRaw {
         member_consistency_residual: consistency_raw,
         member_shift_px: shift_raw,
         member_status: status_raw,
@@ -969,10 +990,17 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
 
     // Structural validation on raw cluster-patch data
     let cp_ok = check_cluster_patch_lengths(&raw, backbone, errors);
-    if cp_ok {
-        check_member_statuses(&raw.member_status, errors);
-    }
-    if cp_ok && backbone.consistent {
+    let statuses_ok = match &status_legend {
+        Some(legend) if cp_ok => match normalize_member_statuses(&mut raw.member_status, legend) {
+            Ok(()) => true,
+            Err(e) => {
+                errors.push(e);
+                false
+            }
+        },
+        _ => false,
+    };
+    if statuses_ok && backbone.consistent {
         check_cluster_references(&raw, backbone, errors);
     }
 
@@ -1019,19 +1047,6 @@ fn check_cluster_patch_lengths(
         }
     }
     cp_ok
-}
-
-/// Check that every member status is a [`ClusterMemberStatus`] discriminant.
-fn check_member_statuses(status_raw: &[u8], errors: &mut Vec<String>) {
-    for (k, &status) in status_raw.iter().enumerate() {
-        if ClusterMemberStatus::from_u8(status).is_none() {
-            errors.push(format!(
-                "member_status[{k}] = {status} is not a valid ClusterMemberStatus \
-                 discriminant"
-            ));
-            break;
-        }
-    }
 }
 
 /// Check each cluster's reference member: that it lies in the cluster, that it

@@ -317,10 +317,11 @@ fn test_round_trip_no_tvg() {
     let data = make_test_data();
     let (dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
-    // Frozen from the original writer at HEAD 6528c746.
+    // Frozen from the writer at format version 7 (the version is in the
+    // hashed top-level metadata, so a version bump moves this value).
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "665fc243fe4cda3bb4ec493fdc3bcaa6"
+        "c78185e6732752e2e6a11f79290345c9"
     );
 
     // Verify metadata
@@ -1013,6 +1014,19 @@ fn mutate_metadata(entries: &mut [(String, Vec<u8>)], f: impl FnOnce(&mut serde_
     });
 }
 
+/// The `cluster_patches/metadata.json` entry, which carries the
+/// `member_status_names` legend.
+const CP_METADATA: &str = "cluster_patches/metadata.json.zst";
+
+/// Mutate the `cluster_patches/metadata.json` JSON in place.
+fn mutate_cp_metadata(entries: &mut [(String, Vec<u8>)], f: impl FnOnce(&mut serde_json::Value)) {
+    mutate_entry(entries, CP_METADATA, |bytes| {
+        let mut json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        f(&mut json);
+        *bytes = serde_json::to_vec(&json).unwrap();
+    });
+}
+
 /// Overwrite the u32 at `index` in a little-endian uint32 entry.
 fn set_u32(bytes: &mut [u8], index: usize, value: u32) {
     bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
@@ -1122,8 +1136,9 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
 /// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
 /// `version` field reads `version` (dropping the version-3 metadata fields
 /// for `version <= 2`, the version-4 `images/image_dims` entry for
-/// `version <= 3` and the version-6 `clusters/member_positions` /
-/// `clusters/member_affine_shapes` entries for `version <= 5`, matching what
+/// `version <= 3`, the version-6 `clusters/member_positions` /
+/// `clusters/member_affine_shapes` entries for `version <= 5` and the
+/// version-7 `member_status_names` legend for `version <= 6`, matching what
 /// old writers produced), then recomputing the
 /// stored hashes so the result is an internally consistent file of that
 /// version — for authoring old- or future-version fixture bytes.
@@ -1146,6 +1161,11 @@ fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version
         entries.retain(|(n, _)| {
             !n.starts_with("clusters/member_positions.")
                 && !n.starts_with("clusters/member_affine_shapes.")
+        });
+    }
+    if version <= 6 && entries.iter().any(|(n, _)| n == CP_METADATA) {
+        mutate_cp_metadata(&mut entries, |json| {
+            json.as_object_mut().unwrap().remove("member_status_names");
         });
     }
     rebuild_matches_archive(&entries, dst);
@@ -1417,7 +1437,7 @@ fn test_verify_rejects_invalid_status() {
                 |bytes| bytes[3] = 7,
             )
         },
-        "not a valid ClusterMemberStatus",
+        "member_status[3] is 7, past the 7 names its legend gives",
     );
 }
 
@@ -3099,4 +3119,329 @@ fn test_shared_image_dims_absent_and_empty() {
     // An empty image table is its own answer, checked before the dimensions.
     data.image_names.clear();
     assert_eq!(data.shared_image_dims(), Err(SharedDimsError::NoImages));
+}
+
+// ── The member_status legend (format version 7) ────────────────────────────
+
+/// Write [`make_cluster_patch_test_data`], apply `mutate` to its decompressed
+/// entries and rebuild it with fresh hashes, so the only thing wrong with the
+/// result is what `mutate` did. Returns the temp dir and the crafted file.
+fn craft_cluster_patch_file(
+    name: &str,
+    mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("valid.matches");
+    let dst = dir.join("crafted.matches");
+    write_matches(&src, &make_cluster_patch_test_data(), 3).unwrap();
+    let mut entries = load_archive_entries(&src);
+    mutate(&mut entries);
+    rebuild_matches_archive(&entries, &dst);
+    (dir, dst)
+}
+
+/// The `member_status_names` value of a file's `cluster_patches/metadata.json`
+/// (`Null` when the key is absent).
+fn stored_member_status_names(path: &std::path::Path) -> serde_json::Value {
+    let entries = load_archive_entries(path);
+    let cp_meta: serde_json::Value =
+        serde_json::from_slice(&entries.iter().find(|(n, _)| n == CP_METADATA).unwrap().1).unwrap();
+    cp_meta["member_status_names"].clone()
+}
+
+/// Store the `member_status` column under `legend`: every canonical code is
+/// rewritten to the position of its name in `legend`, which must name it.
+fn restate_member_status_legend(entries: &mut [(String, Vec<u8>)], legend: &[&str]) {
+    let names: Vec<String> = legend.iter().map(|s| s.to_string()).collect();
+    mutate_cp_metadata(entries, |json| {
+        json["member_status_names"] = serde_json::json!(names);
+    });
+    mutate_entry(
+        entries,
+        "cluster_patches/member_status.5.uint8.zst",
+        |bytes| {
+            for code in bytes.iter_mut() {
+                let name = ClusterMemberStatus::NAMES[*code as usize];
+                *code = legend.iter().position(|n| *n == name).unwrap() as u8;
+            }
+        },
+    );
+}
+
+#[test]
+fn test_member_status_code_is_its_place_in_the_legend() {
+    // The writer states `NAMES` as the legend and stores each status's
+    // discriminant, so a discriminant has to be its name's place in `NAMES`.
+    for (code, status) in ClusterMemberStatus::ALL.into_iter().enumerate() {
+        assert_eq!(status as usize, code);
+        assert_eq!(status.as_str(), ClusterMemberStatus::NAMES[code]);
+        assert_eq!(
+            status.as_str().parse::<ClusterMemberStatus>().unwrap(),
+            status
+        );
+        assert_eq!(ClusterMemberStatus::from_u8(code as u8), Some(status));
+    }
+}
+
+#[test]
+fn test_member_status_legend_round_trip() {
+    let data = make_cluster_patch_test_data();
+    let (dir, path) = write_to_temp("matches_test_member_status_legend_round_trip", &data);
+
+    // The writer states the whole canonical legend beside the column.
+    assert_eq!(
+        stored_member_status_names(&path),
+        serde_json::json!(ClusterMemberStatus::NAMES)
+    );
+    assert_eq!(read_matches_metadata(&path).unwrap().version, 7);
+
+    let loaded = read_matches(&path).unwrap();
+    assert_eq!(
+        loaded.cluster_patches.as_ref().unwrap().member_status,
+        data.cluster_patches.as_ref().unwrap().member_status
+    );
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "{errors:?}");
+
+    // A bare backbone has no cluster_patches/ and so no legend.
+    let (bare_dir, bare_path) = write_to_temp(
+        "matches_test_member_status_legend_bare",
+        &make_cluster_test_data(),
+    );
+    assert!(!load_archive_entries(&bare_path)
+        .iter()
+        .any(|(n, _)| n.starts_with("cluster_patches/")));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&bare_dir).unwrap();
+}
+
+#[test]
+fn test_member_status_read_through_another_legend() {
+    // A reader resolves each code through the legend the file carries and
+    // hands back the canonical numbering, whatever order the legend is in and
+    // whether it names every status or only the ones the file uses.
+    let expected = make_cluster_patch_test_data()
+        .cluster_patches
+        .unwrap()
+        .member_status;
+    let mut reversed = ClusterMemberStatus::NAMES;
+    reversed.reverse();
+    let subset = ["not_evaluated", "kept", "rejected_low_zncc", "reference"];
+    for (label, legend) in [("reversed", &reversed[..]), ("subset", &subset[..])] {
+        let (dir, path) = craft_cluster_patch_file(
+            &format!("matches_test_member_status_legend_{label}"),
+            |entries| restate_member_status_legend(entries, legend),
+        );
+        let loaded = read_matches(&path).unwrap();
+        assert_eq!(
+            loaded.cluster_patches.as_ref().unwrap().member_status,
+            expected,
+            "{label}"
+        );
+        let (valid, errors) = verify_matches(&path).unwrap();
+        assert!(valid, "{label}: {errors:?}");
+
+        // Writing it back states the canonical legend and numbering again.
+        let rewritten = dir.join("rewritten.matches");
+        write_matches(&rewritten, &loaded, 3).unwrap();
+        assert_eq!(
+            stored_member_status_names(&rewritten),
+            serde_json::json!(ClusterMemberStatus::NAMES)
+        );
+        let entries = load_archive_entries(&rewritten);
+        let status = &entries
+            .iter()
+            .find(|(n, _)| n == "cluster_patches/member_status.5.uint8.zst")
+            .unwrap()
+            .1;
+        assert_eq!(status.as_slice(), expected.as_slice().unwrap(), "{label}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn test_malformed_member_status_legend_rejected() {
+    // Every rule the legend is held to, on the archive bytes: each case is
+    // refused by the reader and reported by the verifier.
+    type Mutation = Box<dyn FnOnce(&mut Vec<(String, Vec<u8>)>)>;
+    let set_legend = |legend: serde_json::Value| -> Mutation {
+        Box::new(move |entries| {
+            mutate_cp_metadata(entries, |json| json["member_status_names"] = legend)
+        })
+    };
+    let cases: Vec<(&str, Mutation, &str)> = vec![
+        (
+            // Codes 0, 1 and 2 are named; the two not-evaluated members keep
+            // code 5, which this three-name legend does not reach.
+            "past_end",
+            set_legend(serde_json::json!([
+                "reference",
+                "kept",
+                "rejected_low_zncc"
+            ])),
+            "member_status[3] is 5, past the 3 names its legend gives",
+        ),
+        (
+            "unknown_name",
+            set_legend(serde_json::json!([
+                "reference",
+                "kept",
+                "rejected_low_zncc",
+                "rejected_shift",
+                "duplicate_image",
+                "skipped",
+                "rejected_unlocalizable"
+            ])),
+            "member_status_names[5] is \"skipped\", not one of",
+        ),
+        (
+            "repeated_name",
+            set_legend(serde_json::json!([
+                "reference",
+                "kept",
+                "kept",
+                "rejected_shift",
+                "duplicate_image",
+                "not_evaluated",
+                "rejected_unlocalizable"
+            ])),
+            "member_status_names[2] repeats \"kept\"",
+        ),
+        (
+            "empty",
+            set_legend(serde_json::json!([])),
+            "member_status_names is empty",
+        ),
+        (
+            "not_a_list",
+            set_legend(serde_json::json!("reference,kept")),
+            "not a list of names",
+        ),
+        (
+            "missing",
+            Box::new(|entries| {
+                mutate_cp_metadata(entries, |json| {
+                    json.as_object_mut().unwrap().remove("member_status_names");
+                })
+            }),
+            "carries no member_status_names",
+        ),
+        (
+            "version_6_with_legend",
+            Box::new(|entries| {
+                mutate_metadata(entries, |json| json["version"] = serde_json::json!(6))
+            }),
+            "version 6 file carries cluster_patches/metadata.json member_status_names",
+        ),
+    ];
+    for (label, mutate, expected) in cases {
+        let (dir, path) =
+            craft_cluster_patch_file(&format!("matches_test_bad_status_legend_{label}"), mutate);
+        let msg = format!("{}", read_matches(&path).err().unwrap());
+        assert!(msg.contains(expected), "{label}: read said {msg}");
+        let (valid, errors) = verify_matches(&path).unwrap();
+        assert!(!valid, "{label}");
+        assert!(
+            errors.iter().any(|e| e.contains(expected)),
+            "{label}: verify said {errors:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn test_version_6_cluster_patches_read_through_the_canonical_legend() {
+    // A version 6 file carries no legend: its writer stored the fixed
+    // numbering the canonical legend now states, so it reads and verifies
+    // through that legend.
+    let data = make_cluster_patch_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v6_status_legend");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.matches");
+    let v6 = dir.join("v6.matches");
+    write_matches(&current, &data, 3).unwrap();
+    rewrite_matches_version(&current, &v6, 6);
+    assert_eq!(stored_member_status_names(&v6), serde_json::Value::Null);
+
+    let (valid, errors) = verify_matches(&v6).unwrap();
+    assert!(valid, "{errors:?}");
+    let loaded = read_matches(&v6).unwrap();
+    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    assert_eq!(
+        loaded.cluster_patches.as_ref().unwrap().member_status,
+        data.cluster_patches.as_ref().unwrap().member_status
+    );
+
+    // A code past the fixed numbering is still refused in a version 6 file.
+    let mut entries = load_archive_entries(&v6);
+    mutate_entry(
+        &mut entries,
+        "cluster_patches/member_status.5.uint8.zst",
+        |bytes| bytes[4] = 7,
+    );
+    let bad = dir.join("v6_bad.matches");
+    rebuild_matches_archive(&entries, &bad);
+    let expected = "member_status[4] is 7, past the 7 names its legend gives";
+    let msg = format!("{}", read_matches(&bad).err().unwrap());
+    assert!(msg.contains(expected), "{msg}");
+    let (valid, errors) = verify_matches(&bad).unwrap();
+    assert!(!valid);
+    assert!(errors.iter().any(|e| e.contains(expected)), "{errors:?}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_member_status_legend_is_inside_the_section_hash() {
+    // The legend rides in cluster_patches/metadata.json, which is hashed into
+    // cluster_patches_xxh128, so editing only the legend under the stored
+    // hashes is a hash mismatch.
+    use std::io::{Read, Write};
+    let (dir, path) = write_to_temp(
+        "matches_test_member_status_legend_hashed",
+        &make_cluster_patch_test_data(),
+    );
+    let mut stored_hash = Vec::new();
+    zip::ZipArchive::new(std::fs::File::open(&path).unwrap())
+        .unwrap()
+        .by_name("content_hash.json.zst")
+        .unwrap()
+        .read_to_end(&mut stored_hash)
+        .unwrap();
+
+    let mut entries = load_archive_entries(&path);
+    let mut reversed = ClusterMemberStatus::NAMES;
+    reversed.reverse();
+    mutate_cp_metadata(&mut entries, |json| {
+        json["member_status_names"] = serde_json::json!(reversed)
+    });
+    let edited = dir.join("edited.matches");
+    let mut zip_out = zip::ZipWriter::new(std::fs::File::create(&edited).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in &entries {
+        zip_out.start_file(name, stored).unwrap();
+        zip_out
+            .write_all(&zstd::bulk::compress(bytes, 3).unwrap())
+            .unwrap();
+    }
+    zip_out.start_file("content_hash.json.zst", stored).unwrap();
+    zip_out.write_all(&stored_hash).unwrap();
+    zip_out.finish().unwrap();
+
+    let (valid, errors) = verify_matches(&edited).unwrap();
+    assert!(!valid);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.starts_with("Cluster patches hash mismatch")),
+        "{errors:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }
