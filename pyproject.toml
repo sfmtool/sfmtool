@@ -7,7 +7,7 @@ build-backend = "maturin"
 
 [project]
 name = "sfmtool"
-version = "0.2"
+version = "0.3"
 requires-python = ">=3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

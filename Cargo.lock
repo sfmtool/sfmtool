@@ -4836,7 +4836,7 @@ dependencies = [
 
 [[package]]
 name = "sfm-explorer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64",
@@ -4874,7 +4874,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-archive-io"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "rayon",
@@ -4888,7 +4888,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-camrig-format"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "ndarray",
@@ -4902,7 +4902,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-colmap"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "ndarray",
@@ -4915,7 +4915,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "base64",
@@ -4950,7 +4950,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-kdf-format"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "rayon",
@@ -4969,7 +4969,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-matches-format"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "ndarray",
@@ -4984,14 +4984,14 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-progress"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "sfmtool-py"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "half",
  "image",
@@ -5014,7 +5014,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-sfmr-format"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "bytemuck",
@@ -5033,7 +5033,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-sift-format"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "bytemuck",
