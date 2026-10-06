@@ -112,7 +112,8 @@ gate (`embed-patches --max-member-zncc-self-similarity-radius`).
 
 ## Output statuses
 
-`member_status` values in the written file (see
+`member_status` values in the written file, which states them in its
+`member_status_names` legend in this canonical order (see
 [`matches-file-format.md`](../../formats/matches-file-format.md), Cluster
 Patches): `0 reference`, `1 kept`, `2 rejected_low_zncc`,
 `3 rejected_shift`, `4 duplicate_image`, `5 not_evaluated`,

@@ -166,8 +166,9 @@ which. The reference member's shape is `S_ref`, so the reference→member warp i
 what each means are defined under
 [`cluster_patches/member_status`](../../formats/matches-file-format.md#cluster_patchesmember_statuskuint8zst).
 A patch cluster = the reference plus its `kept` members; statuses preserve the
-rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays are the signals, mirroring how
-`match_descriptor_distances` enables descriptor re-filtering).
+rejected members so consumers can re-gate without re-running (the ZNCC/shift
+arrays are the signals, mirroring how `match_descriptor_distances` enables
+descriptor re-filtering).
 
 The affine is stored fully absolute (a 2×3 in pixel coordinates) rather than
 anchored/relative, so a consumer re-derives neither the SIFT seed nor the
