@@ -665,6 +665,7 @@ most of the per-sentence findings.
     - bitmaps ⇒ patch frame (:1480)
     - confidence ⇒ normals (:1483)
     - `embedded_patches` ⇒ patch frame (:1690)
+    > _Status (2026-10-06): **Done** — the reader refuses and the verifier reports each of the three, through the predicate the writer uses; see the 2026-10-06 status under Third copies, branch `decision-fix-06-sfmr-presence-rules`._
   - **Rigs and frames:** they must appear together (:698), but only `rigs/` is checked, so a `frames/` without `rigs/` passes.
     > _Status (2026-10-04): **Done** — `read_sfmr` refuses a file with `frames/` entries and no `rigs/`, and `verify_sfmr` reports it, with a test; the spec says both refuse it, branch `report-fix-16-sfmr-frames-without-rigs`._
   - **Keypoint bounds:** the writer does not check them (:1572), so it can write a file its own reader rejects.
@@ -683,6 +684,7 @@ most of the per-sentence findings.
   Links to `../core/reconstruction/README.md` and `../gui/goto-point.md` are background and acquitted.
 **Third copies:** The hash-slot order appears three times; the :1803 copy is incomplete. The version list appears twice, and the two copies disagree.
   > _Status (2026-10-05): **Partially done** — the code names (`SfmrReconstruction` and its `conversion` module, the verifier link, `verify_sfmr`, `SfmrCamera`, the three `THUMBNAIL_SIZE` constants, `classify_points_at_infinity`, `materialize_points_at_infinity`, `observation_affine_shape`, `WriteOptions::zstd_level`, and the `sfm xform` flags) are moved to § Implementations, and the normative text states each rule in format terms. The hash-slot order is stated once, in the `content_xxh128` entry of § Content Hash, and § Hash Computation and § Why `content_xxh128` point there. The migration sections under § Versioning and Migration are the one description of the versions, the `version` field points there, and § Version History is a one-line-per-version index linking to them. Still open, for discussion: whether the reader and verifier should enforce the writer's presence rules, the unenforced lineage rules, and the unchecked `world_space_unit` values. Branch `audit-fix-03-sfmr-code-names`._
+  > _Status (2026-10-06): **Done** — `read_sfmr` refuses, and `verify_sfmr` reports, a file whose `points3d/metadata.json` flags break a presence rule (patch bitmaps without the patch frame, normal confidence without normals, `embedded_patches` without the patch frame) or whose `world_space_unit` is not one of `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`; `write_sfmr` now refuses an unknown unit too. The writer, reader and verifier apply one presence predicate (`OptionalPresence` in `types.rs`) and one unit check, with tests for each refusal on read and verify, and the spec says the reader and verifier refuse each case. No writer, `sfm xform` step or checked-in `.sfmr` produces a violating file. Lineage is handled on branch `decision-fix-07-sfmr-remove-lineage`. Branch `decision-fix-06-sfmr-presence-rules`._
 **Shape:**
   - **Edit-history residue:** :962-964 "(This line previously read…)", the :1009-1013 "earlier revision" block, and "before this amendment" at :1250 and :1539.
     > _Status (2026-10-03): **Done** — the thumbnail resize line states area averaging without the earlier wording, the "earlier revision" note is removed, and the two "before this amendment" phrases now name the versions (1–4 for `normal_confidence`, 1–5 for `observation_confidence`), PR #683._
@@ -693,6 +695,7 @@ most of the per-sentence findings.
 **Unclear / incorrect / suspicious:**
   - The lineage rules (:491-494) are not enforced anywhere.
   - `world_space_unit` is not checked against its five allowed values.
+    > _Status (2026-10-06): **Done** — the writer and reader refuse, and the verifier reports, any other value, branch `decision-fix-06-sfmr-presence-rules`._
 
 ### specs/formats/matches-file-format.md
 **Summary:** Entry names, dtypes, shapes, the backbone rule, hash order and version gating (`MATCHES_FORMAT_VERSION = 6`) match. The spec states rules no code enforces, lists stale `matching_method` values, gives stale Python examples, and has no Implementations section.
