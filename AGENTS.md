@@ -237,11 +237,13 @@ backlog and keep them honest as findings get addressed:
   report, annotate that finding inline rather than deleting it — add a dated
   status line in the established style, e.g.
   `> _Status (YYYY-MM-DD): **Done** — <what changed>, PR #<n>._` (use
-  `Partially done` / `Not done` as appropriate). Name the PR, or the branch
-  when no PR exists yet, rather than a commit SHA: PRs are squash-merged, so a
-  branch commit's SHA is not on `main`. The body of a finding stays as
-  the original snapshot; status accretes above or below it. This is how the
-  existing reports already track progress.
+  `Partially done` / `Not done` / `Superseded` as appropriate, `Declined`
+  with the reason when the finding is wrong or not worth its cost, and
+  `Needs decision` naming the choice when it waits on a maintainer). Name the
+  PR, or the branch when no PR exists yet, rather than a commit SHA: PRs are
+  squash-merged, so a branch commit's SHA is not on `main`. The body of a
+  finding stays as the original snapshot; status accretes above or below it.
+  This is how the existing reports already track progress.
 - **Retire a report once it has outlived its usefulness — use judgement.** The
   bar is "is this still earning its place as a live backlog?", not "is every last
   box ticked". Retire (delete the whole file, git preserves history) when any of
