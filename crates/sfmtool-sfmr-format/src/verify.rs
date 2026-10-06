@@ -58,6 +58,9 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         ));
         return Ok((false, errors));
     }
+    if let Err(e) = validate_world_space_unit(metadata.world_space_unit.as_deref()) {
+        errors.push(e);
+    }
 
     // The content identity folds only these sections, in canonical order.
     // Version 10+ derived bytes are verified before images but excluded here.
@@ -412,6 +415,17 @@ fn verify_points3d_section<R: Read + Seek>(
         .get("patch_bitmap_resolution")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // The combinations the writer and reader refuse.
+    errors.extend(
+        OptionalPresence {
+            embedded_patches: metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES,
+            normals: has_normals,
+            normal_confidence: has_normal_confidence,
+            patch_frame: has_uv_frames,
+            patch_bitmaps: has_patch_bitmaps,
+        }
+        .presence_violations(),
+    );
     // The per-point constraint triple is optional from version 7 (default
     // `false`), and the three columns are flagged together. The flag also
     // promises the `point_constraint_names` legend the codes index; a file that

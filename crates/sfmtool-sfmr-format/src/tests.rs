@@ -2559,8 +2559,143 @@ fn test_patch_bitmaps_without_frame_rejected() {
     let path = dir.join("test.sfmr");
     let result = write_sfmr(&path, &mut data);
     assert!(
-        matches!(result, Err(SfmrError::ShapeMismatch(_))),
+        matches!(&result, Err(SfmrError::InvalidFormat(m)) if m.contains("requires the patch frame")),
         "bitmaps without a frame should be rejected, got {result:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Write `data`, copy the file with `edit` applied to its
+/// `points3d/metadata.json`, and assert that the reader refuses the copy and
+/// the verifier reports it, both with a message containing `expected`.
+fn assert_points3d_flags_refused(
+    test_name: &str,
+    mut data: SfmrData,
+    edit: impl Fn(&mut serde_json::Value),
+    expected: &str,
+) {
+    let dir = std::env::temp_dir().join(test_name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("valid.sfmr");
+    let options = WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    write_sfmr_with_options(&path, &mut data, &options).unwrap();
+    let edited = dir.join("edited.sfmr");
+    rewrite_points3d_metadata(&path, &edited, edit);
+
+    let Err(err) = read_sfmr(&edited) else {
+        panic!("{test_name}: the edited file was read");
+    };
+    assert!(
+        matches!(&err, SfmrError::InvalidFormat(m) if m.contains(expected)),
+        "{test_name}: unexpected error: {err}"
+    );
+
+    let (valid, errors) = verify_sfmr(&edited).unwrap();
+    assert!(!valid);
+    assert!(
+        errors.iter().any(|e| e.contains(expected)),
+        "{test_name}: unexpected errors: {errors:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// The presence rules the writer applies are the ones the reader and verifier
+// apply to a file's flags, so a file another writer or a hand edit produced is
+// refused rather than read with one of the rule's pieces silently dropped.
+#[test]
+fn test_patch_bitmaps_without_frame_refused_on_read_and_verify() {
+    let mut data = make_test_data();
+    data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
+    data.patch_v_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.25));
+    data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
+    assert_points3d_flags_refused(
+        "sfmr_test_read_bitmaps_no_frame",
+        data,
+        |meta| meta["has_uv_frames"] = serde_json::json!(false),
+        "patch_bitmaps_y_x_rgba requires the patch frame",
+    );
+}
+
+#[test]
+fn test_normal_confidence_without_normals_refused_on_read_and_verify() {
+    let mut data = make_test_data();
+    data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255, 0, 128]));
+    assert_points3d_flags_refused(
+        "sfmr_test_read_confidence_no_normals",
+        data,
+        |meta| meta["has_normals"] = serde_json::json!(false),
+        "normal_confidence requires normals_xyz",
+    );
+}
+
+#[test]
+fn test_embedded_patches_without_frame_refused_on_read_and_verify() {
+    assert_points3d_flags_refused(
+        "sfmr_test_read_embedded_no_frame",
+        make_embedded_test_data(),
+        |meta| meta["has_uv_frames"] = serde_json::json!(false),
+        "requires patch_u_halfvec_xyz and patch_v_halfvec_xyz",
+    );
+}
+
+#[test]
+fn test_world_space_unit_checked_on_write_read_and_verify() {
+    let dir = std::env::temp_dir().join("sfmr_test_world_space_unit");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Each of the five units round-trips and verifies.
+    for unit in WORLD_SPACE_UNITS {
+        let mut data = make_test_data();
+        data.metadata.world_space_unit = Some(unit.to_string());
+        let path = dir.join(format!("{unit}.sfmr"));
+        write_sfmr(&path, &mut data).unwrap();
+        let loaded = read_sfmr(&path).unwrap();
+        assert_eq!(loaded.metadata.world_space_unit.as_deref(), Some(unit));
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "{unit}: {errors:?}");
+    }
+
+    // The writer refuses any other value.
+    let mut data = make_test_data();
+    data.metadata.world_space_unit = Some("km".to_string());
+    let result = write_sfmr(&dir.join("km.sfmr"), &mut data);
+    assert!(
+        matches!(&result, Err(SfmrError::InvalidFormat(m)) if m.contains("unknown world_space_unit \"km\"")),
+        "unexpected result: {result:?}"
+    );
+    assert!(!dir.join("km.sfmr").exists());
+
+    // A file that names another value is refused by the reader and reported
+    // by the verifier.
+    let edited = dir.join("edited.sfmr");
+    rewrite_entries(&dir.join("m.sfmr"), &edited, |name, raw| {
+        (name == "metadata.json.zst").then(|| {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json["world_space_unit"] = serde_json::json!("metres");
+            serde_json::to_vec(&json).unwrap()
+        })
+    });
+    let Err(err) = read_sfmr(&edited) else {
+        panic!("a file with an unknown world_space_unit was read");
+    };
+    assert!(
+        matches!(&err, SfmrError::InvalidFormat(m) if m.contains("unknown world_space_unit \"metres\"")),
+        "unexpected error: {err}"
+    );
+    let (valid, errors) = verify_sfmr(&edited).unwrap();
+    assert!(!valid);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("unknown world_space_unit \"metres\"")),
+        "unexpected errors: {errors:?}"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();

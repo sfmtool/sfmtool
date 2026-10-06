@@ -1477,7 +1477,11 @@ frame** (a texture is meaningless without the `u`/`v` it is parameterised over),
 and **normal confidence requires normals** (a confidence rates a stored claim;
 without `normals_xyz` there is nothing for it to rate). Every other combination
 is valid — normals without a frame, a frame without normals, constraints without
-either, or none of them.
+either, or none of them. A writer refuses to write a combination that breaks one
+of these rules, and a reader and a verifier refuse a file whose
+`points3d/metadata.json` flags state one: `has_patch_bitmaps` without
+`has_uv_frames`, or `has_normal_confidence` without `has_normals` (a version 1 or
+2 file always has normals).
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
 
@@ -1689,7 +1693,9 @@ frame, [Per-point patch frame](#per-point-patch-frame-optional-version-3)), the
 keypoint additionally fixes that observation's patch geometrically: the patch is
 the point's surfel re-anchored within its own plane so that its centre projects
 to the keypoint in this view. An `embedded_patches` file therefore requires the
-patch frame (`has_uv_frames = true`).
+patch frame (`has_uv_frames = true`). A writer refuses to write an
+`embedded_patches` file without it, and a reader and a verifier refuse one whose
+`has_uv_frames` is `false` or absent.
 
 For observation `j` with `i = image_indexes[j]`, `p = point_indexes[j]`,
 `k = keypoints_xy[j]`, point `X_p`, frame `u = patch_u_halfvec_xyz[p]`,
@@ -1856,7 +1862,16 @@ describes. Other parts of this spec are implemented by:
 - World orientation: `sfm xform --rotate` and `--align-to` refine it after a
   solve.
 - `world_space_unit`: `sfm xform --scale-by-measurements` scales a
-  reconstruction and sets the field.
+  reconstruction and sets the field. The five values are
+  `sfmtool_sfmr_format::WORLD_SPACE_UNITS`.
+- The presence rules between the optional per-point pieces and
+  `feature_source`: `write_sfmr`, `read_sfmr` and `verify_sfmr` apply the one
+  predicate in [`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)
+  (`OptionalPresence`), the writer to the columns it is handed and the reader
+  and verifier to the `has_*` flags. The writer and reader stop at the first
+  broken rule; the verifier lists each one. `read_sfmr_metadata` reads the
+  top-level metadata only and checks neither these rules nor
+  `world_space_unit`.
 
 The conversions between the canonical convention and COLMAP's, given in
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary),
@@ -2001,6 +2016,9 @@ the physical unit of 3D coordinates (point positions and camera translations) in
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `world_space_unit` | No | string | Physical unit of 3D world-space coordinates. One of: `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`. |
+
+These five strings are the only values the field takes. A writer refuses any
+other value, and a reader and a verifier refuse a file that carries one.
 
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
 solve.

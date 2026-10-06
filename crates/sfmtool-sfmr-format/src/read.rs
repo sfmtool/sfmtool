@@ -154,6 +154,8 @@ fn read_top_level(
             metadata.version
         )));
     }
+    validate_world_space_unit(metadata.world_space_unit.as_deref())
+        .map_err(SfmrError::InvalidFormat)?;
 
     Ok((metadata, content_hash))
 }
@@ -436,6 +438,28 @@ fn read_points_section(
             .get("has_normals")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+    // Normal confidence (version 5+) and the patch frame and bitmaps (version
+    // 3+) are flagged the same way, `false` when the key is absent.
+    let flag = |key: &str| {
+        points3d_meta
+            .get(key)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+    let has_normal_confidence = flag("has_normal_confidence");
+    let has_uv_frames = flag("has_uv_frames");
+    let has_patch_bitmaps = flag("has_patch_bitmaps");
+    // The writer refuses a combination that breaks a presence rule, and so
+    // does the reader, before reading any optional column.
+    OptionalPresence {
+        embedded_patches: metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES,
+        normals: has_normals,
+        normal_confidence: has_normal_confidence,
+        patch_frame: has_uv_frames,
+        patch_bitmaps: has_patch_bitmaps,
+    }
+    .check()
+    .map_err(SfmrError::InvalidFormat)?;
     let normals_xyz = if has_normals {
         let normals_name = entries::points3d_normals(is_pre_v3, point_count);
         let normals_vec: Vec<f32> = read_binary_array(archive, &normals_name, point_count * 3)?;
@@ -450,11 +474,7 @@ fn read_points_section(
     // Optional per-point normal confidence (version 5+). Absent means "no
     // confidence information", so an older file — which never carries the flag
     // nor the array — simply reads as `None`.
-    let normal_confidence = if points3d_meta
-        .get("has_normal_confidence")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
+    let normal_confidence = if has_normal_confidence {
         let confidence_vec: Vec<u8> = read_binary_array(
             archive,
             &entries::points3d_normal_confidence(point_count),
@@ -534,10 +554,6 @@ fn read_points_section(
         Array2::from_shape_vec((point_count, 3), v)
             .map_err(|e| SfmrError::ShapeMismatch(format!("{field} reshape: {e}")))
     };
-    let has_uv_frames = points3d_meta
-        .get("has_uv_frames")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let (patch_u_halfvec_xyz, patch_v_halfvec_xyz) = if has_uv_frames {
         (
             Some(read_vec3(
@@ -552,12 +568,7 @@ fn read_points_section(
     } else {
         (None, None)
     };
-    let patch_bitmaps_y_x_rgba = if has_uv_frames
-        && points3d_meta
-            .get("has_patch_bitmaps")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    {
+    let patch_bitmaps_y_x_rgba = if has_patch_bitmaps {
         let r = points3d_meta
             .get("patch_bitmap_resolution")
             .and_then(|v| v.as_u64())

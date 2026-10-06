@@ -287,6 +287,13 @@ fn write_sfmr_into<S: EntrySink>(
     // Validate the feature_source and that the mode-appropriate columns are
     // present (and the others absent) before mutating or writing anything.
     validate_feature_source(data)?;
+    // The presence rules and the unit are the ones the reader and verifier
+    // refuse, so a file this writes is one they accept.
+    presence_of(data)
+        .check()
+        .map_err(SfmrError::InvalidFormat)?;
+    validate_world_space_unit(data.metadata.world_space_unit.as_deref())
+        .map_err(SfmrError::InvalidFormat)?;
     let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
     // Ensure tracks are sorted by (point_indexes, image_indexes)
@@ -998,7 +1005,7 @@ fn point_constraints_to_write(
 
 /// Validate the optional per-point patch frame arrays: `patch_u_halfvec_xyz`
 /// and `patch_v_halfvec_xyz` must be present together and shaped `(P, 3)`;
-/// bitmaps require the frame and must be shaped `(P, R, R, 4)`.
+/// bitmaps must be shaped `(P, R, R, 4)`.
 fn validate_patch_dimensions(data: &SfmrData, point_count: usize) -> Result<(), SfmrError> {
     let check = |name: &str, got: &[usize]| -> Result<(), SfmrError> {
         if got != [point_count, 3] {
@@ -1019,12 +1026,9 @@ fn validate_patch_dimensions(data: &SfmrData, point_count: usize) -> Result<(), 
     if let Some(v) = &data.patch_v_halfvec_xyz {
         check("patch_v_halfvec_xyz", v.shape())?;
     }
+    // That bitmaps require the frame is a presence rule, checked with the
+    // others in `presence_of`.
     if let Some(b) = &data.patch_bitmaps_y_x_rgba {
-        if data.patch_u_halfvec_xyz.is_none() {
-            return Err(SfmrError::ShapeMismatch(
-                "patch_bitmaps_y_x_rgba requires the patch frame (patch_u/v_halfvec_xyz)".into(),
-            ));
-        }
         let s = b.shape();
         if s.len() != 4 || s[0] != point_count || s[1] != s[2] || s[3] != 4 {
             return Err(SfmrError::ShapeMismatch(format!(
@@ -1086,6 +1090,17 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
     }
 }
 
+/// What the presence rules need to know about `data`, read off its columns.
+fn presence_of(data: &SfmrData) -> OptionalPresence {
+    OptionalPresence {
+        embedded_patches: data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES,
+        normals: data.normals_xyz.is_some(),
+        normal_confidence: data.normal_confidence.is_some(),
+        patch_frame: data.patch_u_halfvec_xyz.is_some() && data.patch_v_halfvec_xyz.is_some(),
+        patch_bitmaps: data.patch_bitmaps_y_x_rgba.is_some(),
+    }
+}
+
 /// Validate that `feature_source` is recognized and the mode-appropriate columns
 /// are present *and the opposite-mode identity columns absent* — no file states
 /// both ways of identifying an observation, so a contradictory `SfmrData` is
@@ -1127,12 +1142,6 @@ fn validate_feature_source(data: &SfmrData) -> Result<(), SfmrError> {
         FEATURE_SOURCE_EMBEDDED_PATCHES => {
             present("keypoints_xy", data.keypoints_xy.is_some())?;
             present("image_file_hashes", data.image_file_hashes.is_some())?;
-            // An embedded_patches file is patch-based: the keypoint anchors the
-            // observation's patch, which only exists if the per-point frame is
-            // present. The format spec ("Observation source") requires
-            // has_uv_frames = true here.
-            present("patch_u_halfvec_xyz", data.patch_u_halfvec_xyz.is_some())?;
-            present("patch_v_halfvec_xyz", data.patch_v_halfvec_xyz.is_some())?;
             absent("feature_indexes", data.feature_indexes.is_none())?;
             absent("feature_tool_hashes", data.feature_tool_hashes.is_none())?;
             absent("sift_content_hashes", data.sift_content_hashes.is_none())?;
@@ -1269,10 +1278,6 @@ fn validate_dimensions_with(
         );
     }
     if let Some(normal_confidence) = &data.normal_confidence {
-        check!(
-            normals_xyz.is_some(),
-            "normal_confidence requires normals_xyz (a confidence rates the stored normals)"
-        );
         check!(
             normal_confidence.len() == point_count,
             format!(

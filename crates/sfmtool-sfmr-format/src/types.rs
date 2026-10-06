@@ -516,6 +516,86 @@ pub(crate) fn validate_point_constraints(
     Ok(())
 }
 
+/// The values `world_space_unit` may take: millimetres, centimetres, metres,
+/// inches and feet.
+pub const WORLD_SPACE_UNITS: [&str; 5] = ["mm", "cm", "m", "in", "ft"];
+
+/// Check a file's `world_space_unit` against [`WORLD_SPACE_UNITS`].
+///
+/// An absent unit is valid (the coordinates are in scene units). Read, write
+/// and verify all route through this, so a file the writer accepts is one the
+/// reader and the verifier accept.
+pub(crate) fn validate_world_space_unit(unit: Option<&str>) -> Result<(), String> {
+    match unit {
+        Some(unit) if !WORLD_SPACE_UNITS.contains(&unit) => Err(format!(
+            "unknown world_space_unit {unit:?} (expected one of {WORLD_SPACE_UNITS:?})"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Which of the optional pieces that the presence rules relate a file carries.
+///
+/// The writer fills this from the columns it was handed, and the reader and
+/// the verifier from the `has_*` flags of `points3d/metadata.json` and the
+/// top-level `feature_source`, so the three apply
+/// [`presence_violations`](Self::presence_violations) to the same statement.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OptionalPresence {
+    /// `feature_source` is `embedded_patches`.
+    pub(crate) embedded_patches: bool,
+    /// `points3d/normals_xyz` is present.
+    pub(crate) normals: bool,
+    /// `points3d/normal_confidence` is present.
+    pub(crate) normal_confidence: bool,
+    /// The patch frame (`patch_u_halfvec_xyz` and `patch_v_halfvec_xyz`) is
+    /// present.
+    pub(crate) patch_frame: bool,
+    /// `points3d/patch_bitmaps_y_x_rgba` is present.
+    pub(crate) patch_bitmaps: bool,
+}
+
+impl OptionalPresence {
+    /// One message for each presence rule this combination breaks, in a fixed
+    /// order; empty when it breaks none.
+    ///
+    /// The rules are: normal confidence requires normals, patch bitmaps
+    /// require the patch frame, and an `embedded_patches` file requires the
+    /// patch frame. Every other combination is valid.
+    pub(crate) fn presence_violations(&self) -> Vec<String> {
+        let mut violations = Vec::new();
+        if self.normal_confidence && !self.normals {
+            violations.push(
+                "normal_confidence requires normals_xyz (a confidence rates the stored normals)"
+                    .to_string(),
+            );
+        }
+        if self.patch_bitmaps && !self.patch_frame {
+            violations.push(
+                "patch_bitmaps_y_x_rgba requires the patch frame (patch_u_halfvec_xyz and \
+                 patch_v_halfvec_xyz)"
+                    .to_string(),
+            );
+        }
+        if self.embedded_patches && !self.patch_frame {
+            violations.push(format!(
+                "feature_source = {FEATURE_SOURCE_EMBEDDED_PATCHES:?} requires \
+                 patch_u_halfvec_xyz and patch_v_halfvec_xyz (the keypoint anchors each \
+                 observation's patch)"
+            ));
+        }
+        violations
+    }
+
+    /// The first broken presence rule, for a caller that stops at one.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        match self.presence_violations().into_iter().next() {
+            Some(violation) => Err(violation),
+            None => Ok(()),
+        }
+    }
+}
+
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
