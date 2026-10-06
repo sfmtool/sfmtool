@@ -516,10 +516,6 @@ pub(crate) fn validate_point_constraints(
     Ok(())
 }
 
-/// The values `world_space_unit` may take: millimetres, centimetres, metres,
-/// inches and feet.
-pub const WORLD_SPACE_UNITS: [&str; 5] = ["mm", "cm", "m", "in", "ft"];
-
 /// Check a file's `world_space_unit` against [`WORLD_SPACE_UNITS`].
 ///
 /// An absent unit is valid (the coordinates are in scene units). Read, write
@@ -527,9 +523,12 @@ pub const WORLD_SPACE_UNITS: [&str; 5] = ["mm", "cm", "m", "in", "ft"];
 /// reader and the verifier accept.
 pub(crate) fn validate_world_space_unit(unit: Option<&str>) -> Result<(), String> {
     match unit {
-        Some(unit) if !WORLD_SPACE_UNITS.contains(&unit) => Err(format!(
-            "unknown world_space_unit {unit:?} (expected one of {WORLD_SPACE_UNITS:?})"
-        )),
+        Some(unit) if world_space_unit_in_metres(unit).is_none() => {
+            let names: Vec<&str> = WORLD_SPACE_UNITS.iter().map(|&(name, _)| name).collect();
+            Err(format!(
+                "unknown world_space_unit {unit:?} (expected one of {names:?})"
+            ))
+        }
         _ => Ok(()),
     }
 }

@@ -2694,7 +2694,7 @@ fn test_world_space_unit_checked_on_write_read_and_verify() {
     std::fs::create_dir_all(&dir).unwrap();
 
     // Each of the five units round-trips and verifies.
-    for unit in WORLD_SPACE_UNITS {
+    for (unit, _) in WORLD_SPACE_UNITS {
         let mut data = make_test_data();
         data.metadata.world_space_unit = Some(unit.to_string());
         let path = dir.join(format!("{unit}.sfmr"));
