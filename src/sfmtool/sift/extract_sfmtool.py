@@ -7,7 +7,7 @@ Wraps the ``sfmtool._sfmtool.sift.extract_sift`` PyO3 binding so it plugs into t
 same extraction pipeline as the COLMAP and OpenCV backends.
 ``extract_sift_with_sfmtool`` decodes and extracts several images concurrently
 and yields one result per image in input order. Why the backend runs images
-concurrently and how many it runs at once: ``specs/core/features/sift.md``
+concurrently and how many it runs at once: ``specs/cli/image-feature/sift-command.md``
 § Extraction-orchestration pipelining.
 """
 
@@ -237,7 +237,7 @@ def _extract_workers(image_pixels: int | None = None) -> int:
     unknown it is ``min(os.cpu_count(), 4)``. An integer in
     ``SFMTOOL_SIFT_EXTRACT_WORKERS`` overrides both, raised to 1 if lower (``1``
     disables concurrency); a non-integer value is ignored with a warning. Why the
-    count scales with the core count: ``specs/core/features/sift.md``
+    count scales with the core count: ``specs/cli/image-feature/sift-command.md``
     § Extraction-orchestration pipelining.
     """
     override = os.environ.get("SFMTOOL_SIFT_EXTRACT_WORKERS")
