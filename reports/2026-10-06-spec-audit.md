@@ -475,6 +475,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Purpose (:5-6) names three shared callers that each have their own code: growth (`reconstruction_growth.rs:194, :211-230, :501-530`), pose refinement (`pose_refine.rs:45-88`), pose verification (`pose_verification.rs:171-192`). Fix the spec, or move those callers onto this function (discuss).
   - Bug: zero observations give shape `(0, 0)` (`PyArray2::from_vec2`, py :90), not `(n_obs, 2)` (:83), and `inlier_fraction` then refuses it (py :105) where :62-63 says 0.0. Verified by running.
   - Bug: out-of-range `obs_image`/`obs_point` and a short `translations` array raise `PanicException` (py :59-78; core :64-76), not `ValueError`. Verified.
+    > _Status (2026-10-06): **Done** — the binding now reshapes the flat result so zero observations give `(0, 2)`, and raises `ValueError` for out-of-range `obs_image` / `obs_point` and a `translations` row count that differs from `quaternions_wxyz`; the spec's Bindings section and the core function's `# Panics` doc say so, with binding tests, branch `spec-fix-1006-05-reproj-binding`._
   - A non-finite pose gives `(NaN, NaN)`, not `(invalid_residual, 0)` (core :69-86); the spec (:46-53) should say so.
 **Third copies:** invalid-observation rationale in spec :46-53, core doc :26-31, binding doc py :18-21; shrink the binding copy and link the spec from the module doc (:4-10).
 **Shape:** failure 1. Proposed: "This function computes, for every observation of a world point in an image, the pixel offset between where the point projects under that image's pose and where it was observed, for a set of images that share one camera model." Failure 3: no reason for flat `&[f64]` inputs; the Python block is a signature, not a call.
@@ -805,6 +806,7 @@ Read 2026-09-26; open items above.
      short `translations` array raise `PanicException`, not `ValueError`
      (`crates/sfmtool-py/src/geometry/reprojection.rs:90, 105`).
      (reprojection-residuals)
+     > _Status (2026-10-06): **Done** — the binding now reshapes the flat result so zero observations give `(0, 2)`, and raises `ValueError` for out-of-range `obs_image` / `obs_point` and a `translations` row count that differs from `quaternions_wxyz`; the spec's Bindings section and the core function's `# Panics` doc say so, with binding tests, branch `spec-fix-1006-05-reproj-binding`._
    - **MCP `set_view`:**
      - It ignores `fov_short_axis_deg` beside `fit`, `look_through` or
        `exit_camera_view` (`mcp/tools.rs:794-848`).

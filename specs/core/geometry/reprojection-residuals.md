@@ -85,9 +85,15 @@ reprojection_residuals(
 inlier_fraction(residuals, threshold_px) -> float   # residuals: (n_obs, 2)
 ```
 
-Shapes are validated: `quaternions_wxyz` `(n_img, 4)`, `translations` and
-`points` `(n, 3)`, `uv` `(n_obs, 2)`, and `obs_image` / `obs_point` / `uv` the
-same length.
+The binding validates its inputs and raises `ValueError` on any mismatch:
+`quaternions_wxyz` must be `(n_img, 4)`, `translations` `(n_img, 3)` with the
+same row count, `points` `(n_pt, 3)`, `uv` `(n_obs, 2)`, `obs_image` /
+`obs_point` / `uv` the same length, every `obs_image` entry below `n_img`, and
+every `obs_point` entry below `n_pt`. The Rust function checks only the
+observation lengths, by assertion, and panics on an out-of-range index, so the
+binding checks the indexes before calling it. The result is always
+`(n_obs, 2)`, including `(0, 2)` for zero observations, which `inlier_fraction`
+accepts and scores as `0.0`.
 
 ## Testing requirements
 

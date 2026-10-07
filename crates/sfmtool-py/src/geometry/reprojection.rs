@@ -4,7 +4,9 @@
 //! Bindings for batched reprojection residuals: compose per-image
 //! world-to-camera poses with the shared camera model's canonical projection.
 
-use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{
+    PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 
 use sfmtool_core::geometry::{
@@ -76,6 +78,15 @@ pub fn reprojection_residuals<'py>(
             "obs_image, obs_point, and uv must share the same length",
         ));
     }
+    let n_img = quaternions_wxyz.shape()[0];
+    if translations.shape()[0] != n_img {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "translations has {} rows but quaternions_wxyz has {n_img}",
+            translations.shape()[0]
+        )));
+    }
+    let n_pt = points.shape()[0];
+    let n_obs = uv.shape()[0];
 
     let q = to_contiguous!(quaternions_wxyz);
     let t = to_contiguous!(translations);
@@ -83,12 +94,25 @@ pub fn reprojection_residuals<'py>(
     let uvd = to_contiguous!(uv);
     let oi = to_contiguous!(obs_image);
     let op = to_contiguous!(obs_point);
+    check_indexes("obs_image", &oi, n_img, "quaternions_wxyz")?;
+    check_indexes("obs_point", &op, n_pt, "points")?;
 
     let res =
         core_reprojection_residuals(&camera.inner, &q, &t, &p, &uvd, &oi, &op, invalid_residual);
-    let rows: Vec<Vec<f64>> = res.chunks(2).map(|c| vec![c[0], c[1]]).collect();
-    PyArray2::from_vec2(py, &rows)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    // Reshape the flat result so zero observations still give shape (0, 2).
+    PyArray1::from_vec(py, res).reshape([n_obs, 2])
+}
+
+/// Return a `ValueError` naming the first index in `indexes` that is not
+/// below `n`, the row count of the array named `target`.
+fn check_indexes(name: &str, indexes: &[u32], n: usize, target: &str) -> PyResult<()> {
+    match indexes.iter().position(|&i| i as usize >= n) {
+        Some(k) => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{name}[{k}] = {} is out of range for {target} with {n} rows",
+            indexes[k]
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Fraction of observations whose reprojection residual norm is below

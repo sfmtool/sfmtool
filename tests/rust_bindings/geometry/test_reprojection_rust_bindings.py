@@ -13,6 +13,7 @@ built with numpy (the test env has no scipy).
 
 import numpy as np
 import numpy.testing as npt
+import pytest
 
 from sfmtool._sfmtool.geometry import (
     CameraIntrinsics,
@@ -133,6 +134,49 @@ def test_multi_image_reprojection_indexing():
     obs_pt = np.array([0, 1, 0, 1], np.uint32)
     res = reprojection_residuals(cam, q, t, world, uv, obs_img, obs_pt)
     npt.assert_allclose(res, 0.0, atol=1e-9)
+
+
+def test_reprojection_residuals_zero_observations():
+    cam = _cam()
+    res = reprojection_residuals(
+        cam,
+        np.array([[1.0, 0, 0, 0]]),
+        np.array([[0.0, 0, 0]]),
+        np.array([[0.0, 0, -5.0]]),
+        np.zeros((0, 2)),
+        np.zeros(0, np.uint32),
+        np.zeros(0, np.uint32),
+    )
+    assert res.shape == (0, 2)
+    assert res.dtype == np.float64
+    assert inlier_fraction(res, 3.0) == 0.0
+
+
+def _one_observation_args(**overrides):
+    args = {
+        "quaternions_wxyz": np.array([[1.0, 0, 0, 0]]),
+        "translations": np.array([[0.0, 0, 0]]),
+        "points": np.array([[0.0, 0, -5.0]]),
+        "uv": np.array([[320.0, 240.0]]),
+        "obs_image": np.zeros(1, np.uint32),
+        "obs_point": np.zeros(1, np.uint32),
+    }
+    args.update(overrides)
+    return args
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"obs_image": np.array([1], np.uint32)}, "obs_image"),
+        ({"obs_point": np.array([3], np.uint32)}, "obs_point"),
+        ({"translations": np.zeros((0, 3))}, "translations"),
+        ({"translations": np.zeros((2, 3))}, "translations"),
+    ],
+)
+def test_reprojection_residuals_rejects_bad_indexes(overrides, match):
+    with pytest.raises(ValueError, match=match):
+        reprojection_residuals(_cam(), **_one_observation_args(**overrides))
 
 
 def test_refine_absolute_pose_recovers_pose():
