@@ -121,7 +121,8 @@ pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize>;
 The source's trusted bound is
 [`trustworthy_max_theta_deg`](../../../crates/sfmtool-core/src/camera/report.rs),
 and `ModelExtent::source_fold_deg` is `forward_fold_deg` in the same module: the
-angle at which a polynomial fisheye's forward map stops increasing.
+angle at which a polynomial fisheye's, or a `k1 < 0` `SIMPLE_RADIAL_FISHEYE`'s,
+forward map stops increasing.
 
 ### Why it is shaped this way
 
@@ -193,16 +194,20 @@ at `(θ, φ)` is `(sin θ cos φ, sin θ sin φ, −cos θ)`. Each ray is projec
 the source. A source that has no pixel for a ray inside the domain is refused
 (`SourceCannotProject`), since there is nothing to fit to there.
 
-The **principal point is copied**, not fitted. Bundle adjustment never frees it,
-and a fit that moved it would move every keypoint's ray for a reason the data
-did not give. The image size is copied too.
+The **principal point is copied**, not fitted. sfmtool's Rust bundle adjustment
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)) never
+frees it, and a fit that moved it would move every keypoint's ray for a reason
+the data did not give. The image size is copied too.
 
 ### The fit's largest angle
 
 `θ_fit` defaults to the source's trusted bound: the angle past which a
-polynomial fisheye folds or its inverse blends toward the identity ray. For a
-model with no trusted bound (the perspective models, the spline models, the
-exact fisheye maps), the lens-only default is the incidence angle of the far
+polynomial fisheye folds or its inverse blends toward the identity ray. A
+`SIMPLE_RADIAL_FISHEYE` has no blend, so its bound is its fold alone: with
+`k1 < 0` its map `θ·(1 + k1·θ²)` peaks at `θ = 1/√(−3·k1)`, and with `k1 > 0`
+it has no bound. For a model with no trusted bound (the perspective models,
+the spline models, the exact fisheye maps, a `SIMPLE_RADIAL_FISHEYE` that does
+not fold before 180°), the lens-only default is the incidence angle of the far
 image corner under the source, capped at 180°. The reconstruction-level switch
 uses the observations' extent instead; see its spec.
 
@@ -344,7 +349,9 @@ A fitted polynomial fisheye is checked the way the viewer checks one: its own
 trusted bound must reach `θ_fit`, or the fit is refused (`TrustedBoundShort`).
 Past 90° of distorted angle the fisheye polynomials' inverse blends toward the
 identity ray, so a polynomial fitted to a near-equidistant lens out to 120° is
-trusted only to about 90°.
+trusted only to about 90°. A fitted `SIMPLE_RADIAL_FISHEYE` is checked the same
+way, against its fold: an orthographic-like lens, `θ_d ≈ sin θ`, fitted out to
+88° comes back with `k1` near −0.15, which folds at about 86°, and is refused.
 
 The polynomial fit is not constrained to be monotone. Its parameters enter the
 pixel nonlinearly, so the slope floor is not a linear constraint there, and the
@@ -427,8 +434,9 @@ All are constants in [refit_intrinsics.rs](../../../crates/sfmtool-core/src/came
 `CameraIntrinsics.refit(camera_model, *, coeff_count=None, theta_fit_deg=None,
 spline_domain_deg=None)` returns `(CameraIntrinsics, report)`. The report is a
 dict: `camera_model`, `theta_fit_deg`, `theta_fit_source` (`"trusted_bound"`,
-`"observations"`, `"image_corner"`, `"given"` or `"spline_domain"`), `spline_domain_deg` (`None` for
-a non-spline target), `rms_px`, `max_px`, `radial_rms_px`, `dropped` (one
+`"image_corner"` or `"given"`; the reconstruction-level switch's report
+carries the same dict per camera, where it can also be `"observations"` or
+`"spline_domain"`), `spline_domain_deg` (`None` for a non-spline target), `rms_px`, `max_px`, `radial_rms_px`, `dropped` (one
 sentence per term) and `extent` (`edge_deg`, `corner_deg`, `source_trusted_deg`,
 `source_fold_deg`) and `monotone_constraint` (`active`, `active_angles`, and
 `range_deg`, a `(from, to)` pair of incidence angles or `None`). A refusal is a
@@ -467,8 +475,11 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
   unconstrained refit equal bit for bit to the plain least-squares solve.
   `constrained_lsq.rs` tests the solver on hand-solved problems and an
   infeasible one.
+- A `SIMPLE_RADIAL_FISHEYE` source with `k1 < 0` is fitted by default to its
+  fold, and refused past it.
 - Refusals: a perspective target past 90°; a fit past the trusted bound; a
-  polynomial trusted short of the fit; target names and coefficient counts.
+  polynomial trusted short of the fit; a `SIMPLE_RADIAL_FISHEYE` target that
+  folds inside the fit; target names and coefficient counts.
 
 `forward_fold_deg` is tested in
 [report/tests.rs](../../../crates/sfmtool-core/src/camera/report/tests.rs). The
@@ -477,8 +488,12 @@ bindings are tested in
 
 ## Non-goals
 
-- Fitting the principal point. Nothing in the toolkit frees it, and the fit
-  keeps that.
+- Fitting the principal point. sfmtool's Rust bundle adjustment never frees
+  it, and the fit keeps that. The pycolmap bundle adjustment behind
+  `sfm densify --ba-refine-principal-point` and
+  `BundleAdjustTransform(refine_principal_point=True)` (on a reconstruction
+  with no spline camera) can; a camera refined there brings its moved
+  principal point to a refit, which copies it.
 - An aspect for the spline models. They have one focal, and a lens whose `fx`
   and `fy` really differ loses the difference; the report says so.
 - Choosing `d_max` from the image circle of a circular fisheye. The default is
