@@ -488,6 +488,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - A non-finite pose gives `(NaN, NaN)`, not `(invalid_residual, 0)` (core :69-86); the spec (:46-53) should say so.
 **Third copies:** invalid-observation rationale in spec :46-53, core doc :26-31, binding doc py :18-21; shrink the binding copy and link the spec from the module doc (:4-10).
 **Shape:** failure 1. Proposed: "This function computes, for every observation of a world point in an image, the pixel offset between where the point projects under that image's pose and where it was observed, for a set of images that share one camera model." Failure 3: no reason for flat `&[f64]` inputs; the Python block is a signature, not a call.
+  > _Status (2026-10-07): **Done** for failure 1 — the Purpose opening now says what a reprojection residual is before naming a symbol, then that `reprojection_residuals` computes it as projection minus observed over images sharing one camera model and that `inlier_fraction`, also specified here, reports the share under a pixel threshold; the sentence no longer lists callers, which branch `spec-fix-1006-20-reproj-spec` restates in a paragraph of their own, branch `spec-fix-1006-39-opening-reproj`. Failure 3 is still open._
 **Non-goals / deferrals checked:** 2; neither overtaken.
 **Recommendation:** update code (empty shape; `ValueError` on bad indexes) and spec (callers; cite it from the code). Discuss moving the other helpers onto it.
 **Unclear / incorrect / suspicious:** :50-51 and :97-99 distinguish `inf` from a finite value in `inlier_fraction`, which treats both alike (:99-102). Four separate helpers project, take the norm and count below 3 px; none calls this function.
@@ -893,3 +894,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
+   > _Status (2026-10-07): **Partially done** — `reprojection-residuals.md` has a new opening, branch `spec-fix-1006-39-opening-reproj`; the other eight are open._

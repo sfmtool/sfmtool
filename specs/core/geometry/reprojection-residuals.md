@@ -2,11 +2,12 @@
 
 ## Purpose
 
-The forward reprojection model shared by resection scoring, acceptance gates,
-and pose-only refinement: given camera poses over a set of images that share
-one camera model, a set of world points, and the observations tying them
-together, report
-each observation's pixel residual `(projection − observed)`. It is a
+A reprojection residual is the pixel offset between where a world point
+projects under an image's camera pose and where that image observed it.
+`reprojection_residuals` computes it, as projection minus observed, for every
+observation at once over a set of images that share one camera model, and
+`inlier_fraction` reports the share of observations whose offset is shorter
+than a pixel threshold. The residual function is a
 measurement function, not an optimizer — callers threshold it, tally inliers,
 or feed it to a solver.
 
