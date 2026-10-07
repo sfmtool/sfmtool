@@ -1,9 +1,13 @@
 # Keypoint Reach Pairs
 
-One question, asked per image of a track set: which other keypoints lie inside
-this keypoint's own disk? Several rules read that neighbourhood and differ only
-in what they then test, so the enumeration is stated once and the tests stay
-with the callers.
+Keypoint reach lists, for each image of a set of tracks, every ordered pair of
+keypoints in which the second lies inside the first one's disk, whose radius in
+pixels each keypoint carries as its own. It exists so that a rule judging
+nearby observations reads those pairs instead of searching the image for them
+itself: [covered-by-finer](covered-by-finer.md), which retires a coarse
+observation when a finer observation of another track lies inside its
+footprint, is the rule that reads it. The enumeration is stated once here, and
+what each rule then tests of a pair stays with that rule.
 
 The domain is the image plane. A KEYPOINT here is a row of a track set: an
 image index, a pixel position, and its own query radius (its REACH) in pixels.

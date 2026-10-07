@@ -229,6 +229,7 @@ should read it as a claim.
    - Current: "One question, asked per image of a track set: which other keypoints lie inside this keypoint's own disk? Several rules read that neighbourhood and differ only in what they then test, so the enumeration is stated once and the tests stay with the callers."
    - Problem: precise and true, but it names no rule and no use; the one consumer, covered-by-finer, appears only at :65.
    - Proposed: *"Keypoint reach lists, for each image of a set of tracks, every pair of keypoints in which one lies inside the other's disk, so that a rule such as covered-by-finer, which retires a coarse observation that a finer one covers, reads those pairs instead of searching for them itself."*
+   > _Status (2026-10-07): **Done** — the opening now says what the enumeration lists and what it is for, adapted from the proposal after checking the code: the pairs are ordered (the second keypoint lies inside the first one's disk, whose radius each keypoint carries), and covered-by-finer is named and linked as the one rule that reads them, since the same-measurement reconciliation the old opening counted among "several rules" still does its own search, branch `spec-fix-1006-35-opening-keypoint-reach`._
 4. **`research/blender-viewport-navigation-implementation-overview.md:3`**
    - Current: "This document details how Blender implements precision trackpad/touchpad navigation in the viewport on Windows."
    - Problem: says what, not why it is in this repository.
@@ -885,3 +886,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
+   > _Status (2026-10-07): **Partially done** — `keypoint-reach.md`, branch `spec-fix-1006-35-opening-keypoint-reach`; the other openings are on their own branches._
