@@ -110,7 +110,7 @@ pub struct AbsolutePoseOptions {
     /// bit-identical output.
     pub seed: u64,
     /// Local optimization: after each new best consensus, refit the pose
-    /// on its inliers and rescore, repeating while the inlier set grows.
+    /// on its inliers and rescore, repeating while the inlier count grows.
     pub local_optimization: bool,
 }
 
@@ -138,11 +138,19 @@ deterministic.
 **Local optimization.** When enabled, each new best consensus triggers a
 refit: minimize the sum of squared angular residuals over the current
 inliers by Gauss-Newton with a local `SO(3) × R³` parameterization
-(rotation updates composed from a rotation-vector increment), rescore,
-and repeat while the inlier count strictly grows (bounded by a small
-fixed round limit). This recovers most of the accuracy gap to a full
-robust refinement at negligible cost, and keeps the returned pose the
-best *refit* pose, not a raw 3-point solution.
+(rotation updates composed from a rotation-vector increment), and rescore.
+A refit replaces the pose when it does not shrink the consensus: when it
+has more inliers, or the same number and a lower value of the cost
+Gauss-Newton minimizes, evaluated over the inliers it was fitted to. Otherwise the previous pose and its inlier set
+stand. Refitting repeats only while the inlier count strictly grows,
+bounded by a small fixed round limit, because a refit on an unchanged
+inlier set reproduces the same pose. The equal-count case is the common
+one on clean data, where the 3-point pose already has every true
+correspondence as an inlier; accepting the refit there is what makes the
+returned pose a fit to its whole consensus rather than to three samples.
+The residual comparison keeps a Gauss-Newton run that did not converge
+from replacing a pose that fits better. This recovers most of the
+accuracy gap to a full robust refinement at negligible cost.
 
 **Termination.** After each trial with best inlier count `n_best`, the
 required trial count is `log(1 − confidence) / log(1 − (n_best/N)³)`;

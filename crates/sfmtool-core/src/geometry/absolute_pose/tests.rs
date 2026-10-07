@@ -412,6 +412,42 @@ fn local_optimization_improves_or_equals() {
     );
 }
 
+#[test]
+fn local_optimization_refits_when_consensus_is_already_complete() {
+    // Every correspondence is a noisy inlier and the threshold admits all of
+    // them, so the first 3-point pose already has the full consensus and the
+    // refit cannot grow it. The refit must still replace the 3-point pose,
+    // because it fits all inliers instead of three.
+    let n = 100;
+    let (scene, bearings, points, _truth) = contaminated(n, 1.0, 0.002, 777);
+    let base = AbsolutePoseOptions {
+        max_angular_error: 0.1,
+        confidence: 0.999,
+        max_iterations: 50_000,
+        min_inliers: 6,
+        seed: 11,
+        local_optimization: false,
+    };
+    let raw = estimate_absolute_pose(&bearings, &points, &base).unwrap();
+    let lo = estimate_absolute_pose(
+        &bearings,
+        &points,
+        &AbsolutePoseOptions {
+            local_optimization: true,
+            ..base
+        },
+    )
+    .unwrap();
+    assert!(raw.inliers.iter().all(|&b| b));
+    assert!(lo.inliers.iter().all(|&b| b));
+    let raw_err = scene.rot_err(&raw.rotation) + scene.trans_err(&raw.translation);
+    let lo_err = scene.rot_err(&lo.rotation) + scene.trans_err(&lo.translation);
+    assert!(
+        lo_err < raw_err,
+        "refit not kept on an equal inlier count: raw {raw_err}, lo {lo_err}"
+    );
+}
+
 // ── Model-genericity: equidistant fisheye bearings past 90° ────────────────
 //
 // The estimator is bearing-native, so a camera model reaches it only through

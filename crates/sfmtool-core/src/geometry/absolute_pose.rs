@@ -326,7 +326,8 @@ pub struct AbsolutePoseOptions {
     /// SplitMix64 seed for the sampler.
     pub seed: u64,
     /// Refit each new best consensus on its inliers (Gauss-Newton on angular
-    /// residuals), repeating while the inlier set grows.
+    /// residuals), keeping a refit that does not shrink the consensus and
+    /// repeating while the inlier count grows.
     pub local_optimization: bool,
 }
 
@@ -428,7 +429,8 @@ pub fn estimate_absolute_pose(
         for (mut r, mut t) in p3p_solve(&sample_b, &sample_x) {
             let mut count = score(&r, &t, bearings, points, cos_thresh, &mut scratch);
             if count > best_count {
-                // Local optimization: refit on inliers while the set grows.
+                // Local optimization: refit on the inliers, repeating while
+                // the count grows.
                 if options.local_optimization {
                     (r, t, count) =
                         local_optimize(r, t, bearings, points, cos_thresh, count, &mut scratch);
@@ -465,9 +467,20 @@ pub fn estimate_absolute_pose(
     })
 }
 
-/// Refit a pose on its inliers, rescore, and repeat while the inlier count
-/// strictly grows (bounded rounds). Returns the best refit pose, its inlier
-/// mask (in `scratch`), and inlier count.
+/// Refit a pose on its inliers and rescore, repeating while the inlier count
+/// strictly grows (bounded rounds).
+///
+/// A refit is accepted when it does not shrink the consensus: on a larger
+/// inlier count, or on an equal count when it lowers the [`refine_pose`]
+/// cost ([`angular_cost`]) over the inliers it was fitted to. The equal-count case
+/// is the common clean one, where the raw 3-point pose already has every true
+/// correspondence as an inlier and the refit only improves accuracy; the
+/// residual check stops a Gauss-Newton step that did not converge from
+/// replacing a better pose. Rounds continue only after a strict gain, since a
+/// refit on an unchanged inlier set reproduces the same pose.
+///
+/// Returns the last accepted pose, its inlier mask (in `scratch`), and its
+/// inlier count.
 fn local_optimize(
     mut r: UnitQuaternion<f64>,
     mut t: Vector3<f64>,
@@ -486,19 +499,47 @@ fn local_optimize(
         }
         let (rr, tt) = refine_pose(r, t, bearings, points, &inliers);
         let new_count = score(&rr, &tt, bearings, points, cos_thresh, scratch);
-        if new_count > count {
+        let grew = new_count > count;
+        let tied_and_tighter = new_count == count
+            && angular_cost(&rr, &tt, bearings, points, &inliers)
+                < angular_cost(&r, &t, bearings, points, &inliers);
+        if grew || tied_and_tighter {
             r = rr;
             t = tt;
             count = new_count;
             cur_mask.copy_from_slice(scratch);
         } else {
-            // Keep the refined pose only if it did not shrink the consensus;
-            // otherwise restore the last accepted mask into `scratch`.
+            // The refit shrank the consensus or did not fit its inliers
+            // better: keep the last accepted pose and restore its mask.
             scratch.copy_from_slice(&cur_mask);
+        }
+        if !grew {
             break;
         }
     }
     (r, t, count)
+}
+
+/// Sum over `inliers` of `sin²θ_i = 1 − (b_i · d_i)²`, the squared norm of the
+/// residual [`refine_pose`] minimizes. A point with no predicted direction
+/// contributes the maximum, 1.
+fn angular_cost(
+    r: &UnitQuaternion<f64>,
+    t: &Vector3<f64>,
+    bearings: &[Vector3<f64>],
+    points: &[Point3<f64>],
+    inliers: &[usize],
+) -> f64 {
+    inliers
+        .iter()
+        .map(|&i| match predict_dir(r, t, &points[i]) {
+            Some(d) => {
+                let c = bearings[i].dot(&d);
+                1.0 - c * c
+            }
+            None => 1.0,
+        })
+        .sum()
 }
 
 /// Gauss-Newton refinement of a pose minimizing the sum of squared angular

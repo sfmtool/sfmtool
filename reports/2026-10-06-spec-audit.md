@@ -343,6 +343,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfmtool-core/src/geometry/absolute_pose.rs` (`p3p_solve`, `kabsch`, `AbsolutePoseOptions`, `estimate_absolute_pose`, `local_optimize`), `geometry/pose_refine.rs`, bindings in `crates/sfmtool-py/src/geometry/`. Consumers: `reconstruction_growth.rs:263-304`, `resect_images/finite.rs:29`, `pose_verification.rs:604`.
 **Inconsistencies:**
   - Spec :138-145 says the result is "the best *refit* pose". The code keeps a refit only when it strictly grows the inlier count (`absolute_pose.rs:489`) and otherwise returns the raw P3P pose (:494-498), which is the common clean case; the comment at :495 contradicts `new_count > count`. Code bug: accept on `new_count >= count`.
+    > _Status (2026-10-06): **Done** — `local_optimize` now keeps a refit that has more inliers, or the same count and a lower Gauss-Newton cost over the inliers it was fitted to (a plain `>=` could keep a refit that fits worse), and repeats only on a strict gain; the comment, option doc and spec say the same, and a new test pins the full-consensus case, branch `spec-fix-1006-03-abspose-lo`._
   - Spec :139-140 says "squared angular residuals"; the code minimizes `sin²θ` (`absolute_pose.rs:529-536`). Update spec.
   - Spec :188-191 says only `EQUIDISTANT_FISHEYE` among fisheyes has an analytic Jacobian; `supports_pixel_jacobian` is also true for `SIMPLE_RADIAL_FISHEYE` and `SFMTOOL_FISHEYE` (`camera/intrinsics.rs:496-502`). The `project_with_jac` doc (`pose_refine.rs:88-91`) is stale too.
   - Consumers (:17-20) name a relocalization consumer that does not exist; merge uses `pycolmap.estimate_and_refine_absolute_pose` (`merge/pose_refinement.py:114`). Bindings (:232-234): the binding also derives the angular threshold from `camera` for (N, 3) input (`sfmtool-py/src/geometry/absolute_pose.rs:172-186`), and `AbsolutePoseOptions::default()` (`absolute_pose.rs:333-344`) is undocumented, and `reconstruction_growth.rs:263-266` relies on it.
@@ -797,6 +798,7 @@ Read 2026-09-26; open items above.
    - **Absolute-pose local optimization keeps the refit only on a strict gain**
      (`absolute_pose.rs:489`, `new_count > count`). On clean data it returns the
      raw P3P pose, and the comment at :495 says the opposite. (absolute-pose)
+     > _Status (2026-10-06): **Done** — an equal-count refit is kept when it lowers the Gauss-Newton cost; code, comment and spec agree, branch `spec-fix-1006-03-abspose-lo`._
    - **`KdForest.query(max_dist=…)` returns points beyond `max_dist`**:
      `u8::cutoff_sq` rounds `max_dist²` up (`kdforest/distance.rs:78-85`), so
      2.5 admits a squared distance of 7 (2.65). (randomized-kdtree-forest)
