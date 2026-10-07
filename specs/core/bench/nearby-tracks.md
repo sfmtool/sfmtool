@@ -5,9 +5,10 @@ and ask what the other photographs agree is there, or near there. This
 operation answers with **nearby tracks**: 3D points close to the pixel in that
 photograph that several photographs see, each one ready to be put on the
 [bench](bench.md), the list of labelled items held beside a reconstruction to
-be judged and edited before they are committed as points. The scene near a pixel can hold surfaces at very different
-distances, a tree in front of a building in front of the sky, so the answer is
-a set of hypotheses rather than one estimate. The tracks are grouped into
+be judged and edited before they are committed as points. The scene near a
+pixel can hold surfaces at very different distances, a tree in front of a
+building in front of the sky, so the answer is a set of hypotheses rather than
+one estimate. The tracks are grouped into
 **depth layers**, ranges of distance along the pixel's ray that overlap, and
 each layer carries a rank, the evidence behind it, and a confidence that the
 pixel is on it. Each track gets a label that names the query, its layer's rank
@@ -192,12 +193,12 @@ candidates fall in no depth layer or in more than one, or none lies within a
 pixel of the pixel. The count of layers is the grouping alone, which reads no
 photograph: it is taken with `DepthLayerOptions::default()` and the evidence
 off, not with `options.layers`, whose fields all govern the reading and the
-ranking and none the grouping. A pixel on the sky or a distant skyline is the case this is for:
-the sources find nearer points around it, often one layer of them, and none at
-the pixel itself. Each reading keeps the range the sweep gave it, the stretch
-between its neighbouring disparities; a reading the sweep's refit moved gets
-its sightings' range instead, like a matching source's candidate. `Always`
-and `Never` run it or not regardless.
+ranking and none the grouping. A pixel on the sky or a distant skyline is the
+case this is for: the sources find nearer points around it, often one layer of
+them, and none at the pixel itself. Each reading keeps the range the sweep gave
+it, the stretch between its neighbouring disparities; a reading the sweep's
+refit moved gets its sightings' range instead, like a matching source's
+candidate. `Always` and `Never` run it or not regardless.
 
 **The layers.** Every track found, the sweep's readings after the sources',
 goes to [`depth_layers`](depth-layers.md) with its range and class, and gets
@@ -318,8 +319,8 @@ with `label`, `source`, `found` (its index into `found`), `layer`, `rank`,
 `confidence`, `pixel`, `distance_px`, `range`, `n_views`, `point` and
 `track` (an `EditableTrack`, or `None` for an existing point or when building
 is off), and `error` when building failed. `rank` and `confidence` are `None`
-when the layers are not ranked (`layers.evidence` off). With `commit=True` every built
-track is committed with the bench's commit in label order, its row's `point`
+when the layers are not ranked (`layers.evidence` off). With `commit=True`
+every built track is committed with the bench's commit in label order, its row's `point`
 set to the new point, and the call returns `(EditedReconstruction, result)`; a
 track the commit refuses gets an `error` and the rest are committed.
 
@@ -362,7 +363,7 @@ support; the labels, their order and the caller's label, and that a
 duplicate names a labelled track and is left out; that `commit=True`
 adds every built track as a point and leaves the given version alone; the
 skipped sources; and the refusals of the options and of a label that is
-empty or holds a control character.
+all whitespace or holds a control character.
 
 **Parity with the harness.** Run from the harness with `finder_impl=rust` and
 `finder_impl=python`, over both ground truths (seoul_bull's 1277 queries and
