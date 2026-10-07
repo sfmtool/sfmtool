@@ -637,9 +637,9 @@ refinement measured and which members stand.
   `max_keypoint_uncertainty` is in files refined before that change and
   `max_member_zncc_self_similarity_radius` in files refined after it. A file
   rewritten at a later version, or a selection of it, keeps the keys of the
-  refinement it holds, so a version 7 file can carry either. A reader treats a missing
-  `refine_options`, or one with neither extent key, as recording no patch
-  extent.
+  refinement it holds, so a version 7 file can carry either. A reader treats
+  a missing `refine_options`, or one with neither extent key, as recording no
+  patch extent.
 
 #### `cluster_patches/reference_members.{C}.uint32.zst`
 
@@ -1009,8 +1009,8 @@ absent whenever the source is an ordinary file.
 keys changed no stored layout and no format version. It was first written
 into version 4 files, and `restrict_cluster_ids` and `source_selection` were
 first written into version 5 files. Every cluster file a reader accepts
-(version 6 and later) may carry the record with either key. A reader treats a
-file without the record as an ordinary file, a record without
+(version 6 and later) may carry the record, with or without either key. A
+reader treats a file without the record as an ordinary file, a record without
 `restrict_cluster_ids` as a selection not restricted by cluster, and a record
 without `source_selection` as a selection of an ordinary file.
 
