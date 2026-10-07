@@ -36,9 +36,8 @@ pub struct BlurScratch {
     b: Vec<f32>,
     line: Vec<Tap>,
     axis: Vec<Tap>,
-    /// `(stride, height, planes)` of the padded buffers `a` was last zeroed
-    /// for.
-    geometry: (usize, usize, usize),
+    /// One row of reciprocals of the blurred mask.
+    inverse: Vec<f32>,
 }
 
 /// One tap of a pass: `dst[y][x] += w · src[y + dy][x + dx]`.
@@ -84,14 +83,52 @@ fn check_shapes(values: &[f32], channels: usize, side: usize, data: &[bool], out
     );
 }
 
-/// The normalized taps `exp(−t²/2σ²)` for `t = −K ..= K`, `K = ⌈3σ⌉`.
+/// The normalized taps `exp(−t²/2s²)` for `t = −K ..= K`, `K = ⌈3σ⌉`, with
+/// `s` chosen so the taps' variance `Σ w t²` is `σ²`.
+///
+/// From `σ = 1` up, the taps of `s = σ` have that variance to within half a
+/// percent, and `s` is `σ`. Below, they fall short of it, more the narrower
+/// the Gaussian: `σ = 0.5` gives 0.215 for 0.25, and `σ = 0.3` under a tenth
+/// of 0.09. A pass of the slanted line is often that narrow along its rows,
+/// so there `s` is found by bisection. On the tile of sinusoids the passes are
+/// tested on (`the_two_passes_match_the_exact_blur_and_the_direct_2d_blur`),
+/// over semi-axes of 0.5 to 0.7 at every 5°, matching the variance brings the
+/// passes' worst error against the exact blur from 7.8 grey levels to 2.7.
 fn gaussian_weights(sigma: f64) -> Vec<f64> {
     let radius = (3.0 * sigma).ceil().max(1.0) as isize;
-    let raw: Vec<f64> = (-radius..=radius)
-        .map(|t| (-((t * t) as f64) / (2.0 * sigma * sigma)).exp())
-        .collect();
-    let total: f64 = raw.iter().sum();
-    raw.into_iter().map(|w| w / total).collect()
+    let taps = |s: f64| -> Vec<f64> {
+        let raw: Vec<f64> = (-radius..=radius)
+            .map(|t| (-((t * t) as f64) / (2.0 * s * s)).exp())
+            .collect();
+        let total: f64 = raw.iter().sum();
+        raw.into_iter().map(|w| w / total).collect()
+    };
+    if sigma >= 1.0 {
+        return taps(sigma);
+    }
+    // `Σ w t²` of the normalized taps of `s`, summed over `t > 0` and doubled.
+    let variance = |s: f64| -> f64 {
+        let (mut total, mut moment) = (1.0, 0.0);
+        for t in 1..=radius {
+            let t2 = (t * t) as f64;
+            let w = (-t2 / (2.0 * s * s)).exp();
+            total += 2.0 * w;
+            moment += 2.0 * w * t2;
+        }
+        moment / total
+    };
+    // The taps' variance grows with `s`; at `s = σ` it is short of `σ²`, and
+    // at `σ + 0.5` past it for every `σ` under 1.
+    let (mut lo, mut hi) = (sigma, sigma + 0.5);
+    for _ in 0..20 {
+        let mid = 0.5 * (lo + hi);
+        if variance(mid) < sigma * sigma {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    taps(0.5 * (lo + hi))
 }
 
 /// The two passes' taps for `cov`: the slanted line's, then the axis pass's.
@@ -182,7 +219,7 @@ fn blur_with(
         b,
         line,
         axis,
-        geometry,
+        inverse,
     } = scratch;
     plan(cov, line, axis);
     let (first, second): (&[Tap], &[Tap]) = match (line.is_empty(), axis.is_empty()) {
@@ -218,19 +255,12 @@ fn blur_with(
         plane: stride * height,
         planes,
     };
-    // `a` holds the padded tile. Its padding is zero, and stays zero between
-    // calls of the same geometry, since the second pass writes only the
-    // tile's rows; on a new geometry it is cleared.
-    let shape = (stride, height, planes);
-    if *geometry != shape || a.len() != planes * g.plane {
-        a.clear();
-        a.resize(planes * g.plane, 0.0);
-        *geometry = shape;
-    }
-    if b.len() != planes * g.plane {
-        b.clear();
-        b.resize(planes * g.plane, 0.0);
-    }
+    // `a` holds the padded tile. It is all zeros between calls, whatever the
+    // geometry of the last one, since each call clears what it wrote before
+    // it returns; a resize keeps those zeros and adds more. `b` is read only
+    // where the first pass of this call wrote it.
+    a.resize(planes * g.plane, 0.0);
+    b.resize(planes * g.plane, 0.0);
     let n = side * side;
     for y in 0..side {
         let row = (pad_y + y) * stride + pad_x;
@@ -255,7 +285,7 @@ fn blur_with(
         a
     };
     let mask = &result[channels * g.plane..];
-    let mut inverse = vec![0.0f32; side];
+    inverse.resize(side, 0.0);
     for y in 0..side {
         let at = (pad_y + y) * stride + pad_x;
         let flags = &data[y * side..(y + 1) * side];
@@ -265,21 +295,25 @@ fn blur_with(
         for c in 0..channels {
             let blurred = &result[c * g.plane + at..c * g.plane + at + side];
             let dst = &mut out[c * n + y * side..c * n + (y + 1) * side];
-            for ((d, &v), &inv) in dst.iter_mut().zip(blurred).zip(&inverse) {
+            for ((d, &v), &inv) in dst.iter_mut().zip(blurred).zip(inverse.iter()) {
                 if inv > 0.0 {
                     *d = v * inv;
                 }
             }
         }
     }
-    // The second pass wrote the tile's rows of `a`; put back the zeros of its
-    // padding columns, so the next call of this geometry finds them.
-    if !second.is_empty() {
-        for y in band2.rows.clone() {
-            for p in 0..planes {
-                let row = p * g.plane + y * stride;
-                a[row + band2.cols.start + side..row + band2.cols.end].fill(0.0);
-            }
+    // This call wrote `a` only on the tile's rows, from its first column:
+    // the tile itself, and the second pass its band. Put the zeros back there,
+    // so the next call, of any geometry, finds `a` all zero.
+    let end = if second.is_empty() {
+        pad_x + side
+    } else {
+        band2.cols.end
+    };
+    for y in band2.rows.clone() {
+        for p in 0..planes {
+            let row = p * g.plane + y * stride;
+            a[row + pad_x..row + end].fill(0.0);
         }
     }
 }

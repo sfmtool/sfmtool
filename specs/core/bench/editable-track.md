@@ -1433,10 +1433,11 @@ The standing always agrees with the verdicts. The rule decides over the rows
 that are `in` when the track is read, so a step that then moves a verdict --
 the evaluation's own repaint, `apply_thresholds`, `unpin_verdicts` or
 `set_verdict` -- brings the standings into line without reading anything: a row
-turned `out` loses its agreement readings, and the rule runs again over
-the rows that are still `in` and that it decided on, from the readings they
-carry and on the inputs it read last time. Those readings were taken under the old `in` set and a row turned `in`
-has none, so it has no standing until the next evaluation reads it; the viewer
+turned `out` loses its agreement readings, and the rule runs again over the
+rows that are still `in` and that it decided on, from the readings they carry
+and on the inputs it read last time. Those readings were taken under the old
+`in` set and a row turned `in` has none, so it has no standing until the next
+evaluation reads it; the viewer
 reads a track again after every step and after a repaint (§ "An evaluation
 that only follows a repaint does not repaint again"), so what it shows settles
 on the next reading. An `out` row is therefore never named the reference view,

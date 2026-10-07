@@ -100,10 +100,12 @@ along it is blurred to the other's sharpness. It spares a member that disagrees
 with its track only because it is blurrier than the rest: a frame out of focus,
 motion blur, a far view added to a near track.
 
-Each member's ellipse is read on its own render, the common support as its
-data, and the blur runs over the same support, so the blur-matched pair is read
-over exactly the samples the plain pair is, with the same window, the same
-channels the plain table kept and the same z-normalization. The matrix carries
+Each member's ellipse is read on its own render, over the largest square inside
+the common support (below), and the blur runs over the common support, so the
+blur-matched pair is read over exactly the samples the plain pair is, with the
+same window, the same channels the plain table kept and the same
+z-normalization; a kept channel the blur leaves flat in a render counts as a
+ZNCC of 0 there. The matrix carries
 the result as `blur_matched_zncc` beside the plain `zncc`, which is unchanged,
 and the decision rule's sweep, bars and margin read it. The coarse tables,
 exoneration's retained deficit and the per-member sharpness keep reading the
@@ -115,28 +117,31 @@ datasets, one thread:
 
 | Matching | Time against plain | Pairs blurred | Verdicts that change | Members not kept (plain: 739) |
 |---|---|---|---|---|
-| `BlurMatched` | 2.85 × | 100% | 2.1% | 678 |
-| `BlurMatchedAboveRatio(1.25)` | 2.27 × | 48% | 2.1% | 662 |
-| `BlurMatchedAboveRatio(1.5)` | 2.09 × | 24% | 1.8% | 667 |
+| `BlurMatched` | 2.06 × | 100% | 2.3% | 689 |
+| `BlurMatchedAboveRatio(1.25)` | 1.52 × | 52% | 2.1% | 677 |
+| `BlurMatchedAboveRatio(1.5)` | 1.31 × | 27% | 1.7% | 678 |
 
-About half the added time is reading the members' ellipses (about 50 µs a
-member over the disk-shaped support, which leaves the corners without data and
-so takes the reading's slower route), the rest the blurred pairs. The verdicts
-that change go both ways in equal numbers: 77 tracks kept whole become splits
-and 91 splits are kept whole (ratio 1.25), because matching lifts the core's
+Most of the added time is the blurred pairs; a fifth of it (ratio 1.25) is
+reading the members' ellipses, about 7 µs a member. Each is read on the largest
+square centred on the grid that lies inside the common support, where every
+sample carries data, so the reading takes its dense route; over the
+disk-shaped support itself, whose corners carry no data, it took about 50 µs.
+Where that square is under 8 samples on a side, the ellipse is read over the
+whole support. The verdicts that change go both ways in equal numbers: 84
+tracks kept whole become splits and 86 splits are kept whole (ratio 1.25), because matching lifts the core's
 own agreement and with it the self-normalized bar as well as the blurry
 members. A member made blurrier on purpose (one member's photograph blurred
 near the point so its tile is blurred by `σ` grid px, 595 tracks) is evicted:
 
 | `σ` | Its semi-major axis, median | Plain | Blur-matched | Ratio 1.25 |
 |---|---|---|---|---|
-| 0 | 0.97 | 1.0% | 1.3% | 1.3% |
-| 1 | 1.65 | 1.2% | 1.2% | 1.3% |
-| 2 | 2.93 | 4.9% | 2.7% | 2.0% |
+| 0 | 0.97 | 1.0% | 1.0% | 1.2% |
+| 1 | 1.65 | 1.2% | 1.0% | 1.2% |
+| 2 | 2.93 | 4.9% | 2.4% | 2.0% |
 
 The relative bar and multi-scale exoneration already spare most blurred
-members, so matching buys three points at `σ` 2 and nothing at `σ` 1, for twice
-the time, and moves real verdicts both ways by about as much. A caller vetting
+members, so matching lowers the eviction by three points at `σ` 2 and changes
+nothing at `σ` 1, for half as much time again, and moves real verdicts both ways by about as much. A caller vetting
 tracks where blur is expected (video with motion blur, a far view added to a
 near track) can turn it on; `bar` was calibrated on the plain table, and the
 blur-matched one reads about 0.02 higher on the same pairs.

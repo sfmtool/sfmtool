@@ -113,8 +113,10 @@ pub const REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN: f64 = 0.15;
 ///
 /// After blur matching, what is left of a ninth's disagreement is content,
 /// and a tighter bar catches an occluder without turning away a sharp view.
-/// On the tuning half of the hand picks `0.25` agreed with one more pick than
-/// `0.3`. See `specs/core/patch/reference-view.md` § "Blur-matched agreement".
+/// On the tuning half of the hand picks, with the margin at `0.15`, `0.25`
+/// agreed with them within the lenient bounds on 36 of 39 tracks against 35
+/// for `0.3`, with the same 19 exact. See `specs/core/patch/reference-view.md`
+/// § "Blur-matched agreement".
 pub const REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT: f64 = 0.25;
 
 /// Which reading of the ZNCC between two views' tiles a test of the rule

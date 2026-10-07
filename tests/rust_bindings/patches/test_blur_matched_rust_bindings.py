@@ -79,6 +79,47 @@ def test_samples_without_data_are_left_out():
     assert out["zncc"][0, 1] == pytest.approx(1.0)
 
 
+def test_valid_flags_samples_without_data():
+    tile = _texture()
+    holed = tile.copy()
+    holed[:, :6, :3] = 0
+    valid = np.ones((2, 24, 24), bool)
+    valid[1, :, :6] = False
+    out = blur_matched_zncc_matrix(
+        np.stack([tile, holed]), valid=valid, matching="plain"
+    )
+    assert out["zncc"][0, 1] == pytest.approx(1.0)
+    # Without the flags, the black columns are read as texture.
+    unflagged = blur_matched_zncc_matrix(np.stack([tile, holed]), matching="plain")
+    assert unflagged["zncc"][0, 1] < 0.99
+
+
+def test_grey_and_alpha_read_the_grey_alone():
+    grey = _texture()[..., :1]
+    blurred = _texture(blur=1.5)[..., :1]
+    tiles = np.stack([grey, blurred])
+    with_alpha = np.concatenate([tiles, np.full_like(tiles, 255)], axis=-1)
+    # Alpha is not a colour channel: two channels read as one.
+    for matching in ("plain", "blur_matched"):
+        np.testing.assert_allclose(
+            blur_matched_zncc_matrix(with_alpha, matching=matching)["zncc"],
+            blur_matched_zncc_matrix(tiles, matching=matching)["zncc"],
+        )
+    # Alpha 0 marks a sample without data.
+    holed = with_alpha.copy()
+    holed[1, :, :6, 0] = 0
+    holed[1, :, :6, 1] = 0
+    out = blur_matched_zncc_matrix(
+        np.stack([with_alpha[0], holed[1]]), matching="plain"
+    )
+    expected = blur_matched_zncc_matrix(
+        np.stack([with_alpha[0], with_alpha[1]]),
+        valid=np.stack([np.ones((24, 24), bool), holed[1, ..., 1] > 0]),
+        matching="plain",
+    )
+    assert out["zncc"][0, 1] == pytest.approx(expected["zncc"][0, 1])
+
+
 def test_bad_arguments_are_refused():
     tiles = np.stack([_texture(), _texture()])
     with pytest.raises(ValueError, match="kernel"):
@@ -89,3 +130,7 @@ def test_bad_arguments_are_refused():
         blur_matched_zncc_matrix(tiles, ellipses=np.zeros((3, 2, 2)))
     with pytest.raises(ValueError, match="square"):
         blur_matched_zncc_matrix(np.zeros((2, 24, 20, 4), np.uint8))
+    with pytest.raises(ValueError, match="valid"):
+        blur_matched_zncc_matrix(tiles, valid=np.ones((2, 24, 23), bool))
+    with pytest.raises(ValueError, match="min_ellipse_ratio"):
+        blur_matched_zncc_matrix(tiles, min_ellipse_ratio=0.5)

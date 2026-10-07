@@ -3,10 +3,10 @@
 Two photographs of the same piece of surface rarely show it equally sharply:
 one is farther away, out of focus, moved during the exposure, or seen through
 a part of the lens that smears it along one direction. Normalized correlation
-(ZNCC) between the two views' tiles charges the sharper one for the fine detail
-the other lacks, so a sharp, well-aligned view reads as if it disagreed with
-its track, and a blurry view looks worse beside a sharp one than it does beside
-other blurry views. **Blur-matched ZNCC** removes that charge: before two tiles
+(ZNCC) between the two views' tiles scores the sharper one lower for detail the
+other lacks, so a sharp, well-aligned view reads as if it disagreed with its
+track, and a blurry view reads worse beside a sharp one than it does beside
+other blurry views. **Blur-matched ZNCC** removes that penalty: before two tiles
 are correlated, the sharper one is blurred to the other's sharpness, direction
 by direction, so that what remains of the disagreement is content (an
 occluder, another surface, a shadow, parallax) rather than sharpness. It is a
@@ -59,6 +59,11 @@ pub fn blur_tile(values: &[f32], channels: usize, side: usize, data: &[bool],
     cov: BlurCovariance, out: &mut [f32], scratch: &mut BlurScratch);
 
 pub struct TilePlanes { pub values: Vec<f32>, pub data: Vec<bool>, pub side: usize, pub channels: usize }
+impl TilePlanes {
+    // An interleaved u8 tile: 1 or 2 channels grey (and alpha), 3 or 4 RGB (and alpha).
+    pub fn from_interleaved(samples: &[u8], side: usize, stride: usize, data: &[bool]) -> Self;
+    pub fn blurred(&self, cov: BlurCovariance, scratch: &mut BlurScratch) -> Self;
+}
 pub struct PairReadings { pub whole: f64, pub grid: [[f64; 3]; 3] }
 pub fn pair_zncc_readings(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> PairReadings;
 
@@ -66,6 +71,9 @@ pub enum BlurMatchKernel { Anisotropic, IsotropicLadder }
 pub struct BlurMatchedPairs {
     pub k: usize, pub whole: Vec<f64>, pub grid: Vec<[[f64; 3]; 3]>,
     pub blurred: Vec<bool>, pub pairs: usize, pub pairs_blurred: usize,
+}
+impl BlurMatchedPairs {
+    pub fn row_middle(&self, v: usize) -> f64; // median of view v's whole-tile readings
 }
 pub fn blur_matched_pairs(tiles: &[&TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>],
     matching: PairMatching, kernel: BlurMatchKernel, window: PatchWindow,
@@ -100,18 +108,22 @@ use sfmtool_core::patch::normal_refine::PatchWindow;
 use sfmtool_core::progress::Progress;
 
 fn report(tiles: &[TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>]) {
-let refs: Vec<&TilePlanes> = tiles.iter().collect();
-let pairs = blur_matched_pairs(
-    &refs,
-    ellipses,
-    PairMatching::BlurMatchedAboveRatio(1.25),
-    BlurMatchKernel::Anisotropic,
-    PatchWindow::GaussianDisk { sigma: 0.6 },
-    None,
-    &Progress::none(),
-);
-println!("{} of {} pairs blurred; view 0's median {:.3}",
-    pairs.pairs_blurred, pairs.pairs, pairs.row_middle(0));
+    let refs: Vec<&TilePlanes> = tiles.iter().collect();
+    let pairs = blur_matched_pairs(
+        &refs,
+        ellipses,
+        PairMatching::BlurMatchedAboveRatio(1.25),
+        BlurMatchKernel::Anisotropic,
+        PatchWindow::GaussianDisk { sigma: 0.6 },
+        None,
+        &Progress::none(),
+    );
+    println!(
+        "{} of {} pairs blurred; view 0's median {:.3}",
+        pairs.pairs_blurred,
+        pairs.pairs,
+        pairs.row_middle(0)
+    );
 }
 ```
 
@@ -191,8 +203,8 @@ pairs, and changes what a consumer reads by little:
 |---|---|---|---|---|
 | 1 (every difference) | 100% | 100% | - | - |
 | 1.1 | 82% | - | 0.0007 / 0.005 | 0.003 / 0.018 |
-| 1.25 | 55% | 48% | 0.004 / 0.013 | 0.007 / 0.033 |
-| 1.5 | 29% | 24% | 0.009 / 0.023 | 0.011 / 0.048 |
+| 1.25 | 55% | 52% | 0.004 / 0.013 | 0.007 / 0.033 |
+| 1.5 | 29% | 27% | 0.009 / 0.023 | 0.011 / 0.048 |
 
 The share varies with the data: on BadlandPanorama, whose distant views are
 all about equally sharp, a ratio of 1.25 blurs 6% of the pairs; on
@@ -236,9 +248,10 @@ plane):
 
 The two passes run 10 to 18 times faster than the direct convolution. The
 self-similarity reading that supplies an ellipse costs about 7 µs per reading
-where every sample carries data, and about 50 µs on member coherence's renders,
-whose common support leaves the corners without data and so takes the slower
-route that visits every sample.
+where every sample carries data; member coherence reads it on the largest square
+inside its common support, where every sample does, rather than over the
+disk-shaped support itself, whose corners carry no data and which takes the
+slower route that visits every sample at about 50 µs.
 
 **No AVX2 form.** Every pass is a sum of whole shifted rows, `dst[x] += w ·
 src[x + s]`, which the compiler vectorizes. The same code compiled for AVX2
@@ -250,12 +263,12 @@ little for wider registers), so the kernel has none.
 sharper tile, by semi-major axis, isotropically, with the width snapped to the
 nearest of six levels `0.5 · √2ⁿ` (`LADDER_SIGMAS`), and keeps each view's
 blurred levels, so each view is blurred at most once per level however many
-pairs it is in. On the bench its reference-view phase cost 12 to 25% less than
-the anisotropic kernel's on tracks of up to 20 views and 36% less on tracks of
-21 views or more (4.3 against 6.7 ms); with a ratio of 1.25 on both, 4.1
-against 5.0 ms. Its readings agree with the anisotropic kernel's to within one
-or two of the review cases and to within 0.7 points on the
-planted blur below. It is isotropic, which the anisotropic kernel was chosen
+pairs it is in. On the bench its reference-view phase costs 13 to 32% less
+than the anisotropic kernel's on tracks of up to 20 views and 35% less on
+tracks of 21 views or more (7.9 against 12.1 ms); with a ratio of 1.25 on both,
+7.5 against 9.5 ms. It picks the same reference view as the anisotropic kernel on
+all but one or two of the review cases, and its planted-blur readings below are
+within 0.7 points of the anisotropic kernel's. It is isotropic, which the anisotropic kernel was chosen
 over for oblique and directional views, so it is an option rather than the
 default.
 
@@ -263,20 +276,23 @@ default.
 
 **The two passes against the exact blur.** On a tile of four sinusoids, whose
 blur by a Gaussian is known exactly (each amplitude scales by `exp(−½ kᵀ Σ
-k)`), over 72 covariances (semi-axes from 0.6 to 2, with 1-D blurs, at nine
-angles), the passes are at most 3.6 grey levels off the exact answer on
-sinusoids spanning ±115, against 0.34 for the direct 2-D convolution, which
-has no 1-D form. The error is the linear interpolation's, largest for the
-narrowest blurs at angles between the grid's axes and its diagonals. On a
-textured tile with samples missing, the two blurs agree to a ZNCC above 0.998.
+k)`), the passes are at most 3.6 grey levels off the exact answer on sinusoids
+spanning ±115, over 117 covariances (semi-axes from 0.5 to 2, with 1-D blurs,
+at nine angles). At the widths most blurred pairs get, semi-axes of 0.5 to 0.7
+with 1-D blurs, at every 5°, they are at most 2.7 off and 0.6 on average. The
+direct 2-D convolution is 0.34 off where its minor axis is 0.6 or more; it
+samples the kernel as it is, which falls short of its width below that, and it
+has no 1-D form. The passes' error is the linear interpolation's, largest for
+1-D blurs at angles between the grid's axes and its diagonals. On a textured
+tile with samples missing, the two blurs agree to a ZNCC above 0.998.
 
-**The kernel against the prototype.** The Rust kernel reproduces the Python
-prototype the design was measured with (in Python, on the same tiles)
-on 5,922 pairs of pool tiles to a median difference of 0.0004 in ZNCC (p90
+**The kernel against the prototype.** The Rust kernel reproduces the
+prototype the design was measured with, in Python, on the same tiles: on 5,922
+pairs of pool tiles to a median difference of 0.0004 in ZNCC (p90
 0.02, correlation 0.992). The prototype used clamped borders where the kernel
 renormalizes, and a sampled 2-D kernel where the kernel uses the two passes.
 
-## What it buys
+## What it changes
 
 **A member made blurrier.** From 987 pool tracks of ten datasets (at least five
 views each), one member's tile was blurred by `σ` 1 or 2 grid px (its
@@ -295,22 +311,24 @@ neighbours, and members shifted by 2 to 4 px):
 So a member blurred well past its track, which plain ZNCC rejects one time in
 five, is kept, while wrong views stay separated: measured with the prototype
 on the same planted wrong views, the chance that a member scores above a wrong
-view was 0.967 blur-matched against 0.966 plain. The real tracks contain few members much blurrier than all their partners, which
-is why a consumer's verdicts move little on real data (below).
+view was 0.967 blur-matched against 0.966 plain. The real tracks contain few
+members much blurrier than all their partners, which is why a consumer's
+verdicts move little on real data (below).
 
 **On the consumers**, measured on the review cases and samples of the ten
 datasets of the reference-view work:
 
 | Consumer | Option | Added cost | Effect | Default |
 |---|---|---|---|---|
-| Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.20 ms per track (median; p90 1.4 ms), 3.2% of an evaluation | 30 of 77 hand picks exactly, against 28 plain (tune half 19, held-out 11 against 18 and 10) | on |
-| Member coherence's decision ([member-coherence-validation.md](member-coherence-validation.md)) | blur-matched, ratio 1.25 | 2.3 × the plain run on one thread (2.1 × on all) | a planted member blurred by `σ` 2 is evicted 2.0% of the time against 4.9% plain; verdicts change on 2.1% of real points, in both directions | off |
+| Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.32 ms per track (median; p90 2.3 ms), 3.8% of an evaluation | 30 of 77 hand picks exactly, against 28 plain (tune half 19, held-out 11 against 18 and 10) | on |
+| Member coherence's decision ([member-coherence-validation.md](member-coherence-validation.md)) | blur-matched, ratio 1.25 | 1.5 × the plain run on one thread (1.7 × on all) | a planted member blurred by `σ` 2 is evicted 2.0% of the time against 4.9% plain; verdicts change on 2.1% of real points, in both directions | off |
 
 ## Implementation notes
 
 **The ellipse is the measurement of the tile being blurred.** A consumer passes
 the ellipse of the very render it correlates: the bench the `R×R` tile's whole
-reading, member coherence a reading of its own render over the common support.
+reading, member coherence a reading of its own render over the largest square
+inside the common support.
 An ellipse read on another render of the view (another resolution, sampler or
 support) describes another tile.
 
@@ -319,13 +337,27 @@ padded with zeros by both passes' reach, and the first pass writes the tile and
 the second pass's reach round it, so the two passes compose as one 2-D
 convolution of the tile extended by zeros rather than of a tile cut off after
 the first pass. A band is computed in whole 8-sample groups; the columns past
-the tile it adds are written and never read back. The buffer's padding stays
-zero between calls with the same geometry, since the second pass writes only
-the tile's rows, and is cleared when the geometry changes.
+the tile it adds are written and never read back. The padded buffer is all
+zeros between calls: each call writes it only on the tile's rows, from the
+tile's first column, and clears what it wrote before it returns. Two
+covariances can share a buffer size and differ in their padding, so a buffer
+cleared only when its size changed would hand the previous tile to the next
+call; a test reuses one scratch over many shapes and compares each blur with a
+fresh scratch's, bit for bit.
+
+**Each pass's taps have the variance asked for.** A Gaussian sampled at whole
+pixels has less variance than its width says once the width is under about 1:
+0.215 for 0.25 at `σ` 0.5, and under a tenth of 0.09 at `σ` 0.3. The slanted
+pass is often that narrow along its rows, so its taps would blur less than
+asked, by most at 1-D blurs between the axes and the diagonals. Under `σ` 1 the
+taps are those of a sampled Gaussian whose width is found by bisection so their
+variance is `σ²`, which brought the worst error at widths 0.5 to 0.7 from 7.8
+grey levels to 2.7. Integrating the Gaussian over each pixel instead overshoots
+the variance by about 1/12 and was worse at every width.
 
 **A pair left plain reads exactly the plain value.** `pair_zncc_readings`
 gathers the cells' sums in the same order and by the same formula as
-`pair_zncc_grid`(reference-view.md), so a pair the ratio leaves alone reads
+`pair_zncc_grid` ([reference-view.md](reference-view.md)), so a pair the ratio leaves alone reads
 the plain cell grid bit for bit, and member coherence copies its plain value
 for such a pair.
 
@@ -346,21 +378,38 @@ constants are defined in
 
 ## Python bindings
 
-`sfmtool._sfmtool.patches.blur_matched_zncc_matrix(tiles, *, ellipses=None,
-matching="blur_matched", min_ellipse_ratio=1.25, kernel="anisotropic",
-window="gaussian_disk", window_sigma=0.6)` reads every pair of a `(k, R, R, C)`
-uint8 stack of tiles (a fourth channel is alpha, 0 marking a sample without
-data). `ellipses` is `(k, 2, 2)` float64, NaN for a tile without one, or `None`
-to read each tile's whole self-similarity here. It returns a dict: `zncc`
-`(k, k)`, `zncc_grid` `(k, k, 3, 3)`, `blurred` `(k, k)` bool, `pairs`,
-`pairs_blurred` and `ellipse_matrix` `(k, 2, 2)`. It raises `ValueError` for a
-stack that is not square tiles of 3 or more on a side with 1 to 4 channels, an
-`ellipses` of the wrong shape, an unknown name, or a ratio under 1.
+`sfmtool._sfmtool.patches.blur_matched_zncc_matrix(tiles, *, valid=None,
+ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
+kernel="anisotropic", window="gaussian_disk", window_sigma=0.6)` reads every
+pair of a `(k, R, R, C)` uint8 stack of tiles. One channel is grey, two grey
+and alpha, three RGB and four RGB and alpha; alpha is not correlated, and 0
+there marks a sample without data. `valid` is an optional `(k, R, R)` bool
+stack, as `OrientedPatch.render_view_tile` returns it, `False` marking a sample
+without data. `ellipses` is `(k, 2, 2)` float64, NaN for a tile without one, or
+`None` to read each tile's whole self-similarity here, over the samples with
+data. It returns a dict: `zncc` `(k, k)`, `zncc_grid` `(k, k, 3, 3)`, `blurred`
+`(k, k)` bool, `pairs`, `pairs_blurred` and `ellipse_matrix` `(k, 2, 2)`. It
+raises `ValueError` for a stack that is not square tiles of 3 or more on a side
+with 1 to 4 channels, a `valid` or `ellipses` of the wrong shape, an unknown
+name, or a ratio under 1 or not finite.
+
+The bench's readings are those of the tiles `render_view_tile` renders at each
+view's keypoint, at the evaluation's resolution and with its sampler, read with
+their `valid` flags, the ellipses left to the function, a ratio of 1.25 and the
+default kernel and window:
 
 ```python
 from sfmtool._sfmtool.patches import blur_matched_zncc_matrix
 
-out = blur_matched_zncc_matrix(tiles, matching="blur_matched_above_ratio")
+rendered = [
+    patch.render_view_tile(camera, pose, image, keypoint=kp)
+    for camera, pose, image, kp in views
+]
+out = blur_matched_zncc_matrix(
+    np.stack([t["samples"] for t in rendered]),
+    valid=np.stack([t["valid"] for t in rendered]),
+    matching="blur_matched_above_ratio",
+)
 print(out["pairs_blurred"], "of", out["pairs"], "pairs blurred")
 ```
 
@@ -377,7 +426,9 @@ value, the floor); that equal ellipses blur nothing; that each tile is blurred
 only along the directions it is sharper in, on axis-aligned and rotated pairs;
 the skip ratio, per direction; the two passes against the exact blur of a tile
 of sinusoids and against the direct 2-D convolution, and the two against each
-other round missing samples; that a sample without data neither gives nor takes
+other round missing samples; that one scratch reused over many blurs of
+different shapes gives what a fresh one gives, bit for bit, and that a pair
+reads the same in a track as alone; that a sample without data neither gives nor takes
 a value and a flat tile stays flat at the edge and round holes; that a 1-D blur
 leaves a texture along it alone; that a tile and a blurred copy of it read a
 ZNCC near 1 blur-matched and well above plain; that equally sharp views read
@@ -408,8 +459,9 @@ test the consumers. The Python tests are in
   row's leave-one-out template and its self-similarity reading, which the
   localizer builds per round and does not return, and the bars would need
   measuring again; the localizer is also the alignment, which stays unblurred.
-  Proposed with Part 6 of
-  [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md).
+  Whether the bars should switch at all is an open question of Part 6 of
+  [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md):
+  blur-matched, they would stop reacting to views that are out of focus.
 - **The fuse's IRLS residuals.** Each view's residual against the weighted mean
   is recomputed every iteration, and the mean, the blurrier of every pair,
   changes with the weights, so blur-matching the residuals needs the mean's

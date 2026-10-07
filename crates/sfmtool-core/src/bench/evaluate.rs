@@ -150,7 +150,7 @@ pub struct EvaluateOptions {
 /// The default takes the blur-matched readings, skipping a direction where
 /// the two ellipses differ by less than [`DEFAULT_MIN_ELLIPSE_RATIO`], with
 /// the anisotropic kernel, and has both tests read them: on the review cases
-/// that adds about 0.2 ms to a track's evaluation (3%) and agrees with the
+/// that adds about 0.3 ms to a track's evaluation (4%) and agrees with the
 /// hand picks on two more tracks of 77. `specs/core/patch/reference-view.md`
 /// § "Blur-matched agreement" has the measurements.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -905,13 +905,15 @@ struct TileGeometry<'a> {
 /// with the default parameters, and measure the whole tile's and the middle's
 /// ellipses through `geometry`.
 ///
-/// The tile is read as it is, every sample as data, with no pixels from
-/// outside it: at each shift only the samples both windows hold are
-/// correlated, as the culls read a stored bitmap.
+/// The tile is read with no pixels from outside it: at each shift only the
+/// samples both windows hold, and that carry data, are correlated, as the
+/// culls read a stored bitmap. `data` flags the samples that carry data, one
+/// per sample, row-major; `None` means every sample does.
 fn score_self_similarity(
     samples: &[f32],
     channels: usize,
     resolution: usize,
+    data: Option<&[bool]>,
     geometry: &TileGeometry<'_>,
 ) -> TileSelfSimilarity {
     if channels == 0 || resolution < 3 || samples.len() != resolution * resolution * channels {
@@ -925,7 +927,7 @@ fn score_self_similarity(
         width: resolution,
         height: resolution,
     };
-    let parts = zncc_self_similarity_parts(&tile, None, &SelfSimilarityParams::default());
+    let parts = zncc_self_similarity_parts(&tile, data, &SelfSimilarityParams::default());
     let units = |reading| {
         SelfSimilarityEllipseUnits::read(reading, geometry.jacobian, geometry.placement, resolution)
     };
@@ -975,7 +977,7 @@ fn tile_self_similarity(
         jacobian: Some(shape.map(|row| row.map(|v| v * step))),
         placement: None,
     };
-    score_self_similarity(&tile, channels, resolution, &geometry)
+    score_self_similarity(&tile, channels, resolution, None, &geometry)
 }
 
 // ---- The track stage -------------------------------------------------------
@@ -1562,7 +1564,9 @@ pub(super) fn observation_metrics(
 ///
 /// It reads the view's `R×R` tile ([`render_view_tile`], the grid every
 /// stored patch bitmap is rendered on), the overlap way, with no pixels from
-/// outside it. The ellipses are measured through the placement the tile was
+/// outside it and only its samples on the photograph as data, so a sample the
+/// warp could not place, black in the tile, is not read as texture. The
+/// ellipses are measured through the placement the tile was
 /// rendered through at resolution `R`: the image px per grid px at its centre
 /// and its half-extents.
 fn view_tile_self_similarity(tile: &ViewTile) -> TileSelfSimilarity {
@@ -1571,7 +1575,13 @@ fn view_tile_self_similarity(tile: &ViewTile) -> TileSelfSimilarity {
         jacobian: tile.jacobian,
         placement: Some(&tile.placement),
     };
-    score_self_similarity(&samples, tile.channels(), tile.resolution(), &geometry)
+    score_self_similarity(
+        &samples,
+        tile.channels(),
+        tile.resolution(),
+        Some(&tile.valid),
+        &geometry,
+    )
 }
 
 /// Read what the reference-view rule needs across the `in` observations whose

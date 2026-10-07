@@ -1329,8 +1329,8 @@ tiles are correlated the sharper is blurred to the other's sharpness, along
 each direction in which their self-similarity ellipses differ by more than a
 quarter ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
 so a sharp row is not counted as disagreeing for detail the blurrier rows lack.
-Under plain readings the cell bar is 0.3. When no row passes, the rule drops the 65° limit, then the check of the
-ninths, then coverage and clipping; a row that sees the patch at 90° or more,
+Under plain readings the cell bar is 0.3. When no row passes, the rule drops
+the 65° limit, then the check of the ninths, then coverage and clipping; a row that sees the patch at 90° or more,
 edge on or from behind, is never picked. The cell's first line is the pick,
 `reference`, drawn on a green fill, or the word for the first test that turned
 the row away: `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less`

@@ -239,7 +239,8 @@ pub struct MemberMatrix {
     /// over the same support and by the same estimator. A pair left plain
     /// carries its [`zncc`](Self::zncc) value; the diagonal is `1.0` and an
     /// unscored member's row and column are `NaN`, as in `zncc`. Each member's
-    /// ellipse is read on its own render over the common support.
+    /// ellipse is read on its own render over the largest square inside the
+    /// common support.
     pub blur_matched_zncc: Vec<f64>,
     /// How many pairs [`blur_matched_zncc`](Self::blur_matched_zncc) blurred.
     pub pairs_blurred: u32,

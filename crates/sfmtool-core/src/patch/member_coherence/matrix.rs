@@ -446,17 +446,43 @@ impl MemberStack<'_> {
     }
 }
 
+/// The smallest side [`inner_square`] returns: a narrower square leaves too
+/// few shifts of the self-similarity reading inside it to fit an ellipse.
+const MIN_ELLIPSE_SQUARE: usize = 8;
+
+/// The largest square centred on the `r × r` grid that lies wholly inside
+/// `support`, as `(first row and column, side)`, or `None` where it is under
+/// [`MIN_ELLIPSE_SQUARE`] on a side.
+fn inner_square(support: &[bool], r: usize) -> Option<(usize, usize)> {
+    (MIN_ELLIPSE_SQUARE..=r).rev().find_map(|side| {
+        let start = (r - side) / 2;
+        (start..start + side)
+            .all(|y| {
+                support[y * r + start..y * r + start + side]
+                    .iter()
+                    .all(|&s| s)
+            })
+            .then_some((start, side))
+    })
+}
+
 /// Fill `table` with the blur-matched agreement of the members that scored
 /// ([`MemberMatrix::blur_matched_zncc`]), copying `plain` for a pair left
 /// plain, and return how many pairs were blurred.
 ///
 /// Each member's self-similarity ellipse is read on its render over the
-/// support, the support as its data, in the `blur-matched ellipses` detail
-/// phase of `progress`. A pair is blurred where [`pair_blur`] asks, each
+/// largest centred square inside the support ([`inner_square`]), where every
+/// sample carries data, so the reading takes its dense route; where that
+/// square is too small, over the whole support, the support as its data. The
+/// ellipses are read in the `blur-matched ellipses` detail phase of
+/// `progress`. A pair is blurred where [`pair_blur`] asks, each
 /// render by normalized convolution over the support, then gathered back,
-/// z-normalized over the support with the same window and channels the plain
-/// table kept, and correlated as [`fill_scale`] correlates, in the
-/// `blur-matched pairs` detail phase.
+/// z-normalized over the support with the same window, and correlated as
+/// [`fill_scale`] correlates, in the `blur-matched pairs` detail phase. The
+/// ZNCC is averaged over the channels the plain table kept, `keep`, and no
+/// others, so the two tables average the same channels; a kept channel the
+/// blur leaves flat in either render counts as a ZNCC of 0, since a flat
+/// render has nothing to correlate.
 #[allow(clippy::too_many_arguments)]
 fn fill_blur_matched(
     members: &MemberStack<'_>,
@@ -483,20 +509,46 @@ fn fill_blur_matched(
     let ellipses: Vec<Option<[[f64; 2]; 2]>> = {
         let mut phase = progress.detail_phase("blur-matched ellipses");
         let colour = channels.min(3);
+        let square = inner_square(&support, r);
+        let mut crop = Vec::new();
         let read: Vec<Option<[[f64; 2]; 2]>> = planes
             .iter()
             .map(|values| {
-                let reading = zncc_self_similarity_radius(
-                    &PatchTile {
-                        values: &values[..colour * rr],
-                        channels: colour,
-                        width: r,
-                        height: r,
-                    },
-                    Some(&support),
-                    [0, 0, r, r],
-                    &SelfSimilarityParams::default(),
-                );
+                let reading = match square {
+                    // Every sample of the square carries data, so the reading
+                    // takes its dense route.
+                    Some((start, side)) => {
+                        crop.clear();
+                        for c in 0..colour {
+                            for y in start..start + side {
+                                let row = c * rr + y * r + start;
+                                crop.extend_from_slice(&values[row..row + side]);
+                            }
+                        }
+                        zncc_self_similarity_radius(
+                            &PatchTile {
+                                values: &crop,
+                                channels: colour,
+                                width: side,
+                                height: side,
+                            },
+                            None,
+                            [0, 0, side, side],
+                            &SelfSimilarityParams::default(),
+                        )
+                    }
+                    None => zncc_self_similarity_radius(
+                        &PatchTile {
+                            values: &values[..colour * rr],
+                            channels: colour,
+                            width: r,
+                            height: r,
+                        },
+                        Some(&support),
+                        [0, 0, r, r],
+                        &SelfSimilarityParams::default(),
+                    ),
+                };
                 let e = reading.ellipse;
                 e.axes.iter().all(|a| a.is_finite()).then_some(e.matrix)
             })
@@ -560,6 +612,8 @@ fn fill_blur_matched(
                 &sqrt_weights,
                 &mut xs,
             ) {
+                // The gate drops a kept channel only where the blur left it
+                // flat; it still counts, as 0, in the average.
                 Some((kc, _)) => {
                     let s: f64 = (0..kc)
                         .map(|c| {
@@ -571,9 +625,9 @@ fn fill_blur_matched(
                                 .sum::<f64>()
                         })
                         .sum();
-                    s / kc as f64
+                    s / kept.len() as f64
                 }
-                None => f64::NAN,
+                None => 0.0,
             };
             table[ia * k + ib] = z;
             table[ib * k + ia] = z;

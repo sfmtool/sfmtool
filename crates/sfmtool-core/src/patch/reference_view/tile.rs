@@ -61,11 +61,15 @@ impl ViewTile {
     /// flagged as carrying data: what blur matching reads
     /// ([`crate::patch::blur_matched`]).
     pub fn planes(&self) -> TilePlanes {
-        let samples = self
-            .samples
-            .as_slice()
-            .map_or_else(|| self.samples.iter().copied().collect(), <[u8]>::to_vec);
-        TilePlanes::from_interleaved(&samples, self.resolution(), self.channels(), &self.valid)
+        let copied: Vec<u8>;
+        let samples = match self.samples.as_slice() {
+            Some(samples) => samples,
+            None => {
+                copied = self.samples.iter().copied().collect();
+                &copied
+            }
+        };
+        TilePlanes::from_interleaved(samples, self.resolution(), self.channels(), &self.valid)
     }
 }
 

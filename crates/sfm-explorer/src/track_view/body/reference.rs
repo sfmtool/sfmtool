@@ -6,8 +6,8 @@
 //! row is not the reference.
 //!
 //! The rule picks the one `in` row whose tile could stand as the patch bitmap
-//! (`sfmtool_core::patch::reference_view::choose_reference_view`). The column
-//! reports it; nothing on the track depends on it.
+//! (`sfmtool_core::patch::reference_view::choose_reference_view_with`). The
+//! column reports it; nothing on the track depends on it.
 
 use sfmtool_core::bench::{Observation, StageKind, TrackMeasurement};
 use sfmtool_core::patch::reference_view::{

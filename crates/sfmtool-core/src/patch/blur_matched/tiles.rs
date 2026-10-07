@@ -37,8 +37,10 @@ pub struct TilePlanes {
 
 impl TilePlanes {
     /// The colour planes of an interleaved `side × side × stride` `u8` tile,
-    /// its first `min(stride, 3)` channels, with `data` flagging the samples
-    /// that carry data.
+    /// with `data` flagging the samples that carry data. One or two channels
+    /// are grey, and grey and alpha; three or four are RGB, and RGB and alpha.
+    /// Alpha is not a colour plane: the caller reads it into `data` where it
+    /// says which samples carry data.
     ///
     /// # Panics
     ///
@@ -55,7 +57,7 @@ impl TilePlanes {
             side * side,
             "TilePlanes: one data flag per sample"
         );
-        let channels = stride.min(3);
+        let channels = if stride <= 2 { 1 } else { 3 };
         let n = side * side;
         let mut values = vec![0.0f32; channels * n];
         for (k, pixel) in samples.chunks_exact(stride).enumerate() {
@@ -73,22 +75,36 @@ impl TilePlanes {
 
     /// The same tile blurred by `cov` ([`blur_tile`]).
     pub fn blurred(&self, cov: BlurCovariance, scratch: &mut BlurScratch) -> Self {
-        let mut values = vec![0.0f32; self.values.len()];
+        let mut out = Self::empty();
+        self.blur_into(cov, &mut out, scratch);
+        out
+    }
+
+    /// A tile of no samples, to blur into.
+    fn empty() -> Self {
+        Self {
+            values: Vec::new(),
+            data: Vec::new(),
+            side: 0,
+            channels: 0,
+        }
+    }
+
+    /// [`Self::blurred`] into `out`, reusing its buffers.
+    fn blur_into(&self, cov: BlurCovariance, out: &mut Self, scratch: &mut BlurScratch) {
+        out.values.resize(self.values.len(), 0.0);
+        out.data.clone_from(&self.data);
+        out.side = self.side;
+        out.channels = self.channels;
         blur_tile(
             &self.values,
             self.channels,
             self.side,
             &self.data,
             cov,
-            &mut values,
+            &mut out.values,
             scratch,
         );
-        Self {
-            values,
-            data: self.data.clone(),
-            side: self.side,
-            channels: self.channels,
-        }
     }
 }
 
@@ -219,7 +235,7 @@ pub fn pair_zncc_readings(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> Pai
     }
 }
 
-// The shape of the blur a pair is matched with.
+/// The shape of the blur a pair is matched with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlurMatchKernel {
     /// [`pair_blur`]: each tile blurred along the directions in which its
@@ -330,6 +346,8 @@ pub fn blur_matched_pairs(
     let side = tiles.first().map_or(0, |t| t.side);
     let weights = window_weights(window, side as u32);
     let mut scratch = BlurScratch::default();
+    // The anisotropic kernel's two blurred tiles, reused pair after pair.
+    let mut blurred_pair = [TilePlanes::empty(), TilePlanes::empty()];
     // The isotropic ladder's levels, rendered once per view and level.
     let mut ladder: Vec<[Option<TilePlanes>; 6]> = match kernel {
         BlurMatchKernel::IsotropicLadder => (0..k).map(|_| Default::default()).collect(),
@@ -352,7 +370,13 @@ pub fn blur_matched_pairs(
                             pairs_blurred += 1;
                             blurred[a * k + b] = true;
                             blurred[b * k + a] = true;
-                            read_blurred(tiles[a], tiles[b], blur, &weights, &mut scratch)
+                            read_blurred(
+                                [tiles[a], tiles[b]],
+                                blur,
+                                &weights,
+                                &mut blurred_pair,
+                                &mut scratch,
+                            )
                         }
                     }
                     BlurMatchKernel::IsotropicLadder => {
@@ -403,26 +427,26 @@ pub fn blur_matched_pairs(
     }
 }
 
+/// The readings of the pair `tiles` after each is blurred by its side of
+/// `blur`, a tile with no blur read as it is, the blurred tiles written into
+/// `out`.
 fn read_blurred(
-    a: &TilePlanes,
-    b: &TilePlanes,
+    tiles: [&TilePlanes; 2],
     blur: PairBlur,
     weights: &[f64],
+    out: &mut [TilePlanes; 2],
     scratch: &mut BlurScratch,
 ) -> PairReadings {
-    let a_blurred;
-    let b_blurred;
-    let a_ref = if blur.a.is_zero() {
-        a
-    } else {
-        a_blurred = a.blurred(blur.a, scratch);
-        &a_blurred
-    };
-    let b_ref = if blur.b.is_zero() {
-        b
-    } else {
-        b_blurred = b.blurred(blur.b, scratch);
-        &b_blurred
-    };
-    pair_zncc_readings(a_ref, b_ref, weights)
+    let [out_a, out_b] = out;
+    for (tile, cov, out) in [
+        (tiles[0], blur.a, &mut *out_a),
+        (tiles[1], blur.b, &mut *out_b),
+    ] {
+        if !cov.is_zero() {
+            tile.blur_into(cov, out, scratch);
+        }
+    }
+    let a = if blur.a.is_zero() { tiles[0] } else { &*out_a };
+    let b = if blur.b.is_zero() { tiles[1] } else { &*out_b };
+    pair_zncc_readings(a, b, weights)
 }

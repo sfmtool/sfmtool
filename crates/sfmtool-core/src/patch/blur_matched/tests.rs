@@ -206,7 +206,8 @@ fn ladder_levels_snap_to_the_nearest_in_the_logarithm() {
 /// The two passes, and the direct 2-D convolution they stand in for, against
 /// the exact blur of a tile of sinusoids, over covariances at several sizes,
 /// elongations and angles. The interior is compared, where no tap reaches
-/// past the tile's edge.
+/// past the tile's edge. The narrow blurs, at widths 0.5 to 0.7, are those
+/// the review cases' pairs mostly get.
 #[test]
 fn the_two_passes_match_the_exact_blur_and_the_direct_2d_blur() {
     let tile = sinusoids(None);
@@ -214,6 +215,10 @@ fn the_two_passes_match_the_exact_blur_and_the_direct_2d_blur() {
         |k: usize| (7..SIDE - 7).contains(&(k / SIDE)) && (7..SIDE - 7).contains(&(k % SIDE));
     let (mut worst_fast, mut worst_direct) = (0.0f32, 0.0f32);
     for (major, minor) in [
+        (0.5, 0.0),
+        (0.5, 0.5),
+        (0.6, 0.3),
+        (0.7, 0.0),
         (0.7, 0.7),
         (1.0, 0.6),
         (1.5, 0.6),
@@ -224,13 +229,7 @@ fn the_two_passes_match_the_exact_blur_and_the_direct_2d_blur() {
         (1.5, 0.0),
     ] {
         for deg in [0.0, 15.0, 30.0, 45.0, 60.0, 80.0, 100.0, 135.0, 170.0] {
-            let (s, c) = f64::to_radians(deg).sin_cos();
-            let (l1, l2): (f64, f64) = (major * major, minor * minor);
-            let cov = BlurCovariance {
-                xx: l1 * c * c + l2 * s * s,
-                xy: (l1 - l2) * c * s,
-                yy: l1 * s * s + l2 * c * c,
-            };
+            let cov = ellipse_cov(major, minor, deg);
             let exact = sinusoids(Some(cov));
             let error = |v: &[f32]| {
                 (0..SIDE * SIDE)
@@ -255,7 +254,9 @@ fn the_two_passes_match_the_exact_blur_and_the_direct_2d_blur() {
                 e < 4.0,
                 "σ {major}×{minor} at {deg}°: the passes are {e} off"
             );
-            if minor > 0.0 {
+            // The direct blur samples the kernel as it is, which falls short
+            // of its width under about 0.6.
+            if minor >= 0.6 {
                 let mut direct = vec![0.0f32; tile.values.len()];
                 blur_tile_direct(&tile.values, 1, SIDE, &tile.data, cov, &mut direct);
                 let e = error(&direct);
@@ -268,6 +269,112 @@ fn the_two_passes_match_the_exact_blur_and_the_direct_2d_blur() {
         }
     }
     eprintln!("largest error: passes {worst_fast}, direct 2-D {worst_direct} grey levels");
+}
+
+/// A covariance of semi-axes `major` and `minor` with the major axis at `deg`
+/// degrees from `x`.
+fn ellipse_cov(major: f64, minor: f64, deg: f64) -> BlurCovariance {
+    let (s, c) = f64::to_radians(deg).sin_cos();
+    let (l1, l2) = (major * major, minor * minor);
+    BlurCovariance {
+        xx: l1 * c * c + l2 * s * s,
+        xy: (l1 - l2) * c * s,
+        yy: l1 * s * s + l2 * c * c,
+    }
+}
+
+/// One scratch reused over many blurs of different shapes, tile sides and
+/// missing samples gives every blur bit for bit what a fresh scratch gives:
+/// nothing a call leaves in the buffers reaches the next.
+#[test]
+fn a_reused_scratch_blurs_as_a_fresh_one() {
+    let mut rng = Rng(12345);
+    let mut scratch = BlurScratch::default();
+    for side in [13usize, 16, 24, 32, 24, 13] {
+        let n = side * side;
+        for _ in 0..400 {
+            let values: Vec<f32> = (0..3 * n).map(|_| (rng.next() * 255.0) as f32).collect();
+            let gaps = rng.next() < 0.5;
+            let data: Vec<bool> = (0..n).map(|_| !gaps || rng.next() > 0.2).collect();
+            let major = 0.3 + rng.next() * 2.5;
+            let minor = if rng.next() < 0.4 {
+                0.0
+            } else {
+                rng.next() * major
+            };
+            let cov = ellipse_cov(major, minor, rng.next() * 180.0);
+            let mut reused = vec![0.0f32; 3 * n];
+            let mut fresh = vec![0.0f32; 3 * n];
+            blur_tile(&values, 3, side, &data, cov, &mut reused, &mut scratch);
+            blur_tile(
+                &values,
+                3,
+                side,
+                &data,
+                cov,
+                &mut fresh,
+                &mut BlurScratch::default(),
+            );
+            let same = reused
+                .iter()
+                .zip(&fresh)
+                .all(|(x, y)| x.to_bits() == y.to_bits());
+            assert!(same, "side {side}, {cov:?}: the reused scratch differs");
+        }
+    }
+}
+
+/// A pair's readings in a track are those of the pair read alone, bit for
+/// bit, under both kernels: the other pairs, read with the same scratch and
+/// ladder, do not reach it.
+#[test]
+fn a_pair_reads_the_same_in_a_track_as_alone() {
+    let mut rng = Rng(777);
+    let k = 8;
+    let tiles: Vec<TilePlanes> = (0..k).map(|v| textured(100 + v as u64, 0.8)).collect();
+    let refs: Vec<&TilePlanes> = tiles.iter().collect();
+    let ellipses: Vec<Option<[[f64; 2]; 2]>> = (0..k)
+        .map(|_| {
+            let major = 0.3 + rng.next() * 2.0;
+            let c = ellipse_cov(major, major * (0.3 + 0.7 * rng.next()), rng.next() * 180.0);
+            Some([[c.xx, c.xy], [c.xy, c.yy]])
+        })
+        .collect();
+    let window = PatchWindow::GaussianDisk { sigma: 0.6 };
+    let bits = |r: &[[f64; 3]; 3]| r.map(|row| row.map(f64::to_bits));
+    for kernel in [
+        BlurMatchKernel::Anisotropic,
+        BlurMatchKernel::IsotropicLadder,
+    ] {
+        let read = |tiles: &[&TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>]| {
+            blur_matched_pairs(
+                tiles,
+                ellipses,
+                PairMatching::BlurMatched,
+                kernel,
+                window,
+                None,
+                &Progress::none(),
+            )
+        };
+        let all = read(&refs, &ellipses);
+        assert!(all.pairs_blurred > k);
+        for a in 0..k {
+            for b in (a + 1)..k {
+                let one = read(&[refs[a], refs[b]], &[ellipses[a], ellipses[b]]);
+                assert_eq!(
+                    one.whole[1].to_bits(),
+                    all.whole[a * k + b].to_bits(),
+                    "{kernel:?}, pair {a}-{b}: whole"
+                );
+                assert_eq!(
+                    bits(&one.grid[1]),
+                    bits(&all.grid[a * k + b]),
+                    "{kernel:?}, pair {a}-{b}: grid"
+                );
+            }
+        }
+    }
 }
 
 /// The passes against the direct 2-D blur on a textured tile with samples

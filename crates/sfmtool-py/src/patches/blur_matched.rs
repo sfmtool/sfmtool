@@ -29,20 +29,36 @@ use super::args::{parse_matching, parse_patch_window};
 /// split with every sample weighted equally, per colour channel, the channels
 /// averaged.
 ///
+/// The bench's reference-view rule reads its blur-matched readings this way,
+/// from the tiles ``OrientedPatch.render_view_tile`` renders of the track's
+/// frame at each view's keypoint, at the evaluation's resolution and with its
+/// sampler. To read the same numbers from those tiles, stack each view's
+/// ``samples`` as ``tiles`` and its ``valid`` as ``valid``, leave
+/// ``ellipses`` out, and pass
+/// ``matching="blur_matched_above_ratio"`` with the default
+/// ``min_ellipse_ratio`` of 1.25, the default kernel and the default window.
+/// The ellipses read here are then the bench's, its track-stage
+/// ``zncc_self_similarity_ellipse["grid_px"]["matrix"]``, up to rounding.
+///
 /// Args:
 ///     tiles: A ``(k, R, R, C)`` uint8 stack, one view's tile each, as
-///         ``OrientedPatch.render_view_tile`` renders them. A fourth channel is
-///         read as alpha: a sample whose alpha is 0 carries no data.
+///         ``OrientedPatch.render_view_tile`` renders them. One channel is
+///         grey, two grey and alpha, three RGB and four RGB and alpha. Alpha
+///         is not correlated: a sample whose alpha is 0 carries no data.
+///     valid: A ``(k, R, R)`` bool stack, ``True`` where a sample carries
+///         data, as ``render_view_tile`` returns it in ``valid``; a sample
+///         carries data where it is ``True`` and its alpha, if any, is above
+///         0. When ``None`` (default), alpha alone says.
 ///     ellipses: Each tile's self-similarity ellipse matrix, ``(k, 2, 2)``
 ///         float64 in grid px squared (``ellipse_matrix`` of
 ///         ``zncc_self_similarity_parts``), NaN for a tile without one. When
 ///         ``None`` (default), each tile's whole reading is taken here with the
-///         default parameters.
+///         default parameters, over the samples that carry data.
 ///     matching: ``"blur_matched"`` (default), ``"blur_matched_above_ratio"``
 ///         or ``"plain"``.
 ///     min_ellipse_ratio: The factor two lengths along a direction must differ
 ///         by for ``"blur_matched_above_ratio"`` to blur along it (default
-///         1.25).
+///         1.25), at least 1.
 ///     kernel: ``"anisotropic"`` (default), each tile blurred along the
 ///         directions in which it is the sharper, or ``"isotropic_ladder"``,
 ///         the sharper tile by semi-major axis blurred isotropically at the
@@ -59,17 +75,20 @@ use super::args::{parse_matching, parse_patch_window};
 ///
 /// Raises:
 ///     ValueError: If ``tiles`` is not a uint8 ``(k, R, R, C)`` stack of square
-///         tiles at least 3 on a side with 1 to 4 channels, ``ellipses`` is not
-///         ``(k, 2, 2)``, or a name is unknown.
+///         tiles at least 3 on a side with 1 to 4 channels, ``valid`` is not
+///         ``(k, R, R)``, ``ellipses`` is not ``(k, 2, 2)``,
+///         ``min_ellipse_ratio`` is under 1 or not finite, or a name is
+///         unknown.
 #[pyfunction]
 #[pyo3(signature = (
-    tiles, *, ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
+    tiles, *, valid=None, ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
     kernel="anisotropic", window="gaussian_disk", window_sigma=0.6
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn blur_matched_zncc_matrix<'py>(
     py: Python<'py>,
     tiles: PyReadonlyArray4<'py, u8>,
+    valid: Option<PyReadonlyArray3<'py, bool>>,
     ellipses: Option<PyReadonlyArray3<'py, f64>>,
     matching: &str,
     min_ellipse_ratio: f64,
@@ -99,20 +118,29 @@ pub fn blur_matched_zncc_matrix<'py>(
         )));
     }
     let side = width;
+    let valid = valid.as_ref().map(|v| v.as_array());
+    if let Some(v) = &valid {
+        if v.shape() != [k, side, side] {
+            return Err(PyValueError::new_err(format!(
+                "valid must be ({k}, {side}, {side}), got {:?}",
+                v.shape()
+            )));
+        }
+    }
+    // Two channels are grey and alpha, four RGB and alpha.
+    let alpha = (stride == 2 || stride == 4).then_some(stride - 1);
     let planes: Vec<TilePlanes> = (0..k)
         .map(|v| {
             let tile = tiles.index_axis(numpy::ndarray::Axis(0), v);
             let samples: Vec<u8> = tile.iter().copied().collect();
-            let data: Vec<bool> = if stride == 4 {
-                samples
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|p| p[3] > 0)
-                    .collect()
-            } else {
-                vec![true; side * side]
-            };
+            let data: Vec<bool> = (0..side * side)
+                .map(|i| {
+                    let on = valid
+                        .as_ref()
+                        .is_none_or(|valid| valid[[v, i / side, i % side]]);
+                    on && alpha.is_none_or(|a| samples[i * stride + a] > 0)
+                })
+                .collect();
             TilePlanes::from_interleaved(&samples, side, stride, &data)
         })
         .collect();

@@ -178,7 +178,8 @@ fn an_evaluation_picks_a_whole_view_facing_the_patch_on_a_ground_truth_track() {
 /// readings share. They are the readings of the tile rendered the way they
 /// were before that tile was shared: the patch anchored on the keypoint, the
 /// sampler the sampler rule picks from that placement's Jacobian, black off
-/// the photograph, and the self-similarity read the overlap way.
+/// the photograph, and the self-similarity read the overlap way over the
+/// samples on the photograph.
 #[test]
 fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_them() {
     let truth = GroundTruth::load();
@@ -204,6 +205,9 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             resolution as u32,
         );
         let rendered = render_tile(view.pyramid, &mut map, sampler);
+        let valid: Vec<bool> = (0..resolution * resolution)
+            .map(|k| map.is_valid((k % resolution) as u32, (k / resolution) as u32))
+            .collect();
         let channels = view.pyramid.level(0).channels() as usize;
         let samples = Array3::from_shape_fn((resolution, resolution, channels), |(r, c, k)| {
             if k >= 3 {
@@ -223,7 +227,8 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             width: resolution,
             height: resolution,
         };
-        let parts = zncc_self_similarity_parts(&tile, None, &SelfSimilarityParams::default());
+        let parts =
+            zncc_self_similarity_parts(&tile, Some(&valid), &SelfSimilarityParams::default());
         let ellipse =
             SelfSimilarityEllipseUnits::read(&parts.whole, jacobian, Some(placement), resolution);
 
