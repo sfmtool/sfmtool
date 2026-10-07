@@ -925,8 +925,9 @@ by the point-or-bearing test
 `BundleAdjustment::free_point_decision` reports that decision; it is `None`
 with the crossing off, and when the solve exits degenerate (see "The staged
 loop"), since no final round was solved to measure a noise level on. A free
-point that ends as a direction comes back as a unit row, as any direction does. Ranged and held points keep their own
-parametrisations and are not decided.
+point that ends as a direction comes back as a unit row, as any direction
+does. Ranged and held points keep their own parametrisations and are not
+decided.
 
 The crossing is the default, `FreePointPolicy::default()` being
 `FreePointPolicy::CROSS`, so every caller in the crate crosses unless it states
