@@ -4263,14 +4263,15 @@ command vocabulary: one variant per tool, except that the four input tools
 share `Input`, holding the arguments as the parse left them. A reconstruction
 is named by its label, which `apply` resolves against `AppState::scene`; an
 `Option<String>` label means the selected reconstruction when the argument is
-left out, and every editing variant takes a plain `String`, because an edit
-names the node it edits (§ "An edit names its reconstruction"). The variants and
-their doc comments are in `mod.rs` rather than copied here. The methods in
+left out, and every editing variant that names a node takes a plain `String`,
+because an edit names the node it edits (§ "An edit names its
+reconstruction"). The variants and their doc comments are in `mod.rs` rather
+than copied here. The methods in
 [`mcp/logged.rs`](../../crates/sfm-explorer/src/mcp/logged.rs) read a command
 for the drain: among them `tool_name`, the name the wire uses; `kind`, the
-Action Log kind a refusal is filed under; `edits`, the node whose data the command is about to
-change, read before it is applied so the drain can end a camera held in hand on
-that node; and `renumbers`, the node a succeeded command may have renumbered, so
+Action Log kind a refusal is filed under; `edits`, the node whose data the
+command is about to change, read before it is applied so the drain can end a
+camera held in hand on that node; and `renumbers`, the node a succeeded command may have renumbered, so
 the drain can drop what the panels cached about it.
 
 `Command::kind` for `SetWindowLayout` is `Kind::Layout` when the object carries a
@@ -4412,9 +4413,10 @@ through `Context::run_ui` frames (§ "Testing").
 picture and every other tool answers with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
 others build a plain `Result<Value, ToolError>` and widen it to
-`ToolOutput::Json` only where the reply is sent — the `apply_with_window`
-dispatch for one answered at once, the frame for one answered later — so the
-code that builds a JSON reply never names the shape it is not.
+`ToolOutput::Json` where the reply is sent: at the `apply_with_window` dispatch
+for one answered at once, and in the function that composes a deferred reply
+for one answered later. So a tool answered at once never names the shape it is
+not.
 
 `App` carries four fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`,
 `mcp_deferred: Vec<(Deferred, oneshot::Sender<Reply>)>`, `mcp_input:
