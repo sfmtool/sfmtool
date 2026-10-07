@@ -1078,10 +1078,9 @@ fn coefficient_basis(n: usize, d_max: f64, d: f64) -> [(usize, f64); BSPLINE_SUP
 /// The model's pixel is `(cx, cy) + f·(d + Σ cᵢ·Bᵢ(d))·û`, which is linear in
 /// `x = (f, f·c₀, …, f·c_{N−1})`, so without the constraint below the fit is
 /// one linear least-squares solve, `N + 1` unknowns wide, through the SVD of
-/// the design matrix. The second
-/// difference of `f·c` is penalized, so a coefficient no sample reaches
-/// continues its neighbours along the smoothest curve instead of leaving the
-/// solve rank-deficient.
+/// the design matrix. The second difference of `f·c` is penalized, so a
+/// coefficient no sample reaches continues its neighbours along the smoothest
+/// curve instead of leaving the solve rank-deficient.
 ///
 /// The radial map must be invertible, so the fit is constrained to keep its
 /// slope at or above [`MIN_SLOPE`] times the focal ([`slope_floor_rows`]).
