@@ -448,6 +448,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** no Non-goals section; 5 negative claims checked, all hold (normals re-derived, as above).
 **Recommendation:** update code (forward only given keys), then the spec's normals sentence, parser mechanism and sampler cell.
 **Unclear / incorrect / suspicious:** `sfm xform in.sfmr --localize-keypoints out.sfmr` takes `out.sfmr` as the parameter string (`_arg_parser.py:768-770`); the spec's syntax is correct but does not warn about this.
+> _Status (2026-10-07): **Done** — `LocalizeKeypointsTransform` now forwards only the keys given to `PatchCloud.localize_keypoints` (the binding supplies every other default), with range checks on given keys only and a test that checks the spec's Default column against the binding signature; its docstring is cut to the contract plus a spec link. The spec now says normals are re-derived from the frame, credits `parse_xform_args` with reading the optional value, links the `sampler` cell to `image-warping.md` instead of copying its cost figures, and warns that a path after `--localize-keypoints` is read as the parameter string. Branch `spec-fix-1006-12-localize-forward-keys`._
 
 ### specs/core/patch/zncc-self-similarity-radius.md
 **Summary:** Defines the ZNCC self-similarity radius, the semi-major axis of the moment ellipse of the whole-pixel shifts where a bitmap's ZNCC with itself stays within `τ`, read from the bitmap alone; covers flags, mapping to image px and patch units, the kernels and every consumer. 500 lines. Every default, constant, threshold, panic condition, binding key and the Track View colours match.
@@ -863,6 +864,7 @@ Read 2026-09-26; open items above.
    - `reprojection-residuals.md` names three shared callers; there is one.
    - `localize-keypoints-command.md:109` says the CLI "re-specifies nothing";
      it hardcodes all 17 defaults.
+     > _Status (2026-10-07): **Done** — the CLI now forwards only the keys given, so the binding's defaults govern, branch `spec-fix-1006-12-localize-forward-keys`._
    - `cluster-covisibility.md:323` says a pre-v6 file opens; the reader
      refuses it.
    - `randomized-kdtree-forest.md` gives `L_max` as "precision-tuned"; it is a
