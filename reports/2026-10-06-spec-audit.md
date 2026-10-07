@@ -191,6 +191,8 @@ flags only, which meets the requirement for a Python pipeline.
 | core/spherical/spherical-tiles-rig.md:3-8 | "## Motivation … Three options were considered" | design deliberation as the opening (see check 4) |
 | Future-work headings | flow-based-matching:144, patch-view-selection:324, sift-to-patch-reconstruction:271, sfmr-file-format:1945, scene-graph:1414, user-experience:261, camera-config:382 | each should become a present-tense statement plus an amendment draft, or be deleted |
 
+> _Status (2026-10-07): **Done** for the `spherical-tiles-rig.md:3-8` row — the spec now opens with what a tile rig is, and the comparison of three samplings sits under § "Why small pinhole tiles" in the present tense, branch `spec-fix-1006-33-opening-spherical-tiles`._
+
 Acquitted: algorithm "Step N" / "Phase N" headings (motion, select-by-distribution,
 epipolar-curves, photometric-subsets-ransac), format "Versioning and Migration"
 sections, present-tense "Consumers" sections (cluster-patches:237,
@@ -221,6 +223,7 @@ should read it as a claim.
    - Current: "For per-direction work on the sphere (infinity-consistency tests, parallax-from-pose depth estimation, multi-view color aggregation) we need a discretization that samples the sphere in small, nearly-distortion-free patches. Three options were considered:"
    - Problem: design deliberation under § Motivation; it never says what a tile rig is, and two of the three listed uses have no caller (the users are `sfm panorama` and `sfm camrig spherical-tiles`).
    - Proposed: *"A spherical tile rig is a camera rig of n identical small pinhole "tile" cameras that share one optical centre and look in nearly evenly spread directions, so that per-direction work on the sphere, such as the stitching behind `sfm panorama`, runs on small, nearly undistorted images held in one atlas."* (`tile_rig.rs:8-18`)
+   > _Status (2026-10-07): **Done** — the spec opens with what a tile rig is (identical pinhole tiles sharing one optical centre, nearly evenly spread directions, one atlas image) and names its users, `sfm panorama` and `sfm camrig spherical-tiles`; the uses with no caller are gone from the opening, and § Motivation became § "Why small pinhole tiles", branch `spec-fix-1006-33-opening-spherical-tiles`._
 2. **`gui/edits/move-camera.md:3`**
    - Current: "An image whose pose is wrong is the commonest defect a reviewer can see and cannot fix: …  What the reviewer wants is to take hold of the camera and put it where the photograph lines up, the way a hand would."
    - Problem: the first paragraph states the problem only; what the action is appears in paragraph two, through a figure ("The viewer already has the hand").
@@ -885,3 +888,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
+   > _Status (2026-10-07): **Partially done** — `spherical-tiles-rig.md` has its opening, branch `spec-fix-1006-33-opening-spherical-tiles`; the other eight are open._

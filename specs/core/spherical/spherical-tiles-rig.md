@@ -1,11 +1,18 @@
 # Spherical tile rig: discretizing the sphere as a rig of pinhole tiles
 
-## Motivation
+A spherical tile rig is a camera rig of `n` small pinhole "tile" cameras with
+identical intrinsics that share one optical centre and look in nearly evenly
+spread directions, so that per-direction work on the sphere runs on small,
+nearly undistorted images packed side by side into one atlas image. Its user is
+`sfm panorama`, which composites the source images into the tiles and resamples
+the atlas into an equirectangular panorama; `sfm camrig spherical-tiles` writes
+a rig to a `.camrig` file so a panorama can reuse it.
 
-For per-direction work on the sphere (infinity-consistency tests,
-parallax-from-pose depth estimation, multi-view color aggregation) we need a
-discretization that samples the sphere in small, nearly-distortion-free
-patches. Three options were considered:
+## Why small pinhole tiles
+
+Per-direction work needs a discretization that samples the sphere in small,
+nearly distortion-free patches. Three ways to sample the sphere compare as
+follows:
 
 | Scheme | Distortion at patch edge | Patch count | Seam handling |
 |--------|--------------------------|-------------|---------------|
