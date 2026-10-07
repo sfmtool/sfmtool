@@ -64,9 +64,11 @@ keeps a sum of squares finite, as a least-squares cost needs.
 Only the point is checked for finiteness, not the pose. A non-finite rotation
 or translation goes into `ray_to_pixel` as it is, so its observations get
 `(invalid_residual, 0)` only where the camera model's domain test rejects the
-resulting ray; otherwise the residual has NaN or infinite components. Under a
-pinhole model a NaN quaternion gives `(NaN, NaN)`. `inlier_fraction` counts a
-NaN residual as an outlier, since a NaN norm is never below the threshold.
+resulting ray; otherwise the residual is whatever the projection gives, usually
+with NaN or infinite components. Under a pinhole model a NaN quaternion gives
+`(NaN, NaN)`, while a translation of `−∞` along `z` puts the point at the
+principal point and gives a finite residual. `inlier_fraction` counts a NaN
+residual as an outlier, since a NaN norm is never below the threshold.
 
 ## Inlier fraction
 
@@ -76,8 +78,9 @@ pub fn inlier_fraction(residuals: &[f64], threshold_px: f64) -> f64;
 
 The share of observations whose residual norm `hypot(dx, dy)` is below
 `threshold_px`, computed over the flat `(dx, dy)` slice returned above. Empty
-input is `0.0`. This is the acceptance metric a resection or refinement caller
-thresholds a pose on.
+input is `0.0`. A caller can threshold a pose on it; no production code
+calls it, since growth and pose verification count inliers with their own
+helpers.
 
 ## Bindings
 
