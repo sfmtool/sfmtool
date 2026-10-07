@@ -45,12 +45,16 @@ The panel is [track_view/](../../crates/sfm-explorer/src/track_view/):
 [mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox,
 the empty state and the choice between them and the body,
 [recent.rs](../../crates/sfm-explorer/src/track_view/recent.rs) is the recent
-items strip, and
+items strip,
+[header_buttons.rs](../../crates/sfm-explorer/src/track_view/header_buttons.rs)
+holds the copy and go-to icon buttons the header draws beside a point ID in
+either mode, and
 [body/](../../crates/sfm-explorer/src/track_view/body/) is the one body that
 draws both modes: `mod.rs` the header, the toolbar and the boxes, `table.rs` the
 observation table, `tile.rs` the tile each row draws and its hover view,
 `crop.rs` the crop of the photograph beside the tile and its hover view,
-`surface_plot.rs` the self-similarity surface plot, and `patch.rs` the warp a
+`surface_plot.rs` the self-similarity surface plot, `reference.rs` the
+*Reference* column's cell, hover text and sort key, and `patch.rs` the warp a
 track-stage tile is rendered through and the picture of a track's own patch,
 which the header and the strip both draw. The
 viewed track is [bench/viewed.rs](../../crates/sfm-explorer/src/bench/viewed.rs).
@@ -95,6 +99,7 @@ pub struct TrackBodyResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub fit: bool,
+    pub(crate) normal: Option<NormalStep>,   // Fit Normal, Finite Diff Normal or Grid Plane Normal, with its settings
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>, // Edited: a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
@@ -608,7 +613,7 @@ kept rows; and the angle and the two diagnostics are computed from the rays of
 the kept rows' cameras to the position, and left out where the track has no
 position yet. A cluster has no position and shows none of them.
 
-The metrics are [metrics/](../../crates/sfm-explorer/src/metrics), at the crate
+The metrics are [metrics.rs](../../crates/sfm-explorer/src/metrics.rs), at the crate
 root, because the Image Detail overlay and `get_point` read the same numbers.
 The summary is computed once per key and cached on the body, since the
 diagnostics triangulate: for the viewed track per point and document serial,
@@ -762,8 +767,11 @@ grid of pieces tiling the whole patch and takes the plane through all their
 centres. The two boxes after them say how both cut: *per axis*, from 2 to 8
 pieces along each axis (2 by default), which is a row of that many on each axis
 for *Finite Diff Normal* and that many by that many for *Grid Plane Normal*; and
-*overlap*, from 0% to 90% of a piece's side (0% by default). The labels say
-which: "3 pieces along each axis" for the rows, "3x3 pieces" for the grid. All
+*overlap*, from 0% to 90% of a piece's side (0% by default); they read
+`2 per axis` and `0% overlap`. The version each of the two pushes, and its
+Action Log row, names the cut it was made with: `Finite-difference normal of
+<label> (3 pieces along each axis, 25% overlap)` for the rows, `Grid-plane
+normal of <label> (3x3 pieces, 25% overlap)` for the grid. All
 three entries run on a worker like *Fit*, push one version, and grey
 with `normal_preconditions`' sentence at the cluster stage, at infinity, and
 with fewer than two `in` observations; the boxes grey with them. The boxes are
@@ -987,7 +995,7 @@ beside it is that patch warped square, so the eye reads from the raw pixels to
 the picture the numbers are read from. The two photometric columns come
 straight after the verdict, *ZNCC* and then *Self-similarity*, since they are
 the readings the verdict is most often decided by; the reprojection error, the
-shift, the patch's zoom, the status and, in Edited mode, the provenance follow
+shift, the patch's zoom, the *Reference* column, the status and, in Edited mode, the provenance follow
 them. The image's name is the last column, 220 points wide: hovering it or the
 *Img* cell shows the name whole, so the room in the middle of the table goes to
 the readings. The columns stand at the same offsets in both modes, and Viewed
@@ -1689,8 +1697,12 @@ observation's row, replacing the selection as a plain click does
 layer", [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)). The 3D viewer
 draws the circle of the one selected row larger.
 
-Track View asks the node to look for its SIFT index whenever it draws, in either
-mode, so a session finds the index the last one built without anyone asking.
+Track View asks the node to look for its index files, the SIFT index and the
+cluster-patches file ([`index-files.md`](index-files.md)), whenever it draws, in
+either mode, and to re-derive their states when the node's image table, or the
+index the cluster patches are judged against, has moved. A session so finds the
+files the last one built without anyone asking, and a look that found nothing
+is remembered, so a node with neither file is not checked on every frame.
 
 #### A point with no patch frame
 
@@ -1980,8 +1992,17 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   with 48 px patch bitmaps a Jacobian half the size and zooms twice as large;
   each row's *Zoom*
   cell printing the zoom of its tile's Jacobian, and the same with no photograph
-  decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
-  with no zoom last either way; the *Zoom* cell's two significant digits chosen
+  decoded; the rows starting in increasing order of image, a click on *Img*
+  reversing that and a second putting it back; a click on *Proj. err* ordering
+  the rows largest error first and a second click smallest first; a click on
+  *Keep* ordering them by how many bars they fail, most first, and a second
+  click fewest first; a first click on each heading but *Reference* starting
+  worst first where a bar judges the column and increasing where none does, and
+  a second click reversing; a row with no key sorting last both ways, with ties
+  in increasing order of image; every heading but *Crop*, *Patch* and *From*
+  ordering the rows; the *Verdict* text of an `out` row counting the bars it
+  fails, `out (2)`, and `out` alone for one that fails none; a click on *Zoom*
+  ordering the rows by mean zoom both ways, a row with no zoom last either way; the *Zoom* cell's two significant digits chosen
   after rounding, with both numbers printed where they agree; the
   *Self-similarity* hover's table of ellipses in grid px, image px and world
   space, each as major × minor axis and angle, with `+` on a lower bound and no
@@ -2021,8 +2042,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **Listing the bench in the panel.** The Scene tree's two Bench groups are the
   list, per node, with the stage each item is at; the recent items strip holds
   only the last few items focused.
-- **Deciding anything from a number.** The boxes propose and the person
-  decides.
+- **Acting on the track from a number beyond its verdicts.** The bars set the
+  verdict of every unpinned row (§ "The Keep switch is the verdict"), and a
+  pinned verdict stands against them; every other step on the track, a fit, a
+  normal, a stage change, a split, a search or a commit, is made only when the
+  person asks for it.
 - **A second tile beside the first**, the cluster template and each member warped
   onto it side by side, and **the remaining searches**, both proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).

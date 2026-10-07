@@ -521,11 +521,16 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfm-explorer/src/track_view/` (`mod.rs`, `recent.rs`, `header_buttons.rs`, `body/{mod,table,tile,crop,patch,reference}.rs`); `bench.rs` (`set_editing`:1587); `dock.rs` (`show_track_view`:887).
 **Inconsistencies:**
   - Non-goal "Deciding anything from a number" (2015-2016) contradicts 1573-1582 and the code (`bench/evaluate.rs:430-437`): the bars set every unpinned verdict. Rewrite the bullet.
+    > _Status (2026-10-07): **Done** — the non-goal now reads "Acting on the track from a number beyond its verdicts": the bars set every unpinned verdict, and every other step is the person's, branch `spec-fix-1006-15-trackview-spec`._
   - `TrackBodyResponse` (92-117) lacks `normal: Option<NormalStep>` (`body/mod.rs:156`, #668).
+    > _Status (2026-10-07): **Done** — the spec's `TrackBodyResponse` carries `pub(crate) normal: Option<NormalStep>`, branch `spec-fix-1006-15-trackview-spec`._
   - Module map (44-59) omits `header_buttons.rs` and `body/reference.rs`; column prose (988-991) omits Reference between Zoom and Status (`body/table.rs:306-308`).
+    > _Status (2026-10-07): **Done** — the module map names `header_buttons.rs` and `body/reference.rs`, and the column prose puts *Reference* between the zoom and the status, branch `spec-fix-1006-15-trackview-spec`._
   - Spec 765-766 attributes the Action Log labels (`bench.rs:2422,2426`) to the boxes, which say " per axis" and "% overlap" (`body/mod.rs:781,793`).
+    > _Status (2026-10-07): **Done** — the spec gives the boxes' own `2 per axis` and `0% overlap` and attributes the cut wording to the version label and its Action Log row, branch `spec-fix-1006-15-trackview-spec`._
   - Cleared-Lock hover (`body/mod.rs:818`) names less than spec 779-783; fix the code text. `apply_thresholds` doc (`body/mod.rs:160`) says four boxes; there are six.
   - Spec 611 links a `metrics/` directory; the module is `metrics.rs`. Spec 1684 "its SIFT index" understates the refresh (`dock.rs:894-902`). Testing (1881-1986) omits the sort tests (`body/tests.rs:4274-4424`); none orders by Reference (948).
+    > _Status (2026-10-07): **Done** — the link is `metrics.rs`; the refresh sentence names both index files, the re-derived states and the remembered miss; Testing lists the sort tests and says the first-click test covers every heading but *Reference*, branch `spec-fix-1006-15-trackview-spec`._
 **Third copies:** about 220 lines of module docs in `track_view/`; `body/mod.rs` restates 170-196, 568-573; `tile.rs:4-60` restates 1347-1464. `table.rs`, `tile.rs`, `crop.rs`, `patch.rs` do not name the spec.
 **Shape:** failure 1 (mild). Proposed: "Track View is the SfM Explorer panel that lists one 3D point's observations, one per image, with the measurements of each, and, with its Edit box ticked, the controls that change that track on the bench before it is committed." Failure 4: 1634-1635, 975-977, and the Testing section (1797-2002) as a prose copy of test names. Failure 7: "only as good as" (3), "a gesture with no answer" (396), "in the same breath" (725), "a hand ruling against the bars" (1543). `frame` for patch geometry (1395, 1430, 1442, 1959) conflicts with GLOSSARY.
 **Non-goals / deferrals checked:** 11; one overtaken (above). `specs/drafts/sfm-explorer-track-editing.md` is stale (line 890; σ_pos removed in #654).
@@ -851,6 +856,7 @@ Read 2026-09-26; open items above.
      point, but `sfm densify --ba-refine-principal-point` does.
    - `track-view.md:2015` gives "Deciding anything from a number" as a
      non-goal, while the bars set the verdicts.
+     > _Status (2026-10-07): **Done** — the non-goal is rewritten to say the bars set the unpinned verdicts and nothing else follows from a number, branch `spec-fix-1006-15-trackview-spec`._
    - `mcp-server.md:4994` says editing intrinsics is "still not on the
      surface", but `switch_camera_model` and lens releases exist.
    - `randomized-kdtree-forest.md`: "potentially for patch matching" is
