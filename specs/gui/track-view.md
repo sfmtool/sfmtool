@@ -99,7 +99,7 @@ pub struct TrackBodyResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub fit: bool,
-    pub(crate) normal: Option<NormalStep>,   // Fit Normal, Finite Diff Normal or Grid Plane Normal, with its settings
+    pub(crate) normal: Option<NormalStep>,    // one of the three normal buttons, with its settings
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>, // Edited: a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
@@ -613,8 +613,8 @@ kept rows; and the angle and the two diagnostics are computed from the rays of
 the kept rows' cameras to the position, and left out where the track has no
 position yet. A cluster has no position and shows none of them.
 
-The metrics are [metrics.rs](../../crates/sfm-explorer/src/metrics.rs), at the crate
-root, because the Image Detail overlay and `get_point` read the same numbers.
+The metrics are [metrics.rs](../../crates/sfm-explorer/src/metrics.rs), at the
+crate root, because the Image Detail overlay and `get_point` read the same numbers.
 The summary is computed once per key and cached on the body, since the
 diagnostics triangulate: for the viewed track per point and document serial,
 for a bench track per track `Arc` and version.
@@ -995,8 +995,8 @@ beside it is that patch warped square, so the eye reads from the raw pixels to
 the picture the numbers are read from. The two photometric columns come
 straight after the verdict, *ZNCC* and then *Self-similarity*, since they are
 the readings the verdict is most often decided by; the reprojection error, the
-shift, the patch's zoom, the *Reference* column, the status and, in Edited mode, the provenance follow
-them. The image's name is the last column, 220 points wide: hovering it or the
+shift, the patch's zoom, the *Reference* column, the status and, in Edited
+mode, the provenance follow them. The image's name is the last column, 220 points wide: hovering it or the
 *Img* cell shows the name whole, so the room in the middle of the table goes to
 the readings. The columns stand at the same offsets in both modes, and Viewed
 mode has no *From* column, since every row of a committed point came from the
@@ -1992,18 +1992,18 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   with 48 px patch bitmaps a Jacobian half the size and zooms twice as large;
   each row's *Zoom*
   cell printing the zoom of its tile's Jacobian, and the same with no photograph
-  decoded; the rows starting in increasing order of image, a click on *Img*
-  reversing that and a second putting it back; a click on *Proj. err* ordering
-  the rows largest error first and a second click smallest first; a click on
-  *Keep* ordering them by how many bars they fail, most first, and a second
-  click fewest first; a first click on each heading but *Reference* starting
-  worst first where a bar judges the column and increasing where none does, and
-  a second click reversing; a row with no key sorting last both ways, with ties
-  in increasing order of image; every heading but *Crop*, *Patch* and *From*
-  ordering the rows; the *Verdict* text of an `out` row counting the bars it
-  fails, `out (2)`, and `out` alone for one that fails none; a click on *Zoom*
-  ordering the rows by mean zoom both ways, a row with no zoom last either way; the *Zoom* cell's two significant digits chosen
-  after rounding, with both numbers printed where they agree; the
+  decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
+  with no zoom last either way; the rows starting in increasing order of image,
+  a click on *Img* reversing that and a second putting it back; a click on
+  *Proj. err* ordering the rows largest error first and a second click smallest
+  first; a click on *Keep* ordering them by how many bars they fail, most first,
+  and a second click fewest first; a first click on each heading but
+  *Reference* starting worst first where a bar judges the column and increasing
+  where none does, and a second click reversing; a row with no key sorting last
+  both ways, with ties in increasing order of image; every heading but *Crop*,
+  *Patch* and *From* ordering the rows; the *Verdict* text of an `out` row
+  counting the bars it fails, `out (2)`, and `out` alone for one that fails
+  none; the *Zoom* cell's two significant digits chosen after rounding, with both numbers printed where they agree; the
   *Self-similarity* hover's table of ellipses in grid px, image px and world
   space, each as major × minor axis and angle, with `+` on a lower bound and no
   angle on a circle, every world length scaled to the one
