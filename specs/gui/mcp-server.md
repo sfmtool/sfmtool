@@ -1509,7 +1509,9 @@ not ask for. The relative forms are covered in § "The relative forms" below.
 forms, or is sent alone. Beside `fit`, `look_through`, `exit_camera_view`,
 `point` or `bench_observation` it is refused, naming the form: a fit, an exit
 and a point keep the field of view, and a look-through and a bench observation
-take the camera image's, so a width sent with any of them would be dropped.
+set it to fit the camera image they look through (a fisheye camera image, and a
+bench observation entered from camera view, keep the current one), so a width
+sent with any of them would be dropped.
 The look-at form takes `up` as the roll, defaulting to the current
 `world_up`; a different one re-rolls the view exactly as `tilt` does. The exact
 form restores a view verbatim, which is what `orientation_wxyz` and
@@ -4971,7 +4973,10 @@ where a test hands no host over.
   point's world position at the orbit target, leaves camera view and moves no
   selection, and is refused beside a second form;
   `bench_observation` looks through the camera image the observation is in,
-  and an index past the end of the list is refused.
+  and an index past the end of the list is refused. `fov_short_axis_deg` beside
+  `fit`, `look_through`, `exit_camera_view`, `point` or `bench_observation` is
+  refused naming the form, while alone, with a piece of the explicit camera or
+  with a relative form it is accepted.
 - **The relative forms land where their axes and signs say**: `move` goes
   along the level axes from a camera looking down, `turn` with a positive yaw
   faces left and with a negative yaw and a positive pitch faces right and up,
