@@ -378,16 +378,22 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `src/sfmtool/_commands/flow.py` (14-171); `src/sfmtool/visualization/_flow_display.py` (`draw_flow_visualization` 131-378, `_get_shared_feature_pairs` 83-128).
 **Inconsistencies:**
   - Prerequisites undocumented: `.sift` files for both images (`_flow_display.py:199-205`) and identical dimensions (`optical.rs:71-75`).
+    > _Status (2026-10-07): **Done** — the spec has a "Prerequisites" section (the `.sift` lookup and the same-shape error), and the Click help names both, branch `spec-fix-1006-25-flowcmd-spec`._
   - Flow-only mode (spec 33-34) draws only hits with a categorical palette (`_flow_display.py:443-451`), not flow-coloured arrows; direction colour is only in the separate `<stem>_flow<ext>` image (661-677). The Click help (flow.py:103-105) has the same error.
+    > _Status (2026-10-07): **Done** — the spec's "Flow only" section and the Click help now say only the hits are drawn, one palette colour each, and that direction colour is in `<stem>_flow<ext>`; the `draw_flow_visualization` and `_draw_flow_only_mode` docstrings were corrected the same way, branch `spec-fix-1006-25-flowcmd-spec`._
   - `--descriptor-threshold` changes printed statistics only (`_flow_display.py:268-285`), and its default 100 differs from the matcher's 250 (`_flow_matching.py:167`).
+    > _Status (2026-10-07): **Done** — the options table and Overview say the threshold changes printed statistics only, and the Overview states the 100 vs 250 difference and that a hit takes the nearest keypoint with no descriptor choice, branch `spec-fix-1006-25-flowcmd-spec`._
   - `--max-features` affects drawing only; comparison mode can exceed N by up to 2 (527-533). Ranges and errors (flow.py:51, :58, :141-144; `_flow_display.py:107-110`) are undocumented.
+    > _Status (2026-10-07): **Done** — the table gives each range and says `--max-features` affects drawing only, with the first-N rule (flow only) and the proportional rule that can draw N + 2 (comparison); errors are listed under Prerequisites and the `-r` row, branch `spec-fix-1006-25-flowcmd-spec`._
   - Code bug: comparison mode matches images by basename, last match wins (`_flow_display.py:101-105, 288-289, 484-485`). In `kerry_park_ground_truth.sfmr`, `fisheye_left/frame_01.jpg` resolves to `fisheye_right/` and the wrong tracks are compared silently. Match the workspace-relative path; refuse ambiguous basenames.
     > _Status (2026-10-06): **Done** — `sfm flow -r` now finds each image by its workspace-relative path, refuses a workspace image the reconstruction lacks, and outside the workspace matches by file name only when exactly one image has it; tests in `tests/matching/test_flow.py`, spec § "Comparison mode" updated, branch `spec-fix-1006-02-flow-basename`._
 **Third copies:** the colour legend is in four places (spec 40-42, Click help flow.py:108-112, docstrings 150-158 and 476-479); the two internal docstrings should point at the spec. Low priority.
 **Shape:** failure 1. Proposed first sentence: "The flow command is a diagnostic for flow-based matching: it computes dense optical flow from one image to another, moves the first image's SIFT keypoints along it, and reports how many land near a keypoint of the second image, optionally drawing the result or comparing it with the matches in a reconstruction." It also never links `flow-based-matching.md`.
+> _Status (2026-10-07): **Done** — the opening is the proposed sentence with "matches" changed to "correspondences" (the comparison uses feature pairs that observe the same 3D point, not stored matches), and links `flow-based-matching.md`, branch `spec-fix-1006-25-flowcmd-spec`._
 **Non-goals / deferrals checked:** 1; still true.
 **Recommendation:** update code (basename lookup) and update spec (prerequisites, flow-only drawing, option scope, purpose sentence).
 **Unclear / incorrect / suspicious:** "Middlebury color wheel" (spec 34, `_flow_to_color` 59) is really an HSV direction wheel (69-77); `--side-by-side` rescaling (689-699) is undocumented.
+> _Status (2026-10-07): **Done** — the spec, the `_flow_display.py` docstrings, `_discontinuity_display.py` and `motion-command.md` now describe an HSV hue wheel (hue = direction, saturation = magnitude, white = zero) instead of Middlebury; the spec says the side-by-side image is twice one image's width, since the flow requires equal dimensions and the rescale in `_save_output` therefore never runs, branch `spec-fix-1006-25-flowcmd-spec`._
 
 ### specs/core/features/cluster-covisibility.md
 **Summary:** The pre-reconstruction image-pair count matrix `W[i,j]` (clusters with an accepted member in both images), its acceptance mask, dense-storage bound, the lazy greedy seed-group iterator, candidate ranking and the PyO3 surface.
@@ -885,3 +891,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
+   > _Status (2026-10-07): **Partially done** — `flow-command.md` opening landed, branch `spec-fix-1006-25-flowcmd-spec`; this branch does not cover the other eight._
