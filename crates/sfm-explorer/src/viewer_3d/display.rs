@@ -41,9 +41,9 @@ pub(crate) struct SliderRange {
     pub(crate) max: f32,
     /// Decimals the slider shows, and rounds the value it holds to.
     pub(crate) decimals: usize,
-    pub(crate) logarithmic: bool,
+    logarithmic: bool,
     /// Written after the number in the Action Log text, `" px"` or empty.
-    pub(crate) unit: &'static str,
+    unit: &'static str,
 }
 
 impl SliderRange {
@@ -78,17 +78,26 @@ impl SliderRange {
             .fixed_decimals(self.decimals)
     }
 
-    /// Whether `value` is one the slider can hold: finite and inside the
-    /// range, ends included.
+    /// The two ends of the range as `f64`, rounded to the decimals the slider
+    /// shows: the numbers a refusal and the schema write them as.
     ///
-    /// The ends are compared as the decimals they are written as, not as the
-    /// `f32` they are stored in: `0.001_f32` widens to `0.0010000000474974513`,
-    /// which is above the `0.001` a caller sends, so comparing against the
-    /// widened `f32` would refuse the bottom of the Scene slider.
+    /// The `f32` an end is stored in is not always that decimal: `0.001_f32`
+    /// widens to `0.0010000000474974513`, which is above the `0.001` a caller
+    /// sends. [`Self::contains`] compares against these ends and the schema
+    /// advertises them, so what the schema says and what the parse accepts
+    /// are the same numbers.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn decimal_ends(&self) -> (f64, f64) {
+        let end = |end: f32| egui::emath::round_to_decimals(f64::from(end), self.decimals);
+        (end(self.min), end(self.max))
+    }
+
+    /// Whether `value` is one the slider can hold: finite and inside the
+    /// range, ends included, with the ends from [`Self::decimal_ends`].
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn contains(&self, value: f64) -> bool {
-        let end = |end: f32| egui::emath::round_to_decimals(f64::from(end), self.decimals);
-        value.is_finite() && value >= end(self.min) && value <= end(self.max)
+        let (min, max) = self.decimal_ends();
+        value.is_finite() && value >= min && value <= max
     }
 
     /// `value` rounded to the decimals the slider shows, as `f32`.
@@ -99,8 +108,11 @@ impl SliderRange {
     /// same function the slider uses, keeps what was set and what the HUD shows
     /// the same number. Every range's ends are whole at its decimals, so a
     /// value inside the range stays inside it.
+    ///
+    /// A small negative value rounds to `-0.0`; adding `0.0` turns that into
+    /// `0.0`, so it is stored, reported and logged without a minus sign.
     pub(crate) fn round(&self, value: f64) -> f32 {
-        egui::emath::round_to_decimals(value, self.decimals) as f32
+        egui::emath::round_to_decimals(value, self.decimals) as f32 + 0.0
     }
 
     /// `value` moved to the nearest end of the range when it is outside it,

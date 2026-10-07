@@ -699,10 +699,24 @@ fn a_slider_range_holds_no_value_that_is_not_finite() {
         if let Control::Slider(range) = field.control() {
             assert!(!range.contains(f64::NAN), "{}", field.wire_name());
             assert!(!range.contains(f64::INFINITY), "{}", field.wire_name());
-            assert!(range.contains(f64::from(range.min)));
-            assert!(range.contains(f64::from(range.max)));
+            let (min, max) = range.decimal_ends();
+            assert!(range.contains(min));
+            assert!(range.contains(max));
         }
     }
+}
+
+/// A small negative value that rounds to zero is stored as `0.0`, not `-0.0`,
+/// so it reads back and logs without a minus sign.
+#[test]
+fn a_slider_rounds_a_small_negative_value_to_positive_zero() {
+    let rounded = Field::PointSizeLog2.range().round(-0.04);
+    assert_eq!(rounded, 0.0);
+    assert!(rounded.is_sign_positive());
+    assert_eq!(
+        Field::PointSizeLog2.text(FieldValue::Number(rounded)),
+        "Point size 0.0"
+    );
 }
 
 /// Both ends of every slider are accepted as the decimals the schema and the
@@ -830,9 +844,25 @@ fn set_viewer_3d_display_advertises_the_slider_ranges() {
         .iter()
         .find(|spec| spec.name == "set_viewer_3d_display")
         .expect("in the catalog");
-    let point_size = &spec.schema["properties"]["point_size_log2"];
+    let properties = &spec.schema["properties"];
+    let point_size = &properties["point_size_log2"];
     assert_eq!(point_size["minimum"], -3.0);
     assert_eq!(point_size["maximum"], 3.0);
+    // Ends that no `f32` holds exactly are advertised as their decimals.
+    assert_eq!(properties["length_scale"]["minimum"], 0.001);
+    assert_eq!(properties["frustum_size_multiplier"]["minimum"], 0.05);
+    // Every slider's schema ends are the decimals the refusal writes, and the
+    // ends the parse accepts.
+    let written = |end: f32| -> f64 { end.to_string().parse().expect("a number") };
+    for field in Field::ALL {
+        if let Control::Slider(range) = field.control() {
+            let name = field.wire_name();
+            let (min, max) = (written(range.min), written(range.max));
+            assert_eq!(properties[name]["minimum"], min, "{name}");
+            assert_eq!(properties[name]["maximum"], max, "{name}");
+            assert_eq!(range.decimal_ends(), (min, max), "{name}");
+        }
+    }
     assert_eq!(
         spec.schema["properties"]["show_target_indicator"]["type"],
         "boolean"

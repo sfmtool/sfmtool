@@ -129,17 +129,20 @@ fn property(field: Field) -> Value {
     let description = description(field);
     match field.control() {
         Control::Checkbox => json!({ "type": "boolean", "description": description }),
-        Control::Slider(range) => json!({
-            "type": "number",
-            "minimum": f64::from(range.min),
-            "maximum": f64::from(range.max),
-            "description": format!(
-                "{description} From {}; rounded to {} decimal{}, as the HUD's slider shows it.",
-                range.describe(),
-                range.decimals,
-                if range.decimals == 1 { "" } else { "s" },
-            ),
-        }),
+        Control::Slider(range) => {
+            let (minimum, maximum) = range.decimal_ends();
+            json!({
+                "type": "number",
+                "minimum": minimum,
+                "maximum": maximum,
+                "description": format!(
+                    "{description} From {}; rounded to {} decimal{}, as the HUD's slider shows it.",
+                    range.describe(),
+                    range.decimals,
+                    if range.decimals == 1 { "" } else { "s" },
+                ),
+            })
+        }
     }
 }
 

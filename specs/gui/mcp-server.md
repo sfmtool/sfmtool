@@ -1296,9 +1296,9 @@ draws them.
 
 **The document is flat, and its field names are the field names in the code.**
 The HUD groups its controls into six sections, but a section is a layout
-decision and not a name: no two controls share a word, so a nested
-`{ "size": { "points": … } }` would add a level without telling two things
-apart. Every field is named for the field it is stored in (`AppState`'s, and
+decision and not a name: the field names are already unique, so a nested
+`{ "size": { "point_size_log2": … } }` would add a level without making any
+field name clearer. Every field is named for the field it is stored in (`AppState`'s, and
 `Viewer3D::maintain_z_up`), which is § "Where the GUI has no word, the code's
 word wins" applied to labels like `Points` and `Scene` that would be ambiguous
 on their own. The numbers are carried as the shortest decimal that reads back
