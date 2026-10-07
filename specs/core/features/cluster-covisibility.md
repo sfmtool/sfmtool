@@ -346,8 +346,8 @@ displacement queries and the isolation-ordered `thin` sweep answer on a
 matrix built this way. Every cluster file the reader opens carries positions:
 `read_matches` refuses a cluster file below format version 6, and from version
 6 on `member_positions` is mandatory. `num_images` is the image table's
-length. A file storing the pairwise backbone raises `ValueError`. Custom masks use
-`read_matches` + numpy + `from_arrays`.
+length. A file storing the pairwise backbone raises `ValueError`. Custom masks
+use `read_matches` + numpy + `from_arrays`.
 
 ## Validation
 
@@ -370,7 +370,9 @@ length. A file storing the pairwise backbone raises `ValueError`. Custom masks u
 - Consumers in the tree: reconstruction growth
   ([reconstruction-growth.md](../geometry/reconstruction-growth.md)) ranks
   posed neighbours with `rank_by_covisibility` and picks anchor and finishing
-  bundle-adjustment cameras with `thin_to`; the cluster census
+  bundle-adjustment cameras with `thin_to`; batch resection
+  (`resect_images_batch`) orders its fallback pose seeds with
+  `rank_by_covisibility`; the cluster census
   ([cluster-census.md](../analysis/cluster-census.md)) builds its viewpoint
   groups from `count`; pose verification
   ([pose-verification.md](../geometry/pose-verification.md)) works on the
