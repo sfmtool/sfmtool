@@ -126,7 +126,7 @@ returns each observation's `reproj_error` and pixel.
 > but the field of view (point size, layer toggles, Maintain Z-up, the target
 > indicator), refused outside the slider ranges and logged in the HUD's words;
 > the Alt double-tap is replaced by a **Target indicator** checkbox in the HUD's
-> Layers section, branch `viewer-3d-display-mcp`._
+> Layers section, PR #810._
 
 The tutorial's last GUI screenshot shows the orbit target (double-tap Alt) and
 enlarged points. Neither can be set over MCP.
