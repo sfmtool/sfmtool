@@ -165,6 +165,20 @@ class TestKdForestQuery:
         assert len(filled) > 0
         assert np.all(filled < 10), "cutoff admitted a far-cluster point"
 
+    def test_max_dist_excludes_points_just_past_the_cutoff(self):
+        # Squared distances 6 (~2.45) and 7 (~2.65) from the origin.
+        pts = np.zeros((2, 8), dtype=np.uint8)
+        pts[0, :6] = 1
+        pts[1, :7] = 1
+        forest = KdForest(pts, preset="accurate")
+        query = np.zeros((1, 8), dtype=np.uint8)
+        idx, dist = forest.query(query, k=2, max_leaf_checks=2, max_dist=2.5)
+        assert idx[0, 0] == 0
+        assert idx[0, 1] == np.iinfo(np.uint32).max
+        assert np.all(dist[np.isfinite(dist)] <= 2.5)
+        idx, _ = forest.query(query, k=2, max_leaf_checks=2, max_dist=np.sqrt(7.0))
+        assert sorted(idx[0]) == [0, 1]
+
     def test_dimension_mismatch_raises(self):
         pts = _random_descriptors(20, 32, 15)
         forest = KdForest(pts)

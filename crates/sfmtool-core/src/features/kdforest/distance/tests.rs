@@ -55,8 +55,25 @@ fn f32_cutoff_and_order() {
 }
 
 #[test]
-fn u8_cutoff_rounds_up() {
-    // sqrt(5) ≈ 2.236; squared back must not drop below 5.
-    let c = u8::cutoff_sq(5.0f32.sqrt());
-    assert!(c >= 5, "cutoff {c} under-rounded");
+fn u8_cutoff_rounds_down() {
+    // 2.5² = 6.25: squared distance 6 is within the cutoff, 7 (≈ 2.65) is not.
+    assert_eq!(u8::cutoff_sq(2.5), 6);
+    assert_eq!(u8::cutoff_sq(0.0), 0);
+    assert_eq!(u8::cutoff_sq(f32::INFINITY), i64::MAX);
+}
+
+#[test]
+fn u8_cutoff_keeps_exact_integer_boundaries() {
+    // `sqrt(n)` rounded to f32 squares back to slightly below or above `n`;
+    // the cutoff must admit `n` and, while f32 can still resolve the next
+    // integer, nothing past it.
+    for n in 0i64..=1_000_000 {
+        let c = u8::cutoff_sq((n as f64).sqrt() as f32);
+        assert_eq!(c, n, "cutoff for sqrt({n})");
+    }
+    // At the largest SIFT squared distance f32 can no longer resolve
+    // neighbouring integers, so only the lower bound holds.
+    let n = 255i64 * 255 * 128;
+    let c = u8::cutoff_sq((n as f64).sqrt() as f32);
+    assert!((n..=n + 8).contains(&c), "cutoff {c} for sqrt({n})");
 }

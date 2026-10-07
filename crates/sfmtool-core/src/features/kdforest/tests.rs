@@ -271,6 +271,32 @@ fn max_dist_cutoff_respected() {
 }
 
 #[test]
+fn max_dist_excludes_points_just_past_the_cutoff() {
+    // From the origin: squared distances 6 (≈ 2.45) and 7 (≈ 2.65). With
+    // `max_dist = 2.5` only the first is within the cutoff.
+    let dim = 8;
+    let mut points = vec![0u8; 2 * dim];
+    points[..6].fill(1);
+    points[dim..dim + 7].fill(1);
+    let forest = KdForestU8::build(
+        &points,
+        2,
+        dim,
+        KdForestParams::accurate(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
+    let query = vec![0u8; dim];
+    let nbrs = forest.search(&query, 2, 2, Some(2.5));
+    assert_eq!(nbrs.len(), 1);
+    assert_eq!(nbrs[0].index, 0);
+    assert_eq!(nbrs[0].dist_sq, 6.0);
+    // A cutoff of exactly sqrt(7) admits the squared distance 7.
+    let nbrs = forest.search(&query, 2, 2, Some(7f32.sqrt()));
+    assert_eq!(nbrs.len(), 2);
+}
+
+#[test]
 fn fewer_than_k_padding() {
     let dim = 4;
     let points: Vec<u8> = vec![0, 0, 0, 0, 5, 5, 5, 5];

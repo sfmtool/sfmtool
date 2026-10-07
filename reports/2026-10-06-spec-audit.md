@@ -403,6 +403,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfmtool-core/src/features/kdforest/` (`mod.rs`, `build.rs`, `search.rs`, `distance.rs`, `calibrate.rs`); binding `crates/sfmtool-py/src/spatial/kdforest.rs`; consumer `cluster_match/mod.rs:198`.
 **Inconsistencies:**
   - Code bug: the spec keeps "dist_sq <= max_dist²" (:127, :154), but `u8::cutoff_sq` rounds up (`distance.rs:78-85`), so `max_dist=2.5` admits √7 ≈ 2.65 (`search.rs:214`). Reachable from Python `KdForest.query` (py kdforest.rs:257). Floor with a small relative tolerance.
+    > _Status (2026-10-06): **Done** — `u8::cutoff_sq` now rounds `max_dist²` down after a relative tolerance of `4 · f32::EPSILON`, so 2.5 keeps 6 and drops 7 while `sqrt(n)` still keeps `n`; the eager and lazy (`.kdf`) searches share it, and the cluster matcher passes no cutoff. Tests in Rust and Python, spec § "Distance cutoff" says so, branch `spec-fix-1006-04-kdforest-maxdist`._
   - `L_max` default "precision-tuned" (:190) is a fixed 128 (mod.rs:104-120); `calibrate_max_leaf_checks` has no caller outside the module.
   - Pseudocode sends `diff == 0` right (:145-146); the code sends it left (search.rs:351-354), matching the spec's own rule (:99). Module tree (:271-280) omits `constellation.rs`, `neighbor_index.rs`, `persistent.rs`; "per-dimension bookkeeping" (:300) is not a field.
   - "exactly what `src/sfmtool/feature_match/` already consumes" (:359-360) is false (also py kdforest.rs:8-10); the benchmarks are synthetic, not "end-to-end image-pair matching" (:404-405).
@@ -800,6 +801,7 @@ Read 2026-09-26; open items above.
    - **`KdForest.query(max_dist=…)` returns points beyond `max_dist`**:
      `u8::cutoff_sq` rounds `max_dist²` up (`kdforest/distance.rs:78-85`), so
      2.5 admits a squared distance of 7 (2.65). (randomized-kdtree-forest)
+     > _Status (2026-10-06): **Done** — `u8::cutoff_sq` now rounds `max_dist²` down after a relative tolerance of `4 · f32::EPSILON`, so 2.5 keeps 6 and drops 7 while `sqrt(n)` still keeps `n`; the eager and lazy (`.kdf`) searches share it, and the cluster matcher passes no cutoff. Tests in Rust and Python, spec § "Distance cutoff" says so, branch `spec-fix-1006-04-kdforest-maxdist`._
    - **`reprojection_residuals` binding:** zero observations give shape
      `(0, 0)`, which `inlier_fraction` then refuses; out-of-range indexes and a
      short `translations` array raise `PanicException`, not `ValueError`

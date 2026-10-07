@@ -178,7 +178,11 @@ descend(node, q, lb, result, queue, checked, n_checks):
 - **Distance cutoff.** Seeding `result.worst_dist_sq()` with `max_dist²` makes the
   cutoff prune branches and reject candidates for free through the same
   `worst_dist_sq()` paths — mirroring `spatial.rs`'s `nearest_k_within_radius`.
-  Fewer than `k` neighbors may be returned (padded with `u32::MAX`).
+  Fewer than `k` neighbors may be returned (padded with `u32::MAX`). For `u8`
+  descriptors the squared distance is an integer, so the cutoff is `max_dist²`
+  rounded down after a relative tolerance of `4 · f32::EPSILON`, which absorbs
+  the rounding of `max_dist` to `f32`: `max_dist = 2.5` keeps a squared
+  distance of 6 and drops 7, and `max_dist = sqrt(7)` keeps 7.
 
 ### Parameters
 

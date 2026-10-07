@@ -40,8 +40,12 @@ pub trait ForestScalar: Copy + Send + Sync + PartialEq + 'static {
 
     /// Square a Euclidean cutoff into the squared-distance domain.
     ///
-    /// Rounds *up* for integer domains so the cutoff never prunes a candidate
-    /// that is genuinely within `max_dist`.
+    /// The search keeps a candidate when its squared distance is at most the
+    /// returned value. For integer domains that value is `max_dist²` rounded
+    /// *down*, after a relative tolerance a few times `f32::EPSILON` absorbs
+    /// the rounding of `max_dist` to `f32`: a caller who passes `sqrt(n)` for
+    /// an integer `n` still gets candidates at squared distance exactly `n`,
+    /// and nothing farther than `max_dist` beyond that `f32` rounding.
     fn cutoff_sq(max_dist: f32) -> Self::Dist;
 
     /// Total order over raw coordinates (for median selection / partitioning).
@@ -76,11 +80,14 @@ impl ForestScalar for u8 {
 
     #[inline]
     fn cutoff_sq(max_dist: f32) -> i64 {
-        let sq = (max_dist as f64) * (max_dist as f64);
+        // `max_dist` carries a relative error up to `f32::EPSILON / 2`, so its
+        // square carries up to `f32::EPSILON`; four times that is the margin.
+        const REL_TOL: f64 = 4.0 * f32::EPSILON as f64;
+        let sq = (max_dist as f64) * (max_dist as f64) * (1.0 + REL_TOL);
         if sq >= i64::MAX as f64 {
             i64::MAX
         } else {
-            sq.ceil() as i64
+            sq.floor() as i64
         }
     }
 
