@@ -80,34 +80,61 @@ def _flow_to_color(flow_u: np.ndarray, flow_v: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
 
+def _resolve_recon_image_index(
+    image_names: list[str], workspace_dir: str | Path, image_path: Path
+) -> int:
+    """Index of the reconstruction image that is the file `image_path`.
+
+    An image inside the reconstruction's workspace is looked up by its
+    workspace-relative path, so `fisheye_left/frame_01.jpg` never resolves to
+    `fisheye_right/frame_01.jpg`. An image outside the workspace is looked up
+    by file name, and only when exactly one reconstruction image has that name.
+    Raises `ValueError` when no image matches or the file name is ambiguous.
+    """
+    names = [name.replace("\\", "/") for name in image_names]
+    resolved = image_path.resolve()
+    try:
+        rel = resolved.relative_to(Path(workspace_dir).resolve()).as_posix()
+    except ValueError:
+        rel = None
+
+    if rel is not None:
+        if rel in names:
+            return names.index(rel)
+        raise ValueError(
+            f"Image '{rel}' is in the reconstruction's workspace "
+            f"({workspace_dir}) but not in the reconstruction"
+        )
+
+    matches = [i for i, name in enumerate(names) if Path(name).name == image_path.name]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"Image '{image_path}' not found in reconstruction")
+    listed = ", ".join(image_names[i] for i in matches[:4])
+    raise ValueError(
+        f"Image '{image_path}' is outside the reconstruction's workspace "
+        f"({workspace_dir}) and its file name matches {len(matches)} "
+        f"reconstruction images ({listed}); pass the image's path inside "
+        "the workspace"
+    )
+
+
 def _get_shared_feature_pairs(
     recon: "SfmrReconstruction",
-    image1_name: str,
-    image2_name: str,
-) -> tuple[int, int, list[tuple[int, int]]]:
+    image1_idx: int,
+    image2_idx: int,
+) -> list[tuple[int, int]]:
     """Extract shared feature pairs between two images from reconstruction tracks.
 
-    Returns (image1_idx, image2_idx, list of (feat1_idx, feat2_idx) pairs).
+    Returns a list of (feat1_idx, feat2_idx) pairs, one per 3D point observed
+    in both images.
     """
-    image_names = recon.image_names
     image_indexes = recon.track_image_indexes
     feature_indexes = recon.track_feature_indexes
     point_ids = recon.track_point_indexes
 
     observations = np.column_stack([image_indexes, feature_indexes])
-
-    image1_idx = None
-    image2_idx = None
-    for idx, name in enumerate(image_names):
-        if Path(name).name == Path(image1_name).name or name == image1_name:
-            image1_idx = idx
-        if Path(name).name == Path(image2_name).name or name == image2_name:
-            image2_idx = idx
-
-    if image1_idx is None:
-        raise ValueError(f"Image '{image1_name}' not found in reconstruction")
-    if image2_idx is None:
-        raise ValueError(f"Image '{image2_name}' not found in reconstruction")
 
     obs1_mask = observations[:, 0] == image1_idx
     obs2_mask = observations[:, 0] == image2_idx
@@ -125,7 +152,7 @@ def _get_shared_feature_pairs(
         feat2_idx = obs2[point_ids2 == point_id, 1][0]
         feature_pairs.append((int(feat1_idx), int(feat2_idx)))
 
-    return image1_idx, image2_idx, feature_pairs
+    return feature_pairs
 
 
 def draw_flow_visualization(
@@ -173,6 +200,17 @@ def draw_flow_visualization(
         raise FileNotFoundError(f"Failed to read image: {image1_path}")
     if img2_bgr is None:
         raise FileNotFoundError(f"Failed to read image: {image2_path}")
+
+    sfmr_pairs: list[tuple[int, int]] = []
+    if recon is not None:
+        image_names = list(recon.image_names)
+        image1_idx = _resolve_recon_image_index(
+            image_names, recon.workspace_dir, image1_path
+        )
+        image2_idx = _resolve_recon_image_index(
+            image_names, recon.workspace_dir, image2_path
+        )
+        sfmr_pairs = _get_shared_feature_pairs(recon, image1_idx, image2_idx)
 
     # Convert to grayscale for flow computation
     gray1 = cv2.cvtColor(img1_bgr, cv2.COLOR_BGR2GRAY)
@@ -284,10 +322,6 @@ def draw_flow_visualization(
             )
 
     if recon is not None:
-        # Get shared feature pairs from reconstruction
-        _img1_idx, _img2_idx, sfmr_pairs = _get_shared_feature_pairs(
-            recon, image1_path.name, image2_path.name
-        )
         print(f"  SfMR correspondences: {len(sfmr_pairs)}")
 
         # Compute distance from advected position to SfMR target
@@ -350,9 +384,7 @@ def draw_flow_visualization(
             advected=advected,
             flow_u=flow_u,
             flow_v=flow_v,
-            recon=recon,
-            image1_name=image1_path.name,
-            image2_name=image2_path.name,
+            sfmr_pairs=sfmr_pairs,
             output_path=output_path,
             feature_size=feature_size,
             line_thickness=line_thickness,
@@ -461,9 +493,7 @@ def _draw_comparison_mode(
     advected: np.ndarray,
     flow_u: np.ndarray,
     flow_v: np.ndarray,
-    recon: "SfmrReconstruction",
-    image1_name: str,
-    image2_name: str,
+    sfmr_pairs: list[tuple[int, int]],
     output_path: Path,
     feature_size: int,
     line_thickness: int,
@@ -479,11 +509,6 @@ def _draw_comparison_mode(
     - YELLOW: flow hits that are NOT sfmr correspondences
     """
     h2, w2 = img2_bgr.shape[:2]
-
-    # Get shared feature pairs from reconstruction
-    _img1_idx, _img2_idx, sfmr_pairs = _get_shared_feature_pairs(
-        recon, image1_name, image2_name
-    )
 
     # Compute distance from advected position to SfMR target for each correspondence
     sfmr_distances = []  # (feat1_idx, feat2_idx, distance)

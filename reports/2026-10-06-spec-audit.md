@@ -377,6 +377,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - `--descriptor-threshold` changes printed statistics only (`_flow_display.py:268-285`), and its default 100 differs from the matcher's 250 (`_flow_matching.py:167`).
   - `--max-features` affects drawing only; comparison mode can exceed N by up to 2 (527-533). Ranges and errors (flow.py:51, :58, :141-144; `_flow_display.py:107-110`) are undocumented.
   - Code bug: comparison mode matches images by basename, last match wins (`_flow_display.py:101-105, 288-289, 484-485`). In `kerry_park_ground_truth.sfmr`, `fisheye_left/frame_01.jpg` resolves to `fisheye_right/` and the wrong tracks are compared silently. Match the workspace-relative path; refuse ambiguous basenames.
+    > _Status (2026-10-06): **Done** — `sfm flow -r` now finds each image by its workspace-relative path, refuses a workspace image the reconstruction lacks, and outside the workspace matches by file name only when exactly one image has it; tests in `tests/matching/test_flow.py`, spec § "Comparison mode" updated, branch `spec-fix-1006-02-flow-basename`._
 **Third copies:** the colour legend is in four places (spec 40-42, Click help flow.py:108-112, docstrings 150-158 and 476-479); the two internal docstrings should point at the spec. Low priority.
 **Shape:** failure 1. Proposed first sentence: "The flow command is a diagnostic for flow-based matching: it computes dense optical flow from one image to another, moves the first image's SIFT keypoints along it, and reports how many land near a keypoint of the second image, optionally drawing the result or comparing it with the matches in a reconstruction." It also never links `flow-based-matching.md`.
 **Non-goals / deferrals checked:** 1; still true.
@@ -794,6 +795,7 @@ Read 2026-09-26; open items above.
      on a rig, `fisheye_left/frame_01.jpg` resolves to
      `fisheye_right/frame_01.jpg`, so the wrong tracks are compared with no
      warning. (flow-command)
+     > _Status (2026-10-06): **Done** — `sfm flow -r` now finds each image by its workspace-relative path, refuses a workspace image the reconstruction lacks, and outside the workspace matches by file name only when exactly one image has it; tests in `tests/matching/test_flow.py`, spec § "Comparison mode" updated, branch `spec-fix-1006-02-flow-basename`._
    - **Absolute-pose local optimization keeps the refit only on a strict gain**
      (`absolute_pose.rs:489`, `new_count > count`). On clean data it returns the
      raw P3P pose, and the comment at :495 says the opposite. (absolute-pose)

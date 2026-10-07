@@ -3,8 +3,12 @@
 
 """Tests for the flow command and flow visualization utilities."""
 
+import shutil
+from pathlib import Path
+
 import cv2
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 from sfmtool._sfmtool.flow import compute_optical_flow as _rust_compute_optical_flow
@@ -13,6 +17,7 @@ from sfmtool.visualization._common import get_color_palette
 from sfmtool.visualization._flow_display import (
     _find_nearest_within_tolerance,
     _flow_to_color,
+    _resolve_recon_image_index,
     _save_output,
 )
 from sfmtool.cli import main
@@ -136,6 +141,64 @@ class TestFindNearestWithinTolerance:
         assert 0 in result
         assert 1 in result
         assert 2 not in result
+
+
+class TestResolveReconImageIndex:
+    """`sfm flow -r` finds each image in the reconstruction by its path."""
+
+    RIG_NAMES = [
+        "fisheye_left/frame_01.jpg",
+        "fisheye_left/frame_02.jpg",
+        "fisheye_right/frame_01.jpg",
+        "fisheye_right/frame_02.jpg",
+    ]
+
+    def test_workspace_relative_path_picks_the_right_sensor(self, tmp_path):
+        left = tmp_path / "fisheye_left" / "frame_01.jpg"
+        right = tmp_path / "fisheye_right" / "frame_01.jpg"
+        assert _resolve_recon_image_index(self.RIG_NAMES, tmp_path, left) == 0
+        assert _resolve_recon_image_index(self.RIG_NAMES, tmp_path, right) == 2
+
+    def test_relative_input_path_is_resolved(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        image = Path("fisheye_left") / "frame_02.jpg"
+        assert _resolve_recon_image_index(self.RIG_NAMES, tmp_path, image) == 1
+
+    def test_image_in_workspace_but_not_in_reconstruction(self, tmp_path):
+        other = tmp_path / "other" / "frame_01.jpg"
+        with pytest.raises(ValueError, match="not in the reconstruction"):
+            _resolve_recon_image_index(self.RIG_NAMES, tmp_path, other)
+
+    def test_outside_workspace_unique_file_name(self, tmp_path):
+        workspace = tmp_path / "ws"
+        names = ["images/a.jpg", "images/b.jpg"]
+        outside = tmp_path / "copy" / "b.jpg"
+        assert _resolve_recon_image_index(names, workspace, outside) == 1
+
+    def test_outside_workspace_ambiguous_file_name_is_refused(self, tmp_path):
+        workspace = tmp_path / "ws"
+        outside = tmp_path / "copy" / "frame_01.jpg"
+        with pytest.raises(ValueError, match="matches 2 reconstruction images"):
+            _resolve_recon_image_index(self.RIG_NAMES, workspace, outside)
+
+    def test_outside_workspace_missing(self, tmp_path):
+        workspace = tmp_path / "ws"
+        outside = tmp_path / "copy" / "frame_99.jpg"
+        with pytest.raises(ValueError, match="not found in reconstruction"):
+            _resolve_recon_image_index(self.RIG_NAMES, workspace, outside)
+
+    def test_kerry_park_rig_sensors(self):
+        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+
+        workspace = (
+            Path(__file__).resolve().parents[2] / "test-data" / "images" / "kerry_park"
+        )
+        recon = SfmrReconstruction.load(workspace / "kerry_park_ground_truth.sfmr")
+        names = list(recon.image_names)
+        for sensor in ("fisheye_left", "fisheye_right"):
+            image = workspace / sensor / "frame_01.jpg"
+            idx = _resolve_recon_image_index(names, recon.workspace_dir, image)
+            assert names[idx] == f"{sensor}/frame_01.jpg"
 
 
 class TestSaveOutput:
@@ -352,6 +415,47 @@ class TestFlowCLI:
 
 class TestFlowE2E:
     """End-to-end tests using the Seoul Bull dataset."""
+
+    def test_compare_with_reconstruction(self, seoul_bull_workspace):
+        """`-r` finds both images by their workspace path and compares tracks."""
+        image_dir = seoul_bull_workspace.parent / "test_17_image"
+        images = sorted(image_dir.glob("*.jpg"))
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "flow",
+                str(images[0]),
+                str(images[1]),
+                "--preset",
+                "fast",
+                "-r",
+                str(seoul_bull_workspace),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        line = next(
+            ln for ln in result.output.splitlines() if "SfMR correspondences:" in ln
+        )
+        assert int(line.split(":")[1]) > 0
+
+    def test_same_file_name_elsewhere_in_workspace_is_refused(
+        self, seoul_bull_workspace
+    ):
+        """A workspace image that is not in the reconstruction is an error,
+        even when a reconstruction image has the same file name."""
+        workspace_dir = seoul_bull_workspace.parent
+        images = sorted((workspace_dir / "test_17_image").glob("*.jpg"))
+        other_dir = workspace_dir / "other"
+        other_dir.mkdir()
+        copies = [shutil.copy(img, other_dir / img.name) for img in images[:2]]
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["flow", str(copies[0]), str(copies[1]), "-r", str(seoul_bull_workspace)],
+        )
+        assert result.exit_code != 0
+        assert "not in the reconstruction" in result.output
 
     def test_flow_match_adjacent(self, isolated_seoul_bull_17_images, tmp_path):
         """Flow matching on adjacent Seoul Bull frames should produce matches."""

@@ -41,6 +41,13 @@ Compares flow-based correspondences against reconstruction matches:
 - **Red** — Reconstruction only: feature match exists in `.sfmr` but flow disagrees
 - **Yellow** — Flow only: flow suggests a correspondence not in the reconstruction
 
+Each image is found in the reconstruction by its path relative to the
+reconstruction's workspace, so on a rig `fisheye_left/frame_01.jpg` and
+`fisheye_right/frame_01.jpg` are told apart. An image inside the workspace that
+the reconstruction does not contain is an error. An image outside the workspace
+is matched by file name, and the command fails when no reconstruction image or
+more than one has that name.
+
 ## Usage Examples
 
 ```bash
