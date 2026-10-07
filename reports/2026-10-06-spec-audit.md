@@ -400,6 +400,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - The Validation section's first consumer `exp_pinhole_bootstrap.py` (:347-349) is not in the tree; name the real consumers.
 **Third copies:** `SeedImageGroup` docs (covisibility.rs:145-209, about 45 lines) restate spec :191-233 and :261-267; shrink to contract plus link. Smaller: `MAX_DENSE_IMAGES` doc (:27-32), `prof.rs:13-17`.
 **Shape:** failure 1 (borderline). Proposed: "Cluster covisibility counts, for each pair of images, how many feature-match clusters (sets of matching SIFT features across images, stored in a `.matches` file) have a member in both images, so a caller can choose groups of mutually overlapping images and rank candidate views before any reconstruction exists." Failure 5: plan and experiment language at :86, :235, :347-355. Failure 7: "drop the rest unpaid" (:155), "pays nothing for it" (:197), "the actual scaling wall" (:92), "compact where dense is hopeless" (:98).
+  > _Status (2026-10-07): failure 1 **Done** — the opening now says a member mask decides which members count, defines a feature-match cluster in place, and names the real consumers (growth ranks posed neighbours and thins to a spread subset; the census splits posed images into viewpoint groups) instead of leading with seed groups, which have no production consumer; failures 5 and 7 are still open, branch `spec-fix-1006-40-opening-covisibility`._
 **Non-goals / deferrals checked:** 7; all still unbuilt, none overtaken.
 **Recommendation:** update the spec and the core `from_matches` doc; the code is right.
 **Unclear / incorrect / suspicious:** the seed-group iterator, the spec's headline query, has no consumer outside tests and its binding; worth discussing whether it is still needed.
@@ -893,3 +894,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
+   > _Status (2026-10-07): **Partially done** — `cluster-covisibility.md`'s opening now says what is counted and names its consumers (growth's neighbour ranking and thinning, the census's viewpoint groups), branch `spec-fix-1006-40-opening-covisibility`; the other openings are on their own branches or still open._

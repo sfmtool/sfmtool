@@ -2,9 +2,18 @@
 
 ## Purpose
 
-Cluster covisibility measures how many match clusters each pair of images
-shares, so a caller can pick mutually-overlapping image groups and rank
-candidate views before any reconstruction exists.
+Cluster covisibility counts, for each pair of images, how many feature-match
+clusters have a member in both images. A feature-match cluster is a group of
+SIFT features across several images that likely show the same surface point,
+as stored in a `.matches` file; a caller can pass a per-member mask so that
+only the members it accepts count. The counts come from the matches alone and
+need no camera poses or 3D points, so they are available before and during a
+reconstruction. Incremental reconstruction growth uses them to rank posed
+images by overlap with an image being added, whose poses then serve as
+fallback starting points for its pose, and to thin the posed images to a
+subset spread across the capture for its periodic bundle adjustments; the
+cluster census uses them to split a candidate reconstruction's posed images
+into viewpoint groups.
 
 Given the clusters of a `.matches` file (the `clusters/` section, optionally
 enriched with `cluster_patches/`), compute how many clusters each pair of
