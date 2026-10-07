@@ -630,7 +630,7 @@ refinement measured and which members stand.
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   A consumer that needs the half-width uses `patch_size / 2`, or `radius`
   as-is. The other keys record the settings for a reader to see and are not
-  read back: current files also carry `min_zncc`, `max_shift_px` and
+  read back: current files also carry `resolution`, `min_zncc`, `max_shift_px` and
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
 
@@ -671,13 +671,14 @@ refinement measured and which members stand.
   - `rejected_unlocalizable` — the member's own patch does not pin a position,
     so it was excluded before reference selection and refinement. The bar is
     `refine_options.max_member_zncc_self_similarity_radius`, in pixels of
-    the patch's `resolution × resolution` sampling grid: the member's patch,
-    sampled at its detected position and affine shape, is shifted over
-    itself by whole pixels up to 3 px in each direction, and its ZNCC self-similarity radius is how far it can move
+    the patch's sampling grid (`refine_options.resolution` samples on a
+    side): the member's patch, sampled at its detected position and affine
+    shape, is shifted over itself by whole pixels up to 3 px in each
+    direction, and its ZNCC self-similarity radius is how far it can move
     while still matching itself as well as a true match between two views
     would (the semi-major axis of the ellipse fitted to those shifts). A member
     whose radius is above the bar gets this status; a flat patch or a straight
-    edge reads the maximum. A bar of `0` means the gate was off. Files that
+    edge reads the maximum, 3. A bar of `0` means the gate was off. Files that
     carry `max_keypoint_uncertainty` in place of that key hold members refused
     by an earlier score of the same patch with the same status
 - **Canonical order**: a writer always states the whole legend in the order
