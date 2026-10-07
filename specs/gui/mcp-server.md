@@ -2876,8 +2876,22 @@ after it ([bench.md](bench.md) § "One history for the pair"); it, the resection
 renumber points. An agent holding an index it
 read before such a call is holding a statement about something else, and should
 re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
-is what it is for. `move_camera_image` and `switch_camera_model` renumber
-nothing, and are with them only in what the drain forgets afterwards: the
+is what it is for.
+
+**Point edits close up at the next whole new base.** A point edit
+(`delete_point`, `retriangulate_point`, `commit_bench_track`) keeps every other
+index where it was by leaving the gone point's slot open. Every edit that gives
+the node a whole new base, and a `save_reconstruction` that is not a minimal
+copy, first folds those pending point edits into the value: a deleted point's slot closes up and every point after it moves
+down, a replaced point goes back to the index it replaced, and a point new to
+the base follows the last surviving base point
+([document-model.md](document-model.md) § "Two kinds of edit"). The fold moves
+no image index. So `move_camera_image`, `switch_camera_model`,
+`add_camera_image_to_tracks`, `retriangulate_all_points`,
+`convert_to_embedded_patches` and `bake_reconstruction_transform`, which move no
+index of their own, renumber points whenever a point edit is pending, and
+renumber nothing otherwise. `move_camera_image` and `switch_camera_model` are
+with the renumbering edits in what the drain forgets afterwards either way: the
 panels' cached geometry and lens curves.
 
 **A camera the human is holding is committed first.** An edit arriving on a node
@@ -3101,7 +3115,8 @@ edit pushed, like every other edit's.
 The tracks that image observes are re-triangulated around the new pose where two
 or more pixels still see them; a bearing only it sees turns with it, and
 everything else keeps its position. The image table does not move and no point
-is renumbered, but the geometry a panel cached is a statement about a value the
+is renumbered unless a point edit is pending (§ "The editing family"), but the
+geometry a panel cached is a statement about a value the
 node no longer holds, so the drain drops those caches as it does after a bulk
 edit.
 
@@ -3169,7 +3184,8 @@ One camera switched to a model fitted to it, applied directly as the node's
 next version ([edits/switch-camera-model.md](edits/switch-camera-model.md)), by
 the reconstruction-level switch
 ([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)).
-Poses, points, keypoints and tracks do not move, and nothing is renumbered; the
+Poses, points, keypoints and tracks do not move, and nothing is renumbered
+unless a point edit is pending (§ "The editing family"); the
 stored errors of the points the camera's images observe are recomputed. It is
 the step the Camera Intrinsics panel's `Refit spline…` takes, with any target
 model.
@@ -3215,8 +3231,10 @@ The image menu's `Add Image to Tracks`
 ([edits/add-image-to-tracks.md](edits/add-image-to-tracks.md)): every point the
 image does not observe is looked for in its photograph, and the sightings that
 agree with the point's other observations are added, as the node's next
-version. Nothing else moves and nothing is renumbered, so point and image
-indexes read before the call still mean what they meant. It is the call to make
+version. Nothing else moves and no index of its own moves, so image indexes
+read before the call still mean what they meant, and point indexes do too
+unless a point edit was pending, whose deleted slots close up first
+(§ "The editing family"). It is the call to make
 after `resect_camera_image`. It refuses, in the greyed entry's words, an unposed
 image, a node with no points, a `sift_files` node, a node with no patch frames
 and an image whose photograph cannot be found.
@@ -3333,8 +3351,10 @@ can be read, `has_patch_data: true`. If none can be read, the conversion still
 succeeds without bitmaps and reports `has_patch_data: false`. A save persists
 the conversion's bitmaps, unlike display-only bitmaps made when opening a file.
 
-Every point keeps its index, its position and its track, so a point id a caller
-is holding still names the same point and the selection does not move. The
+Every point keeps its position and its track, and its index too unless a point
+edit was pending, whose deleted slots close up first (§ "The editing family"),
+so with no such edit a point id a caller is holding still names the same point
+and the selection does not move. The
 `.sift` files have to still be where the reconstruction was made; a missing one
 is the frame builder's refusal, worded by the state and recorded once.
 
@@ -3383,7 +3403,8 @@ and the new index is the one the next call about the point has to name.
 `retriangulate_all_points` is a **bulk edit** that runs on a worker thread and
 answers the two ways `bundle_adjust` does, with `"operation": "Retriangulate all
 points"`. It deletes no point and creates none, so every index still means what
-it meant and no cache is dropped for it until the version lands. It polls the
+it meant, unless a point edit was pending, whose deleted slots close up first
+(§ "The editing family"); no cache is dropped for it until the version lands. It polls the
 cancel flag between its stages, so `cancel_background_task` stops it and a
 cancelled retriangulation pushes no version. Its `report` counts the per-point
 statuses: points moved, crossed to or from infinity, turned into directions by
@@ -4201,9 +4222,10 @@ the drain's job rather than the command vocabulary's: `apply_as_agent` reports
 the nodes each successful command renumbered and the drain forgets them, exactly
 as the Scene panel's menu and the Edit History panel do around the same
 `AppState` calls. A point edit is not among them, for the same reason the GUI
-keeps its caches across one. `move_camera_image` is among them without
-renumbering anything: it installs a whole new base, so the geometry those caches
-describe has moved even though every index still means what it meant.
+keeps its caches across one. `move_camera_image` is among them even when it
+renumbers nothing, which is when no point edit was pending: it installs a whole
+new base, so the geometry those caches describe has moved even though every
+index still means what it meant.
 
 **The drain ends a camera held in hand before an editing command lands.** The
 Move Camera lock is `Viewer3D`'s, and an edit applied under one would leave the

@@ -508,6 +508,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Code bug: a background edit ending in `Finished::NoChange` (`background/mod.rs:1043`) replies `changed: true` (`mcp/edit.rs:584-590`), against spec 3073/3276 and `mcp/edit.rs:22-24`.
     > _Status (2026-10-07): **Done** — a background edit that ends in `Finished::NoChange` now answers `changed: false` at the version the node still stands at: `FinishedTask` records whether the run pushed a version and `background_reply` reads it; test in `mcp/tests/edit.rs`, and `background-tasks.md`, the prune and add-to-tracks sections of `mcp-server.md` and § "The wire" of `bench.md` say so, branch `spec-fix-1006-08-mcp-nochange`._
   - Spec 2725-2726, 2949, 3018, 3064, 3181, 3230 and `catalog/edit.rs:121,145,244,307` say five edits "renumber nothing"; with pending point edits each calls `edited.materialize()`, which closes deleted slots (`edited.rs:1162-1175`; `state/edits.rs:1379-1386`). Code right; after `delete_point` an agent reuses stale indexes.
+    > _Status (2026-10-07): **Done** — § "The editing family" of `mcp-server.md` now states when point indexes shift: every edit that gives the node a whole new base, and a non-minimal save, first folds pending point edits in (deleted slots close up, replaced points return to their base index, new points follow the last base point; image indexes never move), and the move, switch, add-to-tracks, retriangulate-all, convert and bake passages and tool descriptions say "unless a point edit is pending"; `delete_point`'s description says what the fold does to its open slot, and a catalog test requires the exception wherever a description promises indexes stay, branch `spec-fix-1006-16-mcp-renumber`._
   - Security item 4 (4435-4436) "No tool in this surface saves an `.sfmr`" is false: `save_reconstruction` (`catalog/edit.rs:50`), as spec 203 and 223 say.
   - Panel counts: `Tab::ALL` has 9 (`layout.rs:191`); `catalog/viewer.rs:509` and `mcp/layout.rs:107` say seven, spec 2470/2486/5138 say eight.
   - Spec 3145 "Six operations run on a worker" omits add-to-tracks, prune, build_index_files, open, create_track_at_pixel, find_nearby_tracks and the bench searches (`background/mod.rs:86-302`).
@@ -878,6 +879,7 @@ Read 2026-09-26; open items above.
 3. **Spec statements that would make a caller act wrongly:**
    - `mcp-server.md` says five edits "renumber nothing", but after a
      `delete_point` they shift point indexes.
+     > _Status (2026-10-07): **Done** — the spec and the tool descriptions name the pending-point-edit fold, branch `spec-fix-1006-16-mcp-renumber`._
    - `pose-verification.md:187` says `INLIER_PX` bounds the screens; it bounds
      only the repair.
    - `reprojection-residuals.md` names three shared callers; there is one.
