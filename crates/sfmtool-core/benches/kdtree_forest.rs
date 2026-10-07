@@ -4,9 +4,10 @@
 //! Benchmarks for the randomized kd-tree forest ANN index.
 //!
 //! Measures build time vs the number of trees, query throughput vs the
-//! per-query budget (`L_max`), and end-to-end batched matching against the
-//! exact brute-force scanner. Uses synthetic 128-D `u8` descriptors (the SIFT
-//! shape) so the bench is self-contained.
+//! per-query budget (`L_max`), a batched 1-NN search against the exact
+//! brute-force scanner, and a file-backed (`.kdf`) batch against the same batch
+//! in memory. Uses synthetic 128-D `u8` descriptors (the SIFT shape) so the
+//! bench is self-contained.
 //!
 //! Run with:
 //!   cargo bench -p sfmtool-core --bench kdtree_forest

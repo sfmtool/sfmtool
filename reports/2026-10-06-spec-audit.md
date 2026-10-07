@@ -411,14 +411,21 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Code bug: the spec keeps "dist_sq <= max_dist²" (:127, :154), but `u8::cutoff_sq` rounds up (`distance.rs:78-85`), so `max_dist=2.5` admits √7 ≈ 2.65 (`search.rs:214`). Reachable from Python `KdForest.query` (py kdforest.rs:257). Floor with a small relative tolerance.
     > _Status (2026-10-06): **Done** — `u8::cutoff_sq` now rounds `max_dist²` down after a relative tolerance of `4 · f32::EPSILON`, so 2.5 keeps 6 and drops 7 while `sqrt(n)` still keeps `n`; the eager and lazy (`.kdf`) searches share it, and the cluster matcher passes no cutoff. Tests in Rust and Python, spec § "Distance cutoff" says so, branch `spec-fix-1006-04-kdforest-maxdist`._
   - `L_max` default "precision-tuned" (:190) is a fixed 128 (mod.rs:104-120); `calibrate_max_leaf_checks` has no caller outside the module.
+    > _Status (2026-10-07): **Done** — the parameter table gives `L_max` as 128 and the `L_max` note says the defaults are the fixed preset values; the calibration section says nothing outside the module's tests calls `calibrate_max_leaf_checks`, branch `spec-fix-1006-22-kdforest-spec`._
   - Pseudocode sends `diff == 0` right (:145-146); the code sends it left (search.rs:351-354), matching the spec's own rule (:99). Module tree (:271-280) omits `constellation.rs`, `neighbor_index.rs`, `persistent.rs`; "per-dimension bookkeeping" (:300) is not a field.
+    > _Status (2026-10-07): **Done** — the pseudocode sends `diff <= 0` left as the code does; the module tree is replaced by a short paragraph that links the five forest files and names the file-backed forest, constellation query and `NeighborIndex` trait as specified elsewhere; `KdForest` is described by its real fields, branch `spec-fix-1006-22-kdforest-spec`._
   - "exactly what `src/sfmtool/feature_match/` already consumes" (:359-360) is false (also py kdforest.rs:8-10); the benchmarks are synthetic, not "end-to-end image-pair matching" (:404-405).
+    > _Status (2026-10-07): **Done** — the spec and the binding's module doc now say no module under `src/sfmtool/` uses `KdForest` (the track-cluster matcher calls it from Rust); the benchmark bullet and the bench's module doc describe the synthetic benches they run, branch `spec-fix-1006-22-kdforest-spec`._
   - `SFMTOOL_KDFOREST_STATS` is on for any value including `0` (mod.rs:79-80); `SFMTOOL_KDFOREST_NO_SIMD` (distance.rs:186-187) is undocumented; the Python class exposes more than the constructor and `query` (py :153-413).
+    > _Status (2026-10-07): **Done** — the Diagnostics section says any value of `SFMTOOL_KDFOREST_STATS` turns it on, `0` included, and documents `SFMTOOL_KDFOREST_NO_SIMD`; the `=1` doc comments in `mod.rs` and `search.rs` say the same; the Python bindings section lists the properties, `leaf_layout` and the two constellation methods, branch `spec-fix-1006-22-kdforest-spec`._
 **Third copies:** no kdforest source links this spec. search.rs:14-24 (11 lines) is nearly the spec's :159-170; the progress-unit rationale is in mod.rs:163-179 (17 lines), build.rs:28-42 and spec :315-323; also search.rs:32-39 and calibrate.rs:23-27.
+> _Status (2026-10-07): **Partially done** — `mod.rs`, `build.rs`, `search.rs`, `distance.rs`, `calibrate.rs` and the binding's module doc now cite this spec; shrinking the third copies is still open, branch `spec-fix-1006-22-kdforest-spec`._
 **Shape:** failure 2 (partial: API at :308 of 414, no example); failure 4 (module tree, stale); failure 5 ("_Future:_" :377-381, :296-297, :22; `KdForestF32` "Phase 2" mod.rs:507-509); failure 7 ("slots in" :360, "dial"/"knob" :198/:172, "dwarfs" :251-252).
 **Non-goals / deferrals checked:** 7. "Potentially for patch matching" is overtaken in part: bench searches use the forest through `LazyKdForestU8` (`bench/search.rs:30-31`, `bench/nearby/{guided,constellation}.rs`).
+> _Status (2026-10-07): **Done** — the Motivation now says the forest also finds image patches through the constellation query, which the bench's descriptor search runs over `LazyKdForestU8`, branch `spec-fix-1006-22-kdforest-spec`._
 **Recommendation:** update code (`max_dist`), update spec (`L_max`, module tree, consumer and benchmark claims), and link the spec from the doc comments.
 **Unclear / incorrect / suspicious:** "each rayon worker keeps one reusable scratch" (:237-239), but `for_each_init` (mod.rs:440-441) can initialise once per job split.
+> _Status (2026-10-07): **Done** — the spec and the `search_batch_inner` comment say `for_each_init` makes one scratch per piece rayon splits the batch into, so a worker can make several, branch `spec-fix-1006-22-kdforest-spec`._
 
 ### specs/core/geometry/bundle-adjustment.md
 **Summary:** The staged soft-L1 LM bundle adjustment kernel: trim/retriangulate/solve rounds, the in-front floor, per-camera lens releases, points at infinity, point constraints (free/ranged/held), inverse-depth free points with the point-or-bearing decision, and protected observations. Interface, defaults and per-camera mechanics match the code; the Non-goals section still describes the kernel as it was before #400 and #607.
@@ -855,6 +862,7 @@ Read 2026-09-26; open items above.
      surface", but `switch_camera_model` and lens releases exist.
    - `randomized-kdtree-forest.md`: "potentially for patch matching" is
      overtaken in part, because the bench searches use the forest.
+     > _Status (2026-10-07): **Done** — the Motivation names the constellation query and the bench's descriptor search as users, branch `spec-fix-1006-22-kdforest-spec`._
 3. **Spec statements that would make a caller act wrongly:**
    - `mcp-server.md` says five edits "renumber nothing", but after a
      `delete_point` they shift point indexes.
@@ -867,6 +875,7 @@ Read 2026-09-26; open items above.
      refuses it.
    - `randomized-kdtree-forest.md` gives `L_max` as "precision-tuned"; it is a
      fixed 128.
+     > _Status (2026-10-07): **Done** — the parameter table gives 128, branch `spec-fix-1006-22-kdforest-spec`._
 4. **Format specs:**
    - `matches-file-format.md:223` says versions run `1` through `6`; the code
      is at 7.
