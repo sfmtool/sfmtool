@@ -177,12 +177,8 @@ pub struct KeypointLocalizeParams {
 ///
 /// The user chose `2.5` from a sweep on seoul_bull and kerry_park (see
 /// `specs/core/patch/patch-keypoint-localization.md`, "The member gate's
-/// default"). At `2.5` the add-image-to-tracks harness recovers 80.4% of the
-/// known tracks on seoul_bull and 73.8% on kerry_park, against 91.2% and 90.0%
-/// with the gate off, and on kerry_park it adds 0 bad extra observations and 6
-/// that make a track's largest residual worse, against 2 and 18 with it off.
-/// The bar sits under the largest radius read (`3`), so it turns out flat and
-/// edge-only views, which read `3`.
+/// default", which gives the sweep's figures). The bar sits under the largest
+/// radius read (`3`), so it rejects flat and edge-only views, which read `3`.
 pub const DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
 
 impl KeypointLocalizeParams {

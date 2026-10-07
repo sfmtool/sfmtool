@@ -500,12 +500,17 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfmtool-core/src/patch/self_similarity/{mod.rs, overlap.rs, kernels.rs, ellipse.rs}`; `patch/keypoint_localize.rs:534`; `cluster_refine/mod.rs:318`; `bench/track.rs:833`; binding `crates/sfmtool-py/src/patches/self_similarity.rs`; `src/sfmtool/xform/_filter_by_zncc_self_similarity_radius.py:19`.
 **Inconsistencies:**
   - Spec :432 "a *self-sim. px* box"; the code says "px whole" (`track_view/body/mod.rs:1851`), as `GLOSSARY.md:54` does. Fix the spec.
+    > _Status (2026-10-07): **Done** — the spec names the box by where it stands, under the *Self-similarity* heading followed by *px whole*, branch `spec-fix-1006-27-zncc-spec`._
   - :404 "3 µs of the parts' 36 µs" was left behind when #772 changed :407 to 45 µs. Fix :404. Also, :56 and :114-115 say the surface is 1 at the centre; a flat template's is NaN throughout (`mod.rs:96-98`, :259-266).
+    > _Status (2026-10-07): **Done** — the copy cost now reads "about 3 µs of the parts' 45 µs" (the copy and kernel code are unchanged since #772), and § The region and the `SelfSimilarity::surface` block say the surface is `NaN` throughout for a template with no textured channel or no data, branch `spec-fix-1006-27-zncc-spec`._
 **Third copies:** `keypoint_localize/params.rs:173-185` (13 lines) gives stale tuning figures (80.4%, 73.8%) against spec :347 (81.0%, 76.2%); `bench/track.rs:823-832`; `ellipse.rs:266-276` (`LENGTH_SLACK`) re-derives :74 nearly word for word; `overlap.rs:259-268` repeats :404. Shrink the code copies. The :432 paragraph (about 20 lines) duplicates track-view.md, mcp-server.md and editable-track.md.
+  > _Status (2026-10-07): **Partially done** — `params.rs` no longer carries the harness figures and points at the spec section that holds them; the `bench/track.rs`, `ellipse.rs` (`LENGTH_SLACK`) and `overlap.rs` copies and the :432 paragraph are still open, branch `spec-fix-1006-27-zncc-spec`._
 **Shape:** failure 5: :347 and :417 report figures under a rule that no longer exists (:417 cull counts 59/837, 292/1,886, 69/765, 316/1,795); remeasure or delete. Failure 7: "turns out" for "rejects" at :334, :417, :430, :481. Failure 4 (mild): test fixtures at :404.
+  > _Status (2026-10-07): **Partially done** — failure 7 is fixed: the gates and the cull "reject nothing", and the painting "sets a row to `out`", branch `spec-fix-1006-27-zncc-spec`. Failure 5 is open: :347 and :417 already name the rule each figure was measured under (the furthest crossing against the disk rule, and "measured under the earlier disk rule"), so the figures are labelled, not remeasured. Failure 4 is open._
 **Non-goals / deferrals checked:** 6 (3 Non-goals, 3 Open questions); none overtaken.
 **Recommendation:** update spec (label, 36 µs, flat-surface exception, disk-rule figures), then shrink the doc copies.
 **Unclear / incorrect / suspicious:** the :351 table was measured before the ellipse (#753 predates #772); state the reading in its caption.
+  > _Status (2026-10-07): **Done** — the caption says both readings took the radius as the contour's furthest crossing, before the ellipse, and links the section comparing the two, branch `spec-fix-1006-27-zncc-spec`._
 
 ### specs/core/geometry/pose-verification.md
 **Summary:** The displacement-neighborhood substrate (per covisible pair: shared-cluster count, mean displacement) and two kernels: `verify_poses` (Screen A self-resection; Screen B homography vs pose-implied rotation) and `repair_poses`. Every table default matches the code.
