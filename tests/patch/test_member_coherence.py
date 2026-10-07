@@ -493,3 +493,47 @@ def test_sharpness_is_measured_off_the_verdict(scene):
         assert not np.isfinite(sa[~scored]).any()
         measured += int(np.isfinite(sa).sum())
     assert measured > 0, "nothing was measured â€” the test proves nothing"
+
+
+def test_blur_matching_adds_its_matrix_and_leaves_the_plain_one(scene):
+    """``matching="blur_matched"`` reports the blur-matched matrix the decision
+    read and how many pairs it blurred, and leaves the plain matrix as it was."""
+    _, cloud, _ = scene
+    sample = sample_point_ids(cloud, n=20)
+    plain = _validate(scene, point_indexes=sample, return_matrix=True)
+    matched = _validate(
+        scene, point_indexes=sample, return_matrix=True, matching="blur_matched"
+    )
+    above = _validate(
+        scene,
+        point_indexes=sample,
+        return_matrix=True,
+        matching="blur_matched_above_ratio",
+        min_ellipse_ratio=1e6,
+    )
+    blurred = 0
+    for p, m, a in zip(plain, matched, above):
+        assert "blur_matched_zncc" not in p and "pairs_blurred" not in p
+        np.testing.assert_array_equal(p["zncc"], m["zncc"])
+        k = len(m["members"])
+        bm = m["blur_matched_zncc"]
+        assert bm.shape == (k, k)
+        np.testing.assert_array_equal(np.isnan(bm), np.isnan(m["zncc"]))
+        np.testing.assert_allclose(bm, bm.T)
+        blurred += m["pairs_blurred"]
+        # A ratio no two ellipses reach leaves every pair plain.
+        assert a["pairs_blurred"] == 0
+        np.testing.assert_array_equal(a["blur_matched_zncc"], a["zncc"])
+    assert blurred > 0
+
+
+def test_an_unknown_matching_is_refused(scene):
+    with pytest.raises(ValueError, match="matching must be"):
+        _validate(scene, point_indexes=[0], matching="blurred")
+    with pytest.raises(ValueError, match="min_ellipse_ratio"):
+        _validate(
+            scene,
+            point_indexes=[0],
+            matching="blur_matched_above_ratio",
+            min_ellipse_ratio=0.5,
+        )

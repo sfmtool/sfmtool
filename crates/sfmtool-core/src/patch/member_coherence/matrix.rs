@@ -13,13 +13,16 @@
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
+use crate::patch::blur_matched::{blur_tile, pair_blur, BlurCovariance, BlurScratch};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
     znormalize_into_kept, NormalRefineParams, PatchWindow, ProjectedImage, ViewSamplers,
     FLAT_NORM_SQ_EPS,
 };
+use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::progress::Progress;
+use crate::progress_note;
 
 /// A `NormalRefineParams` shim carrying just the gating knobs
 /// [`build_level_context`] and [`normalized_stack`] read, so the matrix drives the
@@ -156,6 +159,17 @@ pub fn member_zncc_matrix_reporting(
             t
         })
         .collect();
+    let blur_matched = params.matching.is_blur_matched();
+    let mut blur_matched_zncc = if blur_matched {
+        let mut t = vec![f64::NAN; k * k];
+        for i in 0..k {
+            t[i * k + i] = 1.0;
+        }
+        t
+    } else {
+        Vec::new()
+    };
+    let mut pairs_blurred = 0u32;
     let n_support = if k >= 2 {
         fill_member_zncc(
             patch,
@@ -167,6 +181,7 @@ pub fn member_zncc_matrix_reporting(
             &mut zncc,
             &coarse_factors,
             &mut zncc_coarse,
+            blur_matched.then_some((&mut blur_matched_zncc, &mut pairs_blurred)),
             progress,
         )
     } else {
@@ -182,6 +197,8 @@ pub fn member_zncc_matrix_reporting(
         coarse_factors,
         scored,
         n_support,
+        blur_matched_zncc,
+        pairs_blurred,
     }
 }
 
@@ -215,6 +232,7 @@ fn fill_member_zncc(
     zncc: &mut [f64],
     coarse_factors: &[u32],
     zncc_coarse: &mut [Vec<f64>],
+    blur_matched: Option<(&mut Vec<f64>, &mut u32)>,
     progress: &Progress<'_>,
 ) -> u32 {
     let k = members.len();
@@ -285,7 +303,7 @@ fn fill_member_zncc(
 
     // Full scale, over the frozen support exactly as it stands.
     let rows: Vec<usize> = alive.iter().map(|&v| ctx.kept[v]).collect();
-    if !fill_scale(
+    let Some(keep) = fill_scale(
         stack,
         alive.len(),
         channels,
@@ -294,8 +312,23 @@ fn fill_member_zncc(
         &rows,
         k,
         zncc,
-    ) {
+    ) else {
         return n_support;
+    };
+
+    // Blur-matched, from the same renders, over the same support, with the
+    // channels the plain table kept.
+    if let Some((table, pairs_blurred)) = blur_matched {
+        let members = MemberStack {
+            stack,
+            n_members: alive.len(),
+            channels,
+            pixels: &ctx.pixels,
+            weights: &ctx.weights,
+            resolution,
+        };
+        *pairs_blurred =
+            fill_blur_matched(&members, &keep, &rows, k, zncc, params, table, progress);
     }
 
     // Coarse scales, from the same stack: box-average the support's pixels into
@@ -314,7 +347,8 @@ fn fill_member_zncc(
         ) else {
             continue;
         };
-        fill_scale(
+        // A scale with no channel left keeps its table unfilled.
+        let _ = fill_scale(
             &coarse_stack,
             alive.len(),
             channels,
@@ -329,9 +363,9 @@ fn fill_member_zncc(
 }
 
 /// Z-normalize one scale's stack and write its pairwise ZNCC into `table`.
-/// `rows[a]` is the member index of stack row `a`. Returns `false` when the
-/// shared flat-channel gate leaves nothing to correlate, which leaves `table`
-/// untouched.
+/// `rows[a]` is the member index of stack row `a`. Returns which channels the
+/// shared flat-channel gate kept, or `None` when it leaves nothing to
+/// correlate, which leaves `table` untouched.
 #[allow(clippy::too_many_arguments)]
 fn fill_scale(
     stack: &[f32],
@@ -342,14 +376,14 @@ fn fill_scale(
     rows: &[usize],
     k: usize,
     table: &mut [f64],
-) -> bool {
+) -> Option<Vec<bool>> {
     let total_weight: f64 = weights.iter().sum();
     if total_weight <= 0.0 {
-        return false;
+        return None;
     }
     let sqrt_weights: Vec<f32> = weights.iter().map(|&w| w.sqrt() as f32).collect();
     let mut xs = Vec::new();
-    let Some((kept_channels, _)) = znormalize_into_kept(
+    let (kept_channels, keep) = znormalize_into_kept(
         stack,
         n_members,
         channels,
@@ -358,9 +392,7 @@ fn fill_scale(
         total_weight,
         &sqrt_weights,
         &mut xs,
-    ) else {
-        return false;
-    };
+    )?;
     // Each kept member's z-normalized column is unit-norm per channel, so a plain
     // dot is the windowed ZNCC; average over the channels that survived the shared
     // flat-channel gate, matching the reference's own channel convention.
@@ -383,7 +415,172 @@ fn fill_scale(
             table[ib * k + ia] = z;
         }
     }
-    true
+    Some(keep)
+}
+
+/// The renders of the members that scored, as [`fill_scale`] reads them: a
+/// `[(member*channels + channel)*n + pixel]` stack over the common support
+/// `pixels` (grid positions `row * resolution + col`), with its window weights.
+struct MemberStack<'a> {
+    stack: &'a [f32],
+    n_members: usize,
+    channels: usize,
+    pixels: &'a [usize],
+    weights: &'a [f64],
+    resolution: u32,
+}
+
+impl MemberStack<'_> {
+    /// Member `m`'s render on the `R×R` grid, planar, zero off the support.
+    fn planes(&self, m: usize) -> Vec<f32> {
+        let rr = (self.resolution as usize).pow(2);
+        let n = self.pixels.len();
+        let mut out = vec![0.0f32; self.channels * rr];
+        for c in 0..self.channels {
+            let col = &self.stack[(m * self.channels + c) * n..][..n];
+            for (&p, &v) in self.pixels.iter().zip(col) {
+                out[c * rr + p] = v;
+            }
+        }
+        out
+    }
+}
+
+/// Fill `table` with the blur-matched agreement of the members that scored
+/// ([`MemberMatrix::blur_matched_zncc`]), copying `plain` for a pair left
+/// plain, and return how many pairs were blurred.
+///
+/// Each member's self-similarity ellipse is read on its render over the
+/// support, the support as its data, in the `blur-matched ellipses` detail
+/// phase of `progress`. A pair is blurred where [`pair_blur`] asks, each
+/// render by normalized convolution over the support, then gathered back,
+/// z-normalized over the support with the same window and channels the plain
+/// table kept, and correlated as [`fill_scale`] correlates, in the
+/// `blur-matched pairs` detail phase.
+#[allow(clippy::too_many_arguments)]
+fn fill_blur_matched(
+    members: &MemberStack<'_>,
+    keep: &[bool],
+    rows: &[usize],
+    k: usize,
+    plain: &[f64],
+    params: &MemberCoherenceParams,
+    table: &mut [f64],
+    progress: &Progress<'_>,
+) -> u32 {
+    let r = members.resolution as usize;
+    let rr = r * r;
+    let n = members.pixels.len();
+    let channels = members.channels;
+    let Some(ratio) = params.matching.min_ratio() else {
+        return 0;
+    };
+    let mut support = vec![false; rr];
+    for &p in members.pixels {
+        support[p] = true;
+    }
+    let planes: Vec<Vec<f32>> = (0..members.n_members).map(|m| members.planes(m)).collect();
+    let ellipses: Vec<Option<[[f64; 2]; 2]>> = {
+        let mut phase = progress.detail_phase("blur-matched ellipses");
+        let colour = channels.min(3);
+        let read: Vec<Option<[[f64; 2]; 2]>> = planes
+            .iter()
+            .map(|values| {
+                let reading = zncc_self_similarity_radius(
+                    &PatchTile {
+                        values: &values[..colour * rr],
+                        channels: colour,
+                        width: r,
+                        height: r,
+                    },
+                    Some(&support),
+                    [0, 0, r, r],
+                    &SelfSimilarityParams::default(),
+                );
+                let e = reading.ellipse;
+                e.axes.iter().all(|a| a.is_finite()).then_some(e.matrix)
+            })
+            .collect();
+        progress_note!(phase, "{} members", read.len());
+        read
+    };
+
+    let mut phase = progress.detail_phase("blur-matched pairs");
+    let kept: Vec<usize> = (0..channels).filter(|&c| keep[c]).collect();
+    let total_weight: f64 = members.weights.iter().sum();
+    let sqrt_weights: Vec<f32> = members.weights.iter().map(|&w| w.sqrt() as f32).collect();
+    let mut scratch = BlurScratch::default();
+    let mut blurred = vec![0.0f32; channels * rr];
+    let mut raw = vec![0.0f32; 2 * kept.len() * n];
+    let mut xs = Vec::new();
+    let (mut pairs, mut pairs_blurred) = (0u32, 0u32);
+    for a in 0..members.n_members {
+        for b in (a + 1)..members.n_members {
+            let (ia, ib) = (rows[a], rows[b]);
+            pairs += 1;
+            let blur = match (ellipses[a], ellipses[b]) {
+                (Some(ea), Some(eb)) => pair_blur(&ea, &eb, ratio),
+                _ => Default::default(),
+            };
+            if blur.is_none() {
+                table[ia * k + ib] = plain[ia * k + ib];
+                table[ib * k + ia] = plain[ib * k + ia];
+                continue;
+            }
+            pairs_blurred += 1;
+            for (slot, (m, cov)) in [(a, blur.a), (b, blur.b)].into_iter().enumerate() {
+                let source: &[f32] = if cov == BlurCovariance::ZERO || cov.is_zero() {
+                    &planes[m]
+                } else {
+                    blur_tile(
+                        &planes[m],
+                        channels,
+                        r,
+                        &support,
+                        cov,
+                        &mut blurred,
+                        &mut scratch,
+                    );
+                    &blurred
+                };
+                for (kc, &c) in kept.iter().enumerate() {
+                    let dst = &mut raw[(slot * kept.len() + kc) * n..][..n];
+                    for (d, &p) in dst.iter_mut().zip(members.pixels) {
+                        *d = source[c * rr + p];
+                    }
+                }
+            }
+            let z = match znormalize_into_kept(
+                &raw,
+                2,
+                kept.len(),
+                n,
+                members.weights,
+                total_weight,
+                &sqrt_weights,
+                &mut xs,
+            ) {
+                Some((kc, _)) => {
+                    let s: f64 = (0..kc)
+                        .map(|c| {
+                            let x = &xs[c * n..][..n];
+                            let y = &xs[(kc + c) * n..][..n];
+                            x.iter()
+                                .zip(y)
+                                .map(|(&u, &v)| f64::from(u) * f64::from(v))
+                                .sum::<f64>()
+                        })
+                        .sum();
+                    s / kc as f64
+                }
+                None => f64::NAN,
+            };
+            table[ia * k + ib] = z;
+            table[ib * k + ia] = z;
+        }
+    }
+    progress_note!(phase, "{pairs_blurred} of {pairs} pairs blurred");
+    pairs_blurred
 }
 
 /// Box-average a `[(member*channels + channel)*n + pixel]` stack over the frozen

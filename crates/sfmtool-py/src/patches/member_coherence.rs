@@ -16,7 +16,7 @@ use sfmtool_core::patch::member_coherence::{
 };
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 
-use super::args::{parse_patch_window, parse_sampler};
+use super::args::{parse_matching, parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
@@ -120,6 +120,19 @@ impl PyPatchCloud {
     ///         projection anchoring individually. ``False`` anchors every member at
     ///         its projection. ``bar`` is calibrated per anchoring — the two are not
     ///         the same score.
+    ///     matching: How each pair of members is correlated for the decision:
+    ///         ``"plain"`` (default), the renders as they are;
+    ///         ``"blur_matched"``, the sharper member's render blurred to the
+    ///         other's sharpness first, read from each render's ZNCC
+    ///         self-similarity ellipse; or ``"blur_matched_above_ratio"``, the
+    ///         same but only along directions where the two ellipses differ by
+    ///         more than ``min_ellipse_ratio``. Blur matching spares a member
+    ///         that differs from the rest only by being blurrier. The coarse
+    ///         tables, exoneration and ``sharpness_deficit`` keep reading the
+    ///         plain matrix.
+    ///     min_ellipse_ratio: The factor two ellipses' lengths along a direction
+    ///         must differ by for ``"blur_matched_above_ratio"`` to blur along it
+    ///         (default 1.25).
     ///     return_matrix: Also return the per-point ``zncc`` matrix (default
     ///         ``False`` — it is ``k×k`` per point).
     ///
@@ -153,7 +166,10 @@ impl PyPatchCloud {
     /// ``return_matrix=True`` — ``zncc`` (``k×k`` float64 numpy array, unit
     /// diagonal, NaN for uncorrelatable pairs), ``zncc_coarse`` (a list of the
     /// same-shaped tables at the coarse scales, coarsest last) and
-    /// ``coarse_factors`` (their downsampling factors).
+    /// ``coarse_factors`` (their downsampling factors), and under blur matching
+    /// ``blur_matched_zncc`` (the ``k×k`` matrix the decision read). Under blur
+    /// matching every dict also carries ``pairs_blurred`` (int), how many pairs
+    /// were blurred.
     ///
     /// **Unscored members** — nothing rendered them, or nothing could be
     /// correlated with them — sit outside the decision rule entirely: the block
@@ -166,7 +182,8 @@ impl PyPatchCloud {
         resolution=24,
         window="gaussian_disk", window_sigma=0.6, sampler="per_view",
         min_valid_fraction=0.6, min_support_pixels=8,
-        point_indexes=None, member_views=None, keypoint_anchor=true, return_matrix=false,
+        point_indexes=None, member_views=None, keypoint_anchor=true,
+        matching="plain", min_ellipse_ratio=1.25, return_matrix=false,
         progress=None
     ))]
     fn validate_member_coherence<'py>(
@@ -187,6 +204,8 @@ impl PyPatchCloud {
         point_indexes: Option<Vec<u32>>,
         member_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
         keypoint_anchor: bool,
+        matching: &str,
+        min_ellipse_ratio: f64,
         return_matrix: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
@@ -201,6 +220,7 @@ impl PyPatchCloud {
 
         let window = parse_patch_window(window, window_sigma)?;
         let sampler = parse_sampler(sampler)?;
+        let matching = parse_matching(matching, min_ellipse_ratio)?;
         let params = MemberCoherenceParams {
             bar,
             margin_gate,
@@ -211,6 +231,7 @@ impl PyPatchCloud {
             min_support_pixels,
             self_bar_k,
             exoneration_ratio,
+            matching,
         };
 
         let pyramid_set = resolve_pyramids(&posed, images)?;
@@ -334,7 +355,15 @@ impl PyPatchCloud {
                 "sharpness_deficit",
                 res.decision.sharpness_deficit.clone().into_pyarray(py),
             )?;
+            if matching.is_blur_matched() {
+                d.set_item("pairs_blurred", res.matrix.pairs_blurred)?;
+            }
             if return_matrix {
+                if res.matrix.blur_matched_zncc.len() == k * k {
+                    let arr = Array2::from_shape_vec((k, k), res.matrix.blur_matched_zncc.clone())
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                    d.set_item("blur_matched_zncc", arr.into_pyarray(py))?;
+                }
                 let arr = Array2::from_shape_vec((k, k), res.matrix.zncc.clone())
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
                 d.set_item("zncc", arr.into_pyarray(py))?;

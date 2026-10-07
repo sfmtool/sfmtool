@@ -90,6 +90,57 @@ different surfaces produce the same number at full resolution. They stop looking
 alike the moment the fine detail is removed, and that is what the decision rule and
 the per-member sharpness below both read.
 
+### Blur matching
+
+`matching` (default `Plain`) can blur-match each pair before it is correlated
+([blur-matched-zncc.md](blur-matched-zncc.md)): along each direction in which
+the two members' self-similarity ellipses differ (by more than
+`min_ellipse_ratio` for `BlurMatchedAboveRatio`), the member that is the sharper
+along it is blurred to the other's sharpness. It spares a member that disagrees
+with its track only because it is blurrier than the rest: a frame out of focus,
+motion blur, a far view added to a near track.
+
+Each member's ellipse is read on its own render, the common support as its
+data, and the blur runs over the same support, so the blur-matched pair is read
+over exactly the samples the plain pair is, with the same window, the same
+channels the plain table kept and the same z-normalization. The matrix carries
+the result as `blur_matched_zncc` beside the plain `zncc`, which is unchanged,
+and the decision rule's sweep, bars and margin read it. The coarse tables,
+exoneration's retained deficit and the per-member sharpness keep reading the
+plain table: what they measure is the blur that matching takes away, so read on
+the blur-matched table they would no longer find it.
+
+**Why it is off by default.** Measured on 8,484 points sampled from ten
+datasets, one thread:
+
+| Matching | Time against plain | Pairs blurred | Verdicts that change | Members not kept (plain: 739) |
+|---|---|---|---|---|
+| `BlurMatched` | 2.85 × | 100% | 2.1% | 678 |
+| `BlurMatchedAboveRatio(1.25)` | 2.27 × | 48% | 2.1% | 662 |
+| `BlurMatchedAboveRatio(1.5)` | 2.09 × | 24% | 1.8% | 667 |
+
+About half the added time is reading the members' ellipses (about 50 µs a
+member over the disk-shaped support, which leaves the corners without data and
+so takes the reading's slower route), the rest the blurred pairs. The verdicts
+that change go both ways in equal numbers: 77 tracks kept whole become splits
+and 91 splits are kept whole (ratio 1.25), because matching lifts the core's
+own agreement and with it the self-normalized bar as well as the blurry
+members. A member made blurrier on purpose (one member's photograph blurred
+near the point so its tile is blurred by `σ` grid px, 595 tracks) is evicted:
+
+| `σ` | Its semi-major axis, median | Plain | Blur-matched | Ratio 1.25 |
+|---|---|---|---|---|
+| 0 | 0.97 | 1.0% | 1.3% | 1.3% |
+| 1 | 1.65 | 1.2% | 1.2% | 1.3% |
+| 2 | 2.93 | 4.9% | 2.7% | 2.0% |
+
+The relative bar and multi-scale exoneration already spare most blurred
+members, so matching buys three points at `σ` 2 and nothing at `σ` 1, for twice
+the time, and moves real verdicts both ways by about as much. A caller vetting
+tracks where blur is expected (video with motion blur, a far view added to a
+near track) can turn it on; `bar` was calibrated on the plain table, and the
+blur-matched one reads about 0.02 higher on the same pairs.
+
 ### Members are sampled at their keypoints, not at the reprojection
 
 Each member's render is **recentred in-plane so it is anchored at that member's
@@ -426,6 +477,7 @@ how rayon schedules them.
 | `sampler` | `per_view` | source-pyramid sampling: the sampler rule, `anisotropic` for a member it moves and `bilinear_mip` otherwise ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per view") |
 | `min_valid_fraction` | `0.6` | per-member floor on the window-weighted valid-pixel fraction |
 | `min_support_pixels` | `8` | floor on the common support `n_support`; below it the track is unscored |
+| `matching` | `Plain` | how each pair is correlated for the decision: `Plain`, `BlurMatched`, or `BlurMatchedAboveRatio(r)`, which leaves a direction alone where the two members' ellipses differ by less than `r` (§ "Blur matching") |
 
 `bar` and `margin_gate` are **calibration defaults, not constants** — callers
 override them. `bar` in particular is calibrated *for the render conventions in
@@ -497,6 +549,7 @@ pub struct MemberCoherenceParams {
     pub min_support_pixels: u32,  // 8
     pub self_bar_k: f64,          // 1.5; 0 disables the relative term
     pub exoneration_ratio: f64,   // 0.90; 0 disables exoneration
+    pub matching: PairMatching,   // Plain; blur-matches each pair for the decision
 }
 
 pub const SELF_BAR_CEILING: f64 = 0.99;      // cap on the effective bar
@@ -514,6 +567,12 @@ pub struct MemberMatrix {         // members, k*k row-major zncc, per-member sco
     // The same agreement on box-downsampled copies of the same renders, one
     // k*k table per factor, coarsest last. Empty when none could be built.
     pub zncc_coarse: Vec<Vec<f64>>, pub coarse_factors: Vec<u32>,
+    // Under blur matching, the blur-matched k*k table the decision reads, and
+    // how many pairs it blurred; empty and 0 otherwise.
+    pub blur_matched_zncc: Vec<f64>, pub pairs_blurred: u32,
+}
+impl MemberMatrix {
+    pub fn decision_zncc(&self) -> &[f64]; // blur_matched_zncc where present, else zncc
 }
 pub struct MemberDecision {       // verdict + what it was decided on
     pub verdict: MemberVerdict, pub kept: Vec<bool>, pub block: Vec<bool>,
@@ -579,7 +638,12 @@ pub fn member_keypoints_from_reconstruction(recon, cloud) -> Vec<Vec<Option<[f64
 `MemberMatrix::from_zncc` builds a matrix from an already-computed table, so a
 caller holding its own pairwise scores can use the decision rule on its own; it
 carries no coarse scale, which leaves exoneration and sharpness inactive.
-`from_zncc_scales` takes the coarse tables too.
+`from_zncc_scales` takes the coarse tables too, and `from_zncc_blur_matched` a
+blur-matched table beside the plain one.
+
+A detailed `progress` times the members' ellipse readings in a `blur-matched
+ellipses` detail phase and the blurred pairs in a `blur-matched pairs` one,
+whose note gives the pairs blurred.
 
 The Python binding mirrors `PatchCloud.select_views`:
 
@@ -589,7 +653,8 @@ PatchCloud.validate_member_coherence(
     exoneration_ratio=0.90, resolution=24,
     window="gaussian_disk", window_sigma=0.6, sampler="per_view",
     min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
-    member_views=None, keypoint_anchor=True, return_matrix=False, progress=None,
+    member_views=None, keypoint_anchor=True, matching="plain",
+    min_ellipse_ratio=1.25, return_matrix=False, progress=None,
 ) -> list[dict]
 ```
 
@@ -613,7 +678,11 @@ relative term alone put outside the block, and the subset exoneration spared),
 `retained_deficit` (float64, `NaN` off the flagged members and where undefined),
 `sharpness_deficit` (float64, for every scored member), and — under
 `return_matrix=True` — the `k×k` float64 `zncc`, the list of coarse tables
-`zncc_coarse` and their `coarse_factors`.
+`zncc_coarse` and their `coarse_factors`. `matching` is `"plain"`,
+`"blur_matched"` or `"blur_matched_above_ratio"` (with `min_ellipse_ratio`);
+under blur matching every dict also carries `pairs_blurred`, and
+`return_matrix=True` adds the `k×k` `blur_matched_zncc`. An unknown `matching`
+or a ratio under 1 raises `ValueError`.
 
 ## Testing
 
@@ -678,6 +747,13 @@ deficit under `EXONERATION_MIN_DEFICIT` yielding no ratio and no sparing. Sharpn
 is covered separately, because it is reported on every scored member whatever the
 verdict, and reports `NaN` rather than zero with no coarse scale.
 
+Blur matching has two: on the rendered scene, a member photographed out of
+focus reads higher against every sharp member under blur matching while the
+plain and coarse tables are unchanged, the blur-matched table is symmetric with
+a unit diagonal, and above a ratio the sharp members' pairs read their plain
+values; and a hand-built pair of tables where the plain one splits the track
+and the blur-matched one keeps it whole, which the decision follows.
+
 The coarse scales themselves are covered end-to-end on the rendered scene — built
 from the same stack, symmetric, unit diagonal, over exactly the factors the
 resolution admits, with scoredness identical at every scale and a genuine
@@ -687,5 +763,7 @@ against divisibility and the minimum-grid floor.
 `tests/patch/test_member_coherence.py` covers the binding surface against a real
 reconstruction: the dict keys and dtypes, the `k×k` `zncc` under `return_matrix`
 (symmetry and unit diagonal), `point_indexes` subsetting, `member_views` override
-and its first-seen-wins dedup, the `CameraViews`-without-`member_views` error, and
-the unscored-member-kept contract end to end.
+and its first-seen-wins dedup, the `CameraViews`-without-`member_views` error,
+the unscored-member-kept contract end to end, and blur matching: its matrix and
+`pairs_blurred`, the plain matrix left as it was, a ratio no pair reaches
+leaving every pair plain, and the refusals.

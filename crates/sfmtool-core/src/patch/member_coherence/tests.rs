@@ -1452,3 +1452,138 @@ fn coarse_factors_follow_the_resolution() {
     assert!(coarse_factors_for(6).is_empty());
     assert!(coarse_factors_for(2).is_empty());
 }
+
+// ---- Blur matching ------------------------------------------------------------
+
+/// `image` blurred by an isotropic Gaussian of `sigma` px, its edges clamped.
+fn blurred_image(image: &ImageU8, sigma: f64) -> ImageU8 {
+    let (w, h) = (image.width() as usize, image.height() as usize);
+    let radius = (3.0 * sigma).ceil() as isize;
+    let taps: Vec<f64> = (-radius..=radius)
+        .map(|t| (-((t * t) as f64) / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let total: f64 = taps.iter().sum();
+    let src = image.data();
+    let at = |x: isize, y: isize| -> f64 {
+        let x = x.clamp(0, w as isize - 1) as usize;
+        let y = y.clamp(0, h as isize - 1) as usize;
+        f64::from(src[y * w + x])
+    };
+    let mut rows = vec![0.0f64; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            rows[y * w + x] = (-radius..=radius)
+                .zip(&taps)
+                .map(|(t, g)| g * at(x as isize + t, y as isize))
+                .sum::<f64>()
+                / total;
+        }
+    }
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let v: f64 = (-radius..=radius)
+                .zip(&taps)
+                .map(|(t, g)| g * rows[(y as isize + t).clamp(0, h as isize - 1) as usize * w + x])
+                .sum::<f64>()
+                / total;
+            out[y * w + x] = v.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    ImageU8::new(image.width(), image.height(), 1, out)
+}
+
+/// Four members of one surface, the last photographed out of focus: blur
+/// matching lifts its agreement with the others, and leaves the plain table
+/// and the coarse tables as they were.
+#[test]
+fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
+    use crate::patch::blur_matched::PairMatching;
+    let mut scene = Scene::new(
+        &[
+            [0.0, 0.0, 0.0],
+            [0.6, 0.0, 0.4],
+            [-0.6, 0.2, 0.3],
+            [0.3, -0.5, 0.2],
+        ],
+        &[surface_a, surface_a, surface_a, surface_a],
+    );
+    scene.pyrs[3] = ImageU8Pyramid::build(&blurred_image(scene.pyrs[3].level(0), 5.0), 5);
+    let views = scene.views();
+    let members = [0, 1, 2, 3];
+    let plain = member_zncc_matrix(&plane_patch(), &views, &members, None, &render_params());
+    assert!(plain.blur_matched_zncc.is_empty());
+    assert_eq!(plain.pairs_blurred, 0);
+
+    let params = MemberCoherenceParams {
+        matching: PairMatching::BlurMatched,
+        ..render_params()
+    };
+    let matched = member_zncc_matrix(&plane_patch(), &views, &members, None, &params);
+    assert_eq!(matched.zncc, plain.zncc, "the plain table is unchanged");
+    assert_eq!(matched.zncc_coarse, plain.zncc_coarse);
+    assert_eq!(matched.decision_zncc(), &matched.blur_matched_zncc[..]);
+    let bm = |i: usize, j: usize| matched.blur_matched_zncc[i * 4 + j];
+    for i in 0..4 {
+        assert_eq!(bm(i, i), 1.0);
+        for j in 0..4 {
+            assert_eq!(bm(i, j), bm(j, i), "symmetric");
+        }
+    }
+    assert!(matched.pairs_blurred >= 3, "{}", matched.pairs_blurred);
+    for i in 0..3 {
+        assert!(
+            bm(i, 3) > plain.get(i, 3) + 0.02,
+            "member {i} with the blurred one: blur-matched {} against plain {}",
+            bm(i, 3),
+            plain.get(i, 3)
+        );
+    }
+
+    // Above a ratio the sharp members' pairs, whose ellipses barely differ,
+    // read plain.
+    let params = MemberCoherenceParams {
+        matching: PairMatching::BlurMatchedAboveRatio(1.5),
+        ..render_params()
+    };
+    let above = member_zncc_matrix(&plane_patch(), &views, &members, None, &params);
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        assert_eq!(
+            above.blur_matched_zncc[i * 4 + j],
+            plain.get(i, j),
+            "{i}, {j}"
+        );
+    }
+    for i in 0..3 {
+        assert!(above.blur_matched_zncc[i * 4 + 3] > plain.get(i, 3) + 0.02);
+    }
+}
+
+/// The decision sweeps and gates on the blur-matched table where the matrix
+/// carries one.
+#[test]
+fn the_decision_reads_the_blur_matched_table() {
+    let plain: Vec<f64> = [
+        [1.0, 0.95, 0.95, 0.5],
+        [0.95, 1.0, 0.95, 0.5],
+        [0.95, 0.95, 1.0, 0.5],
+        [0.5, 0.5, 0.5, 1.0],
+    ]
+    .concat();
+    let matched: Vec<f64> = [
+        [1.0, 0.96, 0.96, 0.93],
+        [0.96, 1.0, 0.96, 0.93],
+        [0.96, 0.96, 1.0, 0.93],
+        [0.93, 0.93, 0.93, 1.0],
+    ]
+    .concat();
+    let alone = MemberMatrix::from_zncc((0..4).collect(), plain.clone());
+    assert_eq!(
+        decide_member_coherence(&alone, &absolute()).verdict,
+        MemberVerdict::Split
+    );
+    let both = MemberMatrix::from_zncc_blur_matched((0..4).collect(), plain, matched);
+    let d = decide_member_coherence(&both, &absolute());
+    assert_eq!(d.verdict, MemberVerdict::KeepAll);
+    assert_eq!(d.support, 4);
+}

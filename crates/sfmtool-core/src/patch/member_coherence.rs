@@ -38,6 +38,7 @@
 
 use rayon::prelude::*;
 
+use crate::patch::blur_matched::PairMatching;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage, SamplerChoice, MIN_MASK_PIXELS};
 use crate::patch::PatchCounter;
@@ -114,6 +115,16 @@ pub struct MemberCoherenceParams {
     /// decides alone. It is inert whenever the relative term is, since a member
     /// the absolute bar rejects is never a candidate.
     pub exoneration_ratio: f64,
+    /// How each pair of members is correlated for the decision: as rendered
+    /// ([`PairMatching::Plain`]), or **blur-matched**, the sharper member's
+    /// render blurred to the other's sharpness first
+    /// ([`crate::patch::blur_matched`]), which spares a member that only looks
+    /// different because it is blurrier than the rest. Blur-matched, the
+    /// matrix also carries [`MemberMatrix::blur_matched_zncc`], and the
+    /// sweep, the bars and the margin read it; the coarse tables, exoneration
+    /// and the per-member sharpness keep reading the plain table, since what
+    /// they measure is the blur that matching takes away.
+    pub matching: PairMatching,
 }
 
 /// Upper bound on the self-normalized admission bar: a perfect core cannot
@@ -164,6 +175,7 @@ impl Default for MemberCoherenceParams {
             min_support_pixels: MIN_MASK_PIXELS as u32,
             self_bar_k: 1.5,
             exoneration_ratio: 0.90,
+            matching: PairMatching::Plain,
         }
     }
 }
@@ -220,6 +232,17 @@ pub struct MemberMatrix {
     /// `0` when no support could be built at all, and for a matrix handed in
     /// through [`from_zncc`](Self::from_zncc) (no render happened).
     pub n_support: u32,
+    /// The **blur-matched** `k×k` agreement, when
+    /// [`MemberCoherenceParams::matching`] asks for it, and empty otherwise:
+    /// [`zncc`](Self::zncc) with each pair whose self-similarity ellipses differ
+    /// correlated after the sharper member is blurred to the other's sharpness,
+    /// over the same support and by the same estimator. A pair left plain
+    /// carries its [`zncc`](Self::zncc) value; the diagonal is `1.0` and an
+    /// unscored member's row and column are `NaN`, as in `zncc`. Each member's
+    /// ellipse is read on its own render over the common support.
+    pub blur_matched_zncc: Vec<f64>,
+    /// How many pairs [`blur_matched_zncc`](Self::blur_matched_zncc) blurred.
+    pub pairs_blurred: u32,
 }
 
 impl MemberMatrix {
@@ -281,6 +304,44 @@ impl MemberMatrix {
             coarse_factors,
             scored,
             n_support: 0,
+            blur_matched_zncc: Vec::new(),
+            pairs_blurred: 0,
+        }
+    }
+
+    /// [`from_zncc`](Self::from_zncc) with a blur-matched table beside the
+    /// plain one, for tests and callers that measure their own. The diagonal
+    /// of both is forced to `1.0`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either table is not `k×k`.
+    pub fn from_zncc_blur_matched(
+        members: Vec<u32>,
+        zncc: Vec<f64>,
+        mut blur_matched_zncc: Vec<f64>,
+    ) -> Self {
+        let k = members.len();
+        assert_eq!(
+            blur_matched_zncc.len(),
+            k * k,
+            "blur_matched_zncc must be a k*k row-major matrix"
+        );
+        for i in 0..k {
+            blur_matched_zncc[i * k + i] = 1.0;
+        }
+        let mut matrix = Self::from_zncc(members, zncc);
+        matrix.blur_matched_zncc = blur_matched_zncc;
+        matrix
+    }
+
+    /// The table the decision rule sweeps and gates on: the blur-matched one
+    /// where the matrix carries it, the plain one otherwise.
+    pub fn decision_zncc(&self) -> &[f64] {
+        if self.blur_matched_zncc.len() == self.zncc.len() {
+            &self.blur_matched_zncc
+        } else {
+            &self.zncc
         }
     }
 

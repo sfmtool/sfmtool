@@ -235,7 +235,11 @@ pub fn decide_member_coherence(
     if k == 0 {
         return MemberDecision::default();
     }
+    // The plain table says who is scored and carries the fine scale the
+    // coarse tables are compared with; the decision table, blur-matched where
+    // the matrix carries it, is what the sweep, the bars and the margin read.
     let zncc = &matrix.zncc;
+    let decision = matrix.decision_zncc();
     let scored = scored_mask(zncc, k);
     let idx: Vec<usize> = (0..k).filter(|&i| scored[i]).collect();
     let s = idx.len();
@@ -264,9 +268,11 @@ pub fn decide_member_coherence(
     // half-counted by it. The coarse tables are sliced to the same members, so a
     // scale index means the same thing at every scale.
     let mut sub = vec![f64::NAN; s * s];
+    let mut plain_sub = vec![f64::NAN; s * s];
     for (a, &ia) in idx.iter().enumerate() {
         for (b, &ib) in idx.iter().enumerate() {
-            sub[a * s + b] = zncc[ia * k + ib];
+            sub[a * s + b] = decision[ia * k + ib];
+            plain_sub[a * s + b] = zncc[ia * k + ib];
         }
     }
     let slice_scale = |table: &Vec<f64>| {
@@ -353,7 +359,7 @@ pub fn decide_member_coherence(
     let mut sharpness_deficit = vec![f64::NAN; k];
     if let Some(coarse) = sharp_scale.as_ref() {
         for (a, &ia) in idx.iter().enumerate() {
-            let df = core_deficit(&sub, s, &sub_block, a);
+            let df = core_deficit(&plain_sub, s, &sub_block, a);
             let dc = core_deficit(coarse, s, &sub_block, a);
             if df.is_finite() && dc.is_finite() {
                 sharpness_deficit[ia] = df - dc;
@@ -417,7 +423,7 @@ pub fn decide_member_coherence(
             let Some(coarse) = exon_scale.as_ref() else {
                 continue;
             };
-            let df = core_deficit(&sub, s, &sub_block, a);
+            let df = core_deficit(&plain_sub, s, &sub_block, a);
             if !(df.is_finite() && df > EXONERATION_MIN_DEFICIT) {
                 continue;
             }
