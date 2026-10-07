@@ -35,9 +35,11 @@ the choice of 250).
 
 - **A `.sift` file for each image**, as written by
   [`sfm sift --extract`](../image-feature/sift-command.md). For an image inside a
-  workspace it is looked up under the workspace's feature directory; outside a
-  workspace, at the path that extraction with the COLMAP tool and its default
-  options writes. A missing file is an error that names the path looked for.
+  workspace it is looked up in the workspace's `feature_prefix_dir` under the
+  image's own directory
+  ([workspace.md](../../workspace/workspace.md#feature-storage-convention));
+  outside a workspace, at the path that extraction with the COLMAP tool and its
+  default options writes. A missing file is an error that names the path looked for.
 - **Images of identical dimensions.** The flow is computed only between images
   of the same width and height; otherwise the command fails with
   `img_a and img_b must have the same shape`.
