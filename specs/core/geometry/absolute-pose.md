@@ -14,10 +14,30 @@ fractions of a few percent. The RANSAC success probability per draw is
 `log(1 − p) / log(1 − w³)` — tractable at `w = 0.05` where any
 full-set fit is hopeless.
 
-Consumers: last-chance image registration in reconstruction growth,
-relocalization of a new image against an existing reconstruction, and any
-place a pose must be estimated from vetted-point support rather than
-pairwise geometry.
+Consumers in the tree:
+
+- `resect_one` in
+  [reconstruction_growth.rs](../../../crates/sfmtool-core/src/geometry/reconstruction_growth.rs)
+  runs `estimate_absolute_pose` and then `refine_absolute_pose` on the
+  consensus. It is the single-image resection behind batch registration
+  (`resect_images_batch`) and next-best-view growth
+  ([reconstruction-growth.md](reconstruction-growth.md)).
+- `repair_poses` in
+  [pose_verification.rs](../../../crates/sfmtool-core/src/geometry/pose_verification.rs)
+  calls `refine_absolute_pose` alone, starting a flagged image from the mean
+  pose of its registered neighbours
+  ([pose-verification.md](pose-verification.md)).
+- The finite path of `resect_images`
+  ([resect_images/finite.rs](../../../crates/sfmtool-core/src/geometry/resect_images/finite.rs),
+  [resect-image.md](../../gui/edits/resect-image.md)) calls `p3p_solve` from
+  its own RANSAC loop rather than `estimate_absolute_pose`: it scores every
+  pair in pixels, including tracks whose point is at infinity and cluster
+  pairs, and draws its samples from the track pairs only, neither of which the
+  angular estimator here does.
+
+Reconstruction merging does not use this module; it refines poses with
+pycolmap's `estimate_and_refine_absolute_pose`
+([merge/pose_refinement.py](../../../src/sfmtool/merge/pose_refinement.py)).
 
 ## Definitions
 
@@ -98,7 +118,7 @@ pub struct AbsolutePoseOptions {
     /// Inlier bound on the bearing/prediction angle, radians.
     pub max_angular_error: f64,
     /// Adaptive-termination target: stop once the probability that an
-    /// all-inlier sample was drawn exceeds this (given the best inlier
+    /// all-inlier sample was drawn reaches this (given the best inlier
     /// count so far).
     pub confidence: f64,
     /// Hard trial cap (the adaptive bound can exceed any budget when the
@@ -112,6 +132,11 @@ pub struct AbsolutePoseOptions {
     /// Local optimization: after each new best consensus, refit the pose
     /// on its inliers and rescore, repeating while the inlier count grows.
     pub local_optimization: bool,
+}
+
+impl Default for AbsolutePoseOptions {
+    // max_angular_error: 0.01, confidence: 0.999, max_iterations: 50_000,
+    // min_inliers: 6, seed: 0, local_optimization: true
 }
 
 pub struct AbsolutePoseEstimate {
@@ -135,10 +160,18 @@ keep the candidate with the most inliers. Scoring accumulates in input
 order — combined with the seeded sampler this makes the whole estimator
 deterministic.
 
+`resect_one` builds its options from `AbsolutePoseOptions::default()`,
+overriding only `max_angular_error` (from the camera's mean focal length) and
+`seed`, so the default confidence, trial cap, inlier floor and local
+optimization are the ones registration and growth run with. The Python
+binding sets every field from its own keyword defaults.
+
 **Local optimization.** When enabled, each new best consensus triggers a
-refit: minimize the sum of squared angular residuals over the current
-inliers by Gauss-Newton with a local `SO(3) × R³` parameterization
-(rotation updates composed from a rotation-vector increment), and rescore.
+refit: minimize `Σ sin²θ_i = Σ (1 − (b_i · d_i)²)` over the current
+inliers, the squared norm of the component of `d_i` perpendicular to `b_i`
+(close to `θ_i²` at small angles), by Gauss-Newton with a local `SO(3) × R³`
+parameterization (rotation updates composed from a rotation-vector
+increment), and rescore.
 A refit replaces the pose when it does not shrink the consensus: when it
 has more inliers, or the same number and a lower value of the cost
 Gauss-Newton minimizes, evaluated over the inliers it was fitted to.
@@ -154,7 +187,7 @@ accuracy gap to a full robust refinement at negligible cost.
 
 **Termination.** After each trial with best inlier count `n_best`, the
 required trial count is `log(1 − confidence) / log(1 − (n_best/N)³)`;
-stop when the completed trials exceed it, or at `max_iterations`.
+stop when the completed trials reach it, or at `max_iterations`.
 Return `None` when the best consensus is below `min_inliers`.
 
 ## Pose refinement
@@ -192,11 +225,13 @@ on that subset by Levenberg–Marquardt. Each LM step is taken over a local
 `SO(3) × ℝ³` perturbation of the pose (`R ← exp([δθ]ₓ)·R`, `t ← t + δt`), and
 the Jacobian is analytic: the projection block from
 [`ray_to_pixel_with_jacobian`](../camera/projection-jacobian.md) composed with the exact
-`−[R·X]ₓ` rotation and identity translation blocks. Models without an analytic
-projection Jacobian (the polynomial fisheye family, equirectangular) fall back
-to a central difference of the projection only, keeping the pose block exact;
-`EQUIDISTANT_FISHEYE` has an analytic one and takes the same path as the
-perspective family. Damping `λ` is
+`−[R·X]ₓ` rotation and identity translation blocks. The models with an analytic
+projection Jacobian are the perspective family and the fisheye models
+`EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE` and `SFMTOOL_FISHEYE`
+(`CameraModel::supports_pixel_jacobian`). The others, the multi-coefficient
+fisheye models (`OPENCV_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`,
+`RAD_TAN_THIN_PRISM_FISHEYE`) and `EQUIRECTANGULAR`, fall back to a central
+difference of the projection only, keeping the pose block exact. Damping `λ` is
 adapted down on a cost improvement, up on a rejected step. The trimmed-L2
 choice is deliberate: a plain L2 fit over all correspondences is dragged by the
 leverage of gross outliers, while a robust loss seeded from all-large residuals
@@ -207,8 +242,9 @@ After the trim rounds, a final refit runs on the observations with residual
 `< inlier_px` when at least six qualify, and the returned `inlier_fraction` is
 the share of **all** supplied observations within `inlier_px` after
 refinement. An observation that is behind the camera or outside the model
-domain takes a large finite per-component residual, so it is trimmed out
-without making the normal equations singular.
+domain takes the residual `(1e6, 0)` px (`INVALID_RESIDUAL` in the first
+component only) with a zero Jacobian row: it is trimmed out by its norm and
+adds nothing to the normal equations, so it never steers a step.
 
 Unlike the estimator, refinement does no sampling and has no notion of a
 minimal set: it assumes the supplied pose is already in the basin of
@@ -238,9 +274,10 @@ estimate_absolute_pose(
 With `(N, 2)` input the binding converts pixels to bearings through the
 camera's `pixel_to_ray` (any supported model, including fisheye) and
 derives the angular threshold from the camera's mean focal length. With
-`(N, 3)` input the caller supplies bearings and an angular threshold
-directly. The returned pose is canonical world-to-camera, matching
-`.sfmr` reconstructions.
+`(N, 3)` input the caller supplies bearings, and the threshold is
+`max_angular_error` when given, otherwise `atan(max_error_px / f_mean)` from
+`camera`; with neither, the binding raises `ValueError`. The returned pose
+is canonical world-to-camera, matching `.sfmr` reconstructions.
 
 `sfmtool._sfmtool.geometry.refine_absolute_pose`:
 
@@ -274,8 +311,11 @@ refine_absolute_pose(
 - **Determinism**: identical inputs and seed give bit-identical results;
   different seeds may differ only within tolerance of the true pose.
 - **Differential**: agreement with an established implementation
-  (pycolmap's estimator) on real correspondence sets — same consensus
-  size within sampling variation, poses within tolerance.
+  (pycolmap's `estimate_and_refine_absolute_pose`) on a synthetic
+  contaminated set of 200 correspondences, 70 of them replaced by random
+  pixels: consensus sizes within 20 % of each other, poses within tolerance.
+  The test skips when pycolmap is missing, its API differs, or it finds no
+  pose.
 - **Refinement**: from a pose perturbed off a known solution,
   `refine_absolute_pose` recovers the generating pose and reports a high
   `inlier_fraction`; the trim rounds reject planted outliers a plain L2 fit
