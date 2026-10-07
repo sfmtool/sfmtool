@@ -53,9 +53,19 @@ pub const REFERENCE_MAX_CLIPPED_SHARE: f64 = 0.05;
 /// tracks). Kept for that reason rather than fitted.
 pub const REFERENCE_MAX_VIEWING_ANGLE_DEG: f64 = 65.0;
 
-/// The largest cell deficit a candidate may have: how far below the track's
-/// typical view the candidate may agree with the other views in its worst
-/// judged cell ([`CellAgreement::deficit`]).
+/// The viewing angle a candidate must stay under in every fallback, in
+/// degrees.
+///
+/// At `90°` the view sees the patch edge on, and past it the view sees the
+/// patch's back, so its tile is not a picture of the patch's face at all.
+/// Dropping the angle test when no view passes drops only the
+/// [`REFERENCE_MAX_VIEWING_ANGLE_DEG`] limit; this one stays. A geometric
+/// limit, not tuned.
+pub const REFERENCE_FACING_LIMIT_DEG: f64 = 90.0;
+
+/// The largest cell deficit a candidate may have: how far the candidate's
+/// agreement with the other views may fall below the track's typical
+/// agreement in its worst judged cell ([`CellAgreement::deficit`]).
 ///
 /// The cell check catches a view that agrees with the others over the whole
 /// tile but not in one part of it: an occluder, a shadow edge, or parallax
@@ -113,7 +123,8 @@ pub enum ReferenceTest {
     Coverage,
     /// Clipped share at most [`REFERENCE_MAX_CLIPPED_SHARE`].
     Clipped,
-    /// Viewing angle at most [`REFERENCE_MAX_VIEWING_ANGLE_DEG`].
+    /// Viewing angle at most [`REFERENCE_MAX_VIEWING_ANGLE_DEG`], or, under a
+    /// fallback that drops that limit, under [`REFERENCE_FACING_LIMIT_DEG`].
     Angle,
     /// Cell deficit at most [`REFERENCE_MAX_CELL_DEFICIT`].
     Cells,
@@ -148,7 +159,10 @@ impl std::fmt::Display for ReferenceTest {
 
 /// Which of the candidate tests the rule kept. When no view passes all of
 /// them it drops the angle test, then the cell check, then coverage and the
-/// clipped share together, until some view passes what is left.
+/// clipped share together, until some view passes what is left. Dropping the
+/// angle test drops its [`REFERENCE_MAX_VIEWING_ANGLE_DEG`] limit only: in
+/// every fallback a candidate's viewing angle stays under
+/// [`REFERENCE_FACING_LIMIT_DEG`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum ReferenceFallback {
     /// Every test applied.
@@ -158,7 +172,8 @@ pub enum ReferenceFallback {
     WithoutAngle,
     /// The angle test and the cell check were dropped.
     WithoutAngleOrCells,
-    /// Every candidate test was dropped: every view was a candidate.
+    /// Every candidate test was dropped but the facing limit: every view
+    /// that faces the patch was a candidate.
     WithoutAny,
 }
 
@@ -173,10 +188,13 @@ impl ReferenceFallback {
         }
     }
 
-    /// Whether `test` is applied under this fallback.
+    /// Whether `test` is applied under this fallback. The angle test always
+    /// is: at most [`REFERENCE_MAX_VIEWING_ANGLE_DEG`] under
+    /// [`ReferenceFallback::None`], and under [`REFERENCE_FACING_LIMIT_DEG`]
+    /// under every other.
     pub fn applies(self, test: ReferenceTest) -> bool {
         match test {
-            ReferenceTest::Angle => self == ReferenceFallback::None,
+            ReferenceTest::Angle => true,
             ReferenceTest::Cells => self <= ReferenceFallback::WithoutAngle,
             ReferenceTest::Coverage | ReferenceTest::Clipped => {
                 self <= ReferenceFallback::WithoutAngleOrCells
@@ -237,7 +255,10 @@ impl ReferenceStanding {
 ///    [`REFERENCE_MAX_VIEWING_ANGLE_DEG`], and cell deficit at most
 ///    [`REFERENCE_MAX_CELL_DEFICIT`]. When no view passes, the angle test is
 ///    dropped, then the cell check, then coverage and the clipped share
-///    ([`ReferenceFallback`]).
+///    ([`ReferenceFallback`]). Dropping the angle test leaves a limit of
+///    [`REFERENCE_FACING_LIMIT_DEG`], so a view that sees the patch edge on or
+///    from behind is never a candidate; where every view does, the rule picks
+///    nothing.
 /// 2. **Agreement**: of the candidates, those whose median pairwise ZNCC is
 ///    within [`REFERENCE_AGREEMENT_MARGIN`] of the best candidate's. Where no
 ///    candidate has a pairwise reading, every candidate.
@@ -247,7 +268,9 @@ impl ReferenceStanding {
 ///
 /// A missing coverage or viewing angle fails its test, since the view has to
 /// show that it meets it; a missing clipped share or cell deficit passes, since
-/// there is nothing there to count against the view. A view with no pairwise
+/// there is nothing there to count against the view. Once the angle test is
+/// dropped a missing viewing angle passes, since only an angle shown to be at
+/// or past the facing limit turns the view away. A view with no pairwise
 /// ZNCC fails the agreement test unless no candidate has one.
 ///
 /// ```
@@ -284,9 +307,14 @@ pub fn choose_reference_view(views: &[ReferenceReadings]) -> ReferenceChoice {
             ReferenceTest::Clipped => v
                 .clipped_share
                 .is_none_or(|c| c.is_nan() || c <= REFERENCE_MAX_CLIPPED_SHARE),
-            ReferenceTest::Angle => v
-                .viewing_angle_deg
-                .is_some_and(|a| a <= REFERENCE_MAX_VIEWING_ANGLE_DEG),
+            ReferenceTest::Angle => match fallback {
+                ReferenceFallback::None => v
+                    .viewing_angle_deg
+                    .is_some_and(|a| a <= REFERENCE_MAX_VIEWING_ANGLE_DEG),
+                _ => v
+                    .viewing_angle_deg
+                    .is_none_or(|a| a.is_nan() || a < REFERENCE_FACING_LIMIT_DEG),
+            },
             ReferenceTest::Cells => v
                 .cell_deficit
                 .is_none_or(|d| d.is_nan() || d <= REFERENCE_MAX_CELL_DEFICIT),

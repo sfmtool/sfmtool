@@ -21,6 +21,7 @@ use crate::progress::Progress;
 use crate::readable::Readable;
 use crate::reconstruction::edited::EditedReconstruction;
 
+use super::evaluate::restate_reference_view;
 use super::fit::FitOptions;
 use super::stage::{set_stage, StageError};
 use super::track::{
@@ -783,6 +784,11 @@ pub struct VerdictReport {
 ///
 /// Turning an observation `in` is refused when another `in` observation already
 /// holds its image, because a track observes an image once.
+///
+/// A verdict that moves brings the reference-view standings into line with
+/// the new `in` set, as [`apply_thresholds`] does: a row turned `out` loses
+/// its pair readings and its standing, and the rule picks again among the rows
+/// it last read that are still `in`.
 pub fn set_verdict(
     track: &EditableTrack,
     observation: usize,
@@ -811,6 +817,9 @@ pub fn set_verdict(
     let target = &mut next.observations[observation];
     target.verdict = verdict;
     target.pinned = true;
+    if was != verdict {
+        restate_reference_view(&mut next);
+    }
     Ok((
         next,
         VerdictReport {
@@ -2458,6 +2467,14 @@ pub struct ThresholdReport {
 /// observations of one image would pass, the one with the best score takes the
 /// `in` and the rest are turned `out`, so the painting can never produce a track
 /// that observes an image twice.
+///
+/// A painting that moves a verdict also brings the reference-view standings
+/// into line with the new `in` set: a row turned `out` loses its pair ZNCC,
+/// pair ZNCC grid, cell deficit and standing, and the reference-view rule runs
+/// again over the rows it last read that are still `in`, from the readings
+/// they carry. A row turned `in` has no standing until an evaluation reads it.
+/// This is what keeps an evaluation's repaint from leaving an `out` row named
+/// as the reference view.
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport) {
     let mut report = ThresholdReport {
         turned_in: 0,
@@ -2486,6 +2503,9 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
         next.observations[i].verdict = verdict;
     }
     report.changed = report.turned_in + report.turned_out > 0;
+    if report.changed {
+        restate_reference_view(&mut next);
+    }
     (next, report)
 }
 

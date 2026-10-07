@@ -271,7 +271,18 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
     use sfmtool_core::patch::reference_view::{
         ReferenceFallback, ReferenceStanding, ReferenceTest,
     };
+    use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 
+    let ellipse = SelfSimilarityEllipseUnits {
+        grid_px: SelfSimilarityEllipse {
+            axes: [1.5, 0.8],
+            axes_is_at_least: [false, false],
+            major_angle: 0.0,
+            matrix: [[2.25, 0.0], [0.0, 0.64]],
+        },
+        image_px: None,
+        patch: None,
+    };
     let row = |rejected_by: Option<ReferenceTest>, fallback: ReferenceFallback| Observation {
         image: 0,
         provenance: Provenance::Origin,
@@ -287,6 +298,7 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
             pair_zncc: Some(0.834),
             cell_deficit: Some(0.12),
             pair_zncc_grid: Some([[0.9, 0.8, f64::NAN], [0.7, 0.6, 0.5], [0.4, 0.3, 0.2]]),
+            zncc_self_similarity_ellipse: Some(ellipse),
             reference_view: Some(ReferenceStanding {
                 rejected_by,
                 fallback,
@@ -324,7 +336,7 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
         (
             ReferenceTest::Cells,
             "ninth differs",
-            "0.12 worse than the typical row",
+            "0.12 below the track's typical agreement",
         ),
         (
             ReferenceTest::Agreement,
@@ -349,12 +361,38 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
         assert!(hover.contains(why), "{test}: {hover}");
     }
 
+    // A row turned away for sharpness with no self-similarity radius was not
+    // compared, and the hover says that rather than naming a sharper row.
+    let mut unmeasured = row(Some(ReferenceTest::Sharpness), ReferenceFallback::None);
+    unmeasured
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .zncc_self_similarity_ellipse = None;
+    let hover = cell(&unmeasured).hover.expect("a hover");
+    assert!(hover.contains("has no self-similarity radius"), "{hover}");
+    assert!(!hover.contains("smaller self-similarity radius"), "{hover}");
+
     // A dropped test is said in the hover.
     let dropped = cell(&row(None, ReferenceFallback::WithoutAngle));
     assert!(dropped
         .hover
         .expect("a hover")
-        .contains("dropped the angle test"));
+        .contains("dropped the 65\u{b0} angle limit"));
+
+    // Once the 65° limit is dropped, a row turned away by the angle sees the
+    // patch edge on or from behind.
+    let mut behind = row(Some(ReferenceTest::Angle), ReferenceFallback::WithoutAngle);
+    behind
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .viewing_angle_deg = Some(111.0);
+    let hover = cell(&behind).hover.expect("a hover");
+    assert!(
+        hover.contains("sees the patch at 111.0\u{b0}, edge on or from behind"),
+        "{hover}"
+    );
 
     // An `out` row carries its own readings and no standing.
     let mut out = row(None, ReferenceFallback::None);

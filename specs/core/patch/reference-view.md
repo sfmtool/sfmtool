@@ -12,8 +12,9 @@ measurements that say what each view's tile can contribute, and the
 point's patch bitmap: a view that covers the patch, is not clipped or grazing,
 agrees with the other views everywhere in the tile and nearly as well as the
 best of them overall, and among those is the sharpest. The bench measures every
-track it evaluates this way and reports the pick; nothing yet computes the
-stored bitmap from it (see [Non-goals](#non-goals)).
+track it evaluates this way and reports the pick. The stored bitmap is the
+fused mean of the views; computing it from the reference view is proposed in
+the draft below (see [Non-goals](#non-goals)).
 
 The design behind the measurements, and the case for computing the bitmap from
 the views that hold the most detail, is in
@@ -66,6 +67,9 @@ pub struct ReferenceReadings {
 }
 pub enum ReferenceTest { Coverage, Clipped, Angle, Cells, Agreement, Sharpness }
 pub enum ReferenceFallback { None, WithoutAngle, WithoutAngleOrCells, WithoutAny }
+impl ReferenceFallback {
+    pub fn applies(self, test: ReferenceTest) -> bool; // the angle test always applies
+}
 pub struct ReferenceChoice {
     pub reference: Option<usize>,
     pub fallback: ReferenceFallback,
@@ -130,9 +134,12 @@ reading and every stored patch bitmap are rendered as.
   photograph. A sample past the photograph's border carries no data.
 - **Clipped share**: the share of the photograph's own full-resolution pixels
   inside the tile's outline that are `0` or `255` in any of their first three
-  channels. The outline is the photograph positions of the samples on the
-  grid's border, and a pixel is inside when its centre is, by the even-odd
-  rule. It is read from the photograph rather than the tile because the
+  channels. The outline is the polygon through the photograph positions of the
+  centres of the samples on the grid's border, taken in order round the grid.
+  A border sample off the photograph is left out, so where the tile crosses
+  the photograph's edge a straight edge joins the last border sample on the
+  photograph to the next one. A pixel is inside when its centre is, by the
+  even-odd rule. It is read from the photograph rather than the tile because the
   sampler's blending moves a clipped value off the limit. Specular highlights
   and blown-out sky clip, and a clipped region has neither texture nor its true
   colour.
@@ -145,7 +152,10 @@ reading and every stored patch bitmap are rendered as.
   camera, as an angle from the patch's `u` axis towards its `v` axis. The view
   foreshortens the patch by `cos θ` along it and not at all across it, and an
   error in the normal shears the tile along it. None within
-  `MIN_TILT_ANGLE_DEG = 0.1°` of facing the patch.
+  `MIN_TILT_ANGLE_DEG = 0.1°` of facing the patch. The tile's rows run along
+  `−v`, so in the tile as drawn `v` points up and an angle from `u` towards `v`
+  turns counter-clockwise: the opposite sign to an angle measured in image
+  coordinates, whose `y` runs down the rows.
 - **Pair ZNCC**: the median of the view's pairwise ZNCCs with the track's other
   views, from member coherence's `k×k` matrix
   ([member-coherence-validation.md](member-coherence-validation.md)), rendered
@@ -177,9 +187,15 @@ tile can slide over itself and still match itself, short on a sharp tile.
    - **angle** at most `REFERENCE_MAX_VIEWING_ANGLE_DEG`;
    - **cells**: cell deficit at most `REFERENCE_MAX_CELL_DEFICIT`.
 
-   When no view passes, the angle test is dropped; when still none passes, the
-   cell check too; and then coverage and clipping, so every view is a
-   candidate. A test dropped for the track is dropped for every view of it.
+   When no view passes, the angle test's `REFERENCE_MAX_VIEWING_ANGLE_DEG`
+   limit is dropped; when still none passes, the cell check too; and then
+   coverage and clipping, so every view that faces the patch is a candidate. A
+   test dropped for the track is dropped for every view of it. The angle test
+   keeps a limit of `REFERENCE_FACING_LIMIT_DEG` (`90°`) under every fallback:
+   a view at `90°` sees the patch edge on and one past it sees the patch's back,
+   so its tile is not a picture of the patch's face, and it is turned away by
+   `angle` whichever tests are dropped. Where every view is at `90°` or more,
+   the rule picks nothing.
 2. **Agreement**: of the candidates, those whose pair ZNCC is within
    `REFERENCE_AGREEMENT_MARGIN` of the best candidate's. A view with no pair ZNCC
    fails this test, unless no candidate has one, when the test passes every
@@ -190,7 +206,9 @@ tile can slide over itself and still match itself, short on a sharp tile.
 
 A missing coverage or viewing angle fails its test, since a candidate has to
 show that it meets it; a missing clipped share or cell deficit passes, since
-nothing is there to count against the view. When no view left after the
+nothing is there to count against the view. Once the 65° limit is dropped a
+missing viewing angle passes, since only an angle shown to be at or past the
+facing limit turns the view away. When no view left after the
 agreement test has a self-similarity reading, the rule picks nothing.
 
 ### Each threshold and its reason
@@ -200,6 +218,7 @@ agreement test has a self-similarity reading, the rule picks nothing.
 | `REFERENCE_MIN_COVERAGE` | `0.99` | A partial tile holds only part of the patch, so a bitmap taken from it would be missing the rest. Not tuned. |
 | `REFERENCE_MAX_CLIPPED_SHARE` | `0.05` | A clipped region holds neither texture nor its true colour. Not tuned. |
 | `REFERENCE_MAX_VIEWING_ANGLE_DEG` | `65°` | An oblique tile depends most on the patch model. It changed no pick on the review cases and 0.9% of picks over the whole datasets; on the two ground truths, removing it made the picks it changes localize the other views 0.12 px worse on average (15 tracks). Kept for that reason rather than fitted. |
+| `REFERENCE_FACING_LIMIT_DEG` | `90°` | A view at `90°` sees the patch edge on and one past it sees its back, so its tile is not a picture of the patch's face. Kept under every fallback. A geometric limit, not tuned. |
 | `REFERENCE_MAX_CELL_DEFICIT` | `0.3` | Catches a view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. Values from `0.2` to `0.4` gave the same agreement with the hand picks on the tuning half; `0.3` is the middle. |
 | `REFERENCE_MIN_JUDGED_CELL_ZNCC` | `0.5` | A cell whose views do not agree, because it holds no texture they share, says nothing about any one view. |
 | `REFERENCE_MIN_CELL_SAMPLES` | `16` | Below it a cell's ZNCC is read off a handful of samples. |
@@ -266,7 +285,7 @@ rule by default), and runs member coherence with its default window
 ## Python bindings
 
 The bench's readings cross on each observation's `"track"` dict
-([editable-track.md](../bench/editable-track.md) § "Python"):
+([editable-track.md](../bench/editable-track.md) § "Python bindings"):
 `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share`,
 `pair_zncc` and `cell_deficit` as floats, `pair_zncc_grid` as a `(3, 3)` float64
 array, and `reference_view` as a dict `{"is_reference", "rejected_by",
@@ -281,7 +300,10 @@ view's tile (`render_view_tile`) from a numpy photograph or from an
 `ImagePyramidSet` with `image_index`, and returns a dict: `samples` `(R, R, C)`
 uint8, `valid` `(R, R)` bool, `sampler`, `coverage`, `clipped_share`,
 `viewing_angle_deg`, `tilt_direction_deg`, `jacobian` `(2, 2)` or `None`, and
-`placement`, the `OrientedPatch` the tile was rendered through.
+`placement`, the `OrientedPatch` the tile was rendered through. It raises
+`ValueError` for a `resolution` outside 2 to 1024, a keypoint that is not
+finite, an `ImagePyramidSet` without `image_index`, or an `image_index` given
+with a plain array, which holds one photograph.
 
 ```python
 tile = patch.render_view_tile(camera, pose, photo, keypoint=(812.4, 377.9))
@@ -297,20 +319,26 @@ the clipped share on photographs with known clipped columns and colour pixels,
 and that the row spans count what a test of every pixel centre counts; coverage
 on a tile inside and one over the photograph's edge; the cell readings on
 identical tiles, flat and short cells, an occluder in one cell and cells the
-track does not agree on; and each of the rule's tests, its inclusive
-thresholds, the margin's reference point, the tie breaks, every fallback, and
-missing readings. [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
+track does not agree on; the clipped share of a tile rendered through a
+fisheye camera, against a count of every pixel centre inside the polygon of its
+border samples projected one at a time, and of a tile cut by the photograph's
+edge; and each of the rule's tests, its inclusive thresholds, the margin's
+reference point, the tie breaks, every fallback, the facing limit under every
+fallback, and missing readings. [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
 evaluates a track of the seoul_bull ground truth and checks that the rule picks
-exactly one view, with full coverage and under the angle limit, and that every
-view it turned away for sharpness is no sharper. The Python tests are in
-`tests/rust_bindings/bench/test_bench_rust_bindings.py` and
-`tests/rust_bindings/patches/test_view_tile_rust_bindings.py`.
+exactly one view, with coverage of at least 0.99 and under the angle limit, and
+that every view it turned away for sharpness is no sharper; that each row's
+self-similarity readings are those of its tile rendered directly; and that each
+row's pair ZNCC is the median of its row of `member_zncc_matrix` called
+directly. The Python tests are in
+[test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
+and
+[test_view_tile_rust_bindings.py](../../../tests/rust_bindings/patches/test_view_tile_rust_bindings.py).
 
 ## Non-goals
 
-The rule reports a view; the stored patch bitmap and every template a kernel
-scores against are still the fused mean of the views. Whether a single
-reference or a mean of a few of the best views makes the better template is
-being measured, as
+The rule reports a view. The stored patch bitmap and every template a kernel
+scores against are the fused mean of the views. Computing them from the
+reference view, or from a mean of a few of the best views, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 5 describes.
+Part 5.

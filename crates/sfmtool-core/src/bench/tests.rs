@@ -2767,6 +2767,90 @@ fn an_evaluation_that_follows_a_repaint_does_not_repaint() {
     assert!(!read.repainted());
 }
 
+/// The observation the reference-view rule picked, if any.
+fn reference_row(track: &EditableTrack) -> Option<usize> {
+    let picked: Vec<usize> = (0..track.observations.len())
+        .filter(|&i| {
+            track.observations[i]
+                .track
+                .as_ref()
+                .and_then(|m| m.reference_view)
+                .is_some_and(|s| s.is_reference())
+        })
+        .collect();
+    assert!(picked.len() <= 1, "at most one reference view: {picked:?}");
+    picked.first().copied()
+}
+
+/// The reference view is always an `in` row. The rule decides over the rows
+/// that are `in` when the track is read, and a repaint that then turns a row
+/// `out` takes the row's standing and pair readings with it and runs the rule
+/// again over the rows still `in`.
+#[test]
+fn a_repaint_that_turns_rows_out_leaves_no_out_row_named_the_reference_view() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (track, _) = three_rows_the_bars_decide(&scene);
+    let (read, _) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    // Read again under the `in` set the repaint left: three rows in, one
+    // picked.
+    let (settled, report) = evaluate_over(&scene, &edited, &read).expect("a framed track");
+    assert_eq!(settled.verdict_counts(), (3, 0));
+    assert_eq!((report.turned_in, report.turned_out), (0, 0));
+    let picked = reference_row(&settled).expect("the rule picks one of the three");
+
+    // The bars turn only the picked row out: the painting, which is the
+    // evaluation's repaint, clears its standing and the rule picks another.
+    let mut failing = settled.clone();
+    failing.observations[picked]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .zncc = Some(0.0);
+    let (painted, report) = apply_thresholds(&failing);
+    assert_eq!((report.turned_in, report.turned_out), (0, 1));
+    assert_eq!(painted.observations[picked].verdict, Verdict::Out);
+    let m = painted.observations[picked].track.as_ref().unwrap();
+    assert_eq!(m.reference_view, None);
+    assert_eq!(
+        (m.pair_zncc, m.pair_zncc_grid, m.cell_deficit),
+        (None, None, None)
+    );
+    assert!(m.coverage.is_some(), "its own readings stay");
+    let again = reference_row(&painted).expect("the rule picks among the two left");
+    assert_ne!(again, picked);
+    assert_eq!(painted.observations[again].verdict, Verdict::In);
+    for (i, observation) in painted.observations.iter().enumerate() {
+        if observation.verdict == Verdict::In {
+            assert!(
+                observation.track.as_ref().unwrap().reference_view.is_some(),
+                "row {i} keeps a standing"
+            );
+        }
+    }
+
+    // A verdict set by hand does the same.
+    let (by_hand, _) = set_verdict(&settled, picked, Verdict::Out).expect("a live row");
+    let m = by_hand.observations[picked].track.as_ref().unwrap();
+    assert_eq!(m.reference_view, None);
+    assert_eq!(m.pair_zncc, None);
+    assert!(reference_row(&by_hand).is_some_and(|i| i != picked));
+
+    // Bars no reading clears: the evaluation reads all three `in`, decides
+    // among them, and its repaint turns every one out, standing and all.
+    let mut strict = settled.clone();
+    strict.thresholds.min_zncc = 1.1;
+    let (out, report) = evaluate_over(&scene, &edited, &strict).expect("a framed track");
+    assert_eq!((report.turned_in, report.turned_out), (0, 3));
+    assert!(out.repainted());
+    assert_eq!(reference_row(&out), None);
+    for observation in &out.observations {
+        let m = observation.track.as_ref().unwrap();
+        assert_eq!(m.reference_view, None);
+        assert_eq!(m.pair_zncc_grid, None);
+    }
+}
+
 /// A track put on the bench from a point arrives with every row pinned `in`,
 /// and keeps those verdicts through evaluations whatever the bars say.
 #[test]

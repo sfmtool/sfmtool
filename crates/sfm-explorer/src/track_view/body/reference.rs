@@ -12,8 +12,8 @@
 use sfmtool_core::bench::{Observation, StageKind, TrackMeasurement};
 use sfmtool_core::patch::reference_view::{
     ReferenceFallback, ReferenceStanding, ReferenceTest, REFERENCE_AGREEMENT_MARGIN,
-    REFERENCE_MAX_CELL_DEFICIT, REFERENCE_MAX_CLIPPED_SHARE, REFERENCE_MAX_VIEWING_ANGLE_DEG,
-    REFERENCE_MIN_COVERAGE,
+    REFERENCE_FACING_LIMIT_DEG, REFERENCE_MAX_CELL_DEFICIT, REFERENCE_MAX_CLIPPED_SHARE,
+    REFERENCE_MAX_VIEWING_ANGLE_DEG, REFERENCE_MIN_COVERAGE,
 };
 
 use crate::bench::live::Evaluation;
@@ -24,28 +24,29 @@ pub(super) const REFERENCE_TIP: &str = "Which row's tile could stand as the patc
     reference, on a green cell.\n\n\
     A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
     under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
-    of the tile where it agrees with the other rows more than 0.3 worse than the track's \
-    typical row does. Of the candidates whose pair ZNCC, the median of its ZNCCs with the \
+    of the tile where it agrees with the other rows more than 0.3 below the track's typical \
+    agreement there. Of the candidates whose pair ZNCC, the median of its ZNCCs with the \
     other rows that are in, is within 15 points of the best candidate's, the rule picks the one with \
-    the smallest self-similarity radius. When no row passes, it drops the angle test, then \
-    the ninths, then the coverage and clipping tests.\n\n\
+    the smallest self-similarity radius. When no row passes, it drops the 65\u{b0} limit, then \
+    the check of the ninths, then the coverage and clipping tests; a row that sees the patch \
+    edge on or from behind, at 90\u{b0} or more, is never picked.\n\n\
     The first line is the pick, or the test that turned the row away: partial, clipped, \
     oblique, ninth differs, agrees less, or less sharp. The second is the viewing angle, \
     the angle between the patch's normal and the direction to the camera, and the pair \
     ZNCC. Hover a cell for every reading. An out row is not considered.\n\n\
-    The rule reports a view; the patch bitmap is still fused from every in row.";
+    The rule reports a view; the patch bitmap is fused from every in row.";
 
 /// What one row's *Reference* cell draws.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ReferenceCell {
     /// The cell's two lines: the standing, then the viewing angle and the pair
     /// ZNCC, or `-` where nothing has measured the row.
-    pub text: String,
+    pub(crate) text: String,
     /// The hover text with every reading and the reason, or `None` where the
     /// cell is `-`.
-    pub hover: Option<String>,
+    pub(crate) hover: Option<String>,
     /// Whether the rule picks this row.
-    pub is_reference: bool,
+    pub(crate) is_reference: bool,
 }
 
 impl ReferenceCell {
@@ -136,7 +137,10 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
         Some(standing) => {
             lines.push(match standing.rejected_by {
                 None => "The reference view: the rule picks this row's tile.".to_string(),
-                Some(test) => format!("Not the reference view: {}.", rejection(test, m)),
+                Some(test) => format!(
+                    "Not the reference view: {}.",
+                    rejection(test, standing.fallback, m)
+                ),
             });
             if let Some(dropped) = fallback_sentence(standing.fallback) {
                 lines.push(dropped.to_string());
@@ -170,7 +174,8 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
     }
     if let Some(deficit) = m.cell_deficit {
         lines.push(format!(
-            "Cell deficit {deficit:.2}, in its worst ninth against the typical row."
+            "Cell deficit {deficit:.2}: how far it falls below the track's typical agreement \
+             in its worst ninth."
         ));
     }
     if let Some(grid) = m.pair_zncc_grid {
@@ -193,9 +198,9 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
     lines.join("\n")
 }
 
-/// Why `test` turned a row away, with the row's own reading against the
-/// threshold.
-fn rejection(test: ReferenceTest, m: &TrackMeasurement) -> String {
+/// Why `test` turned a row away under `fallback`, with the row's own reading
+/// against the threshold.
+fn rejection(test: ReferenceTest, fallback: ReferenceFallback, m: &TrackMeasurement) -> String {
     let or_dash = |v: Option<f64>, f: &dyn Fn(f64) -> String| v.map_or("-".to_string(), f);
     match test {
         ReferenceTest::Coverage => format!(
@@ -208,20 +213,38 @@ fn rejection(test: ReferenceTest, m: &TrackMeasurement) -> String {
             or_dash(m.clipped_share, &|c| format!("{:.1}%", 100.0 * c)),
             100.0 * REFERENCE_MAX_CLIPPED_SHARE
         ),
+        ReferenceTest::Angle if fallback != ReferenceFallback::None => format!(
+            "it sees the patch at {}, edge on or from behind: at or past the {:.0}\u{b0} that \
+             no reference may reach",
+            or_dash(m.viewing_angle_deg, &|a| format!("{a:.1}\u{b0}")),
+            REFERENCE_FACING_LIMIT_DEG
+        ),
         ReferenceTest::Angle => format!(
             "it sees the patch at {}, over the {:.0}\u{b0} a reference may be at",
             or_dash(m.viewing_angle_deg, &|a| format!("{a:.1}\u{b0}")),
             REFERENCE_MAX_VIEWING_ANGLE_DEG
         ),
         ReferenceTest::Cells => format!(
-            "in one ninth of the tile it agrees with the other rows {} worse than the typical \
-             row, over the {REFERENCE_MAX_CELL_DEFICIT} allowed",
+            "in one ninth of the tile it agrees with the other rows {} below the track's \
+             typical agreement there, over the {REFERENCE_MAX_CELL_DEFICIT} allowed",
             or_dash(m.cell_deficit, &|d| format!("{d:.2}")),
         ),
         ReferenceTest::Agreement => format!(
             "its pair ZNCC is more than {:.0} points below the best candidate's",
             100.0 * REFERENCE_AGREEMENT_MARGIN
         ),
+        // The rule compares the self-similarity ellipse's semi-major axis. A row
+        // without one was not compared at all, and where no row left had one
+        // the rule picked nothing.
+        ReferenceTest::Sharpness
+            if !m
+                .zncc_self_similarity_ellipse
+                .is_some_and(|e| e.grid_px.axes[0].is_finite()) =>
+        {
+            "it passed every other test, but it has no self-similarity radius, so the rule \
+             could not compare its sharpness with the other candidates'"
+                .to_string()
+        }
         ReferenceTest::Sharpness => "it passed every test, and a candidate with a smaller \
              self-similarity radius did too"
             .to_string(),
@@ -233,13 +256,15 @@ fn fallback_sentence(fallback: ReferenceFallback) -> Option<&'static str> {
     match fallback {
         ReferenceFallback::None => None,
         ReferenceFallback::WithoutAngle => {
-            Some("No row passed every test, so the rule dropped the angle test.")
+            Some("No row passed every test, so the rule dropped the 65\u{b0} angle limit.")
         }
-        ReferenceFallback::WithoutAngleOrCells => {
-            Some("No row passed every test, so the rule dropped the angle test and the ninths.")
-        }
-        ReferenceFallback::WithoutAny => {
-            Some("No row passed the coverage and clipping tests, so every row was a candidate.")
-        }
+        ReferenceFallback::WithoutAngleOrCells => Some(
+            "No row passed every test, so the rule dropped the 65\u{b0} angle limit and the \
+             check of the ninths.",
+        ),
+        ReferenceFallback::WithoutAny => Some(
+            "No row passed the coverage and clipping tests, so every row that faces the patch \
+             was a candidate.",
+        ),
     }
 }

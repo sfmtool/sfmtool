@@ -445,9 +445,17 @@ impl std::fmt::Display for EvaluateReport {
 /// to one extra reading. [`EvaluateReport::turned_in`] and
 /// [`EvaluateReport::turned_out`] say what the repaint moved.
 ///
+/// The reference-view rule is run over the rows that are `in` when the track
+/// is read, and the repaint then runs it again over the rows that are still
+/// `in` ([`apply_thresholds`]), so a row the repaint turns `out` is never left
+/// named as the reference view. The pair readings it decides on were still
+/// taken under the old set, which the [`RepaintMark`] says; the evaluation
+/// that follows reads them under the new one.
+///
 /// `progress` is where the call names its phases, the names the batch kernels
-/// carry: `refine` and `self-similarity` at the cluster stage, `localize` and
-/// `self-similarity` at the track stage. Pass `&Progress::none()` to report
+/// carry: `refine` and `self-similarity` at the cluster stage, and `localize`,
+/// `self-similarity` and `reference view` at the track stage, the last holding
+/// member coherence's render detail phases. Pass `&Progress::none()` to report
 /// nothing.
 ///
 /// # Example
@@ -1543,7 +1551,7 @@ fn read_reference_view(
         ..MemberCoherenceParams::default()
     };
     let matrix =
-        member_zncc_matrix_reporting(frame, images, &members, Some(&keypoints), &params, progress);
+        member_zncc_matrix_reporting(frame, images, &members, Some(&keypoints), &params, &phase);
     // One `in` observation per image, so the matrix's members are the tiles'
     // images in the same order; looked up by image all the same.
     let pair_zncc: Vec<Option<f64>> = members
@@ -1559,43 +1567,82 @@ fn read_reference_view(
         .collect();
     let refs: Vec<&ViewTile> = tiles.iter().map(|(_, tile)| tile).collect();
     let cells = cell_agreement(&refs);
-    let readings: Vec<ReferenceReadings> = tiles
+    for (k, (i, _)) in tiles.iter().enumerate() {
+        if let Some(measurement) = next.observations[*i].track.as_mut() {
+            measurement.pair_zncc = pair_zncc[k];
+            measurement.pair_zncc_grid = Some(cells.pair_zncc_grid[k]);
+            measurement.cell_deficit = finite(cells.deficit[k]);
+        }
+    }
+    let rows: Vec<usize> = tiles.iter().map(|(i, _)| *i).collect();
+    match decide_reference_view(next, &rows) {
+        Some(i) => progress_note!(phase, "{} views, observation {i} picked", rows.len()),
+        None => progress_note!(phase, "{} views, none picked", rows.len()),
+    }
+}
+
+/// Run the reference-view rule over the observations `rows` from the readings
+/// their track-stage slots carry, write each one's standing, and return the
+/// observation it picks.
+fn decide_reference_view(track: &mut EditableTrack, rows: &[usize]) -> Option<usize> {
+    let readings: Vec<ReferenceReadings> = rows
         .iter()
-        .enumerate()
-        .map(|(k, (i, tile))| {
-            let axes = next.observations[*i]
-                .track
-                .as_ref()
+        .map(|&i| {
+            let m = track.observations[i].track.as_ref();
+            let axes = m
                 .and_then(|m| m.zncc_self_similarity_ellipse)
                 .map(|e| e.grid_px.axes);
             ReferenceReadings {
-                coverage: Some(tile.coverage),
-                clipped_share: tile.clipped_share,
-                viewing_angle_deg: tile.viewing_angle.map(|a| a.angle_deg),
-                cell_deficit: finite(cells.deficit[k]),
-                pair_zncc: pair_zncc[k],
+                coverage: m.and_then(|m| m.coverage),
+                clipped_share: m.and_then(|m| m.clipped_share),
+                viewing_angle_deg: m.and_then(|m| m.viewing_angle_deg),
+                cell_deficit: m.and_then(|m| m.cell_deficit),
+                pair_zncc: m.and_then(|m| m.pair_zncc),
                 semi_major: axes.map(|a| a[0]),
                 semi_minor: axes.map(|a| a[1]),
             }
         })
         .collect();
     let choice = choose_reference_view(&readings);
-    for (k, (i, _)) in tiles.iter().enumerate() {
-        if let Some(measurement) = next.observations[*i].track.as_mut() {
-            measurement.pair_zncc = pair_zncc[k];
-            measurement.pair_zncc_grid = Some(cells.pair_zncc_grid[k]);
-            measurement.cell_deficit = finite(cells.deficit[k]);
+    for (k, &i) in rows.iter().enumerate() {
+        if let Some(measurement) = track.observations[i].track.as_mut() {
             measurement.reference_view = choice.standing(k);
         }
     }
-    match choice.reference {
-        Some(k) => progress_note!(
-            phase,
-            "{} views, observation {} picked",
-            tiles.len(),
-            tiles[k].0
-        ),
-        None => progress_note!(phase, "{} views, none picked", tiles.len()),
+    choice.reference.map(|k| rows[k])
+}
+
+/// Bring the reference-view readings into line with verdicts that a step has
+/// just moved, without reading any photograph.
+///
+/// The pair readings and the rule's decision are taken over the rows that are
+/// `in` when the track is read, so a verdict moved afterwards
+/// ([`apply_thresholds`], [`set_verdict`](super::steps::set_verdict)) leaves
+/// them describing the old `in` set. Here an `out` row loses its pair ZNCC,
+/// pair ZNCC grid, cell deficit and standing, which an `out` row never
+/// carries, and the rule runs again over the rows that are still `in` and that
+/// it decided on last time, from the readings they carry. Those readings were
+/// taken under the old set; the next evaluation reads them under the new one.
+/// A row turned `in` since the reading has no pair readings and no standing
+/// until then, because the rule has not read it. So the reference view is
+/// always an `in` row, and there is at most one.
+pub(super) fn restate_reference_view(track: &mut EditableTrack) {
+    let mut rows = Vec::new();
+    for (i, observation) in track.observations.iter_mut().enumerate() {
+        let Some(measurement) = observation.track.as_mut() else {
+            continue;
+        };
+        if observation.verdict == Verdict::Out {
+            measurement.pair_zncc = None;
+            measurement.pair_zncc_grid = None;
+            measurement.cell_deficit = None;
+            measurement.reference_view = None;
+        } else if measurement.reference_view.is_some() {
+            rows.push(i);
+        }
+    }
+    if !rows.is_empty() {
+        decide_reference_view(track, &rows);
     }
 }
 

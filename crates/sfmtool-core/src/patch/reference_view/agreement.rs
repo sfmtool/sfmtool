@@ -4,7 +4,7 @@
 //! Where in the tile each view agrees with the others: the ZNCC between every
 //! pair of views over each cell of the ZNCC grid's three-by-three split, each
 //! view's median over the others, and how far that falls below the track's
-//! typical view in its worst cell.
+//! typical agreement, the median over the views, in its worst cell.
 
 use super::tile::ViewTile;
 use super::{REFERENCE_MIN_CELL_SAMPLES, REFERENCE_MIN_JUDGED_CELL_ZNCC};

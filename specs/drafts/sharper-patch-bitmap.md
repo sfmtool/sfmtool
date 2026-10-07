@@ -19,6 +19,7 @@ Amends:
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the matched-bandwidth score
 - [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
+- [core/patch/reference-view.md](../core/patch/reference-view.md): the stored bitmap computed from the reference view, or from a few of the best views, in place of the fused mean (Part 5)
 
 ## Purpose
 
@@ -131,7 +132,7 @@ The zoom and the footprint it gives (Part 3) also serve:
 
 ### How much the tile depends on the patch model: the viewing angle
 
-`θ_v` is the angle between the view's ray through the observation's keypoint and the patch's outward normal: `cos θ_v = −n · d̂`, with `d̂` the unit ray from the camera centre through the keypoint. Because the render re-anchors the patch so its centre projects onto the keypoint, this is also the ray to the rendered patch's centre. Computing `d̂` unprojects the keypoint through the camera model.
+`θ_v` is the angle between the view's ray through the observation's keypoint and the patch's outward normal: `cos θ_v = −n · d̂`, with `d̂` the unit ray from the camera centre through the keypoint. Because the render re-anchors the patch so its centre projects onto the keypoint, this is also the ray to the rendered patch's centre. Computing `d̂` unprojects the keypoint through the camera model. Where the keypoint's ray does not meet the patch's plane in front of the camera, the render cannot re-anchor the patch, and the built reading is the angle at the patch's centre instead; [core/patch/reference-view.md](../core/patch/reference-view.md) § "A keypoint whose ray misses the patch's plane" describes the case.
 
 **Its two axes.** The **tilt direction** `t̂_v` is `d̂` projected into the patch plane and normalized, with its angle `α_v` in the patch's u, v frame. The view's foreshortening of the patch is an ellipse:
 - along `t̂_v`, its minor axis, the view compresses the patch by `cos θ_v`;
@@ -161,7 +162,9 @@ So the weights read obliquity only from the angle, never from the Jacobian's ani
 
 ## Part 5: computing the patch bitmap
 
-**Built: the reference-view rule.** The rule that picks the single reference view is built and runs in every bench evaluation, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes: candidates with coverage of at least 0.99, a clipped share of at most 0.05, a viewing angle of at most 65° and no ninth of the tile more than 0.3 below the track's typical agreement there; of those within 0.15 of the best candidate's median pairwise ZNCC, the one with the smallest self-similarity radius; the angle, the cell check and then coverage and clipping dropped in turn when no view passes. It was tuned against hand picks on 77 tracks. **Still open: how the bitmap is computed.** Nothing yet takes the bitmap from the pick. An experiment is measuring whether a single reference or a mean of a few of the best views makes the better template, and the fuse and the other consumers below keep the weighted consensus until it decides.
+**Built: the reference-view rule.** The rule that picks the single reference view is built and runs in every bench evaluation, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes: candidates with coverage of at least 0.99, a clipped share of at most 0.05, a viewing angle of at most 65° and no ninth of the tile more than 0.3 below the track's typical agreement there; of those within 0.15 of the best candidate's median pairwise ZNCC, the one with the smallest self-similarity radius; the 65° angle limit, the cell check and then coverage and clipping dropped in turn when no view passes, with a view at 90° or more, which sees the patch edge on or from behind, never a candidate. It was tuned against hand picks on 77 tracks. **Still open: how the bitmap is computed.** Nothing yet takes the bitmap from the pick. An experiment is measuring whether a single reference or a mean of a few of the best views makes the better template, and the fuse and the other consumers below keep the weighted consensus until it decides.
+
+The built rule reads neither of two signals the leading candidate below lists. It reads no zoom: it judges sharpness by the self-similarity radius alone, measured on each view's own tile at the patch resolution. And it reads no brightness or colour: a gate on how typical a view's brightness and colour are of the track was tried during tuning and left out, because it turned away views the hand picks chose.
 
 The pipeline computes the patch bitmap today as a weighted mean of the views, a consensus. The measurements in Part 4 rank the views by what they can contribute, which serves other ways to compute it as well.
 

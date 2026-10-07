@@ -21,6 +21,13 @@ use crate::flow::warp::extract_image_u8;
 use crate::geometry::rigid_transform::PyRigidTransform;
 use crate::PyCameraIntrinsics;
 
+/// The largest tile side `render_view_tile` renders.
+///
+/// The tile, its validity mask and the warp map behind them all grow with
+/// `R²`, and a stored patch bitmap is a few tens of samples on a side, so a
+/// side past this is a mistake in the call rather than a tile anyone reads.
+const MAX_VIEW_TILE_RESOLUTION: usize = 1024;
+
 #[pymethods]
 impl PyOrientedPatch {
     /// Render this patch's ``R×R`` tile in one view, as the bench renders each
@@ -40,10 +47,11 @@ impl PyOrientedPatch {
     ///         matching the camera's size, or an :class:`ImagePyramidSet`
     ///         with ``image_index`` naming the view in it.
     ///     image_index: The view's index in ``image`` when that is an
-    ///         :class:`ImagePyramidSet`.
-    ///     keypoint: The observation's pixel ``(x, y)`` to anchor on, or
-    ///         ``None`` to render the patch where it is.
-    ///     resolution: ``R``, the tile's side.
+    ///         :class:`ImagePyramidSet`; given with a plain array, it is
+    ///         refused.
+    ///     keypoint: The observation's pixel ``(x, y)`` to anchor on, finite,
+    ///         or ``None`` to render the patch where it is.
+    ///     resolution: ``R``, the tile's side, from 2 to 1024.
     ///     sampler: ``"per_view"`` (default), ``"bilinear_mip"``,
     ///         ``"bilinear"`` or ``"anisotropic"``.
     ///
@@ -61,6 +69,13 @@ impl PyOrientedPatch {
     ///     0.1 degrees of facing the patch); ``jacobian`` the ``(2, 2)`` image
     ///     px per grid px at the tile's centre, or ``None``; and ``placement``
     ///     the :class:`OrientedPatch` the tile was rendered through.
+    ///
+    /// Raises:
+    ///     ValueError: ``resolution`` is outside 2 to 1024, ``keypoint`` is
+    ///         not finite, ``image_index`` is missing for an
+    ///         :class:`ImagePyramidSet` or given for a plain array, or the
+    ///         photograph's size does not match the camera's.
+    ///     IndexError: ``image_index`` is past the set's images.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -87,10 +102,18 @@ impl PyOrientedPatch {
         resolution: usize,
         sampler: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
-        if resolution < 2 {
+        if !(2..=MAX_VIEW_TILE_RESOLUTION).contains(&resolution) {
             return Err(PyValueError::new_err(format!(
-                "resolution must be >= 2, got {resolution}"
+                "resolution must be in 2..={MAX_VIEW_TILE_RESOLUTION}, got {resolution}"
             )));
+        }
+        if let Some(k) = keypoint {
+            if !k.iter().all(|c| c.is_finite()) {
+                return Err(PyValueError::new_err(format!(
+                    "keypoint must be finite, got ({}, {})",
+                    k[0], k[1]
+                )));
+            }
         }
         let choice = parse_sampler(sampler)?;
         let built: ImageU8Pyramid;
@@ -107,6 +130,14 @@ impl PyOrientedPatch {
                 ))
             })?
         } else {
+            // A plain array is the one photograph; an index into it would be
+            // ignored, which hides a caller that meant to pass a set.
+            if let Some(index) = image_index {
+                return Err(PyValueError::new_err(format!(
+                    "image_index {index} names a view of an ImagePyramidSet, but image is a \
+                     single photograph; pass the set, or leave image_index out"
+                )));
+            }
             let source = extract_image_u8(image)?;
             built = py.detach(|| ImageU8Pyramid::build(&source, pyramid_levels(&source)));
             &built

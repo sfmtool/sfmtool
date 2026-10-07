@@ -3625,15 +3625,20 @@ photograph's pixels inside the tile's outline that are `0` or `255` in any colou
 channel. An `in` row also carries `pair_zncc`, the median of its pairwise ZNCCs
 with the other `in` rows; `pair_zncc_grid`, the same per ninth, three rows of
 three, null in a ninth with no reading; `cell_deficit`, the most its
-`pair_zncc_grid` falls below the track's typical row in a ninth whose typical
-agreement is at least `0.5`; and `reference_view`, `{"is_reference",
+`pair_zncc_grid` falls below the track's typical agreement, the median over
+the `in` rows, in a ninth whose typical agreement is at least `0.5`; and
+`reference_view`, `{"is_reference",
 "rejected_by", "fallback"}`, the reference-view rule's decision: `rejected_by`
 is null for the row it picks and otherwise the first test that turned the row
 away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`), and
 `fallback` names the tests the rule dropped because no row passed them (`none`,
-`without_angle`, `without_angle_or_cells`, `without_any`). The four are null on
-an `out` row, which the rule does not consider, and `stage_data` reports the
-row the rule picked as `reference_observation`, null where it picked none. No
+`without_angle`, `without_angle_or_cells`, `without_any`); dropping the angle
+test drops its 65° limit only, and a row at 90° or more is turned away by
+`angle` under every fallback. The four are null on an `out` row, which the rule
+does not consider, and `stage_data` reports the row the rule picked as
+`reference_observation`, null where it picked none; a step that turns a row
+`out` clears its standing and has the rule pick again among the rows still
+`in`, so `reference_observation` never names an `out` row. No
 bar judges them and nothing on the track depends on them. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and

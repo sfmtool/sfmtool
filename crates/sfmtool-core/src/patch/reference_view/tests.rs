@@ -254,6 +254,157 @@ fn a_tile_inside_the_photograph_is_fully_covered_and_one_over_its_edge_is_not() 
     assert_eq!(tile.samples[[off / 16, off % 16, 0]], 0);
 }
 
+/// The polygon through the photograph positions of the centres of `patch`'s
+/// border samples at resolution `r`, in the order the tile's outline takes
+/// them, each projected on its own through the camera rather than read off a
+/// warp map. A sample that lands off the photograph is left out, as the tile
+/// leaves it out.
+fn projected_outline(
+    patch: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+    r: usize,
+) -> Vec<[f64; 2]> {
+    let (w, h) = (f64::from(camera.width), f64::from(camera.height));
+    let at = |col: usize, row: usize| {
+        let s = (col as f64 + 0.5) * 2.0 / r as f64 - 1.0;
+        let t = (row as f64 + 0.5) * 2.0 / r as f64 - 1.0;
+        // Rows run down the tile, along -v.
+        let world = patch.center + patch.u_axis * (patch.half_extent[0] * s)
+            - patch.v_axis * (patch.half_extent[1] * t);
+        let ray = pose.transform_point(&world);
+        camera
+            .ray_to_pixel([ray.x, ray.y, ray.z])
+            .filter(|&(x, y)| x >= 0.0 && y >= 0.0 && x < w && y < h)
+            .map(|(x, y)| [x, y])
+    };
+    let border = (0..r)
+        .map(|col| (col, 0))
+        .chain((1..r).map(|row| (r - 1, row)))
+        .chain((0..r - 1).rev().map(|col| (col, r - 1)))
+        .chain((1..r - 1).rev().map(|row| (0, row)));
+    border.filter_map(|(col, row)| at(col, row)).collect()
+}
+
+/// A camera at the origin looking down world `+z`, and a patch at `z = 4`
+/// facing it with half-extent `half`, centred at `x`.
+fn facing_patch(x: f64, half: f64) -> (RigidTransform, OrientedPatch) {
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(x, 0.0, 4.0),
+        -Vector3::z(),
+        Vector3::y(),
+        [half, half],
+    );
+    (pose, patch)
+}
+
+#[test]
+fn the_clipped_share_of_a_fisheye_tile_is_read_inside_its_distorted_outline() {
+    // A fisheye, and a photograph blown out left of a line thirty pixels
+    // right of the principal point, so the share depends on the outline's
+    // shape and not only on its symmetry.
+    let camera = CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 60.0,
+            focal_length_y: 60.0,
+            principal_point_x: 80.0,
+            principal_point_y: 80.0,
+            radial_distortion_k1: 0.05,
+            radial_distortion_k2: 0.0,
+            radial_distortion_k3: 0.0,
+            radial_distortion_k4: 0.0,
+        },
+        width: 160,
+        height: 160,
+    };
+    let pyramid = grey(160, 160, |x, _| if x < 110 { 255 } else { 100 });
+    let (pose, patch) = facing_patch(0.0, 3.0);
+    let view = ProjectedImage {
+        camera: &camera,
+        cam_from_world: &pose,
+        pyramid: &pyramid,
+    };
+    let r = 24;
+    let tile = render_view_tile(
+        &patch,
+        &view,
+        None,
+        r,
+        SamplerChoice::per_view(),
+        &Progress::none(),
+    );
+    assert_eq!(tile.coverage, 1.0);
+    let share = tile.clipped_share.expect("the tile is on the photograph");
+    let outline = projected_outline(&patch, &camera, &pose, r);
+    let expected = clipped_share_by_pixel(&pyramid, &outline);
+    // The warp map projects a fisheye through a coarse grid with a bounded
+    // error, so a pixel on the outline's edge may fall either way.
+    assert!(
+        (share - expected).abs() < 0.01,
+        "{share} against {expected}"
+    );
+
+    // The distortion matters: the same patch through a pinhole of the same
+    // focal length has a larger outline, with a different share.
+    let pinhole = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: 60.0,
+            focal_length_y: 60.0,
+            principal_point_x: 80.0,
+            principal_point_y: 80.0,
+        },
+        width: 160,
+        height: 160,
+    };
+    let undistorted =
+        clipped_share_by_pixel(&pyramid, &projected_outline(&patch, &pinhole, &pose, r));
+    assert!(
+        (undistorted - share).abs() > 0.02,
+        "{undistorted} against {share}"
+    );
+}
+
+#[test]
+fn the_clipped_share_of_a_tile_cut_by_the_photograph_s_edge_is_read_inside_the_part_on_it() {
+    // The rightmost four columns are blown out, and the patch sits over the
+    // right edge, so part of its outline is the chord between the last border
+    // samples on the photograph.
+    let camera = pinhole(64, 64);
+    let pyramid = grey(64, 64, |x, _| if x >= 60 { 255 } else { 100 });
+    let (pose, patch) = facing_patch(1.2, 0.2);
+    let view = ProjectedImage {
+        camera: &camera,
+        cam_from_world: &pose,
+        pyramid: &pyramid,
+    };
+    let r = 16;
+    let tile = render_view_tile(
+        &patch,
+        &view,
+        None,
+        r,
+        SamplerChoice::per_view(),
+        &Progress::none(),
+    );
+    assert!(
+        tile.coverage > 0.2 && tile.coverage < 0.8,
+        "{}",
+        tile.coverage
+    );
+    let share = tile
+        .clipped_share
+        .expect("part of the tile is on the photograph");
+    let outline = projected_outline(&patch, &camera, &pose, r);
+    assert!(outline.len() < 4 * r - 4, "some border samples are off it");
+    let expected = clipped_share_by_pixel(&pyramid, &outline);
+    assert!(
+        (share - expected).abs() < 1e-3,
+        "{share} against {expected}"
+    );
+    assert!(share > 0.1 && share < 0.9, "{share}");
+}
+
 // ---- The cell check -----------------------------------------------------------
 
 /// A one-channel tile of side 24 whose sample at `(row, col)` is `value`,
@@ -534,4 +685,41 @@ fn no_views_or_no_radius_picks_nothing() {
     let choice = choose_reference_view(&[flat]);
     assert_eq!(choice.reference, None);
     assert_eq!(choice.rejected_by, vec![Some(ReferenceTest::Sharpness)]);
+}
+
+#[test]
+fn a_view_of_the_patch_edge_on_or_from_behind_is_never_a_candidate() {
+    // The sharpest view sees the patch's back, the next is edge on, and the
+    // third grazes: no view passes the 65° limit, the fallback drops it, and
+    // the facing limit still turns the first two away.
+    let mut back = good(0.9, 0.1);
+    back.viewing_angle_deg = Some(111.0);
+    let mut edge_on = good(0.9, 0.2);
+    edge_on.viewing_angle_deg = Some(REFERENCE_FACING_LIMIT_DEG);
+    let mut grazing = good(0.9, 0.5);
+    grazing.viewing_angle_deg = Some(89.0);
+    let choice = choose_reference_view(&[back, edge_on, grazing]);
+    assert_eq!(choice.fallback, ReferenceFallback::WithoutAngle);
+    assert_eq!(choice.reference, Some(2));
+    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Angle));
+    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Angle));
+
+    // With every other test dropped as well, the facing limit still holds.
+    let mut views = [back, edge_on, grazing];
+    for v in &mut views {
+        v.coverage = Some(0.5);
+        v.cell_deficit = Some(0.9);
+    }
+    let choice = choose_reference_view(&views);
+    assert_eq!(choice.fallback, ReferenceFallback::WithoutAny);
+    assert_eq!(choice.reference, Some(2));
+    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Angle));
+
+    // Where every view faces away, the rule picks nothing.
+    let choice = choose_reference_view(&[back, edge_on]);
+    assert_eq!(choice.reference, None);
+    assert_eq!(
+        choice.rejected_by,
+        vec![Some(ReferenceTest::Angle), Some(ReferenceTest::Angle)]
+    );
 }

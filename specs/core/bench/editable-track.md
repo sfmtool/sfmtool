@@ -127,7 +127,7 @@ pub struct TrackMeasurement {
     pub clipped_share: Option<f64>,          // share of the photograph under it at 0 or 255
     pub pair_zncc: Option<f64>,              // median ZNCC with the other `in` rows
     pub pair_zncc_grid: Option<[[f64; 3]; 3]>, // the same per ninth
-    pub cell_deficit: Option<f64>,           // the worst ninth against the typical row
+    pub cell_deficit: Option<f64>,           // the worst ninth below the typical agreement
     pub reference_view: Option<ReferenceStanding>, // what the reference-view rule decided
     pub walked_px: Option<f64>,              // grid px, set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
@@ -1396,7 +1396,8 @@ Across the `in` rows that have a tile it then writes:
   the two tiles' ZNCC in that ninth, read from the tiles the evaluation
   rendered;
 - `cell_deficit`: the most the row's `pair_zncc_grid` falls below the track's
-  typical row in a ninth where the typical row agrees at least `0.5`;
+  **typical agreement**, the median of the rows' `pair_zncc_grid` in that
+  ninth, over the ninths whose typical agreement is at least `0.5`;
 - `reference_view`: a `ReferenceStanding`, the rule's decision about the row:
   `rejected_by`, `None` for the reference view and otherwise the first test
   that turned the row away (`Coverage`, `Clipped`, `Angle`, `Cells`,
@@ -1407,10 +1408,23 @@ An `out` row is not considered: its four agreement readings are `None`. A
 contested `in` row, whose image another observation holds, is never `in` beside
 it, so the rule reads one row per image. The rule picks exactly one row
 wherever some candidate has a self-similarity reading. No bar judges these
-readings and no step reads them: the bitmap the track carries is still the
-fused one, and the painting is unchanged. They are kept on the row as the other
-readings are, and are as stale as they are after a step until the next
-evaluation.
+readings: the bitmap the track carries is the fused one, and the painting
+proposes the same verdicts with or without them.
+
+The standing always agrees with the verdicts. The rule decides over the rows
+that are `in` when the track is read, so a step that then moves a verdict --
+the evaluation's own repaint, `apply_thresholds`, `unpin_verdicts` or
+`set_verdict` -- brings the standings into line without reading anything: a row
+turned `out` loses its four agreement readings, and the rule runs again over
+the rows that are still `in` and that it decided on, from the readings they
+carry. Those readings were taken under the old `in` set and a row turned `in`
+has none, so it has no standing until the next evaluation reads it; the viewer
+reads a track again after every step and after a repaint (§ "An evaluation
+that only follows a repaint does not repaint again"), so what it shows settles
+on the next reading. An `out` row is therefore never named the reference view,
+and `stage_data.reference_observation` never points at one. The other readings
+are kept on the row as they are, and are as stale as they are after a step
+until the next evaluation.
 
 ## The steps
 
@@ -2071,7 +2085,7 @@ reading. What lands in each slot is:
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. The px is what `max_projection_error_px` paints on once the track is triangulated. |
 | `zncc_self_similarity_radius` and its middle, grid, ellipses and surface | How far the observation's own tile, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
 | `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share` | The angle the view sees the patch at at the keypoint and the direction its ray leans in the patch's plane, the share of the tile on the photograph, and the share of the photograph under the tile that is clipped (§ "The reference view"). No bar judges them. |
-| `pair_zncc`, `pair_zncc_grid`, `cell_deficit`, `reference_view` | For an `in` row: its agreement with the other `in` rows over the whole tile and each ninth, its worst ninth against the track's typical row, and what the reference-view rule decided about it (§ "The reference view"). `None` on an `out` row. No bar judges them. |
+| `pair_zncc`, `pair_zncc_grid`, `cell_deficit`, `reference_view` | For an `in` row: its agreement with the other `in` rows over the whole tile and each ninth, how far it falls below the track's typical agreement in its worst ninth, and what the reference-view rule decided about it (§ "The reference view"). `None` on an `out` row. No bar judges them. |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
 The projection offset, the residual and the self-similarity rows are filled for
@@ -2796,6 +2810,9 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   unpinned row moved past the shift bar and takes it back in after a fit moves
   it within the bar, and reads a track its own repaint marked without
   repainting it.
+- A repaint that turns the picked row `out`, whether by the painting or by
+  `set_verdict`, clears that row's standing and pair readings and leaves
+  another `in` row picked; one that turns every row `out` leaves no row picked.
 - A point's pinned rows stay `in` whatever the bars say, rows pinned with
   `pin_verdicts` stay where they stood under bars no reading clears, and a
   pinned `out` is scored and left `out`.
@@ -3016,9 +3033,17 @@ unit-tested in `normal.rs` itself.
 
 - A track of the seoul_bull ground truth, read against its checked-in
   photographs, carries the viewing angle, coverage, clipped share and pair ZNCC
-  grid on every row; the reference-view rule picks exactly one row, with full
-  coverage and under the angle limit, with no fallback, and every row turned
-  away for sharpness is no sharper than it.
+  grid on every row; the reference-view rule picks exactly one row, with
+  coverage of at least 0.99 and under the angle limit, with no fallback, and
+  every row turned away for sharpness is no sharper than it.
+- On the same track, each row's self-similarity readings (radius, middle,
+  grid and ellipse) are those of its tile rendered directly: the patch
+  anchored on the keypoint, the sampler rule's sampler, and
+  `zncc_self_similarity_parts` on the result. That guards the readings against
+  the render they now share with the reference view's.
+- Each row's `pair_zncc` is the median of its row of `member_zncc_matrix`,
+  called directly over the `in` rows at the evaluation's resolution and
+  sampler.
 
 ### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
 

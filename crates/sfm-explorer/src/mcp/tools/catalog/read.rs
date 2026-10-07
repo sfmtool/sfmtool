@@ -379,15 +379,19 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           ZNCCs with the other in observations from member coherence's matrix; \
                           pair_zncc_grid, per ninth of the tile, the median over the others of \
                           the pair's ZNCC there; cell_deficit, the most its pair_zncc_grid falls \
-                          below the track's typical view in a ninth where that typical \
-                          agreement is at least 0.5; and reference_view, the reference-view \
+                          below the track's typical agreement (the median over the in \
+                          observations) in a ninth where that typical agreement is at least \
+                          0.5; and reference_view, the reference-view \
                           rule's decision: is_reference, rejected_by (null for the reference, \
                           else the first test that turned it away: coverage under 0.99, \
-                          clipped over 0.05, angle over 65 degrees, cells for a cell_deficit \
+                          clipped over 0.05, angle over 65 degrees, or at or past 90 once that \
+                          limit is dropped, cells for a cell_deficit \
                           over 0.3, agreement for a pair_zncc more than 0.15 below the best \
-                          candidate's, or sharpness for a candidate a sharper one beat) and \
+                          candidate's, or sharpness for a candidate a sharper one beat or one \
+                          with no self-similarity radius) and \
                           fallback (none, or which tests the rule dropped because no view \
-                          passed them: without_angle, without_angle_or_cells, without_any). \
+                          passed them: without_angle, without_angle_or_cells, without_any; \
+                          without_angle drops only the 65 degree limit). \
                           These are null on an out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the row \
                           the rule picked, or null. The rule reports a view; it does not \

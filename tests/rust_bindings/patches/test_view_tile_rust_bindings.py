@@ -93,3 +93,17 @@ def test_a_fixed_sampler_and_bad_arguments():
         )
     with pytest.raises(ValueError, match="camera"):
         patch.render_view_tile(_pinhole(), _identity(), _photograph(32, 32))
+    with pytest.raises(ValueError, match="resolution"):
+        patch.render_view_tile(_pinhole(), _identity(), _photograph(), resolution=4096)
+    with pytest.raises(ValueError, match="keypoint must be finite"):
+        patch.render_view_tile(
+            _pinhole(), _identity(), _photograph(), keypoint=(float("nan"), 3.0)
+        )
+    with pytest.raises(ValueError, match="keypoint must be finite"):
+        patch.render_view_tile(
+            _pinhole(), _identity(), _photograph(), keypoint=(1.0, float("inf"))
+        )
+    # An index names a view of an ImagePyramidSet; with one photograph it would
+    # be ignored, so it is refused.
+    with pytest.raises(ValueError, match="image_index"):
+        patch.render_view_tile(_pinhole(), _identity(), _photograph(), image_index=0)
