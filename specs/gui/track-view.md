@@ -1,19 +1,20 @@
 # Track View
 
-A 3D point in a reconstruction is only as good as the photographs that saw it.
-Each point carries a **track**, the list of feature observations, one per image,
-that were triangulated into it, and judging a suspect point means reading that
-list sighting by sighting: where each one sits, how far it lies from where the
-point projects, and whether the patch of surface it shows looks like the
-others. Sometimes the answer is that the track is wrong, and then it has to be
-worked on: sightings tried, measured, turned out, and the result written back.
-Track View is the one panel of the SfM Explorer where both happen, in one body
-drawn in two modes. With its **Edit** box clear it shows the selected point read
-as a track, measured the way the bench measures a track, and changes nothing.
-With the box ticked it shows the one track the viewer is editing, which is held
-beside the reconstruction on the **bench** until it is committed, together with
-the controls that fit it and commit it, and the measurements that are kept
-current as it changes.
+Track View is the SfM Explorer panel that shows one **track**, the
+observations of one point across the photographs, one row per observation with
+the measurements of each: where it sits in its image, how far it lies from where
+the point projects, and whether the patch of surface it shows looks like the
+others. It draws one body in two modes. With its **Edit** box clear it shows the
+selected 3D point read as a track, measured the way the bench measures a track,
+and changes nothing. Ticking the box puts that point on the **bench**, where an
+item is held beside the reconstruction and judged before it is committed to it
+([`bench.md`](bench.md)), and makes the new track the focused item, the one item
+the viewer is editing; a point already put on the bench has its existing track
+focused instead, and with no point selected the tick focuses again the item
+most recently focused. With the box ticked the panel shows the focused item, together
+with the controls that fit it, set which observations it keeps, and commit it,
+and the measurements that are kept current as it changes. Clearing the box stops
+the editing and leaves the item on the bench.
 
 The panel has an explicit mode so that it always says which of the two things is
 on screen, and it does not list the bench: the Scene tree already lists each
