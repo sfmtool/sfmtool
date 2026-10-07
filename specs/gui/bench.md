@@ -1593,8 +1593,9 @@ do answers successfully. The contract is one for every step:
   echoes.
 
 `changed` is on **every** edit reply, not only the bench's: it is read off the
-cursor before and after the call, so "did the history move" has one answer in one
-place for every family.
+cursor before and after the call, or, for a step that runs on a worker, off
+whether the run pushed a version, so "did the history move" has one answer for
+every family.
 
 **Whether a step had an effect is core's to decide, with a tolerance.** A pixel
 named under a pointer or on the wire is turned into a ray, met with the patch's

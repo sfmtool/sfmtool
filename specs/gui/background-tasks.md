@@ -651,9 +651,9 @@ gone, as `AppState::last_background_task`, a `FinishedTask` holding its id, name
 label, cost, transcript and outcome, and `changed`, whether it pushed a version
 of its node: false for a run that ended in `NoChange` as well as for one that
 was refused or cancelled, which is how an edit's reply answers `changed: false`
-for a run that succeeded without changing anything. For an open it also holds `opened`, the
-first node the open made, which is what `open_reconstruction` answers with once
-the open lands.
+for a run that succeeded without changing anything. For an open it also holds
+`opened`, the first node the open made, which is what `open_reconstruction`
+answers with once the open lands.
 
 `poll_background_task` runs **in phase 0, before the MCP drain**. A completed
 operation's version is then on screen in the frame it landed, and an agent's

@@ -495,7 +495,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Code bug: `set_view` drops `fov_short_axis_deg` beside `fit`, `look_through` or `exit_camera_view` (`tools.rs:794`, :796-848); only `point`/`bench_observation` refuse it (:815-822). Spec 1391 is right.
   - Code bug: an explicit placement with fov outside 5-160 moves the camera (`view.rs:257-282`), then refuses (`view.rs:283,505`). Spec 1541 is right. Every `set_view` also ends a held Move Camera lock before validating (`mod.rs:2288-2290`); say which is intended.
   - Code bug: a background edit ending in `Finished::NoChange` (`background/mod.rs:1043`) replies `changed: true` (`mcp/edit.rs:584-590`), against spec 3073/3276 and `mcp/edit.rs:22-24`.
-    > _Status (2026-10-07): **Done** — a background edit that ends in `Finished::NoChange` now answers `changed: false` at the version the node still stands at: `FinishedTask` records whether the run pushed a version and `background_reply` reads it; test in `mcp/tests/edit.rs`, and `background-tasks.md` and the prune reply section of `mcp-server.md` say so, branch `spec-fix-1006-08-mcp-nochange`._
+    > _Status (2026-10-07): **Done** — a background edit that ends in `Finished::NoChange` now answers `changed: false` at the version the node still stands at: `FinishedTask` records whether the run pushed a version and `background_reply` reads it; test in `mcp/tests/edit.rs`, and `background-tasks.md`, the prune and add-to-tracks sections of `mcp-server.md` and § "The wire" of `bench.md` say so, branch `spec-fix-1006-08-mcp-nochange`._
   - Spec 2725-2726, 2949, 3018, 3064, 3181, 3230 and `catalog/edit.rs:121,145,244,307` say five edits "renumber nothing"; with pending point edits each calls `edited.materialize()`, which closes deleted slots (`edited.rs:1162-1175`; `state/edits.rs:1379-1386`). Code right; after `delete_point` an agent reuses stale indexes.
   - Security item 4 (4435-4436) "No tool in this surface saves an `.sfmr`" is false: `save_reconstruction` (`catalog/edit.rs:50`), as spec 203 and 223 say.
   - Panel counts: `Tab::ALL` has 9 (`layout.rs:191`); `catalog/viewer.rs:509` and `mcp/layout.rs:107` say seven, spec 2470/2486/5138 say eight.
@@ -824,7 +824,7 @@ Read 2026-09-26; open items above.
        (`mcp/view.rs:257-283`).
      - A background edit that changes nothing still replies `changed: true`
        (`mcp/edit.rs:584-590`).
-       > _Status (2026-10-07): **Done** — a background edit that ends in `Finished::NoChange` now answers `changed: false` at the version the node still stands at: `FinishedTask` records whether the run pushed a version and `background_reply` reads it; test in `mcp/tests/edit.rs`, and `background-tasks.md` and the prune reply section of `mcp-server.md` say so, branch `spec-fix-1006-08-mcp-nochange`._
+       > _Status (2026-10-07): **Done** — a background edit that ends in `Finished::NoChange` now answers `changed: false` at the version the node still stands at: `FinishedTask` records whether the run pushed a version and `background_reply` reads it; test in `mcp/tests/edit.rs`, and `background-tasks.md`, the prune and add-to-tracks sections of `mcp-server.md` and § "The wire" of `bench.md` say so, branch `spec-fix-1006-08-mcp-nochange`._
      (mcp-server)
    - **Smaller code-side text:**
      - The refit report labels `fy/fx` as "fx/fy aspect"
