@@ -45,7 +45,8 @@ pub trait ForestScalar: Copy + Send + Sync + PartialEq + 'static {
     /// *down*, after a relative tolerance a few times `f32::EPSILON` absorbs
     /// the rounding of `max_dist` to `f32`: a caller who passes `sqrt(n)` for
     /// an integer `n` still gets candidates at squared distance exactly `n`,
-    /// and nothing farther than `max_dist` beyond that `f32` rounding.
+    /// and no candidate farther than `max_dist` by more than about
+    /// `2 · f32::EPSILON` relative.
     fn cutoff_sq(max_dist: f32) -> Self::Dist;
 
     /// Total order over raw coordinates (for median selection / partitioning).

@@ -65,14 +65,15 @@ fn u8_cutoff_rounds_down() {
 #[test]
 fn u8_cutoff_keeps_exact_integer_boundaries() {
     // `sqrt(n)` rounded to f32 squares back to slightly below or above `n`;
-    // the cutoff must admit `n` and, while f32 can still resolve the next
-    // integer, nothing past it.
+    // the cutoff must admit `n` and, while the tolerance on `n` stays below
+    // one (n under about 1.7 million), nothing past it.
     for n in 0i64..=1_000_000 {
         let c = u8::cutoff_sq((n as f64).sqrt() as f32);
         assert_eq!(c, n, "cutoff for sqrt({n})");
     }
-    // At the largest SIFT squared distance f32 can no longer resolve
-    // neighbouring integers, so only the lower bound holds.
+    // At the largest SIFT squared distance the tolerance spans several
+    // integers (and f32 can no longer resolve neighbouring ones), so only the
+    // lower bound holds.
     let n = 255i64 * 255 * 128;
     let c = u8::cutoff_sq((n as f64).sqrt() as f32);
     assert!((n..=n + 8).contains(&c), "cutoff {c} for sqrt({n})");
