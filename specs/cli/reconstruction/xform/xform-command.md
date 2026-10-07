@@ -384,7 +384,7 @@ fitted parameters, the fit (its largest angle and where it came from, rms,
 radial rms and max pixel error, the spline domain), where a spline fit's
 monotonicity constraint bound (for example `monotone constraint bound at 1
 angle, 113.2°, where the fit departs from the source`), each term the target cannot
-represent (for example `fx/fy aspect 0.9978 dropped (single focal)`), the extent
+represent (for example `aspect fy/fx 0.9978 dropped (single focal)`), the extent
 (the new model's edge and corner angles, the source's trusted bound and fold),
 and the observation comparison over one fixed set: median, 90th percentile and
 maximum error before and after, how many changed by more than a pixel, and the

@@ -30,9 +30,10 @@ pub(super) struct Constrained {
 }
 
 /// Minimize `‖A·x − b‖²` subject to `G·x ≥ 0`, where `A = U·diag(s)·Vᵀ` is
-/// given by its thin SVD (`u`, `singular_values`, `v_t`), every singular value
-/// positive, and `unconstrained` is the minimizer without constraints,
-/// `V·diag(s)⁻¹·Uᵀ·b`.
+/// given by the `singular_values` and `v_t` of its thin SVD, every singular
+/// value positive, and `unconstrained` is the minimizer without constraints,
+/// `V·diag(s)⁻¹·Uᵀ·b`. `U` and `b` are not needed: they enter only through
+/// `unconstrained`.
 ///
 /// With `z = diag(s)·Vᵀ·x − Uᵀ·b` the objective is `‖z‖²` plus a constant,
 /// and `x = unconstrained + V·diag(s)⁻¹·z`, so the constraints become

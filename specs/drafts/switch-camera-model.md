@@ -100,8 +100,8 @@ difference between the identity and the lens.
 
 | | f | radial rms | rms | max | θ_fit | dropped |
 |---|---|---|---|---|---|---|
-| cam0 | 129.523 | 0.013 px | 0.130 px | 0.292 px | 84.5° | fx/fy aspect 0.9978 |
-| cam1 | 129.301 | 0.003 px | 0.384 px | 0.690 px | 83.8° | fx/fy aspect 1.0067 |
+| cam0 | 129.523 | 0.013 px | 0.130 px | 0.292 px | 84.5° | aspect fy/fx 0.9978 |
+| cam1 | 129.301 | 0.003 px | 0.384 px | 0.690 px | 83.8° | aspect fy/fx 1.0067 |
 
 The radial profile fits to about a hundredth of a pixel. The rest of the error
 is the difference between fx and fy, which a single-focal model cannot
@@ -192,8 +192,8 @@ The panel shows a strip of controls at the top:
 Every change refits at once, on the GUI thread: the lens fit and the panel's
 `Derived::compute` for the proposed column take milliseconds, as they do for
 the Refit Spline dialog. The fit report is one line under the strip, for
-example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; fx/fy
-aspect 0.9978 dropped". A spline fit is constrained to stay monotone, so it has
+example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; aspect
+fy/fx 0.9978 dropped". A spline fit is constrained to stay monotone, so it has
 an inverse; where that constraint bound, the line adds its range, for example
 "monotone constraint bound at 1 angle, 113.2°", because there the proposed
 curve is the closest invertible one rather than the current one. The

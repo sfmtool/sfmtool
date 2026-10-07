@@ -328,10 +328,13 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Inconsistencies:**
   - Spec :196 "Bundle adjustment never frees it" and Non-goal :480 "Nothing in the toolkit frees it" (principal point) are false: `sfm densify --ba-refine-principal-point` (`_commands/densify.py:45`, `_densify.py:373-375`) frees it through pycolmap, and `BundleAdjustTransform(refine_principal_point=…)` (`xform/_bundle_adjust.py:82,212`) takes the option. Code right; say "sfmtool's bundle adjustment never frees it".
   - `DroppedTerm::FocalAspect` prints `"fx/fy aspect {fy_over_fx:.4} …"` (`refit_intrinsics.rs:311`); the spec defines the value as `fy / fx` (:368) and copies the wrong label into its example (:182). Code bug in a string that reaches Python `report["dropped"]`.
+    > _Status (2026-10-07): **Done** — the dropped focal aspect now prints `aspect fy/fx 0.9978 dropped (single focal)`, the name the Explorer's parameter table already uses; the spec example, `xform-command.md`, the `switch-camera-model` draft and the Python and Rust tests that pin the string follow, branch `spec-fix-1006-09-refit-label`._
   - `fit_spline` doc says "one solve of the normal equations" (`refit_intrinsics.rs:1079-1080`); the code uses SVD (:1145-1148), as the spec says (:386). Fix the doc.
+    > _Status (2026-10-07): **Done** — the `fit_spline` doc now says the unconstrained fit is one linear least-squares solve through the SVD of the design matrix, branch `spec-fix-1006-09-refit-label`._
   - `SIMPLE_RADIAL_FISHEYE` is missing from the spec's list of models with no trusted bound (:202-205), though `trustworthy_max_theta_deg` returns `None` for it (`report.rs:541`), so the fold check at `refit_intrinsics.rs:649` is skipped. Spec gap and possible code gap.
   - Spec :429-431 lists five `theta_fit_source` values for `CameraIntrinsics.refit`; that method produces only three (`refit_intrinsics.rs:578-584`), and the binding docstring (`camera_intrinsics.rs:528`) lists four. The others come from `switch_camera_model`. Update the spec.
   - Quoted figures no test pins: f ≈ 129.52 (:381) vs the test's 129.56 ± 0.1 (`tests.rs:157`); tk107 rms/max and 113.2°/113.3° (:324-327) are not asserted (`tests.rs:330` checks `max_px < 5`). Not run. Minor: the `least_squares_with_inequalities` doc names a `u` argument the function does not take (`constrained_lsq.rs:32-35`).
+    > _Status (2026-10-07): **Partially done** — only the minor note was in scope: the `least_squares_with_inequalities` doc now names the `singular_values` and `v_t` it takes and says why `U` is not needed; the unpinned quoted figures are still open, branch `spec-fix-1006-09-refit-label`._
 **Third copies:** `MIN_SLOPE` doc (`refit_intrinsics.rs:75-86`, 12 lines), `refit_spline` doc (:672-691, 20 lines), `fit_spline` doc (:1076-1092, drifted) and `SMOOTHING` doc (:66-69) restate the spec; shrink them to contract plus link. The LDP/NNLS derivation is in both `constrained_lsq.rs:4-16,32-41` and spec :396-407; keep it in the code, cut the spec to the choice and its reasons. `sfm-explorer/src/image_detail/intrinsics/axes.rs:651` re-implements core's `spline_domain_deg` (`refit_intrinsics.rs:769`).
 **Shape:** no failures.
 **Non-goals / deferrals checked:** 4. Non-goal 1 (principal point) is false, as above; the other two Non-goals hold; the open question on the regularization weight is still open.
@@ -833,6 +836,7 @@ Read 2026-09-26; open items above.
    - **Smaller code-side text:**
      - The refit report labels `fy/fx` as "fx/fy aspect"
        (`refit_intrinsics.rs:311`).
+       > _Status (2026-10-07): **Done** — the label reads `aspect fy/fx`, branch `spec-fix-1006-09-refit-label`._
      - The two Track View *Lock* hover texts and `mcp/tools/catalog/edit.rs:504`
        contain runs of 18 spaces.
      - A pairwise `.matches` file with stray `two_view_geometries/` entries

@@ -179,7 +179,7 @@ println!(
     refit.camera.focal_lengths().0, refit.rms_px, refit.radial_rms_px, refit.theta_fit_deg,
 );
 for term in &refit.dropped {
-    println!("{term}"); // "fx/fy aspect 0.9978 dropped (single focal)"
+    println!("{term}"); // "aspect fy/fx 0.9978 dropped (single focal)"
 }
 ```
 

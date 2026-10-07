@@ -172,7 +172,10 @@ fn kerry_default_fit_stops_at_the_trusted_bound_short_of_the_fold() {
         }
         ref other => panic!("unexpected {other:?}"),
     }
-    assert!(refit.dropped[0].to_string().contains("0.9978"));
+    assert_eq!(
+        refit.dropped[0].to_string(),
+        "aspect fy/fx 0.9978 dropped (single focal)"
+    );
     // The new model reaches the corners, where the old one had folded.
     assert!(
         refit.extent.corner_deg > 140.0,

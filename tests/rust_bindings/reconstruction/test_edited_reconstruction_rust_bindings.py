@@ -615,7 +615,7 @@ class TestCameraIntrinsicsRefit:
         assert report["theta_fit_source"] == "trusted_bound"
         assert report["theta_fit_deg"] < report["extent"]["source_fold_deg"]
         assert report["radial_rms_px"] < 0.05
-        assert report["dropped"] == ["fx/fy aspect 0.9978 dropped (single focal)"]
+        assert report["dropped"] == ["aspect fy/fx 0.9978 dropped (single focal)"]
         assert report["spline_domain_deg"] == pytest.approx(150.0, abs=1.0)
         assert report["monotone_constraint"] == {
             "active": False,
