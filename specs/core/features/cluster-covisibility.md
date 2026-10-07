@@ -10,10 +10,10 @@ only the members it accepts count. The counts come from the matches alone and
 need no camera poses or 3D points, so they are available before and during a
 reconstruction. Incremental reconstruction growth uses them to rank posed
 images by overlap with an image being added, whose poses then serve as
-fallback starting points for its pose, and to thin the posed images to a
-subset spread across the capture for its periodic bundle adjustments; the
-cluster census uses them to split a candidate reconstruction's posed images
-into viewpoint groups.
+fallback starting points for its pose, and to pick a subset of the posed
+images spread across the capture for its periodic anchor adjustments and its
+finishing adjustment to refine; the cluster census uses them to split a
+candidate reconstruction's posed images into viewpoint groups.
 
 Given the clusters of a `.matches` file (the `clusters/` section, optionally
 enriched with `cluster_patches/`), compute how many clusters each pair of
