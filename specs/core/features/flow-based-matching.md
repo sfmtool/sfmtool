@@ -75,8 +75,8 @@ flow preset unless they name the high-quality preset.
 
 4. **High-quality preset matters for wide baselines.** At 40 frames apart, default
    preset finds 50 matches that pass L2 <= 100 (the table's 1%) while high-quality
-   finds 647. The
-   multi-scale refinement handles large displacements (130px+ median) much better.
+   finds 647. The multi-scale refinement handles large displacements (130px+ median)
+   much better.
 
 5. **Flow field structure is informative.** The flow X-direction histogram becomes bimodal with
    increasing baseline as foreground/background parallax separates. This could be used
@@ -165,9 +165,10 @@ With `window_size=5`, this produces matches at skip=1 through skip=5 for every f
 Each window entry holds, for one source image, its advected keypoint positions
 (N, 2), a validity mask (N,), its original keypoint positions (N, 2) and its
 descriptors (N, 128 bytes), so the window's memory is O(window_size × N_features),
-dominated by the descriptors. Beyond the window, the matcher holds only the current
-and next grayscale images, the current adjacent flow field and the one being
-computed; it never keeps a flow field after its hop.
+dominated by the descriptors. Beyond the window, the matcher holds the current
+image's keypoints and descriptors, the current and next grayscale images, the
+current adjacent flow field and the one being computed; it never keeps a flow
+field after its hop.
 
 #### Matching one window entry against the current image
 
