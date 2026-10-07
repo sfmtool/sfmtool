@@ -22,16 +22,17 @@
 //! See `specs/gui/viewport-hud.md` and `specs/gui/mcp-server.md` §
 //! "`get_viewer_3d_display` / `set_viewer_3d_display`".
 
-// The snapshot, the diff and the wire names are the MCP tools' half; a build
-// without the `mcp` feature draws the HUD from the same list and uses the rest.
-#![cfg_attr(not(feature = "mcp"), allow(dead_code))]
-
 use eframe::egui;
 
 use crate::action_log::{ActionLog, Kind};
 use crate::state::AppState;
 
 use super::Viewer3D;
+
+// The items marked `allow(dead_code)` without the `mcp` feature are the ones
+// only the MCP tools use: the list of every field, reading and writing a field
+// through it, the snapshot of all of them and its diff, and the range check and
+// wording of a refusal. The HUD uses the rest in every build.
 
 /// What a slider allows and how it shows its value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,8 +80,15 @@ impl SliderRange {
 
     /// Whether `value` is one the slider can hold: finite and inside the
     /// range, ends included.
+    ///
+    /// The ends are compared as the decimals they are written as, not as the
+    /// `f32` they are stored in: `0.001_f32` widens to `0.0010000000474974513`,
+    /// which is above the `0.001` a caller sends, so comparing against the
+    /// widened `f32` would refuse the bottom of the Scene slider.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn contains(&self, value: f64) -> bool {
-        value.is_finite() && value >= f64::from(self.min) && value <= f64::from(self.max)
+        let end = |end: f32| egui::emath::round_to_decimals(f64::from(end), self.decimals);
+        value.is_finite() && value >= end(self.min) && value <= end(self.max)
     }
 
     /// `value` rounded to the decimals the slider shows, as `f32`.
@@ -95,7 +103,20 @@ impl SliderRange {
         egui::emath::round_to_decimals(value, self.decimals) as f32
     }
 
+    /// `value` moved to the nearest end of the range when it is outside it,
+    /// then [rounded](Self::round): the value the slider would hold after the
+    /// next frame it is drawn.
+    ///
+    /// For a value the viewer computes rather than one a person or an agent
+    /// chose, such as the scene scale measured from the points at load. Stored
+    /// as it is, such a value could be one `set_viewer_3d_display` refuses, and
+    /// the HUD would change it the first time it drew it.
+    pub(crate) fn clamp_round(&self, value: f64) -> f32 {
+        self.round(value.clamp(f64::from(self.min), f64::from(self.max)))
+    }
+
     /// `0.05 to 5`, `1 to 16 px`: the range as a refusal lists it.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn describe(&self) -> String {
         format!("{} to {}{}", self.min, self.max, self.unit)
     }
@@ -151,6 +172,7 @@ pub(crate) enum Field {
 }
 
 impl Field {
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) const ALL: [Field; 19] = [
         Field::ShowPoints,
         Field::ShowCameraImages,
@@ -303,6 +325,7 @@ impl Field {
     }
 
     /// The field's value as it stands.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn read(self, state: &AppState, viewer: &Viewer3D) -> FieldValue {
         use FieldValue::{Flag, Number};
         match self {
@@ -330,6 +353,7 @@ impl Field {
 
     /// Store `value` in the field. A value of the other kind is ignored: the
     /// parse that builds a change gives each field the kind its control takes.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn write(self, state: &mut AppState, viewer: &mut Viewer3D, value: FieldValue) {
         match value {
             FieldValue::Flag(on) => {
@@ -367,12 +391,27 @@ impl Field {
     }
 }
 
+/// Set the scene scale to `seed`, the scale measured from the loaded points,
+/// held to the range and decimals of its slider.
+///
+/// The viewer writes `length_scale` itself when a node arrives or a transform
+/// changes, and the measured value can fall outside the slider: a scene in
+/// millimetres measures in the hundreds. Holding it to the slider keeps
+/// `get_viewer_3d_display` from reporting a value `set_viewer_3d_display` would
+/// refuse, and keeps the value it reports equal to the one the HUD shows. It
+/// records nothing: no one chose the value.
+pub(crate) fn seed_length_scale(state: &mut AppState, seed: f32) {
+    state.length_scale = Field::LengthScale.range().clamp_round(f64::from(seed));
+}
+
 /// Every field's value at one moment, in [`Field::ALL`]'s order.
 ///
 /// It exists to be diffed by [`record_viewer_3d_display_changes`].
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) struct Viewer3dDisplay([FieldValue; Field::ALL.len()]);
 
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 impl Viewer3dDisplay {
     /// Copy every field as it stands.
     pub(crate) fn snapshot(state: &AppState, viewer: &Viewer3D) -> Self {
@@ -389,6 +428,7 @@ impl Viewer3dDisplay {
 /// field that differs, through [`Field::record`]. A field that did not change
 /// records nothing, and each field is its own run, so a change to three fields
 /// leaves three rows.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) fn record_viewer_3d_display_changes(
     log: &mut ActionLog,
     before: &Viewer3dDisplay,

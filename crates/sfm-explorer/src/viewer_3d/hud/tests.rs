@@ -130,6 +130,21 @@ impl Frame {
         self
     }
 
+    /// Press Alt. egui keeps the modifiers a `ModifiersChanged` event set until
+    /// the next one, so Alt stays held until [`Self::releasing_alt`].
+    fn holding_alt(mut self) -> Self {
+        self.events
+            .push(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+        self
+    }
+
+    /// Let go of Alt, and of every other modifier.
+    fn releasing_alt(mut self) -> Self {
+        self.events
+            .push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        self
+    }
+
     fn grabbing_keyboard(mut self) -> Self {
         self.grab_keyboard = true;
         self
@@ -885,6 +900,55 @@ fn the_target_indicator_checkbox_keeps_the_target_drawn() {
         viewer.target_indicator_visible,
         "the indicator is not drawn with the box ticked"
     );
+}
+
+/// With the Target indicator checkbox clear, holding Alt shows the indicator
+/// and letting go of Alt hides it again.
+#[test]
+fn holding_alt_shows_the_target_indicator_while_the_box_is_clear() {
+    let mut state = demo_state();
+    let (mut viewer, ctx) = settled(&mut state);
+    assert!(!state.show_target_indicator, "off at launch");
+
+    // A flash after a target change also shows the indicator; let any run
+    // out, so what is measured below is Alt alone. Each headless frame
+    // advances egui's clock by its predicted frame time.
+    for _ in 0..120 {
+        if viewer.target_flash_start.is_none() {
+            break;
+        }
+        run_frame(&mut viewer, &ctx, &mut state, Frame::new());
+    }
+    assert!(viewer.target_flash_start.is_none(), "the flash never ended");
+    run_frame(&mut viewer, &ctx, &mut state, Frame::new());
+    assert!(
+        !viewer.target_indicator_visible,
+        "the indicator showed with Alt up and the checkbox clear"
+    );
+
+    run_frame(&mut viewer, &ctx, &mut state, Frame::new().holding_alt());
+    assert!(
+        viewer.target_indicator_visible,
+        "holding Alt did not show the indicator"
+    );
+    assert!(
+        viewer.target_flash_start.is_none(),
+        "Alt alone started a flash"
+    );
+
+    // A frame with no new event keeps Alt where the last one left it.
+    run_frame(&mut viewer, &ctx, &mut state, Frame::new());
+    assert!(
+        viewer.target_indicator_visible,
+        "the indicator went while Alt was still held"
+    );
+
+    run_frame(&mut viewer, &ctx, &mut state, Frame::new().releasing_alt());
+    assert!(
+        !viewer.target_indicator_visible,
+        "the indicator stayed after Alt was let go"
+    );
+    assert!(!state.show_target_indicator, "Alt ticked the checkbox");
 }
 
 #[test]

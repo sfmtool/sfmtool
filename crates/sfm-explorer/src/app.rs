@@ -613,7 +613,7 @@ impl App {
         // so it has to settle before that upload.
         if arrived_any || transform_changed {
             if let Some(seed) = self.scene_renderer.length_scale_seed() {
-                self.state.length_scale = seed;
+                crate::viewer_3d::display::seed_length_scale(&mut self.state, seed);
             }
         }
 

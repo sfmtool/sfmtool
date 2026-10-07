@@ -36,6 +36,12 @@ sizing). This is a rough approximation — it doesn't adapt as you navigate to
 different parts of the scene, and can be off significantly when point
 density varies across the reconstruction.
 
+The computed value is held to the range of the HUD's Scene slider, 0.001 to
+100, and rounded to the slider's three decimals before it is stored, so the
+value the viewer sets is one the slider and `set_viewer_3d_display` both
+accept ([mcp-server.md](mcp-server.md) § "`get_viewer_3d_display` /
+`set_viewer_3d_display`").
+
 ---
 
 ## Point Splat Rendering

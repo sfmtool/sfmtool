@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::viewer_3d::display::{Control, Field, FieldValue};
+use crate::viewer_3d::display::{Control, Field, FieldValue, Viewer3dDisplay};
 
 // ── Display, and solo ───────────────────────────────────────────────────
 
@@ -556,6 +556,75 @@ fn set_viewer_3d_display_rounds_to_the_slider_s_decimals() {
     assert_eq!(state.point_size_log2, 1.5);
 }
 
+/// Every number the viewer stores without a person or an agent choosing it —
+/// the defaults, and the scene scale measured from the points at load — is
+/// one the slider can hold: inside its range and at its decimals. So the value
+/// the read reports is accepted when written back, and drawing the HUD does
+/// not change it.
+#[test]
+fn a_seeded_scene_scale_reads_back_as_a_value_the_set_accepts() {
+    use crate::viewer_3d::display::seed_length_scale;
+
+    // The defaults first, before anything is seeded.
+    let (state, viewer) = two_reconstructions();
+    for (field, value) in Viewer3dDisplay::snapshot(&state, &viewer).fields() {
+        if let (Control::Slider(range), FieldValue::Number(number)) = (field.control(), value) {
+            assert_eq!(
+                number,
+                range.clamp_round(f64::from(number)),
+                "{}'s default is not one its slider holds",
+                field.wire_name()
+            );
+        }
+    }
+
+    // A scene in millimetres measures far above the slider's top, one in
+    // kilometres below its bottom, and any scene to more decimals than it shows.
+    for (seed, expected) in [(312.4_f32, 100.0_f32), (0.0002, 0.001), (0.65537, 0.655)] {
+        let (mut state, mut viewer) = quiet_scene();
+        seed_length_scale(&mut state, seed);
+        assert_eq!(state.length_scale, expected, "seeded from {seed}");
+
+        let read = viewer_3d_display(&mut state, &mut viewer)["length_scale"].clone();
+        let reply = set_viewer_3d(
+            &mut state,
+            &mut viewer,
+            json!({ "length_scale": read.clone() }),
+        );
+        assert_eq!(reply["length_scale"], read, "seeded from {seed}");
+        // Writing back the value read is not a change, so it leaves no row.
+        let displayed = |state: &AppState| {
+            state
+                .action_log
+                .entries()
+                .filter(|entry| entry.kind == Kind::Display)
+                .count()
+        };
+        assert_eq!(displayed(&state), 0, "seeded from {seed}");
+
+        // The HUD's slider clamps and rounds what it is handed on every frame
+        // it draws; the seeded value is already what it would hold.
+        let ctx = eframe::egui::Context::default();
+        for _ in 0..3 {
+            let input = eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    eframe::egui::Pos2::ZERO,
+                    eframe::egui::vec2(1200.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            crate::test_support::run_frame_headless(&ctx, input, |ui| {
+                eframe::egui::CentralPanel::default().show(ui, |ui| {
+                    viewer.show_hud(ui, &mut state, None, true);
+                });
+            });
+        }
+        assert!(viewer.hud_open, "the HUD was not drawn open");
+        assert_eq!(state.length_scale, expected, "the HUD moved {seed}'s seed");
+        assert_eq!(displayed(&state), 0, "the HUD recorded {seed}'s seed");
+    }
+}
+
 /// `show_patches` is a master switch, and it is set whether or not anything
 /// loaded carries patches; without them it draws nothing.
 #[test]
@@ -632,6 +701,24 @@ fn a_slider_range_holds_no_value_that_is_not_finite() {
             assert!(!range.contains(f64::INFINITY), "{}", field.wire_name());
             assert!(range.contains(f64::from(range.min)));
             assert!(range.contains(f64::from(range.max)));
+        }
+    }
+}
+
+/// Both ends of every slider are accepted as the decimals the schema and the
+/// refusal write them as, including ends such as `0.001` and `0.05` that no
+/// `f32` holds exactly, and each reads back as that decimal.
+#[test]
+fn set_viewer_3d_display_accepts_each_end_of_every_slider() {
+    let (mut state, mut viewer) = two_reconstructions();
+    for field in Field::ALL {
+        if let Control::Slider(range) = field.control() {
+            for end in [range.min, range.max] {
+                let written: f64 = end.to_string().parse().expect("an f32 prints as a number");
+                let name = field.wire_name();
+                let reply = set_viewer_3d(&mut state, &mut viewer, json!({ name: written }));
+                assert_eq!(reply[name], written, "{name} at {written}");
+            }
         }
     }
 }

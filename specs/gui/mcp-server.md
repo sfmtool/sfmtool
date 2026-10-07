@@ -1330,13 +1330,25 @@ the range of the HUD's slider for it, read from one list
 the two cannot drift. A number outside its range or not finite, a value of the
 wrong type, and a call naming nothing are refused before a `Command` exists,
 with a message naming the field and its range (`set_viewer_3d_display wants
-point_size_log2 to be a number from -3 to 3 — got 4.`). A call naming a good
+point_size_log2 to be a number from -3 to 3 — got 4.`). The ends are included,
+and are compared as the decimals the message and the schema write them as, so
+`0.001` is accepted for `length_scale` although `0.001` as an `f32` is a little
+above it. A call naming a good
 field and a bad one changes nothing, and the refusal is a protocol error
 (§ "Errors"), so it leaves no Action Log row. **A number inside its range is
 rounded to the decimals its slider shows**, because the slider rounds the value
 it holds to those decimals on every frame it is drawn: a `point_size_log2` of
 `1.53` would become `1.5` the next time the HUD was open, and rounding on the
 way in keeps the value the reply reports equal to the one the HUD shows.
+
+**The value the viewer writes itself is held to the same range.** The viewer
+sets `length_scale` from the points when a node arrives or a transform changes
+(`viewer_3d::display::seed_length_scale`), and what it measures can be outside
+the slider: a scene in millimetres measures in the hundreds. The measured value
+is moved to the nearer end of the range and rounded to the slider's decimals
+before it is stored, so the read never reports a value the set would refuse,
+and what it reports is what the HUD shows. Every default is already a value its
+slider holds.
 
 **Every field the call changed is one Action Log entry**, under `Display`, as
 the agent, in the words the HUD's own control records; a field that did not
@@ -1358,10 +1370,11 @@ the HUD's widgets record through too, so the texts are one definition:
 The HUD does not diff a snapshot of its own frame the way the Image Detail
 toolbar does. An `egui::Slider` rounds and clamps the value it is handed on
 every frame it is drawn and reports that as a change, so a diff around the HUD
-would record `Scene scale 0.655` on the first frame after a load, with nobody
-touching anything. The HUD therefore keeps recording a widget's change only
-when a person was on the widget (`ActionLog::changed`), and writes the entry
-through the same `Field::record` path the tool does.
+would record a row whenever it was handed a value the slider does not hold,
+with nobody touching anything. The HUD therefore records a widget's change only
+when a person was on the widget (`Field::record_widget`, which asks
+`ActionLog::is_action`), and writes the entry through the same `Field::record`
+path the tool does.
 
 ### The view block
 

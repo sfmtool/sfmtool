@@ -582,7 +582,9 @@ pub struct AppState {
 
     /// World-space length scale. Represents characteristic scene size.
     /// Initialized to `DEFAULT_LENGTH_SCALE_MULTIPLIER * auto_point_size` on
-    /// point upload, then independently adjustable via UI.
+    /// point upload, held to the HUD slider's range and decimals
+    /// (`viewer_3d::display::seed_length_scale`), then independently adjustable
+    /// via UI.
     pub length_scale: f32,
 
     /// Frustum stub depth as a fraction of `length_scale`.
@@ -879,7 +881,12 @@ impl AppState {
             edl_line_thickness: 2.4,
             target_size_multiplier: DEFAULT_TARGET_SIZE_MULTIPLIER,
             target_fog_multiplier: DEFAULT_TARGET_FOG_MULTIPLIER,
-            length_scale: DEFAULT_LENGTH_SCALE_MULTIPLIER * 0.03, // fallback until points loaded
+            // The fallback until points are loaded, held to the slider like the
+            // value measured from them: the product in `f32` is 0.29999998,
+            // which the slider shows and holds as 0.3.
+            length_scale: crate::viewer_3d::display::Field::LengthScale
+                .range()
+                .clamp_round(f64::from(DEFAULT_LENGTH_SCALE_MULTIPLIER * 0.03)),
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
             sift_indexes: HashMap::new(),
