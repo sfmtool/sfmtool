@@ -1,5 +1,8 @@
 # The Structure from Motion Tool
 
+SfM Tool is a command-line toolkit (`sfm`) and a desktop viewer (SfM Explorer) for
+building Structure from Motion reconstructions from photographs and inspecting them in 3D.
+
 ## About this Project
 
 The goal of this project is to make creating and exploring Structure from Motion (SfM) fun.
