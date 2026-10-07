@@ -7,7 +7,8 @@ locks the camera to the viewport and moves it with the ordinary navigation
 controls until the photograph lines up with the points. Committing the move
 stores the new pose, re-triangulates each point that image observes where its
 observations allow, and adds the result to the reconstruction's edit history
-as one version, which undo takes back; cancelling puts the camera back where it was and changes nothing.
+as one version, which undo takes back; cancelling puts the camera back where it
+was and changes nothing.
 
 The edit exists because a wrong pose is a defect a reviewer can see and has no
 other way to fix: the photograph sits a few degrees off the structure it should
