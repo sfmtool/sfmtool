@@ -220,7 +220,7 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `6` (see
+- `version`: Format version number. `1` through `7`; writers emit `7` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches. The
   format does not restrict the string; the writers in this repository emit:

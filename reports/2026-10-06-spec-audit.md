@@ -108,6 +108,10 @@ textually, and all 11 are `None` resolving to the stated value.
 | `specs/cli/README.md:76` (index, outside the corpus) | xform sub-command `--select-by-distribution` | no such option; it is `--include-by-distribution` (`src/sfmtool/_commands/xform.py`; `xform-command.md:115`) | code — rename the index row |
 | `specs/formats/matches-file-format.md:223-224` | `version`: "`1` through `6`" | `MATCHES_FORMAT_VERSION = 7` (`crates/sfmtool-matches-format/src/types.rs:133`); the same spec says seven versions at :1227 | code — say `1` through `7` |
 
+> _Status (2026-10-07): **Done** (row 1) — the `specs/cli/README.md` xform index row now names `--include-by-distribution` (the spec file keeps its `select-by-distribution-command.md` name), branch `spec-fix-1006-28-matches-version-range`._
+>
+> _Status (2026-10-07): **Done** (row 2) — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
+
 ### 2. Prose duplicated between a spec and its code
 
 212 normalized lines of 60 or more characters appear in both a spec and a doc
@@ -304,6 +308,7 @@ none, and the two crate specs are about code.
 
 **matches-file-format.md**
 1. Versioning gap, :223-224: "`version`: Format version number. `1` through `6`". The format is at 7 (:1227; `types.rs:133`). Restate as `1` through `7`.
+   > _Status (2026-10-07): **Done** — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
 2. Implementation names in the format proper, :225-235: "the writers in this repository emit: `"exhaustive"`: Exhaustive pairwise matching (`sfm match -e`) … (`sfm match --cluster`, and the viewer's cluster-patches build)". Define each value by what the file holds; move the command for each value to *Implementations*.
 3. :442-443: "In sfmtool, [`sfm match --derive-pairs`](../cli/image-feature/match-command.md) is the command that reads a cluster file and writes that pairwise file." Actor should be "a verifier"; the command belongs in *Implementations*.
 4. :515-516: "In sfmtool, `sfm match --cluster` writes detection-stage files and `sfm cluster-patches` writes refinement-stage files." Same fix: "a matcher writes detection-stage files; a refiner writes refinement-stage files", commands under *Implementations*.
@@ -550,6 +555,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfmtool-matches-format/src/` — `types.rs` (`MATCHES_FORMAT_VERSION`=7 :133, legend :543-619), `read.rs` (:104-152, :394-440), `write.rs` (:384), `verify.rs` (`structure_errors` :39-145, legend :896-1000), `select.rs`.
 **Inconsistencies:**
   - :223-224 "`1` through `6`"; the code (types.rs:133) and spec :1227 say 7. Code right.
+    > _Status (2026-10-07): **Done** — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
   - :1133-1135 requires the entries to match the `has_*` flags; `structure_errors` (verify.rs:39-145) checks stray `cluster_patches/` (:119-130) but not stray `two_view_geometries/`, so such a file passes. Spec right; small verifier gap.
 **Format independence (failure 6):**
   - CONFIRMED :225-236 — `matching_method` values defined by CLI flags; define each by what a writer asserts, move the flags to Implementations.
@@ -636,6 +642,8 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 | COLMAP binary model / database | yes | formats/colmap-interop.md |
 | Nerfstudio `transforms.json` | yes | cli/colmap-interop/to-nerfstudio-command.md |
 | web-export output directory | yes | cli/visualization/web-export-command.md |
+
+> _Status (2026-10-07): **Done** (xform `--include-by-distribution` row) — the `specs/cli/README.md` xform index row now names `--include-by-distribution`, branch `spec-fix-1006-28-matches-version-range`._
 
 Every CLI command, crate and on-disk format now has a spec; the gaps left are
 the `sfmtool-progress` crate, which links none of the spec text it duplicates,
@@ -870,6 +878,7 @@ Read 2026-09-26; open items above.
 4. **Format specs:**
    - `matches-file-format.md:223` says versions run `1` through `6`; the code
      is at 7.
+     > _Status (2026-10-07): **Done** — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
    - Both format specs still name `sfm` commands, repo paths and library types
      in the format proper: 5 confirmed passages in matches (plus 3 more found by
      the deep read) and 3 in sfmr (plus 1).
