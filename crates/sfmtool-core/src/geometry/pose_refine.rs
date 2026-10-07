@@ -91,8 +91,8 @@ fn cost(
 /// [`CameraModel::supports_pixel_jacobian`](crate::camera::CameraModel::supports_pixel_jacobian)
 /// (the perspective family and the equidistant, simple-radial and sfmtool
 /// fisheye models); otherwise a central difference of `ray_to_pixel`, for the
-/// multi-coefficient fisheye models and equirectangular. `None` when the point is outside the model
-/// domain (behind the camera / non-invertible).
+/// multi-coefficient fisheye models and equirectangular. `None` when the point
+/// is outside the model domain (behind the camera / non-invertible).
 ///
 /// The difference step is `1e-6` of the point's range. The projection is
 /// homogeneous of degree zero in the point, so its Jacobian scales as one over

@@ -19,8 +19,10 @@ Consumers in the tree:
 - `resect_one` in
   [reconstruction_growth.rs](../../../crates/sfmtool-core/src/geometry/reconstruction_growth.rs)
   runs `estimate_absolute_pose` and then `refine_absolute_pose` on the
-  consensus. It is the single-image resection behind batch registration
-  (`resect_images_batch`) and next-best-view growth
+  consensus, and when that finds no large enough consensus it runs
+  `refine_absolute_pose` alone from each of its initial poses. It is the
+  single-image resection behind batch registration (`resect_images_batch`)
+  and next-best-view growth
   ([reconstruction-growth.md](reconstruction-growth.md)).
 - `repair_poses` in
   [pose_verification.rs](../../../crates/sfmtool-core/src/geometry/pose_verification.rs)
@@ -32,8 +34,8 @@ Consumers in the tree:
   [resect-image.md](../../gui/edits/resect-image.md)) calls `p3p_solve` from
   its own RANSAC loop rather than `estimate_absolute_pose`: it scores every
   pair in pixels, including tracks whose point is at infinity and cluster
-  pairs, and draws its samples from the track pairs only, neither of which the
-  angular estimator here does.
+  pairs, and draws its samples from the finite track pairs when there are at
+  least three, neither of which the angular estimator here does.
 
 Reconstruction merging does not use this module; it refines poses with
 pycolmap's `estimate_and_refine_absolute_pose`
