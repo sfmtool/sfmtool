@@ -169,8 +169,8 @@ For each registered camera and each of its `max_neighbors`
 lowest-displacement *registered* neighbours (the low-parallax regime,
 where the conjugate-homography model holds) — ranked as `nearest` ranks
 partners over the same `min_shared` floor, but with unregistered partners
-removed before the list is cut to length: estimate the homography over the pair's shared-cluster
-correspondences — skipping a pair with fewer than
+removed before the list is cut to length: estimate the homography over
+the pair's shared-cluster correspondences — skipping a pair with fewer than
 `min_pair_correspondences` of them, or a homography carrying fewer than
 `min_h_inliers` — extract the relative rotation `K⁻¹HK`, and compare with
 the pose-implied relative rotation. Orthonormalization is
@@ -270,9 +270,9 @@ a caller can do that without re-running either screen.
 - Screens on a synthetic scene with implanted misregistrations: a
   wrong-pose camera with healthy observations is flagged by Screen B and
   passes Screen A (its support re-derives a pose); one whose observations
-  are also mostly junk is flagged by both screens; an unflagged scene yields no flags at the default thresholds; a
-  translation-rich (high-parallax) pair alone never flags (screen B's
-  low-parallax gate).
+  are also mostly junk is flagged by both screens; an unflagged scene
+  yields no flags at the default thresholds; a translation-rich
+  (high-parallax) pair alone never flags (screen B's low-parallax gate).
 - Repair: an implanted wrong pose with intact structure is restored to
   within tight bounds of truth; a camera whose cluster points are
   corrupted is flagged but its repair is rejected and state unchanged.
