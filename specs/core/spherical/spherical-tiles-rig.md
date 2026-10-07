@@ -22,11 +22,13 @@ follows:
 
 A rig of small pinhole tiles distributed over the sphere is the right shape for this problem:
 
-- **Per-direction work happens at the tile's look direction.** Infinity tests,
-  depth regression, photometric consensus all evaluate at `d_tile`. A tile's
-  peripheral pixels exist only as neighborhood support for NCC / gradient-based
-  smoothness — they do not need to be the look direction of some other
-  estimator.
+- **Per-direction decisions are made once per tile.** The photometric
+  consensus behind `sfm panorama` picks one agreeing set of source images for
+  each tile, scoring a small central sub-patch around the tile's look
+  direction. The rest of the tile's pixels are output samples: resampling the
+  atlas to the panorama takes each output direction inside the tile's Voronoi
+  cell from that tile, and blends neighbouring tiles across a two-pixel ramp
+  at the cell boundary, which falls in the overlap ring between tiles.
 - **Warping distortion matters for patch-match.** NCC between two warped
   patches is sensitive to the local stretch of the warp: if the warp is
   anisotropic or heavily stretched (cube-map corner), the signal degrades.
