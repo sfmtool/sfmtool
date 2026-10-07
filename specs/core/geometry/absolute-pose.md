@@ -141,8 +141,8 @@ inliers by Gauss-Newton with a local `SO(3) × R³` parameterization
 (rotation updates composed from a rotation-vector increment), and rescore.
 A refit replaces the pose when it does not shrink the consensus: when it
 has more inliers, or the same number and a lower value of the cost
-Gauss-Newton minimizes, evaluated over the inliers it was fitted to. Otherwise the previous pose and its inlier set
-stand. Refitting repeats only while the inlier count strictly grows,
+Gauss-Newton minimizes, evaluated over the inliers it was fitted to.
+Otherwise the previous pose and its inlier set stand. Refitting repeats only while the inlier count strictly grows,
 bounded by a small fixed round limit, because a refit on an unchanged
 inlier set reproduces the same pose. The equal-count case is the common
 one on clean data, where the 3-point pose already has every true
