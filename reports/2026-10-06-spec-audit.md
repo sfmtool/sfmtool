@@ -308,6 +308,7 @@ none, and the two crate specs are about code.
 3. :442-443: "In sfmtool, [`sfm match --derive-pairs`](../cli/image-feature/match-command.md) is the command that reads a cluster file and writes that pairwise file." Actor should be "a verifier"; the command belongs in *Implementations*.
 4. :515-516: "In sfmtool, `sfm match --cluster` writes detection-stage files and `sfm cluster-patches` writes refinement-stage files." Same fix: "a matcher writes detection-stage files; a refiner writes refinement-stage files", commands under *Implementations*.
 5. :1342-1344 (§ Versioning): "consumers that export two-view geometries to a COLMAP database (`sfm to-colmap-db` via `src/sfmtool/colmap/db_setup.py`) S-conjugate the canonical poses back to COLMAP convention when building `pycolmap.Rigid3d`." A repo path and library type in the normative text; say "a consumer exporting to COLMAP conjugates by `S`" and move the names. (The :1067 and :1218 uses of `sfm match --derive-pairs` as the verification step are the same pattern as item 3.)
+   > _Status (2026-10-07): **Done** (items 2-5, with the :1067 and :1218 uses) — the values and actors are defined in format terms and the commands, repo path and `pycolmap.Rigid3d` moved to *Implementations*, branch `spec-fix-1006-29-matches-failure6`._
 
 **sfmr-file-format.md**
 1. :1921-1924 (§ World-Space Unit): "The five units and their lengths in metres are [`WORLD_SPACE_UNITS`](../../crates/sfmtool-sfmr-format/src/types.rs) (with `world_space_unit_in_metres` to look one up), re-exported by `sfmtool-core`". A repo-path link and two code names in the format proper; the metre lengths are standard, so state them in place (1 mm = 0.001 m … 1 ft = 0.3048 m) and move the names to *Implementations*.
@@ -560,6 +561,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - NEW :533-538 — focal-vote and kernel clauses in "Why `float32`".
   - NEW :664-669 — `rejected_unlocalizable` defined only through cluster-patch-refinement.md; state the bar as `refine_options.max_member_zncc_self_similarity_radius` and what the radius measures.
   - Minor: :103-106 "earlier sfmtool releases"; :760-761 acceptable; :35 and :1060-1074 acquitted as background.
+  > _Status (2026-10-07): **Done** — for the CONFIRMED, NEW and Minor (:103-106) items: each `matching_method` value is defined by what the file holds; a verifier, a matcher, a refiner and a COLMAP-exporting consumer are the actors; migration and verification text names no command or function; "Why `float32`" drops the focal-vote and kernel clauses; `rejected_unlocalizable` states its bar (`refine_options.max_member_zncc_self_similarity_radius`) and what the radius measures in place; the API, command, repo-path and `pycolmap.Rigid3d` names now sit in *Implementations*, branch `spec-fix-1006-29-matches-failure6`._
   - Versioning gaps: the `cluster_selection` record, `source_selection` and `restrict_cluster_ids` (:954-997) give no version; `refine_options` keys (:621-628) are tied to "writer generations", not versions.
 **Third copies:** `MATCHES_FORMAT_VERSION` doc (types.rs:67-132, about 65 lines) restates the v1-v7 history; shrink to a spec link plus the v7 line.
 **Non-goals / deferrals checked:** 0 present.
@@ -873,6 +875,7 @@ Read 2026-09-26; open items above.
    - Both format specs still name `sfm` commands, repo paths and library types
      in the format proper: 5 confirmed passages in matches (plus 3 more found by
      the deep read) and 3 in sfmr (plus 1).
+     > _Status (2026-10-07): **Partially done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, branch `spec-fix-1006-29-matches-failure6`; the sfmr passages are still open._
    - Three entries never say which version introduced them: `world_space_unit`
      and `infinity_point_count` in `.sfmr`, and `.matches` `refine_options`.
    - The `.sfmr` writer replaces a zero normal on a finite point, which the
