@@ -305,8 +305,11 @@ Everything below lives in
 `support` / `level` (window and per-level frozen support), `znorm` (render +
 z-normalize), `consensus` (`Φ`), `search` (the coarse-to-fine walk),
 `view_stack` (the multi-view render substrate the representative fuses),
-`view_subset` (the D-optimal basis cap), `obliquity` (the two priors) and
-`fronto_cache` (the candidate cache). The PyO3 binding is
+`view_subset` (the D-optimal basis cap), `obliquity` (the two priors, and
+the `surface_to_camera` direction they read, which `viewing_angle` also reads
+to give the bench each view's viewing angle and tilt direction,
+[reference-view.md](reference-view.md)) and `fronto_cache` (the candidate
+cache). The PyO3 binding is
 `PatchCloud.refine_normals`. The patch primitives it renders through —
 `OrientedPatch`, `WarpMap::from_patch` and `remap_*` — are specified in
 [patch-cloud.md](patch-cloud.md).

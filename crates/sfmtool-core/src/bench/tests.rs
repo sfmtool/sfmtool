@@ -13,6 +13,7 @@
 
 mod delete_image;
 mod normal;
+mod reference_view;
 pub(super) mod scene;
 
 use std::sync::Arc;

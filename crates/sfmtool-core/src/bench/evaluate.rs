@@ -33,9 +33,6 @@ use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
 
-use crate::camera::sampler::{render_phase, render_tile, Sampler, SamplerChoice};
-use crate::camera::warp_map::patch_grid_jacobian;
-use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
@@ -45,7 +42,12 @@ use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
     KeypointLocalizeParams, LocalizeError,
 };
+use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::reference_view::{
+    cell_agreement, choose_reference_view, finite_middle, render_view_tile, ReferenceReadings,
+    ViewTile,
+};
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
     SelfSimilarityParams,
@@ -1135,6 +1137,9 @@ fn evaluate_track(
     let resolution = options.localize.resolution.max(2) as usize;
     let mut next = track.clone();
     let (mut measured, mut unmeasured) = (0, 0);
+    // The `in` observations' tiles, kept for the reference view's readings,
+    // which correlate them in pairs.
+    let mut kept_tiles: Vec<(usize, ViewTile)> = Vec::new();
     {
         let mut phase = progress.phase("self-similarity");
         for i in evaluated(track) {
@@ -1163,6 +1168,14 @@ fn evaluate_track(
             measurement.zncc_self_similarity_ellipse_grid = None;
             measurement.zncc_self_similarity_surface = None;
             measurement.zncc_self_similarity_tolerance = None;
+            measurement.viewing_angle_deg = None;
+            measurement.tilt_direction_deg = None;
+            measurement.coverage = None;
+            measurement.clipped_share = None;
+            measurement.pair_zncc = None;
+            measurement.pair_zncc_grid = None;
+            measurement.cell_deficit = None;
+            measurement.reference_view = None;
             if let Some(pixel) = seed_of(observation) {
                 // The offset is measured from the **patch's** projection,
                 // because that is the anchor the localizer renders its tile
@@ -1178,14 +1191,15 @@ fn evaluate_track(
                     measurement.reprojection_error = finite(error);
                     measurement.ray_angle_deg = finite(angle);
                 }
-                let similarity = patch_tile_readings(
+                let tile = render_view_tile(
                     &frame,
                     view,
-                    pixel,
+                    Some(pixel),
                     resolution,
                     options.localize.sampler,
                     &phase,
                 );
+                let similarity = view_tile_self_similarity(&tile);
                 measurement.zncc_self_similarity_radius = similarity.radius;
                 measurement.zncc_self_similarity_radius_middle = similarity.middle;
                 measurement.zncc_self_similarity_radius_grid = similarity.grid;
@@ -1194,6 +1208,14 @@ fn evaluate_track(
                 measurement.zncc_self_similarity_ellipse_grid = similarity.ellipse_grid;
                 measurement.zncc_self_similarity_surface = similarity.surface;
                 measurement.zncc_self_similarity_tolerance = similarity.tolerance;
+                measurement.viewing_angle_deg = tile.viewing_angle.map(|a| a.angle_deg);
+                measurement.tilt_direction_deg =
+                    tile.viewing_angle.and_then(|a| a.tilt_direction_deg);
+                measurement.coverage = Some(tile.coverage);
+                measurement.clipped_share = tile.clipped_share;
+                if observation.verdict == Verdict::In {
+                    kept_tiles.push((i, tile));
+                }
             }
             if measurement.zncc.is_some() {
                 measured += 1;
@@ -1204,6 +1226,8 @@ fn evaluate_track(
         }
         progress_note!(phase, "{} observations", track.observations.len());
     }
+    progress.check_cancel()?;
+    read_reference_view(&mut next, images, &frame, &kept_tiles, options, progress);
 
     Ok((
         next,
@@ -1466,69 +1490,113 @@ pub(super) fn observation_metrics(
 
 /// The self-similarity of what one view shows of the patch at its keypoint.
 ///
-/// It reads the `R×R` tile rendered through the keypoint-anchored frame
-/// ([`render_bitmap`], the grid every stored patch bitmap is rendered on), the
-/// overlap way, with no pixels from outside it. The ellipses are measured
-/// through the same anchored placement at resolution `R`: the image px per
-/// grid px at its centre ([`patch_grid_jacobian`]) and its half-extents. The
-/// tile is rendered with the sampler `sampler` picks from that same Jacobian,
-/// timed in its detail phase of `progress`.
-fn patch_tile_readings(
-    patch: &OrientedPatch,
-    view: &ProjectedImage<'_>,
-    keypoint: [f64; 2],
-    resolution: usize,
-    sampler: SamplerChoice,
-    progress: &Progress<'_>,
-) -> TileSelfSimilarity {
-    let anchored = patch.anchored_at_keypoint(view.camera, view.cam_from_world, keypoint);
-    let frame = anchored.as_ref().unwrap_or(patch);
-    let channels = view.pyramid.level(0).channels() as usize;
-    let to_f32 = |tile: Array3<u8>| tile.iter().map(|&v| f32::from(v)).collect::<Vec<f32>>();
-    let jacobian = patch_grid_jacobian(frame, view.camera, view.cam_from_world, resolution);
-    let sampler = sampler.for_jacobian(jacobian);
-    let samples = {
-        let _phase = render_phase(progress, sampler, 1);
-        to_f32(render_bitmap(frame, view, resolution, channels, sampler))
-    };
+/// It reads the view's `R×R` tile ([`render_view_tile`], the grid every
+/// stored patch bitmap is rendered on), the overlap way, with no pixels from
+/// outside it. The ellipses are measured through the placement the tile was
+/// rendered through at resolution `R`: the image px per grid px at its centre
+/// and its half-extents.
+fn view_tile_self_similarity(tile: &ViewTile) -> TileSelfSimilarity {
+    let samples: Vec<f32> = tile.samples.iter().map(|&v| f32::from(v)).collect();
     let geometry = TileGeometry {
-        jacobian,
-        placement: Some(frame),
+        jacobian: tile.jacobian,
+        placement: Some(&tile.placement),
     };
-    score_self_similarity(&samples, channels, resolution, &geometry)
+    score_self_similarity(&samples, tile.channels(), tile.resolution(), &geometry)
 }
 
-/// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame with
-/// `sampler`, the way every stored patch bitmap is rendered.
+/// Read what the reference-view rule needs across the `in` observations whose
+/// tiles are in `tiles`, run the rule, and write each one's pair ZNCC, pair ZNCC
+/// grid, cell deficit and standing into its track-stage slot.
 ///
-/// A pixel the warp cannot sample is left black, and the alpha channel -- the
-/// fourth, when the caller asks for one -- is opaque everywhere, because the
-/// whole tile is content this one image saw.
-fn render_bitmap(
-    patch: &OrientedPatch,
-    view: &ProjectedImage<'_>,
-    resolution: usize,
-    channels: usize,
-    sampler: Sampler,
-) -> Array3<u8> {
-    let mut map = WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution as u32);
-    let tile = render_tile(view.pyramid, &mut map, sampler);
-    let src_channels = tile.channels();
-    let mut out = Array3::<u8>::zeros((resolution, resolution, channels));
-    for row in 0..resolution {
-        for col in 0..resolution {
-            for c in 0..channels {
-                out[[row, col, c]] = if c >= 3 {
-                    u8::MAX
-                } else if src_channels >= 3 {
-                    tile.get_pixel(col as u32, row as u32, c as u32)
-                } else {
-                    tile.get_pixel(col as u32, row as u32, 0)
-                };
+/// The pair ZNCC is the median of the observation's row of member coherence's
+/// matrix ([`member_zncc_matrix_reporting`]), rendered over the observations'
+/// common support with member coherence's window at the evaluation's
+/// resolution and sampler, anchored at each observation's keypoint. The cell
+/// readings come from the tiles already rendered ([`cell_agreement`]): member
+/// coherence renders only the samples inside its window's disk and common to
+/// every member, so its corner cells would hold part of their square, and the
+/// cell check was measured on whole cells with each pair's own support.
+/// Timed as the `reference view` phase of `progress`.
+fn read_reference_view(
+    next: &mut EditableTrack,
+    images: &[ProjectedImage<'_>],
+    frame: &OrientedPatch,
+    tiles: &[(usize, ViewTile)],
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) {
+    if tiles.is_empty() {
+        return;
+    }
+    let mut phase = progress.phase("reference view");
+    let members: Vec<u32> = tiles
+        .iter()
+        .map(|(i, _)| next.observations[*i].image)
+        .collect();
+    let keypoints: Vec<Option<[f64; 2]>> = tiles
+        .iter()
+        .map(|(i, _)| seed_of(&next.observations[*i]))
+        .collect();
+    let params = MemberCoherenceParams {
+        resolution: options.localize.resolution.max(2),
+        sampler: options.localize.sampler,
+        ..MemberCoherenceParams::default()
+    };
+    let matrix =
+        member_zncc_matrix_reporting(frame, images, &members, Some(&keypoints), &params, progress);
+    // One `in` observation per image, so the matrix's members are the tiles'
+    // images in the same order; looked up by image all the same.
+    let pair_zncc: Vec<Option<f64>> = members
+        .iter()
+        .map(|image| {
+            let row = matrix.members.iter().position(|m| m == image)?;
+            let others: Vec<f64> = (0..matrix.len())
+                .filter(|&j| j != row)
+                .map(|j| matrix.get(row, j))
+                .collect();
+            finite(finite_middle(&others))
+        })
+        .collect();
+    let refs: Vec<&ViewTile> = tiles.iter().map(|(_, tile)| tile).collect();
+    let cells = cell_agreement(&refs);
+    let readings: Vec<ReferenceReadings> = tiles
+        .iter()
+        .enumerate()
+        .map(|(k, (i, tile))| {
+            let axes = next.observations[*i]
+                .track
+                .as_ref()
+                .and_then(|m| m.zncc_self_similarity_ellipse)
+                .map(|e| e.grid_px.axes);
+            ReferenceReadings {
+                coverage: Some(tile.coverage),
+                clipped_share: tile.clipped_share,
+                viewing_angle_deg: tile.viewing_angle.map(|a| a.angle_deg),
+                cell_deficit: finite(cells.deficit[k]),
+                pair_zncc: pair_zncc[k],
+                semi_major: axes.map(|a| a[0]),
+                semi_minor: axes.map(|a| a[1]),
             }
+        })
+        .collect();
+    let choice = choose_reference_view(&readings);
+    for (k, (i, _)) in tiles.iter().enumerate() {
+        if let Some(measurement) = next.observations[*i].track.as_mut() {
+            measurement.pair_zncc = pair_zncc[k];
+            measurement.pair_zncc_grid = Some(cells.pair_zncc_grid[k]);
+            measurement.cell_deficit = finite(cells.deficit[k]);
+            measurement.reference_view = choice.standing(k);
         }
     }
-    out
+    match choice.reference {
+        Some(k) => progress_note!(
+            phase,
+            "{} views, observation {} picked",
+            tiles.len(),
+            tiles[k].0
+        ),
+        None => progress_note!(phase, "{} views, none picked", tiles.len()),
+    }
 }
 
 /// `Some(value)` when it is a number, `None` when the kernel reported nothing.

@@ -121,6 +121,14 @@ pub struct TrackMeasurement {
     pub zncc_self_similarity_ellipse_grid: Option<[[SelfSimilarityEllipse; 3]; 3]>, // each ninth's, grid px
     pub zncc_self_similarity_surface: Option<Vec<f64>>, // the whole tile's ZNCC at every shift
     pub zncc_self_similarity_tolerance: Option<f64>, // the deficit it was judged by
+    pub viewing_angle_deg: Option<f64>,      // the angle at the keypoint, 0 facing the patch
+    pub tilt_direction_deg: Option<f64>,     // which way in the patch's plane the ray leans
+    pub coverage: Option<f64>,               // share of the tile on the photograph
+    pub clipped_share: Option<f64>,          // share of the photograph under it at 0 or 255
+    pub pair_zncc: Option<f64>,              // median ZNCC with the other `in` rows
+    pub pair_zncc_grid: Option<[[f64; 3]; 3]>, // the same per ninth
+    pub cell_deficit: Option<f64>,           // the worst ninth against the typical row
+    pub reference_view: Option<ReferenceStanding>, // what the reference-view rule decided
     pub walked_px: Option<f64>,              // grid px, set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
@@ -1361,6 +1369,49 @@ with its own member gate off (`EvaluateOptions::default()` sets
 a member the batch pass would refuse is a row the painting turns out at the same
 bar.
 
+### The reference view
+
+A track-stage evaluation also reads what each observation's tile could
+contribute to the point's patch bitmap, and runs the **reference-view rule**,
+which picks the one `in` observation whose tile could stand as the bitmap
+([../patch/reference-view.md](../patch/reference-view.md)). The tile is the one
+the self-similarity reading takes, rendered once for both. For every row with a
+pixel the evaluation writes:
+
+- `viewing_angle_deg`: the angle between the patch's normal and the direction
+  from the patch, anchored at the keypoint, to the camera; `0` facing the patch;
+- `tilt_direction_deg`: the direction in the patch's plane, from `u` towards
+  `v`, of the ray from the camera, along which the view foreshortens the patch
+  and an error in the normal shears the tile; `None` within `0.1°` of facing;
+- `coverage`: the share of the tile's samples on the photograph;
+- `clipped_share`: the share of the photograph's own pixels inside the tile's
+  outline that are `0` or `255` in any colour channel.
+
+Across the `in` rows that have a tile it then writes:
+
+- `pair_zncc`: the median of the row's ZNCCs with the other `in` rows, from
+  member coherence's matrix, rendered at the evaluation's resolution and
+  sampler, anchored at each row's keypoint;
+- `pair_zncc_grid`: per ninth of the tile, the median over the other rows of
+  the two tiles' ZNCC in that ninth, read from the tiles the evaluation
+  rendered;
+- `cell_deficit`: the most the row's `pair_zncc_grid` falls below the track's
+  typical row in a ninth where the typical row agrees at least `0.5`;
+- `reference_view`: a `ReferenceStanding`, the rule's decision about the row:
+  `rejected_by`, `None` for the reference view and otherwise the first test
+  that turned the row away (`Coverage`, `Clipped`, `Angle`, `Cells`,
+  `Agreement` or `Sharpness`), and `fallback`, which tests the rule dropped for
+  the track because no row passed them.
+
+An `out` row is not considered: its four agreement readings are `None`. A
+contested `in` row, whose image another observation holds, is never `in` beside
+it, so the rule reads one row per image. The rule picks exactly one row
+wherever some candidate has a self-similarity reading. No bar judges these
+readings and no step reads them: the bitmap the track carries is still the
+fused one, and the painting is unchanged. They are kept on the row as the other
+readings are, and are as stale as they are after a step until the next
+evaluation.
+
 ## The steps
 
 ### Putting a point on the bench
@@ -1999,8 +2050,8 @@ by the track's `max_zncc_self_similarity_radius` and never by a
 `RejectedUnlocalizable` status.
 
 The evaluation reports its phases through `progress` as `refine` and
-`self-similarity` at the cluster stage, `localize` and `self-similarity` at the
-track stage.
+`self-similarity` at the cluster stage, `localize`, `self-similarity` and
+`reference view` at the track stage.
 
 **At the track stage** the reading is **one round** of
 [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) over the
@@ -2019,6 +2070,8 @@ reading. What lands in each slot is:
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. What `max_projection_error_px` paints on before the track is triangulated. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. The px is what `max_projection_error_px` paints on once the track is triangulated. |
 | `zncc_self_similarity_radius` and its middle, grid, ellipses and surface | How far the observation's own tile, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
+| `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share` | The angle the view sees the patch at at the keypoint and the direction its ray leans in the patch's plane, the share of the tile on the photograph, and the share of the photograph under the tile that is clipped (§ "The reference view"). No bar judges them. |
+| `pair_zncc`, `pair_zncc_grid`, `cell_deficit`, `reference_view` | For an `in` row: its agreement with the other `in` rows over the whole tile and each ninth, its worst ninth against the track's typical row, and what the reference-view rule decided about it (§ "The reference view"). `None` on an `out` row. No bar judges them. |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
 The projection offset, the residual and the self-similarity rows are filled for
@@ -2559,7 +2612,14 @@ a fit; and
 `reason`, the sentence, exactly when it carries no `zncc`, and `walked_px` and
 `walked_to` (with `walked_zncc` and `walked_zncc_middle` where the localizer
 scored the peak) exactly when the last fit refused to walk that sighting and
-kept its seed, with `walked_zncc_grid` beside them. Both stages' dicts carry
+kept its seed, with `walked_zncc_grid` beside them. A track-stage dict also
+carries the reference view's readings where the row has them:
+`viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share`,
+`pair_zncc` and `cell_deficit` as floats, `pair_zncc_grid` as a `(3, 3)` float64
+array, and `reference_view` as a dict `{"is_reference", "rejected_by",
+"fallback"}` with the test and the fallback by name (`"coverage"`, `"clipped"`,
+`"angle"`, `"cells"`, `"agreement"`, `"sharpness"` or `None`; `"none"`,
+`"without_angle"`, `"without_angle_or_cells"` or `"without_any"`). Both stages' dicts carry
 `zncc_middle`, `zncc_self_similarity_radius` and
 `zncc_self_similarity_radius_middle` as floats, as `(3, 3)` float64 arrays with
 `NaN` in a cell with no reading `zncc_grid` and
@@ -2951,6 +3011,14 @@ unit-tested in `normal.rs` itself.
 - A reference follows its observation and keeps its template; a dropped
   reference is re-seated on observation 0 with its template dropped.
 - A track that observes nothing at or past the image comes back as `None`.
+
+### [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
+
+- A track of the seoul_bull ground truth, read against its checked-in
+  photographs, carries the viewing angle, coverage, clipped share and pair ZNCC
+  grid on every row; the reference-view rule picks exactly one row, with full
+  coverage and under the angle limit, with no fallback, and every row turned
+  away for sharpness is no sharper than it.
 
 ### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
 

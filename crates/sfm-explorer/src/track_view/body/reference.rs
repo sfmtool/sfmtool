@@ -1,0 +1,245 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The *Reference* column: what the reference-view rule decided about each
+//! row, the per-view readings it decided on, and the sentence that says why a
+//! row is not the reference.
+//!
+//! The rule picks the one `in` row whose tile could stand as the patch bitmap
+//! (`sfmtool_core::patch::reference_view::choose_reference_view`). The column
+//! reports it; nothing on the track depends on it.
+
+use sfmtool_core::bench::{Observation, StageKind, TrackMeasurement};
+use sfmtool_core::patch::reference_view::{
+    ReferenceFallback, ReferenceStanding, ReferenceTest, REFERENCE_AGREEMENT_MARGIN,
+    REFERENCE_MAX_CELL_DEFICIT, REFERENCE_MAX_CLIPPED_SHARE, REFERENCE_MAX_VIEWING_ANGLE_DEG,
+    REFERENCE_MIN_COVERAGE,
+};
+
+use crate::bench::live::Evaluation;
+
+/// The *Reference* heading's hover text.
+pub(super) const REFERENCE_TIP: &str = "Which row's tile could stand as the patch bitmap, by \
+    the reference-view rule, and the readings it decides on. The row it picks reads \
+    reference, on a green cell.\n\n\
+    A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
+    under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
+    of the tile where it agrees with the other rows more than 0.3 worse than the track's \
+    typical row does. Of the candidates whose pair ZNCC, the median of its ZNCCs with the \
+    other rows that are in, is within 15 points of the best candidate's, the rule picks the one with \
+    the smallest self-similarity radius. When no row passes, it drops the angle test, then \
+    the ninths, then the coverage and clipping tests.\n\n\
+    The first line is the pick, or the test that turned the row away: partial, clipped, \
+    oblique, ninth differs, agrees less, or less sharp. The second is the viewing angle, \
+    the angle between the patch's normal and the direction to the camera, and the pair \
+    ZNCC. Hover a cell for every reading. An out row is not considered.\n\n\
+    The rule reports a view; the patch bitmap is still fused from every in row.";
+
+/// What one row's *Reference* cell draws.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ReferenceCell {
+    /// The cell's two lines: the standing, then the viewing angle and the pair
+    /// ZNCC, or `-` where nothing has measured the row.
+    pub text: String,
+    /// The hover text with every reading and the reason, or `None` where the
+    /// cell is `-`.
+    pub hover: Option<String>,
+    /// Whether the rule picks this row.
+    pub is_reference: bool,
+}
+
+impl ReferenceCell {
+    fn empty() -> Self {
+        Self {
+            text: "-".to_string(),
+            hover: None,
+            is_reference: false,
+        }
+    }
+}
+
+/// The *Reference* cell of `observation` at `stage`, as the evaluation's
+/// state lets it print: nothing at the cluster stage, which has no patch, or
+/// where the track could not be evaluated.
+pub(super) fn reference_cell(
+    observation: &Observation,
+    stage: StageKind,
+    evaluation: &Evaluation,
+) -> ReferenceCell {
+    if stage != StageKind::Track
+        || matches!(evaluation, Evaluation::Refused(_) | Evaluation::Failed(_))
+    {
+        return ReferenceCell::empty();
+    }
+    let Some(m) = observation.track.as_ref() else {
+        return ReferenceCell::empty();
+    };
+    if m.viewing_angle_deg.is_none() && m.reference_view.is_none() {
+        return ReferenceCell::empty();
+    }
+    let word = match m.reference_view {
+        None => "-",
+        Some(standing) => standing_word(standing),
+    };
+    let angle = m
+        .viewing_angle_deg
+        .map_or_else(|| "-".to_string(), |a| format!("{a:.0}\u{b0}"));
+    let second = match m.pair_zncc {
+        Some(pair) => format!("{angle}, {:.0}%", 100.0 * pair),
+        None => angle,
+    };
+    ReferenceCell {
+        text: format!("{word}\n{second}"),
+        hover: Some(reference_hover(m)),
+        is_reference: m.reference_view.is_some_and(|s| s.is_reference()),
+    }
+}
+
+/// The first line of a cell: `reference`, or the word for the test that
+/// turned the row away.
+fn standing_word(standing: ReferenceStanding) -> &'static str {
+    match standing.rejected_by {
+        None => "reference",
+        Some(ReferenceTest::Coverage) => "partial",
+        Some(ReferenceTest::Clipped) => "clipped",
+        Some(ReferenceTest::Angle) => "oblique",
+        Some(ReferenceTest::Cells) => "ninth differs",
+        Some(ReferenceTest::Agreement) => "agrees less",
+        Some(ReferenceTest::Sharpness) => "less sharp",
+    }
+}
+
+/// Where a row stands for ordering by the column: the reference first, then
+/// the rows nearest to being picked, and last the rows a candidate test
+/// turned away, in the reverse of the order the rule applies them.
+pub(super) fn reference_rank(standing: ReferenceStanding) -> f64 {
+    match standing.rejected_by {
+        None => 0.0,
+        Some(ReferenceTest::Sharpness) => 1.0,
+        Some(ReferenceTest::Agreement) => 2.0,
+        Some(ReferenceTest::Cells) => 3.0,
+        Some(ReferenceTest::Angle) => 4.0,
+        Some(ReferenceTest::Clipped) => 5.0,
+        Some(ReferenceTest::Coverage) => 6.0,
+    }
+}
+
+/// The cell's hover text: the decision and why, then every reading.
+pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
+    let percent = |v: f64| format!("{:.1}%", 100.0 * v);
+    let mut lines: Vec<String> = Vec::new();
+    match m.reference_view {
+        None => lines.push(
+            "Not considered for the reference view: the rule reads only the rows that are in."
+                .to_string(),
+        ),
+        Some(standing) => {
+            lines.push(match standing.rejected_by {
+                None => "The reference view: the rule picks this row's tile.".to_string(),
+                Some(test) => format!("Not the reference view: {}.", rejection(test, m)),
+            });
+            if let Some(dropped) = fallback_sentence(standing.fallback) {
+                lines.push(dropped.to_string());
+            }
+        }
+    }
+    lines.push(String::new());
+    if let Some(angle) = m.viewing_angle_deg {
+        lines.push(match m.tilt_direction_deg {
+            Some(tilt) => format!(
+                "Viewing angle {angle:.1}\u{b0}, leaning {tilt:.0}\u{b0} from the patch's u \
+                 towards its v."
+            ),
+            None => format!("Viewing angle {angle:.1}\u{b0}, facing the patch."),
+        });
+    }
+    if let Some(coverage) = m.coverage {
+        lines.push(format!("Coverage {} of the tile.", percent(coverage)));
+    }
+    if let Some(clipped) = m.clipped_share {
+        lines.push(format!(
+            "Clipped {} of the photograph under the tile.",
+            percent(clipped)
+        ));
+    }
+    if let Some(pair) = m.pair_zncc {
+        lines.push(format!(
+            "Pair ZNCC {:.0}%, the median with the other rows that are in.",
+            100.0 * pair
+        ));
+    }
+    if let Some(deficit) = m.cell_deficit {
+        lines.push(format!(
+            "Cell deficit {deficit:.2}, in its worst ninth against the typical row."
+        ));
+    }
+    if let Some(grid) = m.pair_zncc_grid {
+        lines.push("Pair ZNCC per ninth, the median with the other rows that are in:".to_string());
+        for row in grid {
+            lines.push(
+                row.iter()
+                    .map(|v| {
+                        if v.is_finite() {
+                            format!("{:>5.0}", 100.0 * v)
+                        } else {
+                            format!("{:>5}", "-")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+            );
+        }
+    }
+    lines.join("\n")
+}
+
+/// Why `test` turned a row away, with the row's own reading against the
+/// threshold.
+fn rejection(test: ReferenceTest, m: &TrackMeasurement) -> String {
+    let or_dash = |v: Option<f64>, f: &dyn Fn(f64) -> String| v.map_or("-".to_string(), f);
+    match test {
+        ReferenceTest::Coverage => format!(
+            "{} of its tile is on the photograph, under the {:.0}% a reference needs",
+            or_dash(m.coverage, &|c| format!("{:.1}%", 100.0 * c)),
+            100.0 * REFERENCE_MIN_COVERAGE
+        ),
+        ReferenceTest::Clipped => format!(
+            "{} of the photograph under its tile is clipped, over the {:.0}% a reference may have",
+            or_dash(m.clipped_share, &|c| format!("{:.1}%", 100.0 * c)),
+            100.0 * REFERENCE_MAX_CLIPPED_SHARE
+        ),
+        ReferenceTest::Angle => format!(
+            "it sees the patch at {}, over the {:.0}\u{b0} a reference may be at",
+            or_dash(m.viewing_angle_deg, &|a| format!("{a:.1}\u{b0}")),
+            REFERENCE_MAX_VIEWING_ANGLE_DEG
+        ),
+        ReferenceTest::Cells => format!(
+            "in one ninth of the tile it agrees with the other rows {} worse than the typical \
+             row, over the {REFERENCE_MAX_CELL_DEFICIT} allowed",
+            or_dash(m.cell_deficit, &|d| format!("{d:.2}")),
+        ),
+        ReferenceTest::Agreement => format!(
+            "its pair ZNCC is more than {:.0} points below the best candidate's",
+            100.0 * REFERENCE_AGREEMENT_MARGIN
+        ),
+        ReferenceTest::Sharpness => "it passed every test, and a candidate with a smaller \
+             self-similarity radius did too"
+            .to_string(),
+    }
+}
+
+/// The sentence for a fallback, or `None` when every test applied.
+fn fallback_sentence(fallback: ReferenceFallback) -> Option<&'static str> {
+    match fallback {
+        ReferenceFallback::None => None,
+        ReferenceFallback::WithoutAngle => {
+            Some("No row passed every test, so the rule dropped the angle test.")
+        }
+        ReferenceFallback::WithoutAngleOrCells => {
+            Some("No row passed every test, so the rule dropped the angle test and the ninths.")
+        }
+        ReferenceFallback::WithoutAny => {
+            Some("No row passed the coverage and clipping tests, so every row was a candidate.")
+        }
+    }
+}

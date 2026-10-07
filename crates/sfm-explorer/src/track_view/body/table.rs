@@ -9,8 +9,9 @@
 //! verdict cell. After them come the stage's own photometric numbers, the ZNCC
 //! and then the self-similarity, whose column opens with its surface plot;
 //! then the reprojection error, the shift, the zoom the tile gives the
-//! photograph at its centre, the kernel's status, in Edited mode where the
-//! observation came from, and last the image's name.
+//! photograph at its centre, what the reference-view rule decided about the
+//! row, the kernel's status, in Edited mode where the observation came from,
+//! and last the image's name.
 //!
 //! The verdict cell is the one column the two modes draw differently. In
 //! Edited mode it is *Keep*: a switch and a pin, the row's own verdict. In
@@ -54,6 +55,7 @@ use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarity
 use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
+use super::reference::{reference_cell, reference_rank, ReferenceCell, REFERENCE_TIP};
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
     row_ellipse, row_grids, row_radius, row_surface, self_similarity_cell_color,
@@ -76,6 +78,8 @@ pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 const KEEP_WIDTH: f32 = 64.0;
 /// Width of the *Zoom* column: room for `0.21/0.45×` with its sort triangle.
 const ZOOM_WIDTH: f32 = 76.0;
+/// The *Reference* column's width: room for `ninth differs` over `65°, 83%`.
+const REFERENCE_WIDTH: f32 = 112.0;
 /// Width of the *From* column: room for its longest cell, `feature 123456`.
 const FROM_WIDTH: f32 = 110.0;
 /// Width of the *Name* column, the last one. A name longer than this is
@@ -162,6 +166,9 @@ pub(crate) struct RowSummary {
     pub crop: bool,
     /// Whether the row drew the self-similarity surface plot.
     pub self_similarity_plot: bool,
+    /// The *Reference* cell as drawn, with its hover text and whether the
+    /// rule picks the row.
+    pub reference: ReferenceCell,
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
@@ -178,6 +185,7 @@ pub(super) struct ColumnLayout {
     offset: f32,
     shift: f32,
     zoom: f32,
+    reference: f32,
     status: f32,
     from: f32,
 }
@@ -204,7 +212,8 @@ impl ColumnLayout {
         let shift = offset + 76.0;
         // Room for `12.25 px`. The tile's zoom follows it.
         let zoom = shift + 62.0;
-        let status = zoom + ZOOM_WIDTH;
+        let reference = zoom + ZOOM_WIDTH;
+        let status = reference + REFERENCE_WIDTH;
         // The status cell holds a sentence at the track stage -- the reason a
         // row was not read, or the walk a fit refused and what it scored -- so
         // it is given room for one and elided to it.
@@ -222,6 +231,7 @@ impl ColumnLayout {
             offset,
             shift,
             zoom,
+            reference,
             status,
             from,
         }
@@ -294,6 +304,7 @@ impl ColumnLayout {
             (self.offset, "Proj. err", PROJECTION_ERROR_TIP),
             (self.shift, "Shift", SHIFT_TIP),
             (self.zoom, "Zoom", ZOOM_TIP.as_str()),
+            (self.reference, "Reference", REFERENCE_TIP),
             (self.status, "Status", STATUS_TIP),
         ];
         if mode == BodyMode::Edited {
@@ -325,6 +336,9 @@ pub(crate) enum SortColumn {
     /// The zoom the tile applies to the photograph, as the geometric mean
     /// over its two singular directions.
     Zoom,
+    /// What the reference-view rule decided: the reference first, then the
+    /// rows nearest to being picked.
+    Reference,
     /// The status cell's text.
     Status,
     /// The image's name.
@@ -344,6 +358,7 @@ impl SortColumn {
             "Proj. err" => SortColumn::ProjectionError,
             "Shift" => SortColumn::Shift,
             "Zoom" => SortColumn::Zoom,
+            "Reference" => SortColumn::Reference,
             "Status" => SortColumn::Status,
             "Name" => SortColumn::Name,
             _ => return None,
@@ -365,6 +380,7 @@ impl SortColumn {
             SortColumn::Image
             | SortColumn::Zncc
             | SortColumn::Zoom
+            | SortColumn::Reference
             | SortColumn::Status
             | SortColumn::Name => false,
         }
@@ -380,6 +396,7 @@ impl SortColumn {
             SortColumn::ProjectionError => "projection error",
             SortColumn::Shift => "shift",
             SortColumn::Zoom => "zoom",
+            SortColumn::Reference => "reference view",
             SortColumn::Status => "status",
             SortColumn::Name => "name",
         }
@@ -1295,6 +1312,14 @@ impl TrackBody {
                             .flatten()
                             .and_then(|jacobian| jacobian.mean_zoom()),
                     ),
+                    SortColumn::Reference => {
+                        let standing = row
+                            .track
+                            .as_ref()
+                            .and_then(|m| m.reference_view)
+                            .filter(|_| printed && stage == StageKind::Track);
+                        number_key(standing.map(reference_rank))
+                    }
                     SortColumn::Status => Some(SortKey::Text(
                         measurements(row, stage, &self.evaluation)[4].clone(),
                     )),
@@ -1906,7 +1931,7 @@ impl TrackBody {
         if let Some(jacobian) = jacobian {
             let cell = egui::Rect::from_min_max(
                 egui::pos2(x0 + cols.zoom, rect.min.y),
-                egui::pos2(x0 + cols.status - 4.0, rect.max.y),
+                egui::pos2(x0 + cols.reference - 4.0, rect.max.y),
             );
             ui.interact(
                 cell,
@@ -1917,6 +1942,30 @@ impl TrackBody {
         }
         if edited {
             text(cols.from, &provenance_text(row.provenance), weak);
+        }
+
+        // What the reference-view rule decided about the row, on a green cell
+        // for the row it picks, with every reading and the reason on hover.
+        let reference = reference_cell(row, stage, &self.evaluation);
+        let reference_rect = egui::Rect::from_min_max(
+            egui::pos2(x0 + cols.reference - 3.0, rect.min.y + 2.0),
+            egui::pos2(x0 + cols.status - 6.0, rect.max.y - 2.0),
+        );
+        if reference.is_reference {
+            ui.painter().rect_filled(
+                reference_rect,
+                2.0,
+                KEEP_ON_FILL.gamma_multiply(0.35 * fade),
+            );
+        }
+        lines(cols.reference, &reference.text, [number_color; 2]);
+        if let Some(hover) = &reference.hover {
+            ui.interact(
+                reference_rect,
+                ui.id().with(("track_view_reference", observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(egui::RichText::new(hover).monospace());
         }
 
         // The two grids, faded with the numbers while an evaluation is on its
@@ -2006,6 +2055,7 @@ impl TrackBody {
             tile: tile.is_some(),
             crop: cropped,
             self_similarity_plot: plotted,
+            reference,
         });
     }
 }

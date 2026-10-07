@@ -815,7 +815,7 @@ row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
-Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Status  ...  Name
+Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Reference  Status  ...  Name
 Thresholds              [70]% whole         [2.5] px whole      [3.0] px   [6.0] px
                         [70]% mid
 ```
@@ -927,8 +927,9 @@ Clicking a heading orders the rows by that column, worst first where a bar
 judges the column and increasing where none does, and clicking the same
 heading again reverses the order. Worst first is decreasing for *Keep* and
 *Verdict* (the most bars failed), *Self-similarity*, *Proj. err* and *Shift*,
-and increasing for *ZNCC*; *Img*, *Zoom*, *Status* and *Name* start increasing.
-*Zoom* is among them because no bar says one zoom is worse than another. The
+and increasing for *ZNCC*; *Img*, *Zoom*, *Reference*, *Status* and *Name*
+start increasing. *Zoom* and *Reference* are among them because no bar judges
+them. The
 heading the rows are ordered by carries a small triangle after its word,
 pointing up for increasing and down for decreasing, and a heading that orders
 the rows is drawn in the plain text colour under the pointer. Its hover text
@@ -944,6 +945,7 @@ name is *Sort by …*. The keys are what the rows print:
 | Proj. err | the reprojection error in px |
 | Shift | the shift in px |
 | Zoom | the geometric mean of the two zooms, `1 / sqrt(abs(det J))` |
+| Reference | what the reference-view rule decided: the reference first, then the rows turned away for sharpness, agreement, a ninth, the angle, clipping and coverage, in that order, so the rows nearest to being picked come first; an `out` row has no key |
 | Status | the Status cell's text, compared character by character |
 | Name | the image's file name, compared character by character |
 
@@ -1049,6 +1051,7 @@ that is not there prints a bare `-`, with no unit.
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
+| Reference | `-` | what the reference-view rule decided about the row over its viewing angle and pair ZNCC: `reference` over `24°, 87%` on a green cell for the row it picks, or the test that turned the row away, `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less` or `less sharp`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell gives the reason and every reading |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
@@ -1311,6 +1314,28 @@ sampler. The *Zoom* heading's hover describes the same choice
 block report each row's `sampler` (`anisotropic` or `bilinear_mip`) and
 `sampler_minor_axis_loss`, both null where `patch_jacobian` is, and the loss
 null as well where it is not finite.
+
+**The *Reference* column says which row's tile could stand as the patch
+bitmap.** A track-stage evaluation runs the reference-view rule over the `in`
+rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a
+candidate has at least 99% of its tile on the photograph, at most 5% of the
+photograph under the tile clipped, a viewing angle of at most 65°, and no ninth
+where it agrees with the other rows more than 0.3 worse than the track's
+typical row does; of the candidates whose pair ZNCC, the median of its ZNCCs
+with the other `in` rows, is within 15 points of the best candidate's, the
+rule picks the one with the smallest self-similarity radius. The cell's first
+line is the pick, `reference`, drawn on a green fill, or the word for the first
+test that turned the row away. Its second line is the viewing angle, the angle
+between the patch's normal and the direction to the camera at the keypoint, and
+the pair ZNCC in percent. Hovering the cell (`reference::reference_hover`)
+gives the reason in a sentence with the row's own reading against the
+threshold, the tests the rule dropped when no row passed them, and every
+reading: the viewing angle and the tilt direction (the direction in the
+patch's plane the ray from the camera leans along, from `u` towards `v`), the
+coverage, the clipped share, the pair ZNCC, the cell deficit, and the pair ZNCC
+of each ninth. The cell prints `-` at the cluster stage, before the track is
+evaluated, and where it could not be evaluated. The column reports the rule's
+pick; the track's bitmap is still the fused one, and no bar or step reads it.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its
@@ -1855,7 +1880,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   *Evaluating…* until then and again after a verdict; a frameless bearing on the
   bench showing core's refusal sentence where the state would be; **no item tabs**, the labels
   of two other items on the bench appearing nowhere in what the frame painted; a
-  row per observation in index order; a verdict under the same observation index,
+  row per observation in index order; the *Reference* column marking exactly
+  one row `reference` once the track is evaluated, every row printing its
+  viewing angle and pair ZNCC with the readings on hover, and the cell's word
+  and reason for each test that turns a row away, a dropped test, an `out` row,
+  the cluster stage and a refused evaluation; a verdict under the same observation index,
   pinned; the *Keep* switch's cell taking a click the row behind it does not,
   and turning a kept row out; a click on the pin pinning an unpinned row's
   verdict as it stands and unpinning a pinned one, and *Unpin* offered from the

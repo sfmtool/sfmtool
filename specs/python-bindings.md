@@ -98,6 +98,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [patches/oriented_patch.rs](../crates/sfmtool-py/src/patches/oriented_patch.rs), [cloud.rs](../crates/sfmtool-py/src/patches/cloud.rs), [views.rs](../crates/sfmtool-py/src/patches/views.rs), [render_bitmaps.rs](../crates/sfmtool-py/src/patches/render_bitmaps.rs) | `OrientedPatch`, `PatchCloud`, `CameraViews`, `ImagePyramidSet`, `PatchCloud.render_bitmaps` | [patch-cloud.md](core/patch/patch-cloud.md) |
+| [patches/view_tile.rs](../crates/sfmtool-py/src/patches/view_tile.rs) | `OrientedPatch.render_view_tile`: one view's `R×R` tile with its coverage, clipped share, viewing angle and tilt direction | [reference-view.md](core/patch/reference-view.md) |
 | [patches/select_views.rs](../crates/sfmtool-py/src/patches/select_views.rs) | `PatchCloud.select_views` | [patch-view-selection.md](core/patch/patch-view-selection.md) |
 | [patches/refine_normals.rs](../crates/sfmtool-py/src/patches/refine_normals.rs) | `PatchCloud.refine_normals` | [patch-normal-refinement.md](core/patch/patch-normal-refinement.md) |
 | [patches/localize_keypoints.rs](../crates/sfmtool-py/src/patches/localize_keypoints.rs) | `PatchCloud.localize_keypoints` | [patch-keypoint-localization.md](core/patch/patch-keypoint-localization.md) |

@@ -40,6 +40,7 @@ mod view_subset;
 mod znorm;
 
 // Public API.
+pub use obliquity::{surface_to_camera, viewing_angle, ViewingAngle, MIN_TILT_ANGLE_DEG};
 pub use parameterization::{exp_map_normal, tangent_basis};
 pub use params::{
     CacheMode, NormalRefineParams, NormalRefineResult, Objective, PatchWindow, ProjectedImage,
@@ -186,17 +187,9 @@ fn refine_patch_normal_impl(
     // obliquity priors (A) and the fronto-parallel prior (B). A degenerate zero
     // vector (camera at the point) falls back to the init normal, so its cosine is
     // ~1 (no penalty) — a pathological case that shouldn't arise for a real point.
-    let mut view_dirs: Vec<Vector3<f64>> = centers
+    let mut view_dirs: Vec<Vector3<f64>> = views
         .iter()
-        .map(|c| {
-            let d = c - patch.center;
-            let nrm = d.norm();
-            if nrm > 1e-12 {
-                d / nrm
-            } else {
-                init_n
-            }
-        })
+        .map(|v| surface_to_camera(patch, v.cam_from_world).unwrap_or(init_n))
         .collect();
 
     // Optional D-optimal restriction of the refinement basis to the K most

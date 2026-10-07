@@ -490,6 +490,52 @@ class TestEvaluating:
                 if units["grid_px"]["axes_is_at_least"].any():
                     assert patch["ellipse"]["axes_is_at_least"][0]
 
+    def test_an_evaluation_reports_the_reference_view_readings(
+        self, edited, images, long_track_point
+    ):
+        """Every read row carries its viewing angle, coverage and clipped
+        share; every in row its agreement with the others and what the
+        reference-view rule decided, and the rule picks exactly one row."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        measured, _ = evaluate(track, edited, images)
+
+        rows = [o["track"] for o in measured.observations]
+        picked = []
+        for i, entry in enumerate(rows):
+            assert 0.0 <= entry["viewing_angle_deg"] <= 180.0
+            if "tilt_direction_deg" in entry:
+                assert -180.0 <= entry["tilt_direction_deg"] <= 180.0
+            assert 0.0 <= entry["coverage"] <= 1.0
+            assert 0.0 <= entry["clipped_share"] <= 1.0
+            # A committed point's rows are all in, so each is judged.
+            standing = entry["reference_view"]
+            assert set(standing) == {"is_reference", "rejected_by", "fallback"}
+            assert entry["pair_zncc_grid"].shape == (3, 3)
+            if standing["is_reference"]:
+                assert standing["rejected_by"] is None
+                picked.append(i)
+            else:
+                assert standing["rejected_by"] in {
+                    "coverage",
+                    "clipped",
+                    "angle",
+                    "cells",
+                    "agreement",
+                    "sharpness",
+                }
+            assert standing["fallback"] in {
+                "none",
+                "without_angle",
+                "without_angle_or_cells",
+                "without_any",
+            }
+        assert len(picked) == 1
+        reference = rows[picked[0]]
+        if reference["reference_view"]["fallback"] == "none":
+            assert reference["coverage"] >= 0.99
+            assert reference["viewing_angle_deg"] <= 65.0
+            assert reference["clipped_share"] <= 0.05
+
     def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
         self, edited, images, long_track_point
     ):

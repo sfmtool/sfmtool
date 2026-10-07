@@ -226,6 +226,162 @@ fn with_nothing_active_the_body_draws_no_rows_and_no_text() {
     assert!(texts.is_empty(), "{texts:?}");
 }
 
+/// Once the track is evaluated, the *Reference* column marks the one row the
+/// reference-view rule picks, and every row prints its viewing angle and pair
+/// ZNCC with every reading on hover.
+#[test]
+fn the_reference_column_marks_the_row_the_rule_picks() {
+    let (mut state, _id, _label, mut panel, ctx) = on_the_bench();
+    assert!(
+        panel.rows().iter().all(|row| row.reference.text == "-"),
+        "nothing has measured the track yet"
+    );
+    state.settle_bench_evaluation();
+    run_frame(&mut panel, &ctx, &state);
+    let rows = panel.rows();
+    let picked: Vec<_> = rows.iter().filter(|r| r.reference.is_reference).collect();
+    assert_eq!(picked.len(), 1, "{rows:?}");
+    assert!(
+        picked[0].reference.text.starts_with("reference\n"),
+        "{}",
+        picked[0].reference.text
+    );
+    for row in rows {
+        let (_, second) = row
+            .reference
+            .text
+            .split_once('\n')
+            .expect("the standing over the readings");
+        assert!(
+            second.contains('\u{b0}') && second.ends_with('%'),
+            "{second}"
+        );
+        let hover = row.reference.hover.as_deref().expect("a hover");
+        assert!(hover.contains("Viewing angle"), "{hover}");
+        assert!(hover.contains("Coverage"), "{hover}");
+        assert!(hover.contains("Pair ZNCC per ninth"), "{hover}");
+    }
+}
+
+/// The *Reference* cell's words and hover for each standing, for an `out` row
+/// and for a track that could not be evaluated.
+#[test]
+fn the_reference_cell_names_the_test_that_turned_a_row_away() {
+    use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
+    use sfmtool_core::patch::reference_view::{
+        ReferenceFallback, ReferenceStanding, ReferenceTest,
+    };
+
+    let row = |rejected_by: Option<ReferenceTest>, fallback: ReferenceFallback| Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: None,
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            viewing_angle_deg: Some(71.6),
+            tilt_direction_deg: Some(-35.0),
+            coverage: Some(1.0),
+            clipped_share: Some(0.004),
+            pair_zncc: Some(0.834),
+            cell_deficit: Some(0.12),
+            pair_zncc_grid: Some([[0.9, 0.8, f64::NAN], [0.7, 0.6, 0.5], [0.4, 0.3, 0.2]]),
+            reference_view: Some(ReferenceStanding {
+                rejected_by,
+                fallback,
+            }),
+            ..TrackMeasurement::default()
+        }),
+    };
+    let current = crate::bench::live::Evaluation::Current;
+    let cell = |o: &Observation| super::reference::reference_cell(o, StageKind::Track, &current);
+
+    let picked = cell(&row(None, ReferenceFallback::None));
+    assert!(picked.is_reference);
+    assert_eq!(picked.text, "reference\n72\u{b0}, 83%");
+    let hover = picked.hover.expect("a hover");
+    assert!(hover.starts_with("The reference view"), "{hover}");
+    assert!(
+        hover.contains("Viewing angle 71.6\u{b0}, leaning -35\u{b0}"),
+        "{hover}"
+    );
+    assert!(hover.contains("Clipped 0.4%"), "{hover}");
+    assert!(hover.contains("   90   80    -"), "{hover}");
+
+    for (test, word, why) in [
+        (
+            ReferenceTest::Coverage,
+            "partial",
+            "of its tile is on the photograph",
+        ),
+        (ReferenceTest::Clipped, "clipped", "is clipped, over the 5%"),
+        (
+            ReferenceTest::Angle,
+            "oblique",
+            "sees the patch at 71.6\u{b0}, over the 65\u{b0}",
+        ),
+        (
+            ReferenceTest::Cells,
+            "ninth differs",
+            "0.12 worse than the typical row",
+        ),
+        (
+            ReferenceTest::Agreement,
+            "agrees less",
+            "more than 15 points below",
+        ),
+        (
+            ReferenceTest::Sharpness,
+            "less sharp",
+            "smaller self-similarity radius",
+        ),
+    ] {
+        let rejected = cell(&row(Some(test), ReferenceFallback::None));
+        assert!(!rejected.is_reference);
+        assert!(
+            rejected.text.starts_with(&format!("{word}\n")),
+            "{}",
+            rejected.text
+        );
+        let hover = rejected.hover.expect("a hover");
+        assert!(hover.starts_with("Not the reference view: "), "{hover}");
+        assert!(hover.contains(why), "{test}: {hover}");
+    }
+
+    // A dropped test is said in the hover.
+    let dropped = cell(&row(None, ReferenceFallback::WithoutAngle));
+    assert!(dropped
+        .hover
+        .expect("a hover")
+        .contains("dropped the angle test"));
+
+    // An `out` row carries its own readings and no standing.
+    let mut out = row(None, ReferenceFallback::None);
+    out.verdict = Verdict::Out;
+    let slot = out.track.as_mut().expect("a track slot");
+    slot.reference_view = None;
+    slot.pair_zncc = None;
+    let out_cell = cell(&out);
+    assert_eq!(out_cell.text, "-\n72\u{b0}");
+    assert!(out_cell
+        .hover
+        .expect("a hover")
+        .starts_with("Not considered for the reference view"));
+
+    // Nothing at the cluster stage or for a track that could not be evaluated.
+    let refused = crate::bench::live::Evaluation::Refused("no frame".to_string());
+    let picked = row(None, ReferenceFallback::None);
+    assert_eq!(
+        super::reference::reference_cell(&picked, StageKind::Track, &refused).text,
+        "-"
+    );
+    assert_eq!(
+        super::reference::reference_cell(&picked, StageKind::Cluster, &current).text,
+        "-"
+    );
+}
+
 #[test]
 fn the_table_has_a_row_per_observation_in_index_order() {
     let (_state, _id, _label, panel, _ctx) = on_the_bench();

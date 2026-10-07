@@ -657,6 +657,7 @@ one at the cursor, and this block reports it.
                     "max_zncc_self_similarity_radius": 2.5,
                     "max_projection_error_px": 3.0,
                     "geometry_search_min_relative_zncc": 0.7 },
+    "reference_observation": 0,      // the row the reference-view rule picked
     "observations": [ { "observation": 0, "camera_image": 3,
                         "camera_image_name": "images/IMG_0042.jpg",
                         "provenance": { "kind": "origin" },
@@ -684,7 +685,9 @@ when none has landed. `thresholds` are the read-only bars Track View's threshold
 boxes hold, and `verdict_by_bars` is each row's verdict by them -- `in`, `out`,
 or `null` where nothing has measured the row -- computed with core's
 `verdicts_if_unpinned` over a copy of the track carrying those bars, the same
-computation the panel colours by. For any other point the block is absent:
+computation the panel colours by. `reference_observation` is the row the
+reference-view rule picked, as `stage_data.reference_observation` reports it on
+the bench. For any other point the block is absent:
 there is no call that evaluates an arbitrary point on request, since that is a
 separate operation with a cost. A `select_point` earlier in the same batch of
 calls moves the viewed point with it, since `get_point` asks for the viewed
@@ -3610,7 +3613,28 @@ the larger singular value is at least `√2`, and `bilinear_mip` otherwise; both
 are null where `patch_jacobian` is, and `sampler_minor_axis_loss` is null as
 well where it is not finite
 ([`../core/camera/image-warping.md`](../core/camera/image-warping.md) §
-"Choosing the sampler per view"). The
+"Choosing the sampler per view"). **A track-stage `track` block also carries
+the reference view's readings**
+([`../core/patch/reference-view.md`](../core/patch/reference-view.md)):
+`viewing_angle_deg`, the angle between the patch's normal and the direction to
+the camera at the keypoint, `0` facing the patch; `tilt_direction_deg`, the
+direction in the patch's plane, in degrees from `u` towards `v`, of the ray from
+the camera, null within `0.1°` of facing; `coverage`, the share of the `R×R`
+tile's samples on the photograph; and `clipped_share`, the share of the
+photograph's pixels inside the tile's outline that are `0` or `255` in any colour
+channel. An `in` row also carries `pair_zncc`, the median of its pairwise ZNCCs
+with the other `in` rows; `pair_zncc_grid`, the same per ninth, three rows of
+three, null in a ninth with no reading; `cell_deficit`, the most its
+`pair_zncc_grid` falls below the track's typical row in a ninth whose typical
+agreement is at least `0.5`; and `reference_view`, `{"is_reference",
+"rejected_by", "fallback"}`, the reference-view rule's decision: `rejected_by`
+is null for the row it picks and otherwise the first test that turned the row
+away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`), and
+`fallback` names the tests the rule dropped because no row passed them (`none`,
+`without_angle`, `without_angle_or_cells`, `without_any`). The four are null on
+an `out` row, which the rule does not consider, and `stage_data` reports the
+row the rule picked as `reference_observation`, null where it picked none. No
+bar judges them and nothing on the track depends on them. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a

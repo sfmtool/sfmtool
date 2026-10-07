@@ -563,6 +563,9 @@ fn viewed_evaluation(state: &AppState, point: crate::scene::PointRef) -> Option<
         "reason": viewed.evaluation.reason(),
         "running": state.viewed_evaluation_running(),
         "thresholds": super::bench::thresholds(&state.viewed_thresholds),
+        // The row the reference-view rule picked, as an index into
+        // `observations`, or null.
+        "reference_observation": super::bench::reference_observation(&viewed.track),
         "observations": rows,
     }))
 }

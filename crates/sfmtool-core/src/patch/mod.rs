@@ -10,6 +10,7 @@ pub mod keypoint_localize;
 pub mod keypoint_subpixel;
 pub mod member_coherence;
 pub mod normal_refine;
+pub mod reference_view;
 pub mod self_similarity;
 pub mod spawn;
 pub mod view_selection;

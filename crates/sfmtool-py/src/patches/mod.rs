@@ -27,6 +27,7 @@ pub mod render_bitmaps;
 pub mod select_views;
 pub mod self_similarity;
 pub mod spawn;
+pub mod view_tile;
 pub mod views;
 
 pub use cloud::PyPatchCloud;

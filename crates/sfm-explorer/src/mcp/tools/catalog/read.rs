@@ -110,7 +110,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           its rows in get_bench_track's shape, its state (current, evaluating, \
                           refused, failed) and reason, the read-only bars Track View's \
                           threshold boxes hold, and each row's verdict_by_bars (in, out, or \
-                          null where unmeasured). While evaluating, the measurements are the \
+                          null where unmeasured), and reference_observation, the row the \
+                          reference-view rule picked. While evaluating, the measurements are the \
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
@@ -364,7 +365,33 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           it), walked_to (the pixel it would have reached), walked_zncc (the \
                           ZNCC scored there, beside the row's own zncc read at the seed) and \
                           walked_zncc_middle and walked_zncc_grid (the parts' readings there); \
-                          sight_bench_observation with walked_to as the pixel accepts the walk.",
+                          sight_bench_observation with walked_to as the pixel accepts the walk. \
+                          A track-stage observation also carries the reference view's readings: \
+                          viewing_angle_deg, the angle between the patch's normal and the \
+                          direction to the camera at the keypoint (0 facing the patch, 90 edge \
+                          on); tilt_direction_deg, the direction in the patch's plane, in \
+                          degrees from u towards v, that the ray from the camera leans along \
+                          and the view foreshortens the patch along (null within 0.1 degrees of \
+                          facing); coverage, the share of the R x R tile's samples on the \
+                          photograph; and clipped_share, the share of the photograph's pixels \
+                          inside the tile's outline that are 0 or 255 in any colour channel. \
+                          An in observation also carries pair_zncc, the median of its pairwise \
+                          ZNCCs with the other in observations from member coherence's matrix; \
+                          pair_zncc_grid, per ninth of the tile, the median over the others of \
+                          the pair's ZNCC there; cell_deficit, the most its pair_zncc_grid falls \
+                          below the track's typical view in a ninth where that typical \
+                          agreement is at least 0.5; and reference_view, the reference-view \
+                          rule's decision: is_reference, rejected_by (null for the reference, \
+                          else the first test that turned it away: coverage under 0.99, \
+                          clipped over 0.05, angle over 65 degrees, cells for a cell_deficit \
+                          over 0.3, agreement for a pair_zncc more than 0.15 below the best \
+                          candidate's, or sharpness for a candidate a sharper one beat) and \
+                          fallback (none, or which tests the rule dropped because no view \
+                          passed them: without_angle, without_angle_or_cells, without_any). \
+                          These are null on an out observation, which the rule does not \
+                          consider. stage_data.reference_observation is the index of the row \
+                          the rule picked, or null. The rule reports a view; it does not \
+                          change how the patch bitmap is computed.",
             kind: Read,
             schema: object(
                 &[("track", bench_track_schema())],

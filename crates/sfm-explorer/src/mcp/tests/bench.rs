@@ -2570,6 +2570,45 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         measured["reason"].is_null(),
         "a measured row carries no reason: {track}"
     );
+    // The reference view's readings on every `in` row, and the one row the
+    // rule picked, named in the stage data too.
+    let rows = track["observations"].as_array().expect("rows");
+    let mut picked = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let measured = &row["track"];
+        for key in ["viewing_angle_deg", "coverage", "clipped_share"] {
+            assert!(
+                measured[key].is_number(),
+                "{key} is not on the wire: {track}"
+            );
+        }
+        // An `out` row is not considered by the rule.
+        if row["verdict"] != json!("in") {
+            assert!(measured["reference_view"].is_null(), "{track}");
+            assert!(measured["pair_zncc"].is_null(), "{track}");
+            continue;
+        }
+        assert!(measured["pair_zncc"].is_number(), "{track}");
+        assert_eq!(
+            measured["pair_zncc_grid"].as_array().map(Vec::len),
+            Some(3),
+            "{track}"
+        );
+        let standing = &measured["reference_view"];
+        assert!(standing["fallback"].is_string(), "{track}");
+        if standing["is_reference"] == json!(true) {
+            assert!(standing["rejected_by"].is_null(), "{track}");
+            picked.push(i);
+        } else {
+            assert!(standing["rejected_by"].is_string(), "{track}");
+        }
+    }
+    assert_eq!(picked.len(), 1, "{track}");
+    assert_eq!(
+        track["stage_data"]["reference_observation"],
+        json!(picked[0]),
+        "{track}"
+    );
 }
 
 /// An observation seeded a long way from the point's projection is **named** on
@@ -3772,6 +3811,15 @@ fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
         "a bar no reading reaches turns a measured row out: {point}"
     );
     assert!(rows.iter().all(|row| row["verdict"] == json!("in")));
+    // The row the reference-view rule picked, which no bar moves.
+    let reference = evaluation["reference_observation"]
+        .as_u64()
+        .expect("a reference row") as usize;
+    assert_eq!(
+        rows[reference]["track"]["reference_view"]["is_reference"],
+        json!(true),
+        "{point}"
+    );
 
     let other = (0..state.scene[0].edited().point_count() as u32)
         .find(|&p| p != BENCH_POINT && state.scene[0].edited().point(p).is_some())

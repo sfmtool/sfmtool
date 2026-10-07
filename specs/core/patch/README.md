@@ -12,6 +12,7 @@ across views, and everything refined on top of it. Implemented in
 | [patch-cloud.md](patch-cloud.md) | Oriented patches and the patch-projected warp maps that render one point's surface the same way in every view. |
 | [sift-to-patch-reconstruction.md](sift-to-patch-reconstruction.md) | The `sfm embed-patches` pipeline: converting SIFT-referencing observations into embedded patches. Python pipeline. |
 | [patch-view-selection.md](patch-view-selection.md) | Which views photometrically see a point's patch. |
+| [reference-view.md](reference-view.md) | What each view's tile can contribute to a point's patch bitmap (coverage, clipped share, viewing angle and tilt direction, agreement with the other views over the whole tile and each ninth), and the reference-view rule that picks the one view whose tile could stand as the bitmap. |
 | [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md) | How far a patch can slide over itself by whole pixels and still match itself as well as a true match between two views: the ellipse of the shifts that match, whose semi-major axis is the radius, and the ZNCC surface, whole, middle and by ninths, read on the bitmap itself through the overlap reading; the ellipse in grid px, image px and along the patch's axes, with which lengths are only lower bounds. |
 
 ## Normal refinement

@@ -1645,9 +1645,22 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "placement": super::render::placement(payload.placement.as_ref()),
                 "bitmap_fused": payload.bitmap.is_some(),
                 "patch_resolution": recon.map(crate::bench::patch_resolution),
+                // The row the reference-view rule picked at the last
+                // evaluation, as an index into `observations`, or null.
+                "reference_observation": reference_observation(track),
             })
         }
     }
+}
+
+/// The observation the reference-view rule picked, by its index, or `None`.
+pub(super) fn reference_observation(track: &EditableTrack) -> Option<usize> {
+    track.observations.iter().position(|o| {
+        o.track
+            .as_ref()
+            .and_then(|m| m.reference_view)
+            .is_some_and(|standing| standing.is_reference())
+    })
 }
 
 /// What put an observation on the track, in the words the panel's *From* column
@@ -1759,6 +1772,24 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "zncc_self_similarity_ellipse": ellipse_units(measured.zncc_self_similarity_ellipse, world_unit),
         "zncc_self_similarity_ellipse_middle": ellipse_units(measured.zncc_self_similarity_ellipse_middle, world_unit),
         "zncc_self_similarity_ellipse_grid": ellipse_grid(measured.zncc_self_similarity_ellipse_grid),
+        // The reference view's per-view readings: the angle the view sees the
+        // patch at and the direction in the patch's plane its ray leans, the
+        // share of the tile with data and of the photograph under it that is
+        // clipped, and, for an `in` row, its median ZNCC with the other `in`
+        // rows, over the whole tile and per ninth, and its cell deficit.
+        "viewing_angle_deg": finite(measured.viewing_angle_deg),
+        "tilt_direction_deg": finite(measured.tilt_direction_deg),
+        "coverage": finite(measured.coverage),
+        "clipped_share": finite(measured.clipped_share),
+        "pair_zncc": finite(measured.pair_zncc),
+        "pair_zncc_grid": grid(measured.pair_zncc_grid),
+        "cell_deficit": finite(measured.cell_deficit),
+        // What the reference-view rule decided about an `in` row.
+        "reference_view": measured.reference_view.map(|standing| json!({
+            "is_reference": standing.is_reference(),
+            "rejected_by": standing.rejected_by.map(|test| test.name()),
+            "fallback": standing.fallback.name(),
+        })),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the ZNCC the localizer scored there. Accepting the walk is

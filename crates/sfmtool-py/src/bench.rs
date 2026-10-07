@@ -371,15 +371,35 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("walked_px", m.walked_px),
             ("walked_zncc", m.walked_zncc),
             ("walked_zncc_middle", m.walked_zncc_middle),
+            // The reference view's per-view readings: the angle the view sees
+            // the patch at and the direction it leans, how much of the tile
+            // has data and how much of the photograph under it is clipped, and
+            // how well it agrees with the other `in` rows.
+            ("viewing_angle_deg", m.viewing_angle_deg),
+            ("tilt_direction_deg", m.tilt_direction_deg),
+            ("coverage", m.coverage),
+            ("clipped_share", m.clipped_share),
+            ("pair_zncc", m.pair_zncc),
+            ("cell_deficit", m.cell_deficit),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
             }
         }
+        // What the reference-view rule decided about the row: picked, or the
+        // test that turned it away, and the tests it dropped for the track.
+        if let Some(standing) = m.reference_view {
+            let r = PyDict::new(py);
+            r.set_item("is_reference", standing.is_reference())?;
+            r.set_item("rejected_by", standing.rejected_by.map(|t| t.name()))?;
+            r.set_item("fallback", standing.fallback.name())?;
+            t.set_item("reference_view", r)?;
+        }
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.
         for (key, grid) in [
             ("zncc_grid", m.zncc_grid),
             ("walked_zncc_grid", m.walked_zncc_grid),
+            ("pair_zncc_grid", m.pair_zncc_grid),
         ] {
             if let Some(grid) = grid {
                 t.set_item(key, grid_array(grid).into_pyarray(py))?;

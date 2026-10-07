@@ -60,6 +60,7 @@ use crate::track_view::EDIT_LABEL;
 
 mod crop;
 mod patch;
+mod reference;
 mod surface_plot;
 mod table;
 mod tile;

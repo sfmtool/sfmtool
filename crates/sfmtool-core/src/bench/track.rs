@@ -15,6 +15,7 @@ use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{ClusterRefineParams, MemberStatus};
+use crate::patch::reference_view::ReferenceStanding;
 use crate::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 use crate::patch::view_selection::ViewSelectParams;
 
@@ -387,6 +388,55 @@ pub struct TrackMeasurement {
     /// wherever `zncc_self_similarity_radius` is, and where the tile has no
     /// texture.
     pub zncc_self_similarity_tolerance: Option<f64>,
+    /// The **viewing angle** at the keypoint, in degrees: the angle between
+    /// the patch's normal and the direction from the keypoint-anchored patch's
+    /// centre to the camera, `0` facing the patch and `90` edge on
+    /// ([`viewing_angle`](crate::patch::normal_refine::viewing_angle)).
+    /// `None` wherever the tile could not be rendered.
+    pub viewing_angle_deg: Option<f64>,
+    /// The **tilt direction**, in degrees: the angle in the patch's plane,
+    /// from its `u` axis towards its `v` axis, of the ray from the camera,
+    /// the direction the view foreshortens the patch along. `None` where
+    /// [`Self::viewing_angle_deg`] is, and for a view within
+    /// [`MIN_TILT_ANGLE_DEG`](crate::patch::normal_refine::MIN_TILT_ANGLE_DEG)
+    /// of facing the patch.
+    pub tilt_direction_deg: Option<f64>,
+    /// The **coverage** of the observation's own `R×R` tile: the share of its
+    /// samples the warp places on the photograph, `0 ..= 1`. `None` wherever
+    /// the tile could not be rendered.
+    pub coverage: Option<f64>,
+    /// The **clipped share**: the share of the photograph's own pixels inside
+    /// the tile's outline that are `0` or `255` in any colour channel
+    /// ([`clipped_share`](crate::patch::reference_view::clipped_share)).
+    /// `None` wherever the tile could not be rendered or no sample of it lands
+    /// on the photograph.
+    pub clipped_share: Option<f64>,
+    /// The **pair ZNCC**: the median of this observation's pairwise ZNCCs
+    /// with the track's other `in` observations, from member coherence's
+    /// matrix ([`member_zncc_matrix`](crate::patch::member_coherence::member_zncc_matrix)),
+    /// the agreement the reference-view rule's margin is read on. `None` for
+    /// an `out` observation, and where the matrix has no reading for it.
+    pub pair_zncc: Option<f64>,
+    /// The **pair ZNCC grid**: per cell of the ZNCC grid's three-by-three
+    /// split, `grid[row][col]` from the top-left cell, the median over the
+    /// track's other `in` observations of the pair's ZNCC in that cell
+    /// ([`CellAgreement::pair_zncc_grid`](crate::patch::reference_view::CellAgreement::pair_zncc_grid)).
+    /// A cell is `NaN` where no other observation could be correlated with
+    /// this one there. `None` for an `out` observation.
+    pub pair_zncc_grid: Option<[[f64; 3]; 3]>,
+    /// The **cell deficit**: the largest amount by which
+    /// [`Self::pair_zncc_grid`] falls below the track's typical agreement in
+    /// the same cell, over the cells where that typical agreement is at least
+    /// [`REFERENCE_MIN_JUDGED_CELL_ZNCC`](crate::patch::reference_view::REFERENCE_MIN_JUDGED_CELL_ZNCC);
+    /// `0` where no cell is. `None` for an `out` observation and where it has
+    /// no reading in any judged cell.
+    pub cell_deficit: Option<f64>,
+    /// What the reference-view rule decided about this observation: picked as
+    /// the **reference view**, or the test that turned it away, and which tests
+    /// the rule dropped for the track
+    /// ([`choose_reference_view`](crate::patch::reference_view::choose_reference_view)).
+    /// `None` for an `out` observation, which the rule does not consider.
+    pub reference_view: Option<ReferenceStanding>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
     /// therefore kept, in patch-grid px.
