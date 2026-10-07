@@ -434,6 +434,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** 7; 3 overtaken (per-camera release #607, constraint handling and scale gauge #400, "serves the bootstrap experiments"). The kept-fraction follow-up (:1256-1257) is still unimplemented.
 **Recommendation:** update spec (Non-goals bullets 2, 5, 6; the degenerate-exit `None`; the progress-line quote; the bootstrap references).
 **Unclear / incorrect / suspicious:** a degenerate exit after the first round returns the state as of that round (:3053-3059), not the caller's input as :198-200 says. No code bug found; every stated default matches.
+> _Status (2026-10-07): **Done** for the five Inconsistencies bullets and the Unclear note — the spec drops the per-camera-release non-goal, narrows the gauge non-goal to gauge fixing and covariance (pointing at the point constraints), lists the kernel's callers in place of "serves the bootstrap experiments", quotes the kernel's `free points decided at noise …` line and names the CLI's own wording, says `free_point_decision` is `None` on a degenerate exit too, and says what state a degenerate exit returns in the first and in a later round; the bootstrap-spec and experiment-script references are gone from the spec and from the module doc of `bundle_adjust.rs`. Third copies, Shape and the measurement section are not addressed, branch `spec-fix-1006-13-ba-nongoals`._
 
 ### specs/cli/reconstruction/xform/localize-keypoints-command.md
 **Summary:** `sfm xform --localize-keypoints` runs the cross-view keypoint search over each point's full track on an `embedded_patches` reconstruction, drops refused views, culls points below `min_views`, and rebuilds the tracks through `compact_to_embedded_patches`. Documents the `key=value` parameter string, a 17-row key/default table, errors and the summary. Every key, caster, default, error path and the summary format match the code.
@@ -847,6 +848,7 @@ Read 2026-09-26; open items above.
      time, but #607 added that. :1780 says there is no constraint handling,
      but #400 added it. The spec also says the kernel "serves the bootstrap
      experiments".
+     > _Status (2026-10-07): **Done** — the per-camera-release non-goal is deleted, the gauge non-goal now names the point constraints, and the last non-goal lists the kernel's callers, branch `spec-fix-1006-13-ba-nongoals`._
    - `refit-camera-intrinsics.md:196, 480` says nothing frees the principal
      point, but `sfm densify --ba-refine-principal-point` does.
    - `track-view.md:2015` gives "Deciding anything from a number" as a
