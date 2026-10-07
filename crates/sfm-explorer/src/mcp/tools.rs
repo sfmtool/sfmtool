@@ -798,6 +798,16 @@ fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
     }
 
     let fov = args.optional_f64("fov_short_axis_deg")?;
+    // Only the explicit camera and the relative forms carry a field of view.
+    // The other forms set the field of view themselves or keep it, so a width
+    // sent beside one of them would be silently dropped.
+    if let (Some(_), Some(form)) = (fov, forms.first().filter(|_| explicit.is_empty())) {
+        return Err(args.error(format!(
+            "was given fov_short_axis_deg beside {form}, which sets the field of view itself \
+             or keeps it — fov_short_axis_deg combines only with the explicit camera and the \
+             relative forms (move, turn, orbit). Send it in a call of its own after {form}."
+        )));
+    }
 
     if present("fit") {
         return Ok(ViewCommand::Fit {
@@ -819,14 +829,6 @@ fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
         });
     }
     if present("point") || present("bench_observation") {
-        // Both keep the field of view, so a width sent beside either would be
-        // silently dropped.
-        if fov.is_some() {
-            return Err(args.error(
-                "was given fov_short_axis_deg with a form that keeps the field of view — send \
-                 it in a call of its own.",
-            ));
-        }
         if present("point") {
             return Ok(ViewCommand::Point(args.point("point")?));
         }

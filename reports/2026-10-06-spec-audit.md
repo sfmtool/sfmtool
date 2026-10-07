@@ -487,6 +487,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfm-explorer/src/mcp/` — `tools.rs` (`parse`), `tools/catalog/*.rs`, `mod.rs` (`Command`, `apply_with_window`), `view.rs`, `display.rs`, `edit.rs`, `bench.rs`, `layout.rs`, `frame.rs`, `logged.rs`, `server.rs` (`serve`).
 **Inconsistencies:** (ranked by what an agent would get wrong)
   - Code bug: `set_view` drops `fov_short_axis_deg` beside `fit`, `look_through` or `exit_camera_view` (`tools.rs:794`, :796-848); only `point`/`bench_observation` refuse it (:815-822). Spec 1391 is right.
+    > _Status (2026-10-06): **Done** — `set_view` refuses `fov_short_axis_deg` beside `fit`, `look_through`, `exit_camera_view`, `point` or `bench_observation` in one up-front check naming the form, with a test; the spec states the rule once and no longer says `bench_observation` keeps the field of view, branch `spec-fix-1006-06-mcp-setview-fov-ignored`._
   - Code bug: an explicit placement with fov outside 5-160 moves the camera (`view.rs:257-282`), then refuses (`view.rs:283,505`). Spec 1541 is right. Every `set_view` also ends a held Move Camera lock before validating (`mod.rs:2288-2290`); say which is intended.
   - Code bug: a background edit ending in `Finished::NoChange` (`background/mod.rs:1043`) replies `changed: true` (`mcp/edit.rs:584-590`), against spec 3073/3276 and `mcp/edit.rs:22-24`.
   - Spec 2725-2726, 2949, 3018, 3064, 3181, 3230 and `catalog/edit.rs:121,145,244,307` say five edits "renumber nothing"; with pending point edits each calls `edited.materialize()`, which closes deleted slots (`edited.rs:1162-1175`; `state/edits.rs:1379-1386`). Code right; after `delete_point` an agent reuses stale indexes.
@@ -808,6 +809,7 @@ Read 2026-09-26; open items above.
    - **MCP `set_view`:**
      - It ignores `fov_short_axis_deg` beside `fit`, `look_through` or
        `exit_camera_view` (`mcp/tools.rs:794-848`).
+       > _Status (2026-10-06): **Done** — `set_view` refuses `fov_short_axis_deg` beside `fit`, `look_through`, `exit_camera_view`, `point` or `bench_observation` in one up-front check naming the form, with a test; the spec states the rule once and no longer says `bench_observation` keeps the field of view, branch `spec-fix-1006-06-mcp-setview-fov-ignored`._
      - An out-of-range field of view moves the camera and then refuses
        (`mcp/view.rs:257-283`).
      - A background edit that changes nothing still replies `changed: true`

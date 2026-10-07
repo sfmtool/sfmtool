@@ -409,6 +409,45 @@ fn a_point_refuses_a_field_of_view_and_a_second_form() {
     }
 }
 
+/// A field of view rides only with the explicit camera and the relative forms;
+/// beside any other form it is refused rather than dropped, naming the form.
+#[test]
+fn a_field_of_view_beside_a_form_that_sets_the_view_whole_is_refused() {
+    for (form, arguments) in [
+        ("fit", json!({ "fit": null, "fov_short_axis_deg": 40.0 })),
+        (
+            "look_through",
+            json!({ "look_through": { "camera_image": 3 }, "fov_short_axis_deg": 40.0 }),
+        ),
+        (
+            "exit_camera_view",
+            json!({ "exit_camera_view": true, "fov_short_axis_deg": 40.0 }),
+        ),
+        ("point", json!({ "point": 5, "fov_short_axis_deg": 40.0 })),
+        (
+            "bench_observation",
+            json!({ "bench_observation": { "observation": 0 }, "fov_short_axis_deg": 40.0 }),
+        ),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        let error = tools::parse("set_view", Some(&map)).expect_err("refused");
+        assert!(
+            error
+                .0
+                .contains(&format!("was given fov_short_axis_deg beside {form}")),
+            "{error}"
+        );
+    }
+    for arguments in [
+        json!({ "fov_short_axis_deg": 40.0 }),
+        json!({ "target_distance": 4.0, "fov_short_axis_deg": 40.0 }),
+        json!({ "turn": { "yaw_deg": 10.0 }, "fov_short_axis_deg": 40.0 }),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        tools::parse("set_view", Some(&map)).expect("accepted");
+    }
+}
+
 // ── set_view: animate ───────────────────────────────────────────────────
 
 /// With `animate` the reply is the view the call ends at, while the camera is
