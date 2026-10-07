@@ -575,18 +575,18 @@ pub(super) fn background_reply(
                 result,
                 outcome.found_nearby.as_deref(),
             ),
-            // An operation that finished with a report pushed a version: the
-            // three photometric bench steps end in `Finished::BenchTrack` and
-            // the two solves in an edit, and a run that was cancelled or refused
-            // is the `Err` arm. So the field is here for the reason it is on
-            // every other edit reply -- one question, one answer, whichever
-            // family the caller is in.
+            // An operation that finished with a report either pushed a
+            // version or ended in `Finished::NoChange`, which pushes none and
+            // answers with the version the node still stands at; a run that
+            // was cancelled or refused is the `Err` arm. So the field is here
+            // for the reason it is on every other edit reply -- one question,
+            // one answer, whichever family the caller is in.
             (super::Answer::Version(node), Ok(report)) => {
                 version_reply(state, node, Some(report.clone())).map(|mut reply| {
                     reply
                         .as_object_mut()
                         .expect("a version reply is an object")
-                        .insert("changed".into(), json!(true));
+                        .insert("changed".into(), json!(outcome.changed));
                     super::ToolOutput::Json(reply)
                 })
             }

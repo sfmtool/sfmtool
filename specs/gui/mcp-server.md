@@ -3416,7 +3416,7 @@ needs to survive, is not on the wire: two is what the format's own writer
 requires.
 
 A prune that retires nothing **pushes no version** and reports that it had no
-effect, which is the difference between an operation that ran and found nothing
+effect, answering `changed: false` at the version the node still stands at, which is the difference between an operation that ran and found nothing
 and one that was refused. A refusal is in `AppState`'s own words, which are the
 words the greyed `Prune Covered Observations` entry in the Scene tree carries: a
 reconstruction whose points carry no patch frame has no footprint to read, one

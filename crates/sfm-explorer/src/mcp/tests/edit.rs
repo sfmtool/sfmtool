@@ -809,6 +809,48 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     state.finish_background_task();
 }
 
+/// A background edit that ran to its end and found nothing to change pushes no
+/// version, and its reply says so: `changed: false`, at the version the node
+/// still stands at, with the run's own sentence as the report.
+#[test]
+fn a_background_edit_that_changes_nothing_answers_changed_false() {
+    let (mut state, _viewer) = editable();
+    let id = state.scene[0].id;
+    let before = state.node(id).expect("loaded").history.current_version();
+    let (serial, label) = (before.serial.to_string(), before.label.clone());
+    state
+        .start_background_task(
+            crate::background::Operation::PRUNE_COVERED_OBSERVATIONS,
+            id,
+            Box::new(|_progress| {
+                crate::background::Finished::NoChange("Nothing to prune".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let task = state.background_task().expect("running");
+    let pending = super::super::BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::super::Answer::Version(id),
+        label: task.label.clone(),
+        started: std::time::Instant::now(),
+    };
+    state.finish_background_task();
+    assert_eq!(version_count(&state), 1);
+
+    let reply = match super::super::edit::background_reply(&state, &pending)
+        .expect("the operation has finished")
+    {
+        Ok(ToolOutput::Json(value)) => value,
+        _ => panic!("a version reply is JSON"),
+    };
+    assert_eq!(reply["changed"], json!(false), "{reply}");
+    assert_eq!(reply["serial"], json!(serial), "{reply}");
+    assert_eq!(reply["cursor"], json!(serial), "{reply}");
+    assert_eq!(reply["label"], json!(label), "{reply}");
+    assert_eq!(reply["report"], json!("Nothing to prune"), "{reply}");
+}
+
 /// The conversion is a background task on the wire, and `get_scene` says what
 /// it changed: one call defers, the frame answers with the version it pushed,
 /// and the node's `feature_source` has flipped.

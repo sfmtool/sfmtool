@@ -544,6 +544,13 @@ pub(crate) struct FinishedTask {
     /// operation, and for a run that was refused or cancelled.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) found_nearby: Option<Box<crate::bench::nearby_tracks::FoundNearby>>,
+    /// Whether it pushed a version of the node it ran on.
+    ///
+    /// False for a run that ended in [`Finished::NoChange`] as well as for one
+    /// that was refused or cancelled, so a reply can say `changed: false` for a
+    /// run that succeeded without changing anything.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) changed: bool,
     /// What the whole operation cost, measured from the instant it started.
     ///
     /// Not the entry's `took`, which the frame stamps on settling and which
@@ -1092,6 +1099,7 @@ impl AppState {
             opened,
             created_track,
             found_nearby,
+            changed: installed.is_some(),
             took,
             detail: kept,
             outcome,
