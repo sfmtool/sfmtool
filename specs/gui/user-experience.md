@@ -159,10 +159,11 @@ otherwise claims entirely.
 | Section | Control | Range / default | Purpose |
 |---------|---------|-----------------|---------|
 | Layers | Points | on | Toggle point cloud visibility |
-| Layers | Cameras | on | Toggle frustum and image quad visibility |
+| Layers | Camera Images | on | Toggle frustum and image quad visibility |
 | Layers | Grid | on | Toggle ground plane grid |
 | Layers | Patches | on | Toggle the patch surfel pass |
 | Layers | Points at ∞ | on | Toggle `w = 0` points |
+| Layers | Target indicator | off | Keep the orbit target's indicator drawn without holding Alt |
 | Size | Points | −3…+3, default 0 | Multiplier on the auto point size (log₂ scale) |
 | Size | Reset point size | — | Return Points to 0 |
 | Size | ∞ (px) | 1–16 px, default 3 | On-screen splat radius for `w = 0` points |
@@ -170,7 +171,8 @@ otherwise claims entirely.
 | Patches | Opacity | 0–1, default 1.0 | Global multiply on patch color alpha |
 | Patches | Size | −3…+3, default 0 | Multiplier on stored patch half-extents (log₂) |
 | Patches | Edge cutoff | 0–1, default 0.0 | Coverage alpha below which patch texels are discarded |
-| Camera | FOV ° | 10°–120° | Viewport FOV |
+| Camera | Maintain Z-up | on | Turn the view back to +Z up whenever it is not looking through a camera; Q and E turn it off |
+| Camera | FOV ° | 10°–120°, default 45° | Viewport FOV |
 | Camera | Reset FOV | — | Return FOV to 45° |
 | Advanced | EDL width | 0.5–8 px, default 2.4 | EDL neighbour-sample reach |
 | Advanced | Frustum | 0.05–5, log, default 0.5 | Frustum stub depth as a fraction of length scale |

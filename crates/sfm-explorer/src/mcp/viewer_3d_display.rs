@@ -95,8 +95,9 @@ pub(super) fn parse_change(args: &Args) -> Result<Viewer3dDisplayChange, ToolErr
                 Some(number) => {
                     if !range.contains(number) {
                         return Err(args.error(format!(
-                            "wants {name} to be a number from {} — got {number}.",
-                            range.describe()
+                            "wants {name} to be a number from {} — got {}.",
+                            range.describe(),
+                            sfmtool_core::readable::Readable(number)
                         )));
                     }
                     Some(FieldValue::Number(range.round(number)))

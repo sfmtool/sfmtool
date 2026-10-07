@@ -835,8 +835,8 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Seventeen reads, sixty-six writes, four input tools, the one that writes
-    // a file, and the one that hands back a picture.
+    // Sixteen JSON reads, the one read that hands back a picture, sixty-six
+    // writes, four input tools, and the one that writes a file.
     assert_eq!(catalog.len(), 88, "the catalog has grown or shrunk");
     assert_eq!(
         catalog

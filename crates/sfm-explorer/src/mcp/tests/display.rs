@@ -668,6 +668,15 @@ fn set_viewer_3d_display_refuses_a_value_its_slider_cannot_hold() {
     );
     assert!(error.0.contains("0.5 to 100"), "{error}");
 
+    // A huge value is written in exponent form, not as hundreds of digits.
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "length_scale": 1e300 }),
+    );
+    assert!(error.0.contains("got 1e300."), "{error}");
+
     let error = refused_call(
         &mut state,
         &mut viewer,

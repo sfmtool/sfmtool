@@ -4695,14 +4695,21 @@ where a test hands no host over.
   slider's decimals (`1.53` to `1.5`); `show_patches` is set with no patch data
   loaded; a number outside its range is refused with the range in the message,
   as are a value of the wrong type, `fov_short_axis_deg` (an unknown argument)
-  and an empty call, and none of those changes anything; every slider's range
-  holds no value that is not finite. The log gets one `Display` entry per
+  and an empty call, and none of those changes anything; a refused `1e300` is
+  written in exponent form; every slider's range holds no value that is not
+  finite. A scene scale seeded from the points at load reads back as a value
+  the set accepts, and drawing the HUD leaves it unchanged; both ends of every
+  slider are accepted and read back as the decimals they are written as; the
+  schema's `minimum` and `maximum` are those same decimal ends; and a small
+  negative value such as `-0.04` on `point_size_log2` rounds to `0.0`, not
+  `-0.0`. The log gets one `Display` entry per
   changed field in the HUD's words, as `Mcp`, a repeat of the newest field folds
   into its row, and an unchanged field records nothing; every field's text is
   asserted against the words the HUD wrote before the list existed. In
   `viewer_3d::hud::tests`, a click on the **Target indicator** checkbox ticks
   it, records `Target indicator on` as `Field::text` spells it, and keeps the
-  indicator drawn with Alt up.
+  indicator drawn with Alt up; with the checkbox clear, holding Alt shows the
+  indicator and letting go hides it.
 - **Every `set_image_detail_view` target lands where it was aimed**, checked
   against the one thing the reply and the request can be compared on: the centre
   of `visible_rect_px`. A pixel, a point's observation and a feature each end at
