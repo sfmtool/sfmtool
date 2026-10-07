@@ -140,6 +140,12 @@ The design: the model, the maths, the invariants, the argument that it works.
 Derivations, the failure modes it is built against, the empirical evidence
 behind any tuned value. Everything a doc comment should *link to* rather than
 repeat lives here — this section is the reason the code can stay terse.
+
+State the *conclusion* of a measurement here, with the number that drives a
+default or a design choice, and link the measurement itself. Dated benchmark
+runs, A/B tables and the history of how a value was found go in a sibling
+measurements file (see "Measurement files" at the bottom), so the spec stays a
+description of what the code is.
 -->
 
 ## Implementation notes
@@ -155,6 +161,46 @@ for something spelled here.
 Not this: a transcription of the body, a walk through the control flow, a list of
 the private helpers. If a sentence would need editing when the code is refactored
 without changing behaviour, it is the wrong sentence.
+-->
+
+## Determinism and precision
+
+<!--
+For a numerical kernel: which floating-point type it computes in, and how
+reproducible its output is. Start from the spec's goals, not from a habit. Say
+what the output is used for, how precise that use needs it to be, and what
+reproducibility a caller or a test actually depends on. Then choose the
+cheapest setting that meets those needs, and say why it meets them.
+
+**Precision.** Use `f32` when the inputs carry less precision than `f32` holds
+and nothing in the computation amplifies error. SIFT keypoints, `u8`
+descriptors and image intensities are examples of such inputs. `f32` halves
+memory and cache traffic and doubles SIMD width. Use `f64` where a specific
+hazard needs it: long sums whose error grows with the count, nearly cancelling
+differences, ill-conditioned normal equations, or world coordinates far from
+the origin. Name the hazard, and where a choice was tested, give the measured
+difference between the two types on real data and link the measurement. "`f64`
+to be safe" is not a reason; past code has paid for `f64` where `f32` was
+enough.
+
+**Determinism.** Say which of these the output promises, and why the goals
+need that level:
+
+- bit-identical for every thread count;
+- bit-identical for a fixed thread count;
+- equal within a stated tolerance, with the same discrete decisions (the same
+  inliers, the same accepted items).
+
+Some guarantees cost little: fixed seeds, sorted outputs, and tie-breaks that
+do not depend on scheduling. Take those. Other guarantees cost parallelism: a
+reduction forced into a fixed order, chunking pinned to a fixed size, or a
+`rayon` stage made sequential. Do not take those unless a stated goal needs bit
+identity, such as a content hash, a cache key or a golden file. Otherwise
+promise tolerance-level agreement and test at that level. Past code has
+insisted on bit identity where nothing depended on it, and lost `rayon`
+parallelism for it.
+
+Drop this section for code with no floating-point or parallel work.
 -->
 
 ## Parameters
@@ -184,7 +230,8 @@ reason. Do not let a Rust-side suffix (`_py`, `_rs`) reach a Python name.
 
 <!--
 What must be true for this to be considered working: the properties, the
-degenerate inputs, the determinism guarantees. Name the test module.
+degenerate inputs, and the guarantees promised under Determinism and precision,
+tested at the level promised there and no stricter. Name the test module.
 -->
 
 ## Non-goals
@@ -221,6 +268,34 @@ are settled — a stale open question reads as a live one.
   contract. A Rust API section is only warranted where other modules call in.
 
 Add a row to the area's `README.md` index when you file a new spec.
+
+### Measurement files
+
+A spec whose design rests on measurements keeps them in a sibling file named
+`<spec-name>-measurements.md`, linked from the spec in the place where each
+conclusion is stated. The file gets its own row in the area's `README.md`.
+[`kdf-layout-measurements.md`](core/features/kdf-layout-measurements.md) is an
+example. The file is a record, so dated sections are allowed there. They are
+not allowed in the spec.
+
+A table of numbers does not explain itself, so the file says why each
+measurement exists:
+
+- **The opening** names the spec it supports and the decisions its measurements
+  bear on, in a plain sentence for someone who has not read the spec.
+- **Each measurement** says what question it answers, and why this measurement
+  answers it: why this dataset, this scale, this baseline. It also records
+  enough to repeat it: the data, the commit or PR, and the machine where that
+  matters.
+- **Each result** says in simple terms what it decided: "layout B is a third
+  the size of layout A at equal query speed, so the format uses B". If the
+  decision is still
+  open, say what result would settle it. A result that bore on no decision
+  should be deleted, or its question stated.
+
+When the code changes enough that a measurement no longer describes it, say so
+in that section, or re-measure. Do not silently keep numbers from code that no
+longer exists.
 
 ### File format specs stand alone
 

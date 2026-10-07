@@ -650,11 +650,21 @@ still open are listed here; line numbers are current.
   `specs/core/features/kdf-layout-measurements.md` (#761) already follows that
   pattern for the `.kdf` layout study. Every other item on this spec is done
   (#742, #777).
+  > _Status (2026-10-06): **Partially done** — decided: `specs/TEMPLATE.md` §
+  > "Measurement files" now asks a spec to keep its measurements in a sibling
+  > `<name>-measurements.md` that says why each measurement was chosen and what
+  > decision each result made or would settle, branch `spec-audit-2026-10-06`.
+  > Moving this spec's measurement history into such a file is still open._
 - **`specs/TEMPLATE.md`: proposed "Determinism and precision" section for
   numerical-kernel specs** (from the focal-vote read). Not adopted: the
   template mentions determinism only as one item under § Testing
   (`TEMPLATE.md:186-187`). **Needs decision** by a maintainer. The focal-vote
   spec itself is done (#751, #778).
+  > _Status (2026-10-06): **Done** — adopted as § "Determinism and precision"
+  > in `specs/TEMPLATE.md`. The section starts from the spec's goals, takes
+  > `f32` unless a named hazard needs `f64`, and asks for bit identity only where
+  > a goal depends on it, so that `rayon` parallelism is not given up for
+  > nothing. Branch `spec-audit-2026-10-06`._
 - **`specs/core/features/kdf-constellation-query.md:458-467`: the
   `image_feature_ids` cost is described but not measured.** The spec says the
   whole-origin-table pass is paid on every `constellation_from_keypoints` call
