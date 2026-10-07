@@ -10,8 +10,77 @@ near-duplicate viewpoints of which, measured by keypoint displacement —
 and the tests hold the current poses against it. Because the substrate
 never reads poses, it is computed before any reconstruction exists and
 stays valid through seeding, growth, and refinement; the same structure
-serves pair selection, thinning, neighbour initialization, and
-verification at every stage.
+serves pair selection, neighbour initialization, and verification at
+every stage.
+
+## Interface
+
+The kernels live in
+[pose_verification.rs](../../../crates/sfmtool-core/src/geometry/pose_verification.rs),
+bound under `sfmtool._sfmtool.geometry` as `verify_poses` and
+`repair_poses`; the displacement-neighborhood substrate they read is
+[displacement.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/displacement.rs),
+whose queries and compact array serialization hang off the
+`ClusterCovisibility` pyclass
+([cluster-covisibility.md](../features/cluster-covisibility.md)). The
+kernels build on homography estimation ([focal-vote.md](focal-vote.md)),
+batch registration ([reconstruction-growth.md](reconstruction-growth.md)),
+and absolute-pose refinement ([absolute-pose.md](absolute-pose.md)).
+
+```rust
+pub fn verify_poses(
+    cluster_indexes: &[u32],          // nondecreasing: each cluster is a contiguous run
+    image_indexes: &[u32],
+    positions_xy: &[[f64; 2]],        // full-pixel keypoint per observation
+    camera: &CameraIntrinsics,        // shared by every image
+    points: &[[f64; 3]],              // indexed by cluster id; NaN rows invalid
+    quaternions_wxyz: &[[f64; 4]],    // registered world-to-camera poses …
+    translations: &[[f64; 3]],
+    posed_indexes: &[u32],            // … and the images they belong to
+    neighborhood: &DisplacementNeighborhood,
+    options: &VerifyOptions,
+) -> PoseVerification;
+
+pub fn repair_poses(
+    /* the same nine inputs */
+    options: &RepairOptions,          // carries a VerifyOptions
+) -> PoseRepair;
+```
+
+The caller supplies the substrate; neither kernel builds it. It is
+computed once from the cluster tracks and outlives any one pose state, so
+a pipeline builds it with `DisplacementNeighborhood::from_clusters` (or
+reads it off a positioned `ClusterCovisibility`), persists it, and reloads
+it with `DisplacementNeighborhood::from_arrays` for each later check. The
+binding takes it in the persisted form, as the four magnitude columns of
+`ClusterCovisibility.neighborhood_arrays()`, because the kernels never
+read the mean vector. `PoseVerification` holds both screens' per-image
+flags and scores and their union `flagged`; `PoseRepair` holds that
+verification plus the updated poses, a `repaired` mask, and the inlier
+fractions before and after each attempt. Every output array is aligned
+with `posed_indexes`. Both kernels are read-only on the observation data;
+images are independent in both screens and run in parallel.
+
+```python
+from sfmtool._sfmtool.geometry import verify_poses
+from sfmtool._sfmtool.matching import ClusterCovisibility
+
+cov = ClusterCovisibility.from_arrays(
+    cluster_starts, member_images, num_images, positions_xy=member_xy
+)
+d = cov.neighborhood_arrays()
+out = verify_poses(
+    cluster_indexes, image_indexes, positions_xy, camera, points,
+    quaternions_wxyz, translations, posed_indexes,
+    d["i"], d["j"], d["count"], d["mean_magnitude"],
+)
+suspects = posed_indexes[out["flagged"]]
+```
+
+`repair_poses` takes the same arguments plus `min_obs`, `inlier_floor`
+and `inlier_margin`, and returns the same dict extended with
+`quaternions_wxyz`, `translations`, `repaired`, `inlier_before` and
+`inlier_after`.
 
 ## Substrate: the displacement neighborhood
 
@@ -96,15 +165,21 @@ their union.
 
 ## Screen B: measured-versus-posed relative rotation
 
-For each registered camera and each of its `max_neighbors` `nearest`
-neighbours (the low-parallax regime, where the conjugate-homography model
-holds): estimate the homography over the pair's shared-cluster
+For each registered camera and each of its `max_neighbors`
+lowest-displacement *registered* neighbours (the low-parallax regime,
+where the conjugate-homography model holds) — ranked as `nearest` ranks
+partners over the same `min_shared` floor, but with unregistered partners
+removed before the list is cut to length: estimate the homography over the pair's shared-cluster
 correspondences — skipping a pair with fewer than
 `min_pair_correspondences` of them, or a homography carrying fewer than
 `min_h_inliers` — extract the relative rotation `K⁻¹HK`, and compare with
-the pose-implied relative rotation. Orthonormalization is the polar
-factor with the whole-sign fix used everywhere in this codebase, which
-resolves the `H ≃ −R` sign ambiguity a per-column fix would leave open;
+the pose-implied relative rotation. Orthonormalization is
+`polar_rotation` in
+[rotation.rs](../../../crates/sfmtool-core/src/geometry/rotation.rs): the
+polar factor with the whole-sign fix, which resolves the `H ≃ −R` sign
+ambiguity a per-column fix would leave open (its sibling
+`orthonormalized` keeps the orientation instead, for inputs already known
+to be near a proper rotation, and would be wrong here);
 `K⁻¹HK` is an *optical*-frame rotation, so it is conjugated by
 `S = diag(1, −1, −1)` on both sides to reach the canonical frame the
 poses live in. The per-image score is the **median** angular discrepancy
@@ -129,40 +204,22 @@ from a neighbour this pass just fixed. Repairs are therefore order
 dependent, and sorting on the image index rather than on flag discovery
 order is what keeps the pass deterministic.
 
-For each flagged camera: build an initial pose from its top-2 `nearest`
-registered neighbours over the same `min_shared` floor — chordal mean of
-their rotations, mean of their centres — then trimmed pose-only
-refinement against the current structure (5 trim rounds keeping the best
-0.6 of observations each, final inliers at 3 px). A camera with fewer
-than two registered near neighbours, or with fewer than `min_obs`
-observations of valid points, is skipped and its flag stands. Accept only
+For each flagged camera: build an initial pose from its two
+lowest-displacement registered neighbours, chosen as in Screen B over the
+same `min_shared` floor — chordal mean of their rotations, mean of their
+centres — then trimmed pose-only refinement against the current structure
+(5 trim rounds keeping the best 0.6 of observations each, final inliers
+at `INLIER_PX` = 3 px). A camera is skipped, and its flag stands, when it
+has fewer than two registered near neighbours, when the chordal mean has
+no polar factor (`polar_rotation` returns `None` for a non-finite or
+degenerate sum), or when it has fewer than `min_obs` observations of
+valid points. Accept only
 when the all-observation inlier fraction reaches
 `max(inlier_floor, before + inlier_margin)` (defaults 0.10 and 0.05): an
 "improvement" below the absolute floor means the camera's neighbourhood
 structure is itself broken, which pose-only repair cannot fix (re-posing
 plus re-triangulation of the segment is a separate concern). Rejected
 repairs leave the pose untouched and the flag standing.
-
-## Inputs and outputs
-
-The kernels live in
-[pose_verification.rs](../../../crates/sfmtool-core/src/geometry/pose_verification.rs),
-bound under `sfmtool._sfmtool.geometry` as `verify_poses` and
-`repair_poses`; the displacement-neighborhood substrate they read is
-[displacement.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/displacement.rs),
-whose queries and compact array serialization hang off the
-`ClusterCovisibility` pyclass
-([cluster-covisibility.md](../features/cluster-covisibility.md)). The
-kernels build on homography estimation ([focal-vote.md](focal-vote.md)),
-batch registration ([reconstruction-growth.md](reconstruction-growth.md)),
-and absolute-pose refinement ([absolute-pose.md](absolute-pose.md)).
-
-Kernels take the flat cluster-observation arrays, the shared camera, the
-current poses and points, and the substrate (or construct it on the
-fly). `verify_poses` returns per-image flags and scores from both
-screens; `repair_poses` additionally returns updated poses and the
-repaired/rejected lists. Both are read-only on the observation data;
-images are independent in both screens and parallelize.
 
 ## Parameters
 
@@ -184,7 +241,7 @@ same file.
 | `min_obs` (`RepairOptions`) | `12` | Skip repairing a flagged camera observing fewer valid points |
 | `inlier_floor` | `0.10` | Absolute inlier-fraction floor an accepted repair must reach |
 | `inlier_margin` | `0.05` | Improvement over the pre-repair inlier fraction an accepted repair must reach |
-| `INLIER_PX` | `3.0` | Final-inlier pixel bound shared by the screens and repair acceptance (matches the growth kernel) |
+| `INLIER_PX` | `3.0` | Repair: final-inlier pixel bound of the pose-only refinement and of the before/after inlier fractions its acceptance compares (the same value as the growth kernel's; the screens do not read it — Screen A scores at batch registration's own 3 px and Screen B's homography uses `HomographyOptions`' default 3 px) |
 | `REFINE_TRIM_ROUNDS` | `5` | Trim rounds in the repair's pose-only refinement |
 | `REFINE_KEEP_FRACTION` | `0.6` | Observations retained per trim round |
 | `REPAIR_INIT_NEIGHBORS` | `2` | Registered neighbours a repair blends its initial pose from |
@@ -211,8 +268,9 @@ a caller can do that without re-running either screen.
   patterns and CSR rows -- on a 300-image, 20 000-cluster synthetic
   scene, masked and unmasked.
 - Screens on a synthetic scene with implanted misregistrations: a
-  wrong-pose camera with healthy neighbours is flagged by both screens;
-  an unflagged scene yields no flags at the default thresholds; a
+  wrong-pose camera with healthy observations is flagged by Screen B and
+  passes Screen A (its support re-derives a pose); one whose observations
+  are also mostly junk is flagged by both screens; an unflagged scene yields no flags at the default thresholds; a
   translation-rich (high-parallax) pair alone never flags (screen B's
   low-parallax gate).
 - Repair: an implanted wrong pose with intact structure is restored to
