@@ -33,6 +33,7 @@ use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
 
+use crate::patch::blur_matched::{BlurMatchKernel, PairMatching, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
@@ -45,8 +46,8 @@ use crate::patch::keypoint_localize::{
 use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::{
-    cell_agreement, choose_reference_view, finite_middle, render_view_tile, ReferenceReadings,
-    ViewTile,
+    blur_matched_agreement, cell_agreement, choose_reference_view_with, finite_middle,
+    render_view_tile, PairZnccReading, ReferenceReadings, ReferenceRuleInputs, ViewTile,
 };
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
@@ -133,6 +134,63 @@ pub struct EvaluateOptions {
     /// window with it. The default is 256 MiB, which is a couple of hundred
     /// views at the offset bound and thousands at the default search radius.
     pub max_cache_bytes: usize,
+    /// How the track stage reads the agreement between its `in` views that the
+    /// reference-view rule decides on.
+    pub reference_view: ReferenceViewOptions,
+}
+
+/// How an evaluation reads the agreement between a track's views for the
+/// reference-view rule: whether it takes blur-matched readings beside the
+/// plain ones, and which of the two the rule's agreement test and cell check
+/// read.
+///
+/// The plain readings are always taken. The blur-matched ones cost a blur of
+/// the sharper tile for each pair whose ellipses differ.
+///
+/// The default takes the blur-matched readings, skipping a direction where
+/// the two ellipses differ by less than [`DEFAULT_MIN_ELLIPSE_RATIO`], with
+/// the anisotropic kernel, and has both tests read them: on the review cases
+/// that adds about 0.2 ms to a track's evaluation (3%) and agrees with the
+/// hand picks on two more tracks of 77. `specs/core/patch/reference-view.md`
+/// § "Blur-matched agreement" has the measurements.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReferenceViewOptions {
+    /// How the blur-matched readings are taken. [`PairMatching::Plain`] takes
+    /// none, and both tests then read the plain readings whatever
+    /// [`Self::agreement`] and [`Self::cells`] say.
+    pub matching: PairMatching,
+    /// The shape of the blur.
+    pub kernel: BlurMatchKernel,
+    /// Which pair ZNCC the agreement test reads.
+    pub agreement: PairZnccReading,
+    /// Which pair ZNCC grid the cell check reads.
+    pub cells: PairZnccReading,
+}
+
+impl Default for ReferenceViewOptions {
+    fn default() -> Self {
+        Self {
+            matching: PairMatching::BlurMatchedAboveRatio(DEFAULT_MIN_ELLIPSE_RATIO),
+            kernel: BlurMatchKernel::Anisotropic,
+            agreement: PairZnccReading::BlurMatched,
+            cells: PairZnccReading::BlurMatched,
+        }
+    }
+}
+
+impl ReferenceViewOptions {
+    /// Which readings the rule reads under these options: the plain ones
+    /// wherever no blur-matched readings are taken.
+    pub fn inputs(&self) -> ReferenceRuleInputs {
+        if self.matching.is_blur_matched() {
+            ReferenceRuleInputs {
+                agreement: self.agreement,
+                cells: self.cells,
+            }
+        } else {
+            ReferenceRuleInputs::PLAIN
+        }
+    }
 }
 
 /// [`EvaluateOptions::max_seed_offset_px`]'s default: 64 patch-grid px.
@@ -158,6 +216,7 @@ impl Default for EvaluateOptions {
             },
             max_seed_offset_px: DEFAULT_MAX_SEED_OFFSET_PX,
             max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
+            reference_view: ReferenceViewOptions::default(),
         }
     }
 }
@@ -1183,6 +1242,9 @@ fn evaluate_track(
             measurement.pair_zncc = None;
             measurement.pair_zncc_grid = None;
             measurement.cell_deficit = None;
+            measurement.blur_matched_pair_zncc = None;
+            measurement.blur_matched_pair_zncc_grid = None;
+            measurement.blur_matched_cell_deficit = None;
             measurement.reference_view = None;
             if let Some(pixel) = seed_of(observation) {
                 // The offset is measured from the **patch's** projection,
@@ -1524,7 +1586,13 @@ fn view_tile_self_similarity(tile: &ViewTile) -> TileSelfSimilarity {
 /// coherence renders only the samples inside its window's disk and common to
 /// every member, so its corner cells would hold part of their square, and the
 /// cell check was measured on whole cells with each pair's own support.
-/// Timed as the `reference view` phase of `progress`.
+///
+/// Where [`ReferenceViewOptions::matching`] asks for them, the blur-matched
+/// readings are taken from the same tiles ([`blur_matched_agreement`]), each
+/// tile's self-similarity ellipse saying how sharp it is, and the rule reads
+/// the readings [`ReferenceViewOptions::inputs`] names. Timed as the
+/// `reference view` phase of `progress`, whose detail phases time member
+/// coherence's renders and the blur-matched pairs.
 fn read_reference_view(
     next: &mut EditableTrack,
     images: &[ProjectedImage<'_>],
@@ -1567,24 +1635,64 @@ fn read_reference_view(
         .collect();
     let refs: Vec<&ViewTile> = tiles.iter().map(|(_, tile)| tile).collect();
     let cells = cell_agreement(&refs);
+    let reference = options.reference_view;
+    let blur_matched = reference.matching.is_blur_matched().then(|| {
+        let ellipses: Vec<Option<[[f64; 2]; 2]>> = tiles
+            .iter()
+            .map(|(i, _)| {
+                next.observations[*i]
+                    .track
+                    .as_ref()
+                    .and_then(|m| m.zncc_self_similarity_ellipse)
+                    .map(|e| e.grid_px)
+                    .filter(|e| e.axes.iter().all(|a| a.is_finite()))
+                    .map(|e| e.matrix)
+            })
+            .collect();
+        blur_matched_agreement(
+            &refs,
+            &ellipses,
+            reference.matching,
+            reference.kernel,
+            params.window,
+            &phase,
+        )
+    });
     for (k, (i, _)) in tiles.iter().enumerate() {
         if let Some(measurement) = next.observations[*i].track.as_mut() {
             measurement.pair_zncc = pair_zncc[k];
             measurement.pair_zncc_grid = Some(cells.pair_zncc_grid[k]);
             measurement.cell_deficit = finite(cells.deficit[k]);
+            if let Some(b) = &blur_matched {
+                measurement.blur_matched_pair_zncc = finite(b.pair_zncc[k]);
+                measurement.blur_matched_pair_zncc_grid = Some(b.cells.pair_zncc_grid[k]);
+                measurement.blur_matched_cell_deficit = finite(b.cells.deficit[k]);
+            }
         }
     }
     let rows: Vec<usize> = tiles.iter().map(|(i, _)| *i).collect();
-    match decide_reference_view(next, &rows) {
-        Some(i) => progress_note!(phase, "{} views, observation {i} picked", rows.len()),
-        None => progress_note!(phase, "{} views, none picked", rows.len()),
+    let picked = decide_reference_view(next, &rows, reference.inputs());
+    match (picked, &blur_matched) {
+        (Some(i), Some(b)) => progress_note!(
+            phase,
+            "{} views, observation {i} picked, {} of {} pairs blurred",
+            rows.len(),
+            b.pairs.pairs_blurred,
+            b.pairs.pairs
+        ),
+        (Some(i), None) => progress_note!(phase, "{} views, observation {i} picked", rows.len()),
+        (None, _) => progress_note!(phase, "{} views, none picked", rows.len()),
     }
 }
 
 /// Run the reference-view rule over the observations `rows` from the readings
-/// their track-stage slots carry, write each one's standing, and return the
-/// observation it picks.
-fn decide_reference_view(track: &mut EditableTrack, rows: &[usize]) -> Option<usize> {
+/// their track-stage slots carry, the ones `inputs` names, write each one's
+/// standing, and return the observation it picks.
+fn decide_reference_view(
+    track: &mut EditableTrack,
+    rows: &[usize],
+    inputs: ReferenceRuleInputs,
+) -> Option<usize> {
     let readings: Vec<ReferenceReadings> = rows
         .iter()
         .map(|&i| {
@@ -1596,14 +1704,20 @@ fn decide_reference_view(track: &mut EditableTrack, rows: &[usize]) -> Option<us
                 coverage: m.and_then(|m| m.coverage),
                 clipped_share: m.and_then(|m| m.clipped_share),
                 viewing_angle_deg: m.and_then(|m| m.viewing_angle_deg),
-                cell_deficit: m.and_then(|m| m.cell_deficit),
-                pair_zncc: m.and_then(|m| m.pair_zncc),
+                cell_deficit: m.and_then(|m| match inputs.cells {
+                    PairZnccReading::Plain => m.cell_deficit,
+                    PairZnccReading::BlurMatched => m.blur_matched_cell_deficit,
+                }),
+                pair_zncc: m.and_then(|m| match inputs.agreement {
+                    PairZnccReading::Plain => m.pair_zncc,
+                    PairZnccReading::BlurMatched => m.blur_matched_pair_zncc,
+                }),
                 semi_major: axes.map(|a| a[0]),
                 semi_minor: axes.map(|a| a[1]),
             }
         })
         .collect();
-    let choice = choose_reference_view(&readings);
+    let choice = choose_reference_view_with(&readings, inputs);
     for (k, &i) in rows.iter().enumerate() {
         if let Some(measurement) = track.observations[i].track.as_mut() {
             measurement.reference_view = choice.standing(k);
@@ -1619,15 +1733,17 @@ fn decide_reference_view(track: &mut EditableTrack, rows: &[usize]) -> Option<us
 /// `in` when the track is read, so a verdict moved afterwards
 /// ([`apply_thresholds`], [`set_verdict`](super::steps::set_verdict)) leaves
 /// them describing the old `in` set. Here an `out` row loses its pair ZNCC,
-/// pair ZNCC grid, cell deficit and standing, which an `out` row never
-/// carries, and the rule runs again over the rows that are still `in` and that
-/// it decided on last time, from the readings they carry. Those readings were
+/// pair ZNCC grid, cell deficit, their blur-matched readings and its standing,
+/// which an `out` row never carries, and the rule runs again over the rows
+/// that are still `in` and that it decided on last time, from the readings
+/// they carry and on the inputs it read them by last time. Those readings were
 /// taken under the old set; the next evaluation reads them under the new one.
 /// A row turned `in` since the reading has no pair readings and no standing
 /// until then, because the rule has not read it. So the reference view is
 /// always an `in` row, and there is at most one.
 pub(super) fn restate_reference_view(track: &mut EditableTrack) {
     let mut rows = Vec::new();
+    let mut inputs = ReferenceRuleInputs::PLAIN;
     for (i, observation) in track.observations.iter_mut().enumerate() {
         let Some(measurement) = observation.track.as_mut() else {
             continue;
@@ -1636,13 +1752,18 @@ pub(super) fn restate_reference_view(track: &mut EditableTrack) {
             measurement.pair_zncc = None;
             measurement.pair_zncc_grid = None;
             measurement.cell_deficit = None;
+            measurement.blur_matched_pair_zncc = None;
+            measurement.blur_matched_pair_zncc_grid = None;
+            measurement.blur_matched_cell_deficit = None;
             measurement.reference_view = None;
-        } else if measurement.reference_view.is_some() {
+        } else if let Some(standing) = measurement.reference_view {
+            // Every standing of one reading carries the same inputs.
+            inputs = standing.inputs;
             rows.push(i);
         }
     }
     if !rows.is_empty() {
-        decide_reference_view(track, &rows);
+        decide_reference_view(track, &rows, inputs);
     }
 }
 

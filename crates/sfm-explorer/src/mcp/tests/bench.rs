@@ -2594,8 +2594,20 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             Some(3),
             "{track}"
         );
+        // The default evaluation takes the blur-matched readings, and the rule
+        // reads them.
+        assert!(measured["blur_matched_pair_zncc"].is_number(), "{track}");
+        assert_eq!(
+            measured["blur_matched_pair_zncc_grid"]
+                .as_array()
+                .map(Vec::len),
+            Some(3),
+            "{track}"
+        );
         let standing = &measured["reference_view"];
         assert!(standing["fallback"].is_string(), "{track}");
+        assert_eq!(standing["agreement_read"], json!("blur_matched"), "{track}");
+        assert_eq!(standing["cells_read"], json!("blur_matched"), "{track}");
         if standing["is_reference"] == json!(true) {
             assert!(standing["rejected_by"].is_null(), "{track}");
             picked.push(i);

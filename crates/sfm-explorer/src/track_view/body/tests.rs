@@ -302,6 +302,7 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
             reference_view: Some(ReferenceStanding {
                 rejected_by,
                 fallback,
+                inputs: Default::default(),
             }),
             ..TrackMeasurement::default()
         }),
@@ -417,6 +418,86 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
     assert_eq!(
         super::reference::reference_cell(&picked, StageKind::Cluster, &current).text,
         "-"
+    );
+}
+
+/// Where the rule read the blur-matched agreements, the cell shows the
+/// blur-matched pair ZNCC, the hover gives both readings and says which the
+/// rule read, and a rejection quotes the threshold that goes with it.
+#[test]
+fn the_reference_cell_shows_the_blur_matched_readings_the_rule_read() {
+    use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
+    use sfmtool_core::patch::reference_view::{
+        PairZnccReading, ReferenceFallback, ReferenceRuleInputs, ReferenceStanding, ReferenceTest,
+    };
+
+    let inputs = ReferenceRuleInputs {
+        agreement: PairZnccReading::BlurMatched,
+        cells: PairZnccReading::BlurMatched,
+    };
+    let row = |rejected_by: Option<ReferenceTest>| Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: None,
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            viewing_angle_deg: Some(20.0),
+            coverage: Some(1.0),
+            clipped_share: Some(0.0),
+            pair_zncc: Some(0.834),
+            blur_matched_pair_zncc: Some(0.912),
+            cell_deficit: Some(0.12),
+            blur_matched_cell_deficit: Some(0.27),
+            pair_zncc_grid: Some([[0.9; 3]; 3]),
+            blur_matched_pair_zncc_grid: Some([[0.95; 3]; 3]),
+            reference_view: Some(ReferenceStanding {
+                rejected_by,
+                fallback: ReferenceFallback::None,
+                inputs,
+            }),
+            ..TrackMeasurement::default()
+        }),
+    };
+    let current = crate::bench::live::Evaluation::Current;
+    let cell = |o: &Observation| super::reference::reference_cell(o, StageKind::Track, &current);
+
+    let picked = cell(&row(None));
+    assert_eq!(picked.text, "reference\n20\u{b0}, 91%");
+    let hover = picked.hover.expect("a hover");
+    assert!(
+        hover.contains("Pair ZNCC 83%, the median with the other rows that are in.\n"),
+        "{hover}"
+    );
+    assert!(
+        hover.contains("Blur-matched pair ZNCC 91%") && hover.contains("first. The rule reads it."),
+        "{hover}"
+    );
+    assert!(
+        hover.contains("Blur-matched cell deficit 0.27. The rule reads it."),
+        "{hover}"
+    );
+    assert!(
+        hover.contains("Blur-matched pair ZNCC per ninth:"),
+        "{hover}"
+    );
+    assert!(hover.contains("   95   95   95"), "{hover}");
+
+    let hover = cell(&row(Some(ReferenceTest::Cells)))
+        .hover
+        .expect("a hover");
+    assert!(
+        hover.contains("0.27 below the track's typical agreement"),
+        "{hover}"
+    );
+    assert!(hover.contains("over the 0.25 allowed"), "{hover}");
+    let hover = cell(&row(Some(ReferenceTest::Agreement)))
+        .hover
+        .expect("a hover");
+    assert!(
+        hover.contains("its blur-matched pair ZNCC is more than 15 points below"),
+        "{hover}"
     );
 }
 

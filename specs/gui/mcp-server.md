@@ -3626,15 +3626,22 @@ channel. An `in` row also carries `pair_zncc`, the median of its pairwise ZNCCs
 with the other `in` rows; `pair_zncc_grid`, the same per ninth, three rows of
 three, null in a ninth with no reading; `cell_deficit`, the most its
 `pair_zncc_grid` falls below the track's typical agreement, the median over
-the `in` rows, in a ninth whose typical agreement is at least `0.5`; and
+the `in` rows, in a ninth whose typical agreement is at least `0.5`;
+`blur_matched_pair_zncc`, `blur_matched_pair_zncc_grid` and
+`blur_matched_cell_deficit`, the same three with each pair's tiles blur-matched
+first ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
+null where the evaluation took none; and
 `reference_view`, `{"is_reference",
-"rejected_by", "fallback"}`, the reference-view rule's decision: `rejected_by`
+"rejected_by", "fallback", "agreement_read", "cells_read"}`, the reference-view
+rule's decision: `rejected_by`
 is null for the row it picks and otherwise the first test that turned the row
-away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`), and
+away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`),
 `fallback` names the tests the rule dropped because no row passed them (`none`,
-`without_angle`, `without_angle_or_cells`, `without_any`); dropping the angle
+`without_angle`, `without_angle_or_cells`, `without_any`), and `agreement_read`
+and `cells_read` name the reading the agreement test and the cell check read,
+`blur_matched` by default or `plain`; dropping the angle
 test drops its 65° limit only, and a row at 90° or more is turned away by
-`angle` under every fallback. The four are null on an `out` row, which the rule
+`angle` under every fallback. These are null on an `out` row, which the rule
 does not consider, and `stage_data` reports the row the rule picked as
 `reference_observation`, null where it picked none; a step that turns a row
 `out` clears its standing and has the rule pick again among the rows still

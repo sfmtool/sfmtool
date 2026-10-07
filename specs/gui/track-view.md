@@ -1320,11 +1320,16 @@ bitmap.** A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a
 candidate has at least 99% of its tile on the photograph, at most 5% of the
 photograph under the tile clipped, a viewing angle of at most 65°, and no ninth
-where it agrees with the other rows more than 0.3 below the track's **typical
+where it agrees with the other rows more than 0.25 below the track's **typical
 agreement** there, the median over the `in` rows; of the candidates whose pair
 ZNCC, the median of its ZNCCs with the other `in` rows, is within 15 points of
 the best candidate's, the rule picks the one with the smallest self-similarity
-radius. When no row passes, the rule drops the 65° limit, then the check of the
+radius. Both agreements are **blur-matched** by default: before two rows'
+tiles are correlated the sharper is blurred to the other's sharpness, along
+each direction in which their self-similarity ellipses differ by more than a
+quarter ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
+so a sharp row is not counted as disagreeing for detail the blurrier rows lack.
+Under plain readings the cell bar is 0.3. When no row passes, the rule drops the 65° limit, then the check of the
 ninths, then coverage and clipping; a row that sees the patch at 90° or more,
 edge on or from behind, is never picked. The cell's first line is the pick,
 `reference`, drawn on a green fill, or the word for the first test that turned
@@ -1334,13 +1339,16 @@ says the rule could not compare its sharpness, rather than naming a sharper
 row. The column says *ninth* for a cell of the ZNCC grid, since a *cell* in the
 table is one row's entry in one column. Its second line is the viewing angle, the angle
 between the patch's normal and the direction to the camera at the keypoint, and
-the pair ZNCC in percent. Hovering the cell (`reference::reference_hover`)
+the pair ZNCC the rule read, in percent: the blur-matched one by default.
+Hovering the cell (`reference::reference_hover`)
 gives the reason in a sentence with the row's own reading against the
-threshold, the tests the rule dropped when no row passed them, and every
-reading: the viewing angle and the tilt direction (the direction in the
-patch's plane the ray from the camera leans along, from `u` towards `v`), the
-coverage, the clipped share, the pair ZNCC, the cell deficit, and the pair ZNCC
-of each ninth. The cell prints `-` at the cluster stage, before the track is
+threshold that goes with it, the tests the rule dropped when no row passed
+them, and every reading: the viewing angle and the tilt direction (the
+direction in the patch's plane the ray from the camera leans along, from `u`
+towards `v`), the coverage, the clipped share, the pair ZNCC and its
+blur-matched form, the cell deficit and its blur-matched form, each followed by
+`The rule reads it.` where the rule read it, and the pair ZNCC of each ninth,
+plain and blur-matched. The cell prints `-` at the cluster stage, before the track is
 evaluated, and where it could not be evaluated. The column reports the rule's
 pick; the track's bitmap is the fused one, and no bar reads the pick.
 
@@ -1889,7 +1897,8 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   of two other items on the bench appearing nowhere in what the frame painted; a
   row per observation in index order; the *Reference* column marking exactly
   one row `reference` once the track is evaluated, every row printing its
-  viewing angle and pair ZNCC with the readings on hover, and the cell's word
+  viewing angle and pair ZNCC with the readings on hover, the blur-matched
+  readings shown and named as the ones the rule read, and the cell's word
   and reason for each test that turns a row away, a dropped test, an `out` row,
   the cluster stage and a refused evaluation; a verdict under the same observation index,
   pinned; the *Keep* switch's cell taking a click the row behind it does not,

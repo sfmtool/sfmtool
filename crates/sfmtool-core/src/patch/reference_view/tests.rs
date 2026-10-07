@@ -723,3 +723,120 @@ fn a_view_of_the_patch_edge_on_or_from_behind_is_never_a_candidate() {
         vec![Some(ReferenceTest::Angle), Some(ReferenceTest::Angle)]
     );
 }
+
+// ---- Blur-matched readings -------------------------------------------------------
+
+/// The rule on blur-matched readings applies the thresholds that go with them,
+/// and says so in its standings.
+#[test]
+fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
+    let inputs = ReferenceRuleInputs {
+        agreement: PairZnccReading::BlurMatched,
+        cells: PairZnccReading::BlurMatched,
+    };
+    assert_eq!(
+        inputs.agreement_margin(),
+        REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN
+    );
+    assert_eq!(
+        inputs.max_cell_deficit(),
+        REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT
+    );
+    assert_eq!(
+        ReferenceRuleInputs::PLAIN.agreement_margin(),
+        REFERENCE_AGREEMENT_MARGIN
+    );
+    // The blur-matched margin is inclusive.
+    let views = [
+        good(0.95, 0.9),
+        good(0.95 - REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN, 0.2),
+        good(0.95 - REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN - 0.01, 0.1),
+    ];
+    let choice = choose_reference_view_with(&views, inputs);
+    assert_eq!(choice.reference, Some(1));
+    assert_eq!(choice.rejected_by[2], Some(ReferenceTest::Agreement));
+    assert_eq!(choice.standing(0).unwrap().inputs, inputs);
+    // A cell deficit between the two bars.
+    let mut cells = good(0.95, 0.2);
+    cells.cell_deficit =
+        Some(0.5 * (REFERENCE_MAX_CELL_DEFICIT + REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT));
+    let views = [good(0.95, 0.9), cells];
+    assert_eq!(choose_reference_view(&views).reference, Some(1));
+    let choice = choose_reference_view_with(&views, inputs);
+    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Cells));
+}
+
+/// Blur-matched agreement with [`PairMatching::Plain`] reads the cells exactly
+/// as the plain cell agreement does, and on views blurred by differing amounts
+/// it lifts the blurriest view's agreement.
+#[test]
+fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_view() {
+    use crate::patch::blur_matched::{BlurCovariance, BlurMatchKernel, BlurScratch, PairMatching};
+    use crate::patch::normal_refine::PatchWindow;
+    use crate::patch::self_similarity::{
+        zncc_self_similarity_parts, PatchTile, SelfSimilarityParams,
+    };
+
+    // Four views of one smooth texture; the last blurred by 1.5 grid px.
+    let smooth = |r: usize, c: usize| {
+        let (x, y) = (c as f64, r as f64);
+        (128.0
+            + 50.0 * (0.9 * x + 0.3 * y).sin()
+            + 40.0 * (-0.5 * x + 1.1 * y + 1.3).sin()
+            + 25.0 * (1.2 * x - 0.8 * y + 2.0).sin()) as u8
+    };
+    let mut tiles: Vec<ViewTile> = (0..4).map(|_| tile_of(smooth)).collect();
+    let planes = tiles[3].planes();
+    let blurred = planes.blurred(BlurCovariance::isotropic(1.5), &mut BlurScratch::default());
+    for (k, v) in blurred.values.iter().enumerate() {
+        tiles[3].samples[[k / 24, k % 24, 0]] = v.round() as u8;
+    }
+    let ellipses: Vec<Option<[[f64; 2]; 2]>> = tiles
+        .iter()
+        .map(|t| {
+            let p = t.planes();
+            let parts = zncc_self_similarity_parts(
+                &PatchTile {
+                    values: &p.values,
+                    channels: 1,
+                    width: 24,
+                    height: 24,
+                },
+                None,
+                &SelfSimilarityParams::default(),
+            );
+            Some(parts.whole.ellipse.matrix)
+        })
+        .collect();
+    let refs: Vec<&ViewTile> = tiles.iter().collect();
+    let window = PatchWindow::GaussianDisk { sigma: 0.6 };
+    let plain = blur_matched_agreement(
+        &refs,
+        &ellipses,
+        PairMatching::Plain,
+        BlurMatchKernel::Anisotropic,
+        window,
+        &Progress::none(),
+    );
+    assert_eq!(plain.pairs.pairs_blurred, 0);
+    assert_eq!(
+        format!("{:?}", plain.cells),
+        format!("{:?}", cell_agreement(&refs))
+    );
+    let matched = blur_matched_agreement(
+        &refs,
+        &ellipses,
+        PairMatching::BlurMatched,
+        BlurMatchKernel::Anisotropic,
+        window,
+        &Progress::none(),
+    );
+    assert!(matched.pairs.pairs_blurred >= 3);
+    assert!(
+        matched.pair_zncc[3] > plain.pair_zncc[3] + 0.01,
+        "blur-matched {} against plain {}",
+        matched.pair_zncc[3],
+        plain.pair_zncc[3]
+    );
+    assert!(matched.pair_zncc[3] > 0.95, "{}", matched.pair_zncc[3]);
+}

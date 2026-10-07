@@ -509,8 +509,20 @@ class TestEvaluating:
             assert 0.0 <= entry["clipped_share"] <= 1.0
             # A committed point's rows are all in, so each is judged.
             standing = entry["reference_view"]
-            assert set(standing) == {"is_reference", "rejected_by", "fallback"}
+            assert set(standing) == {
+                "is_reference",
+                "rejected_by",
+                "fallback",
+                "agreement_read",
+                "cells_read",
+            }
+            # The default reading takes the blur-matched agreements, and the
+            # rule reads them.
+            assert standing["agreement_read"] == "blur_matched"
+            assert standing["cells_read"] == "blur_matched"
             assert entry["pair_zncc_grid"].shape == (3, 3)
+            assert entry["blur_matched_pair_zncc_grid"].shape == (3, 3)
+            assert -1.0 <= entry["blur_matched_pair_zncc"] <= 1.0
             if standing["is_reference"]:
                 assert standing["rejected_by"] is None
                 picked.append(i)

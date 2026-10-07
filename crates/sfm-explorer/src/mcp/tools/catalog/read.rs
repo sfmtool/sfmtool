@@ -381,17 +381,26 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the pair's ZNCC there; cell_deficit, the most its pair_zncc_grid falls \
                           below the track's typical agreement (the median over the in \
                           observations) in a ninth where that typical agreement is at least \
-                          0.5; and reference_view, the reference-view \
+                          0.5; blur_matched_pair_zncc, blur_matched_pair_zncc_grid and \
+                          blur_matched_cell_deficit, the same three with each pair's tiles \
+                          blur-matched first (the sharper tile blurred, along each direction \
+                          in which the two tiles' self-similarity ellipses differ by more \
+                          than a quarter, to the other's sharpness), read over each pair's own \
+                          samples, null where the evaluation took no blur-matched readings; \
+                          and reference_view, the reference-view \
                           rule's decision: is_reference, rejected_by (null for the reference, \
                           else the first test that turned it away: coverage under 0.99, \
                           clipped over 0.05, angle over 65 degrees, or at or past 90 once that \
-                          limit is dropped, cells for a cell_deficit \
-                          over 0.3, agreement for a pair_zncc more than 0.15 below the best \
+                          limit is dropped, cells for a cell deficit over 0.25 on the \
+                          blur-matched reading or 0.3 on the plain one, agreement for a pair \
+                          ZNCC more than 0.15 below the best \
                           candidate's, or sharpness for a candidate a sharper one beat or one \
-                          with no self-similarity radius) and \
+                          with no self-similarity radius), \
                           fallback (none, or which tests the rule dropped because no view \
                           passed them: without_angle, without_angle_or_cells, without_any; \
-                          without_angle drops only the 65 degree limit). \
+                          without_angle drops only the 65 degree limit), and agreement_read \
+                          and cells_read, the reading the agreement test and the cell check \
+                          read: blur_matched (the default) or plain. \
                           These are null on an out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the row \
                           the rule picked, or null. The rule reports a view; it does not \

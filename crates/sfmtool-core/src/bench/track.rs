@@ -431,10 +431,26 @@ pub struct TrackMeasurement {
     /// `0` where no cell is. `None` for an `out` observation and where it has
     /// no reading in any judged cell.
     pub cell_deficit: Option<f64>,
+    /// The **blur-matched pair ZNCC**: [`Self::pair_zncc`] with each pair's
+    /// tiles blur-matched first, the sharper blurred to the other's sharpness
+    /// ([`blur_matched_agreement`](crate::patch::reference_view::blur_matched_agreement)),
+    /// over each pair's own samples with data rather than member coherence's
+    /// common support. `None` for an `out` observation, where the evaluation
+    /// took no blur-matched readings
+    /// ([`ReferenceViewOptions::matching`](super::ReferenceViewOptions::matching)),
+    /// and where it has no reading.
+    pub blur_matched_pair_zncc: Option<f64>,
+    /// [`Self::pair_zncc_grid`] on the same blur-matched pairs. `None` wherever
+    /// [`Self::blur_matched_pair_zncc`] is not taken.
+    pub blur_matched_pair_zncc_grid: Option<[[f64; 3]; 3]>,
+    /// [`Self::cell_deficit`] of [`Self::blur_matched_pair_zncc_grid`]. `None`
+    /// wherever that grid is, and where it has no reading in any judged cell.
+    pub blur_matched_cell_deficit: Option<f64>,
     /// What the reference-view rule decided about this observation: picked as
-    /// the **reference view**, or the test that turned it away, and which tests
-    /// the rule dropped for the track
-    /// ([`choose_reference_view`](crate::patch::reference_view::choose_reference_view)).
+    /// the **reference view**, or the test that turned it away, which tests
+    /// the rule dropped for the track, and which readings its agreement test
+    /// and cell check read
+    /// ([`choose_reference_view_with`](crate::patch::reference_view::choose_reference_view_with)).
     /// `None` for an `out` observation, which the rule does not consider.
     pub reference_view: Option<ReferenceStanding>,
     /// How far the last fit's correlation peak sat from this sighting's seed,

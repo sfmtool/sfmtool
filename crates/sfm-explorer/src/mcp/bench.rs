@@ -1784,11 +1784,19 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "pair_zncc": finite(measured.pair_zncc),
         "pair_zncc_grid": grid(measured.pair_zncc_grid),
         "cell_deficit": finite(measured.cell_deficit),
-        // What the reference-view rule decided about an `in` row.
+        // The same three with each pair's sharper tile blurred to the other's
+        // sharpness first, where the evaluation took them.
+        "blur_matched_pair_zncc": finite(measured.blur_matched_pair_zncc),
+        "blur_matched_pair_zncc_grid": grid(measured.blur_matched_pair_zncc_grid),
+        "blur_matched_cell_deficit": finite(measured.blur_matched_cell_deficit),
+        // What the reference-view rule decided about an `in` row, and which
+        // readings its agreement test and cell check read.
         "reference_view": measured.reference_view.map(|standing| json!({
             "is_reference": standing.is_reference(),
             "rejected_by": standing.rejected_by.map(|test| test.name()),
             "fallback": standing.fallback.name(),
+            "agreement_read": standing.inputs.agreement.name(),
+            "cells_read": standing.inputs.cells.name(),
         })),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at

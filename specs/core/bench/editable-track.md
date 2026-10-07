@@ -128,6 +128,9 @@ pub struct TrackMeasurement {
     pub pair_zncc: Option<f64>,              // median ZNCC with the other `in` rows
     pub pair_zncc_grid: Option<[[f64; 3]; 3]>, // the same per ninth
     pub cell_deficit: Option<f64>,           // the worst ninth below the typical agreement
+    pub blur_matched_pair_zncc: Option<f64>, // the same three with each pair blur-matched
+    pub blur_matched_pair_zncc_grid: Option<[[f64; 3]; 3]>,
+    pub blur_matched_cell_deficit: Option<f64>,
     pub reference_view: Option<ReferenceStanding>, // what the reference-view rule decided
     pub walked_px: Option<f64>,              // grid px, set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
@@ -615,6 +618,14 @@ pub struct EvaluateOptions {
     pub localize: KeypointLocalizeParams,   // open_localizer, one round
     pub max_seed_offset_px: f64,            // how far a seed may sit, 64
     pub max_cache_bytes: usize,             // one round's tiles, 256 MiB
+    pub reference_view: ReferenceViewOptions, // the reference view's agreement readings
+}
+
+pub struct ReferenceViewOptions {
+    pub matching: PairMatching,         // BlurMatchedAboveRatio(1.25); Plain takes none
+    pub kernel: BlurMatchKernel,        // Anisotropic
+    pub agreement: PairZnccReading,     // BlurMatched: what the agreement test reads
+    pub cells: PairZnccReading,         // BlurMatched: what the cell check reads
 }
 
 pub struct FitOptions {
@@ -1398,13 +1409,20 @@ Across the `in` rows that have a tile it then writes:
 - `cell_deficit`: the most the row's `pair_zncc_grid` falls below the track's
   **typical agreement**, the median of the rows' `pair_zncc_grid` in that
   ninth, over the ninths whose typical agreement is at least `0.5`;
+- `blur_matched_pair_zncc`, `blur_matched_pair_zncc_grid` and
+  `blur_matched_cell_deficit`: the same three with each pair's tiles
+  blur-matched first, the sharper blurred to the other's sharpness
+  ([../patch/blur-matched-zncc.md](../patch/blur-matched-zncc.md)), each pair
+  read over its own samples with data, where `EvaluateOptions::reference_view`
+  takes them, which it does by default;
 - `reference_view`: a `ReferenceStanding`, the rule's decision about the row:
   `rejected_by`, `None` for the reference view and otherwise the first test
   that turned the row away (`Coverage`, `Clipped`, `Angle`, `Cells`,
-  `Agreement` or `Sharpness`), and `fallback`, which tests the rule dropped for
-  the track because no row passed them.
+  `Agreement` or `Sharpness`), `fallback`, which tests the rule dropped for
+  the track because no row passed them, and `inputs`, which readings its
+  agreement test and cell check read: the blur-matched ones by default.
 
-An `out` row is not considered: its four agreement readings are `None`. A
+An `out` row is not considered: its agreement readings are `None`. A
 contested `in` row, whose image another observation holds, is never `in` beside
 it, so the rule reads one row per image. The rule picks exactly one row
 wherever some candidate has a self-similarity reading. No bar judges these
@@ -1415,9 +1433,9 @@ The standing always agrees with the verdicts. The rule decides over the rows
 that are `in` when the track is read, so a step that then moves a verdict --
 the evaluation's own repaint, `apply_thresholds`, `unpin_verdicts` or
 `set_verdict` -- brings the standings into line without reading anything: a row
-turned `out` loses its four agreement readings, and the rule runs again over
+turned `out` loses its agreement readings, and the rule runs again over
 the rows that are still `in` and that it decided on, from the readings they
-carry. Those readings were taken under the old `in` set and a row turned `in`
+carry and on the inputs it read last time. Those readings were taken under the old `in` set and a row turned `in`
 has none, so it has no standing until the next evaluation reads it; the viewer
 reads a track again after every step and after a repaint (§ "An evaluation
 that only follows a repaint does not repaint again"), so what it shows settles
@@ -2065,7 +2083,8 @@ by the track's `max_zncc_self_similarity_radius` and never by a
 
 The evaluation reports its phases through `progress` as `refine` and
 `self-similarity` at the cluster stage, `localize`, `self-similarity` and
-`reference view` at the track stage.
+`reference view` at the track stage; a detailed `progress` times the
+blur-matched pairs inside `reference view` as `blur-matched pairs`.
 
 **At the track stage** the reading is **one round** of
 [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) over the
@@ -2086,6 +2105,7 @@ reading. What lands in each slot is:
 | `zncc_self_similarity_radius` and its middle, grid, ellipses and surface | How far the observation's own tile, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
 | `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share` | The angle the view sees the patch at at the keypoint and the direction its ray leans in the patch's plane, the share of the tile on the photograph, and the share of the photograph under the tile that is clipped (§ "The reference view"). No bar judges them. |
 | `pair_zncc`, `pair_zncc_grid`, `cell_deficit`, `reference_view` | For an `in` row: its agreement with the other `in` rows over the whole tile and each ninth, how far it falls below the track's typical agreement in its worst ninth, and what the reference-view rule decided about it (§ "The reference view"). `None` on an `out` row. No bar judges them. |
+| `blur_matched_pair_zncc`, `blur_matched_pair_zncc_grid`, `blur_matched_cell_deficit` | The same three agreement readings with each pair's tiles blur-matched first, which the rule reads by default (§ "The reference view"). `None` on an `out` row and where the evaluation took none. No bar judges them. |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
 The projection offset, the residual and the self-similarity rows are filled for
@@ -2629,11 +2649,14 @@ scored the peak) exactly when the last fit refused to walk that sighting and
 kept its seed, with `walked_zncc_grid` beside them. A track-stage dict also
 carries the reference view's readings where the row has them:
 `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share`,
-`pair_zncc` and `cell_deficit` as floats, `pair_zncc_grid` as a `(3, 3)` float64
-array, and `reference_view` as a dict `{"is_reference", "rejected_by",
-"fallback"}` with the test and the fallback by name (`"coverage"`, `"clipped"`,
-`"angle"`, `"cells"`, `"agreement"`, `"sharpness"` or `None`; `"none"`,
-`"without_angle"`, `"without_angle_or_cells"` or `"without_any"`). Both stages' dicts carry
+`pair_zncc`, `cell_deficit`, `blur_matched_pair_zncc` and
+`blur_matched_cell_deficit` as floats, `pair_zncc_grid` and
+`blur_matched_pair_zncc_grid` as `(3, 3)` float64 arrays, and `reference_view`
+as a dict `{"is_reference", "rejected_by", "fallback", "agreement_read",
+"cells_read"}` with the test, the fallback and the readings by name
+(`"coverage"`, `"clipped"`, `"angle"`, `"cells"`, `"agreement"`, `"sharpness"`
+or `None`; `"none"`, `"without_angle"`, `"without_angle_or_cells"` or
+`"without_any"`; `"plain"` or `"blur_matched"`). Both stages' dicts carry
 `zncc_middle`, `zncc_self_similarity_radius` and
 `zncc_self_similarity_radius_middle` as floats, as `(3, 3)` float64 arrays with
 `NaN` in a cell with no reading `zncc_grid` and
@@ -3044,6 +3067,12 @@ unit-tested in `normal.rs` itself.
 - Each row's `pair_zncc` is the median of its row of `member_zncc_matrix`,
   called directly over the `in` rows at the evaluation's resolution and
   sampler.
+- Each row's blur-matched readings, under both kernels, are those of
+  `blur_matched_agreement` called directly on the rows' tiles and ellipses;
+  the plain readings are the same with or without them; plain matching takes
+  none and the rule then reads the plain ones; a ratio no pair reaches reads
+  the plain cells; and a verdict set after a blur-matched reading keeps the
+  rule on the inputs it read.
 
 ### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
 

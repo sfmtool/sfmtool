@@ -9,7 +9,11 @@
 use super::tile::ViewTile;
 use super::{REFERENCE_MIN_CELL_SAMPLES, REFERENCE_MIN_JUDGED_CELL_ZNCC};
 use crate::numeric::median_in_place;
-use crate::patch::normal_refine::grid_bounds;
+use crate::patch::blur_matched::{
+    blur_matched_pairs, BlurMatchKernel, BlurMatchedPairs, PairMatching, TilePlanes,
+};
+use crate::patch::normal_refine::{grid_bounds, PatchWindow};
+use crate::progress::Progress;
 
 /// Each view's agreement with the others over the ZNCC grid's cells.
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +167,56 @@ pub fn cell_agreement_from_pairs(pairs: &[[[f64; 3]; 3]], k: usize) -> CellAgree
         pair_zncc_grid,
         typical,
         deficit,
+    }
+}
+
+/// The blur-matched readings of a track's views: each view's median
+/// blur-matched ZNCC with the others over the whole tile, and its agreement
+/// over the ZNCC grid's cells on the same blur-matched pairs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlurMatchedAgreement {
+    /// Per view: the median of its blur-matched whole-tile ZNCCs with the
+    /// other views, `NaN` where it has none.
+    pub pair_zncc: Vec<f64>,
+    /// The cell readings ([`cell_agreement_from_pairs`]) of the blur-matched
+    /// pair grids.
+    pub cells: CellAgreement,
+    /// The pairs themselves, with how many were blurred.
+    pub pairs: BlurMatchedPairs,
+}
+
+/// [`BlurMatchedAgreement`] of `tiles`, one per view, with `ellipses[v]` view
+/// `v`'s self-similarity ellipse matrix in grid px² (`None` where it has
+/// none, which leaves its pairs plain), each pair matched under `matching`
+/// with `kernel` ([`blur_matched_pairs`]).
+///
+/// The whole-tile reading is windowed by `window` (member coherence's
+/// default is the reference rule's), over the samples with data in both tiles
+/// of each pair; the cells are read as [`pair_zncc_grid`] reads them. With
+/// [`PairMatching::Plain`] the cells are [`cell_agreement`]'s.
+///
+/// # Panics
+///
+/// Panics if `ellipses` is not parallel to `tiles`, or the tiles differ in
+/// resolution.
+pub fn blur_matched_agreement(
+    tiles: &[&ViewTile],
+    ellipses: &[Option<[[f64; 2]; 2]>],
+    matching: PairMatching,
+    kernel: BlurMatchKernel,
+    window: PatchWindow,
+    progress: &Progress<'_>,
+) -> BlurMatchedAgreement {
+    let planes: Vec<TilePlanes> = tiles.iter().map(|t| t.planes()).collect();
+    let refs: Vec<&TilePlanes> = planes.iter().collect();
+    let pairs = blur_matched_pairs(&refs, ellipses, matching, kernel, window, None, progress);
+    let k = tiles.len();
+    let pair_zncc = (0..k).map(|v| pairs.row_middle(v)).collect();
+    let cells = cell_agreement_from_pairs(&pairs.grid, k);
+    BlurMatchedAgreement {
+        pair_zncc,
+        cells,
+        pairs,
     }
 }
 

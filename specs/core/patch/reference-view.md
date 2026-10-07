@@ -11,7 +11,11 @@ measurements that say what each view's tile can contribute, and the
 **reference-view rule**, which picks the one view whose tile could stand as the
 point's patch bitmap: a view that covers the patch, is not clipped or grazing,
 agrees with the other views everywhere in the tile and nearly as well as the
-best of them overall, and among those is the sharpest. The bench measures every
+best of them overall, and among those is the sharpest. The agreement it reads
+is **blur-matched** by default: before two views' tiles are correlated, the
+sharper one is blurred to the other's sharpness, so a sharp view is not counted
+as disagreeing for the detail the blurrier views lack
+([blur-matched-zncc.md](blur-matched-zncc.md)). The bench measures every
 track it evaluates this way and reports the pick. The stored bitmap is the
 fused mean of the views; computing it from the reference view is proposed in
 the draft below (see [Non-goals](#non-goals)).
@@ -51,6 +55,8 @@ pub fn render_view_tile(patch: &OrientedPatch, view: &ProjectedImage<'_>,
     progress: &Progress<'_>) -> ViewTile;
 pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f64>;
 
+impl ViewTile { pub fn planes(&self) -> TilePlanes; } // what blur matching reads
+
 pub fn pair_zncc_grid(a: &ViewTile, b: &ViewTile) -> [[f64; 3]; 3];
 pub struct CellAgreement {
     pub pair_zncc_grid: Vec<[[f64; 3]; 3]>, // per view, median over the others
@@ -60,10 +66,26 @@ pub struct CellAgreement {
 pub fn cell_agreement(tiles: &[&ViewTile]) -> CellAgreement;
 pub fn cell_agreement_from_pairs(pairs: &[[[f64; 3]; 3]], k: usize) -> CellAgreement;
 
+pub struct BlurMatchedAgreement {
+    pub pair_zncc: Vec<f64>,        // per view, median of its blur-matched whole-tile ZNCCs
+    pub cells: CellAgreement,       // the cell readings of the blur-matched pairs
+    pub pairs: BlurMatchedPairs,    // the pairs, with how many were blurred
+}
+pub fn blur_matched_agreement(tiles: &[&ViewTile], ellipses: &[Option<[[f64; 2]; 2]>],
+    matching: PairMatching, kernel: BlurMatchKernel, window: PatchWindow,
+    progress: &Progress<'_>) -> BlurMatchedAgreement;
+
 pub struct ReferenceReadings {
     pub coverage: Option<f64>, pub clipped_share: Option<f64>,
     pub viewing_angle_deg: Option<f64>, pub cell_deficit: Option<f64>,
     pub pair_zncc: Option<f64>, pub semi_major: Option<f64>, pub semi_minor: Option<f64>,
+}
+pub enum PairZnccReading { Plain, BlurMatched }
+pub struct ReferenceRuleInputs { pub agreement: PairZnccReading, pub cells: PairZnccReading }
+impl ReferenceRuleInputs {
+    pub const PLAIN: Self;
+    pub fn agreement_margin(self) -> f64; // REFERENCE_AGREEMENT_MARGIN or its blur-matched one
+    pub fn max_cell_deficit(self) -> f64; // REFERENCE_MAX_CELL_DEFICIT or its blur-matched one
 }
 pub enum ReferenceTest { Coverage, Clipped, Angle, Cells, Agreement, Sharpness }
 pub enum ReferenceFallback { None, WithoutAngle, WithoutAngleOrCells, WithoutAny }
@@ -74,9 +96,16 @@ pub struct ReferenceChoice {
     pub reference: Option<usize>,
     pub fallback: ReferenceFallback,
     pub rejected_by: Vec<Option<ReferenceTest>>,
+    pub inputs: ReferenceRuleInputs,
 }
-pub struct ReferenceStanding { pub rejected_by: Option<ReferenceTest>, pub fallback: ReferenceFallback }
-pub fn choose_reference_view(views: &[ReferenceReadings]) -> ReferenceChoice;
+pub struct ReferenceStanding {
+    pub rejected_by: Option<ReferenceTest>,
+    pub fallback: ReferenceFallback,
+    pub inputs: ReferenceRuleInputs,
+}
+pub fn choose_reference_view(views: &[ReferenceReadings]) -> ReferenceChoice; // the plain inputs
+pub fn choose_reference_view_with(views: &[ReferenceReadings], inputs: ReferenceRuleInputs)
+    -> ReferenceChoice;
 
 // patch::normal_refine
 pub struct ViewingAngle { pub angle_deg: f64, pub tilt_direction_deg: Option<f64> }
@@ -106,6 +135,14 @@ The viewing angle sits in normal refinement because its obliquity priors read
 the same direction from a patch to a camera (`surface_to_camera`); one
 function serves both, so the angle the bench reports and the cosine the prior
 weights by cannot disagree.
+
+The rule takes the pair ZNCC and the cell deficit as plain numbers and is told
+by `ReferenceRuleInputs` which reading they are, because the two readings call
+for different thresholds and the readings themselves come from elsewhere. The
+inputs travel with the decision into every standing, so a step that runs the
+rule again from the stored readings (a verdict moved after the reading) reads
+the same ones, and a person reading a row can tell which number the rule
+compared.
 
 ```rust
 use sfmtool_core::patch::reference_view::{choose_reference_view, ReferenceReadings};
@@ -173,6 +210,15 @@ reading and every stored patch bitmap are rendered as.
   largest amount by which its own cell falls below the typical agreement, over
   the cells whose typical agreement is at least
   `REFERENCE_MIN_JUDGED_CELL_ZNCC`; `0` when no cell is judged.
+- **Blur-matched pair ZNCC, pair ZNCC grid and cell deficit**: the same three
+  with each pair's tiles blur-matched first
+  ([blur-matched-zncc.md](blur-matched-zncc.md)): along each direction in which
+  the two tiles' self-similarity ellipses differ by more than
+  `DEFAULT_MIN_ELLIPSE_RATIO` (1.25), the tile that is the sharper along it is
+  blurred to the other's sharpness. They are read on the same tiles as the
+  cells, each pair over the samples with data in both: the whole tile with
+  member coherence's Gaussian disk window, and each cell as the plain cells
+  are. A pair the ratio leaves alone reads its plain cells exactly.
 
 The rule also reads each tile's self-similarity ellipse, whose semi-major axis
 is the ZNCC self-similarity radius
@@ -185,7 +231,8 @@ tile can slide over itself and still match itself, short on a sharp tile.
    - **coverage** at least `REFERENCE_MIN_COVERAGE`;
    - **clipped** share at most `REFERENCE_MAX_CLIPPED_SHARE`;
    - **angle** at most `REFERENCE_MAX_VIEWING_ANGLE_DEG`;
-   - **cells**: cell deficit at most `REFERENCE_MAX_CELL_DEFICIT`.
+   - **cells**: cell deficit at most `REFERENCE_MAX_CELL_DEFICIT`, or
+     `REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT` on the blur-matched reading.
 
    When no view passes, the angle test's `REFERENCE_MAX_VIEWING_ANGLE_DEG`
    limit is dropped; when still none passes, the cell check too; and then
@@ -197,7 +244,8 @@ tile can slide over itself and still match itself, short on a sharp tile.
    `angle` whichever tests are dropped. Where every view is at `90°` or more,
    the rule picks nothing.
 2. **Agreement**: of the candidates, those whose pair ZNCC is within
-   `REFERENCE_AGREEMENT_MARGIN` of the best candidate's. A view with no pair ZNCC
+   `REFERENCE_AGREEMENT_MARGIN` of the best candidate's, or
+   `REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN` on the blur-matched reading. A view with no pair ZNCC
    fails this test, unless no candidate has one, when the test passes every
    candidate.
 3. **Sharpness**: of those, the one with the smallest self-similarity
@@ -223,6 +271,8 @@ agreement test has a self-similarity reading, the rule picks nothing.
 | `REFERENCE_MIN_JUDGED_CELL_ZNCC` | `0.5` | A cell whose views do not agree, because it holds no texture they share, says nothing about any one view. |
 | `REFERENCE_MIN_CELL_SAMPLES` | `16` | Below it a cell's ZNCC is read off a handful of samples. |
 | `REFERENCE_AGREEMENT_MARGIN` | `0.15` | Sharp views correlate worse with blurrier ones, since the detail they carry is missing from the others, so a narrow margin turns away exactly the sharp views. Where the earlier margin of `0.05` missed, the hand-picked view sat `0.06` to `0.21` below the best. `0.10` to `0.20` were within one case of each other on the tuning half. |
+| `REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN` | `0.15` | The margin on the blur-matched pair ZNCC. Blur matching takes away most of the penalty above, which allows a tighter margin, but the tuning half did not prefer one: `0.10` to `0.20` gave the same agreement there, and `0.06` to `0.08` one exact pick fewer (and one more on the held-out half). `0.15` is the middle of the flat run (§ "Blur-matched agreement"). |
+| `REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT` | `0.25` | The cell bar on the blur-matched cell deficit. After blur matching what is left of a ninth's disagreement is content, and the typical agreement rises, so a deficit reads larger; on the tuning half `0.25` agreed with one more hand pick than `0.3` (§ "Blur-matched agreement"). |
 
 The values were set against hand picks of the reference view on 77 tracks from
 ten datasets, split in half by dataset with the thresholds chosen on one half:
@@ -231,7 +281,49 @@ a view as sharp and as typical as it, within 0.1 px of semi-major axis and 0.05
 of pair ZNCC, on 35 of 38 (chance is about one in nine for the first). Two
 signals were tried and left out: a brightness and colour gate, which turned away
 views the hand picks chose, and a contrast floor, which the agreement margin
-already covers.
+already covers. Those values were set on the plain readings; the blur-matched
+readings the bench reads by default were tuned the same way, below.
+
+## Blur-matched agreement
+
+The bench's evaluation takes the blur-matched readings beside the plain ones
+and has both the agreement test and the cell check read them
+(`EvaluateOptions::reference_view`, [editable-track.md](../bench/editable-track.md)).
+A sharp view that differs from the others only in sharpness reads as typical
+after matching, so the margin stops being the room a sharp view needs to stay
+in, and a view whose cells still disagree after its partners are matched to it
+differs in content.
+
+**Against the hand picks.** The rule was run from the bench's own readings (the
+Rust implementation, on the evaluated review tracks) under each option, and the
+thresholds tuned on the same tuning half as above (seeded split by dataset,
+best lenient then exact, the middle of a tied run):
+
+| Readings | Margin, cell bar | Tune exact / lenient (39) | Held-out (38) | All (77) |
+|---|---|---|---|---|
+| Plain (the rule above) | 0.15, 0.3 | 18 / 35 | 10 / 35 | 28 / 70 |
+| Blur-matched agreement only | 0.15, 0.3 | 18 / 35 | 10 / 35 | 28 / 70 |
+| Blur-matched cells only | 0.15, 0.3 | 19 / 35 | 11 / 35 | 30 / 70 |
+| Both blur-matched, every pair blurred | 0.15, 0.3 | 19 / 36 | 11 / 35 | 30 / 71 |
+| **Both blur-matched, ratio 1.25 (the default)** | **0.15, 0.25** | **19 / 36** | **11 / 35** | **30 / 71** |
+| Both blur-matched, ratio 1.25 | 0.08, 0.25 | 18 / 35 | 12 / 36 | 30 / 71 |
+| Both blur-matched, isotropic ladder, ratio 1.25 | 0.15, 0.25 | 19 / 36 | 10 / 35 | 29 / 71 |
+
+The differences are one or two picks, as the plain tuning's were. The gain is
+in the cell check: at the same margin, blur-matched cells take one or two
+exact picks more than plain cells. Of the 37 hand picks that are their track's sharpest usable
+view, a margin of 0.06 keeps 33 under blur-matched medians and 27 under plain
+ones; at 0.08 both keep 34.
+
+**Cost.** Over 661 tracks (the review cases and 60 of each dataset's pool),
+best of three evaluations each, the default adds 0.20 ms to a track's
+`reference view` phase (median; p90 1.4 ms), 3.2% of an evaluation (p90
+8%); blurring every pair would add 0.31 ms, 4.7%. The ratio leaves 45% of the
+pairs plain. The blur work is the `blur-matched pairs` detail phase, whose note
+gives the pairs blurred; the phase's own note ends with the same count.
+
+**Effect over the pools.** The default changes the pick on 46 of the 661
+tracks (7%).
 
 ## Implementation notes
 
@@ -243,7 +335,8 @@ common to every view, so its corner cells would hold only the part of their
 square inside the disk, and the cell check was measured on whole cells. The
 cost is one extra member-coherence render per view and `k(k − 1)/2` pairs of
 nine cells; on the review tracks (6 to 26 views) the bench's `reference view`
-phase takes 0.4 to 2.4 ms, about 9% of an evaluation.
+phase took 0.4 to 2.4 ms, about 9% of an evaluation, before the blur-matched
+readings added 3% (§ "Blur-matched agreement").
 
 **The clipped share reads each pixel once.** A tile far from its camera covers
 hundreds of thousands of photograph pixels. `clipped_share` walks the
@@ -280,18 +373,30 @@ The rule's thresholds are the constants above, defined in
 The bench renders the tiles at the reconstruction's patch resolution with the
 localizer's sampler choice (`EvaluateOptions::localize.sampler`, the sampler
 rule by default), and runs member coherence with its default window
-(`GaussianDisk { sigma: 0.6 }`) at the same resolution and sampler.
+(`GaussianDisk { sigma: 0.6 }`) at the same resolution and sampler. The
+blur-matched readings use the same window, and `EvaluateOptions::reference_view`
+(`ReferenceViewOptions`) chooses them:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `matching` | `BlurMatchedAboveRatio(1.25)` | How the blur-matched readings are taken; `Plain` takes none, and both tests then read the plain readings |
+| `kernel` | `Anisotropic` | The blur's shape; `IsotropicLadder` is the cheaper isotropic form |
+| `agreement` | `BlurMatched` | Which pair ZNCC the agreement test reads |
+| `cells` | `BlurMatched` | Which pair ZNCC grid the cell check reads |
 
 ## Python bindings
 
 The bench's readings cross on each observation's `"track"` dict
 ([editable-track.md](../bench/editable-track.md) § "Python bindings"):
 `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share`,
-`pair_zncc` and `cell_deficit` as floats, `pair_zncc_grid` as a `(3, 3)` float64
-array, and `reference_view` as a dict `{"is_reference", "rejected_by",
-"fallback"}`, with `rejected_by` one of `"coverage"`, `"clipped"`, `"angle"`,
-`"cells"`, `"agreement"`, `"sharpness"` or `None` and `fallback` one of
-`"none"`, `"without_angle"`, `"without_angle_or_cells"`, `"without_any"`. Each
+`pair_zncc`, `cell_deficit`, `blur_matched_pair_zncc` and
+`blur_matched_cell_deficit` as floats, `pair_zncc_grid` and
+`blur_matched_pair_zncc_grid` as `(3, 3)` float64 arrays, and `reference_view`
+as a dict `{"is_reference", "rejected_by", "fallback", "agreement_read",
+"cells_read"}`, with `rejected_by` one of `"coverage"`, `"clipped"`, `"angle"`,
+`"cells"`, `"agreement"`, `"sharpness"` or `None`, `fallback` one of
+`"none"`, `"without_angle"`, `"without_angle_or_cells"`, `"without_any"`, and
+`agreement_read` and `cells_read` each `"plain"` or `"blur_matched"`. Each
 is absent where the row has no such reading.
 
 `OrientedPatch.render_view_tile(camera, cam_from_world, image, *,
@@ -324,13 +429,20 @@ fisheye camera, against a count of every pixel centre inside the polygon of its
 border samples projected one at a time, and of a tile cut by the photograph's
 edge; and each of the rule's tests, its inclusive thresholds, the margin's
 reference point, the tie breaks, every fallback, the facing limit under every
-fallback, and missing readings. [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
+fallback, and missing readings; the blur-matched thresholds and the inputs a
+standing carries; and that blur-matched agreement with plain matching reads
+the plain cells exactly and lifts a blurred view's agreement.
+[bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
 evaluates a track of the seoul_bull ground truth and checks that the rule picks
 exactly one view, with coverage of at least 0.99 and under the angle limit, and
 that every view it turned away for sharpness is no sharper; that each row's
 self-similarity readings are those of its tile rendered directly; and that each
 row's pair ZNCC is the median of its row of `member_zncc_matrix` called
-directly. The Python tests are in
+directly; that each row's blur-matched readings, under either kernel, are those
+of `blur_matched_agreement` called directly on the tiles, leave the plain
+readings as they were and are absent under plain matching; that a ratio no
+pair reaches reads the plain cells; and that a verdict moved after the reading
+keeps the rule on the inputs it read. The Python tests are in
 [test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 and
 [test_view_tile_rust_bindings.py](../../../tests/rust_bindings/patches/test_view_tile_rust_bindings.py).

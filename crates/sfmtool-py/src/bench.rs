@@ -381,6 +381,10 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("clipped_share", m.clipped_share),
             ("pair_zncc", m.pair_zncc),
             ("cell_deficit", m.cell_deficit),
+            // The same with each pair's tiles blur-matched first, where the
+            // evaluation took them.
+            ("blur_matched_pair_zncc", m.blur_matched_pair_zncc),
+            ("blur_matched_cell_deficit", m.blur_matched_cell_deficit),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
@@ -393,6 +397,8 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             r.set_item("is_reference", standing.is_reference())?;
             r.set_item("rejected_by", standing.rejected_by.map(|t| t.name()))?;
             r.set_item("fallback", standing.fallback.name())?;
+            r.set_item("agreement_read", standing.inputs.agreement.name())?;
+            r.set_item("cells_read", standing.inputs.cells.name())?;
             t.set_item("reference_view", r)?;
         }
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.
@@ -400,6 +406,7 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("zncc_grid", m.zncc_grid),
             ("walked_zncc_grid", m.walked_zncc_grid),
             ("pair_zncc_grid", m.pair_zncc_grid),
+            ("blur_matched_pair_zncc_grid", m.blur_matched_pair_zncc_grid),
         ] {
             if let Some(grid) = grid {
                 t.set_item(key, grid_array(grid).into_pyarray(py))?;

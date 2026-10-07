@@ -11,6 +11,7 @@ use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::{render_phase, render_tile, Sampler, SamplerChoice};
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::WarpMap;
+use crate::patch::blur_matched::TilePlanes;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{viewing_angle, ProjectedImage, ViewingAngle};
 use crate::progress::Progress;
@@ -54,6 +55,17 @@ impl ViewTile {
     /// The tile's channel count, `C`.
     pub fn channels(&self) -> usize {
         self.samples.shape()[2]
+    }
+
+    /// The tile's colour planes in `f32`, its samples on the photograph
+    /// flagged as carrying data: what blur matching reads
+    /// ([`crate::patch::blur_matched`]).
+    pub fn planes(&self) -> TilePlanes {
+        let samples = self
+            .samples
+            .as_slice()
+            .map_or_else(|| self.samples.iter().copied().collect(), <[u8]>::to_vec);
+        TilePlanes::from_interleaved(&samples, self.resolution(), self.channels(), &self.valid)
     }
 }
 
