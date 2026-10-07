@@ -474,6 +474,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Inconsistencies:**
   - Purpose (:5-6) names three shared callers that each have their own code: growth (`reconstruction_growth.rs:194, :211-230, :501-530`), pose refinement (`pose_refine.rs:45-88`), pose verification (`pose_verification.rs:171-192`). Fix the spec, or move those callers onto this function (discuss).
   - Bug: zero observations give shape `(0, 0)` (`PyArray2::from_vec2`, py :90), not `(n_obs, 2)` (:83), and `inlier_fraction` then refuses it (py :105) where :62-63 says 0.0. Verified by running.
+    > _Status (2026-10-06): **Done** — the binding reshapes the flat result, so zero observations give `(0, 2)` and `inlier_fraction` scores it `0.0`, with a binding test, branch `spec-fix-1006-05-reproj-binding`._
   - Bug: out-of-range `obs_image`/`obs_point` and a short `translations` array raise `PanicException` (py :59-78; core :64-76), not `ValueError`. Verified.
     > _Status (2026-10-06): **Done** — the binding now reshapes the flat result so zero observations give `(0, 2)`, and raises `ValueError` for out-of-range `obs_image` / `obs_point` and a `translations` row count that differs from `quaternions_wxyz`; the spec's Bindings section and the core function's `# Panics` doc say so, with binding tests, branch `spec-fix-1006-05-reproj-binding`._
   - A non-finite pose gives `(NaN, NaN)`, not `(invalid_residual, 0)` (core :69-86); the spec (:46-53) should say so.

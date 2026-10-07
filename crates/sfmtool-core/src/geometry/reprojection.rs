@@ -34,9 +34,9 @@ use crate::CameraIntrinsics;
 ///
 /// # Panics
 ///
-/// If `obs_pt` or `uv` does not match `obs_img` in length, or if an index in
-/// `obs_img` / `obs_pt` is out of range for `quats_wxyz` and `translations` /
-/// `points`.
+/// If `obs_pt.len()` differs from `obs_img.len()`, if `uv.len()` is not
+/// `2 * obs_img.len()`, or if an index in `obs_img` / `obs_pt` is out of range
+/// for `quats_wxyz` or `translations` / `points`.
 #[allow(clippy::too_many_arguments)]
 pub fn reprojection_residuals(
     cam: &CameraIntrinsics,
