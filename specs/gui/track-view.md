@@ -10,11 +10,11 @@ and changes nothing. Ticking the box puts that point on the **bench**, where an
 item is held beside the reconstruction and judged before it is committed to it
 ([`bench.md`](bench.md)), and makes the new track the focused item, the one item
 the viewer is editing; a point already put on the bench has its existing track
-focused instead, and with no point selected the tick focuses again the item
-most recently focused. With the box ticked the panel shows the focused item, together
-with the controls that fit it, set which observations it keeps, and commit it,
-and the measurements that are kept current as it changes. Clearing the box stops
-the editing and leaves the item on the bench.
+focused instead, and with no point selected the tick focuses the item that was
+focused most recently. With the box ticked the panel shows the focused item,
+together with the controls that fit it, set which observations it keeps, and
+commit it, and the measurements that are kept current as it changes. Clearing
+the box stops the editing and leaves the item on the bench.
 
 The panel has an explicit mode so that it always says which of the two things is
 on screen, and it does not list the bench: the Scene tree already lists each
