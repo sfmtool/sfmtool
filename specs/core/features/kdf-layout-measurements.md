@@ -8,7 +8,7 @@ and when all trees share one descriptor corpus (the layout the format uses), and
 why that corpus is compressed in blocks rather than stored as one flat array.
 The format spec states the layout; this file holds the evidence for it. The
 query-time measurements of the same layouts are in
-[lazy-kdforest-query.md](lazy-kdforest-query.md#what-the-measurements-found).
+[lazy-kdforest-query-measurements.md](lazy-kdforest-query-measurements.md#shared-corpus-versus-per-tree-copies).
 
 ## Version-1 DinoLedge layout study (2026-09-09)
 
@@ -155,7 +155,7 @@ offsets array, against four copies. That is 2.816 GB saved, against the
 2.87–2.89 GB projected. Its `tree_chunks` section is byte-identical to tree-local's,
 which is what makes the comparison a measurement of storage rather than of two
 different forests. What the layout costs in query time is measured in
-[lazy-kdforest-query.md](lazy-kdforest-query.md#what-the-measurements-found).
+[lazy-kdforest-query-measurements.md](lazy-kdforest-query-measurements.md#shared-corpus-versus-per-tree-copies).
 
 Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON
 with ZIP + zstd; sum descriptor entry shapes and stored frame sizes. Recursively
@@ -181,7 +181,7 @@ one-entry-per-column convention: ten separate entries per chunk would cost ten
 reads and ten zstd frames to route through a single node. The format allows
 arbitrary partitions, so tree-chunk and corpus-block tuning do not require a
 version change. Descriptor performance measurements are in
-[lazy-kdforest-query.md](lazy-kdforest-query.md#what-the-measurements-found).
+[lazy-kdforest-query-measurements.md](lazy-kdforest-query-measurements.md).
 
 Descriptors are compressed, and therefore blocked and indexed, rather than
 stored as one flat fixed-stride array a reader could index arithmetically. The flat

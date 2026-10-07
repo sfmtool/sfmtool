@@ -609,7 +609,7 @@ grouped by.
 [`scripts/kdf_patch_localize.py`](../../../scripts/kdf_patch_localize.py)
 localizes patches through both paths and asserts they agree, which is where the
 measurements in
-[lazy-kdforest-query.md](lazy-kdforest-query.md#two-real-access-patterns-and-which-one-this-path-suits)
+[lazy-kdforest-query-measurements.md](lazy-kdforest-query-measurements.md#which-workloads-suit-the-file-backed-path)
 come from.
 
 ## Testing

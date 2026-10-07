@@ -11,6 +11,7 @@ cluster backbone that cluster matching writes, is implemented in the
 | [sift.md](sift.md) | The pure-Rust SIFT detector and descriptor: scale space, orientation, SIMD, and threading. |
 | [randomized-kdtree-forest.md](randomized-kdtree-forest.md) | Approximate nearest-neighbour index replacing the exhaustive descriptor scan. |
 | [lazy-kdforest-query.md](lazy-kdforest-query.md) | Persistent, bounded-cache queries over chunked `.kdf` forests. |
+| [lazy-kdforest-query-measurements.md](lazy-kdforest-query-measurements.md) | The measurements that chose the lazy query path's layout, block, chunk, leaf and cache defaults, and which workloads a `.kdf` suits. |
 | [kdf-layout-measurements.md](kdf-layout-measurements.md) | The measurements that chose the `.kdf` layout: file sizes under tree-local and shared descriptor storage, and why the corpus is compressed in blocks. |
 | [kdf-constellation-query.md](kdf-constellation-query.md) | Which other images contain the patch around a pixel, by affine consensus over a descriptor index. |
 | [track-cluster-matching.md](track-cluster-matching.md) | Matching a whole image set at once: every image's SIFT descriptors clustered into candidate tracks, each descriptor's radius set from its own background floor. Verification is a separate step. |

@@ -655,6 +655,12 @@ still open are listed here; line numbers are current.
   > `<name>-measurements.md` that says why each measurement was chosen and what
   > decision each result made or would settle, branch `spec-audit-2026-10-06`.
   > Moving this spec's measurement history into such a file is still open._
+  > _Status (2026-10-06): **Done** — the measurement history and the pre-build
+  > cost model moved to `specs/core/features/lazy-kdforest-query-measurements.md`,
+  > with each measurement's question, reason and decision. The spec now has
+  > § Access path, § Why the defaults are what they are, § Which workloads this
+  > path suits, § Testing and § Open questions (1,365 lines down to 670). Branch
+  > `lazy-kdforest-measurements`._
 - **`specs/TEMPLATE.md`: proposed "Determinism and precision" section for
   numerical-kernel specs** (from the focal-vote read). Not adopted: the
   template mentions determinism only as one item under § Testing

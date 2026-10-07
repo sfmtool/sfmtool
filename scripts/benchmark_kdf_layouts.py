@@ -3,7 +3,8 @@
 
 """Sweep `.kdf` blocking and cache settings on a real SIFT corpus.
 
-Runs a staged sweep from `specs/core/features/lazy-kdforest-query.md` against a
+Runs the staged sweep described in
+`specs/core/features/lazy-kdforest-query-measurements.md` against a
 workspace's `.sift` files. The format has one descriptor corpus; this measures
 tree-chunk size, descriptor/geometry block size, cache budget and worker count.
 
