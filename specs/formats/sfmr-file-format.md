@@ -321,8 +321,8 @@ JSON structure describing the reconstruction:
   is absent. A reader takes it from whichever entry the file carries.
 - `image_count`: Number of registered images in reconstruction
 - `point_count`: Number of points (finite points and points at infinity combined)
-- `infinity_point_count`: Number of points at infinity (rows of `positions_xyzw`
-  with `w = 0`). Derivable from the points array, but stored here so a consumer
+- `infinity_point_count`: (version 2+; read as `0` when absent) Number of
+  points at infinity (rows of `positions_xyzw` with `w = 0`). Derivable from the points array, but stored here so a consumer
   can read the finite/infinity split without decompressing that array. Must be
   `0` when no points are at infinity.
 - `observation_count`: Total number of 2D-3D correspondences
@@ -1110,7 +1110,13 @@ Per-point surface normals.
 - **Shape**: `(N, 3)` where N = point_count
 - **Data type**: `float32` (little-endian)
 - **Format**: [x, y, z] unit normal vectors in world coordinate system. Rows for
-  `w = 0` points are `(0, 0, 0)`.
+  `w = 0` points are `(0, 0, 0)`. A row for a finite point is a unit vector, or
+  `(0, 0, 0)` when the file has no normal for that point, for example when the
+  directions from the point to the cameras that observe it cancel out. The
+  zero row is the only marker of a missing normal: a reader treats it as "no
+  normal", never as a direction. A writer may replace a zero row of a finite
+  point with a normal it derives from the geometry, and keeps every unit-vector
+  row as it was given.
 - **Optional** (version 3+): present only when `points3d/metadata.json`'s
   `has_normals` is `true`. A reconstruction may carry no normals, in which case
   this array is absent. Versions 1 and 2 always include it.
@@ -1707,10 +1713,41 @@ once, under [Content Hash](#2-content-hash-content_hashjsonzst).
 
 ### Verification Process
 
+A verifier checks both the hashes and the structural rules a hash cannot see.
+For the hashes:
+
 1. Decompress each file and hash the raw uncompressed bytes (do NOT re-serialize JSON)
 2. Recompute section and overall hashes as described above
-3. Compare with stored values in `content_hash.json.zst`
+3. Compare with stored values in `content_hash.json.zst`. A version 10+ file
+   must store `derived_xxh128`.
 4. If any hash mismatches, file is corrupted
+
+For the structure, a file fails verification when:
+
+- its `version` is newer than the verifier knows (it reports that and checks
+  nothing more), `feature_source` is not one of its two values, or
+  `world_space_unit` is not one of the five units;
+- a `frames/` section is present without a `rigs/` section;
+- the `has_*` flags in `points3d/metadata.json` break a presence rule between
+  the optional per-point columns and `feature_source`;
+- in a version 2+ file, a `positions_xyzw` row holds a NaN or infinite value, a
+  `w = 0` row has a zero direction, or the number of `w = 0` rows differs from
+  `infinity_point_count`;
+- `has_point_constraints` is set without a readable `point_constraint_names`
+  legend, or the constraint triple breaks a rule of
+  [Per-point constraints](#per-point-constraints-optional-version-7);
+- the tracks are not sorted by `(point_indexes, image_indexes)`, an
+  `observation_counts` entry is below `1`, or the counts do not sum to
+  `observation_count`;
+- `has_feature_indexes` in `tracks/metadata.json` disagrees with
+  `feature_source`, or an `embedded_patches` file sets `has_keypoints_xy` to
+  `false`;
+- a `keypoints_xy` row is not finite or lies outside `[0, width) × [0, height)`
+  of its image's camera, the constraint
+  [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states.
+
+A verifier reports every failure it finds rather than stopping at the first; a
+file whose entries it cannot read at all is an error, not a list of failures.
 
 ## Implementations
 
@@ -1913,7 +1950,8 @@ the physical unit of 3D coordinates (point positions and camera translations) in
 |-------|----------|------|-------------|
 | `world_space_unit` | No | string | Physical unit of 3D world-space coordinates. One of: `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`. |
 
-These five strings are the only values the field takes. A writer refuses any
+The field is defined in every version (1+), so a file of any version may carry
+it. These five strings are the only values the field takes. A writer refuses any
 other value, and a reader and a verifier refuse a file that carries one.
 
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
@@ -2065,59 +2103,6 @@ otherwise. It does not recompute or rewrite a version 7 file's stored hashes, so
 a version 7 file keeps the digest it was written with. Saving it again writes
 the current version, with a different `content_xxh128`.
 
-### Version 1 → Version 2 (history)
-
-Version 2 replaced the version 1 point representation with the unified
-homogeneous model described in [Points3D](#8-points3d). The differences:
-
-| Version 1 | Version 2 |
-|-----------|-----------|
-| `points3d/positions_xyz.{N}.3.float64.zst` — Euclidean `(x, y, z)` | `points3d/positions_xyzw.{N}.4.float64.zst` — homogeneous `(x, y, z, w)` |
-| `tracks/points3d_indexes.{M}.uint32.zst` | `tracks/point_indexes.{M}.uint32.zst` |
-| metadata `points3d_count` | metadata `point_count` |
-| (no infinity points) | metadata `infinity_point_count` |
-| `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
-
-### Version 2 → Version 3
-
-Version 3 renames the per-point normals array, makes it optional, and adds the
-optional per-point patch frame (all stored in `points3d/`). The differences:
-
-| Version 2 | Version 3 |
-|-----------|-----------|
-| `points3d/estimated_normals_xyz.{N}.3.float32.zst` (always present) | `points3d/normals_xyz.{N}.3.float32.zst` (optional, flagged by `has_normals`) |
-| (no patch data) | optional [per-point patch frame](#per-point-patch-frame-optional-version-3) (`points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) |
-
-The `points3d/` archive directory and the `points3d_xxh128` content-hash field
-keep their original names across all versions; the patch-frame files, when
-present, are part of the points3d section and its hash.
-
-**Migration is mechanical and lossless.** A version 2 file upgrades to the
-version 3 model by reading `estimated_normals_xyz` as `normals_xyz` (the bytes
-are identical; versions 1 and 2 always carry normals, so `has_normals` is
-effectively `true`); it carries no patch data, so the patch-frame files are
-absent.
-
-### Version 3 → Version 4
-
-Version 4 adds the `feature_source` discriminator and the `embedded_patches`
-observation mode (see [Observation source](#observation-source-version-4)). The
-differences:
-
-| Version 3 | Version 4 |
-|-----------|-----------|
-| (implicitly SIFT-referenced) | top-level `feature_source` ∈ {`"sift_files"`, `"embedded_patches"`} |
-| `tracks/feature_indexes` (always present) | present in `sift_files`; replaced by `tracks/keypoints_xy` in `embedded_patches` |
-| `images/feature_tool_hashes`, `images/sift_content_hashes` (always present) | present in `sift_files`; replaced by `images/image_file_hashes` in `embedded_patches` |
-| `tracks/metadata.json` `{observation_count}` | adds `has_feature_indexes`, `has_keypoints_xy` |
-
-**Migration is mechanical and lossless.** A version 1–3 file *is* a `sift_files`
-reconstruction: read it with `feature_source = "sift_files"`,
-`has_feature_indexes = true`, `has_keypoints_xy = false`. A `sift_files` v4 file
-is byte-equivalent to a v3 file apart from the `version` / `feature_source`
-metadata keys and the new `tracks/metadata.json` `has_*` keys.
-`embedded_patches` is a new mode with no v3 equivalent.
-
 ### Version 6 → Version 7
 
 | Change | Detail |
@@ -2171,6 +2156,64 @@ in a pure gauge rotation of the world (a rigid transform, scale 1, so any check
 that compares point clouds sees nothing wrong) while the second `S` cancels the
 camera flip and leaves every camera facing backwards, putting every point behind
 its camera.
+
+### Version 3 → Version 4
+
+Version 4 adds the `feature_source` discriminator and the `embedded_patches`
+observation mode (see [Observation source](#observation-source-version-4)). The
+differences:
+
+| Version 3 | Version 4 |
+|-----------|-----------|
+| (implicitly SIFT-referenced) | top-level `feature_source` ∈ {`"sift_files"`, `"embedded_patches"`} |
+| `tracks/feature_indexes` (always present) | present in `sift_files`; replaced by `tracks/keypoints_xy` in `embedded_patches` |
+| `images/feature_tool_hashes`, `images/sift_content_hashes` (always present) | present in `sift_files`; replaced by `images/image_file_hashes` in `embedded_patches` |
+| `tracks/metadata.json` `{observation_count}` | adds `has_feature_indexes`, `has_keypoints_xy` |
+
+**Migration is mechanical and lossless.** A version 1–3 file *is* a `sift_files`
+reconstruction: read it with `feature_source = "sift_files"`,
+`has_feature_indexes = true`, `has_keypoints_xy = false`. A `sift_files` v4 file
+is byte-equivalent to a v3 file apart from the `version` / `feature_source`
+metadata keys and the new `tracks/metadata.json` `has_*` keys.
+`embedded_patches` is a new mode with no v3 equivalent.
+
+### Version 2 → Version 3
+
+Version 3 renames the per-point normals array, makes it optional, and adds the
+optional per-point patch frame (all stored in `points3d/`). The differences:
+
+| Version 2 | Version 3 |
+|-----------|-----------|
+| `points3d/estimated_normals_xyz.{N}.3.float32.zst` (always present) | `points3d/normals_xyz.{N}.3.float32.zst` (optional, flagged by `has_normals`) |
+| (no patch data) | optional [per-point patch frame](#per-point-patch-frame-optional-version-3) (`points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) |
+
+The `points3d/` archive directory and the `points3d_xxh128` content-hash field
+keep their original names across all versions; the patch-frame files, when
+present, are part of the points3d section and its hash.
+
+**Migration is mechanical and lossless.** A version 2 file upgrades to the
+version 3 model by reading `estimated_normals_xyz` as `normals_xyz` (the bytes
+are identical; versions 1 and 2 always carry normals, so `has_normals` is
+effectively `true`); it carries no patch data, so the patch-frame files are
+absent.
+
+### Version 1 → Version 2 (history)
+
+Version 2 replaced the version 1 point representation with the unified
+homogeneous model described in [Points3D](#8-points3d). The differences:
+
+| Version 1 | Version 2 |
+|-----------|-----------|
+| `points3d/positions_xyz.{N}.3.float64.zst` — Euclidean `(x, y, z)` | `points3d/positions_xyzw.{N}.4.float64.zst` — homogeneous `(x, y, z, w)` |
+| `tracks/points3d_indexes.{M}.uint32.zst` | `tracks/point_indexes.{M}.uint32.zst` |
+| metadata `points3d_count` | metadata `point_count` |
+| (no infinity points) | metadata `infinity_point_count` |
+| `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
+
+**Migration is mechanical and lossless.** Every version 1 point is finite, so a
+reader upgrades a version 1 file by appending `w = 1` to each `positions_xyz`
+row, reads `tracks/points3d_indexes` as `tracks/point_indexes` and both
+`points3d_count` keys as `point_count`, and takes `infinity_point_count` as `0`.
 
 ## Version History
 
