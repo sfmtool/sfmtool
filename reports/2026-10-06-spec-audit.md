@@ -575,11 +575,14 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - NEW :664-669 — `rejected_unlocalizable` defined only through cluster-patch-refinement.md; state the bar as `refine_options.max_member_zncc_self_similarity_radius` and what the radius measures.
   - Minor: :103-106 "earlier sfmtool releases"; :760-761 acceptable; :35 and :1060-1074 acquitted as background.
   - Versioning gaps: the `cluster_selection` record, `source_selection` and `restrict_cluster_ids` (:954-997) give no version; `refine_options` keys (:621-628) are tied to "writer generations", not versions.
+    > _Status (2026-10-07): **Done** — a "Versions" paragraph in § "Cluster Selection" says the record lives in `matching_options`, so it changed no format version, was first written into version 4 files and its `restrict_cluster_ids` / `source_selection` keys into version 5 files, and how a reader treats each when absent; `refine_options` says it entered in version 3 and which keys files of each version carry, without "writer generations" (also dropped from the `MatchesFile.refine_radius` doc), branch `spec-fix-1006-32-matches-versions`._
 **Third copies:** `MATCHES_FORMAT_VERSION` doc (types.rs:67-132, about 65 lines) restates the v1-v7 history; shrink to a spec link plus the v7 line.
+  > _Status (2026-10-07): **Done** — the doc comment is now the version 7 line, the below-6 cluster refusal and a pointer to § "Versioning and Migration"; every fact it held was already in the spec, branch `spec-fix-1006-32-matches-versions`._
 **Non-goals / deferrals checked:** 0 present.
 **Recommendation:** update spec (version range; move CLI and API names to Implementations) and add the verifier check.
 **Unclear / incorrect / suspicious:** with `has_two_view_geometries` true and the entries missing, `verify_matches` returns `Err` (verify.rs:1140) rather than reporting it in the result list (:1149-1151). The "Version 1.0rc1" line (:1385) has no migration statement.
   > _Status (2026-10-07): **Partially done** — `structure_errors` now reports a file that claims `has_two_view_geometries` but has no `two_view_geometries/metadata.json.zst` in the result list, as it does for a missing `clusters/` or `cluster_patches/` section; a section whose metadata is present but one of its data entries is missing still returns `Err`, as for every other section. Still open: the "Version 1.0rc1" note. Branch `spec-fix-1006-11-matches-verify-stray`._
+  > _Status (2026-10-07): **Done** (the "Version 1.0rc1" part) — the line now reads "Version 1", written as the integer `1`, with its poses upgraded on load by `S`-conjugation and a link to § "Version 1 → Version 2", branch `spec-fix-1006-32-matches-versions`._
 
 ### specs/formats/sfmr-file-format.md
 **Summary:** The `.sfmr` archive (versions 1-11): the Z-up / −Z-forward convention, sections and hashes, optional columns and their presence rules, the constraint legend, thumbnails, Point IDs and `world_space_unit`. The lineage retirement (#808) and the presence and unit refusals (#806) match the code.
@@ -896,6 +899,7 @@ Read 2026-09-26; open items above.
      the deep read) and 3 in sfmr (plus 1).
    - Three entries never say which version introduced them: `world_space_unit`
      and `infinity_point_count` in `.sfmr`, and `.matches` `refine_options`.
+     > _Status (2026-10-07): **Partially done** — `.matches` `refine_options` now says it entered with `cluster_patches/` in version 3, that `radius` appears only in refused version 3-4 files, that the member-gate key changed during version 6 and a rewritten file keeps its refinement's keys, and how a reader treats a missing object, branch `spec-fix-1006-32-matches-versions`; the two `.sfmr` entries are open._
    - The `.sfmr` writer replaces a zero normal on a finite point, which the
      spec does not allow for or rule out.
 5. **Nine opening paragraphs.** Check 4 found five:

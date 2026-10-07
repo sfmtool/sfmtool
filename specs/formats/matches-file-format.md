@@ -618,14 +618,28 @@ refinement measured and which members stand.
   [`member_status`](#cluster_patchesmember_statuskuint8zst)). A writer always
   states the whole list in the canonical order; a reader accepts any legend and
   normalises the column onto that order
-- `refine_options`: The refinement parameters used. The patch extent appears
-  under one of two keys across writer generations: `patch_size` (the full
+- `refine_options`: The refinement parameters used, present since the section
+  was introduced in version 3. The patch extent appears
+  under one of two keys: `patch_size` (the full
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   A consumer that needs the half-width uses `patch_size / 2`, or `radius`
   as-is. The other keys record the settings for a reader to see and are not
   read back: current files also carry `min_zncc`, `max_shift_px` and
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
+
+  Which keys `refine_options` holds is not tied to the format version, since
+  the object is a record of settings rather than a stored layout. `radius` was
+  written only into version 3 and 4 files, which are refused because they are
+  cluster files below version 6, so every file a reader accepts carries
+  `patch_size`; a reader still takes `radius` as a half-width when it finds
+  it. The member-gate key changed during version 6:
+  `max_keypoint_uncertainty` is in files refined before that change and
+  `max_member_zncc_self_similarity_radius` in files refined after it. A file
+  rewritten at a later version, or a selection of it, keeps the keys of the
+  refinement it holds, so a version 7 file can carry either. A reader treats a missing
+  `refine_options`, or one with neither extent key, as recording no patch
+  extent.
 
 #### `cluster_patches/reference_members.{C}.uint32.zst`
 
@@ -990,6 +1004,15 @@ record. An unwritten selection has no `content_xxh128`, so the nesting is what
 keeps the chain naming the archive it started from; nesting repeats to any
 depth, and the innermost `source_content_xxh128` names that archive. The key is
 absent whenever the source is an ordinary file.
+
+**Versions.** The record lives in `matching_options`, so adding it and its
+keys changed no stored layout and no format version. It was first written
+into version 4 files, and `restrict_cluster_ids` and `source_selection` were
+first written into version 5 files. Every cluster file a reader accepts
+(version 6 and later) may carry the record with either key. A reader treats a
+file without the record as an ordinary file, a record without
+`restrict_cluster_ids` as a selection not restricted by cluster, and a record
+without `source_selection` as a selection of an ordinary file.
 
 A selection of a selection, for example, records:
 
@@ -1382,4 +1405,6 @@ for the invariant and the `S`/`W` conversion math.
   poses in −Z-forward / +Y-up camera frames, matching `.sfmr` and `.camrig` — becomes
   normative; version 1 files (COLMAP convention) upgrade on load via `S`-conjugation
   of the stored poses. F/E/H matrices unchanged.
-- **Version 1.0rc1**: Release candidate
+- **Version 1**: the first version, written as the integer `1`. Its two-view
+  relative poses are in COLMAP convention; a reader upgrades them on load by
+  `S`-conjugation (see [Version 1 → Version 2](#version-1--version-2)).
