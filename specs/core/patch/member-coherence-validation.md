@@ -94,8 +94,9 @@ the per-member sharpness below both read.
 
 `matching` (default `Plain`) can blur-match each pair before it is correlated
 ([blur-matched-zncc.md](blur-matched-zncc.md)): where one member's
-self-similarity semi-major axis is shorter than the other's semi-minor axis (by
-more than `min_ellipse_ratio` for `BlurMatchedAboveRatio`), that member's render
+self-similarity semi-major axis is shorter than the other's semi-minor axis (and
+the semi-minor axis is at least `min_ellipse_ratio` times the semi-major one
+for `BlurMatchedAboveRatio`), that member's render
 is blurred by a round Gaussian until its semi-major axis reaches the other's
 semi-minor axis; any other pair is read as it is. It spares a member that
 disagrees with its track only because it is blurrier than the rest in every
@@ -125,17 +126,17 @@ datasets, one thread:
 
 The added time is split between reading each member's own ellipse and the
 blurred pairs. The width of each blur is read off the member's blur
-assessment, how its own render grows when blurred: each member blurred in any
-pair has its render blurred by 0.4 and 1 grid px and read again, once, and
-every pair it is in reads its width off those readings
-([blur-matched-zncc.md](blur-matched-zncc.md) § "The width, from each tile's
-blur assessment"). The pairing rule is the one the reference-view rule reads,
-`TrackBlurs` in
-[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs). Measured in the same session, a blur along
-each direction in which the two members' ellipses differ, which blurs 90% and
-50% of the pairs, ran at 2.37 × and 1.77 ×. Reading the members' own ellipses
-takes about 7 µs a member, and a blurred render is read the same way. Each is
-read on the largest
+assessment, how its own render grows when blurred: a member that some pair
+blurs is assessed once, its render blurred by 0.4 and by 1 grid px and each
+blurred copy's ellipse read, and every pair that blurs it reads its width off
+those two readings ([blur-matched-zncc.md](blur-matched-zncc.md) § "The width,
+from each tile's blur assessment"). The pairing rule is the one the
+reference-view rule reads, `TrackBlurs` in
+[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs).
+Measured in the same session, a blur along each direction in which the two
+members' ellipses differ, an alternative that blurs 90% and 50% of the pairs,
+ran at 2.37 × and 1.77 ×. Reading the members' own ellipses takes about 7 µs a
+member, and a blurred render is read the same way. Each is read on the largest
 square centred on the grid that lies inside the common support, where every
 sample carries data, so the reading takes its dense route; over the
 disk-shaped support itself, whose corners carry no data, it took about 50 µs.

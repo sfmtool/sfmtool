@@ -27,10 +27,11 @@ only (an oblique or fisheye view, motion blur along a line) and two tiles of a
 texture with a grain, whose ellipses are long along the grain whatever the
 sharpness: a long axis is not read as blur. The width comes from the sharper
 tile's **blur assessment**, how its own semi-major axis grows when it is
-blurred: each tile is blurred twice, by 0.4 and by 1 grid px, and read again,
-once, and every pair the tile is in reads its width off those readings without
-reading again. The blur is done to one tile; pairing the tiles, and choosing
-which to blur to what length, is the consumers' part.
+blurred. A tile that some pair blurs is assessed once: it is blurred by 0.4
+and by 1 grid px, and the self-similarity ellipse of each blurred copy is
+read. Every pair that blurs the tile reads its width off those two readings,
+with no further reading. The blur is done to one tile; pairing the tiles, and
+choosing which to blur to what length, is the consumers' part.
 
 Two consumers read it. The bench's reference-view rule reads blur-matched
 agreement by default ([reference-view.md](reference-view.md) § "Blur-matched
@@ -66,7 +67,7 @@ impl TilePlanes {
 // The whole-tile self-similarity reading over the samples with data.
 pub fn read_tile_ellipse(values: &[f32], channels: usize, side: usize, data: &[bool])
     -> Option<[[f64; 2]; 2]>;
-pub fn semi_axes(e: &[[f64; 2]; 2]) -> [f64; 2]; // [major, minor], grid px
+pub fn semi_axes(e: &[[f64; 2]; 2]) -> [f64; 2]; // [major, minor], grid px; NaN if E is not finite
 
 // How sharp one tile is, and how that changes under round blur. Read once per tile.
 pub const GROWTH_PROBE_SIGMAS: [f64; 2]; // [0.4, 1.0]
@@ -236,10 +237,10 @@ What it leaves plain, and why that is the intent:
 - **A view blurry along one direction only.** An oblique view is blurry along
   the direction it is foreshortened and sharp across it, and its semi-minor
   axis is often no longer than a frontal view's semi-major axis. Blurring the
-  frontal view along the oblique view's long axis took 21% of the pairs blurred
-  per direction (2,312 pool pairs whose blurrier view is foreshortened by 1.5 or
-  more, or seen at 55° or more), and raised their ZNCC by 0.020 on average.
-  Those pairs are read plain.
+  frontal view along the oblique view's long axis took 21% of the pairs a blur
+  per direction blurred at ratio 1.25 (2,312 pool pairs whose blurrier view is
+  foreshortened by 1.5 or more, or seen at 55° or more), and raised their ZNCC
+  by 0.020 on average. Those pairs are read plain.
 - **Grain and stripes.** A texture with a grain (bark, a railing, a striped
   awning) reads a long ellipse along the grain in a sharp view. Two such views,
   or a sharp grained view and another view, differ in ellipse along the grain
@@ -250,9 +251,10 @@ What it leaves plain, and why that is the intent:
   views whose semi-minor axis is past it, and leaves the 8 pairs among the
   striped views plain.
 
-On pool pairs that keeps 15% of the ZNCC gain a blur per direction gave over
-plain ZNCC, and 61% on the pairs both blur. The planted wrong views below show
-what that trade does to telling members from other surfaces.
+At ratio 1.25, on the pool pairs, that keeps 15% of the ZNCC gain a blur per
+direction gave over plain ZNCC, and 61% on the pairs both blur. The planted
+wrong views below show what that trade does to telling members from other
+surfaces.
 
 ### The width, from each tile's blur assessment
 
@@ -266,14 +268,16 @@ piecewise linear between them and along its last piece past 1. The width is
 the `σ` at which that line reaches the target
 (`BlurAssessment::sigma_to_reach`), at most `MAX_BLUR_SIGMA`. Each view some
 pair blurs is assessed once and kept for every pair (`TrackBlurs`), so a track
-pays two blurred readings for each view it blurs, not for each pair. The probes are isotropic, as the
-blur is, so the line is read on the same kind of blur the pair gets.
+pays two blurred readings for each view it blurs, not for each pair. The
+probes are isotropic, as the blur is, so the line is read on the same kind of
+blur the pair gets.
 
 - **Two probes, because the growth bends.** A tile whose ellipse is well under
   a grid px long hardly lengthens until the blur reaches the scale of a pixel,
   and then lengthens faster. A straight line from one probe at 0.6 blurred 6.1%
   of the tiles more than 10% past the target; the wider probe follows the bend.
-- **Past the widest probe** the line is extrapolated along its last piece. On
+- **Past the widest probe** the line is extrapolated along its last piece that
+  grew; a probe that reads shorter than the reading before it is passed over. On
   the pool pairs 6% of the widths are past 1 grid px and they land within 3% of
   the target (p90); holding them to the width of a rate fitted on real tiles,
   as an extra limit, changed none of them.
@@ -448,7 +452,7 @@ datasets of the reference-view work, all in one session on one machine:
 
 | Consumer | Option | Added cost | Effect | Default |
 |---|---|---|---|---|
-| Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.13 ms per track (median; p90 0.81 ms), 2.1% of an evaluation (a blur per direction: +0.37 ms, 5.8%) | 28 of 77 hand picks exactly, as plain (tune half 18, held-out 10), against 30 for a blur per direction; the pick differs from plain on 25 of 661 tracks | on |
+| Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.13 ms per track (median; p90 0.81 ms), 2.1% of an evaluation (a blur per direction: +0.37 ms, 5.8%) | 28 of 77 hand picks exactly, as plain (tune half 18, held-out 10), against 30 for a blur per direction; the pick differs from plain on 4 of 661 tracks | on |
 | Member coherence's decision ([member-coherence-validation.md](member-coherence-validation.md)) | blur-matched, ratio 1.25 | 1.18 × the plain run on one thread (a blur per direction 1.77 ×) | a planted member blurred by `σ` 2 is evicted 2.9% of the time against 4.9% plain (1.8% for a blur per direction); verdicts change on 0.4% of real points, in both directions | off |
 
 ## Implementation notes
@@ -502,7 +506,7 @@ its plain value for such a pair.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `DEFAULT_MIN_ELLIPSE_RATIO` | `1.25` | The factor by which the target must exceed the sharper tile's semi-major axis for `BlurMatchedAboveRatio` to blur the pair; it leaves 95% of the pairs on real tracks plain |
+| `DEFAULT_MIN_ELLIPSE_RATIO` | `1.25` | How many times the sharper tile's semi-major axis the target must at least be for `BlurMatchedAboveRatio` to blur the pair; it leaves 95% of the pairs on real tracks plain |
 | `MAX_MATCHED_LENGTH` | `2` grid px | The longest semi-major axis blur matching aims for; a longer semi-minor axis of the blurrier tile is read as this one |
 | `GROWTH_PROBE_SIGMAS` | `[0.4, 1.0]` grid px | The isotropic blurs a tile is blurred by, once each, for its blur assessment |
 | `MATCHED_LENGTH_TOLERANCE` | `0.05` | A target within this fraction of the sharper tile's semi-major axis is not blurred to, whatever the ratio |
@@ -540,8 +544,9 @@ optional `(R, R)` bool `valid` flags:
   out), and `sigma`, the width; `None` where the assessment gives no width.
 
 They raise `ValueError` for a tile that is not square, 3 or more on a side,
-with 1 to 4 channels, for a `valid` or `ellipse` of the wrong shape, and for an
-assessment without `semi_axes` of 2 and `growth` of `(2, 2)`.
+with 1 to 4 channels, for a `valid` or `ellipse` of the wrong shape, for an
+assessment without `semi_axes` of 2 and `growth` of `(2, 2)`, and for a
+`length` that is negative or not finite.
 
 ```python
 from sfmtool._sfmtool.patches import assess_blur, blur_to_length
@@ -574,9 +579,7 @@ way too, or the blur is set against a different reading. It returns a dict:
 column's, 0 where it was not), `pairs`, `pairs_blurred` and `ellipse_matrix`
 `(k, 2, 2)`. It raises `ValueError` for a stack that is not square tiles of 3
 or more on a side with 1 to 4 channels, a `valid` or `ellipses` of the wrong
-shape, an unknown name, or a ratio under 1 or not finite. The blur has one
-shape, so there is no option to choose one; an unknown keyword raises
-`TypeError`.
+shape, an unknown name, or a ratio under 1 or not finite.
 
 The bench's readings are those of the tiles `render_view_tile` renders at each
 view's keypoint, at the evaluation's resolution and with its sampler, read with
@@ -606,14 +609,17 @@ the bench's readings carry the consumers' forms
 ## Testing
 
 [blur_matched/tests.rs](../../../crates/sfmtool-core/src/patch/blur_matched/tests.rs)
-checks the semi-axes read off a matrix; that a tile's assessment keeps both
-axes of its own reading and of each probe's, each what a separate reading of
-the tile blurred by that probe gives, bit for bit, with a reused scratch as
-with a fresh one; that a tile whose probes cannot be read has none; the width
-read off constructed assessments (exact on a linear growth, a flat piece passed
-over, no growth giving none, the cap); that a tile blurred to a copy of it
-blurred by a known round Gaussian ends with its semi-major axis within 5% of
-the copy's semi-minor axis, by no more than the planted width; that a tile
+checks the semi-axes read off a matrix, and that a matrix with an entry that
+is not finite has none; that a tile's assessment keeps both axes of its own
+reading and of each probe's, each what a separate reading of the tile blurred
+by that probe gives, bit for bit, with a reused scratch as with a fresh one;
+that a tile whose probes cannot be read has none; the width read off
+constructed assessments (exact on a linear growth, a flat piece passed over, a
+widest probe that reads shorter passed over and the line extended along the
+piece before it, no growth giving none, the cap); that a tile blurred to a
+copy of it blurred by a known round Gaussian ends with its semi-major axis
+within 5% of the copy's semi-minor axis, by no more than the planted width;
+that a tile
 already long enough comes back unblurred with a width of 0; the two passes
 against the exact blur of a tile of sinusoids and against the direct 2-D
 convolution, and the two against each other round missing samples; that one

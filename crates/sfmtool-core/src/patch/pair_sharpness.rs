@@ -14,9 +14,9 @@
 //! direction past what the blurrier tile shows along its sharpest one. Where
 //! neither tile is the sharper in that sense, as where one tile is blurry
 //! along one direction only or where the two hold a texture with a grain at
-//! different angles, the pair is correlated plain. Where the semi-major axis
-//! is short of the target by less than a ratio, the pair is correlated plain
-//! as well ([`PairMatching`]).
+//! different angles, the pair is correlated plain. Where the target is less
+//! than a ratio times the semi-major axis, the pair is correlated plain as
+//! well ([`PairMatching`]).
 //!
 //! The blur itself is done to one tile, by
 //! [`blur_matched`](crate::patch::blur_matched): each view whose tile some
@@ -36,15 +36,15 @@ pub const MIN_SHARPER_LENGTH: f64 = 0.05;
 /// how well wrong views are told apart.
 pub const MAX_MATCHED_LENGTH: f64 = 2.0;
 
-/// The fraction by which the target must exceed the sharper tile's
+/// The fraction by which the target must at least exceed the sharper tile's
 /// semi-major axis for the pair to be blurred at all, whatever the ratio
 /// asked for: a smaller difference is within the spread of the width the
 /// blur assessment gives.
 pub const MATCHED_LENGTH_TOLERANCE: f64 = 0.05;
 
 /// The default ratio of [`PairMatching::BlurMatchedAboveRatio`]: the target
-/// must exceed the sharper tile's semi-major axis by more than this factor
-/// for the pair to be blurred.
+/// must be at least this factor times the sharper tile's semi-major axis for
+/// the pair to be blurred.
 pub const DEFAULT_MIN_ELLIPSE_RATIO: f64 = 1.25;
 
 /// How a pair of views' tiles is correlated: as they are, or blur-matched.
@@ -53,19 +53,18 @@ pub enum PairMatching {
     /// The tiles as they are.
     #[default]
     Plain,
-    /// The sharper tile blurred wherever [`pair_blur`] finds one, its
-    /// semi-major axis short of the target by more than
-    /// [`MATCHED_LENGTH_TOLERANCE`].
+    /// The sharper tile blurred wherever [`pair_blur`] finds one, the target
+    /// at least `1 +` [`MATCHED_LENGTH_TOLERANCE`] times its semi-major axis.
     BlurMatched,
-    /// The sharper tile blurred where its semi-major axis is short of the
-    /// target by more than the given factor (`> 1`); a pair that differs by
-    /// less is correlated plain, which costs nothing beyond the plain ZNCC.
+    /// The sharper tile blurred where the target is at least the given factor
+    /// (`> 1`) times its semi-major axis; a pair that differs by less is
+    /// correlated plain, which costs nothing beyond the plain ZNCC.
     BlurMatchedAboveRatio(f64),
 }
 
 impl PairMatching {
-    /// The factor the target must exceed the sharper semi-major axis by for
-    /// the pair to be blurred, or `None` for [`PairMatching::Plain`]. `1` for
+    /// The least ratio of the target to the sharper semi-major axis at which
+    /// the pair is blurred, or `None` for [`PairMatching::Plain`]. `1` for
     /// [`PairMatching::BlurMatched`]; [`pair_blur`] blurs no pair whose
     /// lengths are within [`MATCHED_LENGTH_TOLERANCE`] of each other,
     /// whatever the factor.
@@ -121,9 +120,9 @@ pub struct PairBlur {
 /// [`SelfSimilarityEllipse::matrix`](crate::patch::self_similarity::SelfSimilarityEllipse::matrix),
 /// in grid px²); `None` where the pair is correlated plain.
 ///
-/// A tile is blurred when its semi-major axis is shorter than the other
-/// tile's semi-minor axis, the target, by more than `min_ratio` (and by more
-/// than [`MATCHED_LENGTH_TOLERANCE`]). The target is at most
+/// A tile is blurred when the other tile's semi-minor axis, the target, is at
+/// least `min_ratio` times its semi-major axis (and at least `1 +`
+/// [`MATCHED_LENGTH_TOLERANCE`] times it). The target is at most
 /// [`MAX_MATCHED_LENGTH`]. At most one tile of a pair can be shorter in that
 /// way. A pair with an ellipse that cannot be read is not blurred.
 ///

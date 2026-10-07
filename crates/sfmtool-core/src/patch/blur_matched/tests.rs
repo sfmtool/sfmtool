@@ -9,6 +9,11 @@ use crate::patch::reference_view::pair_zncc_readings;
 fn the_semi_axes_are_read_off_the_matrix() {
     let [major, minor] = semi_axes(&ellipse(1.3, 0.4, 37.0));
     assert!((major - 1.3).abs() < 1e-12 && (minor - 0.4).abs() < 1e-12);
+    // A matrix with an entry that is not finite has no semi-axes.
+    for bad in [f64::NAN, f64::INFINITY] {
+        let [major, minor] = semi_axes(&[[1.0, 0.0], [0.0, bad]]);
+        assert!(major.is_nan() && minor.is_nan(), "{bad}: {major}, {minor}");
+    }
 }
 
 // ------------------------------------------------------------ the assessment
@@ -75,8 +80,9 @@ fn a_tile_whose_probes_cannot_be_read_has_no_assessment() {
 }
 
 /// The width is read off the readings: on a growth that is linear in `σ²`
-/// it is exact; a piece that does not grow is passed over; a growth that
-/// never grows gives none; a length already reached gives 0.
+/// it is exact; a piece that does not grow is passed over, and past the
+/// widest probe the line goes on along the last piece that grew; a growth
+/// that never grows gives none; a length already reached gives 0.
 #[test]
 fn the_width_is_read_off_the_probes() {
     let [p1, p2] = GROWTH_PROBE_SIGMAS;
@@ -97,6 +103,20 @@ fn the_width_is_read_off_the_probes() {
     let late = of([0.25, 0.25, 0.25 + 2.0 * (p2 * p2 - p1 * p1)]);
     let s = late.sigma_to_reach(0.6).unwrap();
     let want = (p1 * p1 + (0.36 - 0.25) / 2.0).sqrt();
+    assert!((s - want).abs() < 1e-12, "{s} against {want}");
+    // The widest probe reads shorter than the narrow one: it is passed over,
+    // and a length past the narrow probe's is reached along the first piece.
+    let dip = BlurAssessment {
+        semi_axes: [0.5, 0.4],
+        growth: [[0.8, 0.5], [0.7, 0.6]],
+    };
+    let slope = (0.64 - 0.25) / (p1 * p1);
+    let s = dip.sigma_to_reach(0.9).unwrap();
+    let want = (p1 * p1 + (0.81 - 0.64) / slope).sqrt();
+    assert!((s - want).abs() < 1e-12, "{s} against {want}");
+    assert!((s - 0.48).abs() < 0.01, "{s}");
+    let s = dip.sigma_to_reach(0.6).unwrap();
+    let want = ((0.36 - 0.25) / slope).sqrt();
     assert!((s - want).abs() < 1e-12, "{s} against {want}");
     // No growth at all: no width.
     assert_eq!(of([0.25, 0.25, 0.25]).sigma_to_reach(1.0), None);

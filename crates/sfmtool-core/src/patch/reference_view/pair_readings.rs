@@ -12,7 +12,6 @@ use super::agreement::finite_middle;
 use super::REFERENCE_MIN_CELL_SAMPLES;
 use crate::patch::blur_matched::{
     assess_blur, blur_to_length_into, read_tile_ellipse, BlurScratch, TilePlanes,
-    GROWTH_PROBE_SIGMAS,
 };
 use crate::patch::normal_refine::{grid_bounds, window_weights, PatchWindow};
 use crate::patch::pair_sharpness::{PairMatching, TrackBlurs};
@@ -170,8 +169,10 @@ pub struct BlurMatchedPairs {
     pub pairs: usize,
     /// How many of them were blurred.
     pub pairs_blurred: usize,
-    /// How many blurred tiles had their ellipse read: one per probe for each
-    /// view some pair blurs, to assess its blur ([`TrackBlurs`]).
+    /// How many blurred tiles had their ellipse read to assess the blur of
+    /// the views some pair blurs ([`TrackBlurs`]): one per probe for each
+    /// such view, fewer where a probe's reading failed and ended its
+    /// assessment.
     pub ellipse_reads: usize,
 }
 
@@ -233,9 +234,13 @@ pub fn blur_matched_pairs(
     let side = tiles.first().map_or(0, |t| t.side);
     let weights = window_weights(window, side as u32);
     let mut scratch = BlurScratch::default();
+    let mut reads = 0;
     let blurs = TrackBlurs::assess(ellipses, matching, |v, e| {
         let t = tiles[v];
-        let read = |values: &[f32]| read_tile_ellipse(values, t.channels, t.side, &t.data);
+        let read = |values: &[f32]| {
+            reads += 1;
+            read_tile_ellipse(values, t.channels, t.side, &t.data)
+        };
         assess_blur(t, e, read, &mut scratch)
     });
     // The blurred tile, reused pair after pair.
@@ -277,7 +282,6 @@ pub fn blur_matched_pairs(
             grid[b * k + a] = readings.grid;
         }
     }
-    let reads = blurs.assessed() * GROWTH_PROBE_SIGMAS.len();
     progress_note!(
         phase,
         "{pairs_blurred} of {pairs} pairs blurred, {reads} blurred tiles read"

@@ -43,7 +43,7 @@ pub(crate) mod test_tiles;
 mod tests;
 
 pub use assess::{assess_blur, blur_to_length, blur_to_length_into, BlurAssessment};
-#[cfg_attr(not(test), allow(unused_imports))]
+#[cfg(test)]
 pub(crate) use blur::blur_tile_direct;
 pub use blur::{blur_tile, BlurScratch};
 pub use tiles::{read_tile_ellipse, TilePlanes};
@@ -60,8 +60,12 @@ pub const GROWTH_PROBE_SIGMAS: [f64; 2] = [0.4, 1.0];
 pub const MAX_BLUR_SIGMA: f64 = 3.0;
 
 /// The semi-axes `[major, minor]` of the ellipse `E`, in grid px: the square
-/// roots of its eigenvalues.
+/// roots of its eigenvalues. Both are `NaN` where an entry of `E` is not
+/// finite.
 pub fn semi_axes(e: &[[f64; 2]; 2]) -> [f64; 2] {
+    if !e.iter().flatten().all(|v| v.is_finite()) {
+        return [f64::NAN; 2];
+    }
     let (a, b, d) = (e[0][0], 0.5 * (e[0][1] + e[1][0]), e[1][1]);
     let mean = 0.5 * (a + d);
     let half = (0.25 * (a - d) * (a - d) + b * b).sqrt();

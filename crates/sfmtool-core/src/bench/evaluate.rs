@@ -149,11 +149,11 @@ pub struct EvaluateOptions {
 /// along every direction.
 ///
 /// The default takes the blur-matched readings, leaving a pair plain where
-/// the sharper tile's semi-major axis is short of the other's semi-minor axis
-/// by less than [`DEFAULT_MIN_ELLIPSE_RATIO`], and has both tests read them:
+/// the other tile's semi-minor axis is less than [`DEFAULT_MIN_ELLIPSE_RATIO`]
+/// times the sharper tile's semi-major axis, and has both tests read them:
 /// on the review cases and pool samples that adds about 0.13 ms to a track's
-/// evaluation (2%), and agrees with the hand picks on as many tracks as the
-/// plain readings (28 of 77). `specs/core/patch/reference-view.md`
+/// evaluation (2%), and agrees with the hand picks exactly on as many tracks
+/// as the plain readings (28 of 77). `specs/core/patch/reference-view.md`
 /// § "Blur-matched agreement" has the measurements.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceViewOptions {

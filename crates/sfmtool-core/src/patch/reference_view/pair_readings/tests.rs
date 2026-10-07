@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::patch::blur_matched::semi_axes;
 use crate::patch::blur_matched::test_tiles::*;
+use crate::patch::blur_matched::{semi_axes, GROWTH_PROBE_SIGMAS};
 
 fn pairs_of(
     tiles: &[&TilePlanes],

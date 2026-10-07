@@ -207,10 +207,23 @@ pub fn assess_blur<'py>(
 ///
 /// Raises:
 ///     ValueError: If ``assessment`` lacks ``semi_axes`` or ``growth`` or
-///         they have the wrong lengths.
+///         they have the wrong lengths, or ``length`` is negative or not
+///         finite.
 #[pyfunction]
 pub fn blur_sigma_to_reach(assessment: &Bound<'_, PyDict>, length: f64) -> PyResult<Option<f64>> {
+    check_length(length)?;
     Ok(assessment_of(assessment)?.sigma_to_reach(length))
+}
+
+/// Check a semi-major axis to reach: finite and not negative.
+fn check_length(length: f64) -> PyResult<()> {
+    if length.is_finite() && length >= 0.0 {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "length must be a finite number of at least 0, not {length}"
+        )))
+    }
 }
 
 /// A tile blurred by a round Gaussian until its self-similarity semi-major
@@ -231,7 +244,8 @@ pub fn blur_sigma_to_reach(assessment: &Bound<'_, PyDict>, length: f64) -> PyRes
 ///
 /// Raises:
 ///     TypeError: If ``samples`` or ``valid`` has the wrong type.
-///     ValueError: If a shape is wrong, or ``assessment`` cannot be read.
+///     ValueError: If a shape is wrong, ``assessment`` cannot be read, or
+///         ``length`` is negative or not finite.
 #[pyfunction]
 #[pyo3(signature = (samples, assessment, length, *, valid=None))]
 pub fn blur_to_length<'py>(
@@ -241,6 +255,7 @@ pub fn blur_to_length<'py>(
     length: f64,
     valid: Option<PyReadonlyArray2<'py, bool>>,
 ) -> PyResult<Option<Bound<'py, PyDict>>> {
+    check_length(length)?;
     let tile = one_tile(&samples, valid.as_ref())?;
     let a = assessment_of(assessment)?;
     let Some((blurred, sigma)) =
@@ -309,8 +324,8 @@ pub fn blur_to_length<'py>(
 ///         default parameters, over the samples that carry data.
 ///     matching: ``"blur_matched"`` (default), ``"blur_matched_above_ratio"``
 ///         or ``"plain"``.
-///     min_ellipse_ratio: The factor by which the other tile's semi-minor
-///         axis must exceed the sharper tile's semi-major axis for
+///     min_ellipse_ratio: How many times the sharper tile's semi-major axis
+///         the other tile's semi-minor axis must at least be for
 ///         ``"blur_matched_above_ratio"`` to blur the pair (default 1.25), at
 ///         least 1.
 ///     window: The whole-tile reading's window, ``"gaussian_disk"``

@@ -127,13 +127,13 @@ impl PyPatchCloud {
     ///         that member's render blurred by a round Gaussian until its
     ///         semi-major axis reaches the other's semi-minor axis first; or
     ///         ``"blur_matched_above_ratio"``, the same but only where the
-    ///         semi-minor axis exceeds the semi-major one by more than
-    ///         ``min_ellipse_ratio``. Blur matching spares a member
+    ///         semi-minor axis is at least ``min_ellipse_ratio`` times the
+    ///         semi-major one. Blur matching spares a member
     ///         that differs from the rest only by being blurrier. The coarse
     ///         tables, exoneration and ``sharpness_deficit`` keep reading the
     ///         plain matrix.
-    ///     min_ellipse_ratio: The factor by which the other member's semi-minor
-    ///         axis must exceed the sharper member's semi-major axis for
+    ///     min_ellipse_ratio: How many times the sharper member's semi-major
+    ///         axis the other member's semi-minor axis must at least be for
     ///         ``"blur_matched_above_ratio"`` to blur the pair (default 1.25).
     ///     return_matrix: Also return the per-point ``zncc`` matrix (default
     ///         ``False`` — it is ``k×k`` per point).

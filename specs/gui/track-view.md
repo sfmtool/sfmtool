@@ -1328,21 +1328,23 @@ bitmap.** A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a
 candidate has at least 99% of its tile on the photograph, at most 5% of the
 photograph under the tile clipped, a viewing angle of at most 65°, and no ninth
-where it agrees with the other rows more than 0.25 below the track's **typical
+where it agrees with the other rows more than 0.3 below the track's **typical
 agreement** there, the median over the `in` rows; of the candidates whose pair
 ZNCC, the median of its ZNCCs with the other `in` rows, is within 15 points of
 the best candidate's, the rule picks the one with the smallest self-similarity
-radius. Both agreements are **blur-matched** by default: before two rows'
-tiles are correlated the sharper is blurred to the other's sharpness, along
-each direction in which their self-similarity ellipses differ by more than a
-quarter ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
-so a sharp row is not counted as disagreeing for detail the blurrier rows lack.
-Under plain readings the cell bar is 0.3. When no row passes, the rule drops
-the 65° limit, then the check of the ninths, then coverage and clipping; a row that sees the patch at 90° or more,
-edge on or from behind, is never picked. The cell's first line is the pick,
-`reference`, drawn on a green fill, or the word for the first test that turned
-the row away: `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less`
-or `less sharp`. The hover of a `less sharp` row with no self-similarity radius
+radius. Both agreements are **blur-matched** by default: where one row's tile
+is sharper than the other's along every direction (the other's
+self-similarity semi-minor axis is at least a quarter longer than its
+semi-major axis), it is blurred by a round Gaussian until its semi-major axis
+reaches the other's semi-minor axis before the two are correlated
+([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
+so a sharp row is counted as disagreeing less for detail a blurrier row lacks.
+The cell bar is 0.3 on either reading. When no row passes, the rule drops the
+65° limit, then the check of the ninths, then coverage and clipping; a row
+that sees the patch at 90° or more, edge on or from behind, is never picked.
+The cell's first line is the pick, `reference`, drawn on a green fill, or the
+word for the first test that turned the row away: `partial`, `clipped`,
+`oblique`, `ninth differs`, `agrees less` or `less sharp`. The hover of a `less sharp` row with no self-similarity radius
 says the rule could not compare its sharpness, rather than naming a sharper
 row. The column says *ninth* for a cell of the ZNCC grid, since a *cell* in the
 table is one row's entry in one column. Its second line is the viewing angle, the angle

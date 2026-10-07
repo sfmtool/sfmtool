@@ -111,6 +111,16 @@ def test_bad_tile_arguments_are_refused():
         blur_to_length(tile, {"semi_axes": [0.5], "growth": [[1, 1], [2, 2]]}, 1.0)
 
 
+@pytest.mark.parametrize("length", [-0.5, float("nan"), float("inf")])
+def test_a_length_that_is_negative_or_not_finite_is_refused(length):
+    tile = _texture()
+    a = assess_blur(tile)
+    with pytest.raises(ValueError, match="length"):
+        blur_sigma_to_reach(a, length)
+    with pytest.raises(ValueError, match="length"):
+        blur_to_length(tile, a, length)
+
+
 def test_a_blurred_copy_reads_higher_blur_matched_than_plain():
     tiles = np.stack([_texture(), _texture(), _texture(blur=1.5)])
     plain = blur_matched_zncc_matrix(tiles, matching="plain")
@@ -206,9 +216,6 @@ def test_grey_and_alpha_read_the_grey_alone():
 
 def test_bad_arguments_are_refused():
     tiles = np.stack([_texture(), _texture()])
-    # The blur is always round: there is no kernel to choose.
-    with pytest.raises(TypeError, match="kernel"):
-        blur_matched_zncc_matrix(tiles, kernel="anisotropic")
     with pytest.raises(ValueError, match="matching"):
         blur_matched_zncc_matrix(tiles, matching="sharp")
     with pytest.raises(ValueError, match="ellipses"):

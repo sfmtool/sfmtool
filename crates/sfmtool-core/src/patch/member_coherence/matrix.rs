@@ -13,9 +13,7 @@
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
-use crate::patch::blur_matched::{
-    assess_blur, blur_to_length_into, BlurScratch, TilePlanes, GROWTH_PROBE_SIGMAS,
-};
+use crate::patch::blur_matched::{assess_blur, blur_to_length_into, BlurScratch, TilePlanes};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
@@ -595,8 +593,12 @@ fn fill_blur_matched(
     // Each member some pair blurs is assessed on its render blurred by each
     // probe, read as the unblurred one was, so the lengths compared are of
     // one reading.
+    let mut reads = 0;
     let blurs = TrackBlurs::assess(&ellipses, params.matching, |m, e| {
-        let read = |values: &[f32]| member_ellipse(values, colour, r, &support, square, &mut crop);
+        let read = |values: &[f32]| {
+            reads += 1;
+            member_ellipse(values, colour, r, &support, square, &mut crop)
+        };
         assess_blur(&planes[m], e, read, &mut blur_scratch)
     });
     let mut blurred = TilePlanes::default();
@@ -671,8 +673,7 @@ fn fill_blur_matched(
     }
     progress_note!(
         phase,
-        "{pairs_blurred} of {pairs} pairs blurred, {} blurred renders read",
-        blurs.assessed() * GROWTH_PROBE_SIGMAS.len()
+        "{pairs_blurred} of {pairs} pairs blurred, {reads} blurred renders read"
     );
     pairs_blurred
 }

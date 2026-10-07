@@ -34,8 +34,10 @@ impl BlurAssessment {
     /// unblurred axis is already that long, `None` where the readings do not
     /// grow or are not finite.
     ///
-    /// The line goes on past the widest probe along its last piece, and a
-    /// reading shorter than the one before it is passed over.
+    /// A reading shorter than the one before it is passed over, and the line
+    /// goes on past the widest probe along the last piece that grew: where
+    /// the widest probe reads shorter than the narrower one, along the piece
+    /// before it.
     ///
     /// ```
     /// use sfmtool_core::patch::blur_matched::BlurAssessment;
@@ -62,19 +64,27 @@ impl BlurAssessment {
         if t2 <= prev.1 {
             return Some(0.0);
         }
-        let last = GROWTH_PROBE_SIGMAS.len() - 1;
-        for (i, &w) in GROWTH_PROBE_SIGMAS.iter().enumerate() {
-            let cur = (w * w, l2[i + 1]);
+        // The width along the piece that starts at `from` and rises at `slope`.
+        let along = |from: (f64, f64), slope: f64| {
+            let s2 = from.0 + (t2 - from.1) / slope;
+            s2.max(0.0).sqrt().min(MAX_BLUR_SIGMA)
+        };
+        // The last piece that grew: where it starts, and its slope.
+        let mut grew = None;
+        for (&w, &l) in GROWTH_PROBE_SIGMAS.iter().zip(&l2[1..]) {
+            let cur = (w * w, l);
             let slope = (cur.1 - prev.1) / (cur.0 - prev.0);
-            if slope > 0.0 && (t2 <= cur.1 || i == last) {
-                let s2 = prev.0 + (t2 - prev.1) / slope;
-                return Some(s2.max(0.0).sqrt().min(MAX_BLUR_SIGMA));
+            if slope > 0.0 {
+                if t2 <= cur.1 {
+                    return Some(along(prev, slope));
+                }
+                grew = Some((prev, slope));
             }
             if cur.1 >= prev.1 {
                 prev = cur;
             }
         }
-        None
+        grew.map(|(from, slope)| along(from, slope))
     }
 }
 

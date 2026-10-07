@@ -15,7 +15,7 @@ best of them overall, and among those is the sharpest. The agreement it reads
 is **blur-matched** by default: before two views' tiles are correlated, a tile
 sharper than the other along every direction is blurred by a round Gaussian to
 the other's sharpness along its sharpest direction, so a sharp view is counted
-less for the detail a blurrier view lacks
+as disagreeing less for detail a blurrier view lacks
 ([blur-matched-zncc.md](blur-matched-zncc.md)). The bench measures every
 track it evaluates this way and reports the pick. The stored bitmap is the
 fused mean of the views; computing it from the reference view is proposed in
@@ -93,7 +93,7 @@ pub struct ReferenceRuleInputs { pub agreement: PairZnccReading, pub cells: Pair
 impl ReferenceRuleInputs {
     pub const PLAIN: Self;
     pub fn agreement_margin(self) -> f64; // REFERENCE_AGREEMENT_MARGIN or its blur-matched one
-    pub fn max_cell_deficit(self) -> f64; // REFERENCE_MAX_CELL_DEFICIT or its blur-matched one
+    pub fn max_cell_deficit(self) -> f64; // REFERENCE_MAX_CELL_DEFICIT, on either reading
 }
 pub enum ReferenceTest { Coverage, Clipped, Angle, Cells, Agreement, Sharpness }
 pub enum ReferenceFallback { None, WithoutAngle, WithoutAngleOrCells, WithoutAny }
@@ -220,10 +220,10 @@ reading and every stored patch bitmap are rendered as.
   `REFERENCE_MIN_JUDGED_CELL_ZNCC`; `0` when no cell is judged.
 - **Blur-matched pair ZNCC, pair ZNCC grid and cell deficit**: the same three
   with each pair's tiles blur-matched first
-  ([blur-matched-zncc.md](blur-matched-zncc.md)): where one tile's
-  self-similarity semi-major axis is shorter than the other's semi-minor axis
-  by more than `DEFAULT_MIN_ELLIPSE_RATIO` (1.25), that tile is blurred by a
-  round Gaussian until its semi-major axis reaches the other's semi-minor axis;
+  ([blur-matched-zncc.md](blur-matched-zncc.md)): where the other tile's
+  self-similarity semi-minor axis is at least `DEFAULT_MIN_ELLIPSE_RATIO`
+  (1.25) times one tile's semi-major axis, that tile is blurred by a round
+  Gaussian until its semi-major axis reaches the other's semi-minor axis;
   any other pair is read as it is. They are read on the same tiles as the
   cells, each pair over the samples with data in both: the whole tile with
   member coherence's Gaussian disk window, and each cell as the plain cells
@@ -240,8 +240,8 @@ tile can slide over itself and still match itself, short on a sharp tile.
    - **coverage** at least `REFERENCE_MIN_COVERAGE`;
    - **clipped** share at most `REFERENCE_MAX_CLIPPED_SHARE`;
    - **angle** at most `REFERENCE_MAX_VIEWING_ANGLE_DEG`;
-   - **cells**: cell deficit at most `REFERENCE_MAX_CELL_DEFICIT`, or
-     `REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT` on the blur-matched reading.
+   - **cells**: cell deficit at most `REFERENCE_MAX_CELL_DEFICIT`, on the
+     plain or the blur-matched reading.
 
    When no view passes, the angle test's `REFERENCE_MAX_VIEWING_ANGLE_DEG`
    limit is dropped; when still none passes, the cell check too; and then
@@ -276,12 +276,11 @@ agreement test has a self-similarity reading, the rule picks nothing.
 | `REFERENCE_MAX_CLIPPED_SHARE` | `0.05` | A clipped region holds neither texture nor its true colour. Not tuned. |
 | `REFERENCE_MAX_VIEWING_ANGLE_DEG` | `65°` | An oblique tile depends most on the patch model. It changed no pick on the review cases and 0.9% of picks over the whole datasets; on the two ground truths, removing it made the picks it changes localize the other views 0.12 px worse on average (15 tracks). Kept for that reason rather than fitted. |
 | `REFERENCE_FACING_LIMIT_DEG` | `90°` | A view at `90°` sees the patch edge on and one past it sees its back, so its tile is not a picture of the patch's face. Kept under every fallback. A geometric limit, not tuned. |
-| `REFERENCE_MAX_CELL_DEFICIT` | `0.3` | Catches a view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. Values from `0.2` to `0.4` gave the same agreement with the hand picks on the tuning half; `0.3` is the middle. |
+| `REFERENCE_MAX_CELL_DEFICIT` | `0.3` | Catches a view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. Values from `0.2` to `0.4` gave the same agreement with the hand picks on the tuning half; `0.3` is the middle. The same bar applies to the blur-matched cell deficit, where `0.3` and `0.35` agree best with the hand picks on the tuning half, with the margin at `0.15` (18 exact and 36 lenient of 39), and `0.25` and `0.4` on one track fewer within the lenient bounds (§ "Blur-matched agreement"). |
 | `REFERENCE_MIN_JUDGED_CELL_ZNCC` | `0.5` | A cell whose views do not agree, because it holds no texture they share, says nothing about any one view. |
 | `REFERENCE_MIN_CELL_SAMPLES` | `16` | Below it a cell's ZNCC is read off a handful of samples. |
 | `REFERENCE_AGREEMENT_MARGIN` | `0.15` | Sharp views correlate worse with blurrier ones, since the detail they carry is missing from the others, so a narrow margin turns away exactly the sharp views. Where the earlier margin of `0.05` missed, the hand-picked view sat `0.06` to `0.21` below the best. `0.10` to `0.20` were within one case of each other on the tuning half. |
-| `REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN` | `0.15` | The margin on the blur-matched pair ZNCC. Blur matching takes away most of the penalty above, which allows a tighter margin, but the tuning half did not prefer one: `0.10` to `0.20` gave the same agreement there, and `0.06` to `0.08` one exact pick fewer (and one more on the held-out half). `0.15` is the middle of the flat run (§ "Blur-matched agreement"). |
-| `REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT` | `0.25` | The cell bar on the blur-matched cell deficit. After blur matching, what is left of a ninth's disagreement is content, and a tighter bar catches an occluder without turning away a sharp view. On the tuning half, with the margin at `0.15`, `0.25` agreed with the hand picks within the lenient bounds on 36 of 39 tracks against 35 for `0.3`, with the same 19 exact (§ "Blur-matched agreement"). |
+| `REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN` | `0.15` | The margin on the blur-matched pair ZNCC. Blur matching takes away part of the penalty above: it blurs only a tile sharper than its partner along every direction, and leaves most pairs plain. That could allow a tighter margin, but the tuning half does not prefer one: with the cell bar at `0.3`, `0.15` and `0.18` agree best (18 exact and 36 lenient of 39), `0.08` to `0.12` and `0.20` on one track fewer within the lenient bounds, and `0.06` on two fewer. On the held-out half `0.08` agrees on one more track, exactly and within the lenient bounds (§ "Blur-matched agreement"). |
 
 The values were set against hand picks of the reference view on 77 tracks from
 ten datasets, split in half by dataset with the thresholds chosen on one half:
@@ -316,42 +315,47 @@ best lenient then exact, the middle of a tied run):
 | Blur-matched agreement only | 0.15, 0.3 | 18 / 35 | 10 / 35 | 28 / 70 |
 | Blur-matched cells only | 0.15, 0.3 | 18 / 35 | 10 / 35 | 28 / 70 |
 | Both blur-matched, every difference | 0.15, 0.3 | 18 / 36 | 10 / 35 | 28 / 71 |
-| **Both blur-matched, ratio 1.25 (the default)** | **0.15, 0.25** | **18 / 35** | **10 / 35** | **28 / 70** |
-| Both blur-matched, ratio 1.25 | 0.15, 0.3 | 18 / 36 | 10 / 35 | 28 / 71 |
-| Both blur-matched, ratio 1.25 | 0.08, 0.25 | 18 / 35 | 11 / 36 | 29 / 71 |
+| **Both blur-matched, ratio 1.25 (the default)** | **0.15, 0.3** | **18 / 36** | **10 / 35** | **28 / 71** |
+| Both blur-matched, ratio 1.25 | 0.15, 0.25 | 18 / 35 | 10 / 35 | 28 / 70 |
+| Both blur-matched, ratio 1.25 | 0.08, 0.3 | 18 / 35 | 11 / 36 | 29 / 71 |
 | Both blur-matched, ratio 1.25 | 0.12, 0.35 | 19 / 36 | 10 / 34 | 29 / 70 |
 | A blur along each direction the ellipses differ, ratio 1.25 | 0.15, 0.25 | 19 / 36 | 11 / 35 | 30 / 71 |
 
-The thresholds were tuned on readings from a blur along each direction in
-which the two ellipses differ, which blurred about half the pairs. With the
-round blur the readings take now ([blur-matched-zncc.md](blur-matched-zncc.md)
-§ "Which tile is blurred, and to what length"), the bench's own picks under
-the default and with every difference blurred both read 28 / 70 (tune 18 / 35,
-held-out 10 / 35), the plain rule's counts; the blur per direction read
-30 / 71. Tuning the margin and the cell bar again on the new readings finds no
-better pair: the best on the tune half, 0.12 and 0.35, reads 19 / 36 there and
-10 / 34 held out. The differences are one or two picks, as the plain tuning's
-were. Of the 38 hand picks that are their track's sharpest usable view, a
-margin of 0.06 keeps 31 under blur-matched medians and 28 under plain ones; at
-0.08 both keep 35. The readings stay the default because they cost 2% of an
-evaluation and keep a sharp view from being turned away for its sharpness
-against a view blurred in every direction, the case the round blur matches.
+The blur-matched readings take the plain readings' thresholds, a margin of
+`0.15` and a cell bar of `0.3`. The margin was chosen on readings from a blur
+along each direction in which the two ellipses differ, an alternative that
+blurred about half the pairs and was set aside
+([blur-matched-zncc.md](blur-matched-zncc.md) § "The widths measured, and the
+alternatives"); the last row reads that alternative at the cell bar it was
+measured at. On the round-blur readings
+([blur-matched-zncc.md](blur-matched-zncc.md) § "Which tile is blurred, and to
+what length"), `0.15` and `0.18` agree best on the tuning half, and the cell
+bar of `0.3` agrees on one track more within the lenient bounds than `0.25`
+there, with the same exact picks, and the same as `0.25` held out. Searched
+over both thresholds, the best pair on the tuning half is `0.12` and `0.35`,
+one exact pick more there and one lenient pick fewer held out; no pair does
+better than `0.15` and `0.3` on both halves. The differences are one or two
+picks, as in the plain tuning. Of the 38 hand picks that are their track's
+sharpest usable view, a margin of 0.06 keeps 30 under blur-matched medians and
+28 under plain ones; at 0.08 both keep 35. The readings are the default
+because they cost 2% of an evaluation and keep a sharp view from being turned
+away for its sharpness against a view blurred in every direction, the case the
+round blur matches.
 
 **Cost.** Over 661 tracks (the review cases and 60 of each dataset's pool),
 best of three evaluations each, the default adds 0.13 ms to a track's
 `reference view` phase (median; p90 0.81 ms), 2.1% of an evaluation (p90
 5.7%); with every difference blurred it adds 0.15 ms, 2.4%. The default blurs
-5.3% of the pairs and every difference 12.2%. Each view the track blurs is
-blurred twice and read again once, for its blur assessment, and each pair blurred costs
-a blur and its readings; a blur per direction, which blurred about half the
-pairs, added 0.37 ms (5.8%) in the same session. The blur work is the
-`blur-matched pairs` detail phase, whose note
-gives the pairs blurred; when the rule picks a view, the phase's own note ends
-with the same count.
+5.3% of the pairs and every difference 12.2%. A view that some pair blurs is
+assessed once, which costs two blurs of its tile and a self-similarity reading
+of each, and each pair blurred then costs a blur and its readings; a blur per
+direction, which blurred about half the pairs, added 0.37 ms (5.8%) in the
+same session. The blur work is the `blur-matched pairs` detail phase, whose
+note gives the pairs blurred; when the rule picks a view, the phase's own note
+ends with the same count.
 
-**Effect over the pools.** The default changes the pick on 25 of the 661
-tracks (4%), mostly through the cell check's tighter bar on the blur-matched
-reading.
+**Effect over the pools.** The default picks a different view from the plain
+rule on 4 of the 661 tracks (0.6%), and so does blurring every difference.
 
 ## Implementation notes
 

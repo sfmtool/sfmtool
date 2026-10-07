@@ -282,7 +282,7 @@ fn pass(src: &[f32], dst: &mut [f32], taps: &[Tap], band: &Band, g: &Geometry) {
 /// two passes are checked against, and the cost they are measured against.
 /// It samples the kernel at `σ` itself, where the passes match the variance
 /// asked for, so the two agree from `σ = 1` up.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn blur_tile_direct(
     values: &[f32],
     channels: usize,
