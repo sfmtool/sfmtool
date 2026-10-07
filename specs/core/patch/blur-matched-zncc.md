@@ -25,10 +25,12 @@ shows along its sharpest direction. A pair in which neither tile is shorter in
 that sense is correlated plain. That covers a view blurry along one direction
 only (an oblique or fisheye view, motion blur along a line) and two tiles of a
 texture with a grain, whose ellipses are long along the grain whatever the
-sharpness: a long axis is not read as blur. The width comes from how the
-sharper tile's own semi-major axis grows when it is blurred: each view's tile
-is blurred twice, by 0.4 and by 1 grid px, and read again, and every pair the
-view is in reads its width off those readings without reading again.
+sharpness: a long axis is not read as blur. The width comes from the sharper
+tile's **blur assessment**, how its own semi-major axis grows when it is
+blurred: each tile is blurred twice, by 0.4 and by 1 grid px, and read again,
+once, and every pair the tile is in reads its width off those readings without
+reading again. The blur is done to one tile; pairing the tiles, and choosing
+which to blur to what length, is the consumers' part.
 
 Two consumers read it. The bench's reference-view rule reads blur-matched
 agreement by default ([reference-view.md](reference-view.md) § "Blur-matched
@@ -38,53 +40,23 @@ matching"). The measurements behind both choices are below.
 
 ## Rust API
 
-The kernel lives in
+Blur matching is done to one tile; which tile of a pair is blurred, and to what
+length, is the caller's choice. The per-tile operations live in
 [blur_matched.rs](../../../crates/sfmtool-core/src/patch/blur_matched.rs), with
-the blur in [blur.rs](../../../crates/sfmtool-core/src/patch/blur_matched/blur.rs),
-each view's growth in
-[growth.rs](../../../crates/sfmtool-core/src/patch/blur_matched/growth.rs)
-and the pair readings in
+the assessment and the blur to a length in
+[assess.rs](../../../crates/sfmtool-core/src/patch/blur_matched/assess.rs), the
+blur in [blur.rs](../../../crates/sfmtool-core/src/patch/blur_matched/blur.rs)
+and the tile and its reading in
 [tiles.rs](../../../crates/sfmtool-core/src/patch/blur_matched/tiles.rs). The
-track-level reading the bench uses is `blur_matched_agreement` in
-[agreement.rs](../../../crates/sfmtool-core/src/patch/reference_view/agreement.rs).
+pairing rule the two consumers share is in
+[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs),
+and the reference-view rule's pairwise readings in
+[pair_readings.rs](../../../crates/sfmtool-core/src/patch/reference_view/pair_readings.rs);
+member coherence reads its pairs in
+[matrix.rs](../../../crates/sfmtool-core/src/patch/member_coherence/matrix.rs).
 
 ```rust
-// patch::blur_matched
-pub enum PairMatching { Plain, BlurMatched, BlurMatchedAboveRatio(f64) }
-impl PairMatching {
-    pub fn min_ratio(self) -> Option<f64>;   // None for Plain, 1 for BlurMatched
-    pub fn is_blur_matched(self) -> bool;
-    pub fn name(self) -> &'static str;       // "plain", "blur_matched", "blur_matched_above_ratio"
-    pub fn from_name(name: &str, ratio: f64) -> Option<Self>;
-}
-
-// Which tile of a pair is blurred, and to what semi-major axis.
-pub struct PairBlur { pub sharper: usize, pub major: f64, pub target: f64 }
-pub fn pair_blur(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> Option<PairBlur>;
-pub fn pair_blur_for(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], matching: PairMatching) -> Option<PairBlur>;
-pub fn semi_axes(e: &[[f64; 2]; 2]) -> [f64; 2]; // [major, minor], grid px
-
-// How a view's semi-major axis grows: its own and its tile's blurred by each probe width.
-pub const GROWTH_PROBE_SIGMAS: [f64; 2]; // [0.4, 1.0]
-pub struct BlurGrowth { pub semi_major: [f64; 3] }
-impl BlurGrowth {
-    pub fn sigma_for(&self, target: f64) -> Option<f64>; // the width that brings it to target
-}
-pub fn read_growth(tile: &TilePlanes, ellipse: &[[f64; 2]; 2],
-    read: impl FnMut(&[f32]) -> Option<[[f64; 2]; 2]>,
-    out: &mut Vec<f32>, scratch: &mut BlurScratch) -> Option<BlurGrowth>;
-pub struct ViewGrowths { /* each view's growth, read the first time a pair asks */ }
-impl ViewGrowths {
-    pub fn new(views: usize) -> Self;
-    pub fn get(&mut self, view: usize, tile: &TilePlanes, ellipse: &[[f64; 2]; 2],
-        read: impl FnMut(&[f32]) -> Option<[[f64; 2]; 2]>) -> Option<BlurGrowth>;
-    pub fn reads(&self) -> usize;
-}
-
-// The isotropic blur, by normalized convolution over the samples with data.
-pub fn blur_tile(values: &[f32], channels: usize, side: usize, data: &[bool],
-    sigma: f64, out: &mut [f32], scratch: &mut BlurScratch);
-
+// patch::blur_matched: one tile.
 pub struct TilePlanes { pub values: Vec<f32>, pub data: Vec<bool>, pub side: usize, pub channels: usize }
 impl TilePlanes {
     // An interleaved u8 tile: 1 or 2 channels grey (and alpha), 3 or 4 RGB (and alpha).
@@ -94,9 +66,55 @@ impl TilePlanes {
 // The whole-tile self-similarity reading over the samples with data.
 pub fn read_tile_ellipse(values: &[f32], channels: usize, side: usize, data: &[bool])
     -> Option<[[f64; 2]; 2]>;
+pub fn semi_axes(e: &[[f64; 2]; 2]) -> [f64; 2]; // [major, minor], grid px
+
+// How sharp one tile is, and how that changes under round blur. Read once per tile.
+pub const GROWTH_PROBE_SIGMAS: [f64; 2]; // [0.4, 1.0]
+pub struct BlurAssessment {
+    pub semi_axes: [f64; 2],       // [major, minor] of the tile as read, grid px
+    pub growth: [[f64; 2]; 2],     // [major, minor] after each of GROWTH_PROBE_SIGMAS
+}
+impl BlurAssessment {
+    // The round blur width that brings the semi-major axis to `length`; 0 when already there.
+    pub fn sigma_to_reach(&self, length: f64) -> Option<f64>;
+}
+pub fn assess_blur(tile: &TilePlanes, ellipse: &[[f64; 2]; 2],
+    read: impl FnMut(&[f32]) -> Option<[[f64; 2]; 2]>,
+    scratch: &mut BlurScratch) -> Option<BlurAssessment>;
+// Blur until the semi-major axis reaches `length` (no blur where it already has): the tile and the width.
+pub fn blur_to_length(tile: &TilePlanes, assessment: &BlurAssessment, length: f64,
+    scratch: &mut BlurScratch) -> Option<(TilePlanes, f64)>;
+pub fn blur_to_length_into(tile: &TilePlanes, assessment: &BlurAssessment, length: f64,
+    out: &mut TilePlanes, scratch: &mut BlurScratch) -> Option<f64>;
+
+// The isotropic blur, by normalized convolution over the samples with data.
+pub fn blur_tile(values: &[f32], channels: usize, side: usize, data: &[bool],
+    sigma: f64, out: &mut [f32], scratch: &mut BlurScratch);
+
+// patch::pair_sharpness: which tile of a pair is blurred, and to what length.
+pub enum PairMatching { Plain, BlurMatched, BlurMatchedAboveRatio(f64) }
+impl PairMatching {
+    pub fn min_ratio(self) -> Option<f64>;   // None for Plain, 1 for BlurMatched
+    pub fn is_blur_matched(self) -> bool;
+    pub fn name(self) -> &'static str;       // "plain", "blur_matched", "blur_matched_above_ratio"
+    pub fn from_name(name: &str, ratio: f64) -> Option<Self>;
+}
+pub struct PairBlur { pub sharper: usize, pub major: f64, pub target: f64 }
+pub fn pair_blur(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> Option<PairBlur>;
+// A track's views: the assessments of the views some pair blurs, each read once.
+pub struct TrackBlurs { /* ... */ }
+pub struct PairTarget<'a> { pub view: usize, pub assessment: &'a BlurAssessment, pub target: f64 }
+impl TrackBlurs {
+    pub fn assess(ellipses: &[Option<[[f64; 2]; 2]>], matching: PairMatching,
+        assess: impl FnMut(usize, &[[f64; 2]; 2]) -> Option<BlurAssessment>) -> Self;
+    pub fn pair(&self, a: usize, b: usize) -> Option<PairTarget<'_>>;
+    pub fn assessment(&self, v: usize) -> Option<&BlurAssessment>;
+    pub fn assessed(&self) -> usize;
+}
+
+// patch::reference_view: the reference-view rule's pairwise readings.
 pub struct PairReadings { pub whole: f64, pub grid: [[f64; 3]; 3] }
 pub fn pair_zncc_readings(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> PairReadings;
-
 pub struct BlurMatchedPairs {
     pub k: usize, pub whole: Vec<f64>, pub grid: Vec<[[f64; 3]; 3]>,
     pub blurred: Vec<bool>, pub sigma: Vec<f64>, // sigma[a*k + b]: the width a was blurred by against b
@@ -106,59 +124,90 @@ impl BlurMatchedPairs {
     pub fn row_middle(&self, v: usize) -> f64; // median of view v's whole-tile readings
 }
 pub fn blur_matched_pairs(tiles: &[&TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>],
-    matching: PairMatching, window: PatchWindow, rows: Option<&[bool]>,
-    progress: &Progress<'_>) -> BlurMatchedPairs;
-
-// patch::reference_view
+    matching: PairMatching, window: PatchWindow, progress: &Progress<'_>) -> BlurMatchedPairs;
 pub struct BlurMatchedAgreement { pub pair_zncc: Vec<f64>, pub cells: CellAgreement, pub pairs: BlurMatchedPairs }
 pub fn blur_matched_agreement(tiles: &[&ViewTile], ellipses: &[Option<[[f64; 2]; 2]>],
     matching: PairMatching, window: PatchWindow, progress: &Progress<'_>) -> BlurMatchedAgreement;
 ```
 
-**Why it is shaped this way.** The kernel takes the ellipse matrices rather
-than tiles to read them from, because every consumer already holds them: the
-bench reads each view's self-similarity once for its own columns, and member
-coherence reads them on its own renders. `pair_blur` is a pure function of two
+**Why it is shaped this way.** A tile's **blur assessment** depends on that
+tile alone: its own self-similarity semi-axes, and the semi-axes of the tile
+blurred by each probe width. So it is read once per tile, whatever the tile is
+later compared with, and every comparison reads its width off the assessment
+without blurring the tile again (`sigma_to_reach`, a function of a few numbers
+that can be tested on constructed readings). The probes already read the whole
+ellipse, so the assessment keeps both axes of each reading; the width uses the
+semi-major ones. Being a few numbers per tile that depend on the tile alone,
+the assessment is what a reconstruction could store per observation beside its
+self-similarity ellipse; the `.sfmr` format does not store it.
+
+`assess_blur` takes the ellipse already read and a reading as a closure,
+because the width is set by comparing a blurred tile's reading with another
+tile's, and they must be the same reading: the bench and the bindings read the
+whole tile over its samples with data (`read_tile_ellipse`), member coherence
+reads the largest square inside its common support. `blur_to_length` is the one
+operation the consumers apply to a tile; `blur_to_length_into` is the same into
+a reused buffer, for a caller that blurs pair after pair.
+
+Pairing is the caller's business. `pair_blur` is a pure function of two
 ellipses, so which tile is blurred and to what length can be tested on
-constructed numbers. `read_growth` takes the reading as a closure, because the
-width is set by comparing a blurred tile's reading with the partner's, and they
-must be the same reading: the bench and the bindings read the whole tile over
-its samples with data (`read_tile_ellipse`), member coherence reads the largest
-square inside its common support. `ViewGrowths` holds a track's views'
-growths, so a view is blurred and read once however many pairs blur it, and
-`BlurGrowth` is plain data, so the width it gives can be tested on constructed
-readings. The blur is a function of one tile and a width, so it can be checked
-against a direct 2-D convolution and an exact answer. `PairMatching` is one
-enum for every consumer, so a consumer's option reads the same on the wire, in
-Python and in Rust. `blur_matched_pairs` reads both the whole tile and the ZNCC
-grid's cells from each pair it blurs, because the reference rule's agreement
-test and its cell check both read the same pairs. `sigma` reports each width,
-so a caller that draws the blurred tiles (the illustration, a test) blurs by
-the kernel's own width rather than working it out again. `rows` limits the
-pairs read to those with a view in a set, for a caller that needs only some
-views' medians.
+constructed numbers. `TrackBlurs` holds a track's pairing for both consumers:
+it assesses each view that `pair_blur` names the sharper of some pair, once and
+in view order, and names, for a pair, the view to blur, its assessment and the
+length; the consumer blurs that view's tile (`blur_to_length_into`) and
+correlates the pair with its own ZNCC code. The views to assess depend on the
+ellipses alone, so a view that no pair can blur is never blurred or read again.
+`PairMatching` is one enum for every consumer, so a consumer's option reads the
+same on the wire, in Python and in Rust. `blur_matched_pairs` reads both the
+whole tile and the ZNCC grid's cells from each pair it blurs, because the
+reference rule's agreement test and its cell check both read the same pairs.
+`sigma` reports each width, so a caller that draws the blurred tiles (the
+illustration, a test) blurs by the kernel's own width rather than working it
+out again. The blur is a function of one tile and a width, so it can be checked
+against a direct 2-D convolution and an exact answer.
 
 ```rust
-use sfmtool_core::patch::blur_matched::{blur_matched_pairs, PairMatching, TilePlanes};
-use sfmtool_core::patch::normal_refine::PatchWindow;
-use sfmtool_core::progress::Progress;
+use sfmtool_core::patch::blur_matched::{
+    assess_blur, blur_to_length, read_tile_ellipse, semi_axes, BlurScratch, TilePlanes,
+};
 
-fn report(tiles: &[TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>]) {
-    let refs: Vec<&TilePlanes> = tiles.iter().collect();
-    let pairs = blur_matched_pairs(
-        &refs,
-        ellipses,
-        PairMatching::BlurMatchedAboveRatio(1.25),
-        PatchWindow::GaussianDisk { sigma: 0.6 },
-        None,
-        &Progress::none(),
-    );
-    println!(
-        "{} of {} pairs blurred; view 0's median {:.3}",
-        pairs.pairs_blurred,
-        pairs.pairs,
-        pairs.row_middle(0)
-    );
+/// Blur `sharp` until it is no sharper than `blurry` along its sharpest direction.
+fn match_to(sharp: &TilePlanes, blurry: &TilePlanes) -> Option<(TilePlanes, f64)> {
+    let mut scratch = BlurScratch::default();
+    let read = |values: &[f32]| read_tile_ellipse(values, sharp.channels, sharp.side, &sharp.data);
+    let ellipse = read(&sharp.values)?;
+    let assessment = assess_blur(sharp, &ellipse, read, &mut scratch)?;
+    let other = read_tile_ellipse(&blurry.values, blurry.channels, blurry.side, &blurry.data)?;
+    blur_to_length(sharp, &assessment, semi_axes(&other)[1], &mut scratch)
+}
+```
+
+Over a track, the consumers pair the views and blur through `TrackBlurs`:
+
+```rust
+use sfmtool_core::patch::blur_matched::{
+    assess_blur, blur_to_length_into, read_tile_ellipse, BlurScratch, TilePlanes,
+};
+use sfmtool_core::patch::pair_sharpness::{PairMatching, TrackBlurs};
+
+fn blurred_pairs(tiles: &[TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>]) {
+    let mut scratch = BlurScratch::default();
+    let blurs = TrackBlurs::assess(ellipses, PairMatching::BlurMatchedAboveRatio(1.25), |v, e| {
+        let t = &tiles[v];
+        let read = |values: &[f32]| read_tile_ellipse(values, t.channels, t.side, &t.data);
+        assess_blur(t, e, read, &mut scratch)
+    });
+    let mut blurred = TilePlanes::default();
+    for a in 0..tiles.len() {
+        for b in (a + 1)..tiles.len() {
+            let Some(p) = blurs.pair(a, b) else { continue };
+            if let Some(sigma) =
+                blur_to_length_into(&tiles[p.view], p.assessment, p.target, &mut blurred, &mut scratch)
+            {
+                println!("pair {a}-{b}: view {} blurred by {sigma:.2} grid px", p.view);
+            }
+        }
+    }
 }
 ```
 
@@ -205,19 +254,19 @@ On pool pairs that keeps 15% of the ZNCC gain a blur per direction gave over
 plain ZNCC, and 61% on the pairs both blur. The planted wrong views below show
 what that trade does to telling members from other surfaces.
 
-### The width, from each view's growth
+### The width, from each tile's blur assessment
 
 A Gaussian blur adds its variance to a texture's correlation length, so the
 square of a tile's semi-major axis grows with `σ²`, about linearly, at a rate
 that differs from tile to tile. Each view's tile is blurred by each of
 `GROWTH_PROBE_SIGMAS` (0.4 and 1 grid px) and each blurred tile's ellipse read
-with the reading the view's own ellipse came from (`read_growth`). The square
+with the reading the view's own ellipse came from (`assess_blur`). The square
 of the semi-major axis is then known at `σ²` = 0, 0.16 and 1, and taken to be
 piecewise linear between them and along its last piece past 1. The width is
-the `σ` at which that line reaches the target (`BlurGrowth::sigma_for`), at
-most `MAX_BLUR_SIGMA`. A view's growth is read the first time a pair blurs it
-and kept for the others (`ViewGrowths`), so a track pays two blurred readings
-for each view it blurs, not for each pair. The probes are isotropic, as the
+the `σ` at which that line reaches the target
+(`BlurAssessment::sigma_to_reach`), at most `MAX_BLUR_SIGMA`. Each view some
+pair blurs is assessed once and kept for every pair (`TrackBlurs`), so a track
+pays two blurred readings for each view it blurs, not for each pair. The probes are isotropic, as the
 blur is, so the line is read on the same kind of blur the pair gets.
 
 - **Two probes, because the growth bends.** A tile whose ellipse is well under
@@ -228,7 +277,7 @@ blur is, so the line is read on the same kind of blur the pair gets.
   the pool pairs 6% of the widths are past 1 grid px and they land within 3% of
   the target (p90); holding them to the width of a rate fitted on real tiles,
   as an extra limit, changed none of them.
-- **Where a view's growth cannot be read**, or its readings do not grow, the
+- **Where a view's assessment cannot be read**, or its readings do not grow, the
   pair is read plain. That happened on none of the pool pairs.
 - **The target is at most `MAX_MATCHED_LENGTH` (2 grid px).** Past about 2 grid
   px the blurred tile holds so little detail across a 24-sample tile that it is
@@ -289,7 +338,7 @@ less than a factor past the sharper tile's semi-major axis, which costs nothing
 beyond the plain ZNCC. `DEFAULT_MIN_ELLIPSE_RATIO` is `1.25`. Even
 `BlurMatched` leaves a pair plain where the target is within
 `MATCHED_LENGTH_TOLERANCE` (5%) of the semi-major axis, a difference within the
-spread of the width the growth gives, and a sharper tile whose semi-major axis
+spread of the width the assessment gives, and a sharper tile whose semi-major axis
 is near 2 against a blurrier one past it is left alone.
 
 | Ratio | Pool pairs blurred (22,035) | Bench pairs blurred (661 tracks) | Member-coherence pairs blurred (8,484 points) |
@@ -322,14 +371,14 @@ plane):
 | Direct 2-D convolution, `σ` 0.5 / 1 / 2 | 26 / 49 / 160 |
 | `pair_blur` from two ellipses | under 0.05 |
 | The whole self-similarity reading of a tile | 8.7 |
-| One view's growth, `read_growth` (two blurs, two readings) | 28 |
-| A blurred pair once its view's growth is read (blur, readings) | 8.6 |
+| One tile's blur assessment, `assess_blur` (two blurs, two readings) | 28 |
+| A blurred pair once its tile is assessed (blur, readings) | 8.6 |
 
-The two passes run 5 to 17 times faster than the direct convolution. A view's
-growth costs two blurs and two whole self-similarity readings, paid once for
-each view a track blurs; a blurred pair then costs a blur and the pair's
+The two passes run 5 to 17 times faster than the direct convolution. A tile's
+assessment costs two blurs and two whole self-similarity readings, paid once
+for each view a track blurs; a blurred pair then costs a blur and the pair's
 readings. On the pool tracks the default adds 0.047 ms to a track's pairs
-(17 µs per blurred pair with the growth reads spread over them, 0.80 reads a
+(17 µs per blurred pair with the assessments spread over them, 0.80 reads a
 pair), where a blur per direction added 0.35 ms (12.7 µs per blurred pair, on
 ten times as many pairs). A tile with samples off the photograph takes the
 reading's slower route, which visits every sample, at about 50 µs a reading.
@@ -415,9 +464,10 @@ way, since the width compares their readings with the partner's:
 its own square, and an ellipse read any other way would set the blur against a
 different scale.
 
-**A view's growth depends on its own tile only.** It is read the first time a
-pair blurs the view, from that view's tile and ellipse alone, and every later
-pair reuses it. So a pair reads the same in a track as alone, bit for bit, and
+**A tile's assessment depends on its own tile only.** It is read once for each
+view some pair blurs, from that view's tile and ellipse alone, and every pair
+reuses it; which views are assessed depends on the ellipses alone. So a pair
+reads the same in a track as alone, bit for bit, and
 the same whatever order the views come in (to rounding, since reversing a
 pair's two tiles reorders the sums); tests check both. Which tile is blurred
 does not depend on the order either: `pair_blur` swaps its answer with its
@@ -454,7 +504,7 @@ its plain value for such a pair.
 |---|---|---|
 | `DEFAULT_MIN_ELLIPSE_RATIO` | `1.25` | The factor by which the target must exceed the sharper tile's semi-major axis for `BlurMatchedAboveRatio` to blur the pair; it leaves 95% of the pairs on real tracks plain |
 | `MAX_MATCHED_LENGTH` | `2` grid px | The longest semi-major axis blur matching aims for; a longer semi-minor axis of the blurrier tile is read as this one |
-| `GROWTH_PROBE_SIGMAS` | `[0.4, 1.0]` grid px | The isotropic blurs each view's tile is blurred by, once each, to read how its semi-major axis grows |
+| `GROWTH_PROBE_SIGMAS` | `[0.4, 1.0]` grid px | The isotropic blurs a tile is blurred by, once each, for its blur assessment |
 | `MATCHED_LENGTH_TOLERANCE` | `0.05` | A target within this fraction of the sharper tile's semi-major axis is not blurred to, whatever the ratio |
 | `MIN_SHARPER_LENGTH` | `0.05` grid px | The shortest semi-major axis the skip ratio reads |
 | `MAX_BLUR_SIGMA` | `3` grid px | The widest blur |
@@ -462,10 +512,51 @@ its plain value for such a pair.
 
 Each consumer's option and its default are in that consumer's spec. The
 constants are defined in
-[blur_matched.rs](../../../crates/sfmtool-core/src/patch/blur_matched.rs) and
-[tiles.rs](../../../crates/sfmtool-core/src/patch/blur_matched/tiles.rs).
+[blur_matched.rs](../../../crates/sfmtool-core/src/patch/blur_matched.rs)
+(`GROWTH_PROBE_SIGMAS`, `MAX_BLUR_SIGMA`),
+[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs)
+(the pairing rule's) and
+[pair_readings.rs](../../../crates/sfmtool-core/src/patch/reference_view/pair_readings.rs)
+(`MIN_WINDOWED_SAMPLES`).
 
 ## Python bindings
+
+The per-tile operations take one tile as `OrientedPatch.render_view_tile`
+renders it, an `(R, R, C)` uint8 array (one channel grey, two grey and alpha,
+three RGB, four RGB and alpha; alpha 0 marks a sample without data), with its
+optional `(R, R)` bool `valid` flags:
+
+- `sfmtool._sfmtool.patches.assess_blur(samples, *, valid=None, ellipse=None)`
+  returns the tile's blur assessment as a dict, `semi_axes` `(2,)`, `growth`
+  `(2, 2)` (one row of [major, minor] per probe), `probe_sigmas` `(2,)` and
+  `ellipse_matrix` `(2, 2)`, or `None` where the ellipse or a probe's cannot be
+  read. The ellipse is read here, over the samples with data, unless one is
+  passed in; one passed in should be read that way too.
+- `blur_sigma_to_reach(assessment, length)` returns the width that brings the
+  tile's semi-major axis to `length`, 0 where it is already that long, and
+  `None` where the readings do not grow.
+- `blur_to_length(samples, assessment, length, *, valid=None)` returns a dict
+  of `samples`, the colour channels blurred (`(R, R, c)` float32, alpha left
+  out), and `sigma`, the width; `None` where the assessment gives no width.
+
+They raise `ValueError` for a tile that is not square, 3 or more on a side,
+with 1 to 4 channels, for a `valid` or `ellipse` of the wrong shape, and for an
+assessment without `semi_axes` of 2 and `growth` of `(2, 2)`.
+
+```python
+from sfmtool._sfmtool.patches import assess_blur, blur_to_length
+
+sharp = patch.render_view_tile(camera_a, pose_a, image_a, keypoint=kp_a)
+blurry = patch.render_view_tile(camera_b, pose_b, image_b, keypoint=kp_b)
+a = assess_blur(sharp["samples"], valid=sharp["valid"])
+b = assess_blur(blurry["samples"], valid=blurry["valid"])
+if a["semi_axes"][0] < b["semi_axes"][1]:  # sharper along every direction
+    out = blur_to_length(sharp["samples"], a, min(b["semi_axes"][1], 2.0), valid=sharp["valid"])
+```
+
+The pair-matrix convenience below reads a track's tiles the way the bench
+does, built from the same per-tile operations and the pairing rule of
+`pair_sharpness`.
 
 `sfmtool._sfmtool.patches.blur_matched_zncc_matrix(tiles, *, valid=None,
 ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
@@ -515,30 +606,40 @@ the bench's readings carry the consumers' forms
 ## Testing
 
 [blur_matched/tests.rs](../../../crates/sfmtool-core/src/patch/blur_matched/tests.rs)
+checks the semi-axes read off a matrix; that a tile's assessment keeps both
+axes of its own reading and of each probe's, each what a separate reading of
+the tile blurred by that probe gives, bit for bit, with a reused scratch as
+with a fresh one; that a tile whose probes cannot be read has none; the width
+read off constructed assessments (exact on a linear growth, a flat piece passed
+over, no growth giving none, the cap); that a tile blurred to a copy of it
+blurred by a known round Gaussian ends with its semi-major axis within 5% of
+the copy's semi-minor axis, by no more than the planted width; that a tile
+already long enough comes back unblurred with a width of 0; the two passes
+against the exact blur of a tile of sinusoids and against the direct 2-D
+convolution, and the two against each other round missing samples; that one
+scratch reused over many blurs of different widths and sides gives what a
+fresh one gives, bit for bit; and that a sample without data neither gives nor
+takes a value and a flat tile stays flat at the edge and round holes. An
+ignored test, `timing`, prints the cost table above.
+[pair_sharpness/tests.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness/tests.rs)
 checks that equal or unreadable ellipses blur nothing; that the sharper tile is
 the one whose semi-major axis is shorter than the other's semi-minor axis, its
 target that semi-minor axis capped at 2, and that swapping the pair swaps only
 which tile is named; that a tile blurry along one direction only, and grain at
-two angles, blur nothing; the skip ratio and the 5% tolerance; the semi-axes
-read off a matrix; the width read off constructed growths (exact on a linear
-one, a flat piece passed over, no growth giving none, the cap); that a tile
-matched to a copy of it blurred by a known round Gaussian is blurred until its
-semi-major axis is within 5% of the copy's semi-minor axis, by no more than the
-planted width, and that a difference within the tolerance is left plain; that
-real grained tiles at three angles read every pair plain, bit for bit; that
-only one tile of a pair is blurred and the same tile by the same width with
-the views reversed; that a view without a growth is read once and its pairs
-plain; that each view's growth is read once however many pairs blur it; that
-the readings do not depend on the order of the views; that a pair reads the
-same in a track as alone, bit for bit; the two passes against the exact blur of
-a tile of sinusoids and against the direct 2-D convolution, and the two against
-each other round missing samples; that one scratch reused over many blurs of
-different widths and sides gives what a fresh one gives, bit for bit; that a
-sample without data neither gives nor takes a value and a flat tile stays flat
-at the edge and round holes; that a tile and a blurred copy of it read a ZNCC
-near 1 blur-matched and well above plain; that equally sharp views read the
-plain value; and `rows`. An ignored test, `timing`, prints the cost table
-above.
+two angles, blur nothing; the skip ratio and the 5% tolerance, and that a
+planted blur within it is left plain; that only the views some pair names the
+sharper are assessed, each once and in view order, and none under `Plain`;
+that a view without an assessment leaves its pairs plain; and that which views
+are assessed, and which view of each pair is blurred to what length, do not
+depend on the order of the views.
+[reference_view/pair_readings/tests.rs](../../../crates/sfmtool-core/src/patch/reference_view/pair_readings/tests.rs)
+checks that real grained tiles at three angles read every pair plain, bit for
+bit; that only one tile of a pair is blurred, and the same tile by the same
+width with the views reversed; that each view some pair blurs is assessed once
+however many pairs blur it; that the readings do not depend on the order of
+the views; that a pair reads the same in a track as alone, bit for bit; that a
+tile and a blurred copy of it read a ZNCC near 1 blur-matched and well above
+plain; and that equally sharp views read the plain value.
 [member_coherence/tests.rs](../../../crates/sfmtool-core/src/patch/member_coherence/tests.rs)
 checks that a member blurred in its photograph is lifted blur-matched, more
 than any pair of the sharp members is.

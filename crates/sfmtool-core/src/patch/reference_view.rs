@@ -18,6 +18,7 @@
 //! computed; the bench reports the rule's pick beside its other readings.
 
 mod agreement;
+mod pair_readings;
 mod tile;
 
 #[cfg(test)]
@@ -27,6 +28,9 @@ pub(crate) use agreement::finite_middle;
 pub use agreement::{
     blur_matched_agreement, cell_agreement, cell_agreement_from_pairs, pair_zncc_grid,
     BlurMatchedAgreement, CellAgreement,
+};
+pub use pair_readings::{
+    blur_matched_pairs, pair_zncc_readings, BlurMatchedPairs, PairReadings, MIN_WINDOWED_SAMPLES,
 };
 pub use tile::{clipped_share, render_view_tile, ViewTile};
 

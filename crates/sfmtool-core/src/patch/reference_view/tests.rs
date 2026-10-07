@@ -771,8 +771,9 @@ fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
 /// it lifts the blurriest view's agreement.
 #[test]
 fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_view() {
-    use crate::patch::blur_matched::{BlurScratch, PairMatching};
+    use crate::patch::blur_matched::BlurScratch;
     use crate::patch::normal_refine::PatchWindow;
+    use crate::patch::pair_sharpness::PairMatching;
     use crate::patch::self_similarity::{
         zncc_self_similarity_parts, PatchTile, SelfSimilarityParams,
     };

@@ -67,6 +67,13 @@ pub struct CellAgreement {
 pub fn cell_agreement(tiles: &[&ViewTile]) -> CellAgreement;
 pub fn cell_agreement_from_pairs(pairs: &[[[f64; 3]; 3]], k: usize) -> CellAgreement;
 
+// Each pair's whole-tile and per-cell ZNCC, and every pair of a track's tiles
+// blur-matched (blur-matched-zncc.md).
+pub struct PairReadings { pub whole: f64, pub grid: [[f64; 3]; 3] }
+pub fn pair_zncc_readings(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> PairReadings;
+pub fn blur_matched_pairs(tiles: &[&TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>],
+    matching: PairMatching, window: PatchWindow, progress: &Progress<'_>) -> BlurMatchedPairs;
+
 pub struct BlurMatchedAgreement {
     pub pair_zncc: Vec<f64>,        // per view, median of its blur-matched whole-tile ZNCCs
     pub cells: CellAgreement,       // the cell readings of the blur-matched pairs
@@ -335,7 +342,7 @@ best of three evaluations each, the default adds 0.13 ms to a track's
 `reference view` phase (median; p90 0.81 ms), 2.1% of an evaluation (p90
 5.7%); with every difference blurred it adds 0.15 ms, 2.4%. The default blurs
 5.3% of the pairs and every difference 12.2%. Each view the track blurs is
-blurred twice and read again once, for its growth, and each pair blurred costs
+blurred twice and read again once, for its blur assessment, and each pair blurred costs
 a blur and its readings; a blur per direction, which blurred about half the
 pairs, added 0.37 ms (5.8%) in the same session. The blur work is the
 `blur-matched pairs` detail phase, whose note

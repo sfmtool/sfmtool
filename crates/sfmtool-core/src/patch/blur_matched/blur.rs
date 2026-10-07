@@ -20,7 +20,8 @@
 //! to 13% slower than the default build, by the kernel's shape, so there is no
 //! AVX2 form.
 
-/// Buffers [`blur_tile`] reuses between calls.
+/// Buffers [`blur_tile`] and [`assess_blur`](super::assess_blur) reuse
+/// between calls.
 #[derive(Debug, Default, Clone)]
 pub struct BlurScratch {
     a: Vec<f32>,
@@ -29,6 +30,8 @@ pub struct BlurScratch {
     rows: Vec<Tap>,
     /// One row of reciprocals of the blurred mask.
     inverse: Vec<f32>,
+    /// The blurred tile each of a blur assessment's probes is read on.
+    pub(super) probe: Vec<f32>,
 }
 
 /// One tap of a pass: `dst[y][x] += w · src[y + dy][x + dx]`.
@@ -69,6 +72,7 @@ pub fn blur_tile(
         columns,
         rows,
         inverse,
+        ..
     } = scratch;
     plan(sigma, columns, rows);
     let (r1y, r1x) = reach(columns);

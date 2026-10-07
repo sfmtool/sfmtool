@@ -33,7 +33,6 @@ use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
 
-use crate::patch::blur_matched::{PairMatching, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
@@ -45,6 +44,7 @@ use crate::patch::keypoint_localize::{
 };
 use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::pair_sharpness::{PairMatching, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::reference_view::{
     blur_matched_agreement, cell_agreement, choose_reference_view_with, finite_middle,
     render_view_tile, PairZnccReading, ReferenceReadings, ReferenceRuleInputs, ViewTile,

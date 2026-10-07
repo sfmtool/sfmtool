@@ -1514,7 +1514,7 @@ fn blurred_image(image: &ImageU8, sigma: f64) -> ImageU8 {
 /// direction.
 #[test]
 fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
-    use crate::patch::blur_matched::PairMatching;
+    use crate::patch::pair_sharpness::PairMatching;
     let mut scene = Scene::new(
         &[
             [0.0, 0.0, 0.0],

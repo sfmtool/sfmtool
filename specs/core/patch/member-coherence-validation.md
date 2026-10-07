@@ -124,11 +124,14 @@ datasets, one thread:
 | `BlurMatchedAboveRatio(1.25)` | 1.18 × | 4.4% | 0.4% | 710 |
 
 The added time is split between reading each member's own ellipse and the
-blurred pairs. The width of each blur is read off how the member's own render
-grows when blurred: each member blurred in any pair has its render blurred by
-0.4 and 1 grid px and read again, once, and every pair it is in reads its
-width off those readings ([blur-matched-zncc.md](blur-matched-zncc.md) § "The
-width, from each view's growth"). Measured in the same session, a blur along
+blurred pairs. The width of each blur is read off the member's blur
+assessment, how its own render grows when blurred: each member blurred in any
+pair has its render blurred by 0.4 and 1 grid px and read again, once, and
+every pair it is in reads its width off those readings
+([blur-matched-zncc.md](blur-matched-zncc.md) § "The width, from each tile's
+blur assessment"). The pairing rule is the one the reference-view rule reads,
+`TrackBlurs` in
+[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs). Measured in the same session, a blur along
 each direction in which the two members' ellipses differ, which blurs 90% and
 50% of the pairs, ran at 2.37 × and 1.77 ×. Reading the members' own ellipses
 takes about 7 µs a member, and a blurred render is read the same way. Each is
@@ -662,7 +665,7 @@ blur-matched table beside the plain one.
 A detailed `progress` times the members' ellipse readings in a `blur-matched
 ellipses` detail phase and the blurred pairs in a `blur-matched pairs` one,
 whose note gives the pairs blurred and the blurred renders read for the
-members' growth.
+members' blur assessments.
 
 The Python binding mirrors `PatchCloud.select_views`:
 

@@ -13,13 +13,16 @@
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
-use crate::patch::blur_matched::{blur_tile, pair_blur, BlurScratch, TilePlanes, ViewGrowths};
+use crate::patch::blur_matched::{
+    assess_blur, blur_to_length_into, BlurScratch, TilePlanes, GROWTH_PROBE_SIGMAS,
+};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
     znormalize_into_kept, NormalRefineParams, PatchWindow, ProjectedImage, ViewSamplers,
     FLAT_NORM_SQ_EPS,
 };
+use crate::patch::pair_sharpness::TrackBlurs;
 use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::progress::Progress;
 use crate::progress_note;
@@ -528,11 +531,12 @@ fn member_ellipse(
 /// sample carries data, so the reading takes its dense route; where that
 /// square is too small, over the whole support, the support as its data. The
 /// ellipses are read in the `blur-matched ellipses` detail phase of
-/// `progress`. A pair is blurred where [`pair_blur`] finds a sharper member:
-/// its render is blurred isotropically by normalized convolution over the
-/// support, the width from the member's growth ([`ViewGrowths`]), read once
-/// per member on its render blurred by each probe and read as the unblurred
-/// one was ([`member_ellipse`]); the pair is then gathered back,
+/// `progress`. A pair is blurred where [`TrackBlurs::pair`] names a sharper
+/// member: its render is blurred isotropically by normalized convolution over
+/// the support to the target ([`blur_to_length_into`]), the width from the
+/// member's blur assessment ([`assess_blur`]), read once per member some pair
+/// blurs, on its render blurred by each probe and read as the unblurred one
+/// was ([`member_ellipse`]); the pair is then gathered back,
 /// z-normalized over the support with the same window, and correlated as
 /// [`fill_scale`] correlates, in the `blur-matched pairs` detail phase. The
 /// ZNCC is averaged over the channels the plain table kept, `keep`, and no
@@ -554,9 +558,9 @@ fn fill_blur_matched(
     let rr = r * r;
     let n = members.pixels.len();
     let channels = members.channels;
-    let Some(ratio) = params.matching.min_ratio() else {
+    if !params.matching.is_blur_matched() {
         return 0;
-    };
+    }
     let mut support = vec![false; rr];
     for &p in members.pixels {
         support[p] = true;
@@ -586,10 +590,16 @@ fn fill_blur_matched(
     let kept: Vec<usize> = (0..channels).filter(|&c| keep[c]).collect();
     let total_weight: f64 = members.weights.iter().sum();
     let sqrt_weights: Vec<f32> = members.weights.iter().map(|&w| w.sqrt() as f32).collect();
-    let mut growths = ViewGrowths::new(members.n_members);
     let mut blur_scratch = BlurScratch::default();
     let mut crop = Vec::new();
-    let mut blurred = vec![0.0f32; channels * rr];
+    // Each member some pair blurs is assessed on its render blurred by each
+    // probe, read as the unblurred one was, so the lengths compared are of
+    // one reading.
+    let blurs = TrackBlurs::assess(&ellipses, params.matching, |m, e| {
+        let read = |values: &[f32]| member_ellipse(values, colour, r, &support, square, &mut crop);
+        assess_blur(&planes[m], e, read, &mut blur_scratch)
+    });
+    let mut blurred = TilePlanes::default();
     let mut raw = vec![0.0f32; 2 * kept.len() * n];
     let mut xs = Vec::new();
     let (mut pairs, mut pairs_blurred) = (0u32, 0u32);
@@ -597,40 +607,27 @@ fn fill_blur_matched(
         for b in (a + 1)..members.n_members {
             let (ia, ib) = (rows[a], rows[b]);
             pairs += 1;
-            // The sharper member and the width that brings it to the target,
-            // where its growth gives one.
-            let blur = match (ellipses[a], ellipses[b]) {
-                (Some(ea), Some(eb)) => pair_blur(&ea, &eb, ratio).and_then(|pb| {
-                    let (m, e) = if pb.sharper == 0 { (a, ea) } else { (b, eb) };
-                    // The member's growth is read on its render blurred by
-                    // each probe, read as the unblurred one was, so the
-                    // lengths compared are of one reading.
-                    let growth = growths.get(m, &planes[m], &e, |values| {
-                        member_ellipse(values, colour, r, &support, square, &mut crop)
-                    })?;
-                    let sigma = growth.sigma_for(pb.target)?;
-                    (sigma > 0.0).then_some((m, sigma))
-                }),
-                _ => None,
-            };
-            let Some((sharp, sigma)) = blur else {
+            // The sharper member blurred to the target, where its assessment
+            // gives a width.
+            let blur = blurs.pair(a, b).and_then(|p| {
+                let sigma = blur_to_length_into(
+                    &planes[p.view],
+                    p.assessment,
+                    p.target,
+                    &mut blurred,
+                    &mut blur_scratch,
+                )?;
+                (sigma > 0.0).then_some(p.view)
+            });
+            let Some(sharp) = blur else {
                 table[ia * k + ib] = plain[ia * k + ib];
                 table[ib * k + ia] = plain[ib * k + ia];
                 continue;
             };
             pairs_blurred += 1;
-            blur_tile(
-                &planes[sharp].values,
-                channels,
-                r,
-                &support,
-                sigma,
-                &mut blurred,
-                &mut blur_scratch,
-            );
             for (slot, m) in [a, b].into_iter().enumerate() {
                 let source: &[f32] = if m == sharp {
-                    &blurred
+                    &blurred.values
                 } else {
                     &planes[m].values
                 };
@@ -675,7 +672,7 @@ fn fill_blur_matched(
     progress_note!(
         phase,
         "{pairs_blurred} of {pairs} pairs blurred, {} blurred renders read",
-        growths.reads()
+        blurs.assessed() * GROWTH_PROBE_SIGMAS.len()
     );
     pairs_blurred
 }

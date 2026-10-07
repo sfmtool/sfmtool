@@ -38,9 +38,9 @@
 
 use rayon::prelude::*;
 
-use crate::patch::blur_matched::PairMatching;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage, SamplerChoice, MIN_MASK_PIXELS};
+use crate::patch::pair_sharpness::PairMatching;
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::SfmrReconstruction;
@@ -236,7 +236,7 @@ pub struct MemberMatrix {
     /// [`MemberCoherenceParams::matching`] asks for it, and empty otherwise:
     /// [`zncc`](Self::zncc) with each pair in which one member is sharper
     /// than the other along every direction
-    /// ([`pair_blur`](crate::patch::blur_matched::pair_blur)) correlated after
+    /// ([`pair_blur`](crate::patch::pair_sharpness::pair_blur)) correlated after
     /// that member is blurred to the other's sharpness,
     /// over the same support and by the same estimator. A pair left plain
     /// carries its [`zncc`](Self::zncc) value; the diagonal is `1.0` and an

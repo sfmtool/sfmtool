@@ -18,9 +18,9 @@ use crate::camera::sampler::render_tile;
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::{PhotographCache, WarpMap};
 use crate::geometry::RigidTransform;
-use crate::patch::blur_matched::PairMatching;
 use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
+use crate::patch::pair_sharpness::PairMatching;
 use crate::patch::reference_view::{
     blur_matched_agreement, finite_middle, render_view_tile, PairZnccReading, ReferenceFallback,
     ReferenceRuleInputs, ReferenceTest, ViewTile, REFERENCE_MAX_VIEWING_ANGLE_DEG,
