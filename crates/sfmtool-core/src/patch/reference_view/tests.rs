@@ -771,7 +771,7 @@ fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
 /// it lifts the blurriest view's agreement.
 #[test]
 fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_view() {
-    use crate::patch::blur_matched::{BlurCovariance, BlurMatchKernel, BlurScratch, PairMatching};
+    use crate::patch::blur_matched::{BlurScratch, PairMatching};
     use crate::patch::normal_refine::PatchWindow;
     use crate::patch::self_similarity::{
         zncc_self_similarity_parts, PatchTile, SelfSimilarityParams,
@@ -787,7 +787,7 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
     };
     let mut tiles: Vec<ViewTile> = (0..4).map(|_| tile_of(smooth)).collect();
     let planes = tiles[3].planes();
-    let blurred = planes.blurred(BlurCovariance::isotropic(1.5), &mut BlurScratch::default());
+    let blurred = planes.blurred(1.5, &mut BlurScratch::default());
     for (k, v) in blurred.values.iter().enumerate() {
         tiles[3].samples[[k / 24, k % 24, 0]] = v.round() as u8;
     }
@@ -814,7 +814,6 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
         &refs,
         &ellipses,
         PairMatching::Plain,
-        BlurMatchKernel::Anisotropic,
         window,
         &Progress::none(),
     );
@@ -827,7 +826,6 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
         &refs,
         &ellipses,
         PairMatching::BlurMatched,
-        BlurMatchKernel::Anisotropic,
         window,
         &Progress::none(),
     );
@@ -838,5 +836,5 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
         matched.pair_zncc[3],
         plain.pair_zncc[3]
     );
-    assert!(matched.pair_zncc[3] > 0.95, "{}", matched.pair_zncc[3]);
+    assert!(matched.pair_zncc[3] > 0.92, "{}", matched.pair_zncc[3]);
 }

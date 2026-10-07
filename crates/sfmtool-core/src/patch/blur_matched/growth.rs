@@ -2,18 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Each view's blur growth: its tile blurred by each of
-//! [`GROWTH_PROBE_SIGMAS`] and each blurred tile's self-similarity ellipse
-//! read, kept for every pair the view is blurred in.
+//! [`GROWTH_PROBE_SIGMAS`] and each blurred tile's semi-major axis read, kept
+//! for every pair the view is blurred in.
 
 use super::blur::{blur_tile, BlurScratch};
 use super::tiles::TilePlanes;
-use super::{BlurCovariance, BlurGrowth, GROWTH_PROBE_SIGMAS};
+use super::{semi_axes, BlurGrowth, GROWTH_PROBE_SIGMAS};
 
-/// The growth of `tile`'s ellipse: the tile blurred isotropically by each of
+/// The growth of `tile`'s semi-major axis: the tile blurred by each of
 /// [`GROWTH_PROBE_SIGMAS`] in turn into `out`, each blurred tile read by
-/// `read`, the readings kept beside `ellipse`, the unblurred tile's
-/// ([`BlurGrowth::from_ellipses`]). `None` where `read` gives no ellipse for
-/// any of them.
+/// `read`, the readings' semi-major axes kept beside that of `ellipse`, the
+/// unblurred tile's. `None` where `read` gives no ellipse for any of them.
 ///
 /// `read` must read the ellipse the way `ellipse` was read, the same reading
 /// of the same render, so that the growth is the reading's own and the
@@ -30,20 +29,20 @@ pub fn read_growth(
     scratch: &mut BlurScratch,
 ) -> Option<BlurGrowth> {
     out.resize(tile.values.len(), 0.0);
-    let mut probed = [[[0.0; 2]; 2]; GROWTH_PROBE_SIGMAS.len()];
-    for (e, &sigma) in probed.iter_mut().zip(&GROWTH_PROBE_SIGMAS) {
+    let mut semi_major = [semi_axes(ellipse)[0]; GROWTH_PROBE_SIGMAS.len() + 1];
+    for (l, &sigma) in semi_major[1..].iter_mut().zip(&GROWTH_PROBE_SIGMAS) {
         blur_tile(
             &tile.values,
             tile.channels,
             tile.side,
             &tile.data,
-            BlurCovariance::isotropic(sigma),
+            sigma,
             out,
             scratch,
         );
-        *e = read(out)?;
+        *l = semi_axes(&read(out)?)[0];
     }
-    Some(BlurGrowth::from_ellipses(ellipse, &probed))
+    Some(BlurGrowth { semi_major })
 }
 
 /// The growth of each view of a track, read the first time a pair blurs the

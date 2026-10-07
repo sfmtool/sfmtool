@@ -30,10 +30,11 @@ pub(super) const REFERENCE_TIP: &str = "Which row's tile could stand as the patc
     the smallest self-similarity radius. When no row passes, it drops the 65\u{b0} limit, then \
     the check of the ninths, then the coverage and clipping tests; a row that sees the patch \
     edge on or from behind, at 90\u{b0} or more, is never picked.\n\n\
-    Both agreements are blur-matched: before two rows' tiles are correlated, the sharper one \
-    is blurred to the other's sharpness, along each direction in which their self-similarity \
-    ellipses differ by more than a quarter, so a sharp row is not counted as disagreeing for \
-    the detail the blurrier rows lack. The hover gives the plain readings too.\n\n\
+    Both agreements are blur-matched: where one row's tile is sharper than the other's along \
+    every direction (the long axis of its self-similarity ellipse more than a quarter shorter \
+    than the other's short axis), it is blurred by a round blur until its long axis reaches \
+    the other's short axis before the two are correlated, so a sharp row is counted less for \
+    the detail a blurrier row lacks. The hover gives the plain readings too.\n\n\
     The first line is the pick, or the test that turned the row away: partial, clipped, \
     oblique, ninth differs, agrees less, or less sharp. The second is the viewing angle, \
     the angle between the patch's normal and the direction to the camera, and the pair \

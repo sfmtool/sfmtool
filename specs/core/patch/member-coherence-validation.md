@@ -93,12 +93,15 @@ the per-member sharpness below both read.
 ### Blur matching
 
 `matching` (default `Plain`) can blur-match each pair before it is correlated
-([blur-matched-zncc.md](blur-matched-zncc.md)): along each direction in which
-the two members' self-similarity ellipses differ (by more than
-`min_ellipse_ratio` for `BlurMatchedAboveRatio`), the member that is the sharper
-along it is blurred to the other's sharpness. It spares a member that disagrees
-with its track only because it is blurrier than the rest: a frame out of focus,
-motion blur, a far view added to a near track.
+([blur-matched-zncc.md](blur-matched-zncc.md)): where one member's
+self-similarity semi-major axis is shorter than the other's semi-minor axis (by
+more than `min_ellipse_ratio` for `BlurMatchedAboveRatio`), that member's render
+is blurred by a round Gaussian until its semi-major axis reaches the other's
+semi-minor axis; any other pair is read as it is. It spares a member that
+disagrees with its track only because it is blurrier than the rest in every
+direction: a frame out of focus, a far view added to a near track. A member
+blurry along one direction only, as by motion along a line or an oblique view,
+is read plain against the sharper members.
 
 Each member's ellipse is read on its own render, over the largest square inside
 the common support (below), and the blur runs over the common support, so the
@@ -117,26 +120,25 @@ datasets, one thread:
 
 | Matching | Time against plain | Pairs blurred | Verdicts that change | Members not kept (plain: 739) |
 |---|---|---|---|---|
-| `BlurMatched` | 2.19 × | 90% | 1.9% | 676 |
-| `BlurMatchedAboveRatio(1.25)` | 1.75 × | 50% | 1.8% | 676 |
+| `BlurMatched` | 1.24 × | 10% | 0.6% | 716 |
+| `BlurMatchedAboveRatio(1.25)` | 1.18 × | 4.4% | 0.4% | 710 |
 
-Most of the added time is the blurred pairs. The width of each blur is read
-off how the member's own render grows when blurred: each member blurred in any
-pair has its render blurred by 0.4 and 1 grid px and read again, once, and
-every pair it is in reads its widths off those readings
-([blur-matched-zncc.md](blur-matched-zncc.md) § "The width, from each view's
-growth"). Measured in the same session, a search per pair, which blurs and
-reads a render about twice for each pair, ran at 3.78 × and 2.51 ×, and the
-difference of squares at a fitted rate, which reads none, at 1.92 × and
-1.52 ×. Reading the members' own ellipses is 13% of the added time (ratio
-1.25), about 7 µs a member, and a blurred render is read the same way. Each is
+The added time is split between reading each member's own ellipse and the
+blurred pairs. The width of each blur is read off how the member's own render
+grows when blurred: each member blurred in any pair has its render blurred by
+0.4 and 1 grid px and read again, once, and every pair it is in reads its
+width off those readings ([blur-matched-zncc.md](blur-matched-zncc.md) § "The
+width, from each view's growth"). Measured in the same session, a blur along
+each direction in which the two members' ellipses differ, which blurs 90% and
+50% of the pairs, ran at 2.37 × and 1.77 ×. Reading the members' own ellipses
+takes about 7 µs a member, and a blurred render is read the same way. Each is
 read on the largest
 square centred on the grid that lies inside the common support, where every
 sample carries data, so the reading takes its dense route; over the
 disk-shaped support itself, whose corners carry no data, it took about 50 µs.
 Where that square is under 8 samples on a side, the ellipse is read over the
 whole support. The verdicts that change go both ways in about equal numbers:
-68 tracks kept whole become splits and 75 splits are kept whole (ratio 1.25),
+15 tracks kept whole become splits and 19 splits are kept whole (ratio 1.25),
 because matching lifts the core's
 own agreement and with it the self-normalized bar as well as the blurry
 members. A member made blurrier on purpose (one member's photograph blurred
@@ -146,15 +148,16 @@ near the point so its tile is blurred by `σ` grid px, 595 tracks) is evicted:
 |---|---|---|---|---|
 | 0 | 0.97 | 1.0% | 1.0% | 1.0% |
 | 1 | 1.65 | 1.2% | 1.2% | 1.2% |
-| 2 | 2.93 | 4.9% | 2.0% | 1.8% |
+| 2 | 2.93 | 4.9% | 2.9% | 2.9% |
 
 The relative bar and multi-scale exoneration already spare most blurred
-members, so matching lowers the eviction by about three points at `σ` 2 and
-changes nothing at `σ` 1, for three quarters of the plain run's time again, and moves
-real verdicts both ways by about as much. A caller vetting
+members, so matching lowers the eviction by two points at `σ` 2 and changes
+nothing at `σ` 1, for a fifth of the plain run's time again (a blur per
+direction lowered it to 1.8% for three quarters again), and moves real
+verdicts both ways by about as much. A caller vetting
 tracks where blur is expected (video with motion blur, a far view added to a
 near track) can turn it on; `bar` was calibrated on the plain table, and the
-blur-matched one reads about 0.02 higher on the same pairs.
+blur-matched one reads higher on the pairs it blurs.
 
 ### Members are sampled at their keypoints, not at the reprojection
 
@@ -492,7 +495,7 @@ how rayon schedules them.
 | `sampler` | `per_view` | source-pyramid sampling: the sampler rule, `anisotropic` for a member it moves and `bilinear_mip` otherwise ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per view") |
 | `min_valid_fraction` | `0.6` | per-member floor on the window-weighted valid-pixel fraction |
 | `min_support_pixels` | `8` | floor on the common support `n_support`; below it the track is unscored |
-| `matching` | `Plain` | how each pair is correlated for the decision: `Plain`, `BlurMatched`, or `BlurMatchedAboveRatio(r)`, which leaves a direction alone where the two members' ellipses differ by less than `r` (§ "Blur matching") |
+| `matching` | `Plain` | how each pair is correlated for the decision: `Plain`, `BlurMatched`, or `BlurMatchedAboveRatio(r)`, which leaves a pair plain where the other member's semi-minor axis is less than `r` times the sharper member's semi-major axis (§ "Blur matching") |
 
 `bar` and `margin_gate` are **calibration defaults, not constants** — callers
 override them. `bar` in particular is calibrated *for the render conventions in

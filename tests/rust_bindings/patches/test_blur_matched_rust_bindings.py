@@ -46,6 +46,13 @@ def test_a_blurred_copy_reads_higher_blur_matched_than_plain():
     # The two sharp copies are the same tile: nothing to match.
     assert not matched["blurred"][0, 1]
     assert matched["zncc"][0, 1] == pytest.approx(1.0)
+    # Only the sharper tile of a pair is blurred, and its width is reported
+    # in its own row.
+    sigma = matched["blur_sigma"]
+    assert sigma.shape == (3, 3)
+    assert sigma[0, 2] > 0 and sigma[1, 2] > 0
+    assert sigma[2, 0] == 0 and sigma[2, 1] == 0
+    assert np.all(plain["blur_sigma"] == 0)
 
 
 def test_a_ratio_and_given_ellipses_are_honoured():
@@ -62,11 +69,6 @@ def test_a_ratio_and_given_ellipses_are_honoured():
     unread = ellipses.copy()
     unread[1] = np.nan
     assert blur_matched_zncc_matrix(tiles, ellipses=unread)["pairs_blurred"] == 0
-    ladder = blur_matched_zncc_matrix(tiles, kernel="isotropic_ladder")
-    assert (
-        ladder["zncc"][0, 1]
-        > blur_matched_zncc_matrix(tiles, matching="plain")["zncc"][0, 1]
-    )
 
 
 def test_samples_without_data_are_left_out():
@@ -122,8 +124,9 @@ def test_grey_and_alpha_read_the_grey_alone():
 
 def test_bad_arguments_are_refused():
     tiles = np.stack([_texture(), _texture()])
-    with pytest.raises(ValueError, match="kernel"):
-        blur_matched_zncc_matrix(tiles, kernel="box")
+    # The blur is always round: there is no kernel to choose.
+    with pytest.raises(TypeError, match="kernel"):
+        blur_matched_zncc_matrix(tiles, kernel="anisotropic")
     with pytest.raises(ValueError, match="matching"):
         blur_matched_zncc_matrix(tiles, matching="sharp")
     with pytest.raises(ValueError, match="ellipses"):

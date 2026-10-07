@@ -9,9 +9,7 @@
 use super::tile::ViewTile;
 use super::{REFERENCE_MIN_CELL_SAMPLES, REFERENCE_MIN_JUDGED_CELL_ZNCC};
 use crate::numeric::median_in_place;
-use crate::patch::blur_matched::{
-    blur_matched_pairs, BlurMatchKernel, BlurMatchedPairs, PairMatching, TilePlanes,
-};
+use crate::patch::blur_matched::{blur_matched_pairs, BlurMatchedPairs, PairMatching, TilePlanes};
 use crate::patch::normal_refine::{grid_bounds, PatchWindow};
 use crate::progress::Progress;
 
@@ -188,7 +186,7 @@ pub struct BlurMatchedAgreement {
 /// [`BlurMatchedAgreement`] of `tiles`, one per view, with `ellipses[v]` view
 /// `v`'s self-similarity ellipse matrix in grid px² (`None` where it has
 /// none, which leaves its pairs plain), each pair matched under `matching`
-/// with `kernel` ([`blur_matched_pairs`]).
+/// ([`blur_matched_pairs`]).
 ///
 /// The whole-tile reading is windowed by `window` (member coherence's
 /// default is the reference rule's), over the samples with data in both tiles
@@ -203,13 +201,12 @@ pub fn blur_matched_agreement(
     tiles: &[&ViewTile],
     ellipses: &[Option<[[f64; 2]; 2]>],
     matching: PairMatching,
-    kernel: BlurMatchKernel,
     window: PatchWindow,
     progress: &Progress<'_>,
 ) -> BlurMatchedAgreement {
     let planes: Vec<TilePlanes> = tiles.iter().map(|t| t.planes()).collect();
     let refs: Vec<&TilePlanes> = planes.iter().collect();
-    let pairs = blur_matched_pairs(&refs, ellipses, matching, kernel, window, None, progress);
+    let pairs = blur_matched_pairs(&refs, ellipses, matching, window, None, progress);
     let k = tiles.len();
     let pair_zncc = (0..k).map(|v| pairs.row_middle(v)).collect();
     let cells = cell_agreement_from_pairs(&pairs.grid, k);

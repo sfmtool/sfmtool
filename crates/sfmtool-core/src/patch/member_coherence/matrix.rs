@@ -13,9 +13,7 @@
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
-use crate::patch::blur_matched::{
-    blur_tile, pair_directions, BlurScratch, TilePlanes, ViewGrowths,
-};
+use crate::patch::blur_matched::{blur_tile, pair_blur, BlurScratch, TilePlanes, ViewGrowths};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
@@ -530,12 +528,11 @@ fn member_ellipse(
 /// sample carries data, so the reading takes its dense route; where that
 /// square is too small, over the whole support, the support as its data. The
 /// ellipses are read in the `blur-matched ellipses` detail phase of
-/// `progress`. A pair is blurred where [`pair_directions`] asks, each
-/// render by normalized convolution over the support, the width from the
-/// member's growth ([`ViewGrowths`]), read once per member on its render
-/// blurred by each probe and read as the unblurred one was
-/// ([`member_ellipse`]), then
-/// gathered back,
+/// `progress`. A pair is blurred where [`pair_blur`] finds a sharper member:
+/// its render is blurred isotropically by normalized convolution over the
+/// support, the width from the member's growth ([`ViewGrowths`]), read once
+/// per member on its render blurred by each probe and read as the unblurred
+/// one was ([`member_ellipse`]); the pair is then gathered back,
 /// z-normalized over the support with the same window, and correlated as
 /// [`fill_scale`] correlates, in the `blur-matched pairs` detail phase. The
 /// ZNCC is averaged over the channels the plain table kept, `keep`, and no
@@ -600,39 +597,42 @@ fn fill_blur_matched(
         for b in (a + 1)..members.n_members {
             let (ia, ib) = (rows[a], rows[b]);
             pairs += 1;
-            let dirs = match (ellipses[a], ellipses[b]) {
-                (Some(ea), Some(eb)) => pair_directions(&ea, &eb, ratio),
-                _ => Default::default(),
+            // The sharper member and the width that brings it to the target,
+            // where its growth gives one.
+            let blur = match (ellipses[a], ellipses[b]) {
+                (Some(ea), Some(eb)) => pair_blur(&ea, &eb, ratio).and_then(|pb| {
+                    let (m, e) = if pb.sharper == 0 { (a, ea) } else { (b, eb) };
+                    // The member's growth is read on its render blurred by
+                    // each probe, read as the unblurred one was, so the
+                    // lengths compared are of one reading.
+                    let growth = growths.get(m, &planes[m], &e, |values| {
+                        member_ellipse(values, colour, r, &support, square, &mut crop)
+                    })?;
+                    let sigma = growth.sigma_for(pb.target)?;
+                    (sigma > 0.0).then_some((m, sigma))
+                }),
+                _ => None,
             };
-            if dirs.is_none() {
+            let Some((sharp, sigma)) = blur else {
                 table[ia * k + ib] = plain[ia * k + ib];
                 table[ib * k + ia] = plain[ib * k + ia];
                 continue;
-            }
+            };
             pairs_blurred += 1;
-            for (slot, (m, d)) in [(a, dirs.a), (b, dirs.b)].into_iter().enumerate() {
-                let source: &[f32] = if d.is_empty() {
-                    &planes[m].values
-                } else {
-                    // The member's growth is read on its render blurred by each
-                    // probe, read as the unblurred one was, so the lengths
-                    // compared are of one reading.
-                    let ellipse = ellipses[m]
-                        .as_ref()
-                        .expect("a blurred member has an ellipse");
-                    let growth = growths.get(m, &planes[m], ellipse, |values| {
-                        member_ellipse(values, colour, r, &support, square, &mut crop)
-                    });
-                    blur_tile(
-                        &planes[m].values,
-                        channels,
-                        r,
-                        &support,
-                        d.blur(growth.as_ref()),
-                        &mut blurred,
-                        &mut blur_scratch,
-                    );
+            blur_tile(
+                &planes[sharp].values,
+                channels,
+                r,
+                &support,
+                sigma,
+                &mut blurred,
+                &mut blur_scratch,
+            );
+            for (slot, m) in [a, b].into_iter().enumerate() {
+                let source: &[f32] = if m == sharp {
                     &blurred
+                } else {
+                    &planes[m].values
                 };
                 for (kc, &c) in kept.iter().enumerate() {
                     let dst = &mut raw[(slot * kept.len() + kc) * n..][..n];

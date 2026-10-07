@@ -396,10 +396,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           observations) in a ninth where that typical agreement is at least \
                           0.5; blur_matched_pair_zncc, blur_matched_pair_zncc_grid and \
                           blur_matched_cell_deficit, the same three with each pair's tiles \
-                          blur-matched first (the sharper tile blurred, along each direction \
-                          in which the two tiles' self-similarity ellipses differ by more \
-                          than a quarter, to the other's sharpness, up to a self-similarity \
-                          ellipse 2 grid px long), read over each pair's own \
+                          blur-matched first (where one tile's self-similarity semi-major \
+                          axis is more than a quarter shorter than the other's semi-minor \
+                          axis, that tile blurred by a round Gaussian until its semi-major \
+                          axis reaches the other's semi-minor axis, at most 2 grid px; any \
+                          other pair read as it is), read over each pair's own \
                           samples, null where the evaluation took no blur-matched readings; \
                           and reference_view, the reference-view \
                           rule's decision: is_reference, rejected_by (null for the reference, \

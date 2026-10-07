@@ -234,8 +234,10 @@ pub struct MemberMatrix {
     pub n_support: u32,
     /// The **blur-matched** `k×k` agreement, when
     /// [`MemberCoherenceParams::matching`] asks for it, and empty otherwise:
-    /// [`zncc`](Self::zncc) with each pair whose self-similarity ellipses differ
-    /// correlated after the sharper member is blurred to the other's sharpness,
+    /// [`zncc`](Self::zncc) with each pair in which one member is sharper
+    /// than the other along every direction
+    /// ([`pair_blur`](crate::patch::blur_matched::pair_blur)) correlated after
+    /// that member is blurred to the other's sharpness,
     /// over the same support and by the same estimator. A pair left plain
     /// carries its [`zncc`](Self::zncc) value; the diagonal is `1.0` and an
     /// unscored member's row and column are `NaN`, as in `zncc`. Each member's

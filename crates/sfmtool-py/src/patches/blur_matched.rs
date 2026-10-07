@@ -10,21 +10,20 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::patch::blur_matched::{
-    blur_matched_pairs, read_tile_ellipse, BlurMatchKernel, TilePlanes,
-};
+use sfmtool_core::patch::blur_matched::{blur_matched_pairs, read_tile_ellipse, TilePlanes};
 use sfmtool_core::progress::Progress;
 
 use super::args::{parse_matching, parse_patch_window};
 
 /// The ZNCC between every pair of a track's views' tiles, each pair
-/// blur-matched: along each direction in which the two tiles' ZNCC
-/// self-similarity ellipses differ, the tile whose ellipse is shorter is
-/// blurred to the other's sharpness before the two are correlated (up to an
-/// ellipse 2 grid px long). The width of each blur is read off how the
-/// tile's own ellipse grows: each tile is blurred by 0.4 and 1 grid px once
-/// and read again, and every pair it is in takes its widths from those
-/// readings. See ``specs/core/patch/blur-matched-zncc.md``.
+/// blur-matched: where one tile's ZNCC self-similarity semi-major axis is
+/// shorter than the other's semi-minor axis, that tile is blurred by a round
+/// Gaussian until its semi-major axis reaches the other's semi-minor axis
+/// (at most 2 grid px) before the two are correlated; any other pair is
+/// correlated as it is. The width of the blur is read off how the tile's own
+/// semi-major axis grows: each tile is blurred by 0.4 and 1 grid px once and
+/// read again, and every pair it is in takes its width from those readings.
+/// See ``specs/core/patch/blur-matched-zncc.md``.
 ///
 /// The ellipses compared are whole-tile readings over the samples with data,
 /// with the default parameters, which is how the blurred tiles are read; pass
@@ -43,7 +42,7 @@ use super::args::{parse_matching, parse_patch_window};
 /// ``samples`` as ``tiles`` and its ``valid`` as ``valid``, leave
 /// ``ellipses`` out, and pass
 /// ``matching="blur_matched_above_ratio"`` with the default
-/// ``min_ellipse_ratio`` of 1.25, the default kernel and the default window.
+/// ``min_ellipse_ratio`` of 1.25 and the default window.
 /// The ellipses read here are then the bench's, its track-stage
 /// ``zncc_self_similarity_ellipse["grid_px"]["matrix"]``, up to rounding.
 ///
@@ -63,23 +62,21 @@ use super::args::{parse_matching, parse_patch_window};
 ///         default parameters, over the samples that carry data.
 ///     matching: ``"blur_matched"`` (default), ``"blur_matched_above_ratio"``
 ///         or ``"plain"``.
-///     min_ellipse_ratio: The factor two lengths along a direction must differ
-///         by for ``"blur_matched_above_ratio"`` to blur along it (default
-///         1.25), at least 1.
-///     kernel: ``"anisotropic"`` (default), each tile blurred along the
-///         directions in which it is the sharper, or ``"isotropic_ladder"``,
-///         the sharper tile by semi-major axis blurred isotropically at
-///         whichever of eight widths brings its semi-major axis closest to the
-///         other tile's, each view blurred and read once per width.
+///     min_ellipse_ratio: The factor by which the other tile's semi-minor
+///         axis must exceed the sharper tile's semi-major axis for
+///         ``"blur_matched_above_ratio"`` to blur the pair (default 1.25), at
+///         least 1.
 ///     window: The whole-tile reading's window, ``"gaussian_disk"``
 ///         (default), ``"gaussian"`` or ``"uniform"``.
 ///     window_sigma: Its sigma.
 ///
 /// Returns a dict: ``zncc`` (``(k, k)`` float64, unit diagonal, NaN where a
 /// pair could not be read), ``zncc_grid`` (``(k, k, 3, 3)`` float64, NaN on
-/// the diagonal), ``blurred`` (``(k, k)`` bool, whether either tile of the
-/// pair was blurred), ``pairs`` and ``pairs_blurred`` (int), and
-/// ``ellipse_matrix`` (``(k, 2, 2)``, the ellipses read).
+/// the diagonal), ``blurred`` (``(k, k)`` bool, whether a tile of the pair
+/// was blurred), ``blur_sigma`` (``(k, k)`` float64, the width in grid px by
+/// which the row's tile was blurred against the column's, 0 where it was not
+/// blurred), ``pairs`` and ``pairs_blurred`` (int), and ``ellipse_matrix``
+/// (``(k, 2, 2)``, the ellipses read).
 ///
 /// Raises:
 ///     TypeError: If ``tiles`` is not a 4-D uint8 array, or ``valid`` is not a
@@ -91,7 +88,7 @@ use super::args::{parse_matching, parse_patch_window};
 #[pyfunction]
 #[pyo3(signature = (
     tiles, *, valid=None, ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
-    kernel="anisotropic", window="gaussian_disk", window_sigma=0.6
+    window="gaussian_disk", window_sigma=0.6
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn blur_matched_zncc_matrix<'py>(
@@ -101,16 +98,10 @@ pub fn blur_matched_zncc_matrix<'py>(
     ellipses: Option<PyReadonlyArray3<'py, f64>>,
     matching: &str,
     min_ellipse_ratio: f64,
-    kernel: &str,
     window: &str,
     window_sigma: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
     let matching = parse_matching(matching, min_ellipse_ratio)?;
-    let kernel = BlurMatchKernel::from_name(kernel).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "kernel must be \"anisotropic\" or \"isotropic_ladder\", not {kernel:?}"
-        ))
-    })?;
     let window = parse_patch_window(window, window_sigma)?;
     let tiles = tiles.as_array();
     let &[k, height, width, stride] = tiles.shape() else {
@@ -176,15 +167,7 @@ pub fn blur_matched_zncc_matrix<'py>(
     };
     let pairs = py.detach(|| {
         let refs: Vec<&TilePlanes> = planes.iter().collect();
-        blur_matched_pairs(
-            &refs,
-            &ellipses,
-            matching,
-            kernel,
-            window,
-            None,
-            &Progress::none(),
-        )
+        blur_matched_pairs(&refs, &ellipses, matching, window, None, &Progress::none())
     });
     let out = PyDict::new(py);
     out.set_item(
@@ -202,6 +185,12 @@ pub fn blur_matched_zncc_matrix<'py>(
         "blurred",
         Array2::from_shape_vec((k, k), pairs.blurred.clone())
             .expect("k*k flags")
+            .into_pyarray(py),
+    )?;
+    out.set_item(
+        "blur_sigma",
+        Array2::from_shape_vec((k, k), pairs.sigma.clone())
+            .expect("k*k widths")
             .into_pyarray(py),
     )?;
     out.set_item("pairs", pairs.pairs)?;
