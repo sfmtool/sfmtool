@@ -225,6 +225,7 @@ should read it as a claim.
    - Current: "An image whose pose is wrong is the commonest defect a reviewer can see and cannot fix: …  What the reviewer wants is to take hold of the camera and put it where the photograph lines up, the way a hand would."
    - Problem: the first paragraph states the problem only; what the action is appears in paragraph two, through a figure ("The viewer already has the hand").
    - Proposed: *"Move Camera is a viewer edit that locks an image's camera to the viewport in camera view, so the reviewer moves it with the ordinary navigation controls until its photograph lines up with the points; releasing the lock settles the points that image observes around the new pose and installs the result as the node's next version."*
+   > _Status (2026-10-07): **Done** — the opening now says what the edit is: a lock in camera view, moved with the navigation controls, and a commit that stores the pose, re-triangulates the observed points where their observations allow and pushes one undoable version. The proposed sentence was adjusted against the code: releasing the lock by `Escape` cancels and pushes nothing, and a bearing or a failed or pixel-less track is not re-triangulated (`move_camera.rs`). The problem statement follows as paragraph two and the "hand" figure is replaced by a literal description of the lock, branch `spec-fix-1006-34-opening-move-camera`._
 3. **`core/analysis/keypoint-reach.md:3`**
    - Current: "One question, asked per image of a track set: which other keypoints lie inside this keypoint's own disk? Several rules read that neighbourhood and differ only in what they then test, so the enumeration is stated once and the tests stay with the callers."
    - Problem: precise and true, but it names no rule and no use; the one consumer, covered-by-finer, appears only at :65.
@@ -885,3 +886,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
+   > _Status (2026-10-07): **Partially done** — `gui/edits/move-camera.md` opening rewritten, branch `spec-fix-1006-34-opening-move-camera`; the other eight are open._
