@@ -95,7 +95,7 @@ pub struct SelfSimilarity {
     /// The channel-averaged ZNCC `z(d)` for every shift of the `(2r + 1)²`
     /// square, row-major from `(dx, dy) = (−r, −r)`, `z(0, 0) = 1`: the
     /// surface the ellipse is read from. Every value is `NaN` for a template
-    /// with no textured channel.
+    /// with no textured channel or no data.
     pub surface: Vec<f64>,
 }
 

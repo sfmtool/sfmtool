@@ -274,7 +274,7 @@ existing patch machinery:
 | `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it); `0` disables |
 | `min_absolute_zncc` | 0.5 | drop a view whose LOO ZNCC is finite and below this absolute floor, however many views remain; `0` disables |
-| `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own tile's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more turns nothing out; see [The member gate's default](#the-member-gates-default) |
+| `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own tile's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more rejects nothing; see [The member gate's default](#the-member-gates-default) |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
 | `robust_iters` | 3 | IRLS passes for the robust consensus |
