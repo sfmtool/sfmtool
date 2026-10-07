@@ -3,6 +3,7 @@
 
 //! Patch clouds: point-patch storage and normal refinement.
 
+pub mod blur_matched;
 pub mod cloud;
 pub mod cluster_refine;
 pub mod display_bitmaps;

@@ -10,8 +10,25 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use sfmtool_core::patch::blur_matched::PairMatching;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler, SamplerChoice};
+
+/// The [`PairMatching`] a `matching` string names, `ratio` the factor of
+/// `"blur_matched_above_ratio"`.
+pub(crate) fn parse_matching(name: &str, ratio: f64) -> PyResult<PairMatching> {
+    if !(ratio.is_finite() && ratio >= 1.0) {
+        return Err(PyValueError::new_err(format!(
+            "min_ellipse_ratio must be a finite number of at least 1, not {ratio}"
+        )));
+    }
+    PairMatching::from_name(name, ratio).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "matching must be \"plain\", \"blur_matched\" or \"blur_matched_above_ratio\", \
+             not {name:?}"
+        ))
+    })
+}
 
 /// Map a window name + sigma to the shared [`PatchWindow`] kernel.
 pub(crate) fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWindow> {
