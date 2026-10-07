@@ -480,16 +480,20 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfmtool-core/src/geometry/reprojection.rs` (:35-89, :94-103); `crates/sfmtool-py/src/geometry/reprojection.rs`. Only production caller: `analysis/cluster_census.rs:682`. No code file cites the spec.
 **Inconsistencies:**
   - Purpose (:5-6) names three shared callers that each have their own code: growth (`reconstruction_growth.rs:194, :211-230, :501-530`), pose refinement (`pose_refine.rs:45-88`), pose verification (`pose_verification.rs:171-192`). Fix the spec, or move those callers onto this function (discuss).
+    > _Status (2026-10-07): **Done** — the spec's Purpose names the cluster census as the one production caller and says growth, pose refinement and pose verification use their own code; the core module doc no longer names them; moving those callers onto the function was not done, branch `spec-fix-1006-20-reproj-spec`._
   - Bug: zero observations give shape `(0, 0)` (`PyArray2::from_vec2`, py :90), not `(n_obs, 2)` (:83), and `inlier_fraction` then refuses it (py :105) where :62-63 says 0.0. Verified by running.
     > _Status (2026-10-06): **Done** — the binding reshapes the flat result, so zero observations give `(0, 2)` and `inlier_fraction` scores it `0.0`, with a binding test, branch `spec-fix-1006-05-reproj-binding`._
   - Bug: out-of-range `obs_image`/`obs_point` and a short `translations` array raise `PanicException` (py :59-78; core :64-76), not `ValueError`. Verified.
     > _Status (2026-10-06): **Done** — the binding now reshapes the flat result so zero observations give `(0, 2)`, and raises `ValueError` for out-of-range `obs_image` / `obs_point` and a `translations` row count that differs from `quaternions_wxyz`; the spec's Bindings section and the core function's `# Panics` doc say so, with binding tests, branch `spec-fix-1006-05-reproj-binding`._
   - A non-finite pose gives `(NaN, NaN)`, not `(invalid_residual, 0)` (core :69-86); the spec (:46-53) should say so.
+    > _Status (2026-10-07): **Done** — the spec says only the point is checked for finiteness; a non-finite pose gets `(invalid_residual, 0)` only where the model's domain test rejects the ray, otherwise NaN or infinite components (`(NaN, NaN)` for a NaN quaternion under a pinhole model), branch `spec-fix-1006-20-reproj-spec`._
 **Third copies:** invalid-observation rationale in spec :46-53, core doc :26-31, binding doc py :18-21; shrink the binding copy and link the spec from the module doc (:4-10).
+> _Status (2026-10-07): **Done** — the core module doc cites the spec, and the binding docstring keeps one sentence and points at the spec, branch `spec-fix-1006-20-reproj-spec`._
 **Shape:** failure 1. Proposed: "This function computes, for every observation of a world point in an image, the pixel offset between where the point projects under that image's pose and where it was observed, for a set of images that share one camera model." Failure 3: no reason for flat `&[f64]` inputs; the Python block is a signature, not a call.
 **Non-goals / deferrals checked:** 2; neither overtaken.
 **Recommendation:** update code (empty shape; `ValueError` on bad indexes) and spec (callers; cite it from the code). Discuss moving the other helpers onto it.
 **Unclear / incorrect / suspicious:** :50-51 and :97-99 distinguish `inf` from a finite value in `inlier_fraction`, which treats both alike (:99-102). Four separate helpers project, take the norm and count below 3 px; none calls this function.
+> _Status (2026-10-07): **Done** for the `inf` note — the spec says `inlier_fraction` counts an invalid observation as an outlier either way and names what the choice changes elsewhere; the Testing line matches the tests. The duplicate helpers are not merged, branch `spec-fix-1006-20-reproj-spec`._
 
 ### specs/gui/mcp-server.md
 **Summary:** The viewer's MCP endpoint (`sfm-explorer --mcp`): CLI and bind behaviour, the 86-tool catalog with argument and reply shapes, the GUI-thread drain, the Rust seam, transport, security, errors and tests. 5167 lines, updated with the code (#804, #807, #809). The tool table matches the catalog name for name (86 each; 16 read, 65 write, 4 input, 1 save), checked by `mcp/tests/catalog.rs:865,964`. Drift sits in prose no test reads.
@@ -861,6 +865,7 @@ Read 2026-09-26; open items above.
    - `pose-verification.md:187` says `INLIER_PX` bounds the screens; it bounds
      only the repair.
    - `reprojection-residuals.md` names three shared callers; there is one.
+     > _Status (2026-10-07): **Done** — the spec names the cluster census as the one caller, branch `spec-fix-1006-20-reproj-spec`._
    - `localize-keypoints-command.md:109` says the CLI "re-specifies nothing";
      it hardcodes all 17 defaults.
    - `cluster-covisibility.md:323` says a pre-v6 file opens; the reader
