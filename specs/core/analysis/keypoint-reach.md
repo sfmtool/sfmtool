@@ -74,11 +74,11 @@ footprint, keeps the pairs at least one radius band apart, and retires the
 coarse side. It reads the pair stream directly and adds its own tests over it,
 which is the calling pattern this module is shaped for.
 
-The other rule extracted from was **reconciling points that rest on one
-measurement**, which would set the reach to a fraction of the row's refined unit
-scale, keep the pairs whose radii agree, and join their points into one tangle.
-It still expands the neighbourhood for itself in NumPy; see
-[Open questions](#open-questions).
+The other rule the enumeration was extracted from, **reconciling points that
+rest on one measurement**, would set the reach to a fraction of the row's
+refined unit scale, keep the pairs whose radii agree, and join their points into
+one tangle. That rule is not in this repository, so covered-by-finer is the only
+caller today; see [Open questions](#open-questions).
 
 ## Binding
 
@@ -113,12 +113,13 @@ the documented "asks nothing" value, not an error.
 
 ## Open questions
 
-**Whether the same-measurement reconciliation should migrate onto it.** It asks
-this question of these rows and differs only in what it then tests, which is why
-the enumeration was stated once. Its verdict would be an exact function of the
-pair set, so the enumeration would carry its determinism. What a migration has to
-establish, and what nothing asserts today, is that the rule's mask comes out byte
-for byte identical to what its NumPy expansion produces now — including on the
-members the reconciliation's tolerance was drawn from. That is the parity the
-covering rule's own binding test establishes for its half of the pair
-([covered-by-finer.md](covered-by-finer.md) § "Testing").
+**Whether the same-measurement reconciliation should migrate onto it, if that
+rule is brought into this repository.** It asks this question of these rows and
+differs only in what it then tests, which is why the enumeration was stated
+once. Its verdict would be an exact function of the pair set, so the
+enumeration would carry its determinism. What a migration has to establish is
+that the rule's mask comes out byte for byte identical to what its own NumPy
+expansion produced, including on the members the reconciliation's tolerance was
+drawn from. That is the parity the covering rule's own binding test establishes
+for its half of the pair ([covered-by-finer.md](covered-by-finer.md) §
+"Testing").
