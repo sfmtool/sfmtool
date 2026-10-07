@@ -2057,6 +2057,27 @@ fn a_view_command_that_leaves_camera_view_commits_a_held_lock_first() {
     );
 }
 
+/// The lock ends before the form is applied, so a leaving form that then
+/// refuses has still ended it -- as a commit, since the hand had moved -- while
+/// the view itself stays where the hand left it.
+#[test]
+fn a_refused_view_command_that_leaves_camera_view_has_still_ended_the_lock() {
+    let (mut state, mut viewer) = editable();
+    hold_the_camera(&mut state, &mut viewer, 1);
+    let held = crate::camera_lock::pending_pose(&viewer, &state.scene[0]);
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "target": [1.0, 2.0, 3.0], "fov_short_axis_deg": 170.0 }),
+    );
+    assert!(error.0.contains("fov_short_axis_deg"), "{error}");
+    assert!(viewer.camera_lock.is_none(), "the lock survived");
+    assert_eq!(version_count(&state), 2, "the hand's move was committed");
+    assert_viewport_at(&state, &viewer, &held, "after the refused placement");
+}
+
 /// The rule is the wire's rather than the pose edit's: any edit landing on the
 /// node ends the lock first, since an edit under one would leave the reviewer
 /// holding a camera whose stored pose had moved beneath them.

@@ -250,6 +250,9 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
         (None, Some((_, distance))) => distance,
         (None, None) => viewer.camera.camera.target_distance,
     };
+    // The last refusal, so it goes before anything else is written: a refused
+    // call leaves the view as it was. Nothing below reads the field of view.
+    set_fov(viewer, placement.fov_short_axis_deg)?;
 
     // Read before anything moves: the anchor of a call that named neither end
     // is where the camera is looking *now*.
@@ -282,7 +285,6 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
             anchor - viewer.camera.camera.forward() * distance
         }
     };
-    set_fov(viewer, placement.fov_short_axis_deg)?;
 
     Ok(if placement.orientation_wxyz.is_some() {
         "Camera restored".to_string()

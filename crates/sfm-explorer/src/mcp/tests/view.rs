@@ -85,6 +85,45 @@ fn a_degenerate_look_at_is_refused() {
     assert!(error.0.contains("no direction"), "{error}");
 }
 
+/// A placement whose field of view is out of range is refused before the
+/// camera moves: a refused call leaves the view where it was, camera view
+/// included.
+#[test]
+fn a_placement_with_an_out_of_range_fov_leaves_the_view_unchanged() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "look_through": { "camera_image": "images/A_003.jpg" } }),
+    )["view"]
+        .clone();
+
+    for fov in [1.0, 170.0] {
+        let error = refused_call(
+            &mut state,
+            &mut viewer,
+            "set_view",
+            json!({
+                "position": [2.0, -3.0, 1.0],
+                "target": [0.0, 0.0, 0.0],
+                "up": [1.0, 0.0, 1.0],
+                "fov_short_axis_deg": fov,
+            }),
+        );
+        assert!(error.0.contains("fov_short_axis_deg"), "{error}");
+        let after = call(&mut state, &mut viewer, "get_scene", json!({}))["view"].clone();
+        assert_eq!(
+            after, before,
+            "a refused placement at {fov}° moved the view"
+        );
+        assert!(
+            viewer.maintain_z_up,
+            "a refused rolled placement turned Maintain Z-up off"
+        );
+    }
+}
+
 // ── set_view: the explicit camera, a piece at a time ────────────────────
 
 /// The view block, as a `(position, target, target_distance)` triple, for

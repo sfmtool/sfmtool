@@ -1457,7 +1457,11 @@ exit, a `move`, an `orbit`) is a step away from a camera the human holds in hand
 lock ends first, as a commit when it has been moved. `fov_short_axis_deg` and a
 `turn` keep camera view and so keep the lock, as the zoom controls and a
 free-look drag do; a turn under the lock turns the camera in hand, as the drag
-does (`ViewCommand::leaves_camera_view`).
+does (`ViewCommand::leaves_camera_view`). The lock ends before the form is
+applied, because the commit reads the pose the viewport is still holding, so a
+leaving form that the viewer then refuses -- an unknown camera image, a
+degenerate placement -- has still ended the lock, while the view itself stays
+where the hand left it.
 
 ```jsonc
 { "fit": null }                             // frame everything drawn
@@ -1531,7 +1535,9 @@ guessed at: `orientation_wxyz` accepts only its exact-form companions,
 along, `forward` may not accompany the pair, and `up` steers a roll only where
 the orientation is being derived (`forward`, or the look-at pair). Every form
 refuses the arguments it does not read -- an argument silently ignored leaves
-the agent believing it asked for something it did not.
+the agent believing it asked for something it did not. Every refusal of a
+placement, a `fov_short_axis_deg` outside 5 to 160 degrees among them, comes
+before anything moves, so a refused placement leaves the view as it was.
 
 **`point` and `bench_observation` are the two double-clicks that aim the 3D
 view at something.** `point` is what a double-click on a tracked feature in

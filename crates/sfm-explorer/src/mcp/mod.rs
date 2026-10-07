@@ -2308,7 +2308,9 @@ pub(crate) fn apply_as_agent(
             // from a camera in hand, exactly as `,` and `.` are: the lock ends
             // first, as a commit when it has been moved. A field-of-view change
             // and a turn keep camera view and so keep the lock, as the zoom
-            // controls and a free-look drag do.
+            // controls and a free-look drag do. The lock ends before the form
+            // runs, whether or not the form then refuses, because the commit
+            // reads the pose the viewport is still holding.
             if matches!(command, Command::SetView { view: ref v, .. } if v.leaves_camera_view()) {
                 stale.extend(crate::camera_lock::exit_implicitly(viewer, state));
             }
