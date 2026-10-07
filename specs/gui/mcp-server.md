@@ -2824,12 +2824,13 @@ different number for a maximized window and the same one for a normal window
 
 ### The editing family
 
-Eight tools that give a node a new version or move its cursor, plus the read
-that lists them and the one that writes a file. What the ten share is worth
-stating once rather than ten times.
+The tools that give a node a new version or move its cursor, plus the read
+that lists the versions and the one that writes a file. What they share is
+stated once here rather than under each tool.
 
-**Each one is a single `AppState` call**: `delete_point`, `delete_image`,
-`resect_image`, `bundle_adjust`, `retriangulate_point`, `undo`, `save_node_as`.
+**Each one is a single `AppState` call**, for example `delete_point`,
+`delete_image`, `resect_image`, `start_bundle_adjust`, `retriangulate_point`,
+`undo` and `save_node_as`.
 It is the
 same call the menu, the panel or the keyboard makes. So an agent's edit is a
 version in the same history, with the same label, drawn on the same Edit History
@@ -4073,7 +4074,7 @@ thread, and waits for the answer.
  tools/call returns
 ```
 
-Four things this buys, each load-bearing:
+What this arrangement gives:
 
 - **Commands land before uploads.** `drain_mcp` runs first in
   `run_ui_and_paint`, ahead of the title sync and `prepare_uploads`, so a
@@ -4182,14 +4183,14 @@ command (a `Query` entry, which never reaches the status line — an agent polli
 **refusal** is recorded as a failed entry, `{tool} failed: {message}`, in the
 same words the agent receives.
 
-**A refusal the state already recorded is not recorded twice.** Three `AppState`
-methods word their own: `resect_image`, `bundle_adjust` and
-`move_camera`, whose refusals belong to the operation's vocabulary rather than
-to the tool that asked
-for it. So the drain writes its row only where the application of that command
-recorded no failed entry of its own. The test is the Action Log's revision
-before and after, which needs no list of which methods those are and cannot fall
-out of step with one.
+**A refusal the state already recorded is not recorded twice.** Some `AppState`
+methods word their own — `resect_image`, `start_bundle_adjust` and
+`move_camera` among them, with several other edits and bench steps —
+because their refusals belong to the operation's vocabulary rather than
+to the tool that asked for it. So the drain writes its row only where the
+application of that command recorded no failed entry of its own. The test is the
+Action Log's revision before and after, which needs no list of which methods
+those are and cannot fall out of step with one.
 
 **The drain drops what the panels cached about a node an edit renumbered.** A
 bulk edit gives a node a whole new base and a cursor move lands on one, so an
@@ -4257,83 +4258,20 @@ testable without a window:
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
-```rust
-/// Everything the MCP surface can ask the viewer to do. One variant per tool.
-///
-/// A reconstruction is named by its label, so these carry a `String` that
-/// `apply` resolves against `AppState::scene`. `Option` means "the selected
-/// reconstruction if omitted".
-pub(crate) enum Command {
-    GetScene,
-    ListCameraImages { reconstruction_label: Option<String>, offset: usize, limit: usize },
-    GetCameraImage { reconstruction_label: Option<String>, camera_image: CameraImageSel },
-    GetCameraIntrinsics { reconstruction_label: Option<String>, camera_intrinsics_index: usize },
-    GetPoint { point: goto_point::PointQuery },
-    /// `actors` is never empty: the parse refuses `[]` and fills an omitted
-    /// field with every actor.
-    GetActionLog { since_revision: u64, limit: usize, actors: Vec<action_log::Actor> },
-    OpenReconstruction { path: PathBuf },
-    CloseReconstruction { target: CloseTarget },
-    SelectReconstruction { reconstruction_label: String },
-    SelectCameraImage { reconstruction_label: Option<String>, camera_image: CameraImageSel },
-    SelectCameraIntrinsics { reconstruction_label: Option<String>, camera_intrinsics_index: usize },
-    SelectPoint { point: goto_point::PointQuery },
-    ClearSelection { scope: SelectionScope },
-    SetReconstructionDisplay { reconstruction_label: String, change: DisplayChange },
-    SetSolo { reconstruction_label: Option<String> },
-    GetImageDetailDisplay,
-    /// Every field an `Option`, `None` meaning "leave it": the parse has
-    /// already resolved the mode name, checked the ladders and the size
-    /// bounds, so `apply` only writes and records.
-    SetImageDetailDisplay { change: ImageDetailDisplayChange },
-    SetView { view: ViewCommand },
-    GetWindowLayout,
-    /// The document as it arrived, unparsed, so that one the viewer will not
-    /// accept is a domain error in the layout parser's own words — path and
-    /// all — rather than a protocol error.
-    SetWindowLayout { document: serde_json::Value },
-    ShowPanel { panel: Tab },
-    HidePanel { panel: Tab },
-    /// The editing family. `reconstruction_label` is a plain `String` on every
-    /// one of them: an edit names the node it edits (§ "An edit names its
-    /// reconstruction").
-    GetHistory { reconstruction_label: String },
-    Undo { reconstruction_label: String },
-    Redo { reconstruction_label: String },
-    /// `serial` as the viewer spells it, `"v12"`, resolved against the node's
-    /// own version list.
-    JumpToVersion { reconstruction_label: String, serial: String },
-    /// `None` is Save, over the node's own path; `Some` is Save As.
-    SaveReconstruction { reconstruction_label: String, path: Option<PathBuf> },
-    DeletePoint { reconstruction_label: String, point: goto_point::PointQuery },
-    DeleteCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    /// World-from-camera in the node's own frame, in the pieces the wire
-    /// carries: a rotation quaternion and a camera centre.
-    MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
-                      quaternion_wxyz: [f64; 4], translation: [f64; 3] },
-    ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
-                   cameras: Vec<CameraReleaseOverride>, free_points_cross: bool },
-    SwitchCameraModel { reconstruction_label: String, request: SwitchCameraModelRequest },
-    /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
-    /// parse refuses it elsewhere, and refuses `widgets: true` beside it.
-    Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32>,
-                 crop: Option<[u32; 4]>, widgets: bool },
-    GetWidgets { panel: Option<Tab>, crop: Option<[u32; 4]> },
-    /// `click`, `hover`, `press_key` and `type_text`, parsed into
-    /// `input::InputCommand`.
-    Input(input::InputCommand),
-}
-
-impl Command {
-    /// The node whose data this command is about to change, read before it is
-    /// applied, for the drain to end a camera held in hand on that node.
-    fn edits(&self) -> Option<&str>;
-    /// The node this command may have renumbered, once it has succeeded, for
-    /// the drain to drop what the panels cached about the table it had.
-    fn renumbers(&self) -> Option<&str>;
-}
-```
+`Command`, in [`mcp/mod.rs`](../../crates/sfm-explorer/src/mcp/mod.rs), is the
+command vocabulary: one variant per tool, except that the four input tools
+share `Input`, holding the arguments as the parse left them. A reconstruction
+is named by its label, which `apply` resolves against `AppState::scene`; an
+`Option<String>` label means the selected reconstruction when the argument is
+left out, and every editing variant takes a plain `String`, because an edit
+names the node it edits (§ "An edit names its reconstruction"). The variants and
+their doc comments are in `mod.rs` rather than copied here. The methods in
+[`mcp/logged.rs`](../../crates/sfm-explorer/src/mcp/logged.rs) read a command
+for the drain: among them `tool_name`, the name the wire uses; `kind`, the
+Action Log kind a refusal is filed under; `edits`, the node whose data the command is about to
+change, read before it is applied so the drain can end a camera held in hand on
+that node; and `renumbers`, the node a succeeded command may have renumbered, so
+the drain can drop what the panels cached about it.
 
 `Command::kind` for `SetWindowLayout` is `Kind::Layout` when the object carries a
 `layout` key and `Kind::Window` otherwise, which is where a refusal of it is
@@ -4341,7 +4279,8 @@ filed. `SetImageDetailDisplay` is `Kind::Display` — the kind the HUD's own
 controls record under, since the Image Detail toolbar is the same sort of thing
 on a different panel — and `GetImageDetailDisplay` a `Kind::Query` like every
 other read. `SetViewer3dDisplay` is `Kind::Display` too, being the HUD's own
-controls, and `GetViewer3dDisplay` a `Kind::Query`. The seven edit commands and the three cursor moves are `Kind::Edit`
+controls, and `GetViewer3dDisplay` a `Kind::Query`. Every edit command, the three
+cursor moves, `CommitBenchTrack` and `CancelBackgroundTask` are `Kind::Edit`
 and `SaveReconstruction` is `Kind::File`, which is where the GUI's own rows for
 them go, so a refusal is filed where its success would have been.
 Everything the window portion is made of — `WindowChange`, `WindowState`,
@@ -4452,7 +4391,7 @@ pub(crate) struct Applied {
 
 /// Start the server. Returns once it is bound and listening, or with the bind
 /// error; the runtime lives on its own thread from here.
-pub(crate) fn serve(port: u16, tx: UnboundedSender<Request>,
+pub(crate) fn serve(port: u16, tx: UnboundedSender<Request>, busy: BusyNotice,
                     wake: impl Fn() + Send + Sync + 'static)
     -> Result<SocketAddr, ServeError>;
 ```
@@ -4470,11 +4409,12 @@ frame but no GPU, so `mcp::tests::widgets` and `mcp::tests::input` run them
 through `Context::run_ui` frames (§ "Testing").
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other thirty-five answer with JSON; squeezing an image through a
+picture and every other tool answers with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-thirty-five return a plain `Result<Value, ToolError>` and are widened at the
-`apply_with_window` dispatch, so nothing below it has to name the shape it is
-not.
+others build a plain `Result<Value, ToolError>` and widen it to
+`ToolOutput::Json` only where the reply is sent — the `apply_with_window`
+dispatch for one answered at once, the frame for one answered later — so the
+code that builds a JSON reply never names the shape it is not.
 
 `App` carries four fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`,
 `mcp_deferred: Vec<(Deferred, oneshot::Sender<Reply>)>`, `mcp_input:
@@ -4559,7 +4499,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Seventy tools are
+relaunch would call tools the new binary does not have. The whole catalog is
 cheap to re-fetch; a stale list is not cheap to debug. `cache_scope` is
 `private`: there are no authorization contexts to share a result across.
 
@@ -4635,7 +4575,7 @@ reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`."*
 status line and in the panel, where before only a success reached them. It is
 recorded by the drain rather than by the method that produced it, which is why
 every `AppState` method the MCP layer calls returns its failure instead of
-logging it, with the two exceptions that word their own, where the drain stands
+logging it, except for the methods that word their own, where the drain stands
 down instead (§ "Threading"). One failure, one entry, either way. Protocol errors
 are **not** logged — they never reach the viewer, and a request the GUI thread
 never saw belongs in the agent's own transcript.
@@ -5182,13 +5122,18 @@ is the panel's own list (§ "`get_history`"), and the save is the File menu's
 (§ "`save_reconstruction`"). An agent and a human editing the same node take
 turns rather than working in two different worlds.
 
-**Editing intrinsics is still not on the surface.** `set_camera_intrinsics`
-would be an edit like the others under this model, but it has real work behind
-it (a partial-parameter merge against `CameraModel`, and the re-upload of every
-frustum, distorted mesh and image quad built from the lens that changed), and it
-should land as its own change, with an edit spec beside the rest in
-[edits/](edits/README.md). Two tools that switch a camera to another model, as a
-proposal an agent can inspect before applying it, are proposed in
+**A lens changes through a fit or a solve, never through values the caller
+gives.** `switch_camera_model` replaces a camera with another model fitted to it
+(§ "`switch_camera_model`"), and `bundle_adjust` refines a camera's focal length
+and distortion where the call releases them (§ "`resect_camera_image` /
+`bundle_adjust`"). No tool sets a camera's parameters to given numbers. Such a
+tool would be an edit like the others under this model, but it has real work
+behind it (a partial-parameter merge against `CameraModel`, and the re-upload of
+every frustum, distorted mesh and image quad built from the lens that changed),
+and it would need an edit spec of its own beside the rest in
+[edits/](edits/README.md). Showing a model switch as a proposal an agent can
+inspect before applying it, `propose_camera_model` and the proposal form of
+`switch_camera_model`, is specified in
 [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
 
 ### Loose images, and the names held for them

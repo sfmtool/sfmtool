@@ -509,10 +509,14 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - retriangulate_point verdicts (3215-3216) are a subset of `triangulation/points.rs:181-189`. Spec 3693-3699: `shape_bench_observation` has no `stage_must_be` check (`mcp/bench.rs:777-794`). The `get_bench_track` description says 24 × 24 and 8 × 8 (`catalog/read.rs:288-296`); spec 3545/3600 is right.
   - Late screenshot refusals (`frame.rs:349,438,472,514`) leave only a success `Query` row (`mod.rs:2308-2310`), against "one failure, one entry" (1950-1956, 4468).
   - Stale counts: "thirty-five" (4308/4310, is 85), "Seventy tools" (4397, is 86), "Four things" (3913, six bullets), "seven edit commands" (4179, is 14), three vs two self-wording methods (4022, 4473); `AppState::bundle_adjust` (2677, 4023) is `start_bundle_adjust`; `serve` lacks `busy` (`server.rs:125-130`); the `Command` block (4096-4162) shows about 44 of 83 variants (`mod.rs:96`).
+    > _Status (2026-10-07): **Done** — the counts are reworded so none is hand-copied ("every other tool answers with JSON", "the whole catalog", "What this arrangement gives", the `Kind::Edit` sentence names the commands' groups, "some `AppState` methods word their own" in both places, and § "The editing family" no longer counts its tools); `AppState::bundle_adjust` is `start_bundle_adjust`; `serve` shows `busy`; the `Command` transcription is replaced by a paragraph on what the enum is and how labels resolve, linking `mod.rs` and the reading methods in `logged.rs`, branch `spec-fix-1006-18-mcp-counts-intrinsics`._
   - Minor: `max_dimension: 0` and `limit: 0` are accepted (`frame.rs:629-631`); a blank line at 5095 splits the Parameters table.
 **Third copies:** `get_bench_track` description (`catalog/read.rs:262-398`, 137 lines) repeats spec 3496-3656 and `bench.md` "The wire"; shrink to fields and units, move the #809 fields to `bench.md`. `mcp/bench.rs` doc comments, `read.rs:270-285` (which also misnames `background_task`), about ten 9-27-line blocks in `display.rs`, `view.rs`, `render.rs`, `layout.rs`, and `mcp/edit.rs:29-34,209,355-365` should shrink.
 **Shape:** failure 3/4: § "The Rust seam" transcribes `Command`, `Deferred` and `serve`, all drifted; replace with rationale and links. Failure 5: 3919, 4470, the draft pointer at 5000. Failure 7: "closes the loop" (117), "defer honestly" (3927), "too blunt an instrument" (5070), "is being rude" (5123), "the representation the rays earned" (3523), "make a mess of the window" (2536).
 **Non-goals / deferrals checked:** 26. One overtaken: 4994-5001 says editing intrinsics is "still not on the surface", but `switch_camera_model` and lens releases ship (`catalog/edit.rs:327,415`).
+
+> _Status (2026-10-07): **Done** — the paragraph now says a lens changes through `switch_camera_model` or a `bundle_adjust` release, that no tool sets parameters to given numbers, and points at the draft for the proposal form only, branch `spec-fix-1006-18-mcp-counts-intrinsics`._
+
 **Recommendation:** update code for the three bugs; update spec elsewhere, starting with "renumbers nothing", Security item 4, the worker list and the panel counts; replace hand-copied counts and the `Command` transcription with ones the catalog test checks.
 **Unclear / incorrect / suspicious:** spec 1157 and 1194 disagree on whether `camera_image` or `bench_observation` wins (`display.rs:517-523`). `FakeWindow` clamps sizes (4499) though a real Windows window does not (`ui_basic.rs:1297-1300`). `catalog/edit.rs:504` carries runs of about 26 spaces. The widget-id parse accepts uppercase hex (`tools.rs:1717`); the schema allows only lowercase.
 
@@ -853,6 +857,7 @@ Read 2026-09-26; open items above.
      non-goal, while the bars set the verdicts.
    - `mcp-server.md:4994` says editing intrinsics is "still not on the
      surface", but `switch_camera_model` and lens releases exist.
+     > _Status (2026-10-07): **Done** — `mcp-server.md` now says a lens changes through `switch_camera_model` or a `bundle_adjust` release and that no tool sets parameters to given numbers, branch `spec-fix-1006-18-mcp-counts-intrinsics`._
    - `randomized-kdtree-forest.md`: "potentially for patch matching" is
      overtaken in part, because the bench searches use the forest.
 3. **Spec statements that would make a caller act wrongly:**
