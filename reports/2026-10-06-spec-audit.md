@@ -398,6 +398,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - `cov.counts  # … errors above dense bound` (:281): the getter has no error path (py `covisibility.rs:213-224`). Minor: :51-52 "for unrefined clusters", but the code deduplicates every cluster (core :362-363).
   - The API block omits `next_seed_image_group` (core :591) and `displacement_neighborhood()` (core :561).
   - The Validation section's first consumer `exp_pinhole_bootstrap.py` (:347-349) is not in the tree; name the real consumers.
+    > _Status (2026-10-07): **Done** — all five bullets: the spec and the core `from_matches` doc now say every cluster file the reader opens carries positions (pre-v6 cluster files are refused); the acceptance table is labelled for version 6 or later; the complexity bound uses `span ≤ d + 2` (`d + 1` when the search returns the seed's own row) and pairs `(d + 2)(d + 1)/2`; `cov.counts` lost its error note; deduplication is stated for every cluster; the API block gains `next_seed_image_group` and `displacement_neighborhood()`; Validation names reconstruction growth, the cluster census and pose verification as consumers. Branch `spec-fix-1006-21-covisibility-spec`._
 **Third copies:** `SeedImageGroup` docs (covisibility.rs:145-209, about 45 lines) restate spec :191-233 and :261-267; shrink to contract plus link. Smaller: `MAX_DENSE_IMAGES` doc (:27-32), `prof.rs:13-17`.
 **Shape:** failure 1 (borderline). Proposed: "Cluster covisibility counts, for each pair of images, how many feature-match clusters (sets of matching SIFT features across images, stored in a `.matches` file) have a member in both images, so a caller can choose groups of mutually overlapping images and rank candidate views before any reconstruction exists." Failure 5: plan and experiment language at :86, :235, :347-355. Failure 7: "drop the rest unpaid" (:155), "pays nothing for it" (:197), "the actual scaling wall" (:92), "compact where dense is hopeless" (:98).
 **Non-goals / deferrals checked:** 7; all still unbuilt, none overtaken.
@@ -865,6 +866,7 @@ Read 2026-09-26; open items above.
      it hardcodes all 17 defaults.
    - `cluster-covisibility.md:323` says a pre-v6 file opens; the reader
      refuses it.
+     > _Status (2026-10-07): **Done** — spec and core `from_matches` doc corrected, branch `spec-fix-1006-21-covisibility-spec`._
    - `randomized-kdtree-forest.md` gives `L_max` as "precision-tuned"; it is a
      fixed 128.
 4. **Format specs:**
