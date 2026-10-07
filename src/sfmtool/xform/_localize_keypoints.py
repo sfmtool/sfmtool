@@ -162,9 +162,9 @@ class LocalizeKeypointsTransform:
 
         # The structural write-back: renumber the surviving points, rebuild
         # keypoints_xy + all three track arrays + the culled patch frames, carry
-        # over positions/colors/errors, and re-derive normals from the frames. Bitmaps are dropped
-        # (patch_bitmaps=None): the localizer renders none, and any stored ones
-        # are stale after the keypoints move and views drop.
+        # over positions/colors/errors, and re-derive normals from the frames.
+        # Bitmaps are dropped (patch_bitmaps=None): the localizer renders none,
+        # and any stored ones are stale after the keypoints move and views drop.
         out = compact_to_embedded_patches(
             recon,
             cloud,
