@@ -525,8 +525,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           carry is preserved. The layout section replaces the whole arrangement \
                           — a panel it does not mention is closed, though every panel keeps its \
                           own state — or is the string \"default\" for the default layout, \
-                          every panel open.A document that does not validate is refused whole, naming what \
-                          was wrong and where, and nothing is applied.",
+                          every panel open. A document that does not validate is refused whole, \
+                          naming what was wrong and where, and nothing is applied.",
             kind: Write,
             schema: object(
                 &[
