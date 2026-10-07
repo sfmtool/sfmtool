@@ -548,6 +548,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Inconsistencies:**
   - :223-224 "`1` through `6`"; the code (types.rs:133) and spec :1227 say 7. Code right.
   - :1133-1135 requires the entries to match the `has_*` flags; `structure_errors` (verify.rs:39-145) checks stray `cluster_patches/` (:119-130) but not stray `two_view_geometries/`, so such a file passes. Spec right; small verifier gap.
+    > _Status (2026-10-07): **Done** — `structure_errors` reports `two_view_geometries/` entries when `has_two_view_geometries` is false (either backbone) and a missing section when it is true; test `test_verify_rejects_two_view_geometries_flag_mismatch`. Every writer goes through `write_matches`, whose `validate_structure` already requires the flag to match the section, and no `.matches` file is checked in, branch `spec-fix-1006-11-matches-verify-stray`._
 **Format independence (failure 6):**
   - CONFIRMED :225-236 — `matching_method` values defined by CLI flags; define each by what a writer asserts, move the flags to Implementations.
   - CONFIRMED :442 (`sfm match --derive-pairs`), :515-516 (`sfm match --cluster`, `sfm cluster-patches`) — move to Implementations.
@@ -562,6 +563,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** 0 present.
 **Recommendation:** update spec (version range; move CLI and API names to Implementations) and add the verifier check.
 **Unclear / incorrect / suspicious:** with `has_two_view_geometries` true and the entries missing, `verify_matches` returns `Err` (verify.rs:1140) rather than reporting it in the result list (:1149-1151). The "Version 1.0rc1" line (:1385) has no migration statement.
+  > _Status (2026-10-07): **Partially done** — `structure_errors` now reports a file that claims `has_two_view_geometries` but has no `two_view_geometries/metadata.json.zst` in the result list, as it does for a missing `clusters/` or `cluster_patches/` section; a section whose metadata is present but one of its data entries is missing still returns `Err`, as for every other section. Still open: the "Version 1.0rc1" note. Branch `spec-fix-1006-11-matches-verify-stray`._
 
 ### specs/formats/sfmr-file-format.md
 **Summary:** The `.sfmr` archive (versions 1-11): the Z-up / −Z-forward convention, sections and hashes, optional columns and their presence rules, the constraint legend, thumbnails, Point IDs and `world_space_unit`. The lineage retirement (#808) and the presence and unit refusals (#806) match the code.
@@ -837,6 +839,7 @@ Read 2026-09-26; open items above.
        contain runs of 18 spaces.
      - A pairwise `.matches` file with stray `two_view_geometries/` entries
        passes verification (`verify.rs:39-145`).
+       > _Status (2026-10-07): **Done** — `structure_errors` reports `two_view_geometries/` entries in a file whose `has_two_view_geometries` is false, on either backbone, with a test, branch `spec-fix-1006-11-matches-verify-stray`._
 2. **Non-goals that shipped code has overtaken.** A reader who believes them
    will not look for a feature that exists:
    - `bundle-adjustment.md:1773` says cameras cannot be released one at a

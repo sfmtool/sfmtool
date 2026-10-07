@@ -1248,6 +1248,47 @@ fn test_verify_rejects_both_backbones() {
 }
 
 #[test]
+fn test_verify_rejects_two_view_geometries_flag_mismatch() {
+    // The two_view_geometries/ entries must match has_two_view_geometries, on
+    // either backbone. Borrow real entries from a file that carries them.
+    let dir = std::env::temp_dir().join("matches_test_verify_tvg_flag_mismatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tvg_path = dir.join("with_tvg.matches");
+    write_matches(&tvg_path, &make_test_data_with_tvg(), 3).unwrap();
+    let tvg_entries: Vec<(String, Vec<u8>)> = load_archive_entries(&tvg_path)
+        .into_iter()
+        .filter(|(n, _)| n.starts_with("two_view_geometries/"))
+        .collect();
+    let stray = "file contains two_view_geometries/ entries but has_two_view_geometries is false";
+
+    let pairwise_stray = tvg_entries.clone();
+    expect_verify_errors(
+        "matches_test_verify_tvg_stray_pairwise",
+        &make_test_data(),
+        move |entries| entries.extend(pairwise_stray),
+        &[stray],
+    );
+
+    expect_verify_errors(
+        "matches_test_verify_tvg_stray_clusters",
+        &make_cluster_test_data(),
+        move |entries| entries.extend(tvg_entries),
+        &[stray],
+    );
+
+    // The flag set with the section gone is reported in the finding list,
+    // not as an Err from the section read.
+    expect_verify_errors(
+        "matches_test_verify_tvg_missing",
+        &make_test_data_with_tvg(),
+        |entries| entries.retain(|(n, _)| !n.starts_with("two_view_geometries/")),
+        &["file claims has_two_view_geometries but has no two_view_geometries/ section"],
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_verify_rejects_neither_backbone() {
     // A cluster file whose metadata claims the pairwise backbone: no
     // image_pairs/ section exists, and the clusters/ entries are orphaned.
