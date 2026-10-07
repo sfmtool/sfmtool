@@ -322,8 +322,9 @@ JSON structure describing the reconstruction:
 - `image_count`: Number of registered images in reconstruction
 - `point_count`: Number of points (finite points and points at infinity combined)
 - `infinity_point_count`: (version 2+; read as `0` when absent) Number of
-  points at infinity (rows of `positions_xyzw` with `w = 0`). Derivable from the points array, but stored here so a consumer
-  can read the finite/infinity split without decompressing that array. Must be
+  points at infinity (rows of `positions_xyzw` with `w = 0`). Derivable from
+  the points array, but stored here so a consumer can read the finite/infinity
+  split without decompressing that array. Must be
   `0` when no points are at infinity.
 - `observation_count`: Total number of 2D-3D correspondences
 - `camera_count`: Number of unique camera intrinsics
@@ -1730,11 +1731,12 @@ For the structure, a file fails verification when:
 - a `frames/` section is present without a `rigs/` section;
 - the `has_*` flags in `points3d/metadata.json` break a presence rule between
   the optional per-point columns and `feature_source`;
-- in a version 2+ file, a `positions_xyzw` row holds a NaN or infinite value, a
-  `w = 0` row has a zero direction, or the number of `w = 0` rows differs from
-  `infinity_point_count`;
+- in a version 2+ file, `positions_xyzw` is not `point_count` rows of 32 bytes,
+  a row holds a NaN or infinite value, a `w = 0` row has a zero direction, or
+  the number of `w = 0` rows differs from `infinity_point_count`;
 - `has_point_constraints` is set without a readable `point_constraint_names`
-  legend, or the constraint triple breaks a rule of
+  legend, or the constraint triple has a column that is not `point_count` rows
+  long or breaks a rule of
   [Per-point constraints](#per-point-constraints-optional-version-7);
 - the tracks are not sorted by `(point_indexes, image_indexes)`, an
   `observation_counts` entry is below `1`, or the counts do not sum to
@@ -1742,9 +1744,9 @@ For the structure, a file fails verification when:
 - `has_feature_indexes` in `tracks/metadata.json` disagrees with
   `feature_source`, or an `embedded_patches` file sets `has_keypoints_xy` to
   `false`;
-- a `keypoints_xy` row is not finite or lies outside `[0, width) × [0, height)`
-  of its image's camera, the constraint
-  [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states.
+- `keypoints_xy` is not `observation_count` rows of 8 bytes, or a row is not
+  finite or lies outside `[0, width) × [0, height)` of its image's camera, the
+  constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states.
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -1805,6 +1807,11 @@ describes. Other parts of this spec are implemented by:
   broken rule; the verifier lists each one. `read_sfmr_metadata` reads the
   top-level metadata only and checks neither these rules nor
   `world_space_unit`.
+- The fill-in of missing normals: `write_sfmr` replaces each `normals_xyz` row
+  whose squared length is at most `1e-6` with the unit vector from the point
+  toward the mean of its observing camera centres, leaving the row zero when
+  the point lies at that mean or is at infinity. The tolerance treats a
+  near-zero row as the zero row, which a conforming file does not hold.
 
 The conversions between the canonical convention and COLMAP's, given in
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary),
