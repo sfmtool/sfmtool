@@ -74,11 +74,12 @@ use super::args::{parse_matching, parse_patch_window};
 /// ``ellipse_matrix`` (``(k, 2, 2)``, the ellipses read).
 ///
 /// Raises:
-///     ValueError: If ``tiles`` is not a uint8 ``(k, R, R, C)`` stack of square
-///         tiles at least 3 on a side with 1 to 4 channels, ``valid`` is not
-///         ``(k, R, R)``, ``ellipses`` is not ``(k, 2, 2)``,
-///         ``min_ellipse_ratio`` is under 1 or not finite, or a name is
-///         unknown.
+///     TypeError: If ``tiles`` is not a 4-D uint8 array, or ``valid`` is not a
+///         3-D bool array.
+///     ValueError: If ``tiles`` is not a stack of square tiles at least 3 on a
+///         side with 1 to 4 channels, ``valid`` is not ``(k, R, R)``,
+///         ``ellipses`` is not ``(k, 2, 2)``, ``min_ellipse_ratio`` is under 1
+///         or not finite, or a name is unknown.
 #[pyfunction]
 #[pyo3(signature = (
     tiles, *, valid=None, ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,

@@ -277,7 +277,7 @@ default.
 **The two passes against the exact blur.** On a tile of four sinusoids, whose
 blur by a Gaussian is known exactly (each amplitude scales by `exp(−½ kᵀ Σ
 k)`), the passes are at most 3.6 grey levels off the exact answer on sinusoids
-spanning ±115, over 117 covariances (semi-axes from 0.5 to 2, with 1-D blurs,
+spanning ±115, over 108 covariances (semi-axes from 0.5 to 2, with 1-D blurs,
 at nine angles). At the widths most blurred pairs get, semi-axes of 0.5 to 0.7
 with 1-D blurs, at every 5°, they are at most 2.7 off and 0.6 on average. The
 direct 2-D convolution is 0.34 off where its minor axis is 0.6 or more; it

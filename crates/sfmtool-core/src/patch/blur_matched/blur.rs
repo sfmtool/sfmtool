@@ -86,8 +86,8 @@ fn check_shapes(values: &[f32], channels: usize, side: usize, data: &[bool], out
 /// The normalized taps `exp(−t²/2s²)` for `t = −K ..= K`, `K = ⌈3σ⌉`, with
 /// `s` chosen so the taps' variance `Σ w t²` is `σ²`.
 ///
-/// From `σ = 1` up, the taps of `s = σ` have that variance to within half a
-/// percent, and `s` is `σ`. Below, they fall short of it, more the narrower
+/// From `σ = 1` up, the taps of `s = σ` have that variance to within 2% (the
+/// cut at `±K` takes up to 1.6% at `σ = 3`), and `s` is `σ`. Below, they fall short of it, more the narrower
 /// the Gaussian: `σ = 0.5` gives 0.215 for 0.25, and `σ = 0.3` under a tenth
 /// of 0.09. A pass of the slanted line is often that narrow along its rows,
 /// so there `s` is found by bisection. On the tile of sinusoids the passes are

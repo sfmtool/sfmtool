@@ -452,7 +452,8 @@ const MIN_ELLIPSE_SQUARE: usize = 8;
 
 /// The largest square centred on the `r × r` grid that lies wholly inside
 /// `support`, as `(first row and column, side)`, or `None` where it is under
-/// [`MIN_ELLIPSE_SQUARE`] on a side.
+/// [`MIN_ELLIPSE_SQUARE`] on a side. Where `r − side` is odd, the square sits
+/// half a sample above and to the left of the centre.
 fn inner_square(support: &[bool], r: usize) -> Option<(usize, usize)> {
     (MIN_ELLIPSE_SQUARE..=r).rev().find_map(|side| {
         let start = (r - side) / 2;
