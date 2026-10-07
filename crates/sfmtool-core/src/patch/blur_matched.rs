@@ -17,12 +17,14 @@
 //! ratio, that direction is left alone, and a pair left alone along both is
 //! correlated plain ([`PairMatching`]).
 //!
-//! The width of each blur is found by measurement ([`match_blur`]): the tile is
-//! blurred, its ellipse read again with the same reading, and the width
-//! corrected by a secant step on `σ²` until the blurred tile's length along
-//! each direction is within [`BLUR_MATCH_TOLERANCE`] of the blurrier tile's,
-//! at most [`BLUR_MATCH_MAX_PROBES`] times. The first width tried comes from
-//! [`estimated_blur_sigma`], a difference of squares calibrated on real tiles.
+//! The width of each blur comes from how the tile's own ellipse grows when
+//! the tile is blurred ([`BlurGrowth`]). Each view's tile is blurred
+//! isotropically by each of [`GROWTH_PROBE_SIGMAS`], and each blurred tile's
+//! ellipse read with the reading the view's own ellipse came from
+//! ([`read_growth`]); every pair the view is blurred in then reads the width
+//! off those readings ([`BlurDirection::sigma`]) without reading again. Where
+//! a view's growth cannot be read, a rate fitted on real tiles stands in
+//! ([`estimated_blur_sigma`]).
 //!
 //! The blur ([`blur_tile`]) is an anisotropic Gaussian applied as two 1-D
 //! passes, one along a grid axis and one along a slanted line, by normalized
@@ -35,7 +37,7 @@
 //! unblurred tiles.
 
 mod blur;
-mod search;
+mod growth;
 mod tiles;
 
 #[cfg(test)]
@@ -44,23 +46,30 @@ mod tests;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use blur::blur_tile_direct;
 pub use blur::{blur_tile, BlurScratch};
-pub use search::{match_blur, MatchScratch, MatchedBlur};
+pub use growth::{read_growth, ViewGrowths};
 pub use tiles::{
     blur_matched_pairs, pair_zncc_readings, read_tile_ellipse, BlurMatchKernel, BlurMatchedPairs,
     PairReadings, TilePlanes, MIN_WINDOWED_SAMPLES,
 };
 
-/// `k` of [`estimated_blur_sigma`]'s growth `k · s^p`: how fast the square of
+/// The widths, in grid px, of the isotropic blurs each view's tile is
+/// blurred by, once each, to read how its ellipse grows ([`read_growth`]).
+/// Most pairs need a blur of 0.3 to 1 grid px; the narrower probe reads the
+/// growth there, the wider one how it bends further out.
+pub const GROWTH_PROBE_SIGMAS: [f64; 2] = [0.4, 1.0];
+
+/// `k` of [`estimated_blur_sigma`]'s rate `k · s^p`: how fast the square of
 /// a tile's ellipse length along a direction grows with the square of a blur
-/// along it, `d(l²)/d(σ²)`, for a sharper length `s` of 1 grid px.
+/// along it, `d(l²)/d(σ²)`, for a sharper length `s` of 1 grid px, fitted on
+/// real tiles.
 pub const BLUR_GROWTH_SCALE: f64 = 1.243;
 
-/// `p` of [`estimated_blur_sigma`]'s growth `k · s^p`: the power of the
+/// `p` of [`estimated_blur_sigma`]'s rate `k · s^p`: the power of the
 /// sharper length.
 pub const BLUR_GROWTH_POWER: f64 = 1.247;
 
-/// The shortest sharper length, in grid px, the skip ratio and
-/// [`estimated_blur_sigma`] read: shorter lengths are read as this one.
+/// The shortest sharper length, in grid px, the skip ratio and the width
+/// read: shorter lengths are read as this one.
 pub const MIN_SHARPER_LENGTH: f64 = 0.05;
 
 /// The widest blur, in grid px, along a direction. The ellipse's own axes are
@@ -75,13 +84,10 @@ pub const MAX_BLUR_SIGMA: f64 = 3.0;
 /// lower how well wrong views are told apart.
 pub const MAX_MATCHED_LENGTH: f64 = 2.0;
 
-/// How close, as a fraction of the length aimed for, the blurred tile's
-/// ellipse length along each direction must come for [`match_blur`] to stop.
-pub const BLUR_MATCH_TOLERANCE: f64 = 0.05;
-
-/// The most blurs [`match_blur`] tries, and reads the ellipse of, for one tile
-/// of a pair.
-pub const BLUR_MATCH_MAX_PROBES: u32 = 2;
+/// The fraction by which two lengths along a direction must differ for the
+/// direction to be blurred at all, whatever the ratio asked for: a smaller
+/// difference is within the spread of the width the growth gives.
+pub const MATCHED_LENGTH_TOLERANCE: f64 = 0.05;
 
 /// The blur widths of the isotropic ladder ([`BlurMatchKernel::IsotropicLadder`]),
 /// in grid px: `0.25 · √2ⁿ` for `n = 0 .. 7`.
@@ -108,7 +114,7 @@ pub enum PairMatching {
     #[default]
     Plain,
     /// The sharper tile blurred along every direction in which the two
-    /// ellipses differ at all.
+    /// ellipses' lengths differ by more than [`MATCHED_LENGTH_TOLERANCE`].
     BlurMatched,
     /// The sharper tile blurred along the directions in which the two
     /// ellipses' lengths differ by more than the given factor (`> 1`); a pair
@@ -120,7 +126,9 @@ pub enum PairMatching {
 impl PairMatching {
     /// The factor two lengths must differ by for a direction to be blurred, or
     /// `None` for [`PairMatching::Plain`]. `1` for
-    /// [`PairMatching::BlurMatched`].
+    /// [`PairMatching::BlurMatched`]; [`pair_directions`] blurs no direction
+    /// whose lengths are within [`MATCHED_LENGTH_TOLERANCE`] of each other,
+    /// whatever the factor.
     pub fn min_ratio(self) -> Option<f64> {
         match self {
             PairMatching::Plain => None,
@@ -215,9 +223,115 @@ impl BlurCovariance {
     }
 }
 
+/// How one view's self-similarity ellipse grows when its tile is blurred:
+/// the tile's ellipse and the ellipses of the tile blurred isotropically by
+/// each of [`GROWTH_PROBE_SIGMAS`], all read the same way ([`read_growth`]).
+///
+/// Along a unit direction `u`, the square of the length `uᵀ E u` against `σ²`
+/// is taken to be piecewise linear through the readings, from no blur to the
+/// widest probe, and to go on past the widest probe along its last piece. The
+/// width that brings the length to a target is read back off that line
+/// ([`BlurGrowth::sigma_along`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlurGrowth {
+    /// The unblurred tile's ellipse, then the probes' in the order of
+    /// [`GROWTH_PROBE_SIGMAS`].
+    pub ellipses: [[[f64; 2]; 2]; GROWTH_PROBE_SIGMAS.len() + 1],
+}
+
+impl BlurGrowth {
+    /// The growth from a tile's ellipse `unblurred` and the ellipses `probed`
+    /// of the same tile blurred by each of [`GROWTH_PROBE_SIGMAS`].
+    pub fn from_ellipses(
+        unblurred: &[[f64; 2]; 2],
+        probed: &[[[f64; 2]; 2]; GROWTH_PROBE_SIGMAS.len()],
+    ) -> Self {
+        let mut ellipses = [*unblurred; GROWTH_PROBE_SIGMAS.len() + 1];
+        ellipses[1..].copy_from_slice(probed);
+        Self { ellipses }
+    }
+
+    /// The width that brings the square of the length along the unit
+    /// direction `u` to `target²`, capped at [`MAX_BLUR_SIGMA`]; `0` where the
+    /// unblurred length is already there, `None` where the readings do not
+    /// grow along `u`.
+    pub fn sigma_along(&self, u: [f64; 2], target: f64) -> Option<f64> {
+        let l2 = self.ellipses.map(|e| length_along(&e, u).powi(2));
+        sigma_on_curve(&l2, target)
+    }
+
+    /// [`Self::sigma_along`] for the semi-major axis, which the isotropic
+    /// ladder reads.
+    pub fn sigma_semi_major(&self, target: f64) -> Option<f64> {
+        let l2 = self.ellipses.map(|e| semi_major(&e).powi(2));
+        sigma_on_curve(&l2, target)
+    }
+
+    /// The semi-major axis the tile is expected to have once blurred
+    /// isotropically by `sigma`, read off the same line.
+    pub fn semi_major_after(&self, sigma: f64) -> f64 {
+        let l2 = self.ellipses.map(|e| semi_major(&e).powi(2));
+        let s2 = sigma * sigma;
+        let mut prev = (0.0, l2[0]);
+        for (i, &w) in GROWTH_PROBE_SIGMAS.iter().enumerate() {
+            let cur = (w * w, l2[i + 1]);
+            if s2 <= cur.0 || i + 1 == GROWTH_PROBE_SIGMAS.len() {
+                let slope = (cur.1 - prev.1) / (cur.0 - prev.0);
+                return (prev.1 + slope.max(0.0) * (s2 - prev.0)).max(0.0).sqrt();
+            }
+            prev = cur;
+        }
+        l2[0].max(0.0).sqrt()
+    }
+}
+
+/// The `σ` at which the line through `(0, l2[0])` and `(w², l2[i + 1])` for
+/// each probe width `w` reaches `target²`, the line going on past the widest
+/// probe along its last piece; a reading shorter than the one before it is
+/// passed over. `None` where no piece grows.
+fn sigma_on_curve(l2: &[f64; GROWTH_PROBE_SIGMAS.len() + 1], target: f64) -> Option<f64> {
+    let t2 = target * target;
+    if !(t2.is_finite() && l2.iter().all(|v| v.is_finite())) {
+        return None;
+    }
+    let mut prev = (0.0, l2[0]);
+    if t2 <= prev.1 {
+        return Some(0.0);
+    }
+    let last = GROWTH_PROBE_SIGMAS.len() - 1;
+    for (i, &w) in GROWTH_PROBE_SIGMAS.iter().enumerate() {
+        let cur = (w * w, l2[i + 1]);
+        let slope = (cur.1 - prev.1) / (cur.0 - prev.0);
+        if slope > 0.0 && (t2 <= cur.1 || i == last) {
+            let s2 = prev.0 + (t2 - prev.1) / slope;
+            return Some(s2.max(0.0).sqrt().min(MAX_BLUR_SIGMA));
+        }
+        if cur.1 >= prev.1 {
+            prev = cur;
+        }
+    }
+    None
+}
+
+/// The semi-major axis of the ellipse `E`: the square root of its larger
+/// eigenvalue.
+pub(crate) fn semi_major(e: &[[f64; 2]; 2]) -> f64 {
+    let (a, b, d) = (e[0][0], 0.5 * (e[0][1] + e[1][0]), e[1][1]);
+    (0.5 * (a + d + ((a - d) * (a - d) + 4.0 * b * b).sqrt()))
+        .max(0.0)
+        .sqrt()
+}
+
+/// The rate `k · s^p` fitted on real tiles, at the sharper length `sharper`.
+pub(crate) fn fitted_rate(sharper: f64) -> f64 {
+    BLUR_GROWTH_SCALE * sharper.max(MIN_SHARPER_LENGTH).powf(BLUR_GROWTH_POWER)
+}
+
 /// The width of the 1-D Gaussian, in grid px, expected to blur a tile whose
 /// self-similarity ellipse is `sharper` long along a direction until it is
-/// `blurrier` long there: the first width [`match_blur`] tries.
+/// `blurrier` long there, from the rate fitted on real tiles: the width used
+/// where a view's own growth could not be read, and the widest a width read
+/// past the widest probe may be (`BlurDirection::sigma`).
 ///
 /// The square of the length grows about linearly with the square of the
 /// blur, at a rate that rises with the sharper length:
@@ -226,9 +340,13 @@ impl BlurCovariance {
 ///
 /// with `k` [`BLUR_GROWTH_SCALE`] and `p` [`BLUR_GROWTH_POWER`], capped at
 /// [`MAX_BLUR_SIGMA`]. `0` where `blurrier ≤ s` or either length is not
-/// finite. The constants were fitted on real tiles of ten datasets; a single
-/// tile's growth is spread about them by a factor of about 2 either way, which
-/// is why the width is then measured rather than taken from here.
+/// finite.
+///
+/// The rate rises with the sharper length, because a longer ellipse comes
+/// from a fainter or smoother texture. The constants were fitted on real
+/// tiles of ten datasets; a single tile's rate is spread about the fit, its
+/// quartiles 1.8 times below and 1.5 times above it, which is why each view's
+/// own growth is read instead where it can be.
 ///
 /// ```
 /// use sfmtool_core::patch::blur_matched::estimated_blur_sigma;
@@ -247,8 +365,7 @@ pub fn estimated_blur_sigma(blurrier: f64, sharper: f64) -> f64 {
     if blurrier <= s * (1.0 + 1e-9) {
         return 0.0;
     }
-    let growth = BLUR_GROWTH_SCALE * s.powf(BLUR_GROWTH_POWER);
-    ((blurrier * blurrier - s * s) / growth)
+    ((blurrier * blurrier - s * s) / fitted_rate(sharper))
         .sqrt()
         .min(MAX_BLUR_SIGMA)
 }
@@ -278,6 +395,27 @@ pub struct BlurDirection {
     pub blurrier: f64,
 }
 
+impl BlurDirection {
+    /// The width of the blur along `u`: the width at which `growth`'s
+    /// readings reach the blurrier length ([`BlurGrowth::sigma_along`]), or
+    /// [`estimated_blur_sigma`] where there is no growth or it does not grow
+    /// along `u`.
+    ///
+    /// A width past the widest probe is extrapolated, and a tile whose
+    /// ellipse grows faster the wider the blur would be blurred too far by
+    /// it, so there the width is at most [`estimated_blur_sigma`]'s (and no
+    /// less than the widest probe).
+    pub fn sigma(&self, growth: Option<&BlurGrowth>) -> f64 {
+        let fitted = estimated_blur_sigma(self.blurrier, self.sharper);
+        let widest = GROWTH_PROBE_SIGMAS[GROWTH_PROBE_SIGMAS.len() - 1];
+        match growth.and_then(|g| g.sigma_along(self.u, self.blurrier)) {
+            Some(sigma) if sigma > widest => sigma.min(fitted.max(widest)),
+            Some(sigma) => sigma,
+            None => fitted,
+        }
+    }
+}
+
 /// The directions, at most two, along which one tile of a pair is to be
 /// blurred.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -297,13 +435,11 @@ impl TileDirections {
         self.len == 0
     }
 
-    /// The blur [`estimated_blur_sigma`] gives along each direction, added up.
-    pub fn estimated_blur(&self) -> BlurCovariance {
+    /// The blur along every direction, each by [`BlurDirection::sigma`] at the
+    /// tile's `growth`, added up.
+    pub fn blur(&self, growth: Option<&BlurGrowth>) -> BlurCovariance {
         self.as_slice().iter().fold(BlurCovariance::ZERO, |cov, d| {
-            cov.add(BlurCovariance::along(
-                d.u,
-                estimated_blur_sigma(d.blurrier, d.sharper),
-            ))
+            cov.add(BlurCovariance::along(d.u, d.sigma(growth)))
         })
     }
 
@@ -333,7 +469,8 @@ impl PairDirections {
 /// self-similarity ellipses `a` and `b` (each `E`,
 /// [`SelfSimilarityEllipse::matrix`](crate::patch::self_similarity::SelfSimilarityEllipse::matrix),
 /// in grid px²), leaving a direction alone where the two lengths along it
-/// differ by less than `min_ratio`.
+/// differ by less than `min_ratio`, or by no more than
+/// [`MATCHED_LENGTH_TOLERANCE`].
 ///
 /// Along each eigenvector `u` of `E_b − E_a`, the tile whose ellipse is
 /// shorter along `u` is to be blurred along `u` until it is as long there as
@@ -356,6 +493,7 @@ pub fn pair_directions(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> 
     if !(readable(a) && readable(b)) {
         return out;
     }
+    let ratio = min_ratio.max(1.0 + MATCHED_LENGTH_TOLERANCE);
     let d = [
         b[0][0] - a[0][0],
         0.5 * (b[0][1] + b[1][0] - a[0][1] - a[1][0]),
@@ -369,10 +507,7 @@ pub fn pair_directions(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> 
         let lb = length_along(b, u);
         let (longer, shorter) = if la > lb { (la, lb) } else { (lb, la) };
         let longer = longer.min(MAX_MATCHED_LENGTH);
-        if longer <= shorter || longer < min_ratio * shorter.max(MIN_SHARPER_LENGTH) {
-            continue;
-        }
-        if estimated_blur_sigma(longer, shorter) <= 0.0 {
+        if longer <= shorter || longer < ratio * shorter.max(MIN_SHARPER_LENGTH) {
             continue;
         }
         let dir = BlurDirection {

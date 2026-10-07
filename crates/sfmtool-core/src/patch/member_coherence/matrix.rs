@@ -13,7 +13,9 @@
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
-use crate::patch::blur_matched::{match_blur, pair_directions, MatchScratch, TilePlanes};
+use crate::patch::blur_matched::{
+    blur_tile, pair_directions, BlurScratch, TilePlanes, ViewGrowths,
+};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
@@ -529,9 +531,11 @@ fn member_ellipse(
 /// square is too small, over the whole support, the support as its data. The
 /// ellipses are read in the `blur-matched ellipses` detail phase of
 /// `progress`. A pair is blurred where [`pair_directions`] asks, each
-/// render by normalized convolution over the support, the width found by
-/// [`match_blur`] with the blurred render read as the unblurred one was
-/// ([`member_ellipse`]), then gathered back,
+/// render by normalized convolution over the support, the width from the
+/// member's growth ([`ViewGrowths`]), read once per member on its render
+/// blurred by each probe and read as the unblurred one was
+/// ([`member_ellipse`]), then
+/// gathered back,
 /// z-normalized over the support with the same window, and correlated as
 /// [`fill_scale`] correlates, in the `blur-matched pairs` detail phase. The
 /// ZNCC is averaged over the channels the plain table kept, `keep`, and no
@@ -585,7 +589,8 @@ fn fill_blur_matched(
     let kept: Vec<usize> = (0..channels).filter(|&c| keep[c]).collect();
     let total_weight: f64 = members.weights.iter().sum();
     let sqrt_weights: Vec<f32> = members.weights.iter().map(|&w| w.sqrt() as f32).collect();
-    let mut scratch = MatchScratch::default();
+    let mut growths = ViewGrowths::new(members.n_members);
+    let mut blur_scratch = BlurScratch::default();
     let mut crop = Vec::new();
     let mut blurred = vec![0.0f32; channels * rr];
     let mut raw = vec![0.0f32; 2 * kept.len() * n];
@@ -609,14 +614,23 @@ fn fill_blur_matched(
                 let source: &[f32] = if d.is_empty() {
                     &planes[m].values
                 } else {
-                    // The blurred render is read as the unblurred one was, so
-                    // the two lengths compared are of one reading.
-                    match_blur(
-                        &planes[m],
-                        d.as_slice(),
-                        |values| member_ellipse(values, colour, r, &support, square, &mut crop),
+                    // The member's growth is read on its render blurred by each
+                    // probe, read as the unblurred one was, so the lengths
+                    // compared are of one reading.
+                    let ellipse = ellipses[m]
+                        .as_ref()
+                        .expect("a blurred member has an ellipse");
+                    let growth = growths.get(m, &planes[m], ellipse, |values| {
+                        member_ellipse(values, colour, r, &support, square, &mut crop)
+                    });
+                    blur_tile(
+                        &planes[m].values,
+                        channels,
+                        r,
+                        &support,
+                        d.blur(growth.as_ref()),
                         &mut blurred,
-                        &mut scratch,
+                        &mut blur_scratch,
                     );
                     &blurred
                 };
@@ -658,7 +672,11 @@ fn fill_blur_matched(
             table[ib * k + ia] = z;
         }
     }
-    progress_note!(phase, "{pairs_blurred} of {pairs} pairs blurred");
+    progress_note!(
+        phase,
+        "{pairs_blurred} of {pairs} pairs blurred, {} blurred renders read",
+        growths.reads()
+    );
     pairs_blurred
 }
 

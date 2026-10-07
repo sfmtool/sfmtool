@@ -1539,6 +1539,19 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
             plain.get(i, 3)
         );
     }
+    // The lift goes to the blurred member's pairs: each gains more than any
+    // pair of the sharp members does.
+    let sharp_gain = [(0, 1), (0, 2), (1, 2)]
+        .iter()
+        .map(|&(i, j)| bm(i, j) - plain.get(i, j))
+        .fold(f64::NEG_INFINITY, f64::max);
+    for i in 0..3 {
+        let gain = bm(i, 3) - plain.get(i, 3);
+        assert!(
+            gain > sharp_gain + 0.01,
+            "member {i} with the blurred one gains {gain}, the sharp pairs up to {sharp_gain}"
+        );
+    }
 
     // Above a ratio the sharp members' pairs, whose ellipses barely differ,
     // read plain.

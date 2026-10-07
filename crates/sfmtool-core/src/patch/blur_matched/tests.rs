@@ -133,7 +133,7 @@ fn each_tile_is_blurred_only_along_the_directions_it_is_sharper() {
     for d in [da, db] {
         assert!((d.sharper - 0.4).abs() < 1e-12 && (d.blurrier - 1.2).abs() < 1e-12);
     }
-    let blur = dirs.a.estimated_blur();
+    let blur = dirs.a.blur(None);
     assert!(
         blur.xx > 0.5 && blur.yy.abs() < 1e-9 && blur.xy.abs() < 1e-9,
         "{blur:?}"
@@ -158,7 +158,7 @@ fn each_tile_is_blurred_only_along_the_directions_it_is_sharper() {
         "{d:?}"
     );
     // The estimate lies along 30° only.
-    let blur = dirs.a.estimated_blur();
+    let blur = dirs.a.blur(None);
     let across = blur.variance_along([-s, c]);
     assert!(
         (blur.variance_along([c, s]) - estimated_blur_sigma(1.5, 0.5).powi(2)).abs() < 1e-9,
@@ -183,6 +183,10 @@ fn the_skip_ratio_leaves_a_small_difference_plain() {
         panic!("{dirs:?}");
     };
     assert!(d.u[1].abs() > 1.0 - 1e-12 && dirs.b.is_empty(), "{dirs:?}");
+    // Lengths within the tolerance of each other are matched already, even
+    // when every difference is asked for.
+    let near = [[0.5184, 0.0], [0.0, 0.5184]]; // 0.72: a ratio of 1.03
+    assert!(pair_directions_for(&a, &near, PairMatching::BlurMatched).is_none());
 }
 
 #[test]
@@ -208,22 +212,35 @@ fn matching_names_round_trip() {
     }
 }
 
-// ------------------------------------------------------- the measured width
+// ------------------------------------------------------- the width from the growth
 
-/// The blurry tile is the sharp tile blurred by a known Gaussian. Matching
-/// blurs the sharp tile until its ellipse is as long as the blurry tile's
-/// along each direction, which recovers that Gaussian: the width found along
-/// each grid axis is within 10% or 0.15 grid px of the one planted, whichever
-/// is wider (a narrow blur lengthens the ellipse little, so a length within
-/// the tolerance pins its width less closely), and the blurred tile's ellipse
-/// is within 10% of the blurry one's along each direction blurred. The texture's ellipse is about
-/// 0.45 grid px, as a sharp view's is. The planted blurs lie along the grid's
-/// axes or are isotropic, where the two passes are an exact Gaussian; a 1-D
-/// blur at another angle also blurs across itself a little, by the slanted
-/// pass's interpolation, and matching finds that too.
+/// The growth of `tile`, read on its whole tile.
+fn growth_of(tile: &TilePlanes) -> BlurGrowth {
+    let e = read_tile_ellipse(&tile.values, tile.channels, tile.side, &tile.data).unwrap();
+    read_growth(
+        tile,
+        &e,
+        |v| read_tile_ellipse(v, tile.channels, tile.side, &tile.data),
+        &mut Vec::new(),
+        &mut BlurScratch::default(),
+    )
+    .unwrap()
+}
+
+/// The blurry tile is the sharp tile blurred by a known Gaussian. Where the
+/// planted width is no wider than the widest probe, the width the sharp
+/// tile's growth gives along each grid axis is within 0.1 grid px of it and
+/// the blurred tile's ellipse within 5% of the blurry one's along each
+/// direction blurred; a planted blur of 0.4, the narrow probe itself, is
+/// found exactly. Past the widest probe the width is held at most to the
+/// fitted rate's, so it falls short of the planted one (and of its length,
+/// by up to 20%) rather than past it. The texture's ellipse is about 0.45
+/// grid px, as a sharp view's is. The planted blurs lie along the grid's
+/// axes or are isotropic, where the two passes are an exact Gaussian.
 #[test]
-fn matching_a_known_blur_recovers_it() {
+fn the_growth_recovers_a_known_blur() {
     let read = |t: &TilePlanes| read_tile_ellipse(&t.values, t.channels, t.side, &t.data).unwrap();
+    let widest = GROWTH_PROBE_SIGMAS[GROWTH_PROBE_SIGMAS.len() - 1];
     for (seed, planted) in [
         (61, BlurCovariance::along([1.0, 0.0], 0.6)),
         (62, BlurCovariance::along([0.0, 1.0], 1.5)),
@@ -243,59 +260,231 @@ fn matching_a_known_blur_recovers_it() {
         let (es, eb) = (read(&sharp), read(&blurry));
         let dirs = pair_directions(&es, &eb, 1.0);
         assert!(dirs.b.is_empty(), "{seed}: {dirs:?}");
-        let mut out = Vec::new();
-        let matched = match_blur(
-            &sharp,
-            dirs.a.as_slice(),
-            |v| read_tile_ellipse(v, sharp.channels, sharp.side, &sharp.data),
-            &mut out,
-            &mut MatchScratch::default(),
-        );
-        assert!(matched.probes >= 1 && matched.probes <= BLUR_MATCH_MAX_PROBES);
-        for (axis, found, want) in [
-            ("x", matched.cov.xx.sqrt(), planted.xx.sqrt()),
-            ("y", matched.cov.yy.sqrt(), planted.yy.sqrt()),
+        let growth = growth_of(&sharp);
+        let cov = dirs.a.blur(Some(&growth));
+        let em = read(&sharp.blurred(cov, &mut BlurScratch::default()));
+        for (u, found, want) in [
+            ([1.0, 0.0], cov.xx.sqrt(), planted.xx.sqrt()),
+            ([0.0, 1.0], cov.yy.sqrt(), planted.yy.sqrt()),
         ] {
-            let ok = (found - want).abs() <= (0.1 * want).max(0.15);
-            assert!(
-                ok,
-                "{seed}: along {axis} planted {want}, found {found} ({matched:?})"
-            );
-        }
-        // `out` is the tile blurred by `cov`, and its ellipse matches.
-        let again = sharp.blurred(matched.cov, &mut BlurScratch::default());
-        assert_eq!(again.values, out);
-        let em = read(&again);
-        for d in dirs.a.as_slice() {
-            let (l, t) = (length_along(&em, d.u), length_along(&eb, d.u));
-            assert!((l / t - 1.0).abs() <= 0.1, "{seed}: {l} against {t}");
+            let ratio = length_along(&em, u) / length_along(&eb, u);
+            if want <= widest {
+                assert!(
+                    (found - want).abs() <= 0.1,
+                    "{seed}: planted {want}, found {found}"
+                );
+                assert!(
+                    (ratio - 1.0).abs() <= 0.05,
+                    "{seed}: length {ratio} of the blurry one's"
+                );
+            } else {
+                assert!(
+                    found < want && found > 0.99 * widest,
+                    "{seed}: planted {want}, found {found}"
+                );
+                assert!(
+                    (0.8..1.0).contains(&ratio),
+                    "{seed}: length {ratio} of the blurry one's"
+                );
+            }
         }
     }
 }
 
-/// The first width tried is the estimate; where nothing can be read, the
-/// tile is blurred by it and the error is not a number.
+/// The rule blurs short of the length aimed for rather than past it at the
+/// widths most pairs need: on sharp tiles matched to copies of themselves
+/// blurred along one direction by 0.5 to 0.7 grid px, the blurred tile's
+/// ellipse comes out at most 2% longer than its partner's along the
+/// direction blurred, and on most shorter. The isotropic probes also blur
+/// across that direction, which lengthens the ellipse along it a little more
+/// than a 1-D blur does, so the growth read is a little fast.
 #[test]
-fn matching_without_a_reading_falls_back_to_the_estimate() {
+fn the_growth_blurs_short_of_a_one_dimensional_blur_rather_than_past_it() {
+    let read = |t: &TilePlanes| read_tile_ellipse(&t.values, t.channels, t.side, &t.data).unwrap();
+    let diagonal = std::f64::consts::FRAC_1_SQRT_2;
+    let mut ratios = Vec::new();
+    for seed in 0..6u64 {
+        let sharp = textured(80 + seed, 1.4);
+        let growth = growth_of(&sharp);
+        let es = read(&sharp);
+        for (u, sigma) in [
+            ([1.0, 0.0], 0.5),
+            ([0.0, 1.0], 0.7),
+            ([diagonal, diagonal], 0.6),
+        ] {
+            let blurry =
+                sharp.blurred(BlurCovariance::along(u, sigma), &mut BlurScratch::default());
+            let eb = read(&blurry);
+            let dirs = pair_directions(&es, &eb, 1.0);
+            let em = read(&sharp.blurred(dirs.a.blur(Some(&growth)), &mut BlurScratch::default()));
+            for d in dirs.a.as_slice() {
+                let ratio = length_along(&em, d.u) / length_along(&eb, d.u);
+                ratios.push(ratio);
+            }
+        }
+    }
+    ratios.sort_by(f64::total_cmp);
+    let median = ratios[ratios.len() / 2];
+    assert!(ratios.iter().all(|&r| r <= 1.02), "{ratios:?}");
+    assert!(median < 1.0, "{ratios:?}");
+}
+
+/// The width is read off the readings: on a growth that is linear in `σ²`
+/// it is exact; a piece that does not grow is passed over; past the widest
+/// probe the line goes on along its last piece, but a direction's width
+/// there is at most the fitted rate's.
+#[test]
+fn the_width_is_read_off_the_probes() {
+    let iso = |l2: f64| [[l2, 0.0], [0.0, l2]];
+    let [p1, p2] = GROWTH_PROBE_SIGMAS;
+    // l² = 0.25 + σ² along every direction.
+    let linear = BlurGrowth::from_ellipses(&iso(0.25), &[iso(0.25 + p1 * p1), iso(0.25 + p2 * p2)]);
+    let s = linear.sigma_along([1.0, 0.0], 1.0).unwrap();
+    assert!((s - 0.75f64.sqrt()).abs() < 1e-12, "{s}");
+    assert_eq!(linear.sigma_along([0.0, 1.0], 0.4), Some(0.0));
+    assert!((linear.semi_major_after(0.75f64.sqrt()) - 1.0).abs() < 1e-12);
+    // Flat up to the narrow probe, then l² = 0.25 + (σ² − p1²) · 2.
+    let late = BlurGrowth::from_ellipses(
+        &iso(0.25),
+        &[iso(0.25), iso(0.25 + 2.0 * (p2 * p2 - p1 * p1))],
+    );
+    let s = late.sigma_along([1.0, 0.0], 0.6).unwrap();
+    let want = (p1 * p1 + (0.36 - 0.25) / 2.0).sqrt();
+    assert!((s - want).abs() < 1e-12, "{s} against {want}");
+    // No growth at all: no width, and the fitted rate stands in.
+    let flat = BlurGrowth::from_ellipses(&iso(0.25), &[iso(0.25), iso(0.25)]);
+    assert_eq!(flat.sigma_along([1.0, 0.0], 1.0), None);
+    // A growth so slow that the line reaches the target only far past the
+    // widest probe: the width is the fitted rate's.
+    let slow = BlurGrowth::from_ellipses(&iso(0.04), &[iso(0.041), iso(0.05)]);
+    let d = BlurDirection {
+        u: [1.0, 0.0],
+        sharper: 0.2,
+        blurrier: 0.6,
+    };
+    assert!(slow.sigma_along(d.u, d.blurrier).unwrap() > estimated_blur_sigma(0.6, 0.2));
+    assert_eq!(d.sigma(Some(&slow)), estimated_blur_sigma(0.6, 0.2));
+}
+
+/// A view whose growth cannot be read, or whose readings do not grow along a
+/// direction, is blurred by the width from the rate fitted on real tiles.
+#[test]
+fn a_view_without_a_growth_falls_back_to_the_estimate() {
     let sharp = textured(71, 0.8);
-    let dirs = pair_directions(&[[0.25, 0.0], [0.0, 0.25]], &[[1.0, 0.0], [0.0, 0.25]], 1.0);
-    let mut out = Vec::new();
-    let matched = match_blur(
-        &sharp,
-        dirs.a.as_slice(),
-        |_| None,
-        &mut out,
-        &mut MatchScratch::default(),
-    );
-    assert_eq!(matched.probes, 1);
-    assert!(matched.error.is_nan());
-    assert_eq!(matched.cov, dirs.a.estimated_blur());
-    assert_eq!(
-        sharp
-            .blurred(matched.cov, &mut BlurScratch::default())
-            .values,
-        out
-    );
+    let e = [[0.25, 0.0], [0.0, 0.25]];
+    let dirs = pair_directions(&e, &[[1.0, 0.0], [0.0, 0.25]], 1.0);
+    let mut growths = ViewGrowths::new(1);
+    assert_eq!(growths.get(0, &sharp, &e, |_| None), None);
+    assert_eq!(growths.reads(), GROWTH_PROBE_SIGMAS.len());
+    let [d] = dirs.a.as_slice() else {
+        panic!("{dirs:?}");
+    };
+    let want = estimated_blur_sigma(d.blurrier, d.sharper);
+    assert!(want > 0.0);
+    assert_eq!(d.sigma(None), want);
+    let flat = BlurGrowth::from_ellipses(&e, &[e, e]);
+    assert_eq!(d.sigma(Some(&flat)), want);
+    assert_eq!(dirs.a.blur(None), BlurCovariance::along(d.u, want));
+}
+
+/// Each view's growth is read once, the first time a pair blurs it, and kept
+/// for the others: a sharp view blurred against three blurrier ones has one
+/// blurred tile read per probe, under both kernels.
+#[test]
+fn each_views_growth_is_read_once() {
+    let sharp = textured(91, 1.4);
+    let mut views = vec![sharp.clone()];
+    for s in [0.8, 1.2, 1.6] {
+        views.push(sharp.blurred(BlurCovariance::isotropic(s), &mut BlurScratch::default()));
+    }
+    let refs: Vec<&TilePlanes> = views.iter().collect();
+    let ellipses: Vec<_> = views.iter().map(|v| Some(ellipse_of(v))).collect();
+    for kernel in [
+        BlurMatchKernel::Anisotropic,
+        BlurMatchKernel::IsotropicLadder,
+    ] {
+        let only_sharp = blur_matched_pairs(
+            &refs,
+            &ellipses,
+            PairMatching::BlurMatchedAboveRatio(1.25),
+            kernel,
+            PatchWindow::GaussianDisk { sigma: 0.6 },
+            Some(&[true, false, false, false]),
+            &Progress::none(),
+        );
+        assert_eq!(only_sharp.pairs_blurred, 3, "{kernel:?}");
+        assert_eq!(
+            only_sharp.ellipse_reads,
+            GROWTH_PROBE_SIGMAS.len(),
+            "{kernel:?}"
+        );
+        let all = blur_matched_pairs(
+            &refs,
+            &ellipses,
+            PairMatching::BlurMatched,
+            kernel,
+            PatchWindow::GaussianDisk { sigma: 0.6 },
+            None,
+            &Progress::none(),
+        );
+        // Every view but the blurriest is the sharper one of some pair, and
+        // is read once however many pairs it is blurred in.
+        assert!(all.pairs_blurred >= 5, "{kernel:?}: {}", all.pairs_blurred);
+        assert!(
+            all.ellipse_reads <= 3 * GROWTH_PROBE_SIGMAS.len(),
+            "{kernel:?}: {}",
+            all.ellipse_reads
+        );
+    }
+}
+
+/// The readings do not depend on the order the views come in: reversed,
+/// every pair reads the same, bit for bit, since each view's growth is a
+/// function of its own tile.
+#[test]
+fn the_readings_do_not_depend_on_the_order_of_the_views() {
+    let mut rng = Rng(4242);
+    let k = 6;
+    let tiles: Vec<TilePlanes> = (0..k)
+        .map(|v| {
+            let t = textured(300 + v as u64, 1.2);
+            let s = 0.2 + rng.next() * 1.5;
+            t.blurred(
+                BlurCovariance::along([1.0, 0.0], s),
+                &mut BlurScratch::default(),
+            )
+        })
+        .collect();
+    let ellipses: Vec<_> = tiles.iter().map(|t| Some(ellipse_of(t))).collect();
+    let forward: Vec<&TilePlanes> = tiles.iter().collect();
+    let backward: Vec<&TilePlanes> = tiles.iter().rev().collect();
+    let back_ellipses: Vec<_> = ellipses.iter().rev().copied().collect();
+    for kernel in [
+        BlurMatchKernel::Anisotropic,
+        BlurMatchKernel::IsotropicLadder,
+    ] {
+        let run = |t: &[&TilePlanes], e: &[Option<[[f64; 2]; 2]>]| {
+            blur_matched_pairs(
+                t,
+                e,
+                PairMatching::BlurMatched,
+                kernel,
+                PatchWindow::GaussianDisk { sigma: 0.6 },
+                None,
+                &Progress::none(),
+            )
+        };
+        let f = run(&forward, &ellipses);
+        let b = run(&backward, &back_ellipses);
+        assert!(f.pairs_blurred > 0, "{kernel:?}");
+        for i in 0..k {
+            for j in 0..k {
+                let (bi, bj) = (k - 1 - i, k - 1 - j);
+                let (x, y) = (f.whole[i * k + j], b.whole[bi * k + bj]);
+                assert!((x - y).abs() < 1e-9, "{kernel:?} {i}, {j}: {x} against {y}");
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ the blur
@@ -841,23 +1030,41 @@ fn timing() {
     time("whole self-similarity reading of a tile", &mut || {
         black_box(read_tile_ellipse(&b.values, 3, SIDE, &b.data));
     });
-    let dirs = pair_directions(&ea, &eb, 1.0);
-    let mut matched_out = Vec::new();
-    let mut match_scratch = MatchScratch::default();
-    let mut probes = 0u64;
-    let mut calls = 0u64;
-    time("measured width of one tile (match_blur)", &mut || {
-        let m = match_blur(
+    let mut probe = Vec::new();
+    time("one view's growth, read once (read_growth)", &mut || {
+        black_box(read_growth(
             &a,
-            dirs.a.as_slice(),
+            &ea,
             |v| read_tile_ellipse(v, 3, SIDE, &a.data),
-            &mut matched_out,
-            &mut match_scratch,
-        );
-        probes += u64::from(m.probes);
-        calls += 1;
+            &mut probe,
+            &mut scratch,
+        ));
     });
-    eprintln!("  probes per call {:.2}", probes as f64 / calls as f64);
+    let growth = read_growth(
+        &a,
+        &ea,
+        |v| read_tile_ellipse(v, 3, SIDE, &a.data),
+        &mut probe,
+        &mut scratch,
+    );
+    let dirs = pair_directions(&ea, &eb, 1.0);
+    let mut blurred = a.clone();
+    time(
+        "a blurred pair, its view's growth already read",
+        &mut || {
+            let cov = dirs.a.blur(growth.as_ref());
+            blur_tile(
+                &a.values,
+                3,
+                SIDE,
+                &a.data,
+                cov,
+                &mut blurred.values,
+                &mut scratch,
+            );
+            black_box(pair_zncc_readings(&blurred, &b, &w));
+        },
+    );
     for kernel in [
         BlurMatchKernel::Anisotropic,
         BlurMatchKernel::IsotropicLadder,

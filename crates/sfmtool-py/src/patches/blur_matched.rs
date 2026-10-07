@@ -20,10 +20,11 @@ use super::args::{parse_matching, parse_patch_window};
 /// The ZNCC between every pair of a track's views' tiles, each pair
 /// blur-matched: along each direction in which the two tiles' ZNCC
 /// self-similarity ellipses differ, the tile whose ellipse is shorter is
-/// blurred to the other's sharpness before the two are correlated. The width
-/// of each blur is found by blurring the tile, reading its ellipse again, and
-/// correcting the width until the two lengths agree (up to 2 grid px). See
-/// ``specs/core/patch/blur-matched-zncc.md``.
+/// blurred to the other's sharpness before the two are correlated (up to an
+/// ellipse 2 grid px long). The width of each blur is read off how the
+/// tile's own ellipse grows: each tile is blurred by 0.4 and 1 grid px once
+/// and read again, and every pair it is in takes its widths from those
+/// readings. See ``specs/core/patch/blur-matched-zncc.md``.
 ///
 /// The ellipses compared are whole-tile readings over the samples with data,
 /// with the default parameters, which is how the blurred tiles are read; pass

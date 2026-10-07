@@ -310,28 +310,31 @@ best lenient then exact, the middle of a tied run):
 | Both blur-matched, ratio 1.25 | 0.08, 0.25 | 18 / 35 | 12 / 36 | 30 / 71 |
 | Both blur-matched, isotropic ladder, ratio 1.25 | 0.15, 0.25 | 19 / 36 | 10 / 35 | 29 / 71 |
 
-The rows were measured with the width the blur matching took from a fitted
-mapping; with the width found by measurement
-([blur-matched-zncc.md](blur-matched-zncc.md) § "The width, found by
-measurement"), the bench's own picks under the default, every pair blurred and
-the ladder read the same counts (30 / 71, 30 / 71 and 29 / 71), and the
-default's pick differs on 14 of 661 tracks. The differences are one or two
-picks, as the plain tuning's were. The gain is
+The thresholds were tuned with the width the blur matching takes from a
+mapping fitted on synthetic blurs. With the width read off each view's growth
+([blur-matched-zncc.md](blur-matched-zncc.md) § "The width, from each view's
+growth"), the bench's own picks under the default, every pair blurred and the
+ladder read the same counts (30 / 71, 30 / 71 and 29 / 71), as they do with a
+search for the width per pair, whose picks the default's differ from on 7 of
+661 tracks. The differences are one or two picks, as the plain tuning's were.
+The gain is
 in the cell check: at the same margin, blur-matched cells take one or two
 exact picks more than plain cells. Of the 38 hand picks that are their track's
 sharpest usable view, a margin of 0.06 keeps 34 under blur-matched medians and
 28 under plain ones; at 0.08 both keep 35.
 
 **Cost.** Over 661 tracks (the review cases and 60 of each dataset's pool),
-best of three evaluations each, the default adds 0.59 ms to a track's
-`reference view` phase (median; p90 4.4 ms), 8.3% of an evaluation (p90
-21%); blurring every pair would add 0.97 ms, 12.6%. The ratio leaves 48% of the
-pairs plain. Most of it is the search for each blur's width, which reads about
-two blurred tiles per pair blurred. The blur work is the `blur-matched pairs` detail phase, whose note
+best of three evaluations each, the default adds 0.30 ms to a track's
+`reference view` phase (median; p90 1.6 ms), 5.2% of an evaluation (p90
+11%); blurring every pair would add 0.43 ms, 6.8%. The ratio leaves 48% of the
+pairs plain. Each view the track blurs is blurred twice and read again once,
+for its growth, and each pair blurred costs a blur and its readings; a search
+for the width per pair, which read about two blurred tiles a pair, added
+0.44 ms (7.2%) in the same session. The blur work is the `blur-matched pairs` detail phase, whose note
 gives the pairs blurred; when the rule picks a view, the phase's own note ends
 with the same count.
 
-**Effect over the pools.** The default changes the pick on 29 of the 661
+**Effect over the pools.** The default changes the pick on 26 of the 661
 tracks (4%).
 
 ## Implementation notes
@@ -345,7 +348,7 @@ square inside the disk, and the cell check was measured on whole cells. The
 cost is one extra member-coherence render per view and `k(k − 1)/2` pairs of
 nine cells; on the review tracks (6 to 26 views) the bench's `reference view`
 phase takes 0.4 to 2.4 ms on the plain readings, about 9% of an evaluation, and
-the blur-matched readings the default also takes add about 8% (§ "Blur-matched
+the blur-matched readings the default also takes add about 5% (§ "Blur-matched
 agreement").
 
 **The clipped share reads each pixel once.** A tile far from its camera covers
