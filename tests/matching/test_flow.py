@@ -378,3 +378,35 @@ class TestFlowE2E:
                 assert len(matches) >= 5, (
                     f"Pair ({i}, {j}) has only {len(matches)} matches"
                 )
+
+
+class TestFlowSequenceOrder:
+    def test_sequence_is_sorted_by_workspace_relative_path(self, tmp_path, monkeypatch):
+        """The flow matcher sees the images in path order, not listing order."""
+        from sfmtool.feature_match import _flow_matching
+        from sfmtool.feature_match._run import _run_flow_matching
+
+        names = ["cam_b/frame_01.jpg", "cam_a/frame_02.jpg", "cam_a/frame_01.jpg"]
+        image_paths = [tmp_path / n for n in names]
+        sift_paths = [tmp_path / (n + ".sift") for n in names]
+
+        seen = {}
+
+        def fake_flow_match_sequential(image_paths, sift_paths, **kwargs):
+            seen["images"] = list(image_paths)
+            seen["sifts"] = list(sift_paths)
+            return {}
+
+        monkeypatch.setattr(
+            _flow_matching, "flow_match_sequential", fake_flow_match_sequential
+        )
+
+        _run_flow_matching(
+            image_paths, sift_paths, tmp_path, tmp_path / "database.db", tmp_path
+        )
+
+        expected = sorted(names)
+        assert [p.relative_to(tmp_path).as_posix() for p in seen["images"]] == expected
+        assert [p.relative_to(tmp_path).as_posix() for p in seen["sifts"]] == [
+            n + ".sift" for n in expected
+        ]

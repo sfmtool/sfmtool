@@ -85,6 +85,14 @@ The matcher is
 `sfm match --flow` and `sfm solve --flow-match`; `sfm flow` provides the
 diagnostics described here.
 
+The sequence order is the order of the images' workspace-relative paths,
+compared character by character
+([`_run_flow_matching`](../../../src/sfmtool/feature_match/_run.py) sorts them
+before calling the matcher). Frame numbers therefore need zero padding for name
+order to be capture order: `frame_10.jpg` sorts before `frame_2.jpg`. Images
+from several directories form one sequence, one directory after another, so the
+last images of one directory are matched against the first images of the next.
+
 The pipeline combines two stages:
 
 1. **Flow-based candidate generation** via a sliding window over adjacent flows

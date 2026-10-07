@@ -434,10 +434,20 @@ def _run_flow_matching(
     Computes optical flow between sequential image pairs, finds feature
     correspondences via advection + descriptor filtering, writes matches
     to the database, and runs geometric verification via pycolmap.
+
+    The sequence is ordered by workspace-relative path (lexicographic), not by
+    the order of `image_paths`, which follows the directory listing.
     """
     import pycolmap
 
     from ._flow_matching import flow_match_sequential
+
+    image_names = [
+        os.path.relpath(p, workspace_dir).replace("\\", "/") for p in image_paths
+    ]
+    order = sorted(range(len(image_paths)), key=lambda i: image_names[i])
+    image_paths = [image_paths[i] for i in order]
+    sift_paths = [sift_paths[i] for i in order]
 
     # Build image_id mapping from the database
     image_id_map = {}  # image index -> database image_id

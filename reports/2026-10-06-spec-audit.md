@@ -358,6 +358,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `src/sfmtool/feature_match/_flow_matching.py` (`flow_match_sequential` 163-375), `feature_match/_run.py` `_run_flow_matching` 422-514, `colmap/db_setup.py:117-128`, `features/feature_match/descriptor.rs:167`, `optical_flow/flow_field.rs` `advect_points`, `crates/sfmtool-py/src/flow/optical.rs` `compute_optical_flow` 59-98.
 **Inconsistencies:**
   - Likely code bug: sequence order. `expand_paths` returns `Path.rglob` order unsorted (`_filenames.py:58-80`), passed through `match.py:289-291` and `solve.py:265`; on ext4 adjacent frames can be arbitrary images, and rig subdirectories are concatenated and flowed across the boundary. Sort in code; state the order rule in the spec.
+    > _Status (2026-10-06): **Done** — `_run_flow_matching` now sorts the images by workspace-relative path before flow matching (both `sfm match --flow` and `sfm solve --flow-match` go through it), with a test; the spec's Overview states the order rule, including zero-padded frame numbers and how several directories join into one sequence, branch `spec-fix-1006-01-flow-sort`._
   - The descriptor threshold "(default 250)" (:119) has no knob (`_run.py:456-462`); `--flow-skip` and `--flow-preset` (`match.py:120-124`) are not named. Update spec.
   - The cost table (166-167) omits GPU auto-selection (`optical.rs:37`) and the background-thread pipelining (`_flow_matching.py:253-270`). Measurements contradict: :52-53 says L2 <= 100, :63-64 and :129-130 say 250; 0.58 px median vs 0.56 px in the table.
   - Memory claim (:107-108) omits the stored original positions and (N,128) descriptors (`_flow_matching.py:235-237, 309`); "Per-pair matching" (:110-121) describes `_flow_match_pair`, which only `tests/matching/test_flow.py:11` calls.
@@ -790,6 +791,7 @@ Read 2026-09-26; open items above.
      flow matcher pairs adjacent entries. On ext4 that order is not the file
      name order, and rig subdirectories are joined end to end.
      (flow-based-matching)
+     > _Status (2026-10-06): **Done** — `_run_flow_matching` now sorts the images by workspace-relative path before flow matching (both `sfm match --flow` and `sfm solve --flow-match` go through it), with a test; the spec's Overview states the order rule, including zero-padded frame numbers and how several directories join into one sequence, branch `spec-fix-1006-01-flow-sort`._
    - **`sfm flow -r` resolves images by file name only** (`_flow_display.py:101-105`):
      on a rig, `fisheye_left/frame_01.jpg` resolves to
      `fisheye_right/frame_01.jpg`, so the wrong tracks are compared with no
