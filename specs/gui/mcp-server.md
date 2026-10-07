@@ -2882,11 +2882,11 @@ is what it is for.
 (`delete_point`, `retriangulate_point`, `commit_bench_track`) keeps every other
 index where it was by leaving the gone point's slot open. Every edit that gives
 the node a whole new base, and a `save_reconstruction` that is not a minimal
-copy, first folds those pending point edits into the value: a deleted point's slot closes up and every point after it moves
-down, a replaced point goes back to the index it replaced, and a point new to
-the base follows the last surviving base point
-([document-model.md](document-model.md) § "Two kinds of edit"). The fold moves
-no image index. So `move_camera_image`, `switch_camera_model`,
+copy, first folds those pending point edits into the value: a deleted point's
+slot closes up and every point after it moves down, a replaced point goes back
+to the base slot it replaced, and a point new to the base follows the last
+surviving base point ([document-model.md](document-model.md) § "Two kinds of
+edit"). The fold moves no image index. So `move_camera_image`, `switch_camera_model`,
 `add_camera_image_to_tracks`, `retriangulate_all_points`,
 `convert_to_embedded_patches` and `bake_reconstruction_transform`, which move no
 index of their own, renumber points whenever a point edit is pending, and
@@ -3404,8 +3404,9 @@ and the new index is the one the next call about the point has to name.
 answers the two ways `bundle_adjust` does, with `"operation": "Retriangulate all
 points"`. It deletes no point and creates none, so every index still means what
 it meant, unless a point edit was pending, whose deleted slots close up first
-(§ "The editing family"); no cache is dropped for it until the version lands. It polls the
-cancel flag between its stages, so `cancel_background_task` stops it and a
+(§ "The editing family"); no cache is dropped for it until the version lands.
+It polls the cancel flag between its stages, so `cancel_background_task` stops
+it and a
 cancelled retriangulation pushes no version. Its `report` counts the per-point
 statuses: points moved, crossed to or from infinity, turned into directions by
 each rule (too thin, no depth at the noise level, behind a camera, past the
