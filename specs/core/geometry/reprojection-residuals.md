@@ -7,9 +7,7 @@ projects under an image's camera pose and where that image observed it.
 `reprojection_residuals` computes it, as projection minus observed, for every
 observation at once over a set of images that share one camera model, and
 `inlier_fraction` reports the share of observations whose offset is shorter
-than a pixel threshold. The residual function is a
-measurement function, not an optimizer — callers threshold it, tally inliers,
-or feed it to a solver.
+than a pixel threshold. Both only measure: neither changes a pose or a point.
 
 ## Definitions
 
