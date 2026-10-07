@@ -522,12 +522,14 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Module map (44-59) omits `header_buttons.rs` and `body/reference.rs`; column prose (988-991) omits Reference between Zoom and Status (`body/table.rs:306-308`).
   - Spec 765-766 attributes the Action Log labels (`bench.rs:2422,2426`) to the boxes, which say " per axis" and "% overlap" (`body/mod.rs:781,793`).
   - Cleared-Lock hover (`body/mod.rs:818`) names less than spec 779-783; fix the code text. `apply_thresholds` doc (`body/mod.rs:160`) says four boxes; there are six.
+    > _Status (2026-10-07): **Done** — the cleared-*Lock* hover now also names the normal's segment and arrowhead and the ghost outline, with the spec's reasons (no size, turn, depth or facing; no keypoint to move), and the `apply_thresholds` doc says six boxes, branch `spec-fix-1006-10-lock-hover-spaces`._
   - Spec 611 links a `metrics/` directory; the module is `metrics.rs`. Spec 1684 "its SIFT index" understates the refresh (`dock.rs:894-902`). Testing (1881-1986) omits the sort tests (`body/tests.rs:4274-4424`); none orders by Reference (948).
 **Third copies:** about 220 lines of module docs in `track_view/`; `body/mod.rs` restates 170-196, 568-573; `tile.rs:4-60` restates 1347-1464. `table.rs`, `tile.rs`, `crop.rs`, `patch.rs` do not name the spec.
 **Shape:** failure 1 (mild). Proposed: "Track View is the SfM Explorer panel that lists one 3D point's observations, one per image, with the measurements of each, and, with its Edit box ticked, the controls that change that track on the bench before it is committed." Failure 4: 1634-1635, 975-977, and the Testing section (1797-2002) as a prose copy of test names. Failure 7: "only as good as" (3), "a gesture with no answer" (396), "in the same breath" (725), "a hand ruling against the bars" (1543). `frame` for patch geometry (1395, 1430, 1442, 1959) conflicts with GLOSSARY.
 **Non-goals / deferrals checked:** 11; one overtaken (above). `specs/drafts/sfm-explorer-track-editing.md` is stale (line 890; σ_pos removed in #654).
 **Recommendation:** update spec; the code-side fixes are the Lock hover text and the four-boxes doc comment.
 **Unclear / incorrect / suspicious:** code bug: the Lock hover strings contain runs of 18 spaces (`body/mod.rs:814`, `818`), as does `mcp/tools/catalog/edit.rs:504`. `AppState::set_editing` (`bench.rs:1593`) reads the raw `selected_point`; no user gesture found that reaches the bad state (`track_view/tests.rs:328`).
+> _Status (2026-10-07): **Partially done** — the space runs are fixed: each was a line break inside a string written without a trailing `\`. Both *Lock* hovers, the `convert_to_embedded_patches` description and two test strings (`background/tests.rs`, `viewer_3d/bench_track/tests.rs`) now continue with `\`, and `catalog_descriptions_have_no_runs_of_spaces` in `mcp/tests/catalog.rs` checks every tool and schema description. The `set_editing` item is not addressed on this branch, branch `spec-fix-1006-10-lock-hover-spaces`._
 
 ### specs/core/bench/nearby-tracks.md
 **Summary:** `find_nearby_tracks`: for a pixel, run the matching sources in order with a stopping rule, run the far-field sweep when needed, group and rank into depth layers, build a track-stage `EditableTrack` per usable candidate, mark duplicates and label the rest. Matches the code (#634-#642) closely, including every parameter default and the example call.
@@ -835,6 +837,7 @@ Read 2026-09-26; open items above.
        (`refit_intrinsics.rs:311`).
      - The two Track View *Lock* hover texts and `mcp/tools/catalog/edit.rs:504`
        contain runs of 18 spaces.
+       > _Status (2026-10-07): **Done** — the strings continue with `\` and read single-spaced; two test strings with the same defect are fixed too, and a catalog test asserts no tool or schema description has a run of spaces, branch `spec-fix-1006-10-lock-hover-spaces`._
      - A pairwise `.matches` file with stray `two_view_geometries/` entries
        passes verification (`verify.rs:39-145`).
 2. **Non-goals that shipped code has overtaken.** A reader who believes them
