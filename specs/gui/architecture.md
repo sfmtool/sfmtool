@@ -432,7 +432,10 @@ Thumbnail memory is the main concern at scale. The atlas uses a
 `texture_2d_array` with multiple pages to stay within GPU texture dimension
 limits (e.g. 8192px → 64×64 = 4096 cells per page, multiple pages for larger
 datasets). Compressed texture formats (BC7/ASTC) would reduce memory ~4x.
-For 10K+ cameras, async loading and an LRU texture cache are planned.
+The display thumbnails are built on the background task that opens the file
+(see [background-tasks.md](background-tasks.md) § "Opening a file"), and every
+image's thumbnail stays resident in the atlas while its file is open: the atlas
+has no eviction.
 
 ### Design Decisions for Performance
 

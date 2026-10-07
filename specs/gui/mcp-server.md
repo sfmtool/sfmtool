@@ -5309,8 +5309,8 @@ Other candidates, in rough order of value:
   loop.
 - **Should `get_scene` carry `window` at all?** It costs a few lines in every
   `get_scene` reply and saves an agent one call before deciding whether to
-  screenshot. Kept for now, alongside `window_title`, which it subsumes; drop it
-  if `get_scene` replies grow noisy.
+  screenshot. `get_scene` carries it alongside `window_title`, which it
+  subsumes.
 - **`focus: true` and the human.** An agent that steals focus while the human is
   typing in another application is being rude. The platform usually prevents it;
   if it does not, the window section's `focus` may want to become "request
