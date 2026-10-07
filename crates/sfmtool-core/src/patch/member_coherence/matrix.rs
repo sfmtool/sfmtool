@@ -13,7 +13,7 @@
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
-use crate::patch::blur_matched::{blur_tile, pair_blur, BlurCovariance, BlurScratch};
+use crate::patch::blur_matched::{match_blur, pair_directions, MatchScratch, TilePlanes};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
@@ -467,6 +467,58 @@ fn inner_square(support: &[bool], r: usize) -> Option<(usize, usize)> {
     })
 }
 
+/// The self-similarity ellipse matrix of one member's planar render `values`
+/// (`colour` colour planes first, of `r × r`): read over `square`, the largest
+/// centred square inside the support ([`inner_square`]), where every sample
+/// carries data, so the reading takes its dense route; where there is no such
+/// square, over the whole render with the support as its data. `crop` is a
+/// buffer for the square.
+fn member_ellipse(
+    values: &[f32],
+    colour: usize,
+    r: usize,
+    support: &[bool],
+    square: Option<(usize, usize)>,
+    crop: &mut Vec<f32>,
+) -> Option<[[f64; 2]; 2]> {
+    let rr = r * r;
+    let reading = match square {
+        Some((start, side)) => {
+            crop.clear();
+            for c in 0..colour {
+                for y in start..start + side {
+                    let row = c * rr + y * r + start;
+                    crop.extend_from_slice(&values[row..row + side]);
+                }
+            }
+            zncc_self_similarity_radius(
+                &PatchTile {
+                    values: crop,
+                    channels: colour,
+                    width: side,
+                    height: side,
+                },
+                None,
+                [0, 0, side, side],
+                &SelfSimilarityParams::default(),
+            )
+        }
+        None => zncc_self_similarity_radius(
+            &PatchTile {
+                values: &values[..colour * rr],
+                channels: colour,
+                width: r,
+                height: r,
+            },
+            Some(support),
+            [0, 0, r, r],
+            &SelfSimilarityParams::default(),
+        ),
+    };
+    let e = reading.ellipse;
+    e.axes.iter().all(|a| a.is_finite()).then_some(e.matrix)
+}
+
 /// Fill `table` with the blur-matched agreement of the members that scored
 /// ([`MemberMatrix::blur_matched_zncc`]), copying `plain` for a pair left
 /// plain, and return how many pairs were blurred.
@@ -476,8 +528,10 @@ fn inner_square(support: &[bool], r: usize) -> Option<(usize, usize)> {
 /// sample carries data, so the reading takes its dense route; where that
 /// square is too small, over the whole support, the support as its data. The
 /// ellipses are read in the `blur-matched ellipses` detail phase of
-/// `progress`. A pair is blurred where [`pair_blur`] asks, each
-/// render by normalized convolution over the support, then gathered back,
+/// `progress`. A pair is blurred where [`pair_directions`] asks, each
+/// render by normalized convolution over the support, the width found by
+/// [`match_blur`] with the blurred render read as the unblurred one was
+/// ([`member_ellipse`]), then gathered back,
 /// z-normalized over the support with the same window, and correlated as
 /// [`fill_scale`] correlates, in the `blur-matched pairs` detail phase. The
 /// ZNCC is averaged over the channels the plain table kept, `keep`, and no
@@ -506,53 +560,22 @@ fn fill_blur_matched(
     for &p in members.pixels {
         support[p] = true;
     }
-    let planes: Vec<Vec<f32>> = (0..members.n_members).map(|m| members.planes(m)).collect();
+    let planes: Vec<TilePlanes> = (0..members.n_members)
+        .map(|m| TilePlanes {
+            values: members.planes(m),
+            data: support.clone(),
+            side: r,
+            channels,
+        })
+        .collect();
+    let colour = channels.min(3);
+    let square = inner_square(&support, r);
     let ellipses: Vec<Option<[[f64; 2]; 2]>> = {
         let mut phase = progress.detail_phase("blur-matched ellipses");
-        let colour = channels.min(3);
-        let square = inner_square(&support, r);
         let mut crop = Vec::new();
         let read: Vec<Option<[[f64; 2]; 2]>> = planes
             .iter()
-            .map(|values| {
-                let reading = match square {
-                    // Every sample of the square carries data, so the reading
-                    // takes its dense route.
-                    Some((start, side)) => {
-                        crop.clear();
-                        for c in 0..colour {
-                            for y in start..start + side {
-                                let row = c * rr + y * r + start;
-                                crop.extend_from_slice(&values[row..row + side]);
-                            }
-                        }
-                        zncc_self_similarity_radius(
-                            &PatchTile {
-                                values: &crop,
-                                channels: colour,
-                                width: side,
-                                height: side,
-                            },
-                            None,
-                            [0, 0, side, side],
-                            &SelfSimilarityParams::default(),
-                        )
-                    }
-                    None => zncc_self_similarity_radius(
-                        &PatchTile {
-                            values: &values[..colour * rr],
-                            channels: colour,
-                            width: r,
-                            height: r,
-                        },
-                        Some(&support),
-                        [0, 0, r, r],
-                        &SelfSimilarityParams::default(),
-                    ),
-                };
-                let e = reading.ellipse;
-                e.axes.iter().all(|a| a.is_finite()).then_some(e.matrix)
-            })
+            .map(|t| member_ellipse(&t.values, colour, r, &support, square, &mut crop))
             .collect();
         progress_note!(phase, "{} members", read.len());
         read
@@ -562,7 +585,8 @@ fn fill_blur_matched(
     let kept: Vec<usize> = (0..channels).filter(|&c| keep[c]).collect();
     let total_weight: f64 = members.weights.iter().sum();
     let sqrt_weights: Vec<f32> = members.weights.iter().map(|&w| w.sqrt() as f32).collect();
-    let mut scratch = BlurScratch::default();
+    let mut scratch = MatchScratch::default();
+    let mut crop = Vec::new();
     let mut blurred = vec![0.0f32; channels * rr];
     let mut raw = vec![0.0f32; 2 * kept.len() * n];
     let mut xs = Vec::new();
@@ -571,26 +595,26 @@ fn fill_blur_matched(
         for b in (a + 1)..members.n_members {
             let (ia, ib) = (rows[a], rows[b]);
             pairs += 1;
-            let blur = match (ellipses[a], ellipses[b]) {
-                (Some(ea), Some(eb)) => pair_blur(&ea, &eb, ratio),
+            let dirs = match (ellipses[a], ellipses[b]) {
+                (Some(ea), Some(eb)) => pair_directions(&ea, &eb, ratio),
                 _ => Default::default(),
             };
-            if blur.is_none() {
+            if dirs.is_none() {
                 table[ia * k + ib] = plain[ia * k + ib];
                 table[ib * k + ia] = plain[ib * k + ia];
                 continue;
             }
             pairs_blurred += 1;
-            for (slot, (m, cov)) in [(a, blur.a), (b, blur.b)].into_iter().enumerate() {
-                let source: &[f32] = if cov == BlurCovariance::ZERO || cov.is_zero() {
-                    &planes[m]
+            for (slot, (m, d)) in [(a, dirs.a), (b, dirs.b)].into_iter().enumerate() {
+                let source: &[f32] = if d.is_empty() {
+                    &planes[m].values
                 } else {
-                    blur_tile(
+                    // The blurred render is read as the unblurred one was, so
+                    // the two lengths compared are of one reading.
+                    match_blur(
                         &planes[m],
-                        channels,
-                        r,
-                        &support,
-                        cov,
+                        d.as_slice(),
+                        |values| member_ellipse(values, colour, r, &support, square, &mut crop),
                         &mut blurred,
                         &mut scratch,
                     );

@@ -10,9 +10,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::patch::blur_matched::{blur_matched_pairs, BlurMatchKernel, TilePlanes};
-use sfmtool_core::patch::self_similarity::{
-    zncc_self_similarity_radius, PatchTile, SelfSimilarityParams,
+use sfmtool_core::patch::blur_matched::{
+    blur_matched_pairs, read_tile_ellipse, BlurMatchKernel, TilePlanes,
 };
 use sfmtool_core::progress::Progress;
 
@@ -21,8 +20,15 @@ use super::args::{parse_matching, parse_patch_window};
 /// The ZNCC between every pair of a track's views' tiles, each pair
 /// blur-matched: along each direction in which the two tiles' ZNCC
 /// self-similarity ellipses differ, the tile whose ellipse is shorter is
-/// blurred to the other's sharpness before the two are correlated. See
+/// blurred to the other's sharpness before the two are correlated. The width
+/// of each blur is found by blurring the tile, reading its ellipse again, and
+/// correcting the width until the two lengths agree (up to 2 grid px). See
 /// ``specs/core/patch/blur-matched-zncc.md``.
+///
+/// The ellipses compared are whole-tile readings over the samples with data,
+/// with the default parameters, which is how the blurred tiles are read; pass
+/// ``ellipses`` read another way and the blur is set against a different
+/// reading.
 ///
 /// Each pair is read over the samples with data in both tiles: over the whole
 /// tile with the window, and over each cell of the ZNCC grid's three-by-three
@@ -61,8 +67,9 @@ use super::args::{parse_matching, parse_patch_window};
 ///         1.25), at least 1.
 ///     kernel: ``"anisotropic"`` (default), each tile blurred along the
 ///         directions in which it is the sharper, or ``"isotropic_ladder"``,
-///         the sharper tile by semi-major axis blurred isotropically at the
-///         nearest of six widths, each view blurred once per width.
+///         the sharper tile by semi-major axis blurred isotropically at
+///         whichever of eight widths brings its semi-major axis closest to the
+///         other tile's, each view blurred and read once per width.
 ///     window: The whole-tile reading's window, ``"gaussian_disk"``
 ///         (default), ``"gaussian"`` or ``"uniform"``.
 ///     window_sigma: Its sigma.
@@ -163,21 +170,7 @@ pub fn blur_matched_zncc_matrix<'py>(
         }
         None => planes
             .iter()
-            .map(|t| {
-                let reading = zncc_self_similarity_radius(
-                    &PatchTile {
-                        values: &t.values,
-                        channels: t.channels,
-                        width: side,
-                        height: side,
-                    },
-                    Some(&t.data),
-                    [0, 0, side, side],
-                    &SelfSimilarityParams::default(),
-                );
-                let e = reading.ellipse;
-                e.axes.iter().all(|a| a.is_finite()).then_some(e.matrix)
-            })
+            .map(|t| read_tile_ellipse(&t.values, t.channels, side, &t.data))
             .collect(),
     };
     let pairs = py.detach(|| {

@@ -85,34 +85,38 @@ fn max_abs_diff(a: &[f32], b: &[f32], data: &[bool], channels: usize) -> f32 {
     worst
 }
 
-// --------------------------------------------------------------- the mapping
+// ------------------------------------------------------- the directions
 
 #[test]
-fn blur_sigma_is_zero_without_a_difference_and_grows_with_it() {
-    assert_eq!(blur_sigma(0.7, 0.7), 0.0);
-    assert_eq!(blur_sigma(0.5, 0.7), 0.0);
-    assert_eq!(blur_sigma(f64::NAN, 0.7), 0.0);
+fn the_estimate_is_zero_without_a_difference_and_grows_with_it() {
+    assert_eq!(estimated_blur_sigma(0.7, 0.7), 0.0);
+    assert_eq!(estimated_blur_sigma(0.5, 0.7), 0.0);
+    assert_eq!(estimated_blur_sigma(f64::NAN, 0.7), 0.0);
     let mut last = 0.0;
     for longer in [0.75, 0.9, 1.2, 1.8, 2.5, 3.0] {
-        let s = blur_sigma(longer, 0.7);
+        let s = estimated_blur_sigma(longer, 0.7);
         assert!(s > last, "{longer}: {s} after {last}");
         last = s;
     }
-    // The fitted values at the mapping's own points.
-    let s = blur_sigma(1.0, 0.5);
-    assert!((s - 0.9975 * 0.5f64.powf(0.2613) * 3.0f64.powf(0.1744)).abs() < 1e-12);
+    // The difference of squares over the growth at the sharper length.
+    let s = estimated_blur_sigma(1.0, 0.5);
+    let growth = BLUR_GROWTH_SCALE * 0.5f64.powf(BLUR_GROWTH_POWER);
+    assert!((s - (0.75 / growth).sqrt()).abs() < 1e-12, "{s}");
     // A sharper length under the floor is read as the floor.
-    assert_eq!(blur_sigma(1.0, 0.0), blur_sigma(1.0, BLUR_MAP_MIN_LENGTH));
-    assert!(blur_sigma(3.0, 0.0) <= MAX_BLUR_SIGMA);
+    assert_eq!(
+        estimated_blur_sigma(1.0, 0.0),
+        estimated_blur_sigma(1.0, MIN_SHARPER_LENGTH)
+    );
+    assert_eq!(estimated_blur_sigma(3.0, 0.0), MAX_BLUR_SIGMA);
 }
 
 #[test]
 fn equal_ellipses_blur_nothing() {
     let e = [[0.8, 0.1], [0.1, 0.3]];
-    assert!(pair_blur(&e, &e, 1.0).is_none());
-    assert!(pair_blur_for(&e, &[[2.0, 0.0], [0.0, 2.0]], PairMatching::Plain).is_none());
+    assert!(pair_directions(&e, &e, 1.0).is_none());
+    assert!(pair_directions_for(&e, &[[2.0, 0.0], [0.0, 2.0]], PairMatching::Plain).is_none());
     let unread = [[f64::NAN, 0.0], [0.0, 1.0]];
-    assert!(pair_blur(&unread, &e, 1.0).is_none());
+    assert!(pair_directions(&unread, &e, 1.0).is_none());
 }
 
 #[test]
@@ -120,16 +124,20 @@ fn each_tile_is_blurred_only_along_the_directions_it_is_sharper() {
     // `a` is sharp along x and blurry along y; `b` the other way round.
     let a = [[0.16, 0.0], [0.0, 1.44]];
     let b = [[1.44, 0.0], [0.0, 0.16]];
-    let blur = pair_blur(&a, &b, 1.0);
+    let dirs = pair_directions(&a, &b, 1.0);
+    let ([da], [db]) = (dirs.a.as_slice(), dirs.b.as_slice()) else {
+        panic!("{dirs:?}");
+    };
+    assert!(da.u[0].abs() > 1.0 - 1e-12, "{da:?}");
+    assert!(db.u[1].abs() > 1.0 - 1e-12, "{db:?}");
+    for d in [da, db] {
+        assert!((d.sharper - 0.4).abs() < 1e-12 && (d.blurrier - 1.2).abs() < 1e-12);
+    }
+    let blur = dirs.a.estimated_blur();
     assert!(
-        blur.a.xx > 0.5 && blur.a.yy.abs() < 1e-9 && blur.a.xy.abs() < 1e-9,
+        blur.xx > 0.5 && blur.yy.abs() < 1e-9 && blur.xy.abs() < 1e-9,
         "{blur:?}"
     );
-    assert!(
-        blur.b.yy > 0.5 && blur.b.xx.abs() < 1e-9 && blur.b.xy.abs() < 1e-9,
-        "{blur:?}"
-    );
-    assert!((blur.a.xx - blur.b.yy).abs() < 1e-12);
 
     // A rotated pair: `b` is `a` stretched along 30°.
     let (s, c) = 30f64.to_radians().sin_cos();
@@ -139,15 +147,22 @@ fn each_tile_is_blurred_only_along_the_directions_it_is_sharper() {
             [(l1 - l2) * c * s, l1 * s * s + l2 * c * c],
         ]
     };
-    let blur = pair_blur(&rot(0.25, 0.25), &rot(2.25, 0.25), 1.0);
-    assert!(blur.b.is_zero());
-    // The blur lies along 30°: its covariance has that direction as its only
-    // eigenvector with a non-zero eigenvalue.
-    let along = blur.a.xx * c * c + 2.0 * blur.a.xy * c * s + blur.a.yy * s * s;
-    let across = blur.a.xx * s * s - 2.0 * blur.a.xy * c * s + blur.a.yy * c * c;
+    let dirs = pair_directions(&rot(0.25, 0.25), &rot(2.25, 0.25), 1.0);
+    assert!(dirs.b.is_empty());
+    let [d] = dirs.a.as_slice() else {
+        panic!("{dirs:?}");
+    };
+    assert!((d.u[0] * c + d.u[1] * s).abs() > 1.0 - 1e-9, "{d:?}");
     assert!(
-        (along - blur_sigma(1.5, 0.5).powi(2)).abs() < 1e-9,
-        "{along}"
+        (d.sharper - 0.5).abs() < 1e-9 && (d.blurrier - 1.5).abs() < 1e-9,
+        "{d:?}"
+    );
+    // The estimate lies along 30° only.
+    let blur = dirs.a.estimated_blur();
+    let across = blur.variance_along([-s, c]);
+    assert!(
+        (blur.variance_along([c, s]) - estimated_blur_sigma(1.5, 0.5).powi(2)).abs() < 1e-9,
+        "{blur:?}"
     );
     assert!(across.abs() < 1e-9, "{across}");
 }
@@ -156,15 +171,18 @@ fn each_tile_is_blurred_only_along_the_directions_it_is_sharper() {
 fn the_skip_ratio_leaves_a_small_difference_plain() {
     let a = [[0.49, 0.0], [0.0, 0.49]]; // 0.7 along both axes
     let b = [[0.64, 0.0], [0.0, 0.64]]; // 0.8: a ratio of 1.14
-    assert!(!pair_blur(&a, &b, 1.0).is_none());
-    assert!(!pair_blur(&a, &b, 1.1).is_none());
-    assert!(pair_blur(&a, &b, 1.2).is_none());
-    assert!(pair_blur_for(&a, &b, PairMatching::BlurMatchedAboveRatio(1.2)).is_none());
-    assert!(!pair_blur_for(&a, &b, PairMatching::BlurMatched).is_none());
+    assert!(!pair_directions(&a, &b, 1.0).is_none());
+    assert!(!pair_directions(&a, &b, 1.1).is_none());
+    assert!(pair_directions(&a, &b, 1.2).is_none());
+    assert!(pair_directions_for(&a, &b, PairMatching::BlurMatchedAboveRatio(1.2)).is_none());
+    assert!(!pair_directions_for(&a, &b, PairMatching::BlurMatched).is_none());
     // A ratio is per direction: one axis past it is blurred, the other not.
     let c = [[0.64, 0.0], [0.0, 1.96]]; // 0.8 and 1.4
-    let blur = pair_blur(&a, &c, 1.2);
-    assert!(blur.a.yy > 0.0 && blur.a.xx.abs() < 1e-12, "{blur:?}");
+    let dirs = pair_directions(&a, &c, 1.2);
+    let [d] = dirs.a.as_slice() else {
+        panic!("{dirs:?}");
+    };
+    assert!(d.u[1].abs() > 1.0 - 1e-12 && dirs.b.is_empty(), "{dirs:?}");
 }
 
 #[test]
@@ -190,15 +208,94 @@ fn matching_names_round_trip() {
     }
 }
 
+// ------------------------------------------------------- the measured width
+
+/// The blurry tile is the sharp tile blurred by a known Gaussian. Matching
+/// blurs the sharp tile until its ellipse is as long as the blurry tile's
+/// along each direction, which recovers that Gaussian: the width found along
+/// each grid axis is within 10% or 0.15 grid px of the one planted, whichever
+/// is wider (a narrow blur lengthens the ellipse little, so a length within
+/// the tolerance pins its width less closely), and the blurred tile's ellipse
+/// is within 10% of the blurry one's along each direction blurred. The texture's ellipse is about
+/// 0.45 grid px, as a sharp view's is. The planted blurs lie along the grid's
+/// axes or are isotropic, where the two passes are an exact Gaussian; a 1-D
+/// blur at another angle also blurs across itself a little, by the slanted
+/// pass's interpolation, and matching finds that too.
 #[test]
-fn ladder_levels_snap_to_the_nearest_in_the_logarithm() {
-    assert_eq!(ladder_level(0.2), None);
-    assert_eq!(ladder_level(0.5), Some(0));
-    assert_eq!(ladder_level(0.7), Some(1));
-    assert_eq!(ladder_level(1.0), Some(2));
-    assert_eq!(ladder_level(1.45), Some(3));
-    assert_eq!(ladder_level(9.0), Some(5));
-    assert_eq!(ladder_level(f64::NAN), None);
+fn matching_a_known_blur_recovers_it() {
+    let read = |t: &TilePlanes| read_tile_ellipse(&t.values, t.channels, t.side, &t.data).unwrap();
+    for (seed, planted) in [
+        (61, BlurCovariance::along([1.0, 0.0], 0.6)),
+        (62, BlurCovariance::along([0.0, 1.0], 1.5)),
+        (63, BlurCovariance::isotropic(0.9)),
+        (
+            64,
+            BlurCovariance {
+                xx: 1.44,
+                xy: 0.0,
+                yy: 0.25,
+            },
+        ),
+        (66, BlurCovariance::isotropic(0.4)),
+    ] {
+        let sharp = textured(seed, 1.6);
+        let blurry = sharp.blurred(planted, &mut BlurScratch::default());
+        let (es, eb) = (read(&sharp), read(&blurry));
+        let dirs = pair_directions(&es, &eb, 1.0);
+        assert!(dirs.b.is_empty(), "{seed}: {dirs:?}");
+        let mut out = Vec::new();
+        let matched = match_blur(
+            &sharp,
+            dirs.a.as_slice(),
+            |v| read_tile_ellipse(v, sharp.channels, sharp.side, &sharp.data),
+            &mut out,
+            &mut MatchScratch::default(),
+        );
+        assert!(matched.probes >= 1 && matched.probes <= BLUR_MATCH_MAX_PROBES);
+        for (axis, found, want) in [
+            ("x", matched.cov.xx.sqrt(), planted.xx.sqrt()),
+            ("y", matched.cov.yy.sqrt(), planted.yy.sqrt()),
+        ] {
+            let ok = (found - want).abs() <= (0.1 * want).max(0.15);
+            assert!(
+                ok,
+                "{seed}: along {axis} planted {want}, found {found} ({matched:?})"
+            );
+        }
+        // `out` is the tile blurred by `cov`, and its ellipse matches.
+        let again = sharp.blurred(matched.cov, &mut BlurScratch::default());
+        assert_eq!(again.values, out);
+        let em = read(&again);
+        for d in dirs.a.as_slice() {
+            let (l, t) = (length_along(&em, d.u), length_along(&eb, d.u));
+            assert!((l / t - 1.0).abs() <= 0.1, "{seed}: {l} against {t}");
+        }
+    }
+}
+
+/// The first width tried is the estimate; where nothing can be read, the
+/// tile is blurred by it and the error is not a number.
+#[test]
+fn matching_without_a_reading_falls_back_to_the_estimate() {
+    let sharp = textured(71, 0.8);
+    let dirs = pair_directions(&[[0.25, 0.0], [0.0, 0.25]], &[[1.0, 0.0], [0.0, 0.25]], 1.0);
+    let mut out = Vec::new();
+    let matched = match_blur(
+        &sharp,
+        dirs.a.as_slice(),
+        |_| None,
+        &mut out,
+        &mut MatchScratch::default(),
+    );
+    assert_eq!(matched.probes, 1);
+    assert!(matched.error.is_nan());
+    assert_eq!(matched.cov, dirs.a.estimated_blur());
+    assert_eq!(
+        sharp
+            .blurred(matched.cov, &mut BlurScratch::default())
+            .values,
+        out
+    );
 }
 
 // ------------------------------------------------------------------ the blur
@@ -738,9 +835,29 @@ fn timing() {
         }
     }
     let (ea, eb) = (ellipse_of(&a), ellipse_of(&b));
-    time("ellipse pair to kernels (pair_blur)", &mut || {
-        black_box(pair_blur(black_box(&ea), black_box(&eb), 1.0));
+    time("ellipse pair to directions (pair_directions)", &mut || {
+        black_box(pair_directions(black_box(&ea), black_box(&eb), 1.0));
     });
+    time("whole self-similarity reading of a tile", &mut || {
+        black_box(read_tile_ellipse(&b.values, 3, SIDE, &b.data));
+    });
+    let dirs = pair_directions(&ea, &eb, 1.0);
+    let mut matched_out = Vec::new();
+    let mut match_scratch = MatchScratch::default();
+    let mut probes = 0u64;
+    let mut calls = 0u64;
+    time("measured width of one tile (match_blur)", &mut || {
+        let m = match_blur(
+            &a,
+            dirs.a.as_slice(),
+            |v| read_tile_ellipse(v, 3, SIDE, &a.data),
+            &mut matched_out,
+            &mut match_scratch,
+        );
+        probes += u64::from(m.probes);
+        calls += 1;
+    });
+    eprintln!("  probes per call {:.2}", probes as f64 / calls as f64);
     for kernel in [
         BlurMatchKernel::Anisotropic,
         BlurMatchKernel::IsotropicLadder,

@@ -10,12 +10,19 @@
 //! sharpness is read from its ZNCC self-similarity ellipse
 //! ([`SelfSimilarityEllipse::matrix`](crate::patch::self_similarity::SelfSimilarityEllipse::matrix)).
 //! Along each eigenvector `u` of the difference of the two ellipses, the tile
-//! whose ellipse is shorter along `u` is blurred along `u` by a 1-D Gaussian
-//! whose width the fitted mapping [`blur_sigma`] reads off the two lengths
-//! ([`pair_blur`]). Either tile, or both, may be blurred, each only along the
-//! directions in which it is the sharper one. Where the two lengths along a
-//! direction differ by less than a ratio, that direction is left alone, and a
-//! pair left alone along both is correlated plain ([`PairMatching`]).
+//! whose ellipse is shorter along `u` is to be blurred along `u` until its
+//! ellipse is as long there as the other's ([`pair_directions`]). Either tile,
+//! or both, may be blurred, each only along the directions in which it is the
+//! sharper one. Where the two lengths along a direction differ by less than a
+//! ratio, that direction is left alone, and a pair left alone along both is
+//! correlated plain ([`PairMatching`]).
+//!
+//! The width of each blur is found by measurement ([`match_blur`]): the tile is
+//! blurred, its ellipse read again with the same reading, and the width
+//! corrected by a secant step on `σ²` until the blurred tile's length along
+//! each direction is within [`BLUR_MATCH_TOLERANCE`] of the blurrier tile's,
+//! at most [`BLUR_MATCH_MAX_PROBES`] times. The first width tried comes from
+//! [`estimated_blur_sigma`], a difference of squares calibrated on real tiles.
 //!
 //! The blur ([`blur_tile`]) is an anisotropic Gaussian applied as two 1-D
 //! passes, one along a grid axis and one along a slanted line, by normalized
@@ -28,6 +35,7 @@
 //! unblurred tiles.
 
 mod blur;
+mod search;
 mod tiles;
 
 #[cfg(test)]
@@ -36,38 +44,50 @@ mod tests;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use blur::blur_tile_direct;
 pub use blur::{blur_tile, BlurScratch};
+pub use search::{match_blur, MatchScratch, MatchedBlur};
 pub use tiles::{
-    blur_matched_pairs, pair_zncc_readings, BlurMatchKernel, BlurMatchedPairs, PairReadings,
-    TilePlanes, MIN_WINDOWED_SAMPLES,
+    blur_matched_pairs, pair_zncc_readings, read_tile_ellipse, BlurMatchKernel, BlurMatchedPairs,
+    PairReadings, TilePlanes, MIN_WINDOWED_SAMPLES,
 };
 
-/// `k` of the fitted mapping [`blur_sigma`]: `σ = k · s^q · (r² − 1)^p`.
-pub const BLUR_MAP_SCALE: f64 = 0.9975;
+/// `k` of [`estimated_blur_sigma`]'s growth `k · s^p`: how fast the square of
+/// a tile's ellipse length along a direction grows with the square of a blur
+/// along it, `d(l²)/d(σ²)`, for a sharper length `s` of 1 grid px.
+pub const BLUR_GROWTH_SCALE: f64 = 1.243;
 
-/// `p` of the fitted mapping [`blur_sigma`], the power of `r² − 1`.
-pub const BLUR_MAP_RATIO_POWER: f64 = 0.1744;
+/// `p` of [`estimated_blur_sigma`]'s growth `k · s^p`: the power of the
+/// sharper length.
+pub const BLUR_GROWTH_POWER: f64 = 1.247;
 
-/// `q` of the fitted mapping [`blur_sigma`], the power of the sharper length.
-pub const BLUR_MAP_LENGTH_POWER: f64 = 0.2613;
+/// The shortest sharper length, in grid px, the skip ratio and
+/// [`estimated_blur_sigma`] read: shorter lengths are read as this one.
+pub const MIN_SHARPER_LENGTH: f64 = 0.05;
 
-/// The shortest sharper length, in grid px, [`blur_sigma`] reads: shorter
-/// lengths are read as this one. It is the shortest length among the samples
-/// the mapping was fitted on.
-pub const BLUR_MAP_MIN_LENGTH: f64 = 0.05;
-
-/// The widest blur [`blur_sigma`] returns, in grid px. The ellipse's own
-/// axes are capped at the self-similarity reading's `max_radius` (3 grid px by
-/// default), and over that range the mapping stays under about 1.9, so the cap
-/// only guards against a reading from a wider search.
+/// The widest blur, in grid px, along a direction. The ellipse's own axes are
+/// capped at the self-similarity reading's `max_radius` (3 grid px by
+/// default), and a blur of 3 takes the median sharp tile to about 2.5.
 pub const MAX_BLUR_SIGMA: f64 = 3.0;
 
-/// `k`, `p` and `q` of the isotropic mapping [`isotropic_blur_sigma`], fitted
-/// as [`blur_sigma`] was but on the semi-major axes and isotropic blurs.
-pub const ISOTROPIC_BLUR_MAP: [f64; 3] = [0.8361, 0.3635, 0.5588];
+/// The longest ellipse length, in grid px, blur matching aims for: a blurrier
+/// tile's length past it is read as this one. Past about 2 grid px a tile
+/// holds little detail to tell it from another surface's, and matching the
+/// full length blurred members towards smooth tiles of other points enough to
+/// lower how well wrong views are told apart.
+pub const MAX_MATCHED_LENGTH: f64 = 2.0;
+
+/// How close, as a fraction of the length aimed for, the blurred tile's
+/// ellipse length along each direction must come for [`match_blur`] to stop.
+pub const BLUR_MATCH_TOLERANCE: f64 = 0.05;
+
+/// The most blurs [`match_blur`] tries, and reads the ellipse of, for one tile
+/// of a pair.
+pub const BLUR_MATCH_MAX_PROBES: u32 = 2;
 
 /// The blur widths of the isotropic ladder ([`BlurMatchKernel::IsotropicLadder`]),
-/// in grid px: `0.5 · √2ⁿ` for `n = 0 .. 5`.
-pub const LADDER_SIGMAS: [f64; 6] = [
+/// in grid px: `0.25 · √2ⁿ` for `n = 0 .. 7`.
+pub const LADDER_SIGMAS: [f64; 8] = [
+    0.25,
+    0.25 * std::f64::consts::SQRT_2,
     0.5,
     0.5 * std::f64::consts::SQRT_2,
     1.0,
@@ -181,6 +201,11 @@ impl BlurCovariance {
         self.xx + self.yy < 1e-6
     }
 
+    /// The variance of the blur along the unit direction `u`, `uᵀ Σ u`.
+    pub fn variance_along(&self, u: [f64; 2]) -> f64 {
+        u[0] * u[0] * self.xx + 2.0 * u[0] * u[1] * self.xy + u[1] * u[1] * self.yy
+    }
+
     fn add(self, other: Self) -> Self {
         Self {
             xx: self.xx + other.xx,
@@ -190,76 +215,47 @@ impl BlurCovariance {
     }
 }
 
-/// The blur each tile of a pair gets before the two are correlated.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct PairBlur {
-    /// The first tile's blur.
-    pub a: BlurCovariance,
-    /// The second tile's blur.
-    pub b: BlurCovariance,
-}
-
-impl PairBlur {
-    /// Whether neither tile is blurred: the pair is correlated plain.
-    pub fn is_none(&self) -> bool {
-        self.a.is_zero() && self.b.is_zero()
-    }
-}
-
-/// The width of the 1-D Gaussian, in grid px, that blurs a tile whose
+/// The width of the 1-D Gaussian, in grid px, expected to blur a tile whose
 /// self-similarity ellipse is `sharper` long along a direction until it is
-/// about `blurrier` long there: the fitted mapping
+/// `blurrier` long there: the first width [`match_blur`] tries.
 ///
-/// `σ = k · s^q · (r² − 1)^p`, `r = blurrier / s`, `s = max(sharper, `[`BLUR_MAP_MIN_LENGTH`]`)`,
+/// The square of the length grows about linearly with the square of the
+/// blur, at a rate that rises with the sharper length:
 ///
-/// with `k` [`BLUR_MAP_SCALE`], `p` [`BLUR_MAP_RATIO_POWER`] and `q`
-/// [`BLUR_MAP_LENGTH_POWER`], capped at [`MAX_BLUR_SIGMA`]. `0` where
-/// `blurrier ≤ s` or either length is not finite.
+/// `σ² = (blurrier² − s²) / (k · s^p)`, `s = max(sharper, `[`MIN_SHARPER_LENGTH`]`)`,
 ///
-/// The mapping was fitted, not derived: tiles of the ground truths were blurred
-/// by known anisotropic Gaussians and their ellipses read again, and the model
-/// fitted in logs over the samples whose length along the blur changed
-/// measurably. The response is far from the `σ² = blurrier² − sharper²` a
-/// Gaussian model of the ellipse predicts: a blur under about half a grid px
-/// does not register in the reading at all, so any measurable change in length
-/// maps to a blur of at least about 0.5 grid px.
+/// with `k` [`BLUR_GROWTH_SCALE`] and `p` [`BLUR_GROWTH_POWER`], capped at
+/// [`MAX_BLUR_SIGMA`]. `0` where `blurrier ≤ s` or either length is not
+/// finite. The constants were fitted on real tiles of ten datasets; a single
+/// tile's growth is spread about them by a factor of about 2 either way, which
+/// is why the width is then measured rather than taken from here.
 ///
 /// ```
-/// use sfmtool_core::patch::blur_matched::blur_sigma;
+/// use sfmtool_core::patch::blur_matched::estimated_blur_sigma;
 ///
-/// assert_eq!(blur_sigma(0.5, 0.5), 0.0);
-/// // Twice as long along a direction: a blur of about one grid px.
-/// let s = blur_sigma(1.0, 0.5);
-/// assert!(s > 0.95 && s < 1.05, "{s}");
+/// assert_eq!(estimated_blur_sigma(0.5, 0.5), 0.0);
+/// // Half as long again along a direction: a blur of about 0.77 grid px.
+/// let s = estimated_blur_sigma(0.75, 0.5);
+/// assert!(s > 0.75 && s < 0.8, "{s}");
 /// ```
-pub fn blur_sigma(blurrier: f64, sharper: f64) -> f64 {
-    let [k, p, q] = [BLUR_MAP_SCALE, BLUR_MAP_RATIO_POWER, BLUR_MAP_LENGTH_POWER];
-    fitted_sigma(blurrier, sharper, k, p, q)
-}
-
-/// [`blur_sigma`] with the isotropic mapping [`ISOTROPIC_BLUR_MAP`], read on
-/// the two ellipses' semi-major axes.
-pub fn isotropic_blur_sigma(blurrier: f64, sharper: f64) -> f64 {
-    let [k, p, q] = ISOTROPIC_BLUR_MAP;
-    fitted_sigma(blurrier, sharper, k, p, q)
-}
-
-fn fitted_sigma(blurrier: f64, sharper: f64, k: f64, p: f64, q: f64) -> f64 {
+pub fn estimated_blur_sigma(blurrier: f64, sharper: f64) -> f64 {
     if !(blurrier.is_finite() && sharper.is_finite()) {
         return 0.0;
     }
-    let s = sharper.max(BLUR_MAP_MIN_LENGTH);
-    let r = blurrier / s;
+    let s = sharper.max(MIN_SHARPER_LENGTH);
     // Two lengths equal but for rounding are equal.
-    if r <= 1.0 + 1e-9 {
+    if blurrier <= s * (1.0 + 1e-9) {
         return 0.0;
     }
-    (k * s.powf(q) * (r * r - 1.0).powf(p)).min(MAX_BLUR_SIGMA)
+    let growth = BLUR_GROWTH_SCALE * s.powf(BLUR_GROWTH_POWER);
+    ((blurrier * blurrier - s * s) / growth)
+        .sqrt()
+        .min(MAX_BLUR_SIGMA)
 }
 
 /// The half-width of the ellipse `E` along the unit direction `u`:
 /// `sqrt(uᵀ E u)`.
-fn length_along(e: &[[f64; 2]; 2], u: [f64; 2]) -> f64 {
+pub fn length_along(e: &[[f64; 2]; 2], u: [f64; 2]) -> f64 {
     (u[0] * u[0] * e[0][0] + 2.0 * u[0] * u[1] * e[0][1] + u[1] * u[1] * e[1][1])
         .max(0.0)
         .sqrt()
@@ -270,27 +266,95 @@ fn readable(e: &[[f64; 2]; 2]) -> bool {
     e.iter().flatten().all(|v| v.is_finite())
 }
 
-/// The blur each of two tiles gets, from their self-similarity ellipses `a`
-/// and `b` (each `E`, [`SelfSimilarityEllipse::matrix`](crate::patch::self_similarity::SelfSimilarityEllipse::matrix),
-/// in grid px²), blurring a direction only where the two lengths along it
-/// differ by more than `min_ratio`.
+/// One direction along which one tile of a pair is to be blurred.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BlurDirection {
+    /// The unit direction, in grid px (`x` column-right, `y` row-down).
+    pub u: [f64; 2],
+    /// The length along `u` of the tile to be blurred, the sharper one.
+    pub sharper: f64,
+    /// The length the blur aims for: the other tile's length along `u`, at
+    /// most [`MAX_MATCHED_LENGTH`].
+    pub blurrier: f64,
+}
+
+/// The directions, at most two, along which one tile of a pair is to be
+/// blurred.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TileDirections {
+    dirs: [BlurDirection; 2],
+    len: usize,
+}
+
+impl TileDirections {
+    /// The directions.
+    pub fn as_slice(&self) -> &[BlurDirection] {
+        &self.dirs[..self.len]
+    }
+
+    /// Whether the tile is not to be blurred.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The blur [`estimated_blur_sigma`] gives along each direction, added up.
+    pub fn estimated_blur(&self) -> BlurCovariance {
+        self.as_slice().iter().fold(BlurCovariance::ZERO, |cov, d| {
+            cov.add(BlurCovariance::along(
+                d.u,
+                estimated_blur_sigma(d.blurrier, d.sharper),
+            ))
+        })
+    }
+
+    fn push(&mut self, d: BlurDirection) {
+        self.dirs[self.len] = d;
+        self.len += 1;
+    }
+}
+
+/// The directions along which each tile of a pair is to be blurred.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PairDirections {
+    /// The first tile's.
+    pub a: TileDirections,
+    /// The second tile's.
+    pub b: TileDirections,
+}
+
+impl PairDirections {
+    /// Whether neither tile is to be blurred: the pair is correlated plain.
+    pub fn is_none(&self) -> bool {
+        self.a.is_empty() && self.b.is_empty()
+    }
+}
+
+/// Which tile of a pair is to be blurred along which direction, from their
+/// self-similarity ellipses `a` and `b` (each `E`,
+/// [`SelfSimilarityEllipse::matrix`](crate::patch::self_similarity::SelfSimilarityEllipse::matrix),
+/// in grid px²), leaving a direction alone where the two lengths along it
+/// differ by less than `min_ratio`.
 ///
 /// Along each eigenvector `u` of `E_b − E_a`, the tile whose ellipse is
-/// shorter along `u` is blurred along `u` by [`blur_sigma`] of the two
-/// lengths. A pair with an ellipse that cannot be read is not blurred.
+/// shorter along `u` is to be blurred along `u` until it is as long there as
+/// the other, or [`MAX_MATCHED_LENGTH`] long where the other is longer. A pair
+/// with an ellipse that cannot be read is not blurred.
 ///
 /// ```
-/// use sfmtool_core::patch::blur_matched::pair_blur;
+/// use sfmtool_core::patch::blur_matched::pair_directions;
 ///
 /// // `a` is sharp along x and as blurry as `b` along y; `b` is round.
 /// let a = [[0.25, 0.0], [0.0, 1.0]];
 /// let b = [[1.0, 0.0], [0.0, 1.0]];
-/// let blur = pair_blur(&a, &b, 1.0);
-/// assert!(blur.a.xx > 0.3 && blur.a.yy.abs() < 1e-9 && blur.b.xx == 0.0);
+/// let dirs = pair_directions(&a, &b, 1.0);
+/// assert!(dirs.b.is_empty());
+/// let [d] = dirs.a.as_slice() else { panic!() };
+/// assert!(d.u[0].abs() > 0.999 && (d.sharper - 0.5).abs() < 1e-9 && (d.blurrier - 1.0).abs() < 1e-9);
 /// ```
-pub fn pair_blur(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> PairBlur {
+pub fn pair_directions(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> PairDirections {
+    let mut out = PairDirections::default();
     if !(readable(a) && readable(b)) {
-        return PairBlur::default();
+        return out;
     }
     let d = [
         b[0][0] - a[0][0],
@@ -300,44 +364,39 @@ pub fn pair_blur(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> PairBl
     // The eigenvectors of a symmetric 2×2.
     let theta = 0.5 * (2.0 * d[1]).atan2(d[0] - d[2]);
     let (s, c) = theta.sin_cos();
-    let mut blur = PairBlur::default();
     for u in [[c, s], [-s, c]] {
         let la = length_along(a, u);
         let lb = length_along(b, u);
         let (longer, shorter) = if la > lb { (la, lb) } else { (lb, la) };
-        if longer <= shorter || longer < min_ratio * shorter.max(BLUR_MAP_MIN_LENGTH) {
+        let longer = longer.min(MAX_MATCHED_LENGTH);
+        if longer <= shorter || longer < min_ratio * shorter.max(MIN_SHARPER_LENGTH) {
             continue;
         }
-        let sigma = blur_sigma(longer, shorter);
-        if sigma <= 0.0 {
+        if estimated_blur_sigma(longer, shorter) <= 0.0 {
             continue;
         }
-        let along = BlurCovariance::along(u, sigma);
+        let dir = BlurDirection {
+            u,
+            sharper: shorter,
+            blurrier: longer,
+        };
         if lb > la {
-            blur.a = blur.a.add(along);
+            out.a.push(dir);
         } else {
-            blur.b = blur.b.add(along);
+            out.b.push(dir);
         }
     }
-    blur
+    out
 }
 
-/// [`pair_blur`] under `matching`: no blur for [`PairMatching::Plain`].
-pub fn pair_blur_for(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], matching: PairMatching) -> PairBlur {
+/// [`pair_directions`] under `matching`: none for [`PairMatching::Plain`].
+pub fn pair_directions_for(
+    a: &[[f64; 2]; 2],
+    b: &[[f64; 2]; 2],
+    matching: PairMatching,
+) -> PairDirections {
     match matching.min_ratio() {
-        Some(ratio) => pair_blur(a, b, ratio),
-        None => PairBlur::default(),
+        Some(ratio) => pair_directions(a, b, ratio),
+        None => PairDirections::default(),
     }
-}
-
-/// The ladder level, an index into [`LADDER_SIGMAS`], nearest to the isotropic
-/// blur `sigma` in the logarithm, or `None` for a blur under 0.35 grid px,
-/// which the ladder does not apply.
-pub fn ladder_level(sigma: f64) -> Option<usize> {
-    // A NaN width is no blur either.
-    if sigma.is_nan() || sigma < 0.35 {
-        return None;
-    }
-    let n = (2.0 * (sigma / LADDER_SIGMAS[0]).log2()).round();
-    Some((n.max(0.0) as usize).min(LADDER_SIGMAS.len() - 1))
 }

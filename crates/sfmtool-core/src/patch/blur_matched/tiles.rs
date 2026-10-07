@@ -3,16 +3,18 @@
 
 //! Blur-matched ZNCC between whole tiles: each pair correlated over the
 //! samples that carry data in both, over the whole tile with a window and over
-//! each cell of the ZNCC grid, after the blur [`pair_blur`] chooses, and the
+//! each cell of the ZNCC grid, after the blur [`match_blur`] finds, and the
 //! same over every pair of a track's views.
 
 use super::blur::{blur_tile, BlurScratch};
+use super::search::{match_blur, MatchScratch};
 use super::{
-    isotropic_blur_sigma, ladder_level, pair_blur, BlurCovariance, PairBlur, PairMatching,
-    LADDER_SIGMAS,
+    pair_directions, BlurCovariance, PairMatching, TileDirections, BLUR_MATCH_TOLERANCE,
+    LADDER_SIGMAS, MAX_MATCHED_LENGTH, MIN_SHARPER_LENGTH,
 };
 use crate::patch::normal_refine::{grid_bounds, window_weights, PatchWindow};
 use crate::patch::reference_view::REFERENCE_MIN_CELL_SAMPLES;
+use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::progress::Progress;
 use crate::progress_note;
 
@@ -235,18 +237,45 @@ pub fn pair_zncc_readings(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> Pai
     }
 }
 
+/// The whole-tile self-similarity ellipse matrix of the planar tile `values`
+/// (`channels` colour planes of `side × side`), read the overlap way over the
+/// samples `data` marks, with the default parameters; `None` where the
+/// reading has no finite axes. This is the reading [`blur_matched_pairs`]
+/// reads its blurred tiles with, and the one the bench and the bindings read
+/// each view's tile with, so the lengths it compares are of one reading.
+pub fn read_tile_ellipse(
+    values: &[f32],
+    channels: usize,
+    side: usize,
+    data: &[bool],
+) -> Option<[[f64; 2]; 2]> {
+    let reading = zncc_self_similarity_radius(
+        &PatchTile {
+            values,
+            channels: channels.min(3),
+            width: side,
+            height: side,
+        },
+        Some(data),
+        [0, 0, side, side],
+        &SelfSimilarityParams::default(),
+    );
+    let e = reading.ellipse;
+    e.axes.iter().all(|a| a.is_finite()).then_some(e.matrix)
+}
+
 /// The shape of the blur a pair is matched with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlurMatchKernel {
-    /// [`pair_blur`]: each tile blurred along the directions in which its
-    /// ellipse is the shorter, by the anisotropic mapping. Every pair blurs
-    /// its own tiles.
+    /// Each tile blurred along the directions in which its ellipse is the
+    /// shorter ([`pair_directions`]), the widths found by measuring the
+    /// blurred tile ([`match_blur`]). Every pair blurs its own tiles.
     #[default]
     Anisotropic,
-    /// The sharper tile, by semi-major axis, blurred isotropically by the
-    /// isotropic mapping, the width snapped to the nearest of
-    /// [`LADDER_SIGMAS`], so each view is blurred at most once per level
-    /// however many pairs it is in.
+    /// The sharper tile, by semi-major axis, blurred isotropically by one of
+    /// [`LADDER_SIGMAS`]: the level whose blurred tile's semi-major axis comes
+    /// closest to the other tile's. Each view is blurred, and its ellipse read,
+    /// at most once per level however many pairs it is in.
     IsotropicLadder,
 }
 
@@ -287,6 +316,9 @@ pub struct BlurMatchedPairs {
     pub pairs: usize,
     /// How many of them were blurred.
     pub pairs_blurred: usize,
+    /// How many blurred tiles had their ellipse read, over every pair: the
+    /// anisotropic kernel's probes ([`match_blur`]) or the ladder's levels.
+    pub ellipse_reads: usize,
 }
 
 impl BlurMatchedPairs {
@@ -310,13 +342,64 @@ fn semi_major(e: &[[f64; 2]; 2]) -> f64 {
         .sqrt()
 }
 
+/// One view's ladder: each level's blurred tile and the semi-major axis of its
+/// ellipse, filled as pairs ask for them.
+type Ladder = [Option<(TilePlanes, f64)>; LADDER_SIGMAS.len()];
+
+/// The ladder level of `tile` whose semi-major axis comes closest to `target`
+/// in the logarithm, `None` where the tile as it is comes closer, filling the
+/// levels from the narrowest until one reaches `target` within
+/// [`BLUR_MATCH_TOLERANCE`]. `unblurred` is the tile's own semi-major axis.
+fn ladder_pick(
+    tile: &TilePlanes,
+    unblurred: f64,
+    target: f64,
+    ladder: &mut Ladder,
+    scratch: &mut BlurScratch,
+    reads: &mut usize,
+) -> Option<usize> {
+    let mut pick: Option<usize> = None;
+    let mut off = (unblurred.max(MIN_SHARPER_LENGTH) / target).ln().abs();
+    for (level, slot) in ladder.iter_mut().enumerate() {
+        let (_, length) = slot.get_or_insert_with(|| {
+            let blurred = tile.blurred(BlurCovariance::isotropic(LADDER_SIGMAS[level]), scratch);
+            *reads += 1;
+            let length = read_tile_ellipse(
+                &blurred.values,
+                blurred.channels,
+                blurred.side,
+                &blurred.data,
+            )
+            .map_or(f64::NAN, |e| semi_major(&e));
+            (blurred, length)
+        });
+        if !length.is_finite() {
+            break;
+        }
+        let o = (length.max(MIN_SHARPER_LENGTH) / target).ln().abs();
+        if o < off {
+            off = o;
+            pick = Some(level);
+        }
+        if *length >= target * (1.0 - BLUR_MATCH_TOLERANCE) {
+            break;
+        }
+    }
+    pick
+}
+
 /// Read every pair of `tiles` (or every pair with a view in `rows`, when
 /// given) with [`pair_zncc_readings`] after blur-matching it under `matching`
 /// with `kernel`, `ellipses[v]` view `v`'s self-similarity ellipse matrix in
 /// grid px² (`None` where it has none, which leaves every pair it is in plain).
 ///
+/// The ellipses must be the whole-tile reading over the samples with data
+/// ([`read_tile_ellipse`]): the blurred tiles are read that way, and the blur
+/// is set by comparing the two.
+///
 /// The blur work is timed in the `blur-matched pairs` detail phase of
-/// `progress`, with a note of how many pairs were blurred.
+/// `progress`, with a note of how many pairs were blurred and how many blurred
+/// tiles were read.
 ///
 /// # Panics
 ///
@@ -345,15 +428,16 @@ pub fn blur_matched_pairs(
     }
     let side = tiles.first().map_or(0, |t| t.side);
     let weights = window_weights(window, side as u32);
-    let mut scratch = BlurScratch::default();
+    let mut scratch = MatchScratch::default();
+    let mut blur_scratch = BlurScratch::default();
     // The anisotropic kernel's two blurred tiles, reused pair after pair.
     let mut blurred_pair = [TilePlanes::empty(), TilePlanes::empty()];
-    // The isotropic ladder's levels, rendered once per view and level.
-    let mut ladder: Vec<[Option<TilePlanes>; 6]> = match kernel {
+    // The isotropic ladder's levels, rendered and read once per view and level.
+    let mut ladder: Vec<Ladder> = match kernel {
         BlurMatchKernel::IsotropicLadder => (0..k).map(|_| Default::default()).collect(),
         BlurMatchKernel::Anisotropic => Vec::new(),
     };
-    let (mut pairs, mut pairs_blurred) = (0usize, 0usize);
+    let (mut pairs, mut pairs_blurred, mut reads) = (0usize, 0usize, 0usize);
     for a in 0..k {
         for b in (a + 1)..k {
             if rows.is_some_and(|r| !(r[a] || r[b])) {
@@ -363,19 +447,20 @@ pub fn blur_matched_pairs(
             let readings = match (ellipses[a], ellipses[b], matching.min_ratio()) {
                 (Some(ea), Some(eb), Some(ratio)) => match kernel {
                     BlurMatchKernel::Anisotropic => {
-                        let blur = pair_blur(&ea, &eb, ratio);
-                        if blur.is_none() {
+                        let dirs = pair_directions(&ea, &eb, ratio);
+                        if dirs.is_none() {
                             pair_zncc_readings(tiles[a], tiles[b], &weights)
                         } else {
                             pairs_blurred += 1;
                             blurred[a * k + b] = true;
                             blurred[b * k + a] = true;
-                            read_blurred(
+                            read_matched(
                                 [tiles[a], tiles[b]],
-                                blur,
+                                [dirs.a, dirs.b],
                                 &weights,
                                 &mut blurred_pair,
                                 &mut scratch,
+                                &mut reads,
                             )
                         }
                     }
@@ -386,23 +471,28 @@ pub fn blur_matched_pairs(
                         } else {
                             (b, a, ma, mb)
                         };
-                        let level = (longer >= ratio * shorter.max(super::BLUR_MAP_MIN_LENGTH))
-                            .then(|| ladder_level(isotropic_blur_sigma(longer, shorter)))
-                            .flatten();
+                        let longer = longer.min(MAX_MATCHED_LENGTH);
+                        let level = (longer > shorter
+                            && longer >= ratio * shorter.max(MIN_SHARPER_LENGTH))
+                        .then(|| {
+                            ladder_pick(
+                                tiles[sharp],
+                                shorter,
+                                longer,
+                                &mut ladder[sharp],
+                                &mut blur_scratch,
+                                &mut reads,
+                            )
+                        })
+                        .flatten();
                         match level {
                             None => pair_zncc_readings(tiles[a], tiles[b], &weights),
                             Some(level) => {
                                 pairs_blurred += 1;
                                 blurred[a * k + b] = true;
                                 blurred[b * k + a] = true;
-                                let slot = &mut ladder[sharp][level];
-                                if slot.is_none() {
-                                    *slot = Some(tiles[sharp].blurred(
-                                        BlurCovariance::isotropic(LADDER_SIGMAS[level]),
-                                        &mut scratch,
-                                    ));
-                                }
-                                let level_tile = slot.as_ref().expect("filled just above");
+                                let (level_tile, _) =
+                                    ladder[sharp][level].as_ref().expect("filled by the pick");
                                 pair_zncc_readings(level_tile, tiles[other], &weights)
                             }
                         }
@@ -416,7 +506,10 @@ pub fn blur_matched_pairs(
             grid[b * k + a] = readings.grid;
         }
     }
-    progress_note!(phase, "{pairs_blurred} of {pairs} pairs blurred");
+    progress_note!(
+        phase,
+        "{pairs_blurred} of {pairs} pairs blurred, {reads} blurred tiles read"
+    );
     BlurMatchedPairs {
         k,
         whole,
@@ -424,29 +517,47 @@ pub fn blur_matched_pairs(
         blurred,
         pairs,
         pairs_blurred,
+        ellipse_reads: reads,
     }
 }
 
-/// The readings of the pair `tiles` after each is blurred by its side of
-/// `blur`, a tile with no blur read as it is, the blurred tiles written into
-/// `out`.
-fn read_blurred(
+/// The readings of the pair `tiles` after each is blurred along its
+/// directions `dirs` to the other's sharpness ([`match_blur`]), a tile with
+/// none read as it is, the blurred tiles written into `out`, the ellipse
+/// readings counted into `reads`.
+fn read_matched(
     tiles: [&TilePlanes; 2],
-    blur: PairBlur,
+    dirs: [TileDirections; 2],
     weights: &[f64],
     out: &mut [TilePlanes; 2],
-    scratch: &mut BlurScratch,
+    scratch: &mut MatchScratch,
+    reads: &mut usize,
 ) -> PairReadings {
-    let [out_a, out_b] = out;
-    for (tile, cov, out) in [
-        (tiles[0], blur.a, &mut *out_a),
-        (tiles[1], blur.b, &mut *out_b),
-    ] {
-        if !cov.is_zero() {
-            tile.blur_into(cov, out, scratch);
+    for ((tile, d), out) in tiles.iter().zip(&dirs).zip(out.iter_mut()) {
+        if d.is_empty() {
+            continue;
         }
+        out.data.clone_from(&tile.data);
+        out.side = tile.side;
+        out.channels = tile.channels;
+        let matched = match_blur(
+            tile,
+            d.as_slice(),
+            |values| read_tile_ellipse(values, tile.channels, tile.side, &tile.data),
+            &mut out.values,
+            scratch,
+        );
+        *reads += matched.probes as usize;
     }
-    let a = if blur.a.is_zero() { tiles[0] } else { &*out_a };
-    let b = if blur.b.is_zero() { tiles[1] } else { &*out_b };
+    let a = if dirs[0].is_empty() {
+        tiles[0]
+    } else {
+        &out[0]
+    };
+    let b = if dirs[1].is_empty() {
+        tiles[1]
+    } else {
+        &out[1]
+    };
     pair_zncc_readings(a, b, weights)
 }

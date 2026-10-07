@@ -232,7 +232,7 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
     if let Some(pair) = m.blur_matched_pair_zncc {
         lines.push(format!(
             "Blur-matched pair ZNCC {:.0}%: the same with the sharper tile of each pair blurred \
-             to the other's sharpness first.{}",
+             to the other's sharpness (up to 2 grid px of self-similarity) first.{}",
             100.0 * pair,
             read_note(inputs.agreement, PairZnccReading::BlurMatched)
         ));

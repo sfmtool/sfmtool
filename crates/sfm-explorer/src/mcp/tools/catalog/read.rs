@@ -398,7 +398,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           blur_matched_cell_deficit, the same three with each pair's tiles \
                           blur-matched first (the sharper tile blurred, along each direction \
                           in which the two tiles' self-similarity ellipses differ by more \
-                          than a quarter, to the other's sharpness), read over each pair's own \
+                          than a quarter, to the other's sharpness, up to a self-similarity \
+                          ellipse 2 grid px long), read over each pair's own \
                           samples, null where the evaluation took no blur-matched readings; \
                           and reference_view, the reference-view \
                           rule's decision: is_reference, rejected_by (null for the reference, \

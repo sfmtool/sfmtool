@@ -1533,7 +1533,7 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
     assert!(matched.pairs_blurred >= 3, "{}", matched.pairs_blurred);
     for i in 0..3 {
         assert!(
-            bm(i, 3) > plain.get(i, 3) + 0.02,
+            bm(i, 3) > plain.get(i, 3) + 0.01,
             "member {i} with the blurred one: blur-matched {} against plain {}",
             bm(i, 3),
             plain.get(i, 3)
@@ -1555,7 +1555,7 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
         );
     }
     for i in 0..3 {
-        assert!(above.blur_matched_zncc[i * 4 + 3] > plain.get(i, 3) + 0.02);
+        assert!(above.blur_matched_zncc[i * 4 + 3] > plain.get(i, 3) + 0.01);
     }
 }
 
