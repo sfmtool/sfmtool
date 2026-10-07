@@ -9,15 +9,16 @@
 - the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 7);
 - the self-similarity reading summarises its region by an ellipse, whose semi-major axis is the radius, in place of the contour's furthest point, the slide and the reach (Part 2). That step is built;
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built;
-- the per-view measurements of Part 4 that the reference view needs are built and reported by the bench for every track it evaluates: each view's coverage, clipped share, viewing angle and tilt direction, its median ZNCC with the other views, and its agreement over each ninth of the tile with the cell deficit read from it. So is the reference-view rule of Part 5, which picks one view from those readings and says, for each other view, which test turned it away. Track View marks the pick and shows the readings, and the wire and the Python bindings carry them, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes. The rule reports a view; it does not change how the patch bitmap is computed (Part 5).
+- the per-view measurements of Part 4 that the reference view needs are built and reported by the bench for every track it evaluates: each view's coverage, clipped share, viewing angle and tilt direction, its median ZNCC with the other views, and its agreement over each ninth of the tile with the cell deficit read from it. So is the reference-view rule of Part 5, which picks one view from those readings and says, for each other view, which test turned it away. Track View marks the pick and shows the readings, and the wire and the Python bindings carry them, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes. The rule reports a view; it does not change how the patch bitmap is computed (Part 5);
+- scoring at matched sharpness is **blur-matched ZNCC**: the sharper of two tiles blurred, along each direction in which their self-similarity ellipses differ, to the other's sharpness, read from the tiles rather than the footprint. Alignment runs against the unblurred template, and the blur-matched ZNCC is computed for the score (Part 6). The kernel is built, and so are its first two consumers: the reference view's agreement test and cell check read it by default, and member coherence can read it and by default does not ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)).
 
-Not decided: whether the patch bitmap is the reference view's tile, a mean of a few of the best views, or a weighted mean (an experiment is measuring the first two against each other); the functional forms of the weights, the blur used for matched-bandwidth scoring, and the order the consumers adopt it in. See [Open questions](#open-questions).
+Not decided: whether the patch bitmap is the reference view's tile, a mean of a few of the best views, or a weighted mean (an experiment is measuring the first two against each other); the functional forms of the weights; and when the bench's ZNCC bars and the fuse's IRLS residuals read blur-matched scores, which waits on the first (Part 6). See [Open questions](#open-questions).
 
 Amends:
 - [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): the congealing consensus
 - [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md): the representative fuse
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
-- [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the matched-bandwidth score
+- [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the blur-matched score
 - [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
 - [core/patch/reference-view.md](../core/patch/reference-view.md): the stored bitmap computed from the reference view, or from a few of the best views, in place of the fused mean (Part 5)
 
@@ -122,7 +123,7 @@ A sharper template needs to know, for each view, how much detail its tile carrie
 ### What else the zoom serves
 
 The zoom and the footprint it gives (Part 3) also serve:
-- **Matched-bandwidth scoring** (Part 6).
+- **Scoring at matched sharpness** (Part 6), where the footprint was first proposed as the blur and the self-similarity ellipse is used instead.
 - **The baseline for focus:** the radius a view's sampling alone would give, against which a longer radius points to the photograph.
 - **Choosing `R`** per track: views above 1× zoom mean the grid discards detail they hold.
 - **Converting** grid px to image px, as the Track View's hover does.
@@ -199,7 +200,7 @@ Each view's weight in the mean becomes
 w_v ∝ w_v^IRLS · f(φ_v) · g(ρ_v) · h(θ_v)
 ```
 
-- **`w_v^IRLS`** is the Tukey/MAD weight from the view's residual, computed against the template at matched bandwidth (Part 6). That way a blurry view no longer earns weight by sitting close to a blurry mean.
+- **`w_v^IRLS`** is the Tukey/MAD weight from the view's residual, computed against the template blur-matched (Part 6). That way a blurry view no longer earns weight by sitting close to a blurry mean.
 - **`f`** falls with the footprint relative to the track's smallest: `f = (φ_min / φ_v)^p`. A view at twice the smallest footprint carries half the detail per axis. For views that shrink the photograph `φ` stays between 1 and √2 (Part 3), so `f` mostly falls for views that magnify it. The radius already reads long on those tiles, so whether `f` adds anything beside `g` is measured.
 - **`g`** falls with the radius relative to the track's shortest: `g = (ρ_min / ρ_v)^q`, computed when the view is weighted. The radius is compared only within one track, since it also depends on the texture.
 - **`h`** falls with the viewing angle: `h = |cos θ_v|^k`. This is the same term as normal refinement's obliquity prior (`obliquity_weight_power`, off by default there), used here in every consumer. It is the isotropic form. The angle's sensitivity lies along the tilt direction, so the directional form weights the view by `|cos θ_v|^k` along `t̂_v` and fully across it. That needs per-axis weighting of the template (see [Open questions](#open-questions)).
@@ -217,26 +218,22 @@ The exponents `p`, `q` and `k` are measured (see [Evaluation](#evaluation)). `f`
 - **The add-image-to-tracks reference consensus.**
 - **Normal refinement's weighted consensus Φ.** Weighting changes the objective the normal is chosen by, so it adopts the weights last and only after its own measurement.
 
-## Part 6: scoring at matched bandwidth
+## Part 6: scoring at matched sharpness
 
-A sharper template makes the fifth effect worse unless scoring changes with it. A view with footprint `φ_v` is scored against the template low-passed to that footprint:
+**Built: blur-matched ZNCC is the scoring method.** A sharper template makes the fifth effect worse unless scoring changes with it: detail the template carries and a view lacks costs the view ZNCC. A view is scored against another tile, a template or another view, after the sharper of the two is blurred to the other's sharpness, direction by direction, as [core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md) describes:
+- **The blur comes from the tiles, not the geometry.** Along each eigenvector of the difference of the two tiles' self-similarity ellipses, the tile whose ellipse is shorter is blurred along it by a 1-D Gaussian whose width an empirically fitted mapping reads off the two lengths. Either tile, or both, may be blurred, each only along the directions in which it is the sharper. A direction along which the two differ by less than a factor of 1.25 is left alone, which skips about half the pairs on real tracks.
+- **Why not the footprint.** The form first proposed here, `T_v = G(σ_v) * T` with `σ_v = c · sqrt(max(φ_v² − φ_T², 0))` from the footprints of Part 3, reads only the sampling. It does nothing for a view that is blurry for a reason in the photograph: a member of a track blurred by `σ` 2 grid px fell below the threshold that catches 90% of wrong views 20% of the time under the footprint form and under plain ZNCC alike, and 3% blur-matched. The ellipse also covers the case Part 6's variant asked about (folding the view's own sharpness into the blur), since it is measured on the view's tile.
+- **Not blurring both to the coarser.** Blurring both tiles to a common width throws away detail both share, and separated wrong views from members worst of every design tried.
 
-```
-T_v = G(σ_v) * T,   σ_v = c · sqrt(max(φ_v² − φ_T², 0))
-```
+**Alignment runs against the unblurred template.** Every kernel that places a view (the localizer, the subpixel refiner, congealing, Add Image to Tracks) aligns the view's tile to the template as rendered; a blur-matched ZNCC may be computed afterwards, for the score. On the two ground truths, blurring the reference view to each aligned view before aligning, by the footprint (`c` of `1/sqrt(12)` and `0.5`), by the closest self-similarity ellipse, isotropic or anisotropic, or by any of four blur-matched kernel designs, changed the mean localization error by −0.003 to +0.012 px on seoul_bull and made it worse by 0.01 to 0.05 px on kerry_park, under both the localizer's own search and a coarse-to-fine search. The design that maximised the ZNCC per view, raising it by 0.03, was the worst for position, by 0.03 to 0.05 px. A symmetric blur of the template is a symmetric blur of the correlation surface: it leaves the peak where it is on average and lowers its curvature, so the peak is placed less precisely. Blurring the fused mean changed nothing, since its ellipse is already as long as most views'.
 
-- **`G`** is a separable Gaussian.
-- **`φ_T`** is the template's own footprint, the weighted footprint of the views that built it.
-- **`c`** converts a box footprint to a Gaussian width. `1/sqrt(12)` matches the variance of a box one footprint wide; the value is measured.
+**Where it is read.** Each consumer has an option (plain, blur-matched, or blur-matched above a ratio), and its default was set from its measured cost and benefit:
+- **The reference view's agreement and cell check: on.** It adds 0.2 ms (3%) to a track's evaluation, and agrees with the hand picks on 30 of 77 tracks against 28 ([core/patch/reference-view.md](../core/patch/reference-view.md) § "Blur-matched agreement").
+- **Member coherence's decision: off.** It costs 2.3 times the plain run; the relative bar and exoneration already spare most blurred members, so it lowers the eviction of a member blurred by `σ` 2 only from 4.9% to 2.0%, and it moves real verdicts both ways on 2% of points ([core/patch/member-coherence-validation.md](../core/patch/member-coherence-validation.md) § "Blur matching").
 
-The view is scored against `T_v`: its ZNCC, its leave-one-out score and its IRLS residual. Its own tile is not touched.
+**Not yet read by the bench's ZNCC bars or the fuse's IRLS residuals.** A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is the localizer's leave-one-out ZNCC against the IRLS-fused consensus, scored inside the localizer's search; blur-matching it needs each row's leave-one-out template and its ellipse, which the localizer does not return. The fuse's IRLS residuals are recomputed against a mean that changes every iteration, so blur-matching them needs the mean's ellipse each time and changes the stored bitmap, which is Part 5's open question. Both are left for when Part 5 decides how the bitmap is computed; the bars are re-measured then, and so are the localizer's `min_absolute_zncc` / `min_relative_zncc`.
 
-- **Anisotropic footprints.** A view that the sampler rule leaves on `BilinearMip` can still have unequal per-axis footprints, below the threshold `a`. It can be matched with a Gaussian elongated along the Jacobian's singular directions, at the same cost as a separable blur along those directions. Whether the isotropic blur is enough is measured.
-- **Cost.** One separable blur of the `R×R` template per view, about `2·R²·(kernel width)` per channel. Small next to the render.
-- **What it does not correct.** The footprint does not include blur in the photograph. A view out of focus still scores lower against a sharp template. That is intended: the low score reflects the view, and its sharpness weight `g` already lowers its influence.
-- **Variant.** Fold the view's own self-similarity into `φ_v`, so an out-of-focus view is also scored at its own bandwidth. This is an [open question](#open-questions), since it would hide focus misses from the ZNCC bars.
-
-**Effect on the bars.** ZNCC values change: far views score higher against a template blurred to their footprint. The bench's `min_zncc` bars (whole and middle) and the localizer's `min_absolute_zncc` / `min_relative_zncc` are re-measured once Part 6 lands.
+**What it does not correct, and is not meant to.** A view out of focus scores as well, blur-matched, as a sharp one of the same content. Its blur is still in its self-similarity radius, which the reference-view rule and the weights of Part 5 read, and in the plain ZNCC beside it; the bars that should see a focus miss read the plain value.
 
 ## Part 7: storing the self-similarity radii in the `.sfmr` file
 
@@ -335,11 +332,10 @@ Which one is part of this work. The radius columns do not depend on the choice.
 - **Which pairs to correlate** (Part 5), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?
-- **Folding the radius into `φ_v`** for matched-bandwidth scoring (Part 6, variant). Fairer to out-of-focus views, but it hides their blur from the ZNCC bars.
 - **Whether the sampler rule should also consider the view's weight.** A view with a small weight contributes little to the template, so rendering it with the anisotropic sampler may not pay. With the AVX2 kernel an anisotropic render costs 0.65 to 1.55 times what a `BilinearMip` one does, the most on views compressed 10 times or more along one axis, which take the most samples; on a CPU without AVX2 it costs 1.8 to 4 times as much. The question matters most on such views and on such CPUs.
 - **Directional angle terms.** The angle's sensitivity lies along the tilt direction (Part 4). Weighting the template along `t̂_v` by `|cos θ_v|^k` and fully across it is the directional form of `h`, and belongs with per-axis weighting.
 - **The patch resolution.** On the 25-view track most views are far below 1× zoom, so the 24-px grid discards detail the near views hold and the far views cannot. Choosing `R` per track from its footprints is a separate change. It interacts with this one, because a larger `R` widens the range of `φ`.
-- **Normal refinement.** Whether its objective should take these weights at all, or keep the agreement weights and only the matched-bandwidth scoring.
+- **Normal refinement.** Whether its objective should take these weights at all, or keep the agreement weights and only the blur-matched scoring.
 
 ## Non-goals
 
