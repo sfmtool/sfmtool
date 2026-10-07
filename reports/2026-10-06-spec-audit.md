@@ -894,4 +894,4 @@ Read 2026-09-26; open items above.
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
 
-   > _Status (2026-10-07): **Partially done** — `docs/index.md` now says what the tool is before the personal note, branch `spec-fix-1006-37-opening-docs-index`; the other openings are handled on their own branches._
+   > _Status (2026-10-07): **Partially done** — `docs/index.md` now says what the tool is before the personal note, branch `spec-fix-1006-37-opening-docs-index`; this branch does not cover the other eight._
