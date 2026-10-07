@@ -161,40 +161,55 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
     crate::platform::set_test_pointer_pos(Some(frame.pointer));
     let grab_keyboard = frame.grab_keyboard;
     crate::test_support::run_frame_headless(ctx, input, |ui| {
-        if grab_keyboard {
-            ui.ctx()
-                .memory_mut(|m| m.request_focus(egui::Id::new("a_widget_being_typed_into")));
-        }
-        let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
-        if !ui.ctx().egui_wants_keyboard_input() {
-            viewer.handle_image_step(ui, state);
-        }
-        egui::CentralPanel::default().show(ui, |ui| {
-            viewer.show_hud(ui, state, Some((1, 2, 3, 4)), true);
-            // The node borrows only `state.scene`, so the rest of `AppState`
-            // stays reachable alongside it — the same split `dock.rs` relies on.
-            let node = &state.scene[0];
-            viewer.show(
-                ui,
-                node,
-                &state.scene,
-                state.solo,
-                state.selected_image,
-                state.show_grid,
-                state.length_scale,
-                None,
-                &[],
-                &scroll_input,
-                state.show_controls_help,
-                state.show_fps,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &mut state.action_log,
-            );
-        });
+        draw(ui, viewer, state, grab_keyboard);
+    });
+}
+
+/// The input for a frame with nothing happening in it.
+fn quiet_input() -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        ..Default::default()
+    }
+}
+
+/// One frame's UI: the body [`run_frame`] runs, apart so that a test can run it
+/// through `painted_text_rects` to find where a label was drawn.
+fn draw(ui: &mut egui::Ui, viewer: &mut Viewer3D, state: &mut AppState, grab_keyboard: bool) {
+    if grab_keyboard {
+        ui.ctx()
+            .memory_mut(|m| m.request_focus(egui::Id::new("a_widget_being_typed_into")));
+    }
+    let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
+    if !ui.ctx().egui_wants_keyboard_input() {
+        viewer.handle_image_step(ui, state);
+    }
+    egui::CentralPanel::default().show(ui, |ui| {
+        viewer.show_hud(ui, state, Some((1, 2, 3, 4)), true);
+        // The node borrows only `state.scene`, so the rest of `AppState`
+        // stays reachable alongside it — the same split `dock.rs` relies on.
+        let node = &state.scene[0];
+        viewer.show(
+            ui,
+            node,
+            &state.scene,
+            state.solo,
+            state.selected_image,
+            state.show_grid,
+            state.length_scale,
+            None,
+            &[],
+            &scroll_input,
+            state.show_controls_help,
+            state.show_fps,
+            state.show_target_indicator,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &mut state.action_log,
+        );
     });
 }
 
@@ -823,6 +838,53 @@ fn e_turns_maintain_z_up_off_and_the_roll_stays() {
         run_frame(&mut viewer, &ctx, &mut state, Frame::new());
     }
     assert_eq!(viewer.camera.world_up, rolled, "the roll was turned back");
+}
+
+/// The Target indicator checkbox keeps the orbit target drawn without Alt
+/// held, and its Action Log entry is the text `set_viewer_3d_display` writes
+/// for the same field.
+#[test]
+fn the_target_indicator_checkbox_keeps_the_target_drawn() {
+    use crate::viewer_3d::display::{Field, FieldValue};
+
+    let mut state = demo_state();
+    let (mut viewer, ctx) = settled(&mut state);
+    assert!(!state.show_target_indicator, "off at launch");
+    assert!(
+        !viewer.target_indicator_visible,
+        "the indicator showed with Alt up and the checkbox clear"
+    );
+
+    let label = Field::ShowTargetIndicator.label();
+    let painted = crate::test_support::painted_text_rects(&ctx, quiet_input(), |ui| {
+        draw(ui, &mut viewer, &mut state, false);
+    });
+    let rect = painted
+        .iter()
+        .find(|text| text.text == label)
+        .map(|text| text.rect)
+        .expect("the Layers section draws the Target indicator checkbox");
+    click_at(&mut viewer, &ctx, &mut state, rect.center());
+
+    assert!(
+        state.show_target_indicator,
+        "the click did not tick the box"
+    );
+    let entry = state
+        .action_log
+        .entries()
+        .last()
+        .expect("the click recorded");
+    assert_eq!(entry.text, "Target indicator on");
+    assert_eq!(
+        entry.text,
+        Field::ShowTargetIndicator.text(FieldValue::Flag(true))
+    );
+    run_frame(&mut viewer, &ctx, &mut state, Frame::new());
+    assert!(
+        viewer.target_indicator_visible,
+        "the indicator is not drawn with the box ticked"
+    );
 }
 
 #[test]

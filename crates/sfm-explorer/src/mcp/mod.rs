@@ -54,6 +54,7 @@ mod read;
 pub(crate) mod server;
 pub(crate) mod tools;
 mod view;
+mod viewer_3d_display;
 mod widgets;
 pub(crate) mod window;
 mod write;
@@ -195,6 +196,15 @@ pub(crate) enum Command {
     /// different questions, and a call carrying both would have no answer.
     SetImageDetailView {
         request: ImageDetailViewRequest,
+    },
+    /// The 3D viewport's display controls, the HUD's checkboxes and sliders,
+    /// as one flat document.
+    GetViewer3dDisplay,
+    /// The fields the call named, each already checked against its slider's
+    /// range and rounded to the decimals the slider shows, so
+    /// [`apply_with_window`] only writes and records.
+    SetViewer3dDisplay {
+        change: Viewer3dDisplayChange,
     },
     /// Whether the operations to come record their finer stages.
     GetTimingDetail,
@@ -678,6 +688,16 @@ pub(crate) struct ImageDetailDisplayChange {
     pub(crate) feature_size_px: Option<display::FeatureSize>,
     pub(crate) tracked_only: Option<bool>,
     pub(crate) intrinsics: IntrinsicsChange,
+}
+
+/// A `set_viewer_3d_display` request: the fields it named with the value for
+/// each, in the document's order. A field the call did not name is not in it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Viewer3dDisplayChange {
+    pub(crate) fields: Vec<(
+        crate::viewer_3d::display::Field,
+        crate::viewer_3d::display::FieldValue,
+    )>,
 }
 
 /// A `set_image_detail_view` request: which photograph to look at, the one
@@ -1338,6 +1358,10 @@ pub(crate) fn apply_with_window(
         Command::SetImageDetailDisplay { change } => done(display::set(state, &change)),
         Command::GetImageDetailView => done(display::get_view(state)),
         Command::SetImageDetailView { request } => display::set_view(state, &request),
+        Command::GetViewer3dDisplay => done(viewer_3d_display::get(state, viewer)),
+        Command::SetViewer3dDisplay { change } => {
+            done(viewer_3d_display::set(state, viewer, &change))
+        }
         Command::GetTimingDetail => done(display::get_timing_detail(state)),
         Command::SetTimingDetail { enabled } => done(display::set_timing_detail(state, enabled)),
         Command::SetView { view, animate } => done(view::set_view(state, viewer, view, animate)),

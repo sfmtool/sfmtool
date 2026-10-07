@@ -242,6 +242,7 @@ impl TabContext<'_> {
                 self.scroll_input,
                 self.state.show_controls_help,
                 self.state.show_fps,
+                self.state.show_target_indicator,
                 self.scene_texture_id,
                 self.hover_depth,
                 self.hover_pick,

@@ -10,8 +10,8 @@ use eframe::egui::{self, Rect};
 use nalgebra::Vector3;
 
 use super::{
-    bench_track, Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MAINTAIN_Z_UP_LABEL,
-    MOUSE_WHEEL_ZOOM_SPEED, TRACKPAD_ZOOM_SPEED,
+    bench_track, Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MOUSE_WHEEL_ZOOM_SPEED,
+    TRACKPAD_ZOOM_SPEED,
 };
 use crate::bench::geometry;
 use crate::platform::GestureEvent;
@@ -736,11 +736,7 @@ impl Viewer3D {
         let (left, right) = ui.input(|i| (i.key_down(egui::Key::Q), i.key_down(egui::Key::E)));
         if (left || right) && self.maintain_z_up {
             self.maintain_z_up = false;
-            log.record_run(
-                crate::action_log::Kind::Display,
-                MAINTAIN_Z_UP_LABEL,
-                format!("{MAINTAIN_Z_UP_LABEL} off"),
-            );
+            super::display::Field::MaintainZUp.record(log, super::display::FieldValue::Flag(false));
         }
         if left {
             self.camera.tilt(-tilt_speed);

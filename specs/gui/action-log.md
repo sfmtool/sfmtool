@@ -220,8 +220,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | View | — | User | `Home is refused while a camera is being moved; M or Enter commits, Esc cancels.` (**failed**) |
 | View | `camera` | MCP | `Camera placed` / `Camera restored` |
 | View | `field of view` | MCP | `Field of view {fov:.1}°` |
-| Display | the control's label | User | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off` |
-| Display | the control's label | User | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0`, `Scene scale 0.031` |
+| Display | the control's label | User / MCP | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off`, `Target indicator on`; the same text when `set_viewer_3d_display` changes the field, one entry per field it changed, from `viewer_3d::display::Field::record` ([mcp-server.md](mcp-server.md) § "`get_viewer_3d_display` / `set_viewer_3d_display`") |
+| Display | the control's label | User / MCP | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0`, `Scene scale 0.031`, at the decimals the slider shows; the same from `set_viewer_3d_display` |
 | Display | the control's label | User / MCP | The Image Detail panel's controls, in the same two shapes: `Overlay {label}` / `Max features {n|all}` / `Feature size {min:.1}–{max:.1} px` / `Feature size filter off` / `Tracked only {on|off}` / `Intrinsics {on|off}` / `Intrinsics {axes|rings|distortion} {on|off}` / `Distortion scale {×n|auto}` / `Grid density {n}` — one entry per field that changed, from one differ both the toolbar and `set_image_detail_display` call ([mcp-server.md](mcp-server.md) § "`get_image_detail_display` / `set_image_detail_display`"). The run is the control: `Feature size` for both of its texts, `Intrinsics axes` and `Intrinsics rings` two different runs |
 | Animation | — | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
 | Animation | — | Viewer | `Animation reached the end at {name}` |
@@ -707,9 +707,9 @@ headless test as the command vocabulary, since `App` needs a GPU and a window
 and `apply_as_agent` needs neither.
 
 Within that batch, each applied command yields exactly one entry before
-coalescing, with the two exceptions named above (a multi-field
-`set_reconstruction_display` or `set_image_detail_display` records one per
-field it changed):
+coalescing, with the exceptions named above (a multi-field
+`set_reconstruction_display`, `set_image_detail_display` or
+`set_viewer_3d_display` records one per field it changed):
 
 - A mutating tool's entry is written by the `AppState` / `Viewer3D` method it
   calls, with the text from the catalogue and actor `Mcp` because the drain

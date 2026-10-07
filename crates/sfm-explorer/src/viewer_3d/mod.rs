@@ -11,6 +11,9 @@
 /// [`crate::scene_renderer`].
 pub(crate) mod bench_track;
 mod camera;
+/// Crate-visible because the MCP surface reads and writes the fields the HUD
+/// draws, through the same list.
+pub(crate) mod display;
 mod framing;
 mod hud;
 mod input;
@@ -282,12 +285,6 @@ pub struct Viewer3D {
     pub hover_pixel: Option<[u32; 2]>,
     /// Whether the Alt key is currently held.
     pub alt_held: bool,
-    /// Whether the Alt key was held on the previous frame (for edge detection).
-    alt_was_held: bool,
-    /// Timestamp of the last Alt key press (for double-tap detection).
-    last_alt_press_time: f64,
-    /// Whether the target indicator is locked on via Alt double-tap.
-    pub target_keep_visible: bool,
     /// Supernova effect activation level (0.0 = off, 1.0 = fully on).
     pub supernova_active: f32,
     /// Target's view-space position [x, y, z] for the supernova effect (z is positive = in front).
@@ -454,9 +451,6 @@ impl Viewer3D {
             panel_size: [0, 0],
             hover_pixel: None,
             alt_held: false,
-            alt_was_held: false,
-            last_alt_press_time: -1.0,
-            target_keep_visible: false,
             supernova_active: 0.0,
             supernova_view_pos: [0.0, 0.0, 5.0],
             supernova_time: 0.0,
@@ -666,6 +660,9 @@ impl Viewer3D {
         scroll_input: &crate::platform::ScrollInput,
         show_controls_help: bool,
         show_fps: bool,
+        // The HUD's **Target indicator**: draw the orbit target all the time,
+        // not only while Alt is held.
+        show_target_indicator: bool,
         scene_texture_id: Option<egui::TextureId>,
         hover_depth: Option<f32>,
         hover_pick: Option<crate::scene_renderer::PickTarget>,
@@ -690,18 +687,7 @@ impl Viewer3D {
         let rect = response.rect;
         self.alt_held = ui.input(|i| i.modifiers.alt);
 
-        // Detect Alt double-tap to toggle target lock
         let current_time = ui.input(|i| i.time);
-        if self.alt_held && !self.alt_was_held {
-            // Alt just pressed — check for double-tap (within 300ms)
-            if current_time - self.last_alt_press_time < 0.3 {
-                self.target_keep_visible = !self.target_keep_visible;
-                self.last_alt_press_time = -1.0; // reset to prevent triple-tap toggle
-            } else {
-                self.last_alt_press_time = current_time;
-            }
-        }
-        self.alt_was_held = self.alt_held;
 
         // Keyboard arbitration: a HUD `DragValue` in text-entry mode owns the
         // keyboard, and WASD typed into it must not also fly the camera. egui
@@ -732,7 +718,7 @@ impl Viewer3D {
         let dt = ui.input(|i| i.stable_dt);
         self.supernova_time = current_time as f32;
         let fade_speed = 5.0; // 1.0 / 0.2 seconds
-        if self.alt_held || self.target_keep_visible {
+        if self.alt_held || show_target_indicator {
             self.supernova_active = (self.supernova_active + dt * fade_speed).min(1.0);
         } else {
             self.supernova_active = (self.supernova_active - dt * fade_speed).max(0.0);
@@ -843,7 +829,7 @@ impl Viewer3D {
         self.draw_axis_indicator(&painter, rect);
 
         // Update target indicator state for GPU rendering
-        self.update_target_indicator_state(ui);
+        self.update_target_indicator_state(ui, show_target_indicator);
 
         // The focused item, as the scene geometry the next frame's
         // upload draws. After the camera has been moved by this frame's input,
@@ -1694,11 +1680,16 @@ impl Viewer3D {
 
     /// Updates target indicator state for GPU rendering.
     ///
+    /// The indicator is drawn while Alt is held, because Alt+click sets the
+    /// target and the indicator shows where it stands before the click; while
+    /// `show_target_indicator`, the HUD's **Target indicator**, is on; and for
+    /// the flash after the target moves.
+    ///
     /// Advances the rotation animation and computes flash animation state.
     /// The actual rendering is done by `SceneRenderer::render_target_indicator`.
-    fn update_target_indicator_state(&mut self, ui: &egui::Ui) {
+    fn update_target_indicator_state(&mut self, ui: &egui::Ui, show_target_indicator: bool) {
         self.target_indicator_visible =
-            self.alt_held || self.target_keep_visible || self.target_flash_start.is_some();
+            self.alt_held || show_target_indicator || self.target_flash_start.is_some();
 
         if !self.target_indicator_visible {
             return;

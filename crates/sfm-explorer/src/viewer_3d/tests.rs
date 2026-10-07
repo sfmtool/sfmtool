@@ -126,6 +126,7 @@ fn run_bench_frame(
                 &scroll_input,
                 state.show_controls_help,
                 state.show_fps,
+                state.show_target_indicator,
                 None,
                 None,
                 pick,

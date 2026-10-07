@@ -444,6 +444,24 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "set_viewer_3d_display",
+            description: "Change the 3D viewport's display controls, the checkboxes and sliders \
+                          of its Display HUD: which layers are drawn (points, camera images, grid, \
+                          patches, points at infinity, the orbit target's indicator), point and \
+                          patch sizes, the scene scale, Maintain Z-up, the Advanced sliders and \
+                          the two Debug overlays. Every field is optional and every omitted one \
+                          is left alone; the reply is the whole document, as \
+                          get_viewer_3d_display returns it. It works whether or not the HUD is \
+                          open. A number outside its slider's range or not finite, a value of \
+                          the wrong type and a call naming nothing are refused whole, leaving the \
+                          call's other fields unapplied; a number inside the range is rounded to \
+                          the decimals the slider shows. The field of view is not here: set_view \
+                          sets it. Each changed field writes one Action Log entry in the words \
+                          the HUD's own control records.",
+            kind: Write,
+            schema: object(&crate::mcp::viewer_3d_display::properties(), &[]),
+        },
+        ToolSpec {
             name: "set_timing_detail",
             description: "Record the finer stages inside each operation, or stop recording them. \
                           This is the level the next operation is timed at; get_action_log's \

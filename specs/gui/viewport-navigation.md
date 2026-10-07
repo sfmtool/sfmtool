@@ -176,8 +176,7 @@ details.
 | Z | Zoom to Fit | Frame all visible points (or view through selected camera if one is selected) |
 | Home | Level Horizon | Reset `world_up` to Z-up without moving the camera |
 | Shift+Home | Reset View | Reset to default camera position looking at origin with Z-up |
-| Alt (hold) | Target Reveal | Show target indicator and supernova lighting effect |
-| Alt (double-tap) | Target Toggle | Toggle target indicator to stay visible without holding Alt |
+| Alt (hold) | Target Reveal | Show target indicator and supernova lighting effect; the HUD's **Target indicator** checkbox keeps them shown without Alt |
 | WASD | Fly Movement | W=forward, S=back, A=left, D=right (camera-relative) |
 | R / F | Fly Up / Down | Camera-relative up/down movement |
 | Q / E | Tilt / Roll | Rotate horizon left/right around view axis, and turn [Maintain Z-up](#maintain-z-up) off |
@@ -356,7 +355,7 @@ nodal pan (same as Alt+drag — camera stays fixed, view direction changes,
 target slides to new look-at point). This matches video game conventions where
 mouse-look rotates your view while moving. Fly mode does not affect the target
 indicator or supernova visibility — if the target is visible (via Alt hold or
-Alt double-tap lock), it stays visible while flying.
+the HUD's **Target indicator** checkbox), it stays visible while flying.
 
 The navigation mode is locked when a fly-key-initiated drag starts and held
 until the drag ends. If you release the fly keys while still dragging, the
@@ -611,11 +610,21 @@ While Alt is held, the viewport renders a persistent **target indicator** at the
 target point. This serves two purposes: confirming where the target is, and providing a
 spatial anchor for understanding the 3D structure around it.
 
-#### Double-Tap Alt: Target Toggle
+#### The Target indicator checkbox
 
-Double-tapping Alt (two presses within 300ms) toggles the target indicator and supernova
-effect to stay visible without holding Alt. Double-tap again to turn it off. This is
-useful when you want to keep the target visible while navigating normally.
+The HUD's **Target indicator** checkbox, in its Layers section
+([viewport-hud.md](viewport-hud.md)), keeps the target indicator and supernova
+effect visible without holding Alt, for keeping the target in view while
+navigating normally. It is off at launch and is `AppState::show_target_indicator`,
+which `set_viewer_3d_display` also sets
+([mcp-server.md](mcp-server.md#get_viewer_3d_display--set_viewer_3d_display)).
+Holding Alt still shows the indicator while Alt is held, because Alt+click sets
+the target and the indicator shows where it stands before the click; and the
+indicator still flashes for 0.3 s after the target moves.
+
+It is a checkbox rather than a key gesture because a checkbox shows whether it
+is on, and an agent can set it, which it could not do with two key presses timed
+against each other.
 
 **3D Shape at Target**:
 - A small **rotating 3D compass** at the target point, slowly spinning to

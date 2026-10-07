@@ -6,8 +6,8 @@ once per point. A point has no surface normal to shade by, so a full-screen
 Eye-Dome Lighting (EDL) pass then darkens each point pixel whose neighboring
 pixels hold nearer points or no point at all. That outlines surfaces and depth
 edges and makes the 3D shape of a sparse cloud readable. While Alt is held, or
-after Alt is double-tapped, a rotating compass glyph marks the orbit camera's
-target point: cyan where it is in front of the scene, a faded orange where scene
+while the HUD's Target indicator checkbox is on, a rotating compass glyph marks
+the orbit camera's target point: cyan where it is in front of the scene, a faded orange where scene
 geometry hides it. The EDL pass also brightens points near the target, with
 pulses moving outward from it, so the points around the pivot stand out even
 when the glyph itself is hidden. The code calls this brightening the supernova
@@ -219,12 +219,13 @@ For the navigation controls that activate and move the target, see
 
 ### Activation
 
-The target indicator and supernova effect activate in two ways:
+The target indicator and supernova effect activate in two ways, and the
+indicator alone also flashes for 0.3 s after the target moves:
 
 | Trigger | Behavior |
 |---------|----------|
 | **Hold Alt** | Indicator appears while Alt is held, fades on release |
-| **Double-tap Alt** | Toggles indicator to stay visible without holding Alt |
+| **Target indicator** (HUD checkbox, Layers) | Keeps the indicator visible without holding Alt |
 
 Activation fades in/out over ~300ms for smooth transitions.
 

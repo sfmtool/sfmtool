@@ -50,6 +50,8 @@ impl Command {
             Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
             Command::GetImageDetailView => "get_image_detail_view",
             Command::SetImageDetailView { .. } => "set_image_detail_view",
+            Command::GetViewer3dDisplay => "get_viewer_3d_display",
+            Command::SetViewer3dDisplay { .. } => "set_viewer_3d_display",
             Command::GetTimingDetail => "get_timing_detail",
             Command::SetTimingDetail { .. } => "set_timing_detail",
             Command::SetView { .. } => "set_view",
@@ -282,6 +284,7 @@ impl Command {
             | Command::GetWindowLayout
             | Command::GetImageDetailDisplay
             | Command::GetImageDetailView
+            | Command::GetViewer3dDisplay
             | Command::GetTimingDetail
             | Command::GetHistory { .. }
             | Command::GetBackgroundTask
@@ -373,6 +376,7 @@ impl Command {
             // nothing about them reaches the reconstruction.
             Command::SetImageDetailDisplay { .. }
             | Command::SetImageDetailView { .. }
+            | Command::SetViewer3dDisplay { .. }
             | Command::SetTimingDetail { .. } => Kind::Display,
             Command::SetView { .. } => Kind::View,
             // Its own kind: what the input then does is recorded as it would be
@@ -444,6 +448,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         Command::GetBackgroundTask => "get_background_task".to_string(),
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
         Command::GetImageDetailView => "get_image_detail_view".to_string(),
+        Command::GetViewer3dDisplay => "get_viewer_3d_display".to_string(),
         Command::GetTimingDetail => "get_timing_detail".to_string(),
         Command::GetHistory {
             reconstruction_label,

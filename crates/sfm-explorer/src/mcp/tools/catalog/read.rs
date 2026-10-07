@@ -234,6 +234,19 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[]),
         },
         ToolSpec {
+            name: "get_viewer_3d_display",
+            description: "The 3D viewport's display controls, the checkboxes and sliders of its \
+                          Display HUD, as one flat document named by the fields they are stored \
+                          in: the layer toggles (show_points, show_camera_images, show_grid, \
+                          show_patches, show_points_at_infinity, show_target_indicator), the \
+                          sizes (point_size_log2, infinity_point_px, length_scale), the patch \
+                          sliders, maintain_z_up, the Advanced sliders and the two Debug \
+                          overlays. These decide what a screenshot of the viewer_3d panel \
+                          shows. The field of view is in get_scene's view block instead.",
+            kind: Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
             name: "get_history",
             description: "One reconstruction's versions, oldest first: every edit anyone has \
                           made to it this session, with the sentence the edit recorded as each \

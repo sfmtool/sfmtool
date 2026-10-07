@@ -75,6 +75,8 @@ keeps it from fighting the scene while open.
 │                                      │   ☑ Camera Images │ │
 │                                      │   ☑ Grid          │ │
 │                                      │   ☑ Patches       │ │
+│                                      │   ☑ Points at ∞   │ │
+│                                      │   ☐ Target indic… │ │
 │                                      │ ▾ Size            │ │
 │                                      │   Points  ──●──   │ │
 │                                      │   ∞ (px)  ─●───   │ │
@@ -162,12 +164,27 @@ Debug closed.
 
 | Section | Contents |
 |---------|----------|
-| **Layers** | Show Points, Show Camera Images, Show Grid, Show Patches, Show Points at Infinity |
+| **Layers** | Show Points, Show Camera Images, Show Grid, Show Patches, Show Points at Infinity, Target indicator ([viewport-navigation.md](viewport-navigation.md#the-target-indicator-checkbox)) |
 | **Size** | Point Size (log₂, −3…+3) + reset, Infinity Point Size (1–16 px), Length Scale (0.001–100, log) |
 | **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff |
 | **Camera** | Maintain Z-up ([viewport-navigation.md](viewport-navigation.md#maintain-z-up)), Field of View (10°–120°) + reset |
 | **Advanced** | EDL Line Thickness (0.5–8 px), Frustum Size (0.05–5, log), Target Size (0.05–5, log), Target Fog (0.5–100, log) |
 | **Debug** | Controls-help toggle, fps toggle, touchpad diagnostic counters |
+
+Every checkbox and slider but the field of view is one entry of
+`viewer_3d::display::Field`
+([display.rs](../../crates/sfm-explorer/src/viewer_3d/display.rs)): the field it
+is stored in, its label, its slider's range and shown decimals, and the Action
+Log text a change to it records (`Grid off`, `Point size 1.5`). The HUD builds
+its widgets from that list, and the MCP tools `get_viewer_3d_display` and
+`set_viewer_3d_display` read, check and write the same fields through it
+([mcp-server.md](mcp-server.md#get_viewer_3d_display--set_viewer_3d_display)),
+so a range or a text cannot differ between the two. A widget records its change
+only when a person was on it (`ActionLog::is_action`), since a slider rounds
+and clamps the value it is handed on every frame it is drawn and reports that as
+a change; the entry itself is written by `Field::record`, the call the tool's
+diff makes for each field it changed. The field of view is part of the view,
+which `set_view` sets, and stays outside the list.
 
 The **count readout** for points at infinity is not a HUD widget: it belongs
 with the point/image counts already painted top-left, so the scene stats line

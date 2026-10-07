@@ -121,6 +121,13 @@ returns each observation's `reproj_error` and pixel.
 
 ## 3. The target indicator and the point size cannot be set by an agent (medium)
 
+> _Status (2026-10-06): **Done** — new `get_viewer_3d_display` /
+> `set_viewer_3d_display` tools read and write every HUD checkbox and slider
+> but the field of view (point size, layer toggles, Maintain Z-up, the target
+> indicator), refused outside the slider ranges and logged in the HUD's words;
+> the Alt double-tap is replaced by a **Target indicator** checkbox in the HUD's
+> Layers section, branch `viewer-3d-display-mcp`._
+
 The tutorial's last GUI screenshot shows the orbit target (double-tap Alt) and
 enlarged points. Neither can be set over MCP.
 

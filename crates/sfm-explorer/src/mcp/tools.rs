@@ -271,6 +271,12 @@ pub(crate) fn parse(
         "set_image_detail_view" => Command::SetImageDetailView {
             request: super::display::parse_view(&args)?,
         },
+        "get_viewer_3d_display" => Command::GetViewer3dDisplay,
+        // The ranges are the HUD sliders' and static, so the whole call is
+        // checked here and `apply` cannot fail, as `set_image_detail_display`.
+        "set_viewer_3d_display" => Command::SetViewer3dDisplay {
+            change: super::viewer_3d_display::parse_change(&args)?,
+        },
         "get_timing_detail" => Command::GetTimingDetail,
         // Required rather than a toggle, for the reason `set_solo` takes the
         // state it wants: an agent issuing a toggle cannot know the outcome

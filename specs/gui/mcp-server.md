@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Eighty-six tools. Sixteen read -- fifteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-five
+Eighty-eight tools. Seventeen read -- sixteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-six
 write, four send input, and one writes a file. `get_widgets` and the four
 input tools, `click`, `hover`, `press_key` and `type_text`, read and press the
 viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
@@ -133,6 +133,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
 | `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, and the rectangle of it on screen |
+| `get_viewer_3d_display` | read | The 3D viewport's display controls — the HUD's layer toggles, sizes, Maintain Z-up and the rest of its checkboxes and sliders — as one flat document |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, as a background open that fills in the thumbnails and patch bitmaps the file lacks |
@@ -149,6 +150,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
+| `set_viewer_3d_display` | write | Change any of the 3D viewport's display controls, leaving the rest alone |
 | `set_view` | write | Frame the scene, look through a camera image, bring a point or a bench observation to the middle of the view, set the viewport camera outright, or move, turn and orbit it from where it stands |
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
@@ -208,8 +210,8 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
-Every tool is annotated: the fifteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-five writes `destructiveHint: false` (none of
+Every tool is annotated: the sixteen reads and `screenshot` carry
+`readOnlyHint: true`, the sixty-six writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -319,6 +321,9 @@ one panel: the Image Detail panel's controls as a document, with the feature
 overlay and its filters at the top level and the intrinsics layer as an
 **`intrinsics`** sub-block, which is how the panel's toolbar draws them — the
 feature controls in a row, the layer behind one checkbox and a gear.
+**`viewer_3d_display`** is the 3D viewport's HUD controls as a document, named
+for the panel's wire name and flat, because none of the HUD's sections tells two
+of its controls apart.
 
 #### `<entity>` for the thing, `<entity>_<attribute>` for a reference to it
 
@@ -1235,6 +1240,129 @@ area, a point with no sighting in this photograph, a feature index the file does
 not have, and no camera image selected and none named -- which names both
 `camera_image` and `select_camera_image`.
 
+### `get_viewer_3d_display` / `set_viewer_3d_display`
+
+The 3D viewport's HUD ([viewport-hud.md](viewport-hud.md)) decides what a
+`screenshot` of `viewer_3d` shows: which layers are drawn, how large the points
+are, whether the orbit target's indicator is up. These two tools read and write
+those controls as one document, the 3D counterpart of
+`get_image_detail_display` / `set_image_detail_display`. Like those, they are
+scene-level settings rather than properties of a reconstruction: the layer
+toggles are master switches over every node, and the per-node eyes stay with
+`set_reconstruction_display`.
+
+`get_viewer_3d_display` takes no arguments and returns the document:
+
+```jsonc
+{
+  "viewer_3d_display": {
+    "show_points": true,              // Layers
+    "show_camera_images": true,
+    "show_grid": true,
+    "show_patches": true,
+    "show_points_at_infinity": true,
+    "show_target_indicator": false,
+    "point_size_log2": 0.0,           // Size: -3 to 3, 1 decimal
+    "infinity_point_px": 3.0,         //       1 to 16 px, 1 decimal
+    "length_scale": 0.655,            //       0.001 to 100, 3 decimals; set from the points at load
+    "patch_opacity": 1.0,             // Patches: 0 to 1, 2 decimals
+    "patch_size_log2": 0.0,           //          -3 to 3, 1 decimal
+    "patch_alpha_cutoff": 0.0,        //          0 to 1, 2 decimals
+    "maintain_z_up": true,            // Camera
+    "edl_line_thickness": 2.4,        // Advanced: 0.5 to 8, 1 decimal
+    "frustum_size_multiplier": 0.5,   //           0.05 to 5, 2 decimals
+    "target_size_multiplier": 0.3,    //           0.05 to 5, 2 decimals
+    "target_fog_multiplier": 10.0,    //           0.5 to 100, 1 decimal
+    "show_controls_help": true,       // Debug
+    "show_fps": true
+  }
+}
+```
+
+`set_viewer_3d_display` takes any subset of the same fields and leaves every
+omitted one alone:
+
+```jsonc
+{ "point_size_log2": 1.5, "show_target_indicator": true }
+{ "show_grid": false, "show_camera_images": false }
+{ "maintain_z_up": true }
+```
+
+The reply is the whole document, exactly as `get_viewer_3d_display` would return
+it, so the agent reads back the state rather than the fields it happened to set.
+It works whether or not the HUD is open, as `set_image_detail_display` works on a
+closed panel: the values are `AppState`'s and `Viewer3D`'s, and the HUD only
+draws them.
+
+**The document is flat, and its field names are the field names in the code.**
+The HUD groups its controls into six sections, but a section is a layout
+decision and not a name: no two controls share a word, so a nested
+`{ "size": { "points": … } }` would add a level without telling two things
+apart. Every field is named for the field it is stored in (`AppState`'s, and
+`Viewer3D::maintain_z_up`), which is § "Where the GUI has no word, the code's
+word wins" applied to labels like `Points` and `Scene` that would be ambiguous
+on their own. The numbers are carried as the shortest decimal that reads back
+as the stored `f32`, so an EDL width of 2.4 reads `2.4`.
+
+**What is in it and what is not.** Every checkbox and slider of the HUD is a
+field except the field of view. The field of view is part of the view: the view
+block reports it as `fov_short_axis_deg`, `set_view` sets it, and its range
+(`view::MIN_FOV_DEG` to `view::MAX_FOV_DEG`) is wider than the HUD slider's, so
+a second way to set it here would accept less than the first. `maintain_z_up` is
+navigation state too, but it is here because nothing else could turn it back
+on: `set_view` turns it off when it is given a rolled `up` (§ "The view
+block"), and Q and E turn it off, but only the HUD checkbox turns it on.
+Turning it on does not move the view in the call. On the frames that follow, a
+view whose `world_up` is not +Z eases back to level over about a second, as it
+does when the checkbox is ticked
+([viewport-navigation.md](viewport-navigation.md#maintain-z-up)), unless the
+view is looking through a camera, whose own up is kept. A screenshot taken
+straight after the call can therefore show the view part way through the turn.
+
+**`show_patches` is settable without patch data.** The HUD greys its checkbox
+when no loaded reconstruction carries patch bitmaps, but the value is a master
+switch with nothing to draw, and refusing it would make an agent check for
+patch data before setting a layer it may want for the next file it opens.
+
+**Refusals are atomic, and they happen at the parse.** Every field's range is
+the range of the HUD's slider for it, read from one list
+(`viewer_3d::display::Field`), which the HUD builds its sliders from as well, so
+the two cannot drift. A number outside its range or not finite, a value of the
+wrong type, and a call naming nothing are refused before a `Command` exists,
+with a message naming the field and its range (`set_viewer_3d_display wants
+point_size_log2 to be a number from -3 to 3 — got 4.`). A call naming a good
+field and a bad one changes nothing, and the refusal is a protocol error
+(§ "Errors"), so it leaves no Action Log row. **A number inside its range is
+rounded to the decimals its slider shows**, because the slider rounds the value
+it holds to those decimals on every frame it is drawn: a `point_size_log2` of
+`1.53` would become `1.5` the next time the HUD was open, and rounding on the
+way in keeps the value the reply reports equal to the one the HUD shows.
+
+**Every field the call changed is one Action Log entry**, under `Display`, as
+the agent, in the words the HUD's own control records; a field that did not
+change records nothing, and each field is its own run, so a call changing three
+fields leaves three rows. The tool records the diff of the document before and
+after its write; each changed field is written by `Field::record`, the function
+the HUD's widgets record through too, so the texts are one definition:
+
+| Field | Text |
+|-------|------|
+| `show_points` / `show_camera_images` / `show_grid` / `show_patches` | `Points {on|off}` / `Camera Images {on|off}` / `Grid {on|off}` / `Patches {on|off}` |
+| `show_points_at_infinity` / `show_target_indicator` | `Points at ∞ {on|off}` / `Target indicator {on|off}` |
+| `point_size_log2` / `infinity_point_px` / `length_scale` | `Point size {v:.1}` / `∞ point size {v:.1} px` / `Scene scale {v:.3}` |
+| `patch_opacity` / `patch_size_log2` / `patch_alpha_cutoff` | `Patch opacity {v:.2}` / `Patch size {v:.1}` / `Patch edge cutoff {v:.2}` |
+| `maintain_z_up` | `Maintain Z-up {on|off}` |
+| `edl_line_thickness` / `frustum_size_multiplier` / `target_size_multiplier` / `target_fog_multiplier` | `EDL width {v:.1}` / `Frustum size {v:.2}` / `Target size {v:.2}` / `Target fog {v:.1}` |
+| `show_controls_help` / `show_fps` | `Controls help {on|off}` / `Frame rate {on|off}` |
+
+The HUD does not diff a snapshot of its own frame the way the Image Detail
+toolbar does. An `egui::Slider` rounds and clamps the value it is handed on
+every frame it is drawn and reports that as a change, so a diff around the HUD
+would record `Scene scale 0.655` on the first frame after a load, with nobody
+touching anything. The HUD therefore keeps recording a widget's change only
+when a person was on the widget (`ActionLog::changed`), and writes the entry
+through the same `Field::record` path the tool does.
+
 ### The view block
 
 The block reports the viewport camera's stored state, field for field, and puts
@@ -1262,7 +1390,8 @@ While the HUD's **Maintain Z-up** is on, which it is at launch, the viewer turns
 still a camera's up, lands immediately, and the roll then eases back to level
 over the following frames. A `set_view` whose `up` or `world_up` is not +Z asks
 for a rolled view and turns Maintain Z-up off, as Q and E do, so the roll it
-set is kept.
+set is kept. `set_viewer_3d_display { "maintain_z_up": true }` turns it back on
+(§ "`get_viewer_3d_display` / `set_viewer_3d_display`").
 
 **`fov_short_axis_deg` is the field of view of the shorter viewport dimension** —
 vertical in a landscape window, horizontal in a portrait one — which is how
@@ -4085,6 +4214,7 @@ testable without a window:
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
 | `layout` | The four layout tools and their shared reply, over `AppState`'s own document and panel operations |
 | `display` | The `image_detail_display` document: its render, the parse of a change into `ImageDetailDisplayChange`, and the apply — over the two settings structs and the diff-and-record function in `crate::state` that the toolbar shares, unconditional because the human's changes are logged in every build |
+| `viewer_3d_display` | The `viewer_3d_display` document: its render, the parse of a change into `Viewer3dDisplayChange` and the schema's properties, both walked from `crate::viewer_3d::display::Field`, and the apply, which diffs a snapshot before and after its write; the list itself is the viewer's, unconditional because the HUD draws its widgets from it in every build |
 | `edit` | The editing family: the version list, the three cursor moves, the save, and one function per edit family, each of them one `AppState` call, wrapped in the reply that names the version it pushed |
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
 | `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot; and the two calls from the egui pass, which feed an input step's events in and read the frame's widgets out |
@@ -4176,7 +4306,8 @@ impl Command {
 filed. `SetImageDetailDisplay` is `Kind::Display` — the kind the HUD's own
 controls record under, since the Image Detail toolbar is the same sort of thing
 on a different panel — and `GetImageDetailDisplay` a `Kind::Query` like every
-other read. The seven edit commands and the three cursor moves are `Kind::Edit`
+other read. `SetViewer3dDisplay` is `Kind::Display` too, being the HUD's own
+controls, and `GetViewer3dDisplay` a `Kind::Query`. The seven edit commands and the three cursor moves are `Kind::Edit`
 and `SaveReconstruction` is `Kind::File`, which is where the GUI's own rows for
 them go, so a refusal is filed where its success would have been.
 Everything the window portion is made of — `WindowChange`, `WindowState`,
@@ -4543,6 +4674,22 @@ where a test hands no host over.
   `Context::run_ui` frame that presses `I` over the panel records
   `Intrinsics off` as `User`, and a frame that changes nothing records nothing —
   the differ, not the widget, decides.
+- **`get_viewer_3d_display` returns every field of `Field::ALL` and the HUD's
+  defaults** (`show_target_indicator` false, `maintain_z_up` true, an EDL width
+  that reads `2.4`); **`set_viewer_3d_display`** changes exactly the fields it
+  names, writes `maintain_z_up` onto the viewer and turns it back on, and the
+  reply equals the next `get`; a number inside its range is rounded to its
+  slider's decimals (`1.53` to `1.5`); `show_patches` is set with no patch data
+  loaded; a number outside its range is refused with the range in the message,
+  as are a value of the wrong type, `fov_short_axis_deg` (an unknown argument)
+  and an empty call, and none of those changes anything; every slider's range
+  holds no value that is not finite. The log gets one `Display` entry per
+  changed field in the HUD's words, as `Mcp`, a repeat of the newest field folds
+  into its row, and an unchanged field records nothing; every field's text is
+  asserted against the words the HUD wrote before the list existed. In
+  `viewer_3d::hud::tests`, a click on the **Target indicator** checkbox ticks
+  it, records `Target indicator on` as `Field::text` spells it, and keeps the
+  indicator drawn with Alt up.
 - **Every `set_image_detail_view` target lands where it was aimed**, checked
   against the one thing the reply and the request can be compared on: the centre
   of `visible_rect_px`. A pixel, a point's observation and a feature each end at
@@ -4841,7 +4988,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty-six tools**, sixteen of them reads, four of the
+- **The catalog is eighty-eight tools**, seventeen of them reads, four of the
   `Input` kind and one of the `Save` kind, those five carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
@@ -5092,6 +5239,7 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
+| `set_viewer_3d_display` numbers | Each slider's range and decimals (`viewer_3d::display::Field::control`) | The only values accepted, the ends included; a value inside is rounded to the decimals the slider shows. The ranges are listed beside the document in § "`get_viewer_3d_display` / `set_viewer_3d_display`". |
 
 | `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
@@ -5138,15 +5286,6 @@ Other candidates, in rough order of value:
   shows; the tab bar is the same eight words every time. Excluded; include it if
   an agent needs to see which tab is in front, which `get_window_layout`'s
   `panels` already says.
-- **Whether `set_view` should expose the HUD's display controls** (point size,
-  EDL thickness, patch opacity). They change what a screenshot shows, so an
-  agent evaluating a reconstruction may want them; they are also a long tail of
-  knobs that would double the tool's surface. Left out until something asks.
-  The Image Detail panel's controls got their own pair
-  (`get_image_detail_display` / `set_image_detail_display`) because that panel
-  is where "where is the solve wrong" is answered and its controls are a closed
-  set; if the HUD's are exposed, a `viewer_3d_display` document of the same
-  shape is the precedent to follow, not more fields on `set_view`.
 - **Held keys.** The 3D viewport's fly keys act for as long as a key is down,
   and `press_key` holds a key for one frame, so no tool flies the camera. A
   `hold_ms` argument would cover them. There is none because `set_view` already

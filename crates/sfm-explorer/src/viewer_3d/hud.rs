@@ -18,6 +18,7 @@ use eframe::egui;
 use crate::action_log::Kind;
 use crate::state::AppState;
 
+use super::display::{Field, FieldValue};
 use super::Viewer3D;
 
 /// Width of the expanded panel. Fixed, so slider tracks do not jitter as the
@@ -99,61 +100,41 @@ fn section(
     let _ = header.body(body);
 }
 
-/// `on` / `off`, for a checkbox's Action Log entry.
-fn on_off(on: bool) -> &'static str {
-    if on {
-        "on"
-    } else {
-        "off"
-    }
-}
-
 /// One HUD checkbox, recorded as `Grid off` when the click changed it.
 ///
-/// A helper rather than an open-coded pair per control: there are seven of
-/// them, they all write straight into the state they govern, and
-/// `response.changed()` is the only signal that this frame's value is a new
-/// one.
+/// The label is the field's own ([`Field::label`]), which is also the run the
+/// entry folds under and the word it opens with: two checkboxes ticked inside
+/// a second are two acts and keep two lines. The entry is written by
+/// [`Field::record_widget`], so it reads as the one `set_viewer_3d_display`
+/// leaves for the same field.
 fn checkbox(
     ui: &mut egui::Ui,
     log: &mut crate::action_log::ActionLog,
     on: &mut bool,
-    label: &'static str,
+    field: Field,
 ) -> egui::Response {
-    let response = ui.checkbox(on, label);
-    let value = *on;
-    // The label is the run as well as the word the entry opens with: two
-    // checkboxes ticked inside a second are two acts and keep two lines.
-    log.changed(&response, Kind::Display, label, || {
-        format!("{label} {}", on_off(value))
-    });
+    let response = ui.checkbox(on, field.label());
+    field.record_widget(log, &response, FieldValue::Flag(*on));
     response
 }
 
-/// One HUD slider, recorded as `Point size 3.0` when the drag changed it.
-///
-/// `build` rather than a ready-made [`egui::Slider`], because the widget holds
-/// `value` mutably for as long as it exists and the entry needs to read the
-/// value it *left behind*: building inside ends that borrow at the `add`.
+/// One HUD slider over `field`'s range, labelled `text`, recorded as
+/// `Point size 3.0` when the drag changed it.
 ///
 /// A drag records once a frame while it is moving; those entries coalesce into
 /// a single line carrying the value it was let go at, which is the granularity
-/// wanted and needs no `drag_stopped` plumbing.
-///
-/// `run` is the control's name — the word `text` opens with — and is what a
-/// drag folds under, so that this slider's run and the next slider's stay two
-/// lines however close together they were moved.
+/// wanted and needs no `drag_stopped` plumbing. The run is the field's, so this
+/// slider's run and the next slider's stay two lines however close together
+/// they were moved.
 fn slider(
     ui: &mut egui::Ui,
     log: &mut crate::action_log::ActionLog,
     value: &mut f32,
-    run: &'static str,
-    text: impl FnOnce(f32) -> String,
-    build: impl for<'a> FnOnce(&'a mut f32) -> egui::Slider<'a>,
+    field: Field,
+    text: &'static str,
 ) {
-    let response = ui.add(build(&mut *value));
-    let now = *value;
-    log.changed(&response, Kind::Display, run, || text(now));
+    let response = ui.add(field.range().slider(&mut *value).text(text));
+    field.record_widget(log, &response, FieldValue::Number(*value));
 }
 
 impl Viewer3D {
@@ -253,86 +234,72 @@ impl Viewer3D {
         let has_patches = has_patch_data(state);
 
         section(ui, "layers", "Layers", true, |ui| {
-            checkbox(ui, &mut state.action_log, &mut state.show_points, "Points");
+            let log = &mut state.action_log;
+            checkbox(ui, log, &mut state.show_points, Field::ShowPoints);
             checkbox(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.show_camera_images,
-                "Camera Images",
+                Field::ShowCameraImages,
             );
-            checkbox(ui, &mut state.action_log, &mut state.show_grid, "Grid");
+            checkbox(ui, log, &mut state.show_grid, Field::ShowGrid);
             // Greyed rather than hidden: unlike the Patches *section*, the
             // toggle stays visible so the capability remains discoverable on a
             // reconstruction that happens not to carry patches.
             let patches = ui
                 .add_enabled(
                     has_patches,
-                    egui::Checkbox::new(&mut state.show_patches, "Patches"),
+                    egui::Checkbox::new(&mut state.show_patches, Field::ShowPatches.label()),
                 )
                 .on_disabled_hover_text("This reconstruction carries no patch bitmaps");
-            let on = state.show_patches;
-            state
-                .action_log
-                .changed(&patches, Kind::Display, "Patches", || {
-                    format!("Patches {}", on_off(on))
-                });
-            let infinity = ui
-                .checkbox(&mut state.show_points_at_infinity, "Points at ∞")
-                .on_hover_text("Draw w = 0 points — directions with no parallax");
-            let on = state.show_points_at_infinity;
-            state
-                .action_log
-                .changed(&infinity, Kind::Display, "Points at ∞", || {
-                    format!("Points at ∞ {}", on_off(on))
-                });
+            Field::ShowPatches.record_widget(log, &patches, FieldValue::Flag(state.show_patches));
+            checkbox(
+                ui,
+                log,
+                &mut state.show_points_at_infinity,
+                Field::ShowPointsAtInfinity,
+            )
+            .on_hover_text("Draw w = 0 points — directions with no parallax");
+            checkbox(
+                ui,
+                log,
+                &mut state.show_target_indicator,
+                Field::ShowTargetIndicator,
+            )
+            .on_hover_text(
+                "Draw the orbit target all the time. Holding Alt shows it while Alt is held.",
+            );
         });
 
         section(ui, "size", "Size", true, |ui| {
+            let log = &mut state.action_log;
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.point_size_log2,
-                "Point size",
-                |v| format!("Point size {v:.1}"),
-                |v| {
-                    egui::Slider::new(v, -3.0..=3.0)
-                        .text("Points")
-                        .fixed_decimals(1)
-                },
+                Field::PointSizeLog2,
+                "Points",
             );
             if ui.button("Reset point size").clicked() {
                 state.point_size_log2 = 0.0;
                 // Another value of the same control, so a drag this button
                 // interrupts folds into it rather than leaving the abandoned
                 // value on the line above.
-                state
-                    .action_log
-                    .record_run(Kind::Display, "Point size", "Point size 0.0");
+                Field::PointSizeLog2.record(log, FieldValue::Number(0.0));
             }
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.infinity_point_px,
-                "∞ point size",
-                |v| format!("∞ point size {v:.1} px"),
-                |v| {
-                    egui::Slider::new(v, 1.0..=16.0)
-                        .text("∞ (px)")
-                        .fixed_decimals(1)
-                },
+                Field::InfinityPointPx,
+                "∞ (px)",
             );
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.length_scale,
-                "Scene scale",
-                |v| format!("Scene scale {v:.3}"),
-                |v| {
-                    egui::Slider::new(v, 0.001..=100.0)
-                        .logarithmic(true)
-                        .text("Scene")
-                        .fixed_decimals(3)
-                },
+                Field::LengthScale,
+                "Scene",
             );
         });
 
@@ -340,41 +307,27 @@ impl Viewer3D {
         // common reconstruction that carries no patch bitmaps.
         if has_patches {
             section(ui, "patches", "Patches", false, |ui| {
+                let log = &mut state.action_log;
                 slider(
                     ui,
-                    &mut state.action_log,
+                    log,
                     &mut state.patch_opacity,
-                    "Patch opacity",
-                    |v| format!("Patch opacity {v:.2}"),
-                    |v| {
-                        egui::Slider::new(v, 0.0..=1.0)
-                            .text("Opacity")
-                            .fixed_decimals(2)
-                    },
+                    Field::PatchOpacity,
+                    "Opacity",
                 );
                 slider(
                     ui,
-                    &mut state.action_log,
+                    log,
                     &mut state.patch_size_log2,
-                    "Patch size",
-                    |v| format!("Patch size {v:.1}"),
-                    |v| {
-                        egui::Slider::new(v, -3.0..=3.0)
-                            .text("Size")
-                            .fixed_decimals(1)
-                    },
+                    Field::PatchSizeLog2,
+                    "Size",
                 );
                 slider(
                     ui,
-                    &mut state.action_log,
+                    log,
                     &mut state.patch_alpha_cutoff,
-                    "Patch edge cutoff",
-                    |v| format!("Patch edge cutoff {v:.2}"),
-                    |v| {
-                        egui::Slider::new(v, 0.0..=1.0)
-                            .text("Edge cutoff")
-                            .fixed_decimals(2)
-                    },
+                    Field::PatchAlphaCutoff,
+                    "Edge cutoff",
                 );
             });
         }
@@ -384,7 +337,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut self.maintain_z_up,
-                super::MAINTAIN_Z_UP_LABEL,
+                Field::MaintainZUp,
             )
             .on_hover_text(
                 "Turn the view back to +Z up whenever it is not looking through a camera. \
@@ -419,67 +372,46 @@ impl Viewer3D {
         // Four parameters that were plumbed to the GPU but had no widget at
         // all — they could only be changed by editing the defaults in state.rs.
         section(ui, "advanced", "Advanced", false, |ui| {
+            let log = &mut state.action_log;
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.edl_line_thickness,
+                Field::EdlLineThickness,
                 "EDL width",
-                |v| format!("EDL width {v:.1}"),
-                |v| {
-                    egui::Slider::new(v, 0.5..=8.0)
-                        .text("EDL width")
-                        .fixed_decimals(1)
-                },
             );
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.frustum_size_multiplier,
-                "Frustum size",
-                |v| format!("Frustum size {v:.2}"),
-                |v| {
-                    egui::Slider::new(v, 0.05..=5.0)
-                        .logarithmic(true)
-                        .text("Frustum")
-                        .fixed_decimals(2)
-                },
+                Field::FrustumSizeMultiplier,
+                "Frustum",
             );
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.target_size_multiplier,
-                "Target size",
-                |v| format!("Target size {v:.2}"),
-                |v| {
-                    egui::Slider::new(v, 0.05..=5.0)
-                        .logarithmic(true)
-                        .text("Target")
-                        .fixed_decimals(2)
-                },
+                Field::TargetSizeMultiplier,
+                "Target",
             );
             slider(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.target_fog_multiplier,
+                Field::TargetFogMultiplier,
                 "Target fog",
-                |v| format!("Target fog {v:.1}"),
-                |v| {
-                    egui::Slider::new(v, 0.5..=100.0)
-                        .logarithmic(true)
-                        .text("Target fog")
-                        .fixed_decimals(1)
-                },
             );
         });
 
         section(ui, "debug", "Debug", false, |ui| {
+            let log = &mut state.action_log;
             checkbox(
                 ui,
-                &mut state.action_log,
+                log,
                 &mut state.show_controls_help,
-                "Controls help",
+                Field::ShowControlsHelp,
             );
-            checkbox(ui, &mut state.action_log, &mut state.show_fps, "Frame rate");
+            checkbox(ui, log, &mut state.show_fps, Field::ShowFps);
             // The touchpad counters used to be burned into the top-right corner
             // of every frame. They are developer instrumentation, so they live
             // here now and are off unless this section is open.

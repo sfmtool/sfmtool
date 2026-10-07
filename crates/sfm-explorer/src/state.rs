@@ -553,6 +553,11 @@ pub struct AppState {
     /// of a reconstruction you want to look at without — or only without.
     pub show_points_at_infinity: bool,
 
+    /// Whether the orbit target's indicator is drawn all the time, rather than
+    /// only while Alt is held and for a moment after the target moves: the
+    /// HUD's **Target indicator** checkbox. Off at launch.
+    pub show_target_indicator: bool,
+
     /// On-screen splat radius (pixels) for points at infinity. A direction has
     /// no distance, so infinity points are sized in pixels rather than world
     /// units like finite points.
@@ -867,6 +872,7 @@ impl AppState {
             action_log: ActionLog::new(),
             point_size_log2: 0.0,
             show_points_at_infinity: true,
+            show_target_indicator: false,
             infinity_point_px: 3.0,
             show_controls_help: true,
             show_fps: true,

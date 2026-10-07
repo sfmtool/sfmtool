@@ -118,7 +118,7 @@ The viewer uses a dark theme:
 | Look around from here | Alt + two-finger drag | Alt + left-drag |
 | Move the target forward or back | Alt + Ctrl + two-finger drag | Alt + scroll |
 | See where the orbit target is | Hold Alt | Hold Alt |
-| Keep the target visible | Double-tap Alt | Double-tap Alt |
+| Keep the target visible | Tick Target indicator in the display controls | Tick Target indicator in the display controls |
 | Fly through the scene | WASD + R/F | WASD + R/F |
 | Zoom to fit everything | Press Z | Press Z |
 | View through a selected camera | Select frustum, then Z (or double-click frustum) | Select frustum, then Z (or double-click frustum) |

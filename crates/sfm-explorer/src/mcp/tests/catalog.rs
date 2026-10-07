@@ -51,6 +51,11 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ("get_window_layout", json!({})),
         ("get_image_detail_display", json!({})),
         ("get_image_detail_view", json!({})),
+        ("get_viewer_3d_display", json!({})),
+        (
+            "set_viewer_3d_display",
+            json!({ "point_size_log2": 1.5, "show_target_indicator": true }),
+        ),
         (
             "set_image_detail_view",
             json!({ "reconstruction_label": "alpha", "pixel": [142.0, 197.5], "zoom": 4.0 }),
@@ -821,6 +826,7 @@ fn only_the_reads_are_annotated_read_only() {
             "get_window_layout",
             "get_image_detail_display",
             "get_image_detail_view",
+            "get_viewer_3d_display",
             "get_history",
             "get_bench",
             "get_bench_track",
@@ -829,15 +835,15 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Sixteen reads, sixty-five writes, four input tools, the one that writes a
-    // file, and the one that hands back a picture.
-    assert_eq!(catalog.len(), 86, "the catalog has grown or shrunk");
+    // Seventeen reads, sixty-six writes, four input tools, the one that writes
+    // a file, and the one that hands back a picture.
+    assert_eq!(catalog.len(), 88, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        65
+        66
     );
     // One tool can overwrite a file by name, and four can press what a person
     // can press, File ▸ Save included; those five are the ones annotated

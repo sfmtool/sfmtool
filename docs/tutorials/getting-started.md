@@ -146,8 +146,9 @@ get a good view of all the track projection rays as I have done.
 
 Hold Alt and drag the mouse (or use the trackpad gesture) to make the target
 visible. Instead of orbiting, the drag will now look around freely from a
-stationary point. You can double-tap Alt to toggle the target visibility and
-see its position and orientation while you navigate the scene.
+stationary point. To keep the target visible and see its position and
+orientation while you navigate the scene, tick **Target indicator** in the
+Layers section of the display controls at the top right of the 3D view.
 
 ![Visible target in the 3D viewport](images/dino-in-sfm-explorer-visible-target.jpg)
 

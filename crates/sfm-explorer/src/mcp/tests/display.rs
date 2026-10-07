@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::viewer_3d::display::{Control, Field, FieldValue};
 
 // ── Display, and solo ───────────────────────────────────────────────────
 
@@ -457,4 +458,315 @@ fn a_refused_display_call_never_reaches_the_viewer() {
     assert_eq!(entries[0].kind, Kind::Query("get_image_detail_display"));
     assert_eq!(entries[0].text, "get_image_detail_display");
     assert_eq!(entries[0].actor, Actor::Mcp);
+}
+
+// ── The 3D viewport's display controls ──────────────────────────────────
+
+/// The document `get_viewer_3d_display` hands back, unwrapped.
+#[track_caller]
+fn viewer_3d_display(state: &mut AppState, viewer: &mut Viewer3D) -> Value {
+    ok(state, viewer, Command::GetViewer3dDisplay)["viewer_3d_display"].clone()
+}
+
+/// Parse and apply a `set_viewer_3d_display`, returning its document.
+#[track_caller]
+fn set_viewer_3d(state: &mut AppState, viewer: &mut Viewer3D, arguments: Value) -> Value {
+    call(state, viewer, "set_viewer_3d_display", arguments)["viewer_3d_display"].clone()
+}
+
+/// A fresh viewer reports the HUD's defaults, every field under the name of
+/// the field it is stored in.
+#[test]
+fn get_viewer_3d_display_returns_the_defaults() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let document = viewer_3d_display(&mut state, &mut viewer);
+    let mut names: Vec<&str> = document
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mut expected: Vec<&str> = Field::ALL.iter().map(|field| field.wire_name()).collect();
+    names.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(names, expected);
+
+    assert_eq!(document["show_points"], true);
+    assert_eq!(document["show_grid"], true);
+    assert_eq!(document["show_target_indicator"], false);
+    assert_eq!(document["point_size_log2"], 0.0);
+    assert_eq!(document["infinity_point_px"], 3.0);
+    assert_eq!(document["edl_line_thickness"], 2.4);
+    assert_eq!(document["maintain_z_up"], true);
+    assert_eq!(document["show_fps"], true);
+}
+
+/// A call writes what it names and nothing else, and the reply is the whole
+/// document as the read would return it.
+#[test]
+fn set_viewer_3d_display_changes_only_what_it_names() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = viewer_3d_display(&mut state, &mut viewer);
+    let named = [
+        "point_size_log2",
+        "show_target_indicator",
+        "show_grid",
+        "maintain_z_up",
+    ];
+    let reply = set_viewer_3d(
+        &mut state,
+        &mut viewer,
+        json!({
+            "point_size_log2": 1.5,
+            "show_target_indicator": true,
+            "show_grid": false,
+            "maintain_z_up": false,
+        }),
+    );
+    assert_eq!(reply, viewer_3d_display(&mut state, &mut viewer));
+    assert_eq!(state.point_size_log2, 1.5);
+    assert!(state.show_target_indicator);
+    assert!(!state.show_grid);
+    assert!(!viewer.maintain_z_up, "maintain_z_up lives on the viewer");
+    for (name, value) in before.as_object().expect("an object") {
+        if !named.contains(&name.as_str()) {
+            assert_eq!(&reply[name], value, "{name} moved");
+        }
+    }
+
+    // And back on, which set_view cannot do.
+    let reply = set_viewer_3d(&mut state, &mut viewer, json!({ "maintain_z_up": true }));
+    assert_eq!(reply["maintain_z_up"], true);
+    assert!(viewer.maintain_z_up);
+}
+
+/// A number inside the range is rounded to the decimals its slider shows, so
+/// the HUD drawing it changes nothing; the wire reads the stored value.
+#[test]
+fn set_viewer_3d_display_rounds_to_the_slider_s_decimals() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let reply = set_viewer_3d(
+        &mut state,
+        &mut viewer,
+        json!({ "point_size_log2": 1.53, "patch_opacity": 0.333, "length_scale": 0.12345 }),
+    );
+    assert_eq!(reply["point_size_log2"], 1.5);
+    assert_eq!(reply["patch_opacity"], 0.33);
+    assert_eq!(reply["length_scale"], 0.123);
+    assert_eq!(state.point_size_log2, 1.5);
+}
+
+/// `show_patches` is a master switch, and it is set whether or not anything
+/// loaded carries patches; without them it draws nothing.
+#[test]
+fn show_patches_is_settable_without_patch_data() {
+    let (mut state, mut viewer) = two_reconstructions();
+    assert!(state.scene.iter().all(|node| !node.has_patch_data()));
+    let reply = set_viewer_3d(&mut state, &mut viewer, json!({ "show_patches": false }));
+    assert_eq!(reply["show_patches"], false);
+    assert!(!state.show_patches);
+}
+
+/// Every refusal is at the parse, names the range, and leaves the call's good
+/// fields unapplied.
+#[test]
+fn set_viewer_3d_display_refuses_a_value_its_slider_cannot_hold() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = viewer_3d_display(&mut state, &mut viewer);
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "show_grid": false, "point_size_log2": 4.0 }),
+    );
+    assert!(error.0.contains("point_size_log2"), "{error}");
+    assert!(error.0.contains("-3 to 3"), "{error}");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "infinity_point_px": 0.5 }),
+    );
+    assert!(error.0.contains("1 to 16 px"), "{error}");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "target_fog_multiplier": 1000.0 }),
+    );
+    assert!(error.0.contains("0.5 to 100"), "{error}");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "show_points": "yes" }),
+    );
+    assert!(error.0.contains("show_points"), "{error}");
+
+    // The field of view is the view's, and stays with set_view.
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "fov_short_axis_deg": 60.0 }),
+    );
+    assert!(error.0.contains("has no argument"), "{error}");
+
+    let error = refused_call(&mut state, &mut viewer, "set_viewer_3d_display", json!({}));
+    assert!(error.0.contains("nothing to change"), "{error}");
+
+    assert_eq!(viewer_3d_display(&mut state, &mut viewer), before);
+}
+
+/// A value that is not finite is refused like one outside the range. JSON
+/// cannot carry one, so the range check is asked directly.
+#[test]
+fn a_slider_range_holds_no_value_that_is_not_finite() {
+    for field in Field::ALL {
+        if let Control::Slider(range) = field.control() {
+            assert!(!range.contains(f64::NAN), "{}", field.wire_name());
+            assert!(!range.contains(f64::INFINITY), "{}", field.wire_name());
+            assert!(range.contains(f64::from(range.min)));
+            assert!(range.contains(f64::from(range.max)));
+        }
+    }
+}
+
+/// One `Display` entry per field the call changed, as the agent, in the words
+/// the HUD records, and nothing for a field set to the value it had.
+#[test]
+fn set_viewer_3d_display_records_one_display_entry_per_changed_field() {
+    let (mut state, mut viewer) = quiet_scene();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({
+            "show_grid": false,
+            "point_size_log2": 1.5,
+            "infinity_point_px": 6.0,
+            "show_target_indicator": true,
+            "maintain_z_up": false,
+            "show_points": true,
+        }),
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Grid off",
+            "Target indicator on",
+            "Point size 1.5",
+            "∞ point size 6.0 px",
+            "Maintain Z-up off",
+        ]
+    );
+    for entry in &entries {
+        assert_eq!(entry.kind, Kind::Display);
+        assert_eq!(entry.actor, Actor::Mcp);
+    }
+
+    // A repeat of the newest row's field folds into it.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "maintain_z_up": true }),
+    );
+    assert_eq!(
+        state.action_log.entries().last().map(|e| e.text.as_str()),
+        Some("Maintain Z-up on")
+    );
+    assert_eq!(state.action_log.entries().count(), 5);
+
+    // A field set to the value it had is not a change.
+    let (mut state, mut viewer) = quiet_scene();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "show_grid": true, "point_size_log2": 0.0 }),
+    );
+    assert_eq!(state.action_log.entries().count(), 0);
+}
+
+/// Every field's text is in the HUD's words: the HUD writes its entries
+/// through the same `Field::text`, and these are the words it wrote before the
+/// list existed.
+#[test]
+fn every_viewer_3d_display_field_records_the_hud_s_words() {
+    let texts: Vec<String> = Field::ALL
+        .iter()
+        .map(|field| match field.control() {
+            Control::Checkbox => field.text(FieldValue::Flag(false)),
+            Control::Slider(_) => field.text(FieldValue::Number(1.0)),
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Points off",
+            "Camera Images off",
+            "Grid off",
+            "Patches off",
+            "Points at ∞ off",
+            "Target indicator off",
+            "Point size 1.0",
+            "∞ point size 1.0 px",
+            "Scene scale 1.000",
+            "Patch opacity 1.00",
+            "Patch size 1.0",
+            "Patch edge cutoff 1.00",
+            "Maintain Z-up off",
+            "EDL width 1.0",
+            "Frustum size 1.00",
+            "Target size 1.00",
+            "Target fog 1.0",
+            "Controls help off",
+            "Frame rate off",
+        ]
+    );
+}
+
+/// The schema advertises each slider's range, from the constant the parse
+/// checks against.
+#[test]
+fn set_viewer_3d_display_advertises_the_slider_ranges() {
+    let spec = tools::catalog()
+        .iter()
+        .find(|spec| spec.name == "set_viewer_3d_display")
+        .expect("in the catalog");
+    let point_size = &spec.schema["properties"]["point_size_log2"];
+    assert_eq!(point_size["minimum"], -3.0);
+    assert_eq!(point_size["maximum"], 3.0);
+    assert_eq!(
+        spec.schema["properties"]["show_target_indicator"]["type"],
+        "boolean"
+    );
+}
+
+/// The read is a query, like every other read on the surface, and a refused
+/// set is a protocol error that never reaches the viewer.
+#[test]
+fn get_viewer_3d_display_is_a_query() {
+    let (mut state, mut viewer) = quiet_scene();
+    tools::parse(
+        "set_viewer_3d_display",
+        json!({ "point_size_log2": 9.0 }).as_object(),
+    )
+    .expect_err("off the slider");
+    assert_eq!(state.action_log.entries().count(), 0);
+
+    ok(&mut state, &mut viewer, Command::GetViewer3dDisplay);
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Query("get_viewer_3d_display"));
+    assert_eq!(entries[0].text, "get_viewer_3d_display");
 }

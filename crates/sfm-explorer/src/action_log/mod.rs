@@ -520,13 +520,20 @@ impl ActionLog {
         run: &'static str,
         text: impl FnOnce() -> String,
     ) {
+        if Self::is_action(response) {
+            self.record_run(kind, run, text());
+        }
+    }
+
+    /// Whether a widget's frame changed its value with the pointer or the
+    /// keyboard on it: the test [`ActionLog::changed`] records behind, for a
+    /// caller that writes the entry itself.
+    pub(crate) fn is_action(response: &egui::Response) -> bool {
         let touched = response.is_pointer_button_down_on()
             || response.clicked()
             || response.drag_stopped()
             || response.has_focus();
-        if response.changed() && touched {
-            self.record_run(kind, run, text());
-        }
+        response.changed() && touched
     }
 
     /// The `record` / `record_run` / `fail` primitive with an explicit instant.
