@@ -136,7 +136,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `get_viewer_3d_display` | read | The 3D viewport's display controls — the HUD's layer toggles, sizes, Maintain Z-up and the rest of its checkboxes and sliders — as one flat document |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
-| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, as a background open that fills in the thumbnails and patch bitmaps the file lacks |
+| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, filling in the thumbnails and patch bitmaps the file lacks, on a worker thread |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
 | `select_camera_image` | write | Select a camera image — and with it the intrinsics it was shot through |
@@ -164,7 +164,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
-| `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version |
+| `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version, on a worker thread |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
 | `switch_camera_model` | write | Switch one camera to a model fitted to it, or refit its spline to another count or domain, as one version |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
@@ -2620,8 +2620,9 @@ the window is showing as and what it would come back to.
 **`panels` is the arrangement indexed the other way.** "Is the Action Log open"
 should not cost the agent a tree walk. `open` is whether the panel appears
 anywhere in the document's `layout`; `active` is whether it is the front tab of
-its node — a panel alone in a node is active, and the default layout's two
-multi-tab nodes leave four of the eight behind a sibling. A closed panel is
+its node — a panel alone in a node is active, and the default layout leaves
+`image_detail`, `camera_intrinsics`, `action_log` and `edit_history` behind a
+sibling. A closed panel is
 `active: false`.
 
 Where there is no window — a headless `AppState` — `window` is `null` and the
@@ -2637,7 +2638,7 @@ The argument **is the document**, version tag optional:
 { "window": { "state": "maximized" } }
 { "window": { "state": "normal", "inner_size": [1600, 900] } }
 { "layout": { "main": { /* … */ }, "windows": [] } }
-{ "layout": "default" }                                     // the stock eight-panel grid
+{ "layout": "default" }                                     // the default layout, every panel open
 { "window": { "state": "maximized" }, "layout": "default" } // both, in that order
 { "sfm_explorer_layout": 2, "window": { /* … */ }, "layout": { /* … */ } }  // a file, or a whole reply, sent back
 ```
@@ -3297,13 +3298,17 @@ and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Six operations run on a worker**: this one,
-`convert_to_embedded_patches`, `retriangulate_all_points`, and the bench's
-`fit_bench_track`, `fit_bench_track_normal` and `set_bench_track_stage`, which
-answer through the same
-two-level reply. Every other edit is still synchronous on the GUI thread,
-and a reconstruction large enough to take more than the apply timeout will still
-time out the call while the work goes on and finishes. An agent that gets a
+**The tools that run on a worker** are the rows of § "The tool surface"'s
+table that say so: this one, `open_reconstruction`,
+`add_camera_image_to_tracks`, `prune_covered_observations`,
+`retriangulate_all_points`, `convert_to_embedded_patches`,
+`create_track_at_pixel`, `find_nearby_tracks`, `build_index_files`, and the
+bench's `fit_bench_track`, `fit_bench_track_normal`, `set_bench_track_stage`,
+`search_bench_track_descriptors` and `search_bench_track_geometry`. Each starts
+one of the operations `background::Operation` declares, and each answers
+through the same two-level reply. Every other edit is synchronous on the GUI
+thread, and a reconstruction large enough to take more than the apply timeout
+will still time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_history` rather than retry, since the
 version may well have been pushed.
 
@@ -4581,10 +4586,11 @@ shared with logging, is the other case.
 ## Security
 
 The endpoint hands out read access to any `.sfmr` path the process can read
-(`open_reconstruction` takes a path) and control of a window on the user's
-desktop. Both are appropriate for a tool the user explicitly started with a
-flag, and neither is appropriate for anything reachable from outside the
-machine.
+(`open_reconstruction` takes a path), write access to any path the process can
+write (`save_reconstruction` takes one too), and control of a window on the
+user's desktop. All three are appropriate for a tool the user explicitly
+started with a flag, and none is appropriate for anything reachable from
+outside the machine.
 
 1. **Off by default.** No flag, no listener, no port. This is the primary gate
    and the reason the rest can stay simple.
@@ -4597,8 +4603,13 @@ machine.
    driving their viewer through DNS rebinding. A real MCP client sends no
    `Origin` at all and is unaffected. `rmcp`'s `Host` allowlist — loopback by
    default — is left as it is.
-4. **No write path to disk.** No tool in this surface saves an `.sfmr`, exports
-   anything, or deletes a file. `close_reconstruction` unloads a reconstruction.
+4. **Two tools write to disk, and none deletes a file.** `save_reconstruction`
+   writes an `.sfmr` over the node's own file or to a path it is given
+   (§ "`save_reconstruction`"), and `build_index_files` writes a
+   reconstruction's SIFT index and cluster patches beside its `.sfmr`. Nothing
+   else in this surface writes a file, though an input tool can click File ▸
+   Save as a person can (§ "The tool surface"). `close_reconstruction` unloads
+   a reconstruction and leaves its file where it is.
 5. **The window announces it.** Title suffix and Scene panel header, always,
    while the server is live.
 
@@ -4760,7 +4771,7 @@ where a test hands no host over.
 - **`get_window_layout` returns the file**: its `window_layout`, parsed back
   through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
   block beside it is the live one with `monitors`, current first; `panels` has
-  all eight, with the default layout's four behind-a-sibling tabs inactive and
+  every panel in `Tab::ALL`, with the default layout's behind-a-sibling tabs inactive and
   the rest active. A maximized fake makes the two disagree on purpose: the block
   reports the monitor-sized rectangle and the document the one it restores to.
   With no host, `window` is `null` and the document has no `window` section,
@@ -4786,7 +4797,7 @@ where a test hands no host over.
 - **`show_panel` / `hide_panel`**: hiding closes and reports `open: false`;
   hiding a closed panel succeeds and changes nothing; showing after hiding lands
   the panel in its default group-mate's node and in front; showing an open panel
-  raises it and moves nothing else; an unknown name lists the eight.
+  raises it and moves nothing else; an unknown name lists every panel name.
 - **The panel writes record the menu's own entries** — `Closed …`, `Opened …`,
   `Raised …`, and `Reset layout` for `"default"` — each under `Kind::Layout` as
   actor `MCP`, and a document records `Set layout`. A call carrying both portions
@@ -4811,7 +4822,7 @@ where a test hands no host over.
   `Panel(tab)`, the panel's name and its last laid-out size in the caption and
   in the query text; `viewer_3d` keeping the frame description. A closed panel
   is refused naming `show_panel`, one behind another is refused naming the tab
-  in front, an unknown name lists the eight, and a `show_panel` followed by a
+  in front, an unknown name lists every panel name, and a `show_panel` followed by a
   `screenshot` of that panel in one batch is accepted.
 - **`hud: false` with `viewer_3d`** defers with `ScreenshotSource::ViewportRender`
   and a query text ending `without HUD`; with another panel or with no panel it
@@ -5327,7 +5338,7 @@ Other candidates, in rough order of value:
   None of the three supported backends has, and a per-frame blit for a case that
   has not arisen is the wrong trade until it does.
 - **Should a panel screenshot include its tab bar?** The body is what the panel
-  shows; the tab bar is the same eight words every time. Excluded; include it if
+  shows; the tab bar is the same titles every time. Excluded; include it if
   an agent needs to see which tab is in front, which `get_window_layout`'s
   `panels` already says.
 - **Held keys.** The 3D viewport's fly keys act for as long as a key is down,
