@@ -10,11 +10,13 @@ from click.testing import CliRunner
 
 from sfmtool._commands.heatmap import _insert_metric_before_number, _output_stem
 from sfmtool.cli import main
-from sfmtool.visualization._colormap import COLORMAPS, apply_colormap, value_to_color
-from sfmtool.visualization._heatmap_renderer import (
-    compute_triangulation_angles,
+from sfmtool.visualization import (
+    COLORMAPS,
+    apply_colormap,
     render_heatmap_overlay,
+    value_to_color,
 )
+from sfmtool.visualization._heatmap_renderer import compute_triangulation_angles
 
 
 # =============================================================================

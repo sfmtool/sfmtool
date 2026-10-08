@@ -48,6 +48,39 @@ it. Use `pub(crate)` when sibling modules need it, including methods and fields
 of types declared in private modules. Reserve bare `pub` for an item exposed
 through the crate's public interface.
 
+### Python module names
+
+A leading underscore on a Python module name says that the module's file is not
+where other code finds its names; the package's `__init__.py` is. It does not
+mean that no code outside the package imports the module. A new module takes the
+spelling its siblings use, which follows from what their `__init__.py` does:
+
+- **Re-exporting subpackage, underscore names.** The subpackage's `__init__.py`
+  imports the names other code uses from its own modules and lists them in
+  `__all__` (`compare/`, `feature_match/`, `strips/`, `visualization/`,
+  `xform/`). Every module in it starts with `_`.
+- **Module-path subpackage, plain names.** The `__init__.py` holds a docstring
+  and re-exports nothing from its own modules, and callers import
+  `sfmtool.<subpackage>.<module>` (`align/`, `analyze/`, `camera/`, `camrig/`,
+  `colmap/`, `merge/`, `motion/`, `rig/`, `sift/`; `sift/__init__.py`
+  re-exports the extension's `_sfmtool.sift`, not its own modules). No module
+  in it starts with `_`.
+- **The `sfmtool` package root** is a re-exporting package: `__init__.py` binds
+  the public names through `_LAZY_NAMES`, so its own modules are `_`-named. The
+  one exception is `cli.py`, the `sfm` entry point named in `pyproject.toml`.
+- **`_commands/`**: a plain name is a command module, one per row in
+  `cli.COMMANDS`. A helper shared by several commands takes `_`
+  (`_range_options.py`), so it is not mistaken for a command.
+
+Outside a re-exporting subpackage, import a name from the subpackage when its
+`__init__.py` re-exports it (`from ..visualization import
+render_heatmap_overlay`). Import from an `_`-named module only for a name the
+`__init__.py` does not re-export, or in a function-local import that exists to
+avoid loading the rest of the subpackage. Tests and `scripts/` may import from
+any module. When a new subpackage is created, make it re-exporting when callers
+outside it need only a few entry points, and module-path when callers each need
+a different module from it.
+
 ### Opening a pull request
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before

@@ -651,7 +651,7 @@ The console output and option handling of both modes are tested in
 | Image-sequence analysis (adaptive stride, DIS flow via `compute_optical_flow` and `compute_optical_flow_with_init`) | [`motion/image_sequence.py`](../../../src/sfmtool/motion/image_sequence.py), [`motion/flow_stats.py`](../../../src/sfmtool/motion/flow_stats.py), [`motion/ratio_band.py`](../../../src/sfmtool/motion/ratio_band.py) |
 | Image-sequence console output and flow images | [`visualization/_discontinuity_display.py`](../../../src/sfmtool/visualization/_discontinuity_display.py) |
 | Reconstruction analysis (pose extrapolation, step ratio, overlap drop, obs z-score, edge clustering) | [`motion/recon_discontinuity.py`](../../../src/sfmtool/motion/recon_discontinuity.py), [`motion/constants.py`](../../../src/sfmtool/motion/constants.py) |
-| Reconstruction console output | [`motion/_recon_console.py`](../../../src/sfmtool/motion/_recon_console.py) |
+| Reconstruction console output | [`motion/recon_console.py`](../../../src/sfmtool/motion/recon_console.py) |
 | `--json` report | [`motion/report.py`](../../../src/sfmtool/motion/report.py) |
 | Sequence detection | [`_path_summary.py`](../../../src/sfmtool/_path_summary.py) (`summarize_paths_by_sequence`) |
 | Shared point counts | [`_image_pair_graph.py`](../../../src/sfmtool/_image_pair_graph.py) (`build_covisibility_pairs`) |

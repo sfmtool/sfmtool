@@ -205,6 +205,19 @@ describe rendering. Inside the bench it is wrong. *If this boundary is ever
 removed it should be removed deliberately and in one pass, not eroded from
 either side.*
 
+**`_module.py`** (a re-exporting Python package) and **`module.py`** (a
+module-path one). Scope: Python module file names under `src/sfmtool/`. The
+underscore says that the package's `__init__.py`, not the module's file, is
+where other code finds the module's names; the full rule is in
+[AGENTS.md](../AGENTS.md) § "Python module names". It was chosen over reading
+the underscore as *imported only inside its package*, because that is not what
+the tree does: `_commands/` imports `feature_match._run` and
+`visualization._epipolar_display` directly, for command entry points
+(`_run_matching`, `draw_epipolar_visualization`) that their `__init__.py` does
+not re-export. A count of the two
+spellings (five subpackages with underscores, nine without) is not a split to
+converge; it follows each package's `__init__.py`.
+
 ## Contrast pairs that are not synonyms
 
 Two words that look interchangeable and are not. Using either for the other

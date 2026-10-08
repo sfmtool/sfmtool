@@ -11,10 +11,8 @@ import numpy as np
 
 from .._cli_utils import timed_command
 from ..sift.file import SiftReader, get_sift_path_for_image
-from ..visualization._heatmap_renderer import (
-    compute_triangulation_angles,
-    render_heatmap_overlay,
-)
+from ..visualization import render_heatmap_overlay
+from ..visualization._heatmap_renderer import compute_triangulation_angles
 
 
 def _insert_metric_before_number(stem: str, metric: str) -> str:

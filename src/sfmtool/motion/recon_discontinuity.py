@@ -580,9 +580,9 @@ def analyze_reconstruction(
     """
     from .._filenames import number_from_filename
 
-    # Imported lazily to avoid a module-level import cycle: _recon_console
+    # Imported lazily to avoid a module-level import cycle: recon_console
     # imports the pure helper `_flag_frame` from here.
-    from ._recon_console import print_frame_table, print_summary
+    from .recon_console import print_frame_table, print_summary
 
     image_names = recon.image_names
     num_images = recon.image_count
