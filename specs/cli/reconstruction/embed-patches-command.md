@@ -114,7 +114,14 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   bitmap"). Where the rule picks no view, or reaches its pick only through its
   last fallback, the bitmap is the views' fused mean and the point records
   `-1`. Points at infinity go through the same
-  `w`-aware render path and get a real bitmap — no zero-row exemption.
+  `w`-aware render path and get a real bitmap — no zero-row exemption. An
+  input that is already `embedded_patches` and stores reference observations
+  keeps them: the compaction carries each point's reference to the
+  observation of the same image in its final track
+  (`compact_to_embedded_patches(keep_references=True)`), and each such point's
+  bitmap is rendered again from it at the final keypoints and frame
+  (`render_from_references`), so only a point at `-1`, or one whose reference
+  image the refinement dropped, takes the rule's pick.
 - **Self-similarity cull.** After round 1 the sub-pixel stage renders each
   point's bitmap (whatever the round count, while the cull is on),
   and a point whose bitmap's ZNCC self-similarity radius is over

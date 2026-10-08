@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from sfmtool._embed_patches import _refine_subpixel
+from sfmtool._embed_patches import _localizations_from_recon, _refine_subpixel
 from sfmtool._patch_compaction import (
     compact_to_embedded_patches,
     image_file_hashes_from_images,
@@ -224,6 +224,40 @@ def test_compact_writes_references_naming_observations_of_the_compacted_tracks(
         else:
             assert refs[new_id] == -1, f"point {new_id} (src {old_id})"
     assert 0 < named < new.point_count
+
+    # Compacting again without bitmaps, as the keypoint localizer does, keeps
+    # each point's reference where its track still holds the image, and -1
+    # where the localization dropped it.
+    relocs = _localizations_from_recon(new)
+    old_image = {
+        p: timg[offsets[p] + refs[p]] for p in range(new.point_count) if refs[p] >= 0
+    }
+    dropped = set()
+    for loc in relocs:
+        pid = int(loc["point_index"])
+        views = np.asarray(loc["views"])
+        if pid % 3 == 0 and pid in old_image and len(views) > 2:
+            keep = views != old_image[pid]
+            loc["views"] = views[keep]
+            loc["keypoints"] = np.asarray(loc["keypoints"])[keep]
+            dropped.add(pid)
+    again = compact_to_embedded_patches(
+        new, new.patches, relocs, list(new.image_file_hashes), min_views=2
+    )
+    assert again.patch_bitmaps is None
+    assert again.point_count == new.point_count
+    refs2 = np.asarray(again.reference_observations)
+    counts2 = np.asarray(again.observation_counts)
+    offsets2 = np.concatenate([[0], np.cumsum(counts2)[:-1]]).astype(int)
+    timg2 = np.asarray(again.track_image_indexes)
+    kept = 0
+    for p in range(again.point_count):
+        if p in dropped or p not in old_image:
+            assert refs2[p] == -1, f"point {p}"
+        else:
+            assert timg2[offsets2[p] + refs2[p]] == old_image[p], f"point {p}"
+            kept += 1
+    assert kept > 0 and dropped
 
 
 def _normal_frame_angles_deg(recon) -> np.ndarray:

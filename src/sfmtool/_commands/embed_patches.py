@@ -307,6 +307,11 @@ def embed_patches_command(
     by per-view discards, then compacted — so point and observation counts
     generally differ from the input.
 
+    An input that is already embedded_patches and stores reference
+    observations keeps them: each such point's bitmap is rendered from its own
+    reference observation at the final keypoints, where its track still holds
+    that image, and only a point with none takes the reference-view rule's pick.
+
     \b
     Examples:
         # Straight from a solve; writes solve-embedded.sfmr next to the input.

@@ -286,11 +286,61 @@ def test_drop_patch_bitmaps_keeps_frames_and_normals(embedded_sfmr, tmp_path):
     _xform(embedded_sfmr, out, "--drop-patch-bitmaps")
     before, after = read_sfmr(embedded_sfmr), read_sfmr(out)
     assert after["patch_bitmaps_y_x_rgba"] is None
-    for key in ("patch_u_halfvec_xyz", "patch_v_halfvec_xyz", "normals_xyz"):
+    # The references stay: they name the observation each bitmap is to be
+    # rendered from again.
+    assert np.any(before["reference_observations"] >= 0)
+    for key in (
+        "patch_u_halfvec_xyz",
+        "patch_v_halfvec_xyz",
+        "normals_xyz",
+        "reference_observations",
+    ):
         np.testing.assert_array_equal(after[key], before[key])
     np.testing.assert_array_equal(
         after["thumbnails_y_x_rgb"], before["thumbnails_y_x_rgb"]
     )
+    ok, errors = verify_sfmr(out)
+    assert ok, errors
+
+
+def test_drop_then_add_patch_bitmaps_reproduces_them(embedded_sfmr, tmp_path):
+    dropped = tmp_path / "dropped.sfmr"
+    again = tmp_path / "again.sfmr"
+    _xform(embedded_sfmr, dropped, "--drop-patch-bitmaps")
+    _xform(dropped, again, "--add-patch-bitmaps", "resolution=16")
+    before, after = read_sfmr(embedded_sfmr), read_sfmr(again)
+    np.testing.assert_array_equal(
+        after["reference_observations"], before["reference_observations"]
+    )
+    np.testing.assert_array_equal(
+        after["patch_bitmaps_y_x_rgba"], before["patch_bitmaps_y_x_rgba"]
+    )
+
+
+def test_add_patch_bitmaps_renders_from_the_stored_references(embedded_sfmr):
+    """A point with a stored reference is rendered from it and keeps it; only
+    a point at -1 gets the reference-view rule's pick."""
+    recon = SfmrReconstruction.load(embedded_sfmr)
+    picked = np.asarray(recon.reference_observations)
+    counts = np.asarray(recon.observation_counts).astype(np.int64)
+    # Every other picked point names another observation of its track; the
+    # rest go to -1, as a file with no references chosen has them.
+    stored = np.full_like(picked, -1)
+    moved = (picked >= 0) & (np.arange(len(picked)) % 2 == 1)
+    stored[moved] = ((picked[moved] + 1) % counts[moved]).astype(np.int32)
+    assert moved.any()
+    bare = DropPatchBitmapsTransform().apply(recon)
+    bare = bare.clone_with_changes(reference_observations=stored)
+    added = AddPatchBitmapsTransform(resolution=16).apply(bare)
+
+    refs = np.asarray(added.reference_observations)
+    np.testing.assert_array_equal(refs[moved], stored[moved])
+    np.testing.assert_array_equal(refs[~moved], picked[~moved])
+    before = np.asarray(recon.patch_bitmaps)
+    after = np.asarray(added.patch_bitmaps)
+    np.testing.assert_array_equal(after[~moved], before[~moved])
+    differs = np.any(after[moved] != before[moved], axis=(1, 2, 3))
+    assert differs.mean() > 0.5, differs.mean()
 
 
 def test_drop_patch_bitmaps_is_a_no_op_without_them(seoul_bull_workspace, capsys):
@@ -407,6 +457,7 @@ def test_minimal_writes_the_whole_reconstruction_and_no_history(embedded_sfmr):
         "patch_u_halfvec_xyz",
         "patch_v_halfvec_xyz",
         "normals_xyz",
+        "reference_observations",
     ):
         np.testing.assert_array_equal(after[key], before[key])
     assert after["image_file_hashes"] == before["image_file_hashes"]

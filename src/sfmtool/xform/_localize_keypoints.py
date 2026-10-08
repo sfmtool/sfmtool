@@ -165,6 +165,8 @@ class LocalizeKeypointsTransform:
         # over positions/colors/errors, and re-derive normals from the frames.
         # Bitmaps are dropped (patch_bitmaps=None): the localizer renders none,
         # and any stored ones are stale after the keypoints move and views drop.
+        # Each point keeps its reference observation where the track still
+        # holds its image, so a later render renders from it.
         out = compact_to_embedded_patches(
             recon,
             cloud,

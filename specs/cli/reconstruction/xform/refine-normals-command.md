@@ -141,8 +141,9 @@ below). Persisting the frame is not a knob either — the refined cloud is alway
 written back, so the stored frame cannot fall out of step with the rewritten
 normals. `bitmaps` is the only persistence choice here, and it governs the RGBA
 textures alone. Writing the refined patch frame drops any bitmaps the input
-stored, so with `bitmaps=false` the output has none and every
-`tracks/reference_observations` row is `-1`.
+stored, so with `bitmaps=false` the output has none; it keeps every
+`tracks/reference_observations` entry, so a later `--add-patch-bitmaps`
+renders each point from the same observation through the refined frame.
 
 ### Candidate-scoring cache (`cache` / `cache_supersample` / `quality`)
 
@@ -297,7 +298,12 @@ bitmap"). Where the rule picks no view, or reaches its pick only through its
 last fallback, the texture is the cross-view
 **fusion** of the kept views at the optimum: RGB the robust IRLS-weighted mean
 (an unweighted mean under `objective=mean`) and alpha a per-pixel cross-view
-agreement confidence, and the point names no observation. Rendering costs a
+agreement confidence, and the point names no observation. A point whose
+`tracks/reference_observations` entry already names an observation keeps it:
+its texture is rendered again from that observation through the refined patch
+(`render_from_references` in
+[`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)), and
+only a point at `-1` takes the rule's pick. Rendering costs a
 tile render and a self-similarity reading per view and member coherence's
 matrix per patch. It is on by default so the refined reconstruction carries its
 per-point patch textures and can display them without re-rendering; a multi-stage

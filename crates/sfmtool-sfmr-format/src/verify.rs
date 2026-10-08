@@ -94,7 +94,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &mut errors,
     )?;
     section_digests.push(images_hash);
-    let (points3d_hash, patch_columns) =
+    let (points3d_hash, has_uv_frames) =
         verify_points3d_section(&mut archive, &metadata, &stored, &mut errors)?;
     section_digests.push(points3d_hash);
     section_digests.push(verify_tracks_section(
@@ -103,7 +103,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &stored,
         &camera_indexes_raw,
         &cameras,
-        patch_columns,
+        has_uv_frames,
         &mut errors,
     )?);
 
@@ -373,21 +373,14 @@ fn verify_images_section<R: Read + Seek>(
     Ok((images_hash, camera_indexes_raw))
 }
 
-/// Which of the optional patch columns the points section says it carries,
-/// for the tracks section's reference observations, which are present exactly
-/// with the patch frame and name no observation without the bitmaps.
-#[derive(Clone, Copy)]
-struct PatchColumns {
-    frame: bool,
-    bitmaps: bool,
-}
-
+/// Returns the section hash and whether the section carries the patch frame,
+/// which is what says whether the tracks section has reference observations.
 fn verify_points3d_section<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     metadata: &SfmrMetadata,
     stored: &ContentHash,
     errors: &mut Vec<String>,
-) -> Result<(u128, PatchColumns), SfmrError> {
+) -> Result<(u128, bool), SfmrError> {
     // === Points3D hash (lexicographic path order) ===
     // The optional per-point patch frame (`patch_*`) lives in this section.
     let point_count = metadata.point_count as usize;
@@ -631,13 +624,7 @@ fn verify_points3d_section<R: Read + Seek>(
         }
     }
 
-    Ok((
-        points3d_hash,
-        PatchColumns {
-            frame: has_uv_frames,
-            bitmaps: has_patch_bitmaps,
-        },
-    ))
+    Ok((points3d_hash, has_uv_frames))
 }
 
 fn verify_tracks_section<R: Read + Seek>(
@@ -646,7 +633,7 @@ fn verify_tracks_section<R: Read + Seek>(
     stored: &ContentHash,
     camera_indexes_raw: &[u8],
     cameras: &[SfmrCamera],
-    patch_columns: PatchColumns,
+    has_uv_frames: bool,
     errors: &mut Vec<String>,
 ) -> Result<u128, SfmrError> {
     // === Tracks hash (lexicographic path order) ===
@@ -716,17 +703,17 @@ fn verify_tracks_section<R: Read + Seek>(
     tracks_hasher.update(&track_point_indexes_raw);
     // tracks/reference_observations (version 12+, present exactly with the
     // patch frame; sorts after point_indexes)
-    let reference_raw =
-        if patch_columns.frame && metadata.version >= SFMR_REFERENCE_OBSERVATIONS_VERSION {
-            let raw = read_zst_entry(
-                archive,
-                &entries::tracks_reference_observations(point_count),
-            )?;
-            tracks_hasher.update(&raw);
-            Some(raw)
-        } else {
-            None
-        };
+    let reference_raw = if has_uv_frames && metadata.version >= SFMR_REFERENCE_OBSERVATIONS_VERSION
+    {
+        let raw = read_zst_entry(
+            archive,
+            &entries::tracks_reference_observations(point_count),
+        )?;
+        tracks_hasher.update(&raw);
+        Some(raw)
+    } else {
+        None
+    };
 
     let tracks_hash = tracks_hasher.digest128();
     if format_hash(tracks_hash) != stored.tracks_xxh128 {
@@ -778,9 +765,7 @@ fn verify_tracks_section<R: Read + Seek>(
                     .chunks_exact(size)
                     .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                     .collect();
-                if let Err(e) =
-                    validate_reference_observations(&values, &obs_counts, patch_columns.bitmaps)
-                {
+                if let Err(e) = validate_reference_observations(&values, &obs_counts) {
                     errors.push(e);
                 }
             }

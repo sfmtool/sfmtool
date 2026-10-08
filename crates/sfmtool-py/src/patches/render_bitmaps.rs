@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `PatchCloud.render_bitmaps`: render every patch's stored bitmap, its
-//! reference view's tile, at its stored frame and keypoints, moving nothing.
+//! reference observation's tile, at its stored frame and keypoints, moving
+//! nothing.
 
 use numpy::{IntoPyArray, PyArray1, PyArray4};
 use pyo3::exceptions::PyValueError;
@@ -10,7 +11,7 @@ use pyo3::prelude::*;
 
 use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
-use sfmtool_core::patch::stored_bitmap::render_patch_cloud_bitmaps;
+use sfmtool_core::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
 use sfmtool_core::progress::Progress;
 
 use super::args::parse_sampler;
@@ -26,15 +27,21 @@ impl PyPatchCloud {
     /// Render the stored RGBA bitmap of every patch at the patch's stored frame
     /// and each observation's stored keypoint, **moving nothing**.
     ///
-    /// Each point's bitmap is the ``R×R`` tile of the observation the
-    /// reference-view rule picks among its whole track in ``recon``, rendered
-    /// at that observation's stored keypoint, with alpha 255 on the samples on
-    /// the photograph and 0 elsewhere. Where the rule picks none, or reaches
-    /// its pick only through its last fallback (``"without_any"``), it is the
-    /// fused mean of the views and names no observation. A bitmap here equals
-    /// what :meth:`refine_keypoints` renders for a patch whose keypoints it did
-    /// not move and whose every view passes the refiner's projection gate,
-    /// since the refiner runs the rule over the views that pass it.
+    /// Each point's bitmap is the ``R×R`` tile of its reference observation,
+    /// rendered at that observation's stored keypoint, with alpha 255 on the
+    /// samples on the photograph and 0 elsewhere. Where ``recon`` stores a
+    /// reference observation for the point
+    /// (:attr:`SfmrReconstruction.reference_observations` ``>= 0``), that is
+    /// the observation rendered, and it is returned unchanged, so a
+    /// reconstruction whose bitmaps were dropped renders the same bitmaps
+    /// again. Where it stores ``-1``, the reference-view rule picks the
+    /// observation among the point's whole track; where the rule picks none,
+    /// or reaches its pick only through its last fallback (``"without_any"``),
+    /// the bitmap is the fused mean of the views and names no observation. For
+    /// a point at ``-1``, a bitmap here equals what :meth:`refine_keypoints`
+    /// renders for a patch whose keypoints it did not move and whose every
+    /// view passes the refiner's projection gate, since the refiner runs the
+    /// rule over the views that pass it.
     /// ``recon`` must carry inline keypoints, as an
     /// ``embedded_patches`` reconstruction does.
     ///
@@ -48,6 +55,12 @@ impl PyPatchCloud {
     ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
     ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
     ///         ``"bilinear"`` or ``"anisotropic"``, as :meth:`refine_keypoints` takes it.
+    ///     referenced_only: If true, render only the points with a stored
+    ///         reference observation, and give every point at ``-1`` a zero
+    ///         row and ``-1`` without running the rule: for a caller that has
+    ///         bitmaps for those points already, such as a refinement that
+    ///         rendered every point's bitmap by the rule and replaces the
+    ///         points that carry a reference with that reference's render.
     ///     progress: Optional progress counter, bumped once per patch.
     ///
     /// Returns:
@@ -56,13 +69,16 @@ impl PyPatchCloud {
     ///     ``(P,)`` int32 index of each point's reference observation within
     ///     its own track, ``-1`` for none, as
     ///     ``clone_with_changes(patch_bitmaps=..., reference_observations=...)``
-    ///     takes them. A point with no patch, or with fewer than two
-    ///     observations, gets a zero row and ``-1``.
+    ///     takes them. A point with no patch, or one at ``-1`` with fewer than
+    ///     two observations, gets a zero row and ``-1``.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
-    #[pyo3(signature = (recon, images, *, resolution=24, sampler="per_view", progress=None))]
+    #[pyo3(signature = (
+        recon, images, *, resolution=24, sampler="per_view", referenced_only=false, progress=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
     fn render_bitmaps<'py>(
         &self,
         py: Python<'py>,
@@ -70,6 +86,7 @@ impl PyPatchCloud {
         images: &Bound<'py, PyAny>,
         resolution: u32,
         sampler: &str,
+        referenced_only: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<BitmapsAndReferences<'py>> {
         if resolution < 2 {
@@ -112,6 +129,11 @@ impl PyPatchCloud {
                     recon,
                     &views,
                     &params,
+                    if referenced_only {
+                        UnreferencedPoints::Skip
+                    } else {
+                        UnreferencedPoints::Pick
+                    },
                     counter.as_deref(),
                     &Progress::none(),
                 )

@@ -127,13 +127,19 @@ records each point's reference observation, attached via
 `clone_with_changes(patches=cloud, patch_bitmaps=…,
 reference_observations=…)`; the stored frame is
 re-persisted alongside so the bitmaps have a frame to attach to (the frame
-itself is unchanged — keypoints moved, not the surfel). On by default so the
+itself is unchanged — keypoints moved, not the surfel). A point whose
+`tracks/reference_observations` entry already names an observation keeps it:
+its bitmap is rendered again from that observation at its refined keypoint
+(`render_from_references` in
+[`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py), through
+`PatchCloud.render_bitmaps(referenced_only=True)`), and only a point at `-1`
+takes the refiner's pick. On by default so the
 refined reconstruction carries its per-point patch textures and can display them
 without re-rendering; it costs a tile render and a self-similarity reading per view per
 point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
 and render once on the finalizing stage. With `bitmaps=false` the command
-writes only the keypoints, so any stored bitmaps and their
-`tracks/reference_observations` rows carry across as they were.
+writes only the keypoints, so any stored bitmaps and the
+`tracks/reference_observations` entries carry across as they were.
 
 The transform prints a one-line summary in the established `xform` style over
 the finitely-scored views (a point with fewer than two views has no consensus;

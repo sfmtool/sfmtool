@@ -284,34 +284,45 @@ class TestReferenceObservations:
         )
         assert shorter.reference_observations is None
 
-    def test_references_come_across_only_with_their_bitmaps(
+    def test_references_stay_when_the_bitmaps_change_or_go(
         self, embedded_patches_sfmr, tmp_path
     ):
-        # A reference names the observation a stored bitmap is the render of,
-        # so it never outlives the bitmaps it was recorded with.
+        # A reference names the observation the point's bitmap is, or is to
+        # be, rendered from, so it outlives the bitmaps it was recorded with.
         recon = SfmrReconstruction.load(embedded_patches_sfmr)
         refs = np.zeros(recon.point_count, dtype=np.int32)
+        refs[::4] = -1
         recon = recon.clone_with_changes(reference_observations=refs)
-        # A change that keeps the bitmaps keeps the references.
         renamed = recon.clone_with_changes(world_space_unit="m")
         np.testing.assert_array_equal(renamed.reference_observations, refs)
-        # New bitmaps without their references, a new patch frame, and
-        # dropping the bitmaps each leave every point naming none.
+        # New bitmaps without their references, a new patch frame for the
+        # same points, and dropping the bitmaps each keep the references.
         bitmaps = np.ascontiguousarray(np.asarray(recon.patch_bitmaps))
         for changed in (
             recon.clone_with_changes(patch_bitmaps=bitmaps),
             recon.clone_with_changes(patches=recon.patches),
             recon.clone_with_changes(patch_bitmaps=None),
         ):
-            assert np.all(np.asarray(changed.reference_observations) == -1)
-        # Naming an observation where there are no bitmaps is refused.
+            np.testing.assert_array_equal(changed.reference_observations, refs)
+        # A file without bitmaps stores, reads and verifies its references.
         bare = recon.clone_with_changes(patch_bitmaps=None)
-        with pytest.raises(ValueError, match="no patch bitmaps"):
-            bare.clone_with_changes(reference_observations=refs)
+        assert bare.patch_bitmaps is None
         out = tmp_path / "bare.sfmr"
         bare.save(out)
-        assert np.all(read_sfmr(out)["reference_observations"] == -1)
         assert verify_sfmr(out)[0]
+        np.testing.assert_array_equal(read_sfmr(out)["reference_observations"], refs)
+        np.testing.assert_array_equal(
+            SfmrReconstruction.load(out).reference_observations, refs
+        )
+        # New references can be set on it too.
+        other = np.full(recon.point_count, -1, dtype=np.int32)
+        other[1::2] = 0
+        np.testing.assert_array_equal(
+            bare.clone_with_changes(
+                reference_observations=other
+            ).reference_observations,
+            other,
+        )
 
     def test_a_dict_with_a_frame_and_no_column_writes_none(
         self, embedded_patches_sfmr, tmp_path

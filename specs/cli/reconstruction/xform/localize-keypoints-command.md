@@ -45,8 +45,10 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   (points at infinity stay at infinity).
 - **Bitmaps are dropped.** The localizer renders no bitmaps, and any stored
   ones are stale once keypoints move and views drop, so the output carries
-  patch *frames* but no bitmaps, and every `tracks/reference_observations`
-  row is `-1`. Re-run
+  patch *frames* but no bitmaps. Each point keeps its
+  `tracks/reference_observations` entry, moved to the observation of the same
+  image in its rebuilt track (`-1` where that image was dropped), so a later
+  render renders the point from it. Re-run
   `sfm xform --refine-keypoints bitmaps=true` (or
   `--refine-normals bitmaps=true`) to regenerate them (a frames-without-bitmaps
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).

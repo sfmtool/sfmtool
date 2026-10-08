@@ -21,7 +21,10 @@ from typing import Any
 
 import numpy as np
 
-from sfmtool._patch_compaction import compact_to_embedded_patches
+from sfmtool._patch_compaction import (
+    compact_to_embedded_patches,
+    render_from_references,
+)
 from sfmtool._pose_math import recon_camera_centers
 from sfmtool._progress import _poll_progress, _timed_step
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
@@ -425,7 +428,11 @@ def embed_patches(
        reference-view rule picks, or the views' fused mean where it picks none
        or reaches its pick only through its last fallback (points at infinity
        included — they render through the same ``w``-aware path), and reports
-       per-point validity and the reference view's image.
+       per-point validity and the reference view's image. An input that is
+       already ``embedded_patches`` and stores reference observations keeps
+       them: after the compaction, each point that still holds its reference
+       observation's image is rendered again from that observation
+       (:func:`~sfmtool._patch_compaction.render_from_references`).
     4. **Cull + compact**: drop points left below ``min_views`` **and** points the
        sub-pixel pass produced no valid bitmap for (the culled-point
        signal, uniform for finite and infinity points), then renumber the
@@ -846,6 +853,11 @@ def embed_patches(
     #    final sub-pixel pass produced no valid bitmap for (finite and
     #    infinity alike), and compact into the final embedded_patches recon. The
     #    stored bitmaps are the final-keypoint reference-view tiles from that pass.
+    #    An input that already stores reference observations keeps them: each
+    #    such point is rendered again from its own reference at the final
+    #    keypoints and frame, and only a point at -1 keeps the pass's pick.
+    stored = work_recon.reference_observations
+    keep_references = stored is not None and bool(np.any(np.asarray(stored) >= 0))
     with _timed_step(log, "  compacting survivors into embedded_patches..."):
         result = compact_to_embedded_patches(
             work_recon,
@@ -855,5 +867,19 @@ def embed_patches(
             patch_bitmaps=bitmaps,
             valid=valid,
             min_views=min_views,
+            keep_references=keep_references,
         )
+    if keep_references:
+        with _timed_step(log, "  rendering bitmaps from the stored references..."):
+            final_bitmaps, references = render_from_references(
+                result,
+                pyramids,
+                np.asarray(result.patch_bitmaps),
+                np.asarray(result.reference_observations),
+                resolution=resolution,
+                sampler=sampler,
+            )
+            result = result.clone_with_changes(
+                patch_bitmaps=final_bitmaps, reference_observations=references
+            )
     return result

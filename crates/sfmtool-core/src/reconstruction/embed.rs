@@ -247,6 +247,7 @@ impl SfmrReconstruction {
             sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
             out.point_set.points.len()
         ]);
+        out.point_set.display_only_references = None;
         out.rebuild_derived_fields();
         out.validate_observation_columns()
             .map_err(ReconstructionError::Unsupported)?;

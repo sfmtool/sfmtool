@@ -2210,7 +2210,7 @@ fn test_observation_confidence_reordered_in_lockstep_by_sort() {
 }
 
 /// `make_test_data` with a patch frame and patch bitmaps, so it carries
-/// reference observations that may name an observation.
+/// reference observations.
 fn make_framed_test_data(references: Vec<i32>) -> SfmrData {
     let mut data = make_test_data();
     data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
@@ -2243,6 +2243,27 @@ fn test_reference_observations_follow_their_observation_through_the_sort() {
     assert_eq!(
         loaded.reference_observations.unwrap().to_vec(),
         vec![0, 2, 0, 0, -1]
+    );
+    let (valid, errors) = verify_sfmr(&path).unwrap();
+    assert!(valid, "{errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_reference_observations_without_bitmaps_round_trip_and_verify() {
+    // A file that drops its bitmaps keeps its references: they name the
+    // observation a later render renders each point from.
+    let mut d = make_framed_test_data(vec![1, 0, -1, 0, -1]);
+    d.patch_bitmaps_y_x_rgba = None;
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_bare");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bare.sfmr");
+    write_sfmr(&path, &mut d).unwrap();
+    let loaded = read_sfmr(&path).unwrap();
+    assert!(loaded.patch_bitmaps_y_x_rgba.is_none());
+    assert_eq!(
+        loaded.reference_observations.unwrap().to_vec(),
+        vec![1, 0, -1, 0, -1]
     );
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "{errors:?}");
@@ -2293,18 +2314,11 @@ fn test_reference_observations_presence_and_range_refused_on_write() {
         "{result:?}"
     );
 
-    // Without the bitmaps every reference is -1: there is no render for one
-    // to name.
+    // Without the bitmaps the references still name observations: they say
+    // which observation a later render renders each point from.
     let mut data = make_framed_test_data(vec![-1, 0, -1, -1, -1]);
     data.patch_bitmaps_y_x_rgba = None;
-    let result = write_sfmr(&path, &mut data);
-    assert!(
-        matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("no patch bitmaps")),
-        "{result:?}"
-    );
-    let mut data = make_framed_test_data(vec![-1; 5]);
-    data.patch_bitmaps_y_x_rgba = None;
-    write_sfmr(&path, &mut data).expect("every reference -1 without bitmaps");
+    write_sfmr(&path, &mut data).expect("a reference without bitmaps");
     std::fs::remove_file(&path).unwrap();
 
     // Point 0 has two observations, so 2 is past its track; -2 is not -1.
@@ -2343,29 +2357,6 @@ fn test_reference_observations_out_of_range_refused_on_read_and_verify() {
     assert!(!valid);
     assert!(errors.iter().any(|e| e.contains("row 1 = 3")), "{errors:?}");
 
-    // A reference in a file that stores no bitmaps is refused the same way.
-    let mut data = make_framed_test_data(vec![-1; 5]);
-    data.patch_bitmaps_y_x_rgba = None;
-    let bare = dir.join("bare.sfmr");
-    write_sfmr(&bare, &mut data).unwrap();
-    let named = dir.join("named.sfmr");
-    rewrite_entries(&bare, &named, |name, _| {
-        name.starts_with("tracks/reference_observations")
-            .then(|| bytemuck::cast_slice::<i32, u8>(&[-1, 0, -1, -1, -1]).to_vec())
-    });
-    let Err(err) = read_sfmr(&named) else {
-        panic!("a reference without bitmaps was read");
-    };
-    assert!(
-        matches!(&err, SfmrError::InvalidFormat(m) if m.contains("no patch bitmaps")),
-        "{err}"
-    );
-    let (valid, errors) = verify_sfmr(&named).unwrap();
-    assert!(!valid);
-    assert!(
-        errors.iter().any(|e| e.contains("no patch bitmaps")),
-        "{errors:?}"
-    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

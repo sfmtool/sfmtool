@@ -388,9 +388,13 @@ a weight of zero. The thumbnail rows come from each image's verified `.sift`
 first and its photograph second
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
 loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,
-`render_patch_cloud_bitmaps` (each point's reference view's tile, or the fused
-mean), through `render_patch_bitmap_column`, which also returns the reference
-observation each row is the tile of; the open keeps those beside the bitmaps.
+`render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`: each point
+from the reference observation the file stores for it, and a point the file
+stores at `-1` from the reference-view rule's pick (or the fused mean). The
+render returns the reference each row is the tile of; the open puts a pick it
+made for a point at `-1` into the value's references, marked
+`PointSet::display_only_references`, so Track View marks the row the display
+bitmap is the tile of.
 It runs over every photograph that decodes at its camera's
 size; one that does not is left out of every patch's views. The photographs are
 read through the viewer's photograph cache
@@ -404,7 +408,8 @@ marked `PointSet::patch_bitmaps_for_display`, because every reader of bitmaps
 looks there: the bench fit and commit, every edit that selects or reorders
 rows, Track View and the renderer. A column held beside the value would need
 each of those row maps carried out a second time. The mark keeps the column out
-of `to_sfmr_data`, so no save writes it and no content hash covers it, and the
+of `to_sfmr_data`, so no save writes it and no content hash covers it, and a
+save writes the file's `-1` for every display pick, so the
 value keeps the content hash of the file it was read from, which is what every
 point id is minted against ([saving.md](saving.md)).
 

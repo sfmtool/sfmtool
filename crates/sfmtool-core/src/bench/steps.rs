@@ -212,13 +212,12 @@ pub fn create_track(
         placement: view.placement(),
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         // The bench's rows are the stored track's observations in order, so
-        // the stored index names the row. The column names the observation
-        // the bitmap beside it is the render of -- for a column rendered for
-        // display, the observation that render picked -- and `-1` where there
-        // is no bitmap, so the two are read together.
+        // the stored index names the row. Read with or without a bitmap: the
+        // column names the observation the bitmap is, or is to be, rendered
+        // from -- for a column rendered for display, the observation that
+        // render rendered it from.
         reference: view
-            .patch_bitmap()
-            .and(view.reference_observation())
+            .reference_observation()
             .and_then(|r| usize::try_from(r).ok()),
         color: stored.color,
         normal_confidence: view.normal_confidence(),
@@ -1118,9 +1117,9 @@ pub struct SightReport {
 ///
 /// Nothing else on the track moves: the patch keeps its place, its size and
 /// its turn, and every other sighting keeps its own. When the observation is
-/// the one the track's patch bitmap is the render of, the bitmap was rendered
-/// at its old keypoint, so it is dropped with its reference and the next
-/// evaluation renders another ([`TrackPayload::reference`]).
+/// the track's reference observation, the bitmap was rendered at its old
+/// keypoint, so it is dropped and the reference kept; the next evaluation
+/// renders another, re-picking the reference ([`TrackPayload::reference`]).
 ///
 /// **The observation is pinned either way**, at both stages: a sighting a
 /// person placed is a sighting they have ruled on, and
@@ -1143,11 +1142,11 @@ pub fn sight_observation(
 
     let mut next = track.clone();
     // The bitmap of a track whose reference observation is sighted elsewhere
-    // is that observation's render at its old keypoint, so it goes with its
-    // reference.
+    // is that observation's render at its old keypoint, so it goes; the
+    // observation stays on the track, and so does the reference.
     if let Stage::Track(payload) = &mut next.stage {
         if payload.reference == Some(observation) {
-            payload.drop_bitmap();
+            payload.drop_stale_bitmap();
         }
     }
     let target = &mut next.observations[observation];
@@ -2289,16 +2288,16 @@ fn placement_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError>
 /// The position and the patch of a track whose payload has already been read
 /// as a track stage carrying a patch, for a step that moves the patch.
 ///
-/// The bitmap and the reference observation it was rendered from are dropped
-/// here: every caller moves the patch, and a bitmap rendered through the old
-/// placement no longer shows the new one.
+/// The bitmap is dropped here and the reference observation kept: every
+/// caller moves the patch, and a bitmap rendered through the old placement no
+/// longer shows the new one.
 fn track_payload_mut(
     track: &mut EditableTrack,
 ) -> (&mut Option<nalgebra::Point3<f64>>, &mut OrientedPatch) {
     let Stage::Track(payload) = &mut track.stage else {
         unreachable!("the stage was read as a track stage before the clone");
     };
-    payload.drop_bitmap();
+    payload.drop_stale_bitmap();
     let TrackPayload {
         position,
         placement,

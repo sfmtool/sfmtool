@@ -441,6 +441,7 @@ impl SfmrReconstruction {
                 reference_observations: data.reference_observations.map(|r| r.to_vec()).or_else(
                     || has_patch_frame.then(|| vec![NO_REFERENCE_OBSERVATION; point_count]),
                 ),
+                display_only_references: None,
                 observations,
                 image_feature_to_point,
                 max_track_feature_index,
@@ -653,19 +654,16 @@ impl SfmrReconstruction {
             keypoints_xy,
             point_indexes,
             observation_counts,
-            // Present exactly with the patch frame. A reference names the
-            // observation the stored bitmap beside it is the render of, so a
-            // value with no stored bitmap column -- none, or one rendered for
-            // display, which no save writes -- writes every point as having no
-            // reference, as does a value with a frame and no column.
+            // Present exactly with the patch frame, with or without the
+            // bitmaps: a reference names the observation the bitmap is, or is
+            // to be, rendered from. A pick only the display render made is
+            // written as `-1`, as the display bitmaps are not written, and a
+            // value with a frame and no column writes every point as having
+            // no reference.
             reference_observations: self.point_set.patch_u_halfvec_xyz.as_ref().map(|_| {
-                let stored_bitmaps = self.point_set.patch_bitmaps_y_x_rgba.is_some()
-                    && !self.point_set.patch_bitmaps_for_display;
                 Array1::from_vec(
                     self.point_set
-                        .reference_observations
-                        .clone()
-                        .filter(|_| stored_bitmaps)
+                        .saved_reference_observations()
                         .unwrap_or_else(|| {
                             vec![NO_REFERENCE_OBSERVATION; self.point_set.points.len()]
                         }),

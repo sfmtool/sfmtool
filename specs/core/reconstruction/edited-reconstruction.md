@@ -67,6 +67,7 @@ pub struct PointSet {
     pub point_constraints: Option<PointConstraintColumns>,
     pub observation_confidence: Option<Vec<u8>>,
     pub reference_observations: Option<Vec<i32>>, // per point, within its track; -1 none
+    pub display_only_references: Option<Vec<bool>>, // picks only the display render made
     // Derived from the fields above and the image count.
     pub observation_offsets: Vec<usize>,
     pub image_feature_to_point: Vec<HashMap<u32, u32>>,
@@ -150,13 +151,23 @@ edits and the panels read it as they would a file's own. A marked column is
 **left out of what `to_sfmr_data` emits**, and so out of every save and every
 content hash (`content_xxh128` runs the writer over `to_sfmr_data`): the value
 keeps the identity of the file it was read from, and a save writes the columns
-that file had. The open also keeps the display render's own reference picks in
-`reference_observations`, so the bench and Track View mark the row the display
-bitmap is the tile of; `to_sfmr_data` writes every reference row as `-1` when
-the value has no stored bitmap column (none, or a marked one), since a file
-without bitmaps names no reference, and `validate_point_columns` refuses a
-reference other than `-1` without a bitmap column and the reference column
-without patch frames
+that file had. The open renders each point from the reference observation
+the file stores for it, so `reference_observations` keeps the file's column
+for those points. A point the file stores at `-1` gets the display render's
+own pick, which goes into `reference_observations` so the bench and Track View
+mark the row the display bitmap is the tile of, and is marked in
+`display_only_references` (`Some` only beside a marked column). A display pick
+is shown and never saved, as the display bitmaps are not:
+`PointSet::saved_reference_observations`, which `to_sfmr_data` writes, gives
+`-1` for each marked row, and `PointSet::drop_patch_bitmaps` drops the column
+and resets the marked rows to `-1`. Every pass that drops or reorders points
+selects the marks in lockstep with the points
+(`PointSet::select_display_only_references`); a point an edit adds, such as a
+bench commit, is unmarked, so its reference is saved as the point's own.
+`validate_point_columns` checks each reference's range and refuses the
+reference column without patch frames; it accepts references without a bitmap
+column, since a reference names the observation a bitmap is, or is to be,
+rendered from
 ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md) §
 "9. Tracks"). Every pass that selects or reorders the column's rows
 (`filter_points_by_mask`, `subset_by_image_indices`, the similarity transform,

@@ -113,9 +113,11 @@ pub fn render_patch_bitmap(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
     view_set: &[u32], keypoints: &[[f64; 2]], params: &KeypointSubpixelParams,
     progress: &Progress<'_>) -> Option<PatchBitmap>;
 pub struct PatchBitmapColumn { pub bitmaps: Array4<u8>, pub reference_observations: Vec<i32> }
+pub enum UnreferencedPoints { Pick, Skip } // what a point at -1 gets
 pub fn render_patch_cloud_bitmaps(cloud: &PatchCloud, recon: &SfmrReconstruction,
     views: &[Option<ProjectedImage<'_>>], params: &KeypointSubpixelParams,
-    done: Option<&AtomicUsize>, progress: &Progress<'_>) -> Result<PatchBitmapColumn, Cancelled>;
+    unreferenced: UnreferencedPoints, done: Option<&AtomicUsize>,
+    progress: &Progress<'_>) -> Result<PatchBitmapColumn, Cancelled>;
 
 // patch::normal_refine
 pub struct ViewingAngle { pub angle_deg: f64, pub tilt_direction_deg: Option<f64> }
@@ -361,15 +363,32 @@ into the point's own track, in `tracks/reference_observations`.
   by it, so for these points the row Track View marks as the reference is not
   the stored bitmap's tile.
 
-**The bitmap and its reference agree.** Wherever a reconstruction stores a
-point's bitmap, `tracks/reference_observations` names the observation whose
-tile it is, or is `-1` where the bitmap is a fused mean; where a point has no
-stored bitmap, its reference is `-1`. A writer that drops the bitmaps writes
-the column as all `-1`, and the format refuses a reference other than `-1` in
-a file without bitmaps
+**The reference says what to render.** `tracks/reference_observations`
+names, per point, the observation its bitmap is, or is to be, rendered from,
+with or without stored bitmaps. Where a reconstruction stores a point's bitmap
+beside a reference `≥ 0`, the bitmap is that observation's tile as of the last
+render; `-1` means no reference has been chosen, and a stored bitmap beside it
+is a fused mean. Dropping the bitmaps keeps the column, and moving geometry
+(keypoints, the frame, a bundle adjustment) keeps it too
 ([sfmr-file-format.md](../../formats/sfmr-file-format.md) § "9. Tracks").
-On the bench, a step after which the bitmap no longer shows what its
-reference observation sees drops the bitmap and the reference together
+
+**A render reads the reference.** `render_patch_cloud_bitmaps` renders each
+point that stores a reference `≥ 0` from that observation's tile at its
+keypoint and keeps the reference, so dropping the bitmaps and adding them
+again gives the same bitmaps. Where that observation's photograph is not to
+hand, the point gets a zero row and still keeps its reference; the rule does
+not pick another view for it. Only a point at `-1` runs the rule
+(`UnreferencedPoints::Pick`), and its pick is recorded;
+`UnreferencedPoints::Skip` gives such a point a zero row and `-1`, for a
+caller that has bitmaps for those points already (Python:
+`PatchCloud.render_bitmaps(..., referenced_only=True)`). The refiners render
+every point by the rule over the views they keep; the `xform` steps and `sfm
+embed-patches` that write their bitmaps then render each point that stores a
+reference again from it, through `render_from_references` in
+[`_patch_compaction.py`](../../../src/sfmtool/_patch_compaction.py), so only a
+point at `-1` keeps the refiner's pick. The bench is where a reference is
+replaced: its renders run the rule over the `in` rows and set the bitmap and
+the reference together
 ([editable-track.md](../bench/editable-track.md) § "The stored bitmap's
 reference").
 
@@ -377,12 +396,12 @@ Every operation that renders the stored bitmap renders it this way:
 
 | Operation | Where |
 |---|---|
-| `sfm xform --add-patch-bitmaps` | `render_patch_cloud_bitmaps`, through `PatchCloud.render_bitmaps` |
-| `sfm embed-patches` and `sfm xform --refine-keypoints bitmaps=…` | the sub-pixel refiner with `render_bitmaps`, at the final keypoints |
-| `sfm xform --refine-normals bitmaps=…` | normal refinement with `render_bitmap`, through the refined patch |
+| `sfm xform --add-patch-bitmaps` | `render_patch_cloud_bitmaps`, through `PatchCloud.render_bitmaps`: each point from its stored reference, the rule only for a point at `-1` |
+| `sfm embed-patches` and `sfm xform --refine-keypoints bitmaps=…` | the sub-pixel refiner with `render_bitmaps`, at the final keypoints; a point that stores a reference is then rendered from it (`render_from_references`) |
+| `sfm xform --refine-normals bitmaps=…` | normal refinement with `render_bitmap`, through the refined patch; a point that stores a reference is then rendered from it (`render_from_references`) |
 | A bench fit, and `render_bitmap_in_place` | `render_patch_bitmap` over the `in` rows ([editable-track.md](../bench/editable-track.md)) |
-| The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; the viewer keeps the references it picks beside the display bitmaps, so Track View marks the row the display bitmap is the tile of, and a save writes neither (every reference `-1`) |
-| SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; the bitmaps are the converted value's own, so the references are written with them (`to_embedded_patches` alone gives every point `-1`) |
+| The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`: each point from the file's reference; a point at `-1` gets the render's pick, held in the value's references and marked `PointSet::display_only_references`, so Track View marks the row the display bitmap is the tile of, while a save writes neither the bitmaps nor those picks (it writes the file's `-1`) |
+| SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; `to_embedded_patches` gives every point `-1`, so every point gets the rule's pick, and the bitmaps are the converted value's own, so the references are written with them |
 
 The templates the localizer, the sub-pixel refiner, congealing and normal
 refinement align views to are not changed by this: they read their own
@@ -568,12 +587,15 @@ self-similarity readings are those of its tile rendered directly; that each
 row's pair ZNCC is the median of its row of `member_zncc_matrix` called
 directly; that rendering the bitmap where the track stands stores the tile of
 the row the evaluation picked and names it, and that a commit writes its place
-in the stored track; that sighting the bitmap's observation elsewhere, or
-turning it `out` by hand or by the thresholds, drops the bitmap with its
-reference while the same step on another row keeps both; and that a bitmap
-column rendered for display carries the references its render picked, which
-the bench reads with the bitmap and a commit writes back beside it, while a
-save writes neither, and that without a bitmap the bench reads no reference.
+in the stored track; that sighting the reference observation elsewhere, or
+a patch step, drops the bitmap and keeps the reference, that turning it `out`
+by hand or by the thresholds drops both, while the same step on another row
+keeps both; and that the bench reads a stored reference with or without a
+bitmap, that a display pick reaches the bench, is written as `-1` by a save
+and becomes the point's own on a commit. `display_bitmaps/tests.rs` checks
+that a render reads the stored references: storing the rule's picks and
+rendering again draws the same column, and storing other observations draws
+their tiles under those references.
 The Python tests are in
 [test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 and

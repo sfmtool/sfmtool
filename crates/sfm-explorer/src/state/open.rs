@@ -19,11 +19,16 @@
 //!   decoded), then every patch's bitmap rendered at its stored frame and
 //!   keypoints by the render `sfm xform --add-patch-bitmaps` runs
 //!   ([`render_patch_bitmap_column`], whose bitmaps `sfm web-export` also
-//!   renders). The column goes into the value marked
-//!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], with the reference
-//!   observation each row is the render of, so the bench, the edits and Track
-//!   View read the two as they would a file's own, while no save writes the
-//!   bitmaps or those references and no content hash covers them.
+//!   renders): each point from the reference observation the file stores for
+//!   it, and a point the file stores at `-1` from the observation the
+//!   reference-view rule picks. The column goes into the value marked
+//!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], and each pick the
+//!   render made for a point at `-1` goes into the value's references, marked
+//!   [`sfmtool_core::PointSet::display_only_references`]. The bench, the edits
+//!   and Track View read the bitmaps and references as they would a file's
+//!   own, so each marks the row a display bitmap is the tile of, while no save
+//!   writes the bitmaps or the display picks (a save writes the file's `-1`
+//!   for those) and no content hash covers them.
 //!
 //! The GUI thread then appends one node per file, in the order asked for
 //! ([`AppState::append_opened`]).
@@ -284,10 +289,19 @@ fn load_for_display(
         if let Some(column) = render_patch_bitmaps(&recon, photographs, &phase)? {
             recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column.bitmaps));
             recon.point_set.patch_bitmaps_for_display = true;
-            // The references this render picked, beside the bitmaps they name,
-            // so the bench and Track View mark the row each display bitmap
-            // is the tile of. A file without bitmaps stores every reference
-            // as -1, and a save writes them so again, with no bitmaps.
+            // The render read the file's references, so a point with one
+            // comes back with it unchanged. A point at -1 comes back with the
+            // rule's pick, which the bench and Track View read so they mark
+            // the row its display bitmap is the tile of; the mark keeps a save
+            // writing -1 for it, as the display bitmaps are not saved either.
+            let stored = recon.point_set.reference_observations.as_deref();
+            let marks = column
+                .reference_observations
+                .iter()
+                .enumerate()
+                .map(|(p, &r)| r >= 0 && stored.is_none_or(|s| s[p] < 0))
+                .collect();
+            recon.point_set.display_only_references = Some(marks);
             recon.point_set.reference_observations = Some(column.reference_observations);
         }
     }
@@ -300,10 +314,11 @@ fn load_for_display(
 
 /// Render `recon`'s patch bitmaps at its stored frames and keypoints, moving
 /// nothing, with the reference observation each row is the render of
-/// ([`render_patch_bitmap_column`]), reading the photographs through
-/// `photographs`. The open keeps the column for display only, and the
-/// conversion worker keeps it as a stored column; both keep the references
-/// with it. `Ok(None)` when not one photograph could be read, since a column
+/// ([`render_patch_bitmap_column`]: the stored reference where there is one,
+/// the rule's pick where it is `-1`), reading the photographs through
+/// `photographs`. The open keeps the column for display only, marking the
+/// picks as display-only, and the conversion worker keeps it as a stored
+/// column with its references. `Ok(None)` when not one photograph could be read, since a column
 /// of zero rows would draw nothing.
 pub(super) fn render_patch_bitmaps(
     recon: &SfmrReconstruction,

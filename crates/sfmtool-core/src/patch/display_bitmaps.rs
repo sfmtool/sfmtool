@@ -17,7 +17,9 @@ use crate::camera::PhotographCache;
 use crate::geometry::RigidTransform;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
-use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, PatchBitmapColumn};
+use crate::patch::stored_bitmap::{
+    render_patch_cloud_bitmaps, PatchBitmapColumn, UnreferencedPoints,
+};
 use crate::patch::PatchCloud;
 use crate::progress::{Cancelled, Progress};
 use crate::{progress_note, SfmrReconstruction};
@@ -34,10 +36,12 @@ pub const DISPLAY_PYRAMID_LEVELS: usize = 6;
 /// ([`PhotographCache::get_many`], which decodes the misses in parallel), and
 /// `render`, the whole-cloud form of the one render of the stored bitmap the
 /// bench commit and `--add-patch-bitmaps` use ([`render_patch_cloud_bitmaps`]):
-/// each point's reference view's tile. A photograph that cannot be read, or is not
-/// the size its camera says, is left out of every patch's views rather than
-/// failing the operation; a point that two readable views do not see gets a
-/// zero row.
+/// each point's tile from the reference observation `recon` stores for it, or,
+/// for a point at `-1`, from the observation the reference-view rule picks. A
+/// photograph that cannot be read, or is not the size its camera says, is left
+/// out of every patch's views rather than failing the operation; a point whose
+/// reference observation's photograph is left out, or a point at `-1` that two
+/// readable views do not see, gets a zero row.
 ///
 /// `photographs` should build pyramids of [`DISPLAY_PYRAMID_LEVELS`] levels.
 /// SfM Explorer passes its own cache, so the photographs this decodes stay
@@ -57,15 +61,17 @@ pub fn render_display_patch_bitmaps(
     photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<Option<Array4<u8>>, Cancelled> {
-    // The display column is not the reconstruction's own, so the references
-    // the render picked are not written into it: the file's column stands.
+    // A caller that only draws the column has no use for the references; the
+    // ones it read from `recon` it already holds.
     Ok(render_patch_bitmap_column(recon, photographs, progress)?.map(|column| column.bitmaps))
 }
 
 /// [`render_display_patch_bitmaps`] with the reference observation each row's
-/// render came from, for a caller that stores the column as the
-/// reconstruction's own and so records the references with it (SfM
-/// Explorer's conversion to embedded patches).
+/// render came from: `recon`'s stored reference where it is `≥ 0`, the rule's
+/// pick (or `-1`) where it is `-1`. SfM Explorer's conversion to embedded
+/// patches stores the column as the reconstruction's own and records the
+/// references with it; its open keeps the column for display and marks which
+/// references only the display render picked.
 ///
 /// # Errors
 ///
@@ -152,6 +158,7 @@ pub fn render_patch_bitmap_column(
         recon,
         &views,
         &KeypointSubpixelParams::default(),
+        UnreferencedPoints::Pick,
         None,
         &phase,
     )?;

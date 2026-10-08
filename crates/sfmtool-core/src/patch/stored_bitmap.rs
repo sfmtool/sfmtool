@@ -278,21 +278,48 @@ pub struct PatchBitmapColumn {
     pub reference_observations: Vec<i32>,
 }
 
+/// What [`render_patch_cloud_bitmaps`] does for a point whose stored
+/// reference observation is `-1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnreferencedPoints {
+    /// Run the reference-view rule and render its pick (or the fused mean),
+    /// reporting the pick: what `--add-patch-bitmaps` and the viewer's
+    /// display render do.
+    Pick,
+    /// Render nothing: a zero row and `-1`. For a caller that has bitmaps for
+    /// those points already and re-renders only the points with a reference.
+    Skip,
+}
+
 /// One point's rendered bitmap and the index of its reference observation
 /// within its track, `-1` for none.
 type RenderedRow = (Vec<u8>, i32);
 
-/// [`render_patch_bitmap`] over every patch of `cloud`, parallel across
-/// patches (rayon), each from its point's track in `recon` at the stored
-/// per-observation keypoints.
+/// Render the bitmap of every patch of `cloud`, parallel across patches
+/// (rayon), each from its point's track in `recon` at the stored
+/// per-observation keypoints, from the reference observation `recon` stores
+/// for the point where it has one.
+///
+/// A point whose stored reference observation
+/// ([`PointSet::reference_observations`](crate::PointSet::reference_observations))
+/// is `≥ 0` gets that observation's tile at its keypoint
+/// ([`render_view_tile`], [`bitmap_from_tile`]) and keeps the reference: the
+/// column says which observation the bitmap is rendered from, so a
+/// reconstruction whose bitmaps were dropped renders the same bitmaps again.
+/// Where that observation's photograph is not to hand, the point gets a zero
+/// row and still keeps its reference, rather than a render of some other
+/// observation. Only a point at `-1` runs the reference-view rule
+/// ([`render_patch_bitmap`]) and gets the rule's pick, and only with
+/// [`UnreferencedPoints::Pick`]; with [`UnreferencedPoints::Skip`] it gets a
+/// zero row and `-1`.
 ///
 /// `views` holds one entry per image of `recon`. A `None` entry is an image
 /// whose photograph is not to hand, and it is left out of every patch's view
 /// set rather than failing the call. Each point's reference is reported as
 /// the index of that observation within the point's track, so the column is
-/// what `tracks/reference_observations` holds; a point with no patch, no
-/// bitmap or a fused-mean bitmap gets `-1`, and a point with no bitmap a zero
-/// row. `done`, when given, is bumped once per patch, and `progress` receives
+/// what `tracks/reference_observations` holds; a point with no patch, or one
+/// at `-1` left with no bitmap or a fused-mean bitmap, gets `-1`, and a point
+/// with no bitmap a zero row. `done`, when given, is bumped once per patch, and `progress` receives
 /// a `patches` count about every hundredth of the way through and is polled
 /// for cancellation before each patch.
 ///
@@ -311,6 +338,7 @@ pub fn render_patch_cloud_bitmaps(
     recon: &crate::SfmrReconstruction,
     views: &[Option<ProjectedImage<'_>>],
     params: &KeypointSubpixelParams,
+    unreferenced: UnreferencedPoints,
     done: Option<&AtomicUsize>,
     progress: &Progress<'_>,
 ) -> Result<PatchBitmapColumn, Cancelled> {
@@ -321,6 +349,7 @@ pub fn render_patch_cloud_bitmaps(
     let point_count = recon.point_count();
     let offsets = &recon.point_set.observation_offsets;
     let tracks = &recon.point_set.tracks;
+    let stored_references = recon.point_set.reference_observations.as_deref();
     // The views that are to hand, packed, and where each image's view went.
     let mut present: Vec<ProjectedImage<'_>> = Vec::with_capacity(views.len());
     let mut slot: Vec<Option<u32>> = Vec::with_capacity(views.len());
@@ -357,13 +386,39 @@ pub fn render_patch_cloud_bitmaps(
                 ]);
                 within.push(k);
             }
-            let bitmap = render_patch_bitmap(
-                patch, &present, &view_set, &keypoints, params, progress,
-            )
-            .map(|b| {
-                let reference = b.reference.map_or(-1, |r| within[r] as i32);
-                (b.rgba, reference)
-            });
+            // The stored reference, where it names one of the point's
+            // observations.
+            let count = offsets[p + 1] - offsets[p];
+            let stored = stored_references
+                .and_then(|references| references.get(p))
+                .and_then(|&r| usize::try_from(r).ok())
+                .filter(|&r| r < count);
+            let bitmap = match stored {
+                // Its tile, where its photograph is to hand; otherwise no
+                // bitmap (an empty row), and the reference stands.
+                Some(r) => Some(match within.iter().position(|&k| k == r) {
+                    Some(i) => {
+                        let tile = render_view_tile(
+                            patch,
+                            &present[view_set[i] as usize],
+                            Some(keypoints[i]),
+                            resolution,
+                            params.sampler,
+                            progress,
+                        );
+                        (bitmap_from_tile(&tile), r as i32)
+                    }
+                    None => (Vec::new(), r as i32),
+                }),
+                None if unreferenced == UnreferencedPoints::Skip => None,
+                None => {
+                    render_patch_bitmap(patch, &present, &view_set, &keypoints, params, progress)
+                        .map(|b| {
+                            let reference = b.reference.map_or(-1, |r| within[r] as i32);
+                            (b.rgba, reference)
+                        })
+                }
+            };
             if let Some(counter) = done {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
@@ -383,7 +438,9 @@ pub fn render_patch_cloud_bitmaps(
         .expect("a freshly allocated array is contiguous");
     for (p, bitmap) in rendered {
         if let Some((rgba, reference)) = bitmap {
-            flat[p * row_len..(p + 1) * row_len].copy_from_slice(&rgba);
+            if !rgba.is_empty() {
+                flat[p * row_len..(p + 1) * row_len].copy_from_slice(&rgba);
+            }
             reference_observations[p] = reference;
         }
     }

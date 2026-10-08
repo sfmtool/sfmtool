@@ -357,7 +357,7 @@ fn apply_point_field(
             if value.is_none() {
                 recon.point_set.patch_u_halfvec_xyz = None;
                 recon.point_set.patch_v_halfvec_xyz = None;
-                recon.point_set.patch_bitmaps_y_x_rgba = None;
+                recon.point_set.drop_patch_bitmaps();
             } else {
                 let cloud: PyRef<crate::PyPatchCloud> = value.extract().map_err(|_| {
                     pyo3::exceptions::PyTypeError::new_err(
@@ -367,8 +367,9 @@ fn apply_point_field(
                 let (u, v) = cloud.inner.to_halfvec_arrays(recon.point_set.points.len());
                 recon.point_set.patch_u_halfvec_xyz = Some(u);
                 recon.point_set.patch_v_halfvec_xyz = Some(v);
-                // The cloud carries geometry only; clear any stale bitmaps.
-                recon.point_set.patch_bitmaps_y_x_rgba = None;
+                // The cloud carries geometry only; clear any stale bitmaps,
+                // keeping the references they are to be rendered from again.
+                recon.point_set.drop_patch_bitmaps();
             }
         }
         "patch_bitmaps" => {
@@ -742,15 +743,11 @@ fn finalize(
         carry_sift_keypoints(inner, &mut recon);
     }
 
-    // The old references name renders in the old bitmap column, so they come
-    // across only while that column does.
-    let bitmaps_carried = !kw.contains("patch_bitmaps")? && !kw.contains("patches")?;
     settle_reference_observations(
         inner,
         &mut recon,
         old_point_count,
         replacing_tracks,
-        bitmaps_carried,
         reference_observations,
     )?;
 
@@ -814,9 +811,10 @@ fn apply_image_count_changes(
 /// attached by `patches` in the same call is present when it is checked.
 fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyResult<()> {
     if let Some(value) = kw.get_item("patch_bitmaps")? {
-        if value.is_none() {
-            recon.point_set.patch_bitmaps_y_x_rgba = None;
-        } else {
+        // Either way the old column goes, and with it any pick only a display
+        // render made; the references stay.
+        recon.point_set.drop_patch_bitmaps();
+        if !value.is_none() {
             let arr = extract_ndarray!(
                 value,
                 "patch_bitmaps",
@@ -839,10 +837,9 @@ fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -
                      carries one)",
                 ));
             }
+            // A column handed in is the reconstruction's own.
             recon.point_set.patch_bitmaps_y_x_rgba =
                 Some(Arc::new(arr.as_array().as_standard_layout().into_owned()));
-            // A column handed in is the reconstruction's own.
-            recon.point_set.patch_bitmaps_for_display = false;
         }
     }
     Ok(())
@@ -855,26 +852,24 @@ fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -
 /// A value passed in is taken as it is (and checked with the other point
 /// columns); `None` drops the column. Either is refused where it would leave
 /// the column present without patch frames or absent with them, which a save
-/// would otherwise drop or fill with `-1` without a word, and a value that
-/// names an observation is refused where the result has no patch bitmaps for
-/// it to be the render of. Otherwise the column follows the patch frame: a
-/// value with no frame carries none, and one with a frame carries one.
+/// would otherwise drop or fill with `-1` without a word. Otherwise the column
+/// follows the patch frame: a value with no frame carries none, and one with a
+/// frame carries one.
 ///
-/// A reference names the observation a bitmap is the render of, so the column
-/// `inner` carried comes across only where its bitmaps do
-/// (`bitmaps_carried`: neither `patch_bitmaps` nor `patches` was passed) and
-/// the points are the same points: unchanged where the tracks are, and where
-/// the tracks were replaced, each point's reference moves to the observation
-/// of the same image in its new track, `-1` where there is none. Every row is
-/// `-1` otherwise: for bitmaps passed in without their references, for a
-/// result with no bitmaps, where the point count changed and there is no
-/// mapping from the old points to the new, and for a frame that is new.
+/// A reference names the observation the point's bitmap is, or is to be,
+/// rendered from, so the column `inner` carried comes across whether or not
+/// the bitmaps do -- through new bitmaps passed without references, a new
+/// patch frame for the same points, and dropped bitmaps alike -- wherever the
+/// points are the same points: unchanged where the tracks are, and where the
+/// tracks were replaced, each point's reference moves to the observation of
+/// the same image in its new track, `-1` where there is none. Every row is
+/// `-1` where the point count changed, since there is no mapping from the old
+/// points to the new, and for a frame that is new.
 fn settle_reference_observations(
     inner: &SfmrReconstruction,
     recon: &mut SfmrReconstruction,
     old_point_count: usize,
     replacing_tracks: bool,
-    bitmaps_carried: bool,
     given: Option<Option<Vec<i32>>>,
 ) -> PyResult<()> {
     use sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
@@ -890,17 +885,6 @@ fn settle_reference_observations(
                  and this reconstruction has none"
             }));
         }
-        let has_bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.is_some();
-        if !has_bitmaps
-            && given
-                .iter()
-                .flatten()
-                .any(|&r| r != NO_REFERENCE_OBSERVATION)
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "clone_with_changes(): reference_observations names an observation, but the                  result has no patch bitmaps for it to be the render of; pass -1 for every                  point",
-            ));
-        }
         recon.point_set.reference_observations = given;
         return Ok(());
     }
@@ -913,8 +897,7 @@ fn settle_reference_observations(
         .point_set
         .reference_observations
         .as_ref()
-        .filter(|_| point_count == old_point_count)
-        .filter(|_| bitmaps_carried && recon.point_set.patch_bitmaps_y_x_rgba.is_some());
+        .filter(|_| point_count == old_point_count);
     recon.point_set.reference_observations = Some(match carried {
         None => vec![NO_REFERENCE_OBSERVATION; point_count],
         Some(old) if !replacing_tracks => old.clone(),

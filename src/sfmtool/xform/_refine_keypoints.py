@@ -27,7 +27,10 @@ import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
-from .._patch_compaction import reference_observations_from_images
+from .._patch_compaction import (
+    reference_observations_from_images,
+    render_from_references,
+)
 from ._patch_params import validate_patch_params
 
 _CONSENSUS_REFRESH = ("per_sweep", "per_move")
@@ -227,13 +230,20 @@ class RefineKeypointsTransform:
                 f"  Saving {len(result)} patches and {n_filled} bitmaps "
                 f"to the reconstruction"
             )
-            return recon.clone_with_changes(
-                keypoints_xy=kxy,
-                patches=cloud,
-                patch_bitmaps=bitmaps,
-                reference_observations=reference_observations_from_images(
-                    recon, reference_images
-                ),
+            # A point that already names a reference observation keeps it:
+            # its bitmap is rendered again from that observation at the
+            # refined keypoint, and only a point at -1 keeps the refiner's pick.
+            moved = recon.clone_with_changes(keypoints_xy=kxy, patches=cloud)
+            bitmaps, references = render_from_references(
+                moved,
+                images,
+                bitmaps,
+                reference_observations_from_images(recon, reference_images),
+                resolution=self.resolution,
+                sampler=self.sampler,
+            )
+            return moved.clone_with_changes(
+                patch_bitmaps=bitmaps, reference_observations=references
             )
         return recon.clone_with_changes(keypoints_xy=kxy)
 

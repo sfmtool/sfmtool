@@ -373,9 +373,9 @@ impl SfmrReconstruction {
     /// Check that the optional per-point constraint columns are parallel to
     /// `points`, carry a constraint this format defines, and reference only images
     /// this reconstruction holds, and that each reference observation is `-1` or
-    /// within its point's track, present only with the patch frame, and `-1`
-    /// where there are no patch bitmaps.
-    /// Returns a message describing the first violation.
+    /// within its point's track and present only with the patch frame, with or
+    /// without the patch bitmaps. Returns a message describing the first
+    /// violation.
     ///
     /// The companion of [`Self::validate_observation_columns`] on the point
     /// axis: the same in-memory editors that can leave an observation column out
@@ -397,18 +397,11 @@ impl SfmrReconstruction {
                     counts.len()
                 ));
             }
-            let has_bitmaps = self.point_set.patch_bitmaps_y_x_rgba.is_some();
             for (p, (&r, &count)) in references.iter().zip(counts).enumerate() {
                 if r != -1 && !(r >= 0 && (r as u32) < count) {
                     return Err(format!(
                         "point {p} names reference observation {r}, which is neither -1 \
                          nor one of its {count} observations"
-                    ));
-                }
-                if r != -1 && !has_bitmaps {
-                    return Err(format!(
-                        "point {p} names reference observation {r}, but the reconstruction \
-                         has no patch bitmaps for it to be the render of"
                     ));
                 }
             }

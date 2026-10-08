@@ -161,15 +161,21 @@ pub struct PointSet {
     pub observation_confidence: Option<Vec<u8>>,
     /// Per point (parallel to `points`), the index of its **reference
     /// observation** within its own track, `0` to `observation_counts[i] - 1`:
-    /// the observation whose `R×R` render the point's patch bitmap is.
-    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has none: its bitmap
-    /// is not known to be one observation's render (a fused mean), or there is
-    /// no bitmap, so every row is `-1` without [`Self::patch_bitmaps_y_x_rgba`]
-    /// ([`validate_point_columns`](super::SfmrReconstruction::validate_point_columns)).
-    /// With a column rendered for display ([`Self::patch_bitmaps_for_display`])
-    /// it names that render's observations, and a save writes every row as
-    /// `-1`, since it writes no bitmaps. Persisted as
+    /// the observation the point's patch bitmap is, or is to be, rendered
+    /// from. With [`Self::patch_bitmaps_y_x_rgba`], the bitmap is that
+    /// observation's `R×R` render; without it, the column stays, and a later
+    /// render renders the point from it
+    /// ([`render_patch_cloud_bitmaps`](crate::patch::stored_bitmap::render_patch_cloud_bitmaps)).
+    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where no reference has been chosen:
+    /// a bitmap beside it is a fused mean, and a later render runs the
+    /// reference-view rule for the point. Persisted as
     /// `tracks/reference_observations` (version 12+).
+    ///
+    /// With a column rendered for display ([`Self::patch_bitmaps_for_display`]),
+    /// a point the file stored at `-1` holds the observation the display render
+    /// picked, so the bench and Track View mark the row its display bitmap is
+    /// the tile of; [`Self::display_only_references`] marks those rows, and a
+    /// save writes them as `-1` again ([`Self::saved_reference_observations`]).
     ///
     /// `Some` exactly when the patch frame is: a file below version 12 with
     /// patch frames loads with every row `-1`, and
@@ -185,6 +191,20 @@ pub struct PointSet {
     ///
     /// [`NO_REFERENCE_OBSERVATION`]: sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION
     pub reference_observations: Option<Vec<i32>>,
+    /// Per point (parallel to `points`), whether its entry in
+    /// [`Self::reference_observations`] is a pick only the display render made
+    /// -- the file stored `-1` for it, and the viewer rendered its display
+    /// bitmap from the observation the reference-view rule picked. `Some` only
+    /// beside a column marked [`Self::patch_bitmaps_for_display`].
+    ///
+    /// A display pick is shown, never saved, as the display bitmaps are not:
+    /// [`Self::saved_reference_observations`] writes `-1` for a marked row.
+    /// Every pass that drops or reorders points selects its rows in lockstep
+    /// with `points` ([`Self::select_display_only_references`]); a point added
+    /// by an edit, such as a bench commit, is unmarked, since its reference is
+    /// the edit's own; a pass that drops or replaces the bitmap column clears
+    /// it.
+    pub display_only_references: Option<Vec<bool>>,
 
     // --- Derived data (computed from the fields above, not stored in .sfmr) ---
     /// Prefix sum of `observation_counts`: `observation_offsets[i]` is the
@@ -413,6 +433,38 @@ impl PointSet {
                 })
                 .collect(),
         )
+    }
+
+    /// [`Self::display_only_references`]'s rows for `point_rows`, the points a
+    /// pass keeps, in their new order.
+    pub fn select_display_only_references(&self, point_rows: &[usize]) -> Option<Vec<bool>> {
+        let marks = self.display_only_references.as_ref()?;
+        Some(point_rows.iter().map(|&p| marks[p]).collect())
+    }
+
+    /// [`Self::reference_observations`] as a save writes it: `-1` for each
+    /// row [`Self::display_only_references`] marks, since a pick only the
+    /// display render made is not the reconstruction's own.
+    pub fn saved_reference_observations(&self) -> Option<Vec<i32>> {
+        let mut references = self.reference_observations.clone()?;
+        if let Some(marks) = &self.display_only_references {
+            for (reference, &mark) in references.iter_mut().zip(marks) {
+                if mark {
+                    *reference = NO_REFERENCE_OBSERVATION;
+                }
+            }
+        }
+        Some(references)
+    }
+
+    /// Drop the patch bitmap column, keeping the reference observations,
+    /// except a pick only the display render made
+    /// ([`Self::display_only_references`]), which goes back to `-1`.
+    pub fn drop_patch_bitmaps(&mut self) {
+        self.reference_observations = self.saved_reference_observations();
+        self.display_only_references = None;
+        self.patch_bitmaps_y_x_rgba = None;
+        self.patch_bitmaps_for_display = false;
     }
 
     /// The observation row of point `point`'s reference observation, or `None`

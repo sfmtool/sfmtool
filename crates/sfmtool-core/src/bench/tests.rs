@@ -1611,11 +1611,12 @@ fn the_bitmap_s_row_follows_its_observation_or_goes_with_it() {
     assert!(gone.track().unwrap().bitmap.is_none());
 }
 
-/// Sighting the observation a track-stage bitmap is the render of at another
-/// keypoint drops the bitmap with its reference, since it was rendered at the
-/// old keypoint; sighting any other observation keeps both.
+/// Sighting a track's reference observation at another keypoint drops the
+/// bitmap, since it was rendered at the old keypoint, and keeps the reference,
+/// since the observation is still on the track; sighting any other
+/// observation keeps both.
 #[test]
-fn sighting_the_bitmap_s_observation_drops_the_bitmap() {
+fn sighting_the_reference_observation_drops_the_bitmap_and_keeps_the_reference() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -1634,8 +1635,30 @@ fn sighting_the_bitmap_s_observation_drops_the_bitmap() {
     assert!(other.track().unwrap().bitmap.is_some());
 
     let (own, _) = sight_observation(&track, &edited, 0, pixel_of(&track, 0)).expect("sighted");
-    assert_eq!(own.track().unwrap().reference, None);
+    assert_eq!(own.track().unwrap().reference, Some(0));
     assert!(own.track().unwrap().bitmap.is_none());
+    // The reconstruction stores a bitmap per point, so a commit waits for the
+    // render that sets the bitmap and its reference together.
+    assert!(matches!(
+        commit(&edited, &own),
+        Err(crate::bench::CommitError::NoBitmap)
+    ));
+}
+
+/// A patch step makes the bitmap stale and keeps the reference observation,
+/// which is still on the track: the next render renders a new bitmap.
+#[test]
+fn a_patch_step_drops_the_bitmap_and_keeps_the_reference() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    payload_of(&mut track).reference = Some(1);
+    payload_of(&mut track).bitmap = Some(Array3::zeros((4, 4, 4)));
+    let (spun, report) = spin_patch(&track, 0.3).expect("a finite angle");
+    assert!(report.changed);
+    assert_eq!(spun.track().unwrap().reference, Some(1));
+    assert!(spun.track().unwrap().bitmap.is_none());
 }
 
 /// Turning out the observation a track-stage bitmap is the render of drops

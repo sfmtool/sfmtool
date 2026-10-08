@@ -701,7 +701,9 @@ the rows, or one stored before the reference was recorded) or where there is no
 bitmap, as `stage_data.has_bitmap` and `stage_data.bitmap_observation` report
 them on the bench. On a file with patch frames but no stored bitmaps, the
 bitmap is the one the viewer rendered for display at open, and
-`bitmap_observation` is that render's own pick. For any other point the block is absent:
+`bitmap_observation` is the observation it was rendered from: the file's
+reference observation, or the display render's own pick for a point the file
+stores at `-1`. For any other point the block is absent:
 there is no call that evaluates an arbitrary point on request, since that is a
 separate operation with a cost. A `select_point` earlier in the same batch of
 calls moves the viewed point with it, since `get_point` asks for the viewed
@@ -3844,9 +3846,10 @@ mean of the `in` rows and `bitmap_observation` is null although
 stored bitmap"): `stage_data.has_bitmap` says whether the track has a bitmap
 and `stage_data.bitmap_observation` names the row it is the tile of, null for
 a bitmap that names none (a mean of the rows, or one stored before the
-reference was recorded). A step that sights that row elsewhere, takes it off
-the track or turns it `out` drops the bitmap with it, and the live evaluation
-renders a new one and scores every row against it. Every row of a track with a bitmap carries its score
+reference was recorded). A step that sights that row elsewhere drops the
+bitmap and keeps the reference, one that takes it off the track or turns it
+`out` drops both, and the live evaluation renders a new one, re-picking the
+reference, and scores every row against it. Every row of a track with a bitmap carries its score
 against it ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
 § "Scores against the stored bitmap"): `bitmap_zncc`, the windowed ZNCC of its
 tile with the bitmap; `blur_matched_bitmap_zncc`, the same after the bitmap

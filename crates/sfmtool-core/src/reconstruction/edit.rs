@@ -241,6 +241,7 @@ impl SfmrReconstruction {
                 // The bitmaps are unchanged, so each is still the render of
                 // the observation it was.
                 reference_observations: self.point_set.reference_observations.clone(),
+                display_only_references: self.point_set.display_only_references.clone(),
                 // A 3D similarity leaves the 2D image keypoints, feature
                 // indices, and image identity untouched, so the observation
                 // source passes through for both modes.
@@ -369,6 +370,7 @@ impl SfmrReconstruction {
             new_normal_confidence,
             kept_point_constraints,
             new_reference_observations,
+            new_display_only_references,
         ) = if drop_orphaned_points {
             // Count surviving observations per point and build a keep mask.
             let mut per_point_count = vec![0u32; self.point_set.points.len()];
@@ -431,6 +433,7 @@ impl SfmrReconstruction {
                 // keeps its bitmap and loses its reference.
                 self.point_set
                     .select_reference_observations(&keep_idx, &kept_obs),
+                self.point_set.select_display_only_references(&keep_idx),
             )
         } else {
             // Keep all points; recompute per-point counts from the filtered tracks.
@@ -451,6 +454,7 @@ impl SfmrReconstruction {
                     &(0..self.point_set.points.len()).collect::<Vec<_>>(),
                     &kept_obs,
                 ),
+                self.point_set.display_only_references.clone(),
             )
         };
 
@@ -558,6 +562,7 @@ impl SfmrReconstruction {
                 point_constraints: new_point_constraints,
                 observation_confidence: new_observation_confidence,
                 reference_observations: new_reference_observations,
+                display_only_references: new_display_only_references,
                 observations: new_observations,
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,
@@ -718,6 +723,7 @@ impl SfmrReconstruction {
                 reference_observations: self
                     .point_set
                     .select_reference_observations(&keep_idx, &kept),
+                display_only_references: self.point_set.select_display_only_references(&keep_idx),
                 observations: new_observations,
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,

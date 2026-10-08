@@ -29,7 +29,10 @@ import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
-from .._patch_compaction import reference_observations_from_images
+from .._patch_compaction import (
+    reference_observations_from_images,
+    render_from_references,
+)
 from ._patch_params import validate_patch_params
 
 # Confidence (the peakedness of Φ at the optimum) is normalized to roughly
@@ -234,15 +237,21 @@ class RefineNormalsTransform:
                 f"to the reconstruction"
             )
             # Each bitmap is the tile of the view the reference-view rule
-            # picked at the refined normal; record which observation it is.
-            references = reference_observations_from_images(
-                recon, result["reference_images"]
+            # picked at the refined normal; record which observation it is. A
+            # point that already names a reference observation keeps it, and
+            # its bitmap is rendered again from that observation at the
+            # refined normal.
+            out = recon.clone_with_changes(normals=normals, patches=cloud)
+            bitmaps, references = render_from_references(
+                out,
+                images,
+                result["bitmaps"],
+                reference_observations_from_images(recon, result["reference_images"]),
+                resolution=self.resolution,
+                sampler=self.sampler,
             )
-            return recon.clone_with_changes(
-                normals=normals,
-                patches=cloud,
-                patch_bitmaps=result["bitmaps"],
-                reference_observations=references,
+            return out.clone_with_changes(
+                patch_bitmaps=bitmaps, reference_observations=references
             )
         return recon.clone_with_changes(normals=normals, patches=cloud)
 

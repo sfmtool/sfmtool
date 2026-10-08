@@ -1374,12 +1374,14 @@ read plain. The row the column marks is the row the *Reference* column marks,
 since a fit picks the bitmap from the same readings, except where the bitmap is
 the fused mean of a last-fallback pick, when the column marks no row and
 scores every row. A step that sights the marked row elsewhere, takes it off the
-track or turns it `out` drops the bitmap with it, and the live evaluation
-renders and scores a new one
+track or turns it `out` drops the bitmap, and the live evaluation renders and
+scores a new one, re-picking the reference
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 stored bitmap's reference"). On a file with patch frames but no stored
 bitmaps, the bitmap is the one SfM Explorer rendered for display when it
-opened the file, and the marked row is that render's own pick. A track with no
+opened the file, and the marked row is the row it was rendered from: the
+file's reference observation, or the display render's own pick for a point
+the file stores at `-1`. A track with no
 bitmap, the cluster stage, and a track that could not be evaluated print `-`.
 No bar reads the scores.
 

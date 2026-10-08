@@ -302,6 +302,7 @@ fn build_points(
             point_constraints: None,
             observation_confidence: None,
             reference_observations: None,
+            display_only_references: None,
             observations: ObservationSource::EmbeddedPatches {
                 keypoints_xy,
                 image_file_hashes: vec![[0u8; 16]; n_images],

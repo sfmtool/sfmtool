@@ -570,7 +570,9 @@ co-register are dropped, points whose kept-view count falls below `min_views`
 rebuilt from the survivors (via the same compaction helper the `embed-patches`
 pipeline uses). Cameras, poses, and each surviving point's 3D geometry are
 unchanged. Stored patch bitmaps are dropped as stale (the frames are kept, and
-every `tracks/reference_observations` row is written `-1`) —
+each point keeps its `tracks/reference_observations` entry, moved to the
+observation of the same image in its rebuilt track, `-1` where the localizer
+dropped that image) —
 re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
 render bitmaps by default); there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be
@@ -666,9 +668,10 @@ Discards the per-point patch bitmap column
 (`clone_with_changes(patch_bitmaps=None)`). The patch frames
 (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the normals stay, so the
 patches keep their geometry and a later `--add-patch-bitmaps`,
-`--refine-keypoints` or `--refine-normals` can render onto them. Every
-`tracks/reference_observations` row becomes `-1`, since no bitmap is left for
-it to name; the column stays, as it is required with the patch frame
+`--refine-keypoints` or `--refine-normals` can render onto them. The
+`tracks/reference_observations` column stays as it was: each entry names the
+observation the point's bitmap is to be rendered from again, so a later
+`--add-patch-bitmaps` renders the same bitmaps
 ([sfmr-file-format.md](../../../formats/sfmr-file-format.md) § "9. Tracks").
 Valid on both feature sources; a no-op, with one printed line, on a
 reconstruction without bitmaps.
@@ -729,25 +732,31 @@ the step has anything to do. `sampler` takes the values and default of the
 sub-pixel parameters tune a solve this step does not run.
 
 The render is the stored bitmap of a patch whose placement and keypoints are
-settled: each point's bitmap is the tile of the observation the reference-view
-rule picks among its track, rendered at that observation's keypoint, and the
-point's `tracks/reference_observations` row records which observation it is
+settled. A point whose `tracks/reference_observations` entry names an
+observation (one the file kept when its bitmaps were dropped) gets that
+observation's tile at its keypoint and keeps the entry, so
+`--drop-patch-bitmaps` followed by `--add-patch-bitmaps` gives back the same
+bitmaps and references. A point at `-1` gets the tile of the observation the
+reference-view rule picks among its track, rendered at that observation's
+keypoint, and its entry records which observation it is
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
 bitmap"); where the rule picks none, or reaches its pick only through its last
 fallback, the fused mean of the views, recording `-1`.
 [`render_patch_cloud_bitmaps`](../../../../crates/sfmtool-core/src/patch/stored_bitmap.rs)
 renders the whole cloud, parallel over points. It takes one view per image as
 an `Option`, leaving a `None` view out of every patch's view set, and a
-`Progress` that counts `patches` and can cancel it. It is bound as
+`Progress` that counts `patches` and can cancel it, and an
+`UnreferencedPoints` that says whether a point at `-1` runs the rule (`Pick`)
+or gets a zero row (`Skip`). It is bound as
 `PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view",
-progress=None)`, which returns the `(P, R, R, 4)` array and the `(P,)` int32
+referenced_only=False, progress=None)`, which returns the `(P, R, R, 4)` array and the `(P,)` int32
 reference observations `clone_with_changes(patch_bitmaps=...,
 reference_observations=...)` takes. A bench fit renders one track the same way
 (`render_patch_bitmap`), and the viewer's open runs the whole-cloud form for a
 file whose bitmaps are absent.
 
-Its bitmaps therefore equal what `--refine-keypoints` renders for a patch whose
-keypoints it did not move and whose every view passes the refiner's projection
+For a point at `-1`, its bitmap therefore equals what `--refine-keypoints`
+renders for a patch whose keypoints it did not move and whose every view passes the refiner's projection
 gate (the refiner runs the rule over the views that pass it), and what the
 bench commits. `--refine-normals` picks the reference view among every input
 view as well, but where it stores the fused mean it fuses the views the normal
@@ -843,7 +852,7 @@ What it clears and what it keeps:
 | `images/image_file_hashes` | kept | The identity of each photograph, which is what lets `--add-thumbnails` check that the photographs found are the ones reconstructed. |
 | `images/thumbnails_y_x_rgb` | **dropped** | The shorthand. |
 | `points3d/patch_bitmaps_y_x_rgba` | **dropped** | The shorthand. |
-| `tracks/reference_observations` | kept, with **every row `-1`** | It names the observation each bitmap is the render of, and there is no bitmap left; the column itself is required with the patch frame. |
+| `tracks/reference_observations` | kept | It names the observation each bitmap is to be rendered from, so `--add-patch-bitmaps` renders the same bitmaps back; the column is required with the patch frame. |
 | `points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `normals_xyz` | kept | Geometry: the patches keep their placement, so bitmaps can be rendered back onto them. |
 | positions, colours, reprojection errors, tracks, keypoints, poses, cameras, image names | kept | The reconstruction itself. |
 

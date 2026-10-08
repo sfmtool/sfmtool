@@ -158,8 +158,9 @@ impl SfmrReconstruction {
     ///
     /// Both heavy columns dropped (the thumbnails and the patch bitmaps, whether
     /// the bitmaps are the reconstruction's or were rendered for display; the
-    /// patch frames and normals stay, and every reference observation becomes
-    /// `-1`, since there is no bitmap left for it to name the render of), then
+    /// patch frames, normals and reference observations stay, so a later render
+    /// renders the same bitmaps from the same observations; a reference only
+    /// the display render picked goes back to `-1`), then
     /// [`Self::stamp_save`] for `path`,
     /// then [`Self::clear_minimal_metadata`], then `tool_options` set to the
     /// given map. The copy carries no content hash, since it is not the content
@@ -193,13 +194,9 @@ impl SfmrReconstruction {
     ) -> SfmrReconstruction {
         let mut minimal = self.clone_for_edit();
         minimal.image_table.thumbnails_y_x_rgb = None;
-        minimal.point_set.patch_bitmaps_y_x_rgba = None;
-        minimal.point_set.patch_bitmaps_for_display = false;
-        // A reference names the observation a bitmap is the render of, so
-        // with the bitmaps gone every point names none.
-        if let Some(references) = minimal.point_set.reference_observations.as_mut() {
-            references.fill(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION);
-        }
+        // The references stay: they name the observation each bitmap is to be
+        // rendered from again. A pick only a display render made goes.
+        minimal.point_set.drop_patch_bitmaps();
         minimal.stamp_save(path, stamp);
         minimal.clear_minimal_metadata();
         minimal.metadata.tool_options = tool_options;

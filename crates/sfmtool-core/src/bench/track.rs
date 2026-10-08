@@ -674,19 +674,29 @@ pub struct TrackPayload {
     /// observations' renders (a bitmap fused before the reference was recorded,
     /// or one the reference-view rule found no view for).
     pub bitmap: Option<Array3<u8>>,
-    /// The observation, as an index into the track's observations, whose
-    /// render [`Self::bitmap`] is. `None` where the bitmap is not one
-    /// observation's render (a fused mean) and where there is no bitmap: the
-    /// two always agree.
+    /// The track's **reference observation**, as an index into the track's
+    /// observations: the observation [`Self::bitmap`] is, or is to be,
+    /// rendered from. With a bitmap, the bitmap is that observation's render;
+    /// `None` beside a bitmap means the bitmap is not one observation's render
+    /// (a fused mean). Without a bitmap it is the reference the track carries
+    /// until the next render, read from the point's stored reference or kept
+    /// from a bitmap a step made stale.
     ///
     /// It follows its observation through every step that reorders or removes
-    /// other observations. A step after which the bitmap no longer shows what
-    /// its reference observation sees drops both together
-    /// (`drop_bitmap`): one that moves the patch, sights the
-    /// reference observation at another keypoint, removes it from the track,
-    /// or turns it `out`. The live evaluation then renders the bitmap again
-    /// from the observations that are `in`. A commit writes it as the point's
-    /// reference observation.
+    /// other observations. A step that makes the bitmap stale while the
+    /// reference observation stays `in` -- one that moves the patch, or
+    /// sights the reference observation at another keypoint -- drops the
+    /// bitmap and keeps the reference (`drop_stale_bitmap`). A step that
+    /// removes the reference observation from the track, splits it off, or
+    /// turns it `out` drops both (`drop_bitmap`).
+    ///
+    /// **The bench re-picks on render.** Every render of a new bitmap on the
+    /// bench -- the live evaluation's, a fit's, a normal step's -- runs the
+    /// reference-view rule over the `in` rows and sets the bitmap and this
+    /// reference together, so the bench is where a point's reference is
+    /// replaced. A commit writes this reference as the point's reference
+    /// observation, beside the bitmap it is the render of where the
+    /// reconstruction stores bitmaps.
     pub reference: Option<usize>,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
@@ -698,17 +708,24 @@ pub struct TrackPayload {
 }
 
 impl TrackPayload {
-    /// Drop the bitmap and the reference observation it is the render of,
-    /// together, for a step after which the bitmap no longer shows what the
-    /// track sees.
+    /// Drop the bitmap and the reference observation, together, for a step
+    /// after which the reference observation is no longer one the track
+    /// keeps `in`.
     pub(crate) fn drop_bitmap(&mut self) {
         self.bitmap = None;
         self.reference = None;
     }
 
+    /// Drop the bitmap and keep the reference observation, for a step after
+    /// which the bitmap no longer shows what the reference observation sees
+    /// but that observation is still on the track.
+    pub(crate) fn drop_stale_bitmap(&mut self) {
+        self.bitmap = None;
+    }
+
     /// Drop the bitmap with its reference observation when that observation
-    /// is not one of `observations`' `in` rows: a stored bitmap is the render
-    /// of an observation the track keeps.
+    /// is not one of `observations`' `in` rows: a reference is an observation
+    /// the track keeps.
     pub(crate) fn drop_bitmap_unless_in(&mut self, observations: &[Observation]) {
         if let Some(r) = self.reference {
             if observations.get(r).is_none_or(|o| o.verdict != Verdict::In) {

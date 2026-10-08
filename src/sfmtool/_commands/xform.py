@@ -69,7 +69,8 @@ from ..xform._arg_parser import (
         "'angular_range_deg=25,init_steps=7'). Renders and persists the "
         "per-point RGBA patch textures by default so the output is "
         "self-contained; pass 'bitmaps=false' to skip the render (e.g. on an "
-        "intermediate stage). Requires an embedded_patches reconstruction "
+        "intermediate stage). A point that stores a reference observation "
+        "keeps it and is rendered from it. Requires an embedded_patches reconstruction "
         "(convert first with --to-embedded-patches); reads the workspace source "
         "images, which must still be present where it was created."
     ),
@@ -86,7 +87,8 @@ from ..xform._arg_parser import (
         "'max_outer_sweeps=2,sampler=anisotropic'). Renders and persists the "
         "per-point RGBA patch textures at the refined keypoints by default so "
         "the output is self-contained; pass 'bitmaps=false' to skip the render "
-        "(e.g. on an intermediate stage). Requires an embedded_patches "
+        "(e.g. on an intermediate stage). A point that stores a reference "
+        "observation keeps it and is rendered from it. Requires an embedded_patches "
         "reconstruction (convert first with --to-embedded-patches); reads the "
         "workspace source images, which must still be present where it was "
         "created."
@@ -103,7 +105,8 @@ from ..xform._arg_parser import (
         "are dropped, points falling below min_views are culled, and the track "
         "structure is rebuilt from the survivors; stored patch bitmaps are "
         "dropped (re-run --refine-keypoints to regenerate them, since it "
-        "renders bitmaps by default). "
+        "renders bitmaps by default), and each point keeps its reference "
+        "observation where its track still holds that image. "
         "Optional comma-separated key=value params (e.g. "
         "'search=8,min_views=3'). Requires an embedded_patches reconstruction "
         "(convert first with --to-embedded-patches); reads the workspace "
@@ -139,8 +142,9 @@ from ..xform._arg_parser import (
     is_flag=True,
     multiple=True,
     help=(
-        "Discard the per-point patch bitmap column, keeping the patch frames and "
-        "normals so a later step can render onto them."
+        "Discard the per-point patch bitmap column, keeping the patch frames, "
+        "normals and reference observations, so a later step can render the "
+        "same bitmaps onto them."
     ),
 )
 @click.option(
@@ -162,7 +166,9 @@ from ..xform._arg_parser import (
     multiple=True,
     help=(
         "Render the patch bitmap column at the stored frames and keypoints, "
-        "moving nothing. Optional 'resolution=<R>,sampler=<S>' (defaults 24 and "
+        "moving nothing: each point from its stored reference observation, and "
+        "a point with none from the observation the reference-view rule picks, "
+        "which is recorded. Optional 'resolution=<R>,sampler=<S>' (defaults 24 and "
         "per_view). Requires an embedded_patches reconstruction; reads the "
         "workspace source images. A no-op when bitmaps are present."
     ),

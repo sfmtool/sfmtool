@@ -531,6 +531,7 @@ fn point_sets_equal(a: &PointSet, b: &PointSet) -> bool {
         && a.normal_confidence == b.normal_confidence
         && constraints_agree(&a.point_constraints, &b.point_constraints)
         && a.reference_observations == b.reference_observations
+        && a.display_only_references == b.display_only_references
 }
 
 /// Whether two constraint columns say the same thing.
@@ -1379,6 +1380,14 @@ impl EditedReconstruction {
                 })
                 .collect()
         });
+        // A point an edit added names a reference of the edit's own, never a
+        // pick only the display render made.
+        let display_only_references = base.display_only_references.as_ref().map(|marks| {
+            point_rows
+                .iter()
+                .map(|&(is_base, i)| is_base && marks[i])
+                .collect()
+        });
 
         PointSet {
             points,
@@ -1387,6 +1396,7 @@ impl EditedReconstruction {
             observations,
             observation_confidence,
             reference_observations,
+            display_only_references,
             patch_u_halfvec_xyz: self.merge_halfvec(&base.patch_u_halfvec_xyz, &point_rows, true),
             patch_v_halfvec_xyz: self.merge_halfvec(&base.patch_v_halfvec_xyz, &point_rows, false),
             patch_bitmaps_y_x_rgba: self.merge_bitmaps(&point_rows),
@@ -1746,6 +1756,8 @@ fn empty_like(base: &PointSet, image_count: usize) -> PointSet {
             .map(|_| PointConstraintColumns::all_free(0)),
         observation_confidence: base.observation_confidence.as_ref().map(|_| Vec::new()),
         reference_observations: base.reference_observations.as_ref().map(|_| Vec::new()),
+        // Every added point is unmarked, so the added set carries no marks.
+        display_only_references: None,
         observation_offsets: vec![0],
         image_feature_to_point: vec![HashMap::new(); image_count],
         max_track_feature_index: vec![0; image_count],

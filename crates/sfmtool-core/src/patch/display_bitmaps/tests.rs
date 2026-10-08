@@ -117,7 +117,9 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
     use crate::geometry::RigidTransform;
     use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
     use crate::patch::normal_refine::ProjectedImage;
-    use crate::patch::stored_bitmap::{render_patch_bitmap, render_patch_cloud_bitmaps};
+    use crate::patch::stored_bitmap::{
+        render_patch_bitmap, render_patch_cloud_bitmaps, UnreferencedPoints,
+    };
     use crate::patch::PatchCloud;
 
     let recon = seoul_bull();
@@ -165,9 +167,16 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
 
     let cloud = PatchCloud::from_stored_frames(&recon).expect("the file has patch frames");
     let params = KeypointSubpixelParams::default();
-    let column =
-        render_patch_cloud_bitmaps(&cloud, &recon, &views, &params, None, &Progress::none())
-            .expect("not cancelled");
+    let column = render_patch_cloud_bitmaps(
+        &cloud,
+        &recon,
+        &views,
+        &params,
+        UnreferencedPoints::Pick,
+        None,
+        &Progress::none(),
+    )
+    .expect("not cancelled");
 
     let offsets = &recon.point_set.observation_offsets;
     let tracks = &recon.point_set.tracks;
@@ -221,3 +230,73 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
     }
     assert!(checked > 0, "no track had a missing view before its pick");
 }
+
+/// The render reads the reconstruction's references: a point with a stored
+/// reference is rendered from that observation and keeps it, so storing the
+/// rule's picks and rendering again draws the same column, and storing other
+/// observations draws their tiles under those references. Only a point at
+/// `-1` gets the rule's pick.
+#[test]
+fn a_stored_reference_is_rendered_from_and_kept() {
+    let mut recon = seoul_bull();
+    let count = recon.point_count();
+    recon.point_set.reference_observations =
+        Some(vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; count]);
+    let cache = PhotographCache::new(1 << 30, DISPLAY_PYRAMID_LEVELS);
+    let render = |recon: &SfmrReconstruction| {
+        render_patch_bitmap_column(recon, &cache, &Progress::none())
+            .expect("not cancelled")
+            .expect("the photographs are readable")
+    };
+    let picked = render(&recon);
+
+    // The rule's picks, stored and rendered again: the same column.
+    recon.point_set.reference_observations = Some(picked.reference_observations.clone());
+    let again = render(&recon);
+    assert_eq!(again.reference_observations, picked.reference_observations);
+    assert_eq!(again.bitmaps, picked.bitmaps);
+
+    // Another observation for every point that picked one, and -1 for half
+    // of the rest of the points with a pick: the stored ones come back as
+    // they are, the -1 ones come back with the rule's pick.
+    let counts = recon.point_set.observation_counts.clone();
+    let mut stored = picked.reference_observations.clone();
+    let mut moved = 0;
+    for (p, r) in stored.iter_mut().enumerate() {
+        if *r < 0 {
+            continue;
+        }
+        if p % 2 == 0 {
+            *r = NO_REFERENCE;
+        } else {
+            *r = (*r + 1) % counts[p] as i32;
+            moved += 1;
+        }
+    }
+    assert!(moved > 0);
+    recon.point_set.reference_observations = Some(stored.clone());
+    let shifted = render(&recon);
+    let row_len = shifted.bitmaps.len() / count;
+    let flat_shifted = shifted.bitmaps.as_slice().unwrap();
+    let flat_picked = picked.bitmaps.as_slice().unwrap();
+    let mut differs = 0;
+    for (p, &want) in stored.iter().enumerate() {
+        let rows = p * row_len..(p + 1) * row_len;
+        if want >= 0 {
+            assert_eq!(shifted.reference_observations[p], want, "point {p}");
+            differs += usize::from(flat_shifted[rows.clone()] != flat_picked[rows]);
+        } else {
+            assert_eq!(
+                shifted.reference_observations[p], picked.reference_observations[p],
+                "point {p}"
+            );
+            assert_eq!(flat_shifted[rows.clone()], flat_picked[rows], "point {p}");
+        }
+    }
+    assert!(
+        differs * 2 > moved,
+        "most moved references draw another tile: {differs} of {moved}"
+    );
+}
+
+const NO_REFERENCE: i32 = sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;

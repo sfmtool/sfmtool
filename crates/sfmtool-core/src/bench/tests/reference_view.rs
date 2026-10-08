@@ -431,36 +431,52 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
     assert_eq!(images[at], again.observations[picked].image);
 }
 
-/// A bitmap column rendered for display carries the references its render
-/// picked: the bench reads the reference with the bitmap, a commit writes it
-/// back beside the bitmap, and a save writes neither. Without a bitmap the
-/// bench reads no reference, whatever the column says.
+/// The bench reads a point's reference with or without a bitmap: the column
+/// names the observation the bitmap is, or is to be, rendered from. With a
+/// column rendered for display, a pick only the display render made reaches
+/// the bench like a stored reference, a save writes it as `-1`, and a commit
+/// makes it the committed point's own.
 #[test]
-fn a_display_bitmap_s_reference_reaches_the_bench_and_never_a_file() {
+fn a_reference_reaches_the_bench_with_or_without_a_bitmap() {
     let truth = GroundTruth::load();
     let mut recon = truth.recon.clone();
     assert!(recon.point_set.patch_bitmaps_y_x_rgba.is_none());
     let offsets = &recon.point_set.observation_offsets;
-    let point = (0..recon.point_count())
-        .find(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK)
-        .expect("the ground truth has a long track");
+    let mut long = (0..recon.point_count()).filter(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK);
+    let stored = long.next().expect("the ground truth has a long track");
+    let picked = long.next().expect("the ground truth has two long tracks");
     let mut references = vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; recon.point_count()];
-    references[point] = 2;
-    recon.point_set.reference_observations = Some(references);
+    references[stored] = 2;
+    recon.point_set.reference_observations = Some(references.clone());
 
-    // With no bitmap the column is not read.
+    let put_on = |edited: &EditedReconstruction, point: usize| {
+        let (bench, report) = create_track(
+            &Bench::new(),
+            edited,
+            point as u32,
+            &CreateTrackOptions::default(),
+        )
+        .expect("the point is live");
+        bench.track(&report.label).expect("just put on").clone()
+    };
+
+    // With no bitmap the reference is still read: a later render renders
+    // from it.
     let bare = EditedReconstruction::new(Arc::new(recon.clone()));
-    let (bench, report) = create_track(
-        &Bench::new(),
-        &bare,
-        point as u32,
-        &CreateTrackOptions::default(),
-    )
-    .expect("the point is live");
-    let track = bench.track(&report.label).expect("just put on");
-    assert_eq!(track.track().unwrap().reference, None);
+    let track = put_on(&bare, stored);
+    assert_eq!(track.track().unwrap().reference, Some(2));
     assert!(track.track().unwrap().bitmap.is_none());
+    let (committed, report) = commit(&bare, &track).expect("the track commits");
+    let view = committed.point(report.point).expect("the point");
+    assert_eq!(view.reference_observation(), Some(2));
 
+    // A display column: `picked` was -1 in the file, and the display render
+    // picked observation 1 for it.
+    references[picked] = 1;
+    let mut marks = vec![false; recon.point_count()];
+    marks[picked] = true;
+    recon.point_set.reference_observations = Some(references);
+    recon.point_set.display_only_references = Some(marks);
     recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(ndarray::Array4::zeros((
         recon.point_count(),
         4,
@@ -469,27 +485,36 @@ fn a_display_bitmap_s_reference_reaches_the_bench_and_never_a_file() {
     ))));
     recon.point_set.patch_bitmaps_for_display = true;
     let edited = EditedReconstruction::new(Arc::new(recon));
-    let (bench, report) = create_track(
-        &Bench::new(),
-        &edited,
-        point as u32,
-        &CreateTrackOptions::default(),
-    )
-    .expect("the point is live");
-    let track = bench.track(&report.label).expect("just put on");
-    assert_eq!(track.track().unwrap().reference, Some(2));
+    assert_eq!(put_on(&edited, stored).track().unwrap().reference, Some(2));
+    let track = put_on(&edited, picked);
+    assert_eq!(track.track().unwrap().reference, Some(1));
     assert!(track.track().unwrap().bitmap.is_some());
 
-    let (committed, report) = commit(&edited, track).expect("the track commits");
-    let view = committed.point(report.point).expect("the point");
-    assert_eq!(view.reference_observation(), Some(2));
-    let saved = committed.materialize().0.to_sfmr_data();
+    // A save writes the file's references, not the display pick, and no
+    // bitmaps.
+    let saved = edited.materialize().0.to_sfmr_data();
     assert!(saved.patch_bitmaps_y_x_rgba.is_none());
-    assert!(saved
-        .reference_observations
-        .expect("framed")
-        .iter()
-        .all(|&r| r == sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION));
+    let column = saved.reference_observations.expect("framed");
+    assert_eq!(column[stored], 2);
+    assert_eq!(
+        column[picked],
+        sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION
+    );
+
+    // A commit makes the bench's reference the committed point's own.
+    let (committed, report) = commit(&edited, &track).expect("the track commits");
+    assert_eq!(
+        committed
+            .point(report.point)
+            .expect("the point")
+            .reference_observation(),
+        Some(1)
+    );
+    let saved = committed.materialize().0.to_sfmr_data();
+    let column = saved.reference_observations.expect("framed");
+    let mut named: Vec<i32> = column.iter().copied().filter(|&r| r >= 0).collect();
+    named.sort_unstable();
+    assert_eq!(named, vec![1, 2]);
 }
 
 // ---- The last fallback: the fused mean stands ------------------------------

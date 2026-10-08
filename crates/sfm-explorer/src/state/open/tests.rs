@@ -121,8 +121,9 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     );
     assert!(tile(0).iter().all(|&b| b == 0), "a one-view point is not");
 
-    // The references are the ones this render picked, not the file's, which
-    // without bitmaps names none.
+    // The file names no reference, so the references are the ones this render
+    // picked, each marked as a pick only the display render made, and a save
+    // writes the file's -1 for them.
     let on_disk = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
         .expect("the file reads");
     assert!(on_disk
@@ -149,6 +150,20 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
         .expect("framed");
     assert_eq!(references, &picked.reference_observations);
     assert!(references.iter().any(|&r| r >= 0), "{references:?}");
+    let marks = recon
+        .point_set
+        .display_only_references
+        .as_ref()
+        .expect("a display column marks its picks");
+    for (&r, &mark) in references.iter().zip(marks) {
+        assert_eq!(mark, r >= 0);
+    }
+    assert!(recon
+        .to_sfmr_data()
+        .reference_observations
+        .expect("framed")
+        .iter()
+        .all(|&r| r == -1));
 
     let entry = newest(&state);
     let rows = phase_rows(&entry.detail);
@@ -163,6 +178,89 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
             "no {stage} stage in {rows:?}"
         );
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file without bitmaps that stores references gets display bitmaps rendered
+/// from them: each stored reference stands and its observation's tile is the
+/// display bitmap, so Track View marks the row the file names. Only a point
+/// at -1 gets the display render's own pick, and a save writes the file's
+/// column back.
+#[test]
+fn opening_renders_display_bitmaps_from_the_file_s_references() {
+    let dir = temp_dir("bitmaps_from_references");
+    let first = saved_with_photographs(&dir);
+    let mut recon = SfmrReconstruction::load(&first, &sfmtool_core::progress::Progress::none())
+        .expect("the file reads");
+    let photographs = sfmtool_core::camera::PhotographCache::new(
+        0,
+        sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS,
+    );
+    let render = |recon: &SfmrReconstruction| {
+        sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
+            recon,
+            &photographs,
+            &sfmtool_core::progress::Progress::none(),
+        )
+        .expect("not cancelled")
+        .expect("photographs read")
+    };
+    let picked = render(&recon);
+    // Every point of three or more views names an observation other than the
+    // rule's pick; the rest stay at -1.
+    let counts = recon.point_set.observation_counts.clone();
+    let stored: Vec<i32> = picked
+        .reference_observations
+        .iter()
+        .zip(&counts)
+        .map(|(&r, &n)| {
+            if r >= 0 && n >= 3 {
+                (r + 1) % n as i32
+            } else {
+                -1
+            }
+        })
+        .collect();
+    assert!(stored.iter().any(|&r| r >= 0), "{stored:?}");
+    recon.point_set.reference_observations = Some(stored.clone());
+    let path = save_into(&dir, &recon, "with_references.sfmr");
+    let want = render(&recon);
+
+    let mut state = AppState::new();
+    let id = state.open_now(&path).expect("the file opens");
+    let opened = state.node(id).unwrap().recon();
+    assert!(opened.point_set.patch_bitmaps_for_display);
+    assert_eq!(
+        opened.point_set.patch_bitmaps_y_x_rgba.as_deref(),
+        Some(&want.bitmaps)
+    );
+    let references = opened
+        .point_set
+        .reference_observations
+        .as_ref()
+        .expect("framed");
+    let marks = opened
+        .point_set
+        .display_only_references
+        .as_ref()
+        .expect("a display column marks its picks");
+    for p in 0..references.len() {
+        if stored[p] >= 0 {
+            assert_eq!(references[p], stored[p], "point {p}");
+            assert!(!marks[p], "point {p}");
+        } else {
+            assert_eq!(references[p], picked.reference_observations[p], "point {p}");
+            assert_eq!(marks[p], references[p] >= 0, "point {p}");
+        }
+    }
+    assert_eq!(
+        opened
+            .to_sfmr_data()
+            .reference_observations
+            .expect("framed")
+            .to_vec(),
+        stored
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

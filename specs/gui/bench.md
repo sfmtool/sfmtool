@@ -844,9 +844,10 @@ it is what the person pointed at.
 
 **A track-stage track with no bitmap gets one rendered.** A patch step -- a
 move, a resize, a spin or a tilt -- drops the patch bitmap, because it was
-rendered over the square as it stood. So does a step that sights the bitmap's
-own row elsewhere, takes it off the track (a delete of its image, a split) or
-turns it `out`, since the bitmap is that row's render
+rendered over the square as it stood, and keeps the reference observation.
+A step that sights the bitmap's own row elsewhere drops the bitmap and keeps
+the reference too, and one that takes that row off the track (a delete of its
+image, a split) or turns it `out` drops both
 ([../core/bench/editable-track.md](../core/bench/editable-track.md) § "The
 stored bitmap's reference"). When the evaluation reads a track-stage
 track that has a placement and no bitmap, it also runs core's
@@ -862,7 +863,9 @@ read before there was one. The three run as one call, core's
 `evaluate_rendering_bitmap`, which takes the bitmap and the scores from the
 tiles the evaluation already rendered where its reference-view rule ran over
 the same `in` rows on the same grid, so a patch step on a long track costs
-about one evaluation rather than an evaluation plus a render. So a tilted patch shows its texture again
+about one evaluation rather than an evaluation plus a render. The bench
+re-picks on render: the new bitmap's reference is the rule's pick, which
+replaces a reference the step kept. So a tilted patch shows its texture again
 as soon as the evaluation lands, and can be committed into a reconstruction
 that stores a bitmap per point without a fit first. The bitmap is installed with
 the measurements, under the same rule: no version and no Action Log row. A track with fewer than two

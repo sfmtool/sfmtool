@@ -515,17 +515,15 @@ pub(crate) fn validate_world_space_unit(unit: Option<&str>) -> Result<(), String
 }
 
 /// Check `tracks/reference_observations` against the observation counts: one
-/// row per point, each `-1` or an index within the point's own track, and
-/// every row `-1` when the file stores no patch bitmaps (`has_patch_bitmaps`
-/// false), since a reference names the observation a stored bitmap is the
-/// render of.
+/// row per point, each `-1` or an index within the point's own track. The
+/// column is checked the same with or without stored patch bitmaps, since a
+/// reference names the observation the bitmap is, or is to be, rendered from.
 ///
 /// Read, write and verify all route through this, so a file the writer
 /// accepts is one the reader and the verifier accept.
 pub(crate) fn validate_reference_observations(
     reference_observations: &[i32],
     observation_counts: &[u32],
-    has_patch_bitmaps: bool,
 ) -> Result<(), String> {
     if reference_observations.len() != observation_counts.len() {
         return Err(format!(
@@ -543,12 +541,6 @@ pub(crate) fn validate_reference_observations(
             return Err(format!(
                 "tracks/reference_observations row {p} = {r} is neither -1 nor an index \
                  into the point's {count} observations"
-            ));
-        }
-        if r != NO_REFERENCE_OBSERVATION && !has_patch_bitmaps {
-            return Err(format!(
-                "tracks/reference_observations row {p} = {r} names a reference observation, \
-                 but the file stores no patch bitmaps for it to be the render of"
             ));
         }
     }
@@ -1038,14 +1030,16 @@ pub struct SfmrData {
     pub observation_counts: Array1<u32>,
     /// `(P,)` per point, the index of its **reference observation** among the
     /// point's own observations, `0` to `observation_counts[i] - 1`: the
-    /// observation whose `R×R` render the point's patch bitmap is.
-    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has none: its bitmap
-    /// is not known to be one observation's render (a fused mean, from before
-    /// version 12 or where the reference-view rule stores one), or there is no
-    /// bitmap. A file with no `patch_bitmaps_y_x_rgba` has every row `-1`, and
-    /// the writer, reader and verifier refuse any other value there; a writer
-    /// that drops the bitmaps writes the column as all `-1`, since it is
-    /// required with the patch frame, not with the bitmaps.
+    /// observation the point's patch bitmap is, or is to be, rendered from.
+    /// With `patch_bitmaps_y_x_rgba` stored, the bitmap is that observation's
+    /// `R×R` render; without it, a later render (`--add-patch-bitmaps`,
+    /// `embed-patches`, the viewer's display bitmaps) renders the point from
+    /// this observation. [`NO_REFERENCE_OBSERVATION`] (`-1`) where no
+    /// reference has been chosen: a stored bitmap is then a fused mean (from
+    /// before version 12, or where the reference-view rule stores one), and a
+    /// later render runs the reference-view rule for the point. A writer that
+    /// drops the bitmaps keeps the column, since it is required with the patch
+    /// frame, not with the bitmaps.
     ///
     /// The index counts from the start of the point's run in the tracks, which
     /// are sorted by `(point_indexes, image_indexes)`, so removing other points

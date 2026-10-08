@@ -20,7 +20,7 @@ use crate::patch::member_coherence::{
     validate_patch_cloud_member_coherence, MemberCoherenceParams,
 };
 use crate::patch::normal_refine::{refine_patch_cloud_normals, NormalRefineParams, ProjectedImage};
-use crate::patch::stored_bitmap::render_patch_cloud_bitmaps;
+use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
 use crate::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 use crate::patch::PatchCloud;
 use crate::progress::{Event, Progress};
@@ -224,6 +224,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
             &recon,
             &none,
             &KeypointSubpixelParams::default(),
+            UnreferencedPoints::Pick,
             Some(done),
             progress,
         )
