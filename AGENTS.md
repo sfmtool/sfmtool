@@ -77,9 +77,10 @@ Outside a re-exporting subpackage, import a name from the subpackage when its
 render_heatmap_overlay`). Import from an `_`-named module only for a name the
 `__init__.py` does not re-export. Importing an `_`-named module runs the
 package's `__init__.py` first, so it does not avoid loading the rest of the
-subpackage. Tests and `scripts/` may import from any module. When a new subpackage is created, make it re-exporting when callers
-outside it need only a few entry points, and module-path when callers each need
-a different module from it.
+subpackage. Tests and `scripts/` may import from any module. When a new
+subpackage is created, make it re-exporting when callers outside it need only a
+few entry points, and module-path when callers each need a different module
+from it.
 
 ### Opening a pull request
 
