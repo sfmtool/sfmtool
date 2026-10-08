@@ -1611,7 +1611,8 @@ fn a_truncated_row_shows_one_tooltip_rather_than_two() {
     let (said, heard) = mpsc::channel();
     let held = gate.held();
     // Wider than any column this panel has, so the row is certainly elided.
-    let long = "median 0.171 px over 32205 observations, and a good deal more                 besides so that nothing can fit it";
+    let long = "median 0.171 px over 32205 observations, and a good deal more \
+               besides so that nothing can fit it";
     state
         .start_background_task(
             Operation::BUNDLE_ADJUST,

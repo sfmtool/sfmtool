@@ -24,16 +24,18 @@ pub(super) const REFERENCE_TIP: &str = "Which row's tile could stand as the patc
     reference, on a green cell.\n\n\
     A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
     under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
-    of the tile where it agrees with the other rows more than 0.25 below the track's typical \
+    of the tile where it agrees with the other rows more than 0.3 below the track's typical \
     agreement there. Of the candidates whose pair ZNCC, the median of its ZNCCs with the \
     other rows that are in, is within 15 points of the best candidate's, the rule picks the one with \
     the smallest self-similarity radius. When no row passes, it drops the 65\u{b0} limit, then \
     the check of the ninths, then the coverage and clipping tests; a row that sees the patch \
     edge on or from behind, at 90\u{b0} or more, is never picked.\n\n\
-    Both agreements are blur-matched: before two rows' tiles are correlated, the sharper one \
-    is blurred to the other's sharpness, along each direction in which their self-similarity \
-    ellipses differ by more than a quarter, so a sharp row is not counted as disagreeing for \
-    the detail the blurrier rows lack. The hover gives the plain readings too.\n\n\
+    Both agreements are blur-matched: where one row's tile is sharper than the other's along \
+    every direction (the other's self-similarity ellipse has a short axis at least a quarter \
+    longer than its long axis), it is blurred by a round blur until its long axis reaches \
+    the other's short axis before the two are correlated, so a sharp row is counted as \
+    disagreeing less for detail a blurrier row lacks. The hover gives the plain readings \
+    too.\n\n\
     The first line is the pick, or the test that turned the row away: partial, clipped, \
     oblique, ninth differs, agrees less, or less sharp. The second is the viewing angle, \
     the angle between the patch's normal and the direction to the camera, and the pair \
@@ -232,7 +234,7 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
     if let Some(pair) = m.blur_matched_pair_zncc {
         lines.push(format!(
             "Blur-matched pair ZNCC {:.0}%: the same with the sharper tile of each pair blurred \
-             to the other's sharpness first.{}",
+             to the other's sharpness (up to 2 grid px of self-similarity) first.{}",
             100.0 * pair,
             read_note(inputs.agreement, PairZnccReading::BlurMatched)
         ));

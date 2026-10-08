@@ -314,7 +314,8 @@ impl<S: KdfScalar> Cache<S> {
         let shard = &self.shards[shard_index];
         if declared > shard.capacity {
             return Err(KdfError::ResourceLimit(format!(
-                "decoded item requires {declared} bytes; this cache splits {} bytes                  into {} shards of {}",
+                "decoded item requires {declared} bytes; this cache splits {} bytes \
+                 into {} shards of {}",
                 self.capacity,
                 self.shards.len(),
                 shard.capacity

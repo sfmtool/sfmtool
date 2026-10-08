@@ -37,8 +37,11 @@ use crate::CameraIntrinsics;
 
 // ── Tuning (see the spec) ────────────────────────────────────────────────────
 
-/// Final-inlier pixel bound shared by the screens and the repair acceptance
-/// (matches the growth kernel's [`INLIER_PX`]).
+/// Final-inlier pixel bound of the repair's pose-only refinement and of the
+/// inlier fractions its acceptance compares (the same value as the growth
+/// kernel's). The screens do not read it: screen A scores at
+/// [`resect_images_batch`]'s own bound and screen B's homography uses
+/// [`HomographyOptions`]' default.
 const INLIER_PX: f64 = 3.0;
 /// Trim rounds for the repair's pose-only refinement.
 const REFINE_TRIM_ROUNDS: usize = 5;
@@ -390,7 +393,13 @@ pub fn verify_poses(
     );
 
     // Screen A: batch self-resection of every registered camera against the
-    // shared structure, its own current pose available as a fallback init.
+    // shared structure. The registered poses serve only as fallback inits
+    // for a camera whose minimal estimate fails, drawn from its
+    // most-covisible registered neighbours; its own pose is not among them
+    // (an image has no covisibility with itself). Above
+    // `MAX_DENSE_IMAGES` there is no covisibility table and the fallback
+    // takes the first registered poses in index order, which can include
+    // the camera's own.
     let resect = resect_images_batch(
         cluster_indexes,
         image_indexes,

@@ -577,12 +577,14 @@ fn apply_observation_field(
                 let arr = extract_array1!(value, "observation_confidence", u8)?;
                 let s = arr.as_slice().map_err(|e| {
                     pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'observation_confidence' must be                              C-contiguous: {e}"
+                        "clone_with_changes(): 'observation_confidence' must be \
+                         C-contiguous: {e}"
                     ))
                 })?;
                 if !replacing_tracks && s.len() != recon.point_set.tracks.len() {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'observation_confidence' length ({})                              must match observation count ({})",
+                        "clone_with_changes(): 'observation_confidence' length ({}) \
+                         must match observation count ({})",
                         s.len(),
                         recon.point_set.tracks.len()
                     )));

@@ -346,7 +346,8 @@ pub fn describe_keypoints(
     }
     if affine_shapes.shape() != [n, 2, 2] {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "affine_shapes must be (N, 2, 2) float32 with the same N as positions ({n}), got              shape {:?}",
+            "affine_shapes must be (N, 2, 2) float32 with the same N as positions ({n}), got \
+             shape {:?}",
             affine_shapes.shape()
         )));
     }
