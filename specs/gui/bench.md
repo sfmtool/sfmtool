@@ -1640,6 +1640,14 @@ it would write against the one the origin holds, column for column, `NaN`
 agreeing with `NaN`
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "The commit"), and answers `changed: false` when the two say the same thing.
+One origin is written even when the two agree: a point whose reference
+observation only the display render picked (the file stores it at `-1` and the
+open rendered [display patch bitmaps](../GLOSSARY.md)). Committing it is what
+makes that pick the point's own, so the first commit of such a point, edited or
+not, writes it again: one version, one undo entry and an `Edit` row, the
+document marked dirty, and `changed: true` with the index of the point it
+wrote. A save then writes the reference rather than `-1`. The point it wrote
+carries no such mark, so a later press with nothing edited has no effect.
 
 **A pixel off the photograph is brought inside it rather than refused.** A
 pointer can be dragged past the edge of the picture and a call can carry any two
@@ -1714,6 +1722,8 @@ point's exact projection and a photograph cached for every image:
   already holds the track included: repeated presses push no version, mint no
   index, keep the point selected and write one no-effect row each, while the
   press after a sighting is turned out or after an undo writes again;
+- the first commit of an unedited point whose reference only the display render
+  picked writes it (one version, dirty), and the press after it has no effect;
 - a run of bench steps over a clean value is clean, a commit is dirty, and
   undoing the commit is clean again;
 - a report lands on the item it measured, and one for an item that is not there

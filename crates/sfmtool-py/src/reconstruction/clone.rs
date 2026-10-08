@@ -354,28 +354,11 @@ fn apply_point_field(
                 Some(to_contiguous!(arr).into_owned())
             });
         }
-        "patches" => {
-            if value.is_none() {
-                recon.point_set.patch_u_halfvec_xyz = None;
-                recon.point_set.patch_v_halfvec_xyz = None;
-                recon.point_set.drop_patch_bitmaps();
-            } else {
-                let cloud: PyRef<crate::PyPatchCloud> = value.extract().map_err(|_| {
-                    pyo3::exceptions::PyTypeError::new_err(
-                        "clone_with_changes(): 'patches' must be a PatchCloud or None",
-                    )
-                })?;
-                let (u, v) = cloud.inner.to_halfvec_arrays(recon.point_set.points.len());
-                recon.point_set.patch_u_halfvec_xyz = Some(u);
-                recon.point_set.patch_v_halfvec_xyz = Some(v);
-                // The cloud carries geometry only; clear any stale bitmaps,
-                // keeping the references they are to be rendered from again.
-                recon.point_set.drop_patch_bitmaps();
-            }
-        }
-        "patch_bitmaps" => {
-            // Deferred to after the loop so it always runs *after* 'patches'
-            // (which clears any bitmaps), regardless of kwargs order.
+        "patches" | "patch_bitmaps" => {
+            // Deferred to after the loop: `patches` sizes the frame by the
+            // point count, which `positions` may still change in this call,
+            // and `patch_bitmaps` runs after `patches`, which clears any
+            // bitmaps, whatever order the two were passed in.
         }
         "reference_observations" => {
             deferred.reference_observations = Some(if value.is_none() {
@@ -664,8 +647,9 @@ fn apply_observation_field(
 /// 2. The observation source, whose per-image hash columns are checked against
 ///    the settled image count.
 /// 3. The depth histogram, reset when the image count changed.
-/// 4. `patch_bitmaps`, after the first pass so it wins over the clear that
-///    `patches` does, whatever order the two were passed in.
+/// 4. `patches`, at the point count the first pass settled, then
+///    `patch_bitmaps`, which wins over the clear that `patches` does, whatever
+///    order the two were passed in.
 /// 5. The tracks, which also recompute `observation_counts` and so override an
 ///    `observation_counts` value passed in the same call.
 /// 6. The constraint triple, checked against the settled point count.
@@ -724,6 +708,7 @@ fn finalize(
             vec![vec![0u32; num_buckets]; recon.image_table.images.len()];
     }
 
+    apply_patches(&mut recon, kw)?;
     apply_patch_bitmaps(&mut recon, kw)?;
 
     if replacing_tracks {
@@ -811,8 +796,35 @@ fn apply_image_count_changes(
     Ok(())
 }
 
-/// Apply a `patch_bitmaps` keyword argument. It runs after the first pass so
-/// that it wins over the clear that `patches` does, and so that a patch frame
+/// Apply a `patches` keyword argument. It runs after the first pass so the
+/// frame is sized by the point count that `positions` settled, whatever order
+/// the two were passed in.
+fn apply_patches(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyResult<()> {
+    let Some(value) = kw.get_item("patches")? else {
+        return Ok(());
+    };
+    if value.is_none() {
+        recon.point_set.patch_u_halfvec_xyz = None;
+        recon.point_set.patch_v_halfvec_xyz = None;
+        recon.point_set.drop_patch_bitmaps();
+    } else {
+        let cloud: PyRef<crate::PyPatchCloud> = value.extract().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "clone_with_changes(): 'patches' must be a PatchCloud or None",
+            )
+        })?;
+        let (u, v) = cloud.inner.to_halfvec_arrays(recon.point_set.points.len());
+        recon.point_set.patch_u_halfvec_xyz = Some(u);
+        recon.point_set.patch_v_halfvec_xyz = Some(v);
+        // The cloud carries geometry only; clear any stale bitmaps, keeping
+        // the references they are to be rendered from again.
+        recon.point_set.drop_patch_bitmaps();
+    }
+    Ok(())
+}
+
+/// Apply a `patch_bitmaps` keyword argument. It runs after [`apply_patches`]
+/// so that it wins over the clear that `patches` does, and so that a patch frame
 /// attached by `patches` in the same call is present when it is checked.
 fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyResult<()> {
     if let Some(value) = kw.get_item("patch_bitmaps")? {
@@ -873,8 +885,8 @@ fn check_patch_rows(recon: &SfmrReconstruction) -> PyResult<()> {
     for (what, n) in rows {
         if let Some(n) = n.filter(|&n| n != point_count) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): the {what} have {n} rows but the result has 
-                 {point_count} points; pass patches (and patch_bitmaps) for the new 
+                "clone_with_changes(): the {what} have {n} rows but the result has \
+                 {point_count} points; pass patches (and patch_bitmaps) for the new \
                  points, or patches=None to drop them"
             )));
         }
@@ -899,19 +911,21 @@ fn check_patch_rows(recon: &SfmrReconstruction) -> PyResult<()> {
 /// patch frame for the same points, and dropped bitmaps alike -- wherever the
 /// points are the same points: unchanged where the tracks are, and where the
 /// tracks were replaced, each point's reference moves to the observation of
-/// the image of the same name in its new track, `-1` where there is none, so
-/// images appended or reordered around it carry it. Every row is
-/// `-1` for a frame that is new.
+/// the same image in its new track, `-1` where there is none. The same image
+/// is the one at the same index when the image table is unchanged (the same
+/// names in the same order), and otherwise the one with the same name, so
+/// images appended or reordered around it carry it. Every row is `-1` for a
+/// frame that is new.
 ///
 /// Two changes leave no way to carry a reference, and are refused when the
-/// input names any reference (a row `>= 0`) and the result keeps patch frames
+/// input names any reference (a row `>= 0`) and the result has patch frames
 /// without a `reference_observations` value: a changed point count, since
-/// there is no mapping from the old points to the new, and replaced tracks
-/// where an image a reference is in no longer has its name on exactly one
-/// image of the result, since a reference is carried across new tracks by its
-/// image's name. Resetting every row
-/// to `-1` there would cut each stored bitmap from its observation without a
-/// word, so the caller passes the remapped column (or `-1` rows) instead.
+/// there is no mapping from the old points to the new, and replaced tracks,
+/// with a changed image table, where an image a reference is in no longer has
+/// its name on exactly one image of the result, since a reference is then
+/// carried by its image's name. Resetting every row to `-1` there would cut
+/// each stored bitmap from its observation without a word, so the caller
+/// passes the remapped column (or `-1` rows) instead.
 fn settle_reference_observations(
     inner: &SfmrReconstruction,
     recon: &mut SfmrReconstruction,
@@ -944,31 +958,47 @@ fn settle_reference_observations(
     let names_any = carried.is_some_and(|old| old.iter().any(|&r| r >= 0));
     if names_any && point_count != old_point_count {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "clone_with_changes(): the point count changed and the result keeps patch \
+            "clone_with_changes(): the point count changed and the result has patch \
              frames, but reference_observations was not passed; the input's references \
              cannot be mapped to the new points, so pass the remapped column (-1 for a \
              point with no reference observation)",
         ));
     }
-    // Across replaced tracks a reference follows its image by name, so images
-    // appended, reordered or renamed around it carry it; an image name the
-    // result no longer holds once (gone, or now on two images) carries nothing.
+    // Across replaced tracks a reference stays on its image. Where the image
+    // table is unchanged (the same names in the same order) that is the same
+    // index, whatever the names are. Otherwise it follows its image by name,
+    // so images appended, reordered or renamed around it carry it; an image
+    // name the result no longer holds once (gone, or now on two images)
+    // carries nothing.
+    let same_images = inner.image_table.images.len() == recon.image_table.images.len()
+        && inner
+            .image_table
+            .images
+            .iter()
+            .zip(&recon.image_table.images)
+            .all(|(a, b)| a.name == b.name);
     let mut new_index: HashMap<&str, Option<u32>> = HashMap::new();
-    for (i, image) in recon.image_table.images.iter().enumerate() {
-        new_index
-            .entry(image.name.as_str())
-            .and_modify(|e| *e = None)
-            .or_insert(Some(i as u32));
+    if !same_images {
+        for (i, image) in recon.image_table.images.iter().enumerate() {
+            new_index
+                .entry(image.name.as_str())
+                .and_modify(|e| *e = None)
+                .or_insert(Some(i as u32));
+        }
     }
     let referenced_image = |p: usize| -> Option<Option<u32>> {
         let row = inner.point_set.reference_observation_row(p)?;
-        let name = &inner.image_table.images[inner.point_set.tracks[row].image_index as usize].name;
+        let image = inner.point_set.tracks[row].image_index;
+        if same_images {
+            return Some(Some(image));
+        }
+        let name = &inner.image_table.images[image as usize].name;
         Some(new_index.get(name.as_str()).copied().flatten())
     };
     if names_any && replacing_tracks && (0..point_count).any(|p| referenced_image(p) == Some(None))
     {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "clone_with_changes(): the tracks were replaced and the result keeps patch \
+            "clone_with_changes(): the tracks were replaced and the result has patch \
              frames, but reference_observations was not passed, and an image a reference \
              observation is in is no longer one image of image_names; the input's \
              references are carried across new tracks by image name, so pass the remapped \

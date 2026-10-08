@@ -382,6 +382,60 @@ class TestReferenceObservations:
             here = [k for k, i in enumerate(track) if swapped[i] == name]
             assert new_refs[p] == (here[0] if here else -1)
 
+        # Where the image table is unchanged, a reference is carried by image
+        # index, so a name on two images still carries; once the table
+        # changes, it is carried by name, and a duplicated name cannot be.
+        dup_names = list(old_names)
+        dup_names[1] = dup_names[0]
+        dup = recon.clone_with_changes(image_names=dup_names)
+        np.testing.assert_array_equal(dup.reference_observations, refs)
+        np.testing.assert_array_equal(
+            dup.clone_with_changes(**tracks).reference_observations, refs
+        )
+        referenced = imgs[offsets[refs >= 0] + refs[refs >= 0]]
+        assert np.isin(referenced, [0, 1]).any()
+        with pytest.raises(ValueError, match="image_names"):
+            dup.clone_with_changes(
+                **tracks,
+                image_names=dup_names + ["extra.jpg"],
+                image_file_hashes=list(recon.image_file_hashes) + [bytes(16)],
+            )
+
+    def test_patches_passed_before_positions_frame_the_new_points(
+        self, embedded_patches_sfmr
+    ):
+        # `patches` sizes the frame by the point count after `positions`,
+        # whatever order the two are passed in.
+        recon = SfmrReconstruction.load(embedded_patches_sfmr)
+        keep = np.ones(recon.point_count, dtype=bool)
+        keep[-1] = False
+        small = recon.filter_points_by_mask(keep)
+        columns = dict(
+            patches=small.patches,
+            positions=np.ascontiguousarray(np.asarray(small.positions_xyzw)),
+            colors=np.ascontiguousarray(np.asarray(small.colors)),
+            errors=np.ascontiguousarray(np.asarray(small.errors)),
+            normals=np.ascontiguousarray(np.asarray(small.normals)),
+            track_image_indexes=np.ascontiguousarray(small.track_image_indexes),
+            track_feature_indexes=np.zeros(
+                len(small.track_image_indexes), dtype=np.uint32
+            ),
+            track_point_indexes=np.ascontiguousarray(small.track_point_indexes),
+            keypoints_xy=np.ascontiguousarray(small.keypoints_xy),
+            observation_confidence=np.ascontiguousarray(small.observation_confidence),
+            reference_observations=small.reference_observations,
+        )
+        if small.normal_confidence is not None:
+            columns["normal_confidence"] = np.ascontiguousarray(small.normal_confidence)
+        shorter = recon.clone_with_changes(**columns)
+        assert shorter.point_count == recon.point_count - 1
+        assert list(shorter.patches.point_indexes) == list(small.patches.point_indexes)
+        # Without new patches the input's frames are refused, with a message on
+        # one line.
+        with pytest.raises(ValueError, match="patch frames have") as err:
+            recon.clone_with_changes(positions=columns["positions"])
+        assert "\n" not in str(err.value)
+
     def test_references_stay_when_the_bitmaps_change_or_go(
         self, embedded_patches_sfmr, tmp_path
     ):

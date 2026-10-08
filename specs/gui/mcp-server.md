@@ -3579,6 +3579,15 @@ of the value, because a pixel's round trip through a patch's plane does not
 return bit for bit; the contract is written once in [bench.md](bench.md)
 § "The wire".
 
+One commit with nothing edited is a change: the first commit of a point whose
+reference observation only the display render picked (a file that stores it at
+`-1`, opened with display patch bitmaps). It writes the point again so that a
+save names the reference rather than `-1`, so it pushes a version, marks the
+document dirty and answers `changed: true` with a new point index and
+`replaced` naming the old one; a second commit of the same track has no effect
+([../core/bench/editable-track.md](../core/bench/editable-track.md)
+§ "The commit").
+
 **A pixel off the photograph is brought inside it rather than refused.** The
 five tools that name a pixel as a gesture -- `translate_bench_patch`,
 `sight_bench_observation`, `resize_bench_patch`, `resize_bench_shape`,

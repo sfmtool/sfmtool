@@ -1063,6 +1063,59 @@ fn committing_a_track_the_point_already_holds_pushes_no_version() {
     }
 }
 
+/// A point whose reference observation only the display render picked is
+/// written by its first commit even with nothing edited, so that a save names
+/// the reference rather than `-1`: one version, and the document dirty. The
+/// point it wrote carries no mark, so the press after it has no effect.
+#[test]
+fn the_first_commit_of_an_unedited_display_pick_writes_it() {
+    // Settle the point on what the bench writes, so that the record the commit
+    // would write differs from the point's only by the mark.
+    let (mut settle, id) = state();
+    let label = put_on_bench(&mut settle, id);
+    let first = settle
+        .commit_bench_track(id, &label)
+        .expect("a track stage");
+    let (mut recon, map) = settle.scene[0].edited().materialize();
+    let point = map.forward(first.point).expect("the point is live") as usize;
+    let mut references = vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; recon.point_count()];
+    references[point] = 0;
+    recon.point_set.reference_observations = Some(references);
+
+    // Committed twice, with the mark set or not; answers whether each wrote,
+    // and the versions and dirtiness after the first.
+    let commit_twice = |marked: bool| {
+        let mut recon = recon.clone();
+        let mut marks = vec![false; recon.point_count()];
+        marks[point] = marked;
+        recon.point_set.display_only_references = Some(marks);
+        let (mut state, id) = state_of(recon);
+        let label = state
+            .put_point_on_bench(PointRef::new(id, point), None)
+            .expect("a live point");
+        let before = versions(&state, id);
+        let first = state.commit_bench_track(id, &label).expect("a track stage");
+        let after_first = (versions(&state, id) - before, state.is_dirty(id));
+        let second = state.commit_bench_track(id, &label).expect("a track stage");
+        assert_eq!(
+            second.point, first.point,
+            "the second press named another point"
+        );
+        (first.changed, second.changed, after_first)
+    };
+
+    assert_eq!(
+        commit_twice(false),
+        (false, false, (0, false)),
+        "a stored reference: the unedited commit has no effect"
+    );
+    assert_eq!(
+        commit_twice(true),
+        (true, false, (1, true)),
+        "a display pick: the first commit writes it, the second has no effect"
+    );
+}
+
 /// And the press after something moved writes again: the no-effect reading is
 /// about what the point holds now, not about having committed once already.
 #[test]
