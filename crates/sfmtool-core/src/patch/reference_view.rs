@@ -14,25 +14,27 @@
 //! ([`cell_agreement`]). The rule ([`choose_reference_view`]) is a pure
 //! function over those readings, the median pairwise ZNCC from
 //! [member coherence](crate::patch::member_coherence) and each tile's
-//! self-similarity ellipse. Nothing here changes how a patch bitmap is
-//! computed; the bench reports the rule's pick beside its other readings.
+//! self-similarity ellipse.
+//!
+//! [`read_track`] takes those readings over a track's views' tiles and runs the
+//! rule; the bench reports its pick beside its other readings, and the stored
+//! patch bitmap is the picked view's tile
+//! ([`crate::patch::stored_bitmap`]). Every reading is taken on the `R×R`
+//! tiles and nothing else: no coarser grid, and no pixels of the photograph
+//! outside the tile.
 
 mod agreement;
-mod pair_readings;
 mod tile;
+mod track;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use agreement::finite_middle;
-pub use agreement::{
-    blur_matched_agreement, cell_agreement, cell_agreement_from_pairs, pair_zncc_grid,
-    BlurMatchedAgreement, CellAgreement,
-};
-pub use pair_readings::{
-    blur_matched_pairs, pair_zncc_readings, BlurMatchedPairs, PairReadings, MIN_WINDOWED_SAMPLES,
-};
+pub use agreement::{cell_agreement, pair_zncc_grid, CellAgreement};
+#[cfg(test)]
+pub(crate) use agreement::{cell_agreement_from_pairs, finite_middle};
 pub use tile::{clipped_share, render_view_tile, ViewTile};
+pub use track::{read_track, readings_of, tile_semi_axes, TrackReading};
 
 /// The coverage a view's tile needs to be a candidate: the share of its
 /// samples that carry image data.
@@ -78,12 +80,6 @@ pub const REFERENCE_FACING_LIMIT_DEG: f64 = 90.0;
 /// tile but not in one part of it: an occluder, a shadow edge, or parallax
 /// within the tile. Values from `0.2` to `0.4` gave the same agreement with the
 /// picks on the tuning half of the review cases; `0.3` is the middle.
-///
-/// The bar is the same on the blur-matched cell deficit. There, with the margin
-/// at `0.15`, `0.3` and `0.35` agreed best with the hand picks on the tuning
-/// half (18 of 39 exactly, 36 within the lenient bounds), and `0.25` and `0.4`
-/// on one track fewer within the lenient bounds. See
-/// `specs/core/patch/reference-view.md` § "Blur-matched agreement".
 pub const REFERENCE_MAX_CELL_DEFICIT: f64 = 0.3;
 
 /// The typical agreement a cell needs before the cell check judges it.
@@ -106,78 +102,6 @@ pub const REFERENCE_MIN_CELL_SAMPLES: usize = 16;
 /// within one case of each other on the tuning half.
 pub const REFERENCE_AGREEMENT_MARGIN: f64 = 0.15;
 
-/// [`REFERENCE_AGREEMENT_MARGIN`] for a rule whose agreement test reads the
-/// blur-matched pair ZNCC ([`ReferenceRuleInputs::agreement`]).
-///
-/// Blur matching takes away part of the penalty a sharp view pays for the
-/// detail the blurrier views lack, which is what the plain margin makes room
-/// for: it blurs only a tile sharper than its partner along every direction,
-/// and leaves most pairs plain. On the tuning half of the hand picks, with the
-/// cell bar at `0.3`, margins of `0.15` and `0.18` agreed best (18 of 39
-/// exactly, 36 within the lenient bounds), and `0.08` to `0.12` and `0.20` on
-/// one track fewer within the lenient bounds; on the held-out half `0.08`
-/// agreed on one more track, exactly and within the lenient bounds. See
-/// `specs/core/patch/reference-view.md` § "Blur-matched agreement".
-pub const REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN: f64 = 0.15;
-
-/// Which reading of the ZNCC between two views' tiles a test of the rule
-/// reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum PairZnccReading {
-    /// The tiles as rendered.
-    #[default]
-    Plain,
-    /// The tiles blur-matched ([`crate::patch::blur_matched`]): the sharper
-    /// one blurred to the other's sharpness before they are correlated.
-    BlurMatched,
-}
-
-impl PairZnccReading {
-    /// The name the wire and the bindings spell it with: `"plain"` or
-    /// `"blur_matched"`.
-    pub fn name(self) -> &'static str {
-        match self {
-            PairZnccReading::Plain => "plain",
-            PairZnccReading::BlurMatched => "blur_matched",
-        }
-    }
-}
-
-/// Which readings the rule's agreement test and cell check read, and so which
-/// thresholds they apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct ReferenceRuleInputs {
-    /// The pair ZNCC the agreement test reads: the margin is
-    /// [`REFERENCE_AGREEMENT_MARGIN`] on the plain reading and
-    /// [`REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN`] on the blur-matched one.
-    pub agreement: PairZnccReading,
-    /// The pair ZNCC grid the cell check reads. The bar is
-    /// [`REFERENCE_MAX_CELL_DEFICIT`] on either reading.
-    pub cells: PairZnccReading,
-}
-
-impl ReferenceRuleInputs {
-    /// Both tests on the plain readings.
-    pub const PLAIN: Self = Self {
-        agreement: PairZnccReading::Plain,
-        cells: PairZnccReading::Plain,
-    };
-
-    /// The agreement test's margin.
-    pub fn agreement_margin(self) -> f64 {
-        match self.agreement {
-            PairZnccReading::Plain => REFERENCE_AGREEMENT_MARGIN,
-            PairZnccReading::BlurMatched => REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN,
-        }
-    }
-
-    /// The cell check's largest cell deficit: [`REFERENCE_MAX_CELL_DEFICIT`],
-    /// on either reading.
-    pub fn max_cell_deficit(self) -> f64 {
-        REFERENCE_MAX_CELL_DEFICIT
-    }
-}
-
 /// What the rule reads of one view. A reading the view does not have is
 /// `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -188,12 +112,10 @@ pub struct ReferenceReadings {
     pub clipped_share: Option<f64>,
     /// The viewing angle at the keypoint, in degrees.
     pub viewing_angle_deg: Option<f64>,
-    /// The cell deficit ([`CellAgreement::deficit`]), of the reading
-    /// [`ReferenceRuleInputs::cells`] names.
+    /// The cell deficit ([`CellAgreement::deficit`]).
     pub cell_deficit: Option<f64>,
-    /// The median of the view's pairwise ZNCCs with the other views, of the
-    /// reading [`ReferenceRuleInputs::agreement`] names: from member
-    /// coherence's matrix for the plain reading.
+    /// The median of the view's pairwise ZNCCs with the other views, from
+    /// member coherence's matrix.
     pub pair_zncc: Option<f64>,
     /// The self-similarity ellipse's semi-major axis of the view's `R×R`
     /// tile, in grid px: the self-similarity radius.
@@ -216,8 +138,7 @@ pub enum ReferenceTest {
     /// Cell deficit at most [`REFERENCE_MAX_CELL_DEFICIT`].
     Cells,
     /// Median pairwise ZNCC within [`REFERENCE_AGREEMENT_MARGIN`] of the best
-    /// candidate's, or [`REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN`] on the
-    /// blur-matched reading.
+    /// candidate's.
     Agreement,
     /// The smallest self-similarity semi-major axis among the candidates left.
     /// A view that fails only this one passed every other test and lost to a
@@ -303,8 +224,6 @@ pub struct ReferenceChoice {
     /// Per view: the first test, under the fallback, that turned it away, or
     /// `None` for the view picked.
     pub rejected_by: Vec<Option<ReferenceTest>>,
-    /// Which readings the agreement test and the cell check read.
-    pub inputs: ReferenceRuleInputs,
 }
 
 impl ReferenceChoice {
@@ -314,7 +233,6 @@ impl ReferenceChoice {
         Some(ReferenceStanding {
             rejected_by: *self.rejected_by.get(i)?,
             fallback: self.fallback,
-            inputs: self.inputs,
         })
     }
 }
@@ -329,8 +247,6 @@ pub struct ReferenceStanding {
     /// Which tests the rule dropped to find a candidate among the track's
     /// views.
     pub fallback: ReferenceFallback,
-    /// Which readings the agreement test and the cell check read.
-    pub inputs: ReferenceRuleInputs,
 }
 
 impl ReferenceStanding {
@@ -394,19 +310,8 @@ impl ReferenceStanding {
 /// assert_eq!(choice.rejected_by[3], Some(ReferenceTest::Sharpness));
 /// ```
 pub fn choose_reference_view(views: &[ReferenceReadings]) -> ReferenceChoice {
-    choose_reference_view_with(views, ReferenceRuleInputs::PLAIN)
-}
-
-/// [`choose_reference_view`] on readings whose pair ZNCC and cell deficit are
-/// the ones `inputs` names, with the thresholds that go with them: the margin
-/// [`ReferenceRuleInputs::agreement_margin`] and the cell bar
-/// [`ReferenceRuleInputs::max_cell_deficit`].
-pub fn choose_reference_view_with(
-    views: &[ReferenceReadings],
-    inputs: ReferenceRuleInputs,
-) -> ReferenceChoice {
-    let margin = inputs.agreement_margin();
-    let max_cell_deficit = inputs.max_cell_deficit();
+    let margin = REFERENCE_AGREEMENT_MARGIN;
+    let max_cell_deficit = REFERENCE_MAX_CELL_DEFICIT;
     let failed = |v: &ReferenceReadings, fallback: ReferenceFallback| -> Option<ReferenceTest> {
         let passes = |test: ReferenceTest| match test {
             ReferenceTest::Coverage => v.coverage.is_some_and(|c| c >= REFERENCE_MIN_COVERAGE),
@@ -495,6 +400,5 @@ pub fn choose_reference_view_with(
         reference,
         fallback,
         rejected_by,
-        inputs,
     }
 }

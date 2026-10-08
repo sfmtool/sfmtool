@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Which tile of a pair is the sharper, and to what length it is blurred
-//! before the pair is correlated: the pairing rule the blur-matched readings
-//! of the reference-view rule and of member coherence share.
+//! before the pair is correlated: the pairing rule member coherence's
+//! blur-matched readings and the scores of observations against the stored
+//! bitmap ([`crate::patch::stored_bitmap`]) share. The scores apply it in one
+//! direction only: the bitmap is the tile that may be blurred
+//! ([`bitmap_blur`]).
 //!
 //! `specs/core/patch/blur-matched-zncc.md` § "Which tile is blurred, and to
 //! what length" is the design. A tile is the sharper of a pair when its
@@ -158,6 +161,31 @@ pub fn pair_blur(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2], min_ratio: f64) -> Option
         major,
         target,
     })
+}
+
+/// Whether, and to what semi-major axis, a point's stored bitmap is blurred
+/// before an observation is scored against it: [`pair_blur`] with the bitmap
+/// (`bitmap`, its ellipse matrix in grid px²) as the only tile that may be
+/// blurred. `None` where the pair is read plain, which includes an
+/// observation sharper than the bitmap: neither tile of such a pair is
+/// blurred.
+///
+/// ```
+/// use sfmtool_core::patch::pair_sharpness::bitmap_blur;
+///
+/// let sharp = [[0.25, 0.0], [0.0, 0.25]]; // round, 0.5 grid px
+/// let blurry = [[1.0, 0.0], [0.0, 1.0]]; // round, 1 grid px
+/// let blur = bitmap_blur(&sharp, &blurry, 1.25).unwrap();
+/// assert!((blur.target - 1.0).abs() < 1e-12);
+/// // The observation sharper than the bitmap: read plain.
+/// assert!(bitmap_blur(&blurry, &sharp, 1.25).is_none());
+/// ```
+pub fn bitmap_blur(
+    bitmap: &[[f64; 2]; 2],
+    observation: &[[f64; 2]; 2],
+    min_ratio: f64,
+) -> Option<PairBlur> {
+    pair_blur(bitmap, observation, min_ratio).filter(|b| b.sharper == 0)
 }
 
 /// Whether an ellipse matrix can be read: every entry finite.

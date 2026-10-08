@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::test_tiles::*;
+use super::windowed_zncc;
 use super::*;
-use crate::patch::reference_view::pair_zncc_readings;
 
 #[test]
 fn the_semi_axes_are_read_off_the_matrix() {
@@ -302,7 +302,7 @@ fn the_two_passes_match_the_direct_2d_blur_round_missing_samples() {
             values: direct,
             ..tile.clone()
         };
-        let z = pair_zncc_readings(&a, &b, &window()).whole;
+        let z = windowed_zncc(&a, &b, &window());
         assert!(z > 0.9999, "σ {sigma}: ZNCC {z}");
     }
 }
@@ -398,8 +398,8 @@ fn timing() {
         let us = t.elapsed().as_secs_f64() * 1e6 / reps as f64;
         eprintln!("{label:58} {us:7.2} µs");
     };
-    time("plain pair readings (whole + 9 cells)", &mut || {
-        black_box(pair_zncc_readings(black_box(&a), black_box(&b), &w));
+    time("plain windowed ZNCC of a pair", &mut || {
+        black_box(windowed_zncc(black_box(&a), black_box(&b), &w));
     });
     let mut out = vec![0.0f32; a.values.len()];
     let mut scratch = BlurScratch::default();
@@ -437,6 +437,6 @@ fn timing() {
     let mut blurred = TilePlanes::default();
     time("a blurred pair, its tile already assessed", &mut || {
         blur_to_length_into(&a, &assessment, length, &mut blurred, &mut scratch);
-        black_box(pair_zncc_readings(&blurred, &b, &w));
+        black_box(windowed_zncc(&blurred, &b, &w));
     });
 }

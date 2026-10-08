@@ -18,10 +18,11 @@
 //! the tile by that width.
 //!
 //! Which tile of a pair is blurred, and to what length, is the caller's
-//! choice: the consumers' rule is in
-//! [`pair_sharpness`](crate::patch::pair_sharpness), and the reference-view
-//! rule's pairwise readings in
-//! [`blur_matched_pairs`](crate::patch::reference_view::blur_matched_pairs).
+//! choice: member coherence's rule is in
+//! [`pair_sharpness`](crate::patch::pair_sharpness), and the scores of a
+//! point's observations against its stored bitmap, which blur only the bitmap,
+//! in [`stored_bitmap`](crate::patch::stored_bitmap). Both read the pair with
+//! [`windowed_zncc`].
 //!
 //! The blur ([`blur_tile`]) is an isotropic Gaussian applied as two 1-D
 //! passes, one down the columns and one along the rows, by normalized
@@ -36,6 +37,7 @@
 mod assess;
 mod blur;
 mod tiles;
+mod zncc;
 
 #[cfg(test)]
 pub(crate) mod test_tiles;
@@ -47,6 +49,7 @@ pub use assess::{assess_blur, blur_to_length, blur_to_length_into, BlurAssessmen
 pub(crate) use blur::blur_tile_direct;
 pub use blur::{blur_tile, BlurScratch};
 pub use tiles::{read_tile_ellipse, TilePlanes};
+pub use zncc::{windowed_zncc, MIN_WINDOWED_SAMPLES};
 
 /// The widths, in grid px, of the isotropic blurs a tile is blurred by, once
 /// each, to read how its self-similarity ellipse grows ([`assess_blur`]).
