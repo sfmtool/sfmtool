@@ -748,7 +748,7 @@ fn finalize(
         old_point_count,
         replacing_tracks,
         reference_observations,
-    );
+    )?;
 
     // The track arrays and the observation-source columns can be supplied in the
     // same call (and are applied in separate passes), so guard against leaving a
@@ -849,7 +849,10 @@ fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -
 /// when it was not passed).
 ///
 /// A value passed in is taken as it is (and checked with the other point
-/// columns); `None` drops the column. Otherwise the column follows the patch
+/// columns); `None` drops the column. Either is refused where it would leave
+/// the column present without patch frames or absent with them, which a save
+/// would otherwise drop or fill with `-1` without a word. Otherwise the column
+/// follows the patch
 /// frame: a value with no frame carries none, and one with a frame carries one.
 /// The column `inner` carried comes across where the points are the same
 /// points: unchanged where the tracks are, and where the tracks were replaced,
@@ -863,17 +866,27 @@ fn settle_reference_observations(
     old_point_count: usize,
     replacing_tracks: bool,
     given: Option<Option<Vec<i32>>>,
-) {
+) -> PyResult<()> {
     use sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
 
+    let framed = recon.point_set.patch_u_halfvec_xyz.is_some();
     if let Some(given) = given {
+        if given.is_some() != framed {
+            return Err(pyo3::exceptions::PyValueError::new_err(if framed {
+                "clone_with_changes(): a reconstruction with patch frames carries \
+                 reference_observations; pass -1 for a point with none rather than None"
+            } else {
+                "clone_with_changes(): reference_observations requires patch frames, \
+                 and this reconstruction has none"
+            }));
+        }
         recon.point_set.reference_observations = given;
-        return;
+        return Ok(());
     }
     let point_count = recon.point_set.points.len();
-    if recon.point_set.patch_u_halfvec_xyz.is_none() {
+    if !framed {
         recon.point_set.reference_observations = None;
-        return;
+        return Ok(());
     }
     let carried = inner
         .point_set
@@ -898,6 +911,19 @@ fn settle_reference_observations(
             })
             .collect(),
     });
+    // A point left with a zero frame has no patch and so no bitmap, and names
+    // no reference observation, as the infinity conversion clears it.
+    if let (Some(u), Some(references)) = (
+        recon.point_set.patch_u_halfvec_xyz.as_ref(),
+        recon.point_set.reference_observations.as_mut(),
+    ) {
+        for (row, reference) in u.rows().into_iter().zip(references.iter_mut()) {
+            if row.iter().all(|&x| x == 0.0) {
+                *reference = NO_REFERENCE_OBSERVATION;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Replace the tracks from the three track arrays, which must all be passed,

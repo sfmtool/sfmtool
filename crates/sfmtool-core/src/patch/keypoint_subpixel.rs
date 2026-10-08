@@ -441,8 +441,10 @@ fn refine_patch_keypoints_impl(
     let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
     if params.render_bitmaps {
         // The stored bitmap is the tile of the view the reference-view rule
-        // picks at the final keypoints; where it picks none, the fused mean.
-        let reference = match bitmap {
+        // picks at the final keypoints; where it picks none, or picks one only
+        // by dropping the coverage tests, the fused mean, and the pick after
+        // all where no fused mean renders.
+        let (picked, stands) = match bitmap {
             BitmapKind::Reference if out.views.len() >= 2 => {
                 let anchors: Vec<Option<[f64; 2]>> =
                     out.keypoints.iter().map(|&kp| Some(kp)).collect();
@@ -455,24 +457,27 @@ fn refine_patch_keypoints_impl(
                     params.sampler,
                     progress,
                 );
-                render
+                let picked = render
                     .reading
                     .choice
                     .reference
-                    .map(|r| (r, bitmap_from_tile(&render.tiles[r])))
+                    .map(|r| (r, bitmap_from_tile(&render.tiles[r])));
+                (picked, render.stored_reference().is_some())
             }
-            _ => None,
+            _ => (None, false),
         };
-        match reference {
-            Some((r, rgba)) => {
-                out.representative = Some(rgba);
-                out.reference = Some(r);
-            }
-            None => {
+        let picked = match picked {
+            Some(pick) if stands => Some(pick),
+            pick => {
                 out.representative = render_representative(
                     patch, views, &states, &tiles, &support, wpp_u, wpp_v, params, progress,
                 );
+                pick.filter(|_| out.representative.is_none())
             }
+        };
+        if let Some((r, rgba)) = picked {
+            out.representative = Some(rgba);
+            out.reference = Some(r);
         }
     }
     out

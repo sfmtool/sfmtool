@@ -17,7 +17,7 @@ use crate::camera::PhotographCache;
 use crate::geometry::RigidTransform;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
-use crate::patch::stored_bitmap::render_patch_cloud_bitmaps;
+use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, PatchBitmapColumn};
 use crate::patch::PatchCloud;
 use crate::progress::{Cancelled, Progress};
 use crate::{progress_note, SfmrReconstruction};
@@ -57,6 +57,24 @@ pub fn render_display_patch_bitmaps(
     photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<Option<Array4<u8>>, Cancelled> {
+    // The display column is not the reconstruction's own, so the references
+    // the render picked are not written into it: the file's column stands.
+    Ok(render_patch_bitmap_column(recon, photographs, progress)?.map(|column| column.bitmaps))
+}
+
+/// [`render_display_patch_bitmaps`] with the reference observation each row's
+/// render came from, for a caller that stores the column as the
+/// reconstruction's own and so records the references with it (SfM
+/// Explorer's conversion to embedded patches).
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled.
+pub fn render_patch_bitmap_column(
+    recon: &SfmrReconstruction,
+    photographs: &PhotographCache,
+    progress: &Progress<'_>,
+) -> Result<Option<PatchBitmapColumn>, Cancelled> {
     if recon.keypoints_xy().is_none() {
         return Ok(None);
     }
@@ -137,16 +155,13 @@ pub fn render_display_patch_bitmaps(
         None,
         &phase,
     )?;
-    let bitmaps = column.bitmaps;
     progress_note!(
         phase,
         "{} patches at {} px",
         cloud.len(),
-        bitmaps.shape()[1]
+        column.bitmaps.shape()[1]
     );
-    // The display column is not the reconstruction's own, so the references
-    // the render picked are not written into it: the file's column stands.
-    Ok(Some(bitmaps))
+    Ok(Some(column))
 }
 
 #[cfg(test)]

@@ -147,7 +147,8 @@ impl Operation {
         kind: Kind::Edit,
     };
 
-    /// One bench track fitted: localized, re-triangulated, fused, and read back
+    /// One bench track fitted: localized, re-triangulated, its reference
+    /// view's tile stored as the patch bitmap, and read back
     /// (`specs/gui/track-view.md`).
     ///
     /// Cancellable: the fit polls the flag on either side of the decode,

@@ -2573,6 +2573,11 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     // The reference view's readings on every `in` row, and the one row the
     // rule picked, named in the stage data too.
     let rows = track["observations"].as_array().expect("rows");
+    // The fit stored a bitmap, so every row, `in` or `out`, is scored
+    // against it, plain and blur-matched, and the row it is the render of
+    // reads 1.
+    assert_eq!(track["stage_data"]["has_bitmap"], json!(true), "{track}");
+    let bitmap_row = track["stage_data"]["bitmap_observation"].as_u64();
     let mut picked = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let measured = &row["track"];
@@ -2581,6 +2586,12 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
                 measured[key].is_number(),
                 "{key} is not on the wire: {track}"
             );
+        }
+        assert!(measured["bitmap_zncc"].is_number(), "{track}");
+        assert!(measured["blur_matched_bitmap_zncc"].is_number(), "{track}");
+        assert!(measured["bitmap_blur_sigma"].is_number(), "{track}");
+        if bitmap_row == Some(i as u64) {
+            assert_eq!(measured["bitmap_zncc"], json!(1.0), "{track}");
         }
         // An `out` row is not considered by the rule.
         if row["verdict"] != json!("in") {
@@ -2594,16 +2605,6 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             Some(3),
             "{track}"
         );
-        // A track with a bitmap scores every row against it, plain and
-        // blur-matched, and its own row reads 1.
-        if track["stage_data"]["has_bitmap"] == json!(true) {
-            assert!(measured["bitmap_zncc"].is_number(), "{track}");
-            assert!(measured["blur_matched_bitmap_zncc"].is_number(), "{track}");
-            assert!(measured["bitmap_blur_sigma"].is_number(), "{track}");
-            if track["stage_data"]["bitmap_observation"] == json!(i) {
-                assert_eq!(measured["bitmap_zncc"], json!(1.0), "{track}");
-            }
-        }
         let standing = &measured["reference_view"];
         assert!(standing["fallback"].is_string(), "{track}");
         assert!(standing.get("agreement_read").is_none(), "{track}");
@@ -2620,6 +2621,54 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         json!(picked[0]),
         "{track}"
     );
+}
+
+/// A tilt drops the bitmap, and the evaluation that follows renders it again
+/// over the turned patch; the rows are scored against that new bitmap, not
+/// left without a score until a fit.
+#[test]
+fn a_tilt_scores_the_rows_against_the_bitmap_rendered_after_it() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let frame = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
+        .expect("a track from a point carries the stored patch");
+    let (sin, cos) = 10.0_f64.to_radians().sin_cos();
+    let asked = frame.normal() * cos + frame.u_axis * sin;
+    call(
+        &mut state,
+        &mut viewer,
+        "tilt_bench_patch",
+        json!({ "reconstruction_label": "run_a", "normal": [asked.x, asked.y, asked.z] }),
+    );
+    state.settle_bench_evaluation();
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert_eq!(track["evaluation"]["state"], json!("current"), "{track}");
+    assert_eq!(track["stage_data"]["has_bitmap"], json!(true), "{track}");
+    let bitmap_row = track["stage_data"]["bitmap_observation"].as_u64();
+    let rows = track["observations"].as_array().expect("rows");
+    let mut scored = 0;
+    for (i, row) in rows.iter().enumerate() {
+        let measured = &row["track"];
+        if bitmap_row == Some(i as u64) {
+            assert_eq!(measured["bitmap_zncc"], json!(1.0), "{track}");
+            continue;
+        }
+        assert!(measured["bitmap_zncc"].is_number(), "row {i}: {track}");
+        assert!(
+            measured["blur_matched_bitmap_zncc"].is_number(),
+            "row {i}: {track}"
+        );
+        scored += 1;
+    }
+    assert!(scored > 0, "{track}");
 }
 
 /// An observation seeded a long way from the point's projection is **named** on
@@ -3831,6 +3880,25 @@ fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
         json!(true),
         "{point}"
     );
+    // Whether the point has a stored bitmap, and the row it is the tile of,
+    // as the bench's stage data has them.
+    let payload = state
+        .viewed_track()
+        .and_then(|viewed| viewed.track.track().cloned())
+        .expect("the viewed point at the track stage");
+    assert_eq!(
+        evaluation["has_bitmap"],
+        json!(payload.bitmap.is_some()),
+        "{point}"
+    );
+    assert_eq!(
+        evaluation["bitmap_observation"],
+        json!(payload.bitmap.as_ref().and(payload.reference)),
+        "{point}"
+    );
+    if let Some(row) = evaluation["bitmap_observation"].as_u64() {
+        assert_eq!(rows[row as usize]["track"]["bitmap_zncc"], json!(1.0));
+    }
 
     let other = (0..state.scene[0].edited().point_count() as u32)
         .find(|&p| p != BENCH_POINT && state.scene[0].edited().point(p).is_some())

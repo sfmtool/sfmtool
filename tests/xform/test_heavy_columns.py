@@ -7,8 +7,9 @@
 ``--add-patch-bitmaps`` and the ``--minimal`` shorthand, end to end on the
 17-image seoul_bull reconstruction. The properties under test: the drops keep
 every row of everything; ``--add-thumbnails`` rebuilds the column byte for byte
-from the ``.sift`` copies first and the photographs second; ``--add-patch-bitmaps`` moves nothing and renders what the
-zero-step fuse renders; ``--minimal`` writes the smallest file with metadata that
+from the ``.sift`` copies first and the photographs second; ``--add-patch-bitmaps`` moves nothing and stores the
+reference view's render, the one the sub-pixel refiner renders when it takes no
+step; ``--minimal`` writes the smallest file with metadata that
 names no machine and no history. See
 ``specs/cli/reconstruction/xform/xform-command.md``.
 """
@@ -37,6 +38,8 @@ from sfmtool.xform._arg_parser import (
     parse_transform_args,
 )
 from sfmtool.xform._images import load_workspace_images
+
+from ..conftest import assert_references_name_track_observations
 
 
 def _run(args: list[str]):
@@ -297,14 +300,21 @@ def test_drop_patch_bitmaps_is_a_no_op_without_them(seoul_bull_workspace, capsys
     assert out.point_count == recon.point_count
 
 
-def test_add_patch_bitmaps_moves_nothing_and_matches_the_zero_step_fuse(
+def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
     embedded_sfmr,
 ):
+    """The step stores each point's reference-view render and names its
+    reference observation, as the sub-pixel refiner does when it takes no
+    Gauss-Newton step and so moves no keypoint."""
     recon = SfmrReconstruction.load(embedded_sfmr)
+    # The fixture's file, written through the CLI, names an observation of each
+    # point's own track.
+    assert_references_name_track_observations(recon)
     bare = DropPatchBitmapsTransform().apply(recon)
     added = AddPatchBitmapsTransform(resolution=16).apply(bare)
 
     assert added.patch_bitmap_resolution == 16
+    refs = assert_references_name_track_observations(added)
     np.testing.assert_array_equal(
         np.asarray(added.keypoints_xy), np.asarray(recon.keypoints_xy)
     )
@@ -315,14 +325,27 @@ def test_add_patch_bitmaps_moves_nothing_and_matches_the_zero_step_fuse(
         np.asarray(added.track_point_indexes), np.asarray(recon.track_point_indexes)
     )
 
-    # The sub-pixel refiner with no Gauss-Newton step is the fuse, reached here
-    # through its own per-patch loop rather than the cloud form the step calls.
+    # The sub-pixel refiner with no Gauss-Newton step renders the same bitmaps
+    # and picks the same reference images, reached here through its own
+    # per-patch loop rather than the cloud form the step calls.
     images = load_workspace_images(bare)
     fused = bare.patches.refine_keypoints(
         bare, images, resolution=16, max_gn_steps=0, render_bitmaps=True
     )
     expected = np.zeros_like(np.asarray(added.patch_bitmaps))
+    track_images = np.asarray(added.track_image_indexes)
+    offsets = np.concatenate([[0], np.cumsum(added.observation_counts)[:-1]]).astype(
+        int
+    )
     for entry in fused:
+        point = int(entry["point_index"])
+        reference_image = entry["reference_image"]
+        if refs[point] < 0:
+            assert reference_image is None, f"point {point}"
+        else:
+            assert reference_image == track_images[offsets[point] + refs[point]], (
+                f"point {point}"
+            )
         np.testing.assert_array_equal(
             np.asarray(entry["keypoints"], dtype=np.float32).reshape(-1, 2),
             np.asarray(bare.keypoints_xy)[

@@ -28,6 +28,7 @@ from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.io import verify_sfmr
 from sfmtool.cli import main
 
+from ..conftest import assert_references_name_track_observations
 from .conftest import rotation_matrices
 
 
@@ -57,6 +58,9 @@ def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_pa
     assert reloaded.patches is not None
     # image hashes match the source .sift metadata (one per image).
     assert len(reloaded.image_file_hashes) == reloaded.image_count
+    # Each stored bitmap names the observation of its own track it is the tile of.
+    assert reloaded.patch_bitmaps is not None
+    assert_references_name_track_observations(reloaded)
 
 
 def test_embed_patches_default_output_path(monkeypatch, seoul_bull_workspace):

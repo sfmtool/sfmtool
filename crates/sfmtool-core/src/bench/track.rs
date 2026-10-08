@@ -676,7 +676,10 @@ pub struct TrackPayload {
     pub bitmap: Option<Array3<u8>>,
     /// The observation, as an index into the track's observations, whose
     /// render [`Self::bitmap`] is. `None` where the bitmap is not one
-    /// observation's render, or there is no bitmap.
+    /// observation's render. A track read from a file that keeps its
+    /// reference column without its bitmaps carries the stored reference
+    /// with no bitmap; a reader that wants the row the bitmap is the tile of
+    /// asks for both.
     ///
     /// It follows its observation through every step that removes or reorders
     /// observations, and is dropped with the bitmap by every step that moves
@@ -962,7 +965,7 @@ impl RepaintMark {
     }
 
     /// The same mark, for a value that differs from the marked one in nothing
-    /// a reading or a verdict depends on: a step that fuses the consensus
+    /// a reading or a verdict depends on: a step that re-renders the stored
     /// bitmap where the patch stands carries the mark across with this.
     pub(super) fn carried(&self) -> Self {
         Self {

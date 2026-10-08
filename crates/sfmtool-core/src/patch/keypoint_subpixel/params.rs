@@ -189,10 +189,12 @@ pub struct KeypointRefinement {
     /// **final** per-view keypoints — only when
     /// [`KeypointSubpixelParams::render_bitmaps`] is set: the tile of the view
     /// [`Self::reference`] names, or the fused mean of the views where it
-    /// names none. `None` when the point produced no valid cross-view
-    /// consensus (fewer than two views survive the projection gate / render at
-    /// their final offsets) — the uniform "culled point" signal, for finite and
-    /// infinity points alike.
+    /// names none. `None` when fewer than two views survive the projection
+    /// gate, or when the rule picks no view and fewer than two views render in
+    /// frame at their final offsets for the fused mean — the uniform "culled
+    /// point" signal, for finite and infinity points alike. A view the rule
+    /// picks stands as the bitmap even where it is the only one that renders
+    /// in frame.
     pub representative: Option<Vec<u8>>,
     /// The view, as an index into [`Self::views`], whose tile
     /// [`Self::representative`] is; `None` where the bitmap is the fused mean,

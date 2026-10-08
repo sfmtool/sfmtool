@@ -51,7 +51,7 @@ use crate::patch::keypoint_subpixel::{fuse_patch_bitmap_reporting, KeypointSubpi
 use crate::patch::normal_refine::{window_weights, PatchWindow, ProjectedImage};
 use crate::patch::pair_sharpness::{bitmap_blur, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::reference_view::{
-    read_track, render_view_tile, tile_semi_axes, TrackReading, ViewTile,
+    read_track, render_view_tile, tile_semi_axes, ReferenceFallback, TrackReading, ViewTile,
 };
 use crate::progress::{Cancelled, Progress};
 
@@ -107,6 +107,23 @@ pub struct ReferenceRender {
     pub reading: TrackReading,
 }
 
+impl ReferenceRender {
+    /// The view whose tile stands as the stored bitmap: the rule's pick,
+    /// unless the rule reached it only by its last fallback
+    /// ([`ReferenceFallback::WithoutAny`]), which drops the coverage and
+    /// clipping tests because no view passed them. Such a pick may be a tile
+    /// with few samples on its photograph, so the stored bitmap is the fused
+    /// mean instead, which fills every sample some view covers, and the pick
+    /// only where no fused mean renders. `None` then, and where the rule
+    /// picked no view.
+    pub fn stored_reference(&self) -> Option<usize> {
+        self.reading
+            .choice
+            .reference
+            .filter(|_| self.reading.choice.fallback != ReferenceFallback::WithoutAny)
+    }
+}
+
 /// Render each of `view_set`'s views of `patch` at its keypoint and run the
 /// reference-view rule over the tiles.
 ///
@@ -115,8 +132,10 @@ pub struct ReferenceRender {
 /// itself rather than re-anchored. The tiles are rendered at `resolution` with
 /// the sampler `sampler` picks for each view ([`render_view_tile`]), each
 /// tile's self-similarity read ([`tile_semi_axes`]), and the rule's readings
-/// taken across them ([`read_track`]). The renders and member coherence's are
-/// timed in their samplers' detail phases of `progress`.
+/// taken across them ([`read_track`]). Each render, both the tiles here and
+/// the ones member coherence makes for the rule's pair ZNCCs, is timed in the
+/// detail phase of `progress` named for its sampler (`render bilinear_mip`,
+/// `render anisotropic`, ...).
 ///
 /// # Panics
 ///
@@ -213,16 +232,20 @@ pub fn render_patch_bitmap(
         params.sampler,
         progress,
     );
-    match render.reading.choice.reference {
-        Some(r) => Some(PatchBitmap {
-            rgba: bitmap_from_tile(&render.tiles[r]),
-            reference: Some(r),
-        }),
+    let pick = |r: usize| PatchBitmap {
+        rgba: bitmap_from_tile(&render.tiles[r]),
+        reference: Some(r),
+    };
+    match render.stored_reference() {
+        Some(r) => Some(pick(r)),
         None => fuse_patch_bitmap_reporting(patch, views, view_set, keypoints, params, progress)
             .map(|rgba| PatchBitmap {
                 rgba,
                 reference: None,
-            }),
+            })
+            // A pick the coverage tests did not pass, where no fused mean
+            // renders either.
+            .or_else(|| render.reading.choice.reference.map(pick)),
     }
 }
 

@@ -23,7 +23,7 @@ use sfmtool_core::patch::reference_view::{
 use crate::bench::live::Evaluation;
 
 /// The *Reference* heading's hover text.
-pub(super) const REFERENCE_TIP: &str = "Which row's tile is stored as the patch bitmap, by \
+pub(super) const REFERENCE_TIP: &str = "Which row's tile a fit stores as the patch bitmap, by \
     the reference-view rule, and the readings it decides on. The row it picks reads \
     reference, on a green cell.\n\n\
     A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \

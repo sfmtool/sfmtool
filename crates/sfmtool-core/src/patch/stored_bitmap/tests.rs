@@ -327,3 +327,53 @@ fn with_no_view_picked_the_bitmap_is_the_fused_mean() {
     )
     .is_none());
 }
+
+/// A patch every view clips: the rule reaches a pick only by dropping the
+/// coverage and clipping tests, and such a pick does not stand as the stored
+/// bitmap ahead of the fused mean. Here no view has the patch wholly in frame,
+/// so no fused mean renders either, and the pick is stored after all.
+#[test]
+fn a_pick_no_view_covers_is_not_stored() {
+    let scene = Scene::new();
+    let views = scene.views();
+    let x = -1.2;
+    let edge = OrientedPatch::from_center_normal(
+        Point3::new(x, 0.0, 4.0),
+        -Vector3::z(),
+        Vector3::y(),
+        [0.25, 0.25],
+    );
+    let keypoints: Vec<[f64; 2]> = (0..3).map(|i| scene.keypoint(i, x, 0.0)).collect();
+    let params = KeypointSubpixelParams {
+        resolution: 24,
+        ..Default::default()
+    };
+    let render = render_reference(
+        &edge,
+        &views,
+        &[0, 1, 2],
+        &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
+        24,
+        params.sampler,
+        &Progress::none(),
+    );
+    assert_eq!(
+        render.reading.choice.fallback,
+        ReferenceFallback::WithoutAny,
+        "{:?}",
+        render.reading.readings
+    );
+    assert!(render.reading.choice.reference.is_some(), "the rule picks");
+    assert_eq!(render.stored_reference(), None);
+    let picked = render.reading.choice.reference;
+    let bitmap = render_patch_bitmap(
+        &edge,
+        &views,
+        &[0, 1, 2],
+        &keypoints,
+        &params,
+        &Progress::none(),
+    )
+    .expect("the pick, with no fused mean to stand instead");
+    assert_eq!(bitmap.reference, picked);
+}

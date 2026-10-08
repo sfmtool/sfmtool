@@ -212,10 +212,11 @@ pub fn create_track(
         placement: view.placement(),
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         // The bench's rows are the stored track's observations in order, so
-        // the stored index names the row.
+        // the stored index names the row. Read with or without a bitmap: a
+        // file whose bitmaps were dropped keeps its references, and a commit
+        // writes this one back.
         reference: view
             .reference_observation()
-            .filter(|_| view.patch_bitmap().is_some())
             .and_then(|r| usize::try_from(r).ok()),
         color: stored.color,
         normal_confidence: view.normal_confidence(),

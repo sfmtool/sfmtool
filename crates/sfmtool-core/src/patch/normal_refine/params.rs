@@ -245,8 +245,10 @@ pub struct NormalRefineResult {
     /// [`NormalRefineParams::render_bitmap`] is `false`, or the patch was not
     /// refined (too few valid views).
     pub representative: Option<Vec<u8>>,
-    /// The view, as an index into the views the patch was refined over, whose
-    /// tile [`Self::representative`] is; `None` for a fused mean or no bitmap.
+    /// The view, as an index into the caller's `views` (every input view, also
+    /// when [`NormalRefineParams::max_refine_views`] refined over a subset),
+    /// whose tile [`Self::representative`] is; `None` for a fused mean or no
+    /// bitmap.
     pub reference: Option<usize>,
 }
 

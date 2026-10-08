@@ -17,9 +17,7 @@ use sfmtool_core::patch::blur_matched::{
     assess_blur as assess_tile_blur, blur_to_length as blur_tile_to_length, read_tile_ellipse,
     BlurAssessment, BlurScratch, TilePlanes, GROWTH_PROBE_SIGMAS,
 };
-use sfmtool_core::patch::stored_bitmap::{
-    score_against_bitmap as core_score_against_bitmap, BitmapScore, BitmapScorer,
-};
+use sfmtool_core::patch::stored_bitmap::{BitmapScore, BitmapScorer};
 
 use super::args::parse_patch_window;
 
@@ -285,13 +283,11 @@ pub fn blur_to_length<'py>(
 /// bitmap".
 ///
 /// Each pair is read over the samples with data in both tiles, weighted by the
-/// window, per colour channel, the channels averaged. Where the bitmap's ZNCC
-/// self-similarity semi-major axis is shorter than the observation's
-/// semi-minor axis, and that semi-minor axis is at least 1.25 times the
-/// bitmap's semi-major axis, the bitmap is blurred by a round Gaussian until
-/// its semi-major axis reaches the observation's semi-minor axis (at most 2
-/// grid px), by the width the bitmap's own blur assessment gives, and
-/// correlated again. Any other pair, an observation sharper than the bitmap
+/// window, per colour channel, the channels averaged. Where the observation's
+/// ZNCC self-similarity semi-minor axis, capped at 2 grid px, is at least 1.25
+/// times the bitmap's semi-major axis, the bitmap is blurred by a round
+/// Gaussian until its semi-major axis reaches that capped length, by the width
+/// the bitmap's own blur assessment gives, and correlated again. Any other pair, an observation sharper than the bitmap
 /// among them, is read plain. The bitmap's assessment is read at most once.
 /// The observation ``reference`` names, whose tile the bitmap is, is not
 /// computed: its scores read 1.
@@ -390,12 +386,16 @@ pub fn score_against_bitmap<'py>(
             )
         })
         .collect();
+    // One scorer for the scores and the bitmap's own semi-axes, so its
+    // ellipse is read once.
     let (scores, bitmap_axes) = py.detach(|| {
-        let refs: Vec<&TilePlanes> = planes.iter().collect();
-        let scores =
-            core_score_against_bitmap(&bitmap_planes, &refs, &vec![None; k], reference, window);
-        let axes = BitmapScorer::new(&bitmap_planes, window).bitmap_semi_axes();
-        (scores, axes)
+        let mut scorer = BitmapScorer::new(&bitmap_planes, window);
+        let scores: Vec<Option<BitmapScore>> = planes
+            .iter()
+            .enumerate()
+            .map(|(v, tile)| (Some(v) != reference).then(|| scorer.score(tile, None)))
+            .collect();
+        (scores, scorer.bitmap_semi_axes())
     });
     let pick = |f: &dyn Fn(&BitmapScore) -> f64, at_reference: f64| -> Array1<f64> {
         scores

@@ -481,6 +481,39 @@ fn the_bitmap_cell_marks_the_bitmap_s_row_and_prints_the_scores() {
     assert_eq!(cell(0, &unscored, None).text, "-");
 }
 
+/// After a fit stores a bitmap, exactly one row of the drawn table is marked
+/// as the bitmap's, and it is the row the stored bitmap names; every other
+/// measured row prints its score against it.
+#[test]
+fn a_fitted_track_marks_the_one_row_its_bitmap_is_the_tile_of() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state.settle_bench_evaluation();
+    state
+        .start_bench_fit(id, &label)
+        .expect("a framed track with three sightings fits");
+    state.finish_background_task();
+    state.settle_bench_evaluation();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let payload = track.track().expect("the track stage");
+    assert!(payload.bitmap.is_some(), "the fit stored no bitmap");
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    let marked = texts.iter().filter(|t| *t == "bitmap\n100%").count();
+    match payload.reference {
+        Some(r) => {
+            assert_eq!(marked, 1, "{texts:?}");
+            for (i, observation) in track.observations.iter().enumerate() {
+                let m = observation.track.as_ref().expect("measured");
+                if i == r {
+                    assert_eq!(m.bitmap_zncc, Some(1.0));
+                } else {
+                    assert!(m.bitmap_zncc.is_some(), "row {i} has no score");
+                }
+            }
+        }
+        None => assert_eq!(marked, 0, "{texts:?}"),
+    }
+}
+
 #[test]
 fn the_table_has_a_row_per_observation_in_index_order() {
     let (_state, _id, _label, panel, _ctx) = on_the_bench();
@@ -4421,6 +4454,8 @@ fn a_heading_click_starts_worst_first_and_a_second_reverses() {
         (SortColumn::ProjectionError, true),
         (SortColumn::Shift, true),
         (SortColumn::Zoom, false),
+        (SortColumn::Reference, false),
+        (SortColumn::Bitmap, false),
         (SortColumn::Status, false),
         (SortColumn::Name, false),
     ] {

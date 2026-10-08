@@ -240,6 +240,13 @@ impl SfmrReconstruction {
         out.metadata.feature_source = out.point_set.observations.name().to_string();
         out.point_set.patch_u_halfvec_xyz = Some(patch_u);
         out.point_set.patch_v_halfvec_xyz = Some(patch_v);
+        // The column is present exactly when patch frames are. No bitmap here
+        // is a reference view's render yet; a caller that renders the stored
+        // bitmaps through the new frames writes the references it picks.
+        out.point_set.reference_observations = Some(vec![
+            sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+            out.point_set.points.len()
+        ]);
         out.rebuild_derived_fields();
         out.validate_observation_columns()
             .map_err(ReconstructionError::Unsupported)?;

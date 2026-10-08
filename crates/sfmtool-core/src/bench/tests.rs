@@ -2556,11 +2556,11 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         position,
         "the frame follows the position"
     );
-    let bitmap = payload.bitmap.as_ref().expect("a fused consensus");
+    let bitmap = payload.bitmap.as_ref().expect("a stored bitmap");
     assert_eq!(bitmap.shape(), [BITMAP_R, BITMAP_R, 4]);
     assert!(
         bitmap.iter().any(|&v| v > 0),
-        "the fused tile shows the plane"
+        "the stored tile shows the plane"
     );
 }
 

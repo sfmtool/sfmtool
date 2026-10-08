@@ -1776,3 +1776,45 @@ fn a_cell_with_an_unread_pixel_has_no_zncc_grid_reading() {
     assert!(readings[2][0].is_nan());
     assert_relative_eq!(readings[2][1], 1.0, epsilon = 1e-9);
 }
+
+#[test]
+fn stored_bitmap_reference_spans_every_view_under_a_view_cap() {
+    // With `max_refine_views` below the view count the refinement runs on a
+    // subset, but the stored bitmap's reference pick spans every input view
+    // and `reference` indexes the caller's full view list: the bitmap is the
+    // tile of `views[reference]`, as a full-list render picks it.
+    let scene = Scene::new(&[
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.9, 0.0],
+        [0.0, -0.3, 0.0],
+        [0.03, 0.02, 0.0],
+        [-0.02, 0.04, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(exp_map_normal(&true_normal(), [10.0f64.to_radians(), 0.0]));
+    let mut params = test_params(Objective::MeanPairwise);
+    params.render_bitmap = true;
+    params.max_refine_views = 2;
+    let resolution = 15u32;
+
+    let result = refine_patch_normal(&patch, &views, resolution, &params, None);
+    let r = result.reference.expect("the rule picks a reference view");
+    assert!(r < views.len());
+
+    let set: Vec<u32> = (0..views.len() as u32).collect();
+    let full = crate::patch::stored_bitmap::render_reference(
+        &result.patch,
+        &views,
+        &set,
+        &vec![None; views.len()],
+        resolution,
+        params.sampler,
+        &crate::progress::Progress::none(),
+    );
+    assert_eq!(full.stored_reference(), Some(r));
+    assert_eq!(
+        result.representative.as_deref(),
+        Some(crate::patch::stored_bitmap::bitmap_from_tile(&full.tiles[r]).as_slice())
+    );
+}

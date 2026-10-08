@@ -1867,9 +1867,10 @@ impl AppState {
     ///
     /// The step that **moves** the track: at the track stage it localizes every
     /// sighting against the patch, re-triangulates the `in` ones, re-centres
-    /// the frame and fuses the consensus, and then reads the result back so the
-    /// numbers it leaves behind are the ones an evaluation reports. The
-    /// reading looks for each peak within the track's own `max_shift_px`.
+    /// the frame and renders the stored bitmap from the reference view, and
+    /// then reads the result back so the numbers it leaves behind are the ones
+    /// an evaluation reports. The reading looks for each peak within the
+    /// track's own `max_shift_px`.
     ///
     /// The photographs the kernels read are decoded **on that worker**: the
     /// file reads and the pyramid builds are seconds of work, and a step that
@@ -1996,7 +1997,7 @@ impl AppState {
     /// "Estimating the normal": [`NormalStep::Photometric`] is Track View's
     /// *Fit Normal* and [`NormalStep::FiniteDifference`] its *Finite Diff
     /// Normal*. Both move the patch's normal and leave its centre, and both
-    /// end, as a fit does, with the track read back and its bitmap fused.
+    /// end, as a fit does, with the track read back and its bitmap rendered again.
     ///
     /// **What the track alone decides is decided here**, through
     /// [`sfmtool_core::bench::normal_preconditions`], for the reason
@@ -2550,9 +2551,15 @@ pub(crate) fn evaluate_job(
         if progress.is_cancelled() {
             return live::Measured::Cancelled;
         }
-        let fused =
+        let rendered =
             bench::render_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
-        live::Measured::Track(Box::new(fused))
+        // The evaluation scored the rows against no bitmap, so score them
+        // against the one just rendered.
+        match bench::score_bitmap(&rendered, &edited, &views, &options, progress) {
+            Ok(scored) => live::Measured::Track(Box::new(scored)),
+            Err(sfmtool_core::bench::EvaluateError::Cancelled) => live::Measured::Cancelled,
+            Err(e) => live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
+        }
     })
 }
 

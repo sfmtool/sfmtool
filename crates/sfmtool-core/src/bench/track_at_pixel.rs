@@ -842,15 +842,31 @@ pub fn build_track_at_pixel(
         match result {
             Ok(track) => {
                 // Every member ends by sliding the patch onto the pixel, which
-                // drops the bitmap fused where the patch stood before; fuse it
-                // again where it stands now, moving nothing, so the track can
-                // be committed into a reconstruction that stores one.
+                // drops the bitmap rendered where the patch stood before; render
+                // it again where it stands now, moving nothing, so the track can
+                // be committed into a reconstruction that stores one, and score
+                // the rows against it, which the member's evaluation could not.
                 let track = super::fit::render_bitmap_in_place(
                     &track,
                     edited,
                     views,
                     &super::fit::FitOptions::default(),
                 );
+                let track = match super::evaluate::score_bitmap(
+                    &track,
+                    edited,
+                    views,
+                    &super::evaluate::EvaluateOptions::default(),
+                    progress,
+                ) {
+                    Ok(track) => track,
+                    Err(super::evaluate::EvaluateError::Cancelled) => {
+                        return Err(TrackAtPixelError::Cancelled)
+                    }
+                    // The member read every view already, so no other error
+                    // arises; the track stands unscored rather than lost.
+                    Err(_) => track,
+                };
                 return Ok((
                     track,
                     TrackAtPixelReport {

@@ -1653,7 +1653,7 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
     let camera = &state.scene[0].recon().image_table.cameras[0];
     let photograph =
         image::RgbImage::from_pixel(camera.width, camera.height, image::Rgb([40, 80, 120]));
-    // Two readable views suffice for the first point's fuse. The other images
+    // Two readable views suffice for the first point's bitmap. The other images
     // are deliberately absent, as they may be when a workspace has moved.
     for image in &state.scene[0].recon().image_table.images[..2] {
         photograph.save(dir.path().join(&image.name)).unwrap();
@@ -1672,6 +1672,25 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
     assert!(bitmaps.iter().any(|&channel| channel != 0));
     assert!(!recon.point_set.patch_bitmaps_for_display);
     assert!(state.scene[0].has_patch_data());
+    // The stored column records the reference observation each row is the
+    // render of, the ones a render of the same value picks.
+    let references = recon
+        .point_set
+        .reference_observations
+        .clone()
+        .expect("a value with patch frames carries the reference column");
+    let rendered = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
+        recon,
+        &sfmtool_core::camera::PhotographCache::new(
+            0,
+            sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS,
+        ),
+        &sfmtool_core::progress::Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("two photographs are readable");
+    assert_eq!(references, rendered.reference_observations);
+    assert_eq!(&rendered.bitmaps, bitmaps.as_ref());
 
     let saved = dir.path().join("converted.sfmr");
     std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
@@ -1683,6 +1702,7 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
         Some(bitmaps)
     );
     assert!(!reloaded.point_set.patch_bitmaps_for_display);
+    assert_eq!(reloaded.point_set.reference_observations, Some(references));
 }
 
 /// The entry says what it did, with the two counts, and the sentence ends on

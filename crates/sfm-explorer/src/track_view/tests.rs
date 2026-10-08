@@ -807,7 +807,7 @@ fn a_chips_hover_text_says_what_the_item_is() {
 fn a_chip_draws_the_items_patch_or_an_empty_frame() {
     let (mut state, id) = state();
     let track = put(&mut state, id, POINT);
-    // The demo stores no bitmaps; a fit fuses one.
+    // The demo stores no bitmaps; a fit stores one.
     state
         .start_bench_fit(id, &track)
         .expect("a framed track with three sightings fits");

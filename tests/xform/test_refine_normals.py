@@ -21,6 +21,8 @@ from sfmtool.cli import main
 from sfmtool.xform import RefineNormalsTransform
 from sfmtool.xform._arg_parser import parse_refine_normals_params
 
+from ..conftest import assert_references_name_track_observations
+
 
 # ── Argument grammar ────────────────────────────────────────────────────────
 
@@ -354,6 +356,9 @@ def test_refine_normals_bitmaps_default_and_optout(seoul_bull_workspace, tmp_pat
     reloaded = SfmrReconstruction.load(path)
     assert reloaded.patch_bitmaps is not None
     np.testing.assert_array_equal(reloaded.patch_bitmaps, bitmaps)
+    # Each bitmap names the observation of its own track it is the tile of.
+    refs = assert_references_name_track_observations(out)
+    np.testing.assert_array_equal(reloaded.reference_observations, refs)
 
 
 def test_refine_normals_does_not_lower_consensus(seoul_bull_workspace, capsys):

@@ -205,6 +205,10 @@ fn refine_patch_normal_impl(
     // the refined normal applies to the whole surfel.
     let subset_views: Vec<ProjectedImage<'_>>;
     let subset_kps: Vec<Option<[f64; 2]>>;
+    // The full view list, kept for the stored bitmap's reference pick, which
+    // spans every view whatever the refinement basis is.
+    let all_views = views;
+    let all_view_keypoints = view_keypoints;
     let mut views = views;
     let mut view_keypoints = view_keypoints;
     let cap = params.max_refine_views.max(params.min_views);
@@ -396,21 +400,22 @@ fn refine_patch_normal_impl(
         patch.clone()
     };
     // The stored bitmap (optional): the tile of the view the reference-view
-    // rule picks, rendered through the refined patch at each view's keypoint.
+    // rule picks among every input view (not only a `max_refine_views`
+    // subset), rendered through the refined patch at each view's keypoint.
     // Where it picks none, the fused mean of the winner's already-rendered view
     // stack, which needs no extra render or IRLS pass and spans the full R×R
     // grid, filling every pixel a kept view covers. `best` is `Some` exactly in
     // the bitmap path (and then non-empty, since `best_phi` is finite).
     let (representative, reference) = match &best {
         Some((weights, stack)) => {
-            let picked = (views.len() >= 2)
+            let picked = (all_views.len() >= 2)
                 .then(|| {
-                    let set: Vec<u32> = (0..views.len() as u32).collect();
-                    let anchors: Vec<Option<[f64; 2]>> = view_keypoints
-                        .map_or_else(|| vec![None; views.len()], <[Option<[f64; 2]>]>::to_vec);
+                    let set: Vec<u32> = (0..all_views.len() as u32).collect();
+                    let anchors: Vec<Option<[f64; 2]>> = all_view_keypoints
+                        .map_or_else(|| vec![None; all_views.len()], <[Option<[f64; 2]>]>::to_vec);
                     let render = render_reference(
                         &refined,
-                        views,
+                        all_views,
                         &set,
                         &anchors,
                         resolution,
@@ -418,9 +423,7 @@ fn refine_patch_normal_impl(
                         progress,
                     );
                     render
-                        .reading
-                        .choice
-                        .reference
+                        .stored_reference()
                         .map(|r| (bitmap_from_tile(&render.tiles[r]), r))
                 })
                 .flatten();

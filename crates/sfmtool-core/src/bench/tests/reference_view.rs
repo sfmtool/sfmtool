@@ -423,3 +423,37 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
     let at = view.reference_observation().expect("the column is carried") as usize;
     assert_eq!(images[at], again.observations[picked].image);
 }
+
+/// A file that keeps its reference column but not its bitmaps puts the stored
+/// reference on the bench, and committing such a track untouched writes it
+/// back rather than clearing it.
+#[test]
+fn an_untouched_commit_without_a_bitmap_keeps_the_stored_reference() {
+    let truth = GroundTruth::load();
+    let mut recon = truth.recon.clone();
+    assert!(recon.point_set.patch_bitmaps_y_x_rgba.is_none());
+    let offsets = &recon.point_set.observation_offsets;
+    let point = (0..recon.point_count())
+        .find(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK)
+        .expect("the ground truth has a long track");
+    let mut references = vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; recon.point_count()];
+    references[point] = 2;
+    recon.point_set.reference_observations = Some(references);
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        point as u32,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = bench.track(&report.label).expect("just put on");
+    assert_eq!(track.track().unwrap().reference, Some(2));
+    assert!(track.track().unwrap().bitmap.is_none());
+
+    // The first commit rewrites the colour and the error, which an untouched
+    // commit does, and writes the stored reference back with them.
+    let (committed, report) = commit(&edited, track).expect("the track commits");
+    let view = committed.point(report.point).expect("the point");
+    assert_eq!(view.reference_observation(), Some(2));
+}

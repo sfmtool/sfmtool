@@ -267,3 +267,25 @@ fn the_bar_moves_through_every_stage() {
         "the frame build's share never moved: {fractions:?}"
     );
 }
+
+#[test]
+fn the_conversion_gives_every_point_an_empty_reference() {
+    // The converted value has patch frames, so it carries the reference column,
+    // with no point's bitmap yet a reference view's render.
+    let dir = tempfile::tempdir().unwrap();
+    let recon = fixture(&dir);
+    let embedded = recon
+        .to_embedded_patches(
+            PatchNormal::MeanViewing,
+            PatchExtent::default(),
+            &Progress::none(),
+        )
+        .expect("the fixture has a .sift file per image");
+    assert_eq!(
+        embedded.point_set.reference_observations,
+        Some(vec![
+            sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+            embedded.point_set.points.len()
+        ])
+    );
+}

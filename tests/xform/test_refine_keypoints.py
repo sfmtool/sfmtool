@@ -21,6 +21,8 @@ from sfmtool.cli import main
 from sfmtool.xform import RefineKeypointsTransform
 from sfmtool.xform._arg_parser import parse_refine_keypoints_params
 
+from ..conftest import assert_references_name_track_observations
+
 
 # ── Argument grammar ────────────────────────────────────────────────────────
 
@@ -282,6 +284,8 @@ def test_refine_keypoints_bitmaps(seoul_bull_workspace):
     assert bitmaps.dtype == np.uint8
     # At least one patch was rendered (non-zero RGBA somewhere).
     assert bitmaps.any()
+    # Each bitmap names the observation of its own track it is the tile of.
+    assert_references_name_track_observations(out)
 
 
 def test_refine_keypoints_prints_summary(seoul_bull_workspace, capsys):

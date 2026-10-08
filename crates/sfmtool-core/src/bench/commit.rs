@@ -356,11 +356,12 @@ pub fn commit(
         )),
         // The observation the bitmap is the render of, where it is written
         // out: its place in the sorted track. A bitmap whose observation is
-        // no longer `in`, or a fused mean, names none.
+        // no longer `in`, or a fused mean, names none. A track read from a
+        // file that keeps the column without its bitmaps carries the stored
+        // reference with no bitmap, and writes it back.
         reference_observation: edited.has_reference_observations().then(|| {
             payload
                 .reference
-                .filter(|_| payload.bitmap.is_some())
                 .and_then(|r| rows.iter().position(|&(_, i)| i == r))
                 .map_or(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION, |k| k as i32)
         }),
@@ -456,9 +457,10 @@ pub fn commit(
 /// The colour the committed point carries: the centre of the patch bitmap
 /// when there is one, and the colour the payload carries otherwise.
 ///
-/// The bitmap is the appearance every `in` observation agreed on, so its centre
-/// is the colour of the surface at the point rather than the colour one
-/// photograph happened to show there.
+/// The bitmap is the reference view's render, or the fused mean of the `in`
+/// observations where the rule picked no view, so its centre is the colour
+/// one photograph (or that mean) shows at the point, and the point's colour
+/// agrees with its own bitmap.
 fn bitmap_color(payload: &TrackPayload) -> [u8; 3] {
     let Some(bitmap) = &payload.bitmap else {
         return payload.color;

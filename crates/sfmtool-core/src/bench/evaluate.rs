@@ -1683,6 +1683,90 @@ fn score_against_bitmap(
     );
 }
 
+/// Score `track`'s observations against the stored bitmap it holds, rendering
+/// each observation's tile at its keypoint over the track's placement, and
+/// return the track with those bitmap scores written into its rows.
+///
+/// [`evaluate`] scores against the bitmap a track holds when it is read. A
+/// caller that renders the bitmap after the evaluation, as SfM Explorer does
+/// once a patch step has dropped it and Track at Pixel does after its member's
+/// evaluation ([`render_bitmap_in_place`](super::fit::render_bitmap_in_place)),
+/// calls this so that every row carries its score against the bitmap that
+/// stands. The scores are the ones [`evaluate`] writes, at the same
+/// resolution and sampler; nothing else in the rows changes. A track that is
+/// not at the track stage, or has no placement or no bitmap, comes back
+/// unchanged.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::bench::{render_bitmap_in_place, score_bitmap, EditableTrack,
+/// #     EvaluateOptions, FitOptions};
+/// # use sfmtool_core::EditedReconstruction;
+/// # use sfmtool_core::patch::normal_refine::ProjectedImage;
+/// # use sfmtool_core::progress::Progress;
+/// # fn run(track: &EditableTrack, edited: &EditedReconstruction, views: &[ProjectedImage<'_>])
+/// # -> Result<(), Box<dyn std::error::Error>> {
+/// let rendered = render_bitmap_in_place(track, edited, views, &FitOptions::default());
+/// let scored = score_bitmap(&rendered, edited, views, &EvaluateOptions::default(), &Progress::none())?;
+/// # let _ = scored;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// [`EvaluateError::Cancelled`] when `progress` was cancelled, and
+/// [`EvaluateError::NoView`] when an observation names an image `images`
+/// does not hold.
+pub fn score_bitmap(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) -> Result<EditableTrack, EvaluateError> {
+    // A clone drops the repaint mark; the scores change nothing a verdict
+    // depends on, so the mark carries across.
+    let mut next = track.clone();
+    next.repaint = track.repaint.carried();
+    let Stage::Track(payload) = &track.stage else {
+        return Ok(next);
+    };
+    let (Some(frame), Some(_)) = (payload.placement.as_ref(), payload.bitmap.as_ref()) else {
+        return Ok(next);
+    };
+    check_observation_views(track, images)?;
+    let options = options.at_resolution(options.patch_resolution(&edited.base));
+    let resolution = options.localize.resolution.max(2) as usize;
+    let mut tiles: Vec<(usize, ViewTile)> = Vec::new();
+    {
+        let phase = progress.phase("render tiles");
+        for i in evaluated(track) {
+            progress.check_cancel()?;
+            let observation = &track.observations[i];
+            if observation.track.is_none() {
+                continue;
+            }
+            let Some(pixel) = seed_of(observation) else {
+                continue;
+            };
+            let view = &images[observation.image as usize];
+            let tile = render_view_tile(
+                frame,
+                view,
+                Some(pixel),
+                resolution,
+                options.localize.sampler,
+                &phase,
+            );
+            tiles.push((i, tile));
+        }
+    }
+    score_against_bitmap(&mut next, &tiles, progress);
+    Ok(next)
+}
+
 /// Bring the reference-view readings into line with verdicts that a step has
 /// just moved, without reading any photograph.
 ///

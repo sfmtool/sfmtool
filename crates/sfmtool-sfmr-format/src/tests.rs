@@ -2248,6 +2248,26 @@ fn test_reference_observations_follow_their_observation_through_the_sort() {
 }
 
 #[test]
+fn test_reference_observations_out_of_range_refused_when_the_tracks_arrive_unsorted() {
+    // The same refusal as for sorted tracks: the sort leaves an index past
+    // its track as it is rather than turning it into -1.
+    let mut d = make_framed_test_data(vec![3, 0, 0, 0, -1]);
+    d.point_indexes = Array1::from_vec(vec![1u32, 0, 1, 0, 1, 2, 3, 4]);
+    d.image_indexes = Array1::from_vec(vec![2u32, 1, 0, 0, 1, 2, 1, 0]);
+    d.feature_indexes = Some(Array1::from_vec(vec![0; 8]));
+    d.observation_counts = Array1::from_vec(vec![2, 3, 1, 1, 1]);
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_unsorted");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("u.sfmr");
+    let result = write_sfmr(&path, &mut d);
+    assert!(
+        matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("row 0")),
+        "{result:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_reference_observations_presence_and_range_refused_on_write() {
     let dir = std::env::temp_dir().join("sfmr_test_reference_observations_refused");
     std::fs::create_dir_all(&dir).unwrap();

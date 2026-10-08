@@ -115,7 +115,10 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     // A point two photographs see gets a tile; the demo sees point p from
     // p % 3 + 1 images, so point 1 has two views and point 0 one.
     let tile = |p: usize| bitmaps.index_axis(ndarray::Axis(0), p);
-    assert!(tile(1).iter().any(|&b| b != 0), "a two-view point is fused");
+    assert!(
+        tile(1).iter().any(|&b| b != 0),
+        "a two-view point is rendered"
+    );
     assert!(tile(0).iter().all(|&b| b == 0), "a one-view point is not");
 
     let entry = newest(&state);

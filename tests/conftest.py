@@ -894,6 +894,29 @@ MIN_OBLIQUE_POINTS = 5
 OBLIQUE_ANGLE_DEG = 10.0
 
 
+def assert_references_name_track_observations(
+    recon, min_picked_share: float = 0.5
+) -> np.ndarray:
+    """Check a reconstruction's ``reference_observations`` column and return it.
+
+    Each entry must be ``-1`` or the index of an observation within the point's
+    own track (``0 <= k < observation_counts[p]``), and at least
+    ``min_picked_share`` of the points must name one. The stored bitmap of a
+    point that names one is that observation's tile (see
+    ``specs/core/patch/reference-view.md`` § "The stored bitmap").
+    """
+    refs = recon.reference_observations
+    assert refs is not None, "a reconstruction with bitmaps records their references"
+    refs = np.asarray(refs)
+    counts = np.asarray(recon.observation_counts)
+    assert refs.shape == (recon.point_count,)
+    assert np.all(refs >= -1)
+    assert np.all(refs < counts), "a reference names an observation past its track"
+    picked = float(np.mean(refs >= 0))
+    assert picked >= min_picked_share, f"only {picked:.0%} of points name a reference"
+    return refs
+
+
 def points_with_past_90_candidate(recon) -> set[int]:
     """Finite points that some image sees past 90 deg off its optical axis.
 

@@ -1339,11 +1339,15 @@ impl TrackBody {
                         number_key(standing.map(reference_rank))
                     }
                     SortColumn::Bitmap => {
-                        let bitmap_row = track.track().and_then(|p| p.reference);
+                        let bitmap_row = track
+                            .track()
+                            .and_then(|p| p.bitmap.as_ref().and(p.reference));
                         number_key(
                             (printed && stage == StageKind::Track)
                                 .then(|| {
-                                    if bitmap_row == Some(i) {
+                                    // The cell prints the bitmap's row as
+                                    // 100% only where the row was measured.
+                                    if bitmap_row == Some(i) && row.track.is_some() {
                                         Some(1.0)
                                     } else {
                                         row.track.as_ref().and_then(|m| m.blur_matched_bitmap_zncc)
@@ -2002,7 +2006,9 @@ impl TrackBody {
 
         // How the row scores against the stored bitmap, on a green cell for
         // the row the bitmap is the tile of.
-        let bitmap_row = track.track().and_then(|p| p.reference);
+        let bitmap_row = track
+            .track()
+            .and_then(|p| p.bitmap.as_ref().and(p.reference));
         let bitmap = bitmap_cell(observation, row, bitmap_row, stage, &self.evaluation);
         let bitmap_rect = egui::Rect::from_min_max(
             egui::pos2(x0 + cols.bitmap - 3.0, rect.min.y + 2.0),

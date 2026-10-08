@@ -31,7 +31,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sfmtool_core::camera::PhotographCache;
-use sfmtool_core::patch::display_bitmaps::render_display_patch_bitmaps;
+use sfmtool_core::patch::display_bitmaps::{
+    render_display_patch_bitmaps, render_patch_bitmap_column,
+};
+use sfmtool_core::patch::stored_bitmap::PatchBitmapColumn;
 use sfmtool_core::progress::{Cancelled, Progress};
 use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
@@ -294,15 +297,25 @@ fn load_for_display(
 /// Render `recon`'s display patch bitmaps at its stored frames and keypoints,
 /// moving nothing: [`render_display_patch_bitmaps`], reading the photographs
 /// through `photographs`. `Ok(None)` when not one photograph could be read,
-/// since a column of zero rows would draw nothing. The conversion worker also
-/// calls this, but keeps the result as a stored column rather than marking it
-/// for display only.
+/// since a column of zero rows would draw nothing.
 pub(super) fn render_patch_bitmaps(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<Option<ndarray::Array4<u8>>, Cancelled> {
     render_display_patch_bitmaps(recon, photographs, progress)
+}
+
+/// [`render_patch_bitmaps`] with the reference observation each row is the
+/// render of ([`render_patch_bitmap_column`]). The conversion worker calls
+/// this, and keeps the bitmaps as a stored column with its references rather
+/// than marking them for display only.
+pub(super) fn render_stored_patch_bitmaps(
+    recon: &SfmrReconstruction,
+    photographs: &PhotographCache,
+    progress: &Progress<'_>,
+) -> Result<Option<PatchBitmapColumn>, Cancelled> {
+    render_patch_bitmap_column(recon, photographs, progress)
 }
 
 #[cfg(test)]

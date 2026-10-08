@@ -532,6 +532,21 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         [bitmap[[3, 3, 0]], bitmap[[3, 3, 1]], bitmap[[3, 3, 2]]],
         "the colour is not the tile's centre"
     );
+    // The rows are scored against that bitmap: the one it is the render of
+    // reads 1, and every other measured row carries a score.
+    for (i, observation) in track.observations.iter().enumerate() {
+        let Some(measured) = observation.track.as_ref() else {
+            continue;
+        };
+        if Some(i) == payload.reference {
+            assert_eq!(measured.bitmap_zncc, Some(1.0), "row {i}");
+        } else if measured.keypoint.is_some() {
+            assert!(
+                measured.bitmap_zncc.is_some(),
+                "row {i} has no bitmap score"
+            );
+        }
+    }
 
     let again = crate::bench::fit::render_bitmap_in_place(
         &track,

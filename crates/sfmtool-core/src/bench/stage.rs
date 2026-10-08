@@ -131,8 +131,8 @@ impl std::fmt::Display for StageReport {
 /// triangulated depth, with the mean viewing direction as the normal; and the
 /// track-stage fit then localizes and refines every `in` and
 /// `candidate` observation against that patch, re-triangulates the `in`
-/// results and fuses the consensus. The cluster-stage measurements are
-/// dropped: they describe a registration against a reference and a template
+/// results and stores the reference view's tile as the patch bitmap. The
+/// cluster-stage measurements are dropped: they describe a registration against a reference and a template
 /// the track no longer has.
 ///
 /// **Down, track to cluster.** Always possible, and lossy on purpose: the

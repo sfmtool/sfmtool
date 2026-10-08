@@ -226,6 +226,19 @@ class TestReferenceObservations:
         with pytest.raises(ValueError, match="reference observation"):
             recon.clone_with_changes(reference_observations=bad)
 
+    def test_the_column_is_present_exactly_with_patch_frames(
+        self, embedded_patches_sfmr, seoul_bull_sfmr_only
+    ):
+        # None on a value with patch frames, or a column on one without, is
+        # refused rather than filled or dropped on save.
+        framed = SfmrReconstruction.load(embedded_patches_sfmr)
+        with pytest.raises(ValueError, match="pass -1"):
+            framed.clone_with_changes(reference_observations=None)
+        bare = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        refs = np.full(bare.point_count, -1, dtype=np.int32)
+        with pytest.raises(ValueError, match="requires patch frames"):
+            bare.clone_with_changes(reference_observations=refs)
+
     def test_replaced_tracks_move_each_reference_with_its_image(
         self, embedded_patches_sfmr
     ):

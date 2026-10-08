@@ -2303,7 +2303,7 @@ fn show_track_patch(
             response.on_hover_text(match (stage, mode) {
                 (StageKind::Track, BodyMode::Viewed) => "The point has no stored patch",
                 (StageKind::Track, BodyMode::Edited) => {
-                    "No patch yet: fit the track to fuse its observations into one"
+                    "No patch yet: fit the track to store its reference view's tile as the patch"
                 }
                 (StageKind::Cluster, _) => {
                     "No template yet: the cluster's first evaluation cuts one"

@@ -1126,10 +1126,11 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
             if *r < 0 {
                 continue;
             }
-            *r = match runs[p].get(*r as usize) {
-                Some(&input) => (sorted_at[input] - run_start[p]) as i32,
-                None => NO_REFERENCE_OBSERVATION,
-            };
+            // An index past its track is left as it is, for the validation
+            // that follows to refuse, as it would were the tracks sorted.
+            if let Some(&input) = runs[p].get(*r as usize) {
+                *r = (sorted_at[input] - run_start[p]) as i32;
+            }
         }
     }
 }

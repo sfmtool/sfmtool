@@ -371,16 +371,16 @@ fn a_tilt_drops_the_bitmap_and_the_evaluation_fuses_it_again_where_the_patch_now
         Some(Evaluation::Current)
     );
     let fused = payload(&track(&state, id, &label));
-    assert!(fused.bitmap.is_some(), "the evaluation fused no bitmap");
+    assert!(fused.bitmap.is_some(), "the evaluation rendered no bitmap");
     assert_eq!(
         fused.placement, tilted.placement,
-        "fusing the bitmap moved the patch"
+        "rendering the bitmap moved the patch"
     );
     assert!((fused.placement.expect("placed").normal() - normal).norm() < 1e-9);
     assert_eq!(
         versions(&state, id),
         versions_after_tilt,
-        "fusing the bitmap pushed a version"
+        "rendering the bitmap pushed a version"
     );
 }
 
