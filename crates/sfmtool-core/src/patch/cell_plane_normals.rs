@@ -15,31 +15,29 @@
 //! The plane fit is a weighted least-variance fit with Tukey IRLS. Each cell's
 //! weight is the inverse of its position's variance along the plane normal,
 //! from the rays' geometry (how many, how far, how wide the baseline) and the
-//! ray-intersection residual. Alongside the normal the kernel reports which
-//! axes of it the cells fix: both, one (the cells lie on a line, and the normal
-//! may still turn about that line), or none. A one-axis normal is the one
-//! perpendicular to the line closest to the mean viewing direction, and a
-//! normal with no fixed axis is `NaN`.
+//! ray-intersection residual, floored at the precision of a measured cell
+//! shift. Alongside the normal the kernel reports which axes of it the cells
+//! fix: both, one (the cells lie on a line, and the normal may still turn
+//! about that line), or none. A cell counts toward that verdict when the
+//! robust fit gives it any weight. A one-axis normal is the one perpendicular
+//! to the line closest to the mean viewing direction, and a normal with no
+//! fixed axis is `NaN`.
 //!
 //! See `specs/drafts/cell-plane-normals.md` for the design.
 
-use nalgebra::{Matrix3, SymmetricEigen, Vector3};
+use nalgebra::{Matrix2, Matrix3, SymmetricEigen, Vector3};
 use rayon::prelude::*;
-use sfmtool_matches_format::{ClusterCellStatus, ClusterMemberStatus};
+use sfmtool_matches_format::{
+    ClusterCellStatus, ClusterMemberStatus, CLUSTER_REFERENCE_UNREFINABLE,
+};
 
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
-use crate::patch::normal_refine::grid_bounds;
-
-/// `reference_members` value of a cluster that has no reference member.
-pub const NO_REFERENCE: u32 = u32::MAX;
+use crate::patch::normal_refine::grid_cell_centres;
 
 /// Median-absolute-deviation to standard-deviation conversion for a Gaussian.
 const MAD_TO_SIGMA: f64 = 1.4826;
-/// A cell's weight counts toward the determinacy verdict when it is at least
-/// this fraction of the cluster's largest weight.
-const LIVE_WEIGHT_FRACTION: f64 = 0.25;
 /// Weight sums at or below this leave the IRLS loop where it was.
 const EPS_STALL: f64 = 1e-300;
 /// Eigenvalue floor below which an in-plane spread counts as none.
@@ -58,8 +56,14 @@ pub struct CellPlaneParams {
     /// A cell whose widest pair of rays subtends less than this, in degrees, is
     /// not triangulated: its depth is not pinned.
     pub min_triangulation_angle_deg: f64,
-    /// Floor on a cell's ray-intersection residual, in pixels: below this the
-    /// residual is treated as noise of this size.
+    /// Precision of a measured cell shift, in grid px. A ray's pixel noise is
+    /// at least this shift mapped into its member's image,
+    /// `cell_shift_precision_grid_px · (patch_size / R) · ‖S‖` with `‖S‖`
+    /// the largest singular value of the member's stored shape, and a cell's
+    /// residual is floored at the root mean square of its rays' floors.
+    pub cell_shift_precision_grid_px: f64,
+    /// Absolute floor on a cell's ray-intersection residual, in pixels, under
+    /// the floor that [`Self::cell_shift_precision_grid_px`] sets.
     pub ray_noise_floor_px: f64,
     /// Number of IRLS passes before the final plane solve.
     pub irls_iters: u32,
@@ -78,6 +82,7 @@ impl Default for CellPlaneParams {
             include_refused_outlier: false,
             min_rays: 2,
             min_triangulation_angle_deg: 2.0,
+            cell_shift_precision_grid_px: 0.1,
             ray_noise_floor_px: 0.05,
             irls_iters: 3,
             tukey_c: 4.685,
@@ -96,7 +101,8 @@ impl Default for CellPlaneParams {
 pub struct CellPlaneClusters<'a> {
     /// `C + 1` member-range boundaries.
     pub cluster_starts: &'a [u32],
-    /// `C` global member index of each cluster's reference, or [`NO_REFERENCE`].
+    /// `C` global member index of each cluster's reference, or
+    /// [`CLUSTER_REFERENCE_UNREFINABLE`] for none.
     pub reference_members: &'a [u32],
     /// `K` image index of each member, into the camera arrays.
     pub member_images: &'a [u32],
@@ -139,7 +145,8 @@ pub enum NormalDeterminacy {
         /// The line's direction, about which the normal is free.
         free_axis: [f64; 3],
     },
-    /// Fewer than [`CellPlaneParams::min_cells`] live cells, or no spread.
+    /// Fewer than [`CellPlaneParams::min_cells`] live cells (cells the robust
+    /// plane fit gives any weight), or no spread.
     None,
 }
 
@@ -205,13 +212,14 @@ pub struct CellPlaneNormal {
     /// Final plane-fit weight per cell; `0` where it has none.
     pub cell_weight: [f64; 9],
     /// Ray-intersection residual per cell, pixels (RMS over the rays,
-    /// degrees-of-freedom corrected); `NaN` where not triangulated.
+    /// degrees-of-freedom corrected), before any floor; `NaN` where not
+    /// triangulated.
     pub cell_residual_px: [f64; 9],
     /// Weighted RMS of the cells' distances from the plane, world units;
     /// `NaN` when no plane was fitted.
     pub plane_rms: f64,
-    /// `λ_mid / λ_max` of the live cells' weighted scatter; `NaN` when no
-    /// plane was fitted.
+    /// `λ_mid / λ_max` of the live cells' scatter, projected onto the fitted
+    /// plane and with equal weights; `NaN` when no plane was fitted.
     pub anisotropy: f64,
     /// `(Σw)² / Σw²` over the weighted cells; `NaN` when no plane was fitted.
     pub n_eff: f64,
@@ -251,6 +259,8 @@ struct Ray {
     origin: Vector3<f64>,
     dir: Vector3<f64>,
     focal_px: f64,
+    /// The ray's pixel-noise floor: a cell shift's precision in its image.
+    floor_px: f64,
 }
 
 /// A triangulated cell.
@@ -269,9 +279,11 @@ struct CellPoint {
 /// for every `kept` member in a posed image whose cell status is `fitted` (and
 /// `refused_outlier` with [`CellPlaneParams::include_refused_outlier`]), the
 /// ray through `position + (patch_size / R) · S · (c + d)` are intersected in
-/// the least-squares sense. The positions are fitted with a plane (Tukey
+/// the least-squares sense, each ray weighted by `(f / ρ)²` for its focal
+/// length `f` and depth `ρ`. The positions are fitted with a plane (Tukey
 /// IRLS, each cell weighted by the inverse of its position's variance along the
-/// normal), and the result says which of the normal's axes the cells fix.
+/// normal), and the result says which of the normal's axes the cells with a
+/// nonzero Tukey weight fix, from their spread within the plane.
 ///
 /// The per-cluster work is independent and runs in parallel, with no
 /// randomness and a fixed pass count, so the result does not depend on the
@@ -349,19 +361,28 @@ pub fn cell_plane_normals(
         .collect()
 }
 
-/// Cell centres in grid coordinates centred on the grid, `[x, y]`, row-major.
-/// The same split the piecewise refinement measures:
-/// `[0, R/3, R − R/3, R]` on each axis.
+/// Cell centres in grid coordinates centred on the grid, `[x, y]`, row-major:
+/// the centres the piecewise refinement measures its cells about.
 fn cell_centres(resolution: u32) -> [[f64; 2]; 9] {
-    let bounds = grid_bounds(resolution);
-    let mid = (resolution as f64 - 1.0) / 2.0;
-    let span = |t: usize| (bounds[t] + bounds[t + 1] - 1) as f64 / 2.0 - mid;
-    std::array::from_fn(|i| [span(i % 3), span(i / 3)])
+    let grid = grid_cell_centres(resolution);
+    std::array::from_fn(|i| grid[i / 3][i % 3])
 }
 
-/// The world ray through `pixel` of `view`; `None` when the camera model
-/// returns no finite direction.
-fn ray_through(view: &View<'_>, pixel: [f64; 2]) -> Option<Ray> {
+/// Largest singular value of a stored shape `S`: the most a unit step on the
+/// patch grid can stretch to in the member's image.
+fn shape_gain(shape: &[[f32; 2]; 2]) -> f64 {
+    let m = Matrix2::new(
+        f64::from(shape[0][0]),
+        f64::from(shape[0][1]),
+        f64::from(shape[1][0]),
+        f64::from(shape[1][1]),
+    );
+    m.singular_values().max()
+}
+
+/// The world ray through `pixel` of `view`, with pixel-noise floor
+/// `floor_px`; `None` when the camera model returns no finite direction.
+fn ray_through(view: &View<'_>, pixel: [f64; 2], floor_px: f64) -> Option<Ray> {
     let d = view.camera.pixel_to_ray(pixel[0], pixel[1]);
     let d = view.r_wc * Vector3::new(d[0], d[1], d[2]);
     let len = d.norm();
@@ -372,6 +393,7 @@ fn ray_through(view: &View<'_>, pixel: [f64; 2]) -> Option<Ray> {
         origin: view.centre,
         dir: d / len,
         focal_px: view.focal_px,
+        floor_px,
     })
 }
 
@@ -394,10 +416,15 @@ fn fit_cluster(
 ) -> CellPlaneNormal {
     let mut out = CellPlaneNormal::empty();
     let reference = clusters.reference_members[c];
-    if reference == NO_REFERENCE {
+    if reference == CLUSTER_REFERENCE_UNREFINABLE {
         return out;
     }
     let range = clusters.cluster_starts[c] as usize..clusters.cluster_starts[c + 1] as usize;
+    // A ray's pixel-noise floor: the cell-shift precision mapped through the
+    // member's grid-to-pixel map.
+    let ray_floor = |k: usize| {
+        params.cell_shift_precision_grid_px * step * shape_gain(&clusters.member_shapes[k])
+    };
     let accepted = |s: ClusterCellStatus| {
         s == ClusterCellStatus::Fitted
             || (params.include_refused_outlier && s == ClusterCellStatus::RefusedOutlier)
@@ -415,7 +442,7 @@ fn fit_cluster(
                 step,
                 *centre,
             );
-            rays.extend(ray_through(view, px));
+            rays.extend(ray_through(view, px, ray_floor(r)));
         }
         for k in range.clone() {
             if clusters.member_status[k] != ClusterMemberStatus::Kept
@@ -437,7 +464,7 @@ fn fit_cluster(
                 step,
                 u,
             );
-            rays.extend(ray_through(view, px));
+            rays.extend(ray_through(view, px, ray_floor(k)));
         }
         out.cell_rays[j] = rays.len() as u32;
         match triangulate(&rays, params) {
@@ -537,12 +564,14 @@ fn fit_cluster(
     }
 
     // ── Determinacy ──────────────────────────────────────────────────────
-    let max_w = weights.iter().copied().fold(0.0f64, f64::max);
-    let live: Vec<usize> = (0..m)
-        .filter(|&i| weights[i] > 0.0 && weights[i] >= LIVE_WEIGHT_FRACTION * max_w)
-        .collect();
-    // The live cells' spread, with equal weights: the verdict asks where the
-    // cells are, not how sure the fit is of each.
+    // A cell is live when the robust fit gives it any weight. Its precision
+    // does not enter: a two-ray cell is as much a sample of where the surface
+    // is as a five-ray one, and the precision already sets how hard each
+    // pulls on the plane.
+    let live: Vec<usize> = (0..m).filter(|&i| weights[i] > 0.0).collect();
+    // The live cells' spread within the fitted plane, with equal weights: the
+    // verdict asks where the cells are, not how sure the fit is of each, and
+    // a cell's offset from the plane is noise, not spread.
     let mut mean = Vector3::zeros();
     for &i in &live {
         mean += pts[i].position;
@@ -551,6 +580,7 @@ fn fit_cluster(
     let mut scatter = Matrix3::zeros();
     for &i in &live {
         let d = pts[i].position - mean;
+        let d = d - d.dot(&normal) * normal;
         scatter += d * d.transpose();
     }
     let (evals, evecs) = sorted_eigen(&scatter);
@@ -582,8 +612,14 @@ fn fit_cluster(
     out
 }
 
-/// Least-squares nearest point of `rays`, with its covariance and its
-/// residual in pixels; the failing status otherwise.
+/// Nearest point of `rays`, with its covariance and its residual in pixels;
+/// the failing status otherwise.
+///
+/// The plain least-squares point gives each ray's depth `ρᵢ`; the point is
+/// then solved again with each ray's projector weighted by `(fᵢ/ρᵢ)²`, so
+/// each ray pulls in pixels of its own image, and the covariance `σ² Λ⁻¹`
+/// inverts that same weighted normal matrix `Λ`. One pass, from the plain
+/// point's depths.
 fn triangulate(
     rays: &[Ray],
     params: &CellPlaneParams,
@@ -600,40 +636,38 @@ fn triangulate(
     if !wide {
         return Err(CellPlaneStatus::NarrowBaseline);
     }
-    let mut a = Matrix3::zeros();
-    let mut b = Vector3::zeros();
-    for r in rays {
-        let p = Matrix3::identity() - r.dir * r.dir.transpose();
-        a += p;
-        b += p * r.origin;
-    }
-    let Some(x) = a.try_inverse().map(|inv| inv * b) else {
-        return Err(CellPlaneStatus::NarrowBaseline);
-    };
-    if !(x[0].is_finite() && x[1].is_finite() && x[2].is_finite()) {
-        return Err(CellPlaneStatus::NarrowBaseline);
-    }
 
-    let mut info = Matrix3::zeros();
+    let x0 = nearest_point(rays, &vec![1.0; rays.len()])?.0;
+    let weights = rays
+        .iter()
+        .map(|r| {
+            let depth = (x0 - r.origin).dot(&r.dir);
+            if depth > 0.0 {
+                Ok((r.focal_px / depth).powi(2))
+            } else {
+                Err(CellPlaneStatus::BehindCamera)
+            }
+        })
+        .collect::<Result<Vec<f64>, _>>()?;
+    let (x, info) = nearest_point(rays, &weights)?;
+
     let mut sum_e2 = 0.0;
+    let mut sum_floor2 = 0.0;
     let mut toward = Vector3::zeros();
-    for r in rays {
+    for (r, &w) in rays.iter().zip(&weights) {
         let v = x - r.origin;
-        let depth = v.dot(&r.dir);
-        if depth <= 0.0 {
+        if v.dot(&r.dir) <= 0.0 {
             return Err(CellPlaneStatus::BehindCamera);
         }
-        let p = Matrix3::identity() - r.dir * r.dir.transpose();
-        let perp = (p * v).norm();
-        let k = r.focal_px / depth;
-        sum_e2 += (perp * k).powi(2);
-        info += (k * k) * p;
+        sum_e2 += w * (v - v.dot(&r.dir) * r.dir).norm_squared();
+        sum_floor2 += r.floor_px * r.floor_px;
         toward -= v / v.norm();
     }
     // Two coordinates per ray, three for the point.
-    let dof = (2 * rays.len() - 3) as f64;
-    let residual_px = (sum_e2 / dof).sqrt();
-    let sigma = residual_px.max(params.ray_noise_floor_px);
+    let n = rays.len() as f64;
+    let residual_px = (sum_e2 / (2.0 * n - 3.0)).sqrt();
+    let floor_px = (sum_floor2 / n).sqrt().max(params.ray_noise_floor_px);
+    let sigma = residual_px.max(floor_px);
     let Some(info_inv) = info.try_inverse() else {
         return Err(CellPlaneStatus::NarrowBaseline);
     };
@@ -645,6 +679,30 @@ fn triangulate(
         },
         residual_px,
     ))
+}
+
+/// The point minimising `Σ wᵢ ‖Pᵢ (x − oᵢ)‖²` with `Pᵢ = I − dᵢdᵢᵀ`, and the
+/// normal matrix `Σ wᵢ Pᵢ`.
+fn nearest_point(
+    rays: &[Ray],
+    weights: &[f64],
+) -> Result<(Vector3<f64>, Matrix3<f64>), CellPlaneStatus> {
+    let mut a = Matrix3::zeros();
+    let mut b = Vector3::zeros();
+    for (r, &w) in rays.iter().zip(weights) {
+        let p = w * (Matrix3::identity() - r.dir * r.dir.transpose());
+        a += p;
+        b += p * r.origin;
+    }
+    let x = a
+        .try_inverse()
+        .map(|inv| inv * b)
+        .ok_or(CellPlaneStatus::NarrowBaseline)?;
+    if x.iter().all(|v| v.is_finite()) {
+        Ok((x, a))
+    } else {
+        Err(CellPlaneStatus::NarrowBaseline)
+    }
 }
 
 /// Each cell's robust weight times the inverse of its variance along `normal`.

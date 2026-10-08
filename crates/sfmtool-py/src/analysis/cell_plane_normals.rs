@@ -18,7 +18,9 @@ use sfmtool_core::patch::cell_plane_normals::{
     CellPlaneParams, CellPlaneStatus, NormalDeterminacy,
 };
 use sfmtool_core::RigidTransform;
-use sfmtool_matches_format::{ClusterCellStatus, ClusterMemberStatus};
+use sfmtool_matches_format::{
+    ClusterCellStatus, ClusterMemberStatus, CLUSTER_REFERENCE_UNREFINABLE,
+};
 
 use crate::PyCameraIntrinsics;
 
@@ -33,12 +35,14 @@ const DETERMINACY_NAMES: [&str; 3] = ["none", "one_axis", "both_axes"];
 /// cameras and poses. For each of a cluster's nine cells, the reference
 /// member's ray through the cell's centre and every ``kept`` member's ray
 /// through ``position + (patch_size / resolution) · S · (c + d)`` are
-/// intersected in the least-squares sense, over the members whose image is
-/// posed and whose cell status is ``fitted`` (and ``refused_outlier`` with
+/// intersected in the least-squares sense, each ray weighted by
+/// ``(f / depth)²``, over the members whose image is posed and whose cell
+/// status is ``fitted`` (and ``refused_outlier`` with
 /// ``include_refused_outlier``). The cell positions are fitted with a plane by
 /// Tukey IRLS, each cell weighted by the inverse of its position's variance
-/// along the normal, from its rays and their intersection residual. See
-/// ``specs/drafts/cell-plane-normals.md``.
+/// along the normal, from its rays and their intersection residual. The
+/// verdict counts the cells the robust fit gives any weight, by their spread
+/// within the fitted plane. See ``specs/drafts/cell-plane-normals.md``.
 ///
 /// Args:
 ///     cluster_starts: ``(C + 1,)`` uint32 member-range boundaries.
@@ -61,11 +65,18 @@ const DETERMINACY_NAMES: [&str; 3] = ["none", "one_axis", "both_axes"];
 ///     min_rays: fewest rays a cell is triangulated from (the reference's
 ///         counts).
 ///     min_triangulation_angle_deg: widest ray pair a cell needs.
-///     ray_noise_floor_px: floor on a cell's ray-intersection residual.
+///     cell_shift_precision_grid_px: precision of a measured cell shift, grid
+///         px. Each ray's pixel-noise floor is this shift times
+///         ``patch_size / resolution`` times the largest singular value of its
+///         member's shape, and a cell's residual is floored at the RMS of its
+///         rays' floors.
+///     ray_noise_floor_px: absolute floor on a cell's residual, pixels.
 ///     irls_iters: IRLS passes before the final solve.
 ///     tukey_c: Tukey cut-off, in robust scales.
-///     min_cells: fewest live cells a normal is fitted from.
-///     det_aniso: in-plane anisotropy at which both axes count as fixed.
+///     min_cells: fewest live cells (cells the robust plane fit gives any
+///         weight) a normal is fitted from.
+///     det_aniso: anisotropy of the live cells within the fitted plane at
+///         which both axes count as fixed.
 ///
 /// Returns:
 ///     dict of numpy arrays over the ``C`` clusters: ``normal`` ``(C, 3)``
@@ -98,6 +109,7 @@ const DETERMINACY_NAMES: [&str; 3] = ["none", "one_axis", "both_axes"];
     include_refused_outlier=false,
     min_rays=2,
     min_triangulation_angle_deg=2.0,
+    cell_shift_precision_grid_px=0.1,
     ray_noise_floor_px=0.05,
     irls_iters=3,
     tukey_c=4.685,
@@ -124,6 +136,7 @@ pub fn cell_plane_normals<'py>(
     include_refused_outlier: bool,
     min_rays: usize,
     min_triangulation_angle_deg: f64,
+    cell_shift_precision_grid_px: f64,
     ray_noise_floor_px: f64,
     irls_iters: u32,
     tukey_c: f64,
@@ -186,7 +199,7 @@ pub fn cell_plane_normals<'py>(
     )?;
     let references = to_contiguous!(reference_members).into_owned();
     for (ci, &r) in references.iter().enumerate() {
-        if r != u32::MAX && !(starts[ci] <= r && r < starts[ci + 1]) {
+        if r != CLUSTER_REFERENCE_UNREFINABLE && !(starts[ci] <= r && r < starts[ci + 1]) {
             return Err(PyValueError::new_err(format!(
                 "reference_members[{ci}] = {r} is not in cluster {ci}'s member range"
             )));
@@ -257,6 +270,7 @@ pub fn cell_plane_normals<'py>(
         include_refused_outlier,
         min_rays,
         min_triangulation_angle_deg,
+        cell_shift_precision_grid_px,
         ray_noise_floor_px,
         irls_iters,
         tukey_c,

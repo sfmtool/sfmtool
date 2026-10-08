@@ -23,6 +23,7 @@ use super::super::{
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::patch::normal_refine::build_support;
+use crate::patch::normal_refine::grid_cell_centres;
 use ndarray::{Array2, Array3};
 
 /// The band-limited texture of the cluster-refinement tests, with fine terms
@@ -1506,4 +1507,31 @@ fn the_residual_scale_is_the_rayleigh_median_factor() {
         (MEDIAN_LENGTH_TO_SIGMA - want).abs() < 1e-15,
         "{MEDIAN_LENGTH_TO_SIGMA} vs {want}"
     );
+}
+
+#[test]
+fn cell_layout_centres_are_the_shared_cell_centres() {
+    // The cell plane normals cast their rays through `grid_cell_centres`; the
+    // refinement must measure its cells about the same points. Each centre is
+    // also the mean of the integer grid positions its cell spans.
+    for resolution in [6u32, 12, 13, 24, 25] {
+        let layout = CellLayout::new(resolution, 2.0);
+        let shared = grid_cell_centres(resolution);
+        let bounds = grid_bounds(resolution);
+        let mid = (resolution as f64 - 1.0) / 2.0;
+        let span_mean = |t: usize| {
+            let n = (bounds[t + 1] - bounds[t]) as f64;
+            (bounds[t]..bounds[t + 1]).map(|i| i as f64).sum::<f64>() / n - mid
+        };
+        for (row, shared_row) in shared.iter().enumerate() {
+            for (col, &centre) in shared_row.iter().enumerate() {
+                assert_eq!(layout.centres[row][col], centre, "R={resolution}");
+                assert_eq!(
+                    centre,
+                    [span_mean(col), span_mean(row)],
+                    "R={resolution} cell ({row}, {col})"
+                );
+            }
+        }
+    }
 }

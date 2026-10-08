@@ -94,13 +94,14 @@ struct Members {
 /// image, each member's shape the plane's affine at the patch centre and its
 /// cell displacements the exact remainder: the homography's second-order term.
 fn planar_members(scene: &Scene) -> Members {
-    planar_members_with(scene, Matrix2::identity())
+    planar_members_with(scene, scene)
 }
 
-/// [`planar_members`] with every member's shape right-multiplied by `error`,
-/// an affine the shape got wrong; the displacements, measured from the wrong
-/// shape, carry it.
-fn planar_members_with(scene: &Scene, error: Matrix2<f64>) -> Members {
+/// [`planar_members`] with every member's shape the affine of `shape_scene`'s
+/// plane instead, a plane through the same point at another tilt: the shape a
+/// wrong tilt would give. The displacements, measured from those shapes to the
+/// true plane's transfer, carry the correction.
+fn planar_members_with(scene: &Scene, shape_scene: &Scene) -> Members {
     let step = PATCH_SIZE / RESOLUTION as f64;
     let centres = cell_centres(RESOLUTION);
     let s_ref = Matrix2::new(4.0, 0.5, -0.3, 3.5);
@@ -136,7 +137,8 @@ fn planar_members_with(scene: &Scene, error: Matrix2<f64>) -> Members {
         // Central-difference Jacobian of the reference → member transfer.
         let h = 1e-3;
         let col = |e: Vector2<f64>| {
-            (scene.transfer(i, ref_pos64 + h * e) - scene.transfer(i, ref_pos64 - h * e))
+            (shape_scene.transfer(i, ref_pos64 + h * e)
+                - shape_scene.transfer(i, ref_pos64 - h * e))
                 / (2.0 * h)
         };
         let jx = col(Vector2::x());
@@ -144,7 +146,7 @@ fn planar_members_with(scene: &Scene, error: Matrix2<f64>) -> Members {
         let j = Matrix2::new(jx.x, jy.x, jx.y, jy.y);
         let pos = scene.transfer(i, ref_pos64);
         let pos = [pos.x as f32, pos.y as f32];
-        let shape = round(j * s_ref64 * error);
+        let shape = round(j * s_ref64);
         let pos64 = Vector2::new(f64::from(pos[0]), f64::from(pos[1]));
         let inv = (step * unround(shape)).try_inverse().unwrap();
         let shifts = std::array::from_fn(|c| {
@@ -269,12 +271,15 @@ fn planar_cluster_recovers_its_normal_with_both_axes() {
 
 #[test]
 fn the_displacements_correct_a_wrong_stored_shape() {
-    // Every member's stored shape is off by a 6% shear; the displacements,
-    // measured from that shape, carry the correction. Zeroing them leaves the
-    // cells where the wrong shapes put them, and the plane they give is off.
+    // Every member's stored shape is the affine of a plane tilted 20° away
+    // from the true one; the displacements, measured from those shapes, carry
+    // the correction. Zeroing them leaves the cells where the wrong shapes put
+    // them, on the wrong plane.
     let scene = Scene::new(tilted_normal(), &ring_centres());
-    let error = Matrix2::new(1.0, 0.06, 0.0, 1.0);
-    let mut members = planar_members_with(&scene, error);
+    let wrong = Scene::new(Vector3::new(0.0, -0.3, 1.0), &ring_centres());
+    let tilt = angle_deg(wrong.normal.into(), scene.normal);
+    assert!((15.0..30.0).contains(&tilt), "shape plane tilted {tilt}°");
+    let mut members = planar_members_with(&scene, &wrong);
     let params = CellPlaneParams::default();
     let exact = run(&scene, &[&members], &[0], &scene.cam_from_world(), &params);
     for s in members.shifts[1..].iter_mut() {
@@ -291,6 +296,9 @@ fn the_displacements_correct_a_wrong_stored_shape() {
         "zeroed {:?} at {e_zeroed}°",
         zeroed[0].determinacy
     );
+    // They lie on the plane the shapes came from.
+    let e_wrong = angle_deg(zeroed[0].normal, wrong.normal);
+    assert!(e_wrong < 0.5, "zeroed off the shapes' plane by {e_wrong}°");
 }
 
 #[test]
@@ -527,4 +535,51 @@ fn the_answer_does_not_depend_on_the_thread_count() {
             })
     };
     assert_eq!(go(1), go(4));
+}
+
+#[test]
+fn two_ray_cells_at_the_floor_count_toward_the_verdict() {
+    // Cell 4 is fitted in every member; cells 0, 2 and 7 only in the member of
+    // image 1, so each of them is triangulated from two rays with no residual
+    // and sits at the noise floor. Their precision is far below cell 4's, but
+    // the robust fit keeps them, and so they decide the verdict with it.
+    let scene = Scene::new(tilted_normal(), &ring_centres());
+    let mut members = planar_members(&scene);
+    for (k, cells) in members.cells.iter_mut().enumerate().skip(1) {
+        for (j, c) in cells.iter_mut().enumerate() {
+            let two_ray = [0, 2, 7].contains(&j) && k == 1;
+            if j != 4 && !two_ray {
+                *c = ClusterCellStatus::RefusedZncc;
+            }
+        }
+    }
+    let out = run(
+        &scene,
+        &[&members],
+        &[0],
+        &scene.cam_from_world(),
+        &CellPlaneParams::default(),
+    );
+    let r = &out[0];
+    assert_eq!(r.cell_rays[4], 5);
+    let max_w = r.cell_weight[4];
+    for j in [0, 2, 7] {
+        assert_eq!(r.cell_rays[j], 2);
+        assert_eq!(r.cell_status[j], CellPlaneStatus::InPlane);
+        assert!(r.cell_residual_px[j] < 0.05, "cell {j} off the floor");
+        // Below a quarter of the largest weight: a live set chosen by the
+        // precision weight would have dropped these cells.
+        assert!(r.cell_weight[j] < 0.25 * max_w, "cell {j} weight too high");
+    }
+    assert_eq!(r.determinacy, NormalDeterminacy::BothAxes);
+    let err = angle_deg(r.normal, scene.normal);
+    assert!(err < 0.5, "normal off by {err}°");
+}
+
+#[test]
+fn the_ray_floor_follows_the_shape_and_the_grid_step() {
+    let shape = [[3.0f32, 0.0], [0.0, 4.0]];
+    assert!((shape_gain(&shape) - 4.0).abs() < 1e-12);
+    let rotated = [[0.0f32, -2.0], [2.0, 0.0]];
+    assert!((shape_gain(&rotated) - 2.0).abs() < 1e-6);
 }

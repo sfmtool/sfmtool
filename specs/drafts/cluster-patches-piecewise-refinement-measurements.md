@@ -739,7 +739,7 @@ Under Gaussian noise alone a cut-off at 4.685σ would refuse a cell with probabi
 | SeoulBull | 14.9 | 4.5 | 80.6 | 21.6 | 72.2 | 4.8 | 70.1 |
 | KerryPark480 | 11.2 | 6.1 | 82.7 | 15.2 | 50.8 | 30.8 | 58.3 |
 
-Most clusters get no normal because most cells have one ray: `SeoulBull` keeps 2953 members over 3934 references, so most clusters have no kept member at all. On `KerryPark480` the distant city adds narrow baselines. Admitting `refused_outlier` cells raises the both-axes share by half a point (to 13.8% and 10.1% of all clusters, against 13.3% and 9.7%). *Shapes only* raises it to 21.7% and 14.5%, since every kept member then contributes all nine cells. The ray-intersection residual of in-plane cells is a median 0.17 px (`SeoulBull`) and 0.13 px (`KerryPark480`), p90 0.42 and 4.2 px, which says the grid-to-pixel map and the poses agree. The kernel takes 3 ms on `SeoulBull`'s 4407 clusters and 10 ms on `KerryPark480`'s 13699.
+Of the clusters with a reference (3934 on `SeoulBull`, 11865 on `KerryPark480`), 80.6% and 82.7% get no normal, for three reasons. 48.5% and 25.3% of the clusters with a reference have no kept member, so each cell has only the reference's ray (`SeoulBull` keeps 2953 members over its 3934 references). 16.6% and 49.4% have a kept member but fewer than three triangulated cells; of these, 8.9 and 40.5 points (of the clusters with a reference) have at least one cell refused for a narrow baseline, which on `KerryPark480` is the distant city, and the rest have too few rays. The remaining 15.5% and 8.0% have three or more triangulated cells but fewer than three live ones: this run counted a cell toward the verdict only when its weight was at least a quarter of the cluster's largest, and a cell triangulated from two rays at the 0.05 px floor carries a small fraction of the weight of a cell with more rays, so it was left out. That share comes from the rule, not from the data, and the [re-measurement](#cell-plane-normals-after-the-audit-2026-10-08) removes it. Admitting `refused_outlier` cells raises the both-axes share by half a point (to 13.8% and 10.1% of all 4407 and 13699 clusters, against 13.3% and 9.7%). *Shapes only* raises it to 21.7% and 14.5% of all clusters, but this variant adds support as well as changing the cell positions: it marks all nine cells of every kept member `fitted`, including the cells the refinement refused or did not measure, so its higher share and its errors below are not a comparison of the displacements alone. The [re-measurement](#cell-plane-normals-after-the-audit-2026-10-08) compares with the same cells. The ray-intersection residual of in-plane cells is a median 0.17 px (`SeoulBull`) and 0.13 px (`KerryPark480`), p90 0.42 and 4.2 px, which says the grid-to-pixel map and the poses agree. The kernel takes 3 ms on `SeoulBull`'s 4407 clusters and 10 ms on `KerryPark480`'s 13699.
 
 **Both-axes clusters**, median / p90 error in degrees:
 
@@ -791,7 +791,7 @@ Most clusters get no normal because most cells have one ray: `SeoulBull` keeps 2
 - On the 3 px sets the cell plane normal halves the median error of the mean viewing direction (15.5° against 29.8° on `SeoulBull`, 17.6° against 32.8° on `KerryPark480`), and on its one-axis clusters the fixed component improves the same way. Its p90 is not better: 56.6° and 61.1°, against 49.6° and 62.9°.
 - The error follows the predicted precision: under 5° predicted, the median is 7.7° and 11.1°; above 15°, 27.9° and 29.7°. A minimum triangulation angle of 5° gives a similar subset (medians 10.7° and 10.8°) at the cost of the both-axes share (11.7% and 5.8% of all clusters).
 - Where the truth faces the cameras (within 20° of the viewing direction) the cell normal is worse than the viewing direction itself (25.1° against 11.6°, 47.8° against 13.2°); where the truth is tilted 40° or more it is far better (7.0° to 10.5° against 50.5° to 67.7°). The measurement cannot separate a noisy cell normal from a truth normal held near the viewing direction by the estimator that made it.
-- The displacements add little over the affine shapes here. On the paired sets *cells* and *shapes only* are within 1.5° in median (16.6° against 17.6°, 15.8° against 14.3°), and on `KerryPark480` the shapes are better at p90. The draft's test that the cell normals beat the whole-member warp tilt on the `seoul_bull_sculpture` ground truth is not met by a margin this sample can show.
+- The displacements add little over the affine shapes here. On the paired sets *cells* and *shapes only* are within 1.5° in median (16.6° against 17.6°, 15.8° against 14.3°), and on `KerryPark480` the shapes are better at p90. *Shapes only* here also used cells that *cells* did not, so the two differ in support as well as in the displacements. The draft's test that the cell normals beat the whole-member warp tilt on the `seoul_bull_sculpture` ground truth is not met by a margin this sample can show.
 - Admitting `refused_outlier` cells changes no median on `SeoulBull` and worsens `KerryPark480`'s paired median by 2.0°.
 - At 1 px the samples are 5 to 20 clusters. `KerryPark480`'s 1 px set is the one where the cell normal loses to the viewing direction (41.2° against 23.8°); 8 of its 20 clusters have a truth within 20° of the viewing direction.
 
@@ -799,4 +799,59 @@ Most clusters get no normal because most cells have one ray: `SeoulBull` keeps 2
 
 - **The kernel stays as built, with `refused_outlier` cells excluded by default.** Including them does not help.
 - **No consumer reads it yet.** A cell normal is better than the viewing direction where it predicts itself precise, and worse where the surface faces the cameras, and the seed has no way to know the second case in advance. The next step is to return the predicted precision from the kernel and measure a gate on it; a minimum angle of 5° is the alternative gate.
-- **The ground truth decides less than it should.** Its keypoints are not the cluster files' detections, so 1 px matches under 1% of clusters, and its normals are estimates. A ground truth with independently measured normals, or one built from the same detections, is needed before the cell normal is compared with the warp tilt solve again.
+- **The ground truth cannot decide between the cell normal and the warp tilt.** Its keypoints are not the cluster files' detections, so 1 px matches under 1% of the clusters with a reference, too few to separate two estimators a few degrees apart; and its normals are estimates, so where a cell normal disagrees with a truth near the viewing direction it cannot say which of the two is wrong. A ground truth with independently measured normals, or one built from the same detections, is needed before the cell normal is compared with the warp tilt solve again.
+
+## Cell plane normals after the audit (2026-10-08)
+
+**Question.** An audit of the [section above](#cell-plane-normals-against-the-ground-truths-2026-10-08) changed four things in the kernel ([cell-plane-normals.md](cell-plane-normals.md)): a cell is live when its final Tukey weight is above zero, not when its weight is at least a quarter of the cluster's largest; a cell's residual is floored at the precision of a measured cell shift, 0.1 grid px mapped into each ray's image (`0.1 · (patch_size / R) · ‖S‖` pixels, the largest singular value of the member's shape), with 0.05 px kept as an absolute floor; the rays are weighted by `(f/ρ)²` in the triangulation, so the point and its covariance come from the same estimator; and the both-axes verdict reads the live cells' spread within the fitted plane. How do the verdict shares and the errors move, and how does the cell normal compare with the affine shapes when both use the same cells?
+
+**Data.**
+
+- **Code.** Branch `bootstrap-core-migration` at `0da8d375`, with the commit that adds this section, the extension rebuilt with `pixi run maturin develop --release`.
+- **Machine.** Windows 11, Intel Core (family 6 model 183), 32 threads.
+- **Cluster files, poses, truth and matching.** As in the [section above](#cell-plane-normals-against-the-ground-truths-2026-10-08): the same `SeoulBull` and `KerryPark480` `--piecewise` cluster files, the ground truths' cameras, poses and patch-frame normals, and a cluster mapped to a ground-truth point when its reference member lies within 1 px or 3 px of one of that point's keypoints in the same image. One ground-truth point can be matched by several clusters, so the matched clusters are not independent samples; the tables give the number of distinct points.
+- **Variants.** *cells*: the kernel at its defaults. *shapes only*: each cell that had a measured shift gets a zero displacement, and every cell status stays as stored, so the cells and their support are those of *cells* and only the displacement differs. This replaces the earlier variant, which marked all nine cells of every kept member `fitted`. *view_dir*: the mean unit direction from the cells toward their rays' cameras.
+- **Errors.** As above: the angle to the truth normal for both-axes clusters, the error of the fixed component for one-axis clusters.
+
+**Verdicts**, as a share of the clusters with a reference (3934 and 11865):
+
+| entry | both axes % | one axis % | none % | none: no kept member % | none: kept member, < 3 cells triangulated % | none: ≥ 3 triangulated, < 3 live % | before the audit: both / one / none % |
+|---|---|---|---|---|---|---|---|
+| SeoulBull | 29.7 | 5.2 | 65.1 | 48.5 | 16.6 | 0.0 | 14.9 / 4.5 / 80.6 |
+| KerryPark480 | 17.5 | 7.8 | 74.7 | 25.3 | 49.4 | 0.0 | 11.2 / 6.1 / 82.7 |
+
+Of the clusters with at least one kept member (51.5% and 74.7% of the clusters with a reference), 57.7% and 23.4% get both axes and 10.0% and 10.5% one axis. *Shapes only* gives 29.6% and 17.6% both axes of the clusters with a reference. The in-plane cells' residual is unchanged, a median 0.17 px and 0.13 px, p90 0.42 and 4.0 px.
+
+**Both-axes clusters**, median / p90 error in degrees. *All*: every matched cluster *cells* calls both-axes. *Paired*: those that *shapes only* also calls both-axes.
+
+| entry @ tolerance | all: n | cells | view_dir | paired: n (GT points) | cells | shapes only | view_dir |
+|---|---|---|---|---|---|---|---|
+| SeoulBull @ 1 px | 14 | 20.0 / 28.7 | 28.3 / 43.7 | 14 (13) | 20.0 / 28.7 | 13.6 / 28.0 | 28.3 / 43.7 |
+| SeoulBull @ 3 px | 89 | 19.1 / 60.1 | 29.3 / 49.3 | 88 (65) | 19.2 / 60.2 | 21.0 / 53.0 | 29.5 / 49.4 |
+| KerryPark480 @ 1 px | 21 | 49.5 / 73.6 | 21.7 / 38.1 | 19 (16) | 48.6 / 66.7 | 36.0 / 64.9 | 21.7 / 41.3 |
+| KerryPark480 @ 3 px | 92 | 20.6 / 60.6 | 30.0 / 58.5 | 89 (63) | 19.3 / 59.4 | 16.6 / 57.7 | 30.1 / 58.9 |
+
+The matched counts are those of the section above: 27 clusters on 23 ground-truth points and 164 on 116 for `SeoulBull`, 80 on 43 and 323 on 161 for `KerryPark480`.
+
+**One-axis clusters**, error of the fixed component, median / p90:
+
+| entry @ tolerance | n | cells | view_dir |
+|---|---|---|---|
+| SeoulBull @ 1 px | 2 | 21.6 / 26.8 | 38.8 / 44.6 |
+| SeoulBull @ 3 px | 13 | 28.1 / 63.8 | 26.7 / 45.8 |
+| KerryPark480 @ 1 px | 15 | 36.2 / 73.2 | 29.3 / 59.1 |
+| KerryPark480 @ 3 px | 39 | 22.2 / 72.2 | 35.1 / 65.8 |
+
+**Result.**
+
+- Under the new live rule no cluster with three or more triangulated cells is left without a verdict. The both-axes share doubles on `SeoulBull` (14.9% to 29.7% of the clusters with a reference) and rises from 11.2% to 17.5% on `KerryPark480`. Every remaining cluster without a normal lacks support: it has no kept member, or fewer than three cells triangulated, on `KerryPark480` mostly for narrow baselines.
+- The clusters the verdict now admits are less accurate. At 3 px the both-axes median error rises from 15.5° to 19.1° on `SeoulBull` and from 17.6° to 20.6° on `KerryPark480`, still below the viewing direction's 29.3° and 30.0°; the p90 stays near 60°. The four changes were applied together, and this run does not split the change in error among them.
+- With the same cells, the displacements do not beat the affine shapes. On the paired 3 px sets *cells* is 1.8° better in median on `SeoulBull` (19.2° against 21.0°) and 2.7° worse on `KerryPark480` (19.3° against 16.6°); at 1 px the shapes are better on both (13.6° against 20.0°, 36.0° against 48.6°), on 14 and 19 clusters.
+- On one-axis clusters at 3 px the fixed component beats the viewing direction on `KerryPark480` (22.2° against 35.1°) and does not on `SeoulBull` (28.1° against 26.7°, 13 clusters).
+- `KerryPark480` at 1 px is still the set where the cell normal loses to the viewing direction (49.5° against 21.7°).
+
+**What this decides.**
+
+- **The four changes stay.** They make the verdict say what it is defined to say, whether the cells the fit keeps spread in two directions within the plane, and make the weights match the noise model. That the newly admitted clusters are less accurate is a statement about their precision, which the verdict is not meant to carry.
+- **A precision gate is now needed before any consumer reads the normal.** The verdict admits more low-precision clusters than before, so the next step of the section above, returning the predicted precision from the kernel and measuring a gate on it, comes first.
+- **The displacements against the shapes stays open.** With the same cells the two are within 3° in median at 3 px, in opposite directions on the two entries, and this ground truth cannot separate them, for the reasons in the section above.

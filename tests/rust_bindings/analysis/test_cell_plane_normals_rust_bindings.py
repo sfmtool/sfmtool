@@ -116,3 +116,15 @@ def test_cell_plane_normals_rejects_an_unknown_cell_status():
     args["member_cell_status"][1, 0, 0] = 200
     with pytest.raises(ValueError, match="cell status"):
         cell_plane_normals(**args)
+
+
+def test_cell_plane_normals_floors_the_residual_at_the_cell_shift_precision():
+    # The rays meet exactly, so the cell weight is set by the floor alone:
+    # 0.1 grid px times patch_size / resolution times the shape's gain of 3.
+    # Doubling the shift precision doubles the floor and quarters the weight.
+    base = cell_plane_normals(**_scene(1))
+    coarse = cell_plane_normals(**_scene(1), cell_shift_precision_grid_px=0.2)
+    np.testing.assert_allclose(
+        coarse["cell_weight"], base["cell_weight"] / 4, rtol=1e-9
+    )
+    np.testing.assert_allclose(coarse["normal"], base["normal"], atol=1e-9)

@@ -124,6 +124,18 @@ pub(in crate::patch) fn grid_bounds(resolution: u32) -> [usize; 4] {
     [0, r / 3, r - r / 3, r]
 }
 
+/// The centres of the [`grid_bounds`] cells in grid coordinates centred on the
+/// grid, `[x, y]`, `centres[row][col]` from the top-left cell: the mean of the
+/// integer positions the cell spans, minus the grid's centre `(R − 1) / 2`.
+/// The piecewise refinement measures its cells about these centres and the
+/// cell plane normals cast their rays through them.
+pub(in crate::patch) fn grid_cell_centres(resolution: u32) -> [[[f64; 2]; 3]; 3] {
+    let bounds = grid_bounds(resolution);
+    let mid = (resolution as f64 - 1.0) / 2.0;
+    let span = |t: usize| (bounds[t] + bounds[t + 1] - 1) as f64 / 2.0 - mid;
+    std::array::from_fn(|row| std::array::from_fn(|col| [span(col), span(row)]))
+}
+
 /// The cells of the [`grid_bounds`] split over the **whole** `R×R` square, as
 /// grid positions `row · R + col`, `cells[row][col]` from the top-left cell.
 /// Every cell is a full rectangle: the window's disk plays no part.

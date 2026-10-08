@@ -38,7 +38,7 @@ use sfmtool_matches_format::{ClusterCellStatus, MemberCellData};
 
 use crate::camera::image::ImageU8Pyramid;
 use crate::numeric::median_in_place;
-use crate::patch::normal_refine::{grid_bounds, FLAT_NORM_SQ_EPS};
+use crate::patch::normal_refine::{grid_bounds, grid_cell_centres, FLAT_NORM_SQ_EPS};
 
 use super::kernels::TemplateKernel;
 use super::{inv2, mul2, sample_grid_window, GridEdge, Mat2};
@@ -334,11 +334,7 @@ impl CellLayout {
         let margin = bound.ceil() as usize;
         let reach = (bound.floor() as usize).min(margin);
         let bounds = grid_bounds(resolution as u32);
-        let mid = (resolution as f64 - 1.0) / 2.0;
-        let span_centre = |t: usize| (bounds[t] + bounds[t + 1] - 1) as f64 / 2.0 - mid;
-        let centres = std::array::from_fn(|row| {
-            std::array::from_fn(|col| [span_centre(col), span_centre(row)])
-        });
+        let centres = grid_cell_centres(resolution as u32);
         CellLayout {
             resolution,
             margin,

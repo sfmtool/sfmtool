@@ -2,7 +2,7 @@
 
 **Status:** Draft. Built: the kernel, its binding and a measurement against the two checked-in ground truths. Not decided: whether a consumer reads it, and with which gate. See [Open questions](#open-questions).
 
-Amends: [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md) § "From displacements to a normal", which this draft builds. Shares its determinacy verdict with [piece-gated-grid-normal.md](piece-gated-grid-normal.md). Measured in [cluster-patches-piecewise-refinement-measurements.md](cluster-patches-piecewise-refinement-measurements.md#cell-plane-normals-against-the-ground-truths-2026-10-08).
+Amends: [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md) § "From displacements to a normal", which this draft builds. Shares its determinacy verdict with [piece-gated-grid-normal.md](piece-gated-grid-normal.md). Measured in [cluster-patches-piecewise-refinement-measurements.md](cluster-patches-piecewise-refinement-measurements.md#cell-plane-normals-against-the-ground-truths-2026-10-08), and again with the rules described here in [the section after it](cluster-patches-piecewise-refinement-measurements.md#cell-plane-normals-after-the-audit-2026-10-08).
 
 ## Purpose
 
@@ -15,7 +15,7 @@ The kernel is [`cell_plane_normals`](../../crates/sfmtool-core/src/patch/cell_pl
 ```rust
 pub struct CellPlaneClusters<'a> {
     pub cluster_starts: &'a [u32],                 // C + 1
-    pub reference_members: &'a [u32],              // C, NO_REFERENCE for none
+    pub reference_members: &'a [u32],              // C, CLUSTER_REFERENCE_UNREFINABLE for none
     pub member_images: &'a [u32],                  // K
     pub member_status: &'a [ClusterMemberStatus],  // K
     pub member_positions: &'a [[f32; 2]],          // K
@@ -36,6 +36,7 @@ pub struct CellPlaneParams {
     pub include_refused_outlier: bool,   // false
     pub min_rays: usize,                 // 2
     pub min_triangulation_angle_deg: f64, // 2.0
+    pub cell_shift_precision_grid_px: f64, // 0.1
     pub ray_noise_floor_px: f64,         // 0.05
     pub irls_iters: u32,                 // 3
     pub tukey_c: f64,                    // 4.685
@@ -95,9 +96,9 @@ A member's grid coordinate `u`, centred on the patch grid, lies at pixel `p + (p
 
 ### Triangulating a cell
 
-The cell's position is the least-squares nearest point of its rays, `x = (Σ Pᵢ)⁻¹ Σ Pᵢ oᵢ` with `Pᵢ = I − dᵢdᵢᵀ`. A cell is not triangulated with fewer than `min_rays` rays (the reference's counts), when no pair of its rays subtends `min_triangulation_angle_deg`, or when the point lies behind a ray's camera.
+The cell's position is the nearest point of its rays in pixels. The plain least-squares point `x₀ = (Σ Pᵢ)⁻¹ Σ Pᵢ oᵢ`, with `Pᵢ = I − dᵢdᵢᵀ`, gives each ray's depth `ρᵢ`; the position is then `x = Λ⁻¹ Σ wᵢ Pᵢ oᵢ` with `wᵢ = (fᵢ/ρᵢ)²` and `Λ = Σ wᵢ Pᵢ`, so each ray pulls in pixels of its own image. One such pass is made. A cell is not triangulated with fewer than `min_rays` rays (the reference's counts), when no pair of its rays subtends `min_triangulation_angle_deg`, or when the point lies behind a ray's camera.
 
-Its noise is read in pixels: each ray's perpendicular distance to `x`, divided by the depth along the ray and multiplied by the camera's focal length, is that ray's residual. With `n` rays the point has `2n − 3` degrees of freedom left, so the cell's residual is `σ = √(Σ eᵢ² / (2n − 3))`, floored at `ray_noise_floor_px`. The position's covariance is `σ² Λ⁻¹` with `Λ = Σ (fᵢ/ρᵢ)² Pᵢ`, the information of `n` rays of angular noise `σ/f` at depths `ρᵢ`. More rays, a wider baseline and a smaller residual all shrink it.
+Its noise is read in pixels: each ray's perpendicular distance to `x`, times `fᵢ/ρᵢ`, is that ray's residual `eᵢ`. With `n` rays the point has `2n − 3` degrees of freedom left, so the cell's residual is `√(Σ eᵢ² / (2n − 3))`. The residual is floored at the precision of a measured cell shift: a shift of `cell_shift_precision_grid_px` grid px is `cell_shift_precision_grid_px · (patch_size / R) · ‖Sᵢ‖` pixels in member `i`'s image, with `‖Sᵢ‖` the largest singular value of its stored shape, and the cell's floor is the root mean square of its rays' floors, itself floored at `ray_noise_floor_px`. A cell whose rays meet exactly, as two rays nearly always do, carries this floor as its `σ`. The position's covariance is `σ² Λ⁻¹`, the inverse of the same weighted normal matrix the position was solved with: the information of `n` rays of angular noise `σ/fᵢ` at depths `ρᵢ`. More rays, a wider baseline and a smaller residual all shrink it.
 
 ### The plane
 
@@ -105,20 +106,21 @@ The plane through the positioned cells is the weighted least-variance plane: wei
 
 ### Which axes the cells fix
 
-A cell is live when its weight is at least a quarter of the cluster's largest. With fewer than `min_cells` live cells, or no spread among them, the verdict is none and the normal is `NaN`; the kernel never substitutes a prior for a normal it did not measure. Otherwise the live cells' scatter has eigenvalues `λ₀ ≤ λ₁ ≤ λ₂`, and the anisotropy `λ₁ / λ₂` says whether they spread in two directions. At `det_aniso` or above both axes are fixed. Below it the cells lie on a line along the eigenvector of `λ₂`: the normal must be perpendicular to that line, but its rotation about the line is free. The kernel then reports the line as `free_axis` and returns the normal perpendicular to it that is nearest the mean viewing direction, so the free rotation stays at that prior. A three-by-three grid of cells reads an anisotropy near one, one row of cells near zero, and two rows `3/8`.
+A cell is live when its final Tukey weight is above zero, that is when the robust fit did not reject it. Its precision weight does not enter: a two-ray cell at the noise floor is a sample of where the surface is as much as a five-ray cell is, and the precision already sets how hard each pulls on the plane. With fewer than `min_cells` live cells, or no spread among them, the verdict is none and the normal is `NaN`; the kernel never substitutes a prior for a normal it did not measure. Otherwise the live cells' offsets from their mean are projected onto the fitted plane, so that their scatter along the normal, which is noise, does not count as spread. The projected scatter, with equal weights, has eigenvalues `λ₀ ≤ λ₁ ≤ λ₂` with `λ₀` zero, and the anisotropy `λ₁ / λ₂` says whether the cells spread in two directions within the plane. At `det_aniso` or above both axes are fixed. Below it the cells lie on a line along the eigenvector of `λ₂`: the normal must be perpendicular to that line, but its rotation about the line is free. The kernel then reports the line as `free_axis` and returns the normal perpendicular to it that is nearest the mean viewing direction, so the free rotation stays at that prior. A three-by-three grid of cells reads an anisotropy near one, one row of cells near zero, and two rows `3/8`.
 
 This is the verdict [piece-gated-grid-normal.md](piece-gated-grid-normal.md) describes for its piece estimator. The [adjacency surfel normals](../core/analysis/adjacency-surfel-normals.md) report a boolean `determined` from the same kind of diagnostics (effective support, anisotropy), not a free axis, so the three-way `NormalDeterminacy` is new here and is the type the piece-gated estimator would share.
 
 ## Implementation notes
 
-- The cell centres are those of the piecewise refinement's `CellLayout`, computed from the same `grid_bounds`. Its displacements are in grid px, so the kernel needs the file's `patch_size` and `resolution`, never the image's pixels.
+- The cell centres come from `grid_cell_centres` in `patch/normal_refine/support.rs`, the function the piecewise refinement's `CellLayout` takes its centres from; a test checks that the two agree, and that each centre is the mean of its cell's grid positions, for `R` in {6, 12, 13, 24, 25}. The displacements are in grid px, so the kernel needs the file's `patch_size` and `resolution`, never the image's pixels.
+- A cluster with no reference carries `CLUSTER_REFERENCE_UNREFINABLE` from `sfmtool_matches_format`, the value the file format writes.
 - The geometry is `f64` throughout; the stored positions, shapes and displacements are `f32` and are widened on read.
-- The determinacy reads the live cells' spread with equal weights: the verdict asks where the cells are, not how sure the fit is of each.
+- The determinacy reads the live cells' spread within the plane with equal weights: the verdict asks where the cells are, not how sure the fit is of each. The live set and the spread are both taken from the final plane fit, so a cell the fit rejects neither counts nor spreads.
 - Per-cluster work is independent and runs in parallel with no randomness and a fixed pass count; a test checks one thread and four give equal output.
 
 ## Testing
 
-[tests.rs](../../crates/sfmtool-core/src/patch/cell_plane_normals/tests.rs) builds a planar cluster from known poses: each member's shape is the plane's affine at the patch centre, and its displacements are the exact remainder, the homography's second-order term. The kernel recovers the normal within 0.5° with both axes fixed and every cell in the plane; with every member's shape sheared by 6% and the displacements measured from the sheared shapes it still does, and with those displacements zeroed it does not. Cells refused outside the middle row give one axis whose free axis is the row and a normal perpendicular to it in the plane of the axis and the viewing direction. Two triangulated cells give no normal. A cell reached only by the reference's ray, and one reached only by one kept member when the reference's image is unposed, is not triangulated. A cell whose rays meet off the plane is refused by the plane fit. A narrow baseline triangulates nothing. `refused_outlier` cells enter only on request. The Python test checks the binding's shapes and dtypes, a fronto-parallel plane, and its argument checks.
+[tests.rs](../../crates/sfmtool-core/src/patch/cell_plane_normals/tests.rs) builds a planar cluster from known poses: each member's shape is the plane's affine at the patch centre, and its displacements are the exact remainder, the homography's second-order term. The kernel recovers the normal within 0.5° with both axes fixed and every cell in the plane. With every member's shape taken from a plane tilted about 23° away and the displacements measured from those shapes it still does, and with those displacements zeroed the cells lie on the shapes' plane, within 0.5° of its normal. Cells refused outside the middle row give one axis whose free axis is the row and a normal perpendicular to it in the plane of the axis and the viewing direction. Three cells reached by two rays each, at the noise floor and with less than a quarter of the weight of a five-ray cell, are live and give both axes with it. Two triangulated cells give no normal. A cell reached only by the reference's ray, and one reached only by one kept member when the reference's image is unposed, is not triangulated. A cell whose rays meet off the plane is refused by the plane fit. A narrow baseline triangulates nothing. `refused_outlier` cells enter only on request. The Python test checks the binding's shapes and dtypes, a fronto-parallel plane, that doubling `cell_shift_precision_grid_px` quarters the weights of cells whose rays meet exactly, and its argument checks.
 
 ## Open questions
 
