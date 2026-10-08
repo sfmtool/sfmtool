@@ -193,7 +193,7 @@ aspect ratio of each pyramid. `frustum_size_multiplier` defaults to `0.5`.
 
 Frustum geometry is re-uploaded when any of these change:
 - `length_scale` (UI slider)
-- `frustum_size_multiplier` (planned UI slider)
+- `frustum_size_multiplier` (the HUD's "Frustum" slider)
 - `selected_image` (click pick)
 
 This is tracked via `prev_frustum_length_scale`, `prev_frustum_size_multiplier`,

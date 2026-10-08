@@ -1,18 +1,26 @@
 # Move Camera
 
-An image whose pose is wrong is the commonest defect a reviewer can see and
-cannot fix: the photograph, drawn behind the points in camera view, sits a few
-degrees off the structure it should line up with, or a metre to one side of it.
-Resection re-estimates the pose from correspondences, and when the
-correspondences are what is wrong it lands the same answer again. What the
-reviewer wants is to take hold of the camera and put it where the photograph
-lines up, the way a hand would.
+Move Camera is an SfM Explorer edit that lets a reviewer place one image's
+camera by hand. In camera view, where the viewport looks through the image's
+camera with its photograph drawn behind the reconstructed points, the reviewer
+locks the camera to the viewport and moves it with the ordinary navigation
+controls until the photograph lines up with the points. Committing the move
+stores the new pose, re-triangulates each point that image observes where its
+observations allow, and adds the result to the reconstruction's edit history
+as one version, which undo takes back; cancelling puts the camera back where it
+was and changes nothing.
 
-The viewer already has the hand. Camera view puts the viewport exactly at an
-image's pose with its photograph rigidly attached, and every navigation control
-moves the viewport. So moving a camera is camera view with one bit flipped:
-instead of the viewport leaving the camera when it moves, the camera comes
-along. The lock is the edit's whole interaction; releasing it is the version.
+The edit exists because a wrong pose is a defect a reviewer can see and has no
+other way to fix: the photograph sits a few degrees off the structure it should
+line up with, or a metre to one side of it. Resection re-estimates the pose from
+correspondences, and when the correspondences are what is wrong it returns the
+same pose again.
+
+The lock is a small change to camera view. Camera view already puts the
+viewport exactly at an image's pose with its photograph attached, and every
+navigation control moves the viewport. Without the lock, moving the viewport
+leaves the camera behind; with it, the camera moves with the viewport, so the
+pose the viewport is at when the lock is committed is the new pose.
 
 Related specs: [`../camera-views.md`](../camera-views.md) (camera view itself,
 and which navigation keeps it), [`../viewport-navigation.md`](../viewport-navigation.md)

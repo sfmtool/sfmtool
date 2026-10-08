@@ -1,14 +1,20 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ``blur_matched_zncc_matrix``: the ZNCC between every pair of a
-track's views' tiles, each pair blur-matched. See
-``specs/core/patch/blur-matched-zncc.md``."""
+"""Tests for the blur-matching bindings: one tile's ``assess_blur``,
+``blur_sigma_to_reach`` and ``blur_to_length``, and
+``blur_matched_zncc_matrix``, the ZNCC between every pair of a track's views'
+tiles, each pair blur-matched. See ``specs/core/patch/blur-matched-zncc.md``."""
 
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.patches import blur_matched_zncc_matrix
+from sfmtool._sfmtool.patches import (
+    assess_blur,
+    blur_matched_zncc_matrix,
+    blur_sigma_to_reach,
+    blur_to_length,
+)
 
 
 def _texture(side=24, blur=0.0, seed=3):
@@ -29,6 +35,92 @@ def _texture(side=24, blur=0.0, seed=3):
     return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
 
+def test_assess_blur_keeps_both_axes_of_the_tile_and_each_probe():
+    tile = _texture()
+    a = assess_blur(tile)
+    assert a["semi_axes"].shape == (2,)
+    assert a["growth"].shape == (2, 2)
+    np.testing.assert_allclose(a["probe_sigmas"], [0.4, 1.0])
+    # The semi-axes are the square roots of the ellipse's eigenvalues.
+    eig = np.sqrt(np.linalg.eigvalsh(a["ellipse_matrix"]))[::-1]
+    np.testing.assert_allclose(a["semi_axes"], eig, rtol=1e-9)
+    # Blurring lengthens both axes, more under the wider probe.
+    assert np.all(a["growth"][0] > a["semi_axes"])
+    assert np.all(a["growth"][1] > a["growth"][0])
+    # The ellipse passed in is the one the assessment is set against.
+    given = assess_blur(tile, ellipse=a["ellipse_matrix"])
+    for key in ("semi_axes", "growth"):
+        np.testing.assert_array_equal(given[key], a[key])
+    # An ellipse that cannot be read gives no assessment.
+    assert assess_blur(tile, ellipse=np.full((2, 2), np.nan)) is None
+
+
+def test_blur_to_length_brings_the_tile_to_the_length_asked():
+    sharp = _texture()
+    blurry = _texture(blur=2.0)
+    a = assess_blur(sharp)
+    length = assess_blur(blurry)["semi_axes"][1]
+    sigma = blur_sigma_to_reach(a, length)
+    out = blur_to_length(sharp, a, length)
+    assert out["sigma"] == sigma > 0
+    assert out["samples"].shape == (24, 24, 3)
+    assert out["samples"].dtype == np.float32
+    # Read again, the blurred tile's semi-major axis is near the length.
+    blurred = np.concatenate(
+        [np.clip(np.round(out["samples"]), 0, 255), np.full((24, 24, 1), 255)],
+        axis=-1,
+    ).astype(np.uint8)
+    major = assess_blur(blurred)["semi_axes"][0]
+    assert major == pytest.approx(length, rel=0.1)
+
+
+def test_blur_to_length_leaves_a_long_enough_tile_unblurred():
+    tile = _texture(blur=1.0)
+    a = assess_blur(tile)
+    for length in (a["semi_axes"][0], 0.5 * a["semi_axes"][0]):
+        assert blur_sigma_to_reach(a, length) == 0
+        out = blur_to_length(tile, a, length)
+        assert out["sigma"] == 0
+        np.testing.assert_array_equal(out["samples"], tile[..., :3].astype(np.float32))
+    # An assessment that does not grow gives no width.
+    flat = {"semi_axes": a["semi_axes"], "growth": np.stack([a["semi_axes"]] * 2)}
+    assert blur_sigma_to_reach(flat, 2 * a["semi_axes"][0]) is None
+    assert blur_to_length(tile, flat, 2 * a["semi_axes"][0]) is None
+
+
+def test_the_matrix_blurs_by_the_width_of_the_sharper_tiles_assessment():
+    tiles = np.stack([_texture(), _texture(blur=2.0)])
+    out = blur_matched_zncc_matrix(tiles)
+    assert out["blurred"][0, 1]
+    a = assess_blur(tiles[0])
+    target = min(assess_blur(tiles[1])["semi_axes"][1], 2.0)
+    assert out["blur_sigma"][0, 1] == blur_sigma_to_reach(a, target)
+
+
+def test_bad_tile_arguments_are_refused():
+    tile = _texture()
+    with pytest.raises(ValueError, match="square"):
+        assess_blur(np.zeros((24, 20, 4), np.uint8))
+    with pytest.raises(ValueError, match="valid"):
+        assess_blur(tile, valid=np.ones((24, 23), bool))
+    with pytest.raises(ValueError, match="ellipse"):
+        assess_blur(tile, ellipse=np.zeros((3, 2)))
+    with pytest.raises(ValueError, match="growth"):
+        blur_sigma_to_reach({"semi_axes": [0.5, 0.4]}, 1.0)
+    with pytest.raises(ValueError, match="assessment"):
+        blur_to_length(tile, {"semi_axes": [0.5], "growth": [[1, 1], [2, 2]]}, 1.0)
+
+
+@pytest.mark.parametrize("length", [-0.5, float("nan"), float("inf")])
+def test_a_length_that_is_negative_or_not_finite_is_refused(length):
+    tile = _texture()
+    a = assess_blur(tile)
+    with pytest.raises(ValueError, match="length"):
+        blur_sigma_to_reach(a, length)
+    with pytest.raises(ValueError, match="length"):
+        blur_to_length(tile, a, length)
+
+
 def test_a_blurred_copy_reads_higher_blur_matched_than_plain():
     tiles = np.stack([_texture(), _texture(), _texture(blur=1.5)])
     plain = blur_matched_zncc_matrix(tiles, matching="plain")
@@ -46,6 +138,13 @@ def test_a_blurred_copy_reads_higher_blur_matched_than_plain():
     # The two sharp copies are the same tile: nothing to match.
     assert not matched["blurred"][0, 1]
     assert matched["zncc"][0, 1] == pytest.approx(1.0)
+    # Only the sharper tile of a pair is blurred, and its width is reported
+    # in its own row.
+    sigma = matched["blur_sigma"]
+    assert sigma.shape == (3, 3)
+    assert sigma[0, 2] > 0 and sigma[1, 2] > 0
+    assert sigma[2, 0] == 0 and sigma[2, 1] == 0
+    assert np.all(plain["blur_sigma"] == 0)
 
 
 def test_a_ratio_and_given_ellipses_are_honoured():
@@ -62,11 +161,6 @@ def test_a_ratio_and_given_ellipses_are_honoured():
     unread = ellipses.copy()
     unread[1] = np.nan
     assert blur_matched_zncc_matrix(tiles, ellipses=unread)["pairs_blurred"] == 0
-    ladder = blur_matched_zncc_matrix(tiles, kernel="isotropic_ladder")
-    assert (
-        ladder["zncc"][0, 1]
-        > blur_matched_zncc_matrix(tiles, matching="plain")["zncc"][0, 1]
-    )
 
 
 def test_samples_without_data_are_left_out():
@@ -122,8 +216,6 @@ def test_grey_and_alpha_read_the_grey_alone():
 
 def test_bad_arguments_are_refused():
     tiles = np.stack([_texture(), _texture()])
-    with pytest.raises(ValueError, match="kernel"):
-        blur_matched_zncc_matrix(tiles, kernel="box")
     with pytest.raises(ValueError, match="matching"):
         blur_matched_zncc_matrix(tiles, matching="sharp")
     with pytest.raises(ValueError, match="ellipses"):

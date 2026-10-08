@@ -623,7 +623,6 @@ pub struct EvaluateOptions {
 
 pub struct ReferenceViewOptions {
     pub matching: PairMatching,         // BlurMatchedAboveRatio(1.25); Plain takes none
-    pub kernel: BlurMatchKernel,        // Anisotropic
     pub agreement: PairZnccReading,     // BlurMatched: what the agreement test reads
     pub cells: PairZnccReading,         // BlurMatched: what the cell check reads
 }
@@ -3068,7 +3067,7 @@ unit-tested in `normal.rs` itself.
 - Each row's `pair_zncc` is the median of its row of `member_zncc_matrix`,
   called directly over the `in` rows at the evaluation's resolution and
   sampler.
-- Each row's blur-matched readings, under both kernels, are those of
+- Each row's blur-matched readings are those of
   `blur_matched_agreement` called directly on the rows' tiles and ellipses;
   the plain readings are the same with or without them; plain matching takes
   none and the rule then reads the plain ones; a ratio no pair reaches reads

@@ -1128,6 +1128,32 @@ fn schema_descriptions(value: &Value, out: &mut Vec<String>) {
     }
 }
 
+/// An edit that gives the node a whole new base first folds the pending point
+/// edits in, which closes up a deleted point's slot, so a description that
+/// says the edit keeps every index also says when it does not. A description
+/// without the exception sends an agent off with point indexes read before a
+/// `delete_point`. Spec audit of 2026-10-06.
+#[test]
+fn no_description_promises_indexes_stay_without_the_pending_fold() {
+    for spec in tools::catalog() {
+        let text = spec.description;
+        let promises = [
+            "renumbers nothing",
+            "nothing is renumbered",
+            "still means what it meant",
+        ]
+        .iter()
+        .any(|phrase| text.contains(phrase));
+        if promises {
+            assert!(
+                text.contains("unless a point edit is pending"),
+                "{} keeps every index without naming the pending point edits: {text}",
+                spec.name
+            );
+        }
+    }
+}
+
 /// `delete_camera_image` renumbers the bench's observations with the image
 /// table, so no tool tells an agent that an observation's position is never
 /// renumbered, and the delete's own description says what it does to the

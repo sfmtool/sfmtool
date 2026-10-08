@@ -56,9 +56,10 @@ W[i, j] = |{ c : cluster c has an accepted member in image i
 - `W` is symmetric with a zero diagonal.
 - **Accepted** is caller-defined via a per-member mask (see Acceptance
   below). Each cluster contributes at most 1 to any pair regardless of how
-  the mask is built — the `.matches` format guarantees at most one
-  status-`reference`/`kept` member per (cluster, image), and for unrefined
-  clusters the per-cluster image list is deduplicated before counting.
+  the mask is built: every cluster's accepted-image list is deduplicated
+  before counting, so a cluster with several accepted members in one image
+  still adds 1 to each pair. (The cluster matcher already puts at most one
+  member per image in a cluster.)
 - A cluster's **span** is its number of distinct accepted images; clusters
   with span < 2 contribute nothing.
 
@@ -71,7 +72,8 @@ entire integration point for prioritization and filtering:
 - Patch-enriched default — status ∈ {`reference`, `kept`}.
 - **Custom masks** — callers filter members by any properties they choose,
   and rebuild the matrix when the selection changes (construction is cheap,
-  see Complexity). The properties available *from the file alone* (v4):
+  see Complexity). The properties available *from the file alone* — every
+  cluster file the reader opens, which is format version 6 or later:
 
   | channel | source | typical filter |
   |---|---|---|
@@ -86,10 +88,16 @@ entire integration point for prioritization and filtering:
 
 Construction visits each cluster's accepted-image list and increments its
 `span·(span−1)/2` pairs: total `Σ span²/2` increments. The cluster matcher
-caps cluster size (`matcher_options.d`, currently 10), so
+bounds cluster size through its neighbour count `d` (`matcher_options.d`,
+default 10): a cluster is a seed feature plus its within-radius neighbours
+from the seed's `d + 1` nearest-neighbour query, at most one per other image.
+The query normally returns the seed itself, which is skipped, so a cluster
+holds at most `d + 1` members; when the search misses the seed's own row, all
+`d + 1` neighbours can be kept and the cluster holds `d + 2`. With
+`span ≤ d + 2`,
 
 ```
-Σ span² ≤ d · (accepted members)      — linear in observations
+Σ span² ≤ (d + 2) · (accepted members)      — linear in observations
 ```
 
 Empirically, across three campaign datasets, mean span ≈ 3.3 and
@@ -107,9 +115,9 @@ videos — the capture style that produces such N — have banded covisibility,
 so the sparse variant is compact where dense is hopeless.
 
 The `d` coupling is an assumption worth keeping visible: raising the
-matcher's cluster-size cap (e.g. to ~100 for long-track experiments) scales
-construction cost by `d` and makes each mega-cluster vote on up to
-`d(d−1)/2` pairs.
+matcher's `d` (e.g. to ~100 for long-track experiments) scales
+construction cost by about `d` and makes each large cluster vote on up to
+`(d + 2)(d + 1)/2` pairs.
 
 A positioned build runs three passes over the same arrays and returns one
 object, so which pass the time went to is not visible from outside it.
@@ -137,7 +145,7 @@ pub struct ClusterCovisibility { /* num_images, counts (private) */ }
 
 impl ClusterCovisibility {
     /// `member_accepted`: parallel to `member_images`; `None` = all members.
-    /// Panics/errors if `num_images` exceeds the dense bound or arrays are
+    /// Errors if `num_images` exceeds the dense bound or arrays are
     /// not parallel / CSR-consistent.
     pub fn from_clusters(
         cluster_starts: &[u32],
@@ -167,9 +175,23 @@ impl ClusterCovisibility {
         params: &SeedImageGroupParams,
     ) -> SeedImageGroups<'_>;
 
+    /// One step of the seed-group algorithm against a caller-held
+    /// excluded-image mask (`num_images` entries); marks the yielded group
+    /// excluded. The iterator above and the Python binding, which cannot
+    /// hold a Rust borrow, both drive this one implementation.
+    pub fn next_seed_image_group(
+        &self,
+        excluded: &mut [bool],
+        params: &SeedImageGroupParams,
+    ) -> Option<SeedImageGroup>;
+
     /// `candidates` reordered by descending covisibility with `image`
     /// (ties: ascending index); zero-covisibility candidates are dropped.
     pub fn rank_by_covisibility(&self, image: u32, candidates: &[u32]) -> Vec<u32>;
+
+    /// The sparse per-pair displacement substrate (pose-verification.md);
+    /// `None` when the matrix was built without positions.
+    pub fn displacement_neighborhood(&self) -> Option<&DisplacementNeighborhood>;
 }
 
 /// Borrows the matrix; state is an excluded-image mask (no matrix copy).
@@ -287,7 +309,7 @@ ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
                                 seed=0)
 
 cov.num_images          # getter
-cov.counts              # numpy (N, N) uint32 copy; errors above dense bound
+cov.counts              # numpy (N, N) uint32 copy
 cov.seed_image_groups(group_size=5, *, min_shared=8)  # iterator of groups
 cov.rank_by_covisibility(image, candidates)   # numpy uint32
 ```
@@ -330,10 +352,11 @@ all-members otherwise. The backbone's `member_positions` pass through as the
 `f32` pairs the file stores, copying nothing and widening nothing (the
 displacement arithmetic is `f64` at the point of computation), so the
 displacement queries and the isolation-ordered `thin` sweep answer on a
-matrix built this way; a cluster file below format v6 stores no positions and
-leaves them unavailable. `num_images` is the image table's length. A file
-storing the pairwise backbone raises `ValueError`. Custom masks use
-`read_matches` + numpy + `from_arrays`.
+matrix built this way. Every cluster file the reader opens carries positions:
+`read_matches` refuses a cluster file below format version 6, and from version
+6 on `member_positions` is mandatory. `num_images` is the image table's
+length. A file storing the pairwise backbone raises `ValueError`. Custom masks
+use `read_matches` + numpy + `from_arrays`.
 
 ## Validation
 
@@ -353,9 +376,17 @@ storing the pairwise backbone raises `ValueError`. Custom masks use
   maximum-shared-pair invariant restated through `pair_shared`; and
   `seed_shared` against a direct count of the clusters whose accepted
   members reach both seed-pair images.
-- First consumer: `exp_pinhole_bootstrap.py` swaps its `covisibility()` and
-  `pick_seed_groups()` for the binding — campaign parity on seoul is the
-  acceptance test.
+- Consumers in the tree: reconstruction growth
+  ([reconstruction-growth.md](../geometry/reconstruction-growth.md)) ranks
+  posed neighbours with `rank_by_covisibility` and picks anchor and finishing
+  bundle-adjustment cameras with `thin_to`; batch resection
+  (`resect_images_batch`) orders its fallback pose seeds with
+  `rank_by_covisibility`; the cluster census
+  ([cluster-census.md](../analysis/cluster-census.md)) builds its viewpoint
+  groups from `count`; pose verification
+  ([pose-verification.md](../geometry/pose-verification.md)) works on the
+  `DisplacementNeighborhood` a positioned build holds. The seed-group
+  iterator has no consumer outside its tests and its binding.
 - Evaluation experiments (separate from this spec's implementation): the
   filter-aware cluster budget (replace the span-only `MAX_CLUSTERS`
   selection with span + consistency + ZNCC + feature-size priority)

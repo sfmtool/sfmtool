@@ -122,17 +122,19 @@ impl PyPatchCloud {
     ///         the same score.
     ///     matching: How each pair of members is correlated for the decision:
     ///         ``"plain"`` (default), the renders as they are;
-    ///         ``"blur_matched"``, the sharper member's render blurred to the
-    ///         other's sharpness first, read from each render's ZNCC
-    ///         self-similarity ellipse; or ``"blur_matched_above_ratio"``, the
-    ///         same but only along directions where the two ellipses differ by
-    ///         more than ``min_ellipse_ratio``. Blur matching spares a member
+    ///         ``"blur_matched"``, where one member's ZNCC self-similarity
+    ///         semi-major axis is shorter than the other's semi-minor axis,
+    ///         that member's render blurred by a round Gaussian until its
+    ///         semi-major axis reaches the other's semi-minor axis first; or
+    ///         ``"blur_matched_above_ratio"``, the same but only where the
+    ///         semi-minor axis is at least ``min_ellipse_ratio`` times the
+    ///         semi-major one. Blur matching spares a member
     ///         that differs from the rest only by being blurrier. The coarse
     ///         tables, exoneration and ``sharpness_deficit`` keep reading the
     ///         plain matrix.
-    ///     min_ellipse_ratio: The factor two ellipses' lengths along a direction
-    ///         must differ by for ``"blur_matched_above_ratio"`` to blur along it
-    ///         (default 1.25).
+    ///     min_ellipse_ratio: How many times the sharper member's semi-major
+    ///         axis the other member's semi-minor axis must at least be for
+    ///         ``"blur_matched_above_ratio"`` to blur the pair (default 1.25).
     ///     return_matrix: Also return the per-point ``zncc`` matrix (default
     ///         ``False`` — it is ``k×k`` per point).
     ///

@@ -1,11 +1,18 @@
 # Spherical tile rig: discretizing the sphere as a rig of pinhole tiles
 
-## Motivation
+A spherical tile rig is a camera rig of `n` small pinhole "tile" cameras with
+identical intrinsics that share one optical centre and look in nearly evenly
+spread directions, so that per-direction work on the sphere runs on small,
+nearly undistorted images packed side by side into one atlas image. Its user is
+`sfm panorama`, which composites the source images into the tiles and resamples
+the atlas into an equirectangular panorama; `sfm camrig spherical-tiles` writes
+a rig to a `.camrig` file so a panorama can reuse it.
 
-For per-direction work on the sphere (infinity-consistency tests,
-parallax-from-pose depth estimation, multi-view color aggregation) we need a
-discretization that samples the sphere in small, nearly-distortion-free
-patches. Three options were considered:
+## Why small pinhole tiles
+
+Per-direction work needs a discretization that samples the sphere in small,
+nearly distortion-free patches. Three ways to sample the sphere compare as
+follows:
 
 | Scheme | Distortion at patch edge | Patch count | Seam handling |
 |--------|--------------------------|-------------|---------------|
@@ -15,11 +22,13 @@ patches. Three options were considered:
 
 A rig of small pinhole tiles distributed over the sphere is the right shape for this problem:
 
-- **Per-direction work happens at the tile's look direction.** Infinity tests,
-  depth regression, photometric consensus all evaluate at `d_tile`. A tile's
-  peripheral pixels exist only as neighborhood support for NCC / gradient-based
-  smoothness — they do not need to be the look direction of some other
-  estimator.
+- **Per-direction decisions are made once per tile.** The photometric
+  consensus behind `sfm panorama` picks one agreeing set of source images for
+  each tile, scoring a small central sub-patch around the tile's look
+  direction. The rest of the tile's pixels are output samples: resampling the
+  atlas to the panorama takes each output direction inside the tile's Voronoi
+  cell from that tile, and blends neighbouring tiles across a two-pixel ramp
+  at the cell boundary, which falls in the overlap ring between tiles.
 - **Warping distortion matters for patch-match.** NCC between two warped
   patches is sensitive to the local stretch of the warp: if the warp is
   anisotropic or heavily stretched (cube-map corner), the signal degrades.

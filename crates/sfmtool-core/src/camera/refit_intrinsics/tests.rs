@@ -395,6 +395,76 @@ fn a_polynomial_trusted_short_of_the_fit_is_refused() {
     assert!(matches!(err, RefitError::TrustedBoundShort { .. }), "{err}");
 }
 
+/// A `SIMPLE_RADIAL_FISHEYE` with `k1 < 0` folds at `θ = 1/√(−3·k1)`, and
+/// as a source that fold is its trusted bound.
+#[test]
+fn a_folding_simple_radial_fisheye_source_is_fitted_to_its_fold() {
+    let source = CameraIntrinsics {
+        model: CameraModel::SimpleRadialFisheye {
+            focal_length: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -0.1,
+        },
+        width: 480,
+        height: 480,
+    };
+    let fold_deg = (1.0 / 0.3_f64.sqrt()).to_degrees();
+    let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
+    assert_eq!(refit.theta_fit_source, ThetaFitSource::TrustedBound);
+    assert!(
+        (refit.theta_fit_deg - fold_deg).abs() < 1e-6,
+        "{}",
+        refit.theta_fit_deg
+    );
+
+    let options = RefitOptions {
+        theta_fit_deg: Some(fold_deg + 5.0),
+        spline_domain_deg: None,
+    };
+    let err = refit_camera_intrinsics(&source, &target, &options).unwrap_err();
+    assert!(
+        matches!(err, RefitError::BeyondTrustedBound { .. }),
+        "{err}"
+    );
+}
+
+/// A `SIMPLE_RADIAL_FISHEYE` target whose fitted `k1 < 0` folds inside the
+/// fitted range is refused, as a polynomial fisheye target trusted short of
+/// it is. The source is an orthographic-like lens, `θ_d ≈ sin θ` (the sine's
+/// series to `θ⁹`), whose best one-coefficient fit compresses faster than the
+/// source and peaks before it.
+#[test]
+fn a_simple_radial_fisheye_target_that_folds_inside_the_fit_is_refused() {
+    let source = CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 130.0,
+            focal_length_y: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -1.0 / 6.0,
+            radial_distortion_k2: 1.0 / 120.0,
+            radial_distortion_k3: -1.0 / 5040.0,
+            radial_distortion_k4: 1.0 / 362_880.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let theta_fit_deg = 88.0;
+    assert!(trustworthy_max_theta_deg(&source).unwrap() > theta_fit_deg);
+    let target = RefitTarget::from_name("SIMPLE_RADIAL_FISHEYE", None).unwrap();
+    let options = RefitOptions {
+        theta_fit_deg: Some(theta_fit_deg),
+        spline_domain_deg: None,
+    };
+    let err = refit_camera_intrinsics(&source, &target, &options).unwrap_err();
+    let RefitError::TrustedBoundShort { trusted_deg, .. } = err else {
+        panic!("{err}");
+    };
+    assert!(trusted_deg < theta_fit_deg, "{trusted_deg}");
+}
+
 #[test]
 fn targets_are_checked_by_name() {
     assert!(matches!(

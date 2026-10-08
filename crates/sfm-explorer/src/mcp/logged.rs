@@ -188,11 +188,12 @@ impl Command {
     /// around the same `AppState` calls. A point edit is not here, for the same
     /// reason the GUI keeps its caches across one: the base does not move.
     ///
-    /// A camera move renumbers nothing -- the image table stays put and no
-    /// point is deleted -- but it installs a whole new base, so what the panels
-    /// cached *about* the geometry describes a value the node no longer holds.
-    /// It is here for that, which is the same drop the lock's own commit makes
-    /// in the window.
+    /// A camera move renumbers no image and deletes no point, so with no point
+    /// edit pending it renumbers nothing (a pending one is folded in first,
+    /// closing up deleted slots), but it installs a whole new base either way,
+    /// so what the panels cached *about* the geometry describes a value the
+    /// node no longer holds. It is here for that, which is the same drop the
+    /// lock's own commit makes in the window.
     ///
     /// The bundle adjustment is **not** here, though it renumbers as hard as
     /// anything does: it runs in the background, so the node it renumbers has
@@ -204,8 +205,8 @@ impl Command {
                 reconstruction_label,
                 ..
             }
-            // The bake installs a whole new base and renumbers nothing, which
-            // is the camera move's case.
+            // The bake installs a whole new base and renumbers nothing of its
+            // own, which is the camera move's case.
             | Command::BakeReconstructionTransform {
                 reconstruction_label,
             }
@@ -217,7 +218,7 @@ impl Command {
                 reconstruction_label,
                 ..
             }
-            // The switch renumbers nothing either, but it installs a whole new
+            // The switch renumbers nothing of its own either, but it installs a whole new
             // base with another camera, which is what the intrinsics panel and
             // the image overlay cached their curves from.
             | Command::SwitchCameraModel {
