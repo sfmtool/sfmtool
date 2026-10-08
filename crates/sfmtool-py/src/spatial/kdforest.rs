@@ -5,9 +5,9 @@
 //!
 //! [`PyKdForest`] wraps [`sfmtool_core::features::kdforest::KdForestU8`]: it builds once
 //! from an `(N, D)` `uint8` descriptor array and answers batched approximate
-//! k-NN queries. The `(indices, distances)` output is exactly the layout the
-//! `sfmtool.feature_match` ratio test consumes, so an approximate matcher
-//! backend slots in alongside the exact scanner.
+//! k-NN queries with `(indices, distances)` arrays. It also runs the patch
+//! constellation query over the forest in memory. Specified in
+//! `specs/core/features/randomized-kdtree-forest.md`.
 
 use std::borrow::Cow;
 

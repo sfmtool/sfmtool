@@ -47,8 +47,8 @@ pub fn gpu_available() -> bool {
 /// Compute dense optical flow between two grayscale images.
 ///
 /// Args:
-///     img_a: (H, W) numpy array, uint8 or float32
-///     img_b: (H, W) numpy array, uint8 or float32
+///     img_a: (H, W) uint8 numpy array (grayscale)
+///     img_b: (H, W) uint8 numpy array, the same shape as img_a
 ///     preset: "default" (default), "fast", or "high_quality"
 ///     use_gpu: None (default, auto-detect), True (require GPU), or False (force CPU)
 ///
@@ -56,6 +56,11 @@ pub fn gpu_available() -> bool {
 ///     Tuple of two (H, W) numpy arrays of float32: (flow_u, flow_v)
 ///     where flow_u is horizontal displacement and flow_v is vertical displacement.
 ///     Stack with `np.stack((flow_u, flow_v), axis=-1)` to get (H, W, 2) if needed.
+///
+/// Raises:
+///     TypeError: If an image is not a 2-D uint8 array.
+///     ValueError: If the two images differ in shape, or the preset is unknown.
+///     RuntimeError: If use_gpu is True and no GPU is available.
 #[pyfunction]
 #[pyo3(signature = (img_a, img_b, preset=None, use_gpu=None))]
 #[allow(clippy::type_complexity)]
@@ -103,8 +108,8 @@ pub fn compute_optical_flow(
 /// refines from there. Useful when a chained or approximate flow is available.
 ///
 /// Args:
-///     img_a: (H, W) numpy array, uint8 or float32
-///     img_b: (H, W) numpy array, uint8 or float32
+///     img_a: (H, W) uint8 numpy array (grayscale)
+///     img_b: (H, W) uint8 numpy array, the same shape as img_a
 ///     initial_flow_u: (H, W) float32 initial horizontal flow estimate
 ///     initial_flow_v: (H, W) float32 initial vertical flow estimate
 ///     preset: "default" (default), "fast", or "high_quality"
@@ -112,6 +117,12 @@ pub fn compute_optical_flow(
 ///
 /// Returns:
 ///     Tuple of two (H, W) numpy arrays of float32: (flow_u, flow_v)
+///
+/// Raises:
+///     TypeError: If an image is not a 2-D uint8 array.
+///     ValueError: If the images or the initial flow arrays differ in shape, or
+///         the preset is unknown.
+///     RuntimeError: If use_gpu is True and no GPU is available.
 #[pyfunction]
 #[pyo3(signature = (img_a, img_b, initial_flow_u, initial_flow_v, preset=None, use_gpu=None))]
 #[allow(clippy::type_complexity)]

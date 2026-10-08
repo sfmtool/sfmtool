@@ -101,8 +101,8 @@ pair of relative-pose arrays in the optional two-view geometries section:
   frame by conjugating with the camera-frame flip `S = diag(1, −1, −1)`.
 
 > **Migration note.** The canonical camera convention was formalized after the format
-> was already in use; files written by earlier sfmtool releases (format version 1)
-> hold COLMAP-convention relative poses (cameras looking down +Z with Y down). See
+> was already in use; files of format version 1 hold COLMAP-convention relative
+> poses (cameras looking down +Z with Y down). See
 > [Versioning and Migration](#versioning-and-migration).
 
 ## File Structure
@@ -220,19 +220,25 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `6` (see
+- `version`: Format version number. `1` through `7`; writers emit `7` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches. The
-  format does not restrict the string; the writers in this repository emit:
-  - `"exhaustive"`: Exhaustive pairwise matching (`sfm match -e`)
-  - `"sequential"`: Sequential matching with overlap (`sfm match -s`)
-  - `"flow"`: Optical-flow matching (`sfm match --flow`)
-  - `"cluster"`: Cluster matching, a cluster-backbone file (`sfm match --cluster`,
-    and the viewer's cluster-patches build)
-  - `"merged"`: The union of several `.matches` files (`sfm match --merge`); the
-    source files' methods are listed in `matching_options["source_methods"]`
-  - A file derived from another one (`sfm match --derive-pairs`,
-    `sfm cluster-patches`, a cluster selection) keeps its source's value
+  format does not restrict the string; these values have a defined meaning:
+  - `"exhaustive"`: a pairwise file whose matcher compared the descriptors of
+    every pair of images in the file
+  - `"sequential"`: a pairwise file whose matcher compared the descriptors of
+    each image only with images near it in capture order (the count is in
+    `matching_options`)
+  - `"flow"`: a pairwise file whose correspondences were found by following
+    dense optical flow from one image to the other, not by comparing
+    descriptors
+  - `"cluster"`: a cluster-backbone file whose matcher grouped features across
+    images into clusters directly, with no stored pairwise stage
+  - `"merged"`: the union of several `.matches` files; the source files'
+    methods are listed in `matching_options["source_methods"]`
+  - A file derived from another one — its verified pairwise expansion, its
+    refinement-stage counterpart, or a cluster selection — keeps its source's
+    value
 - `matching_tool`: Tool that produced the matches (e.g., `"colmap"`)
 - `matching_tool_version`: Version string of the tool
 - `matching_options`: Method-specific parameters. Contents depend on `matching_method` and
@@ -439,8 +445,9 @@ file is still written once. Pair descriptor distances, which the stored
 pairwise form carries, are recomputed from the referenced `.sift` files when a
 consumer needs them.
 
-In sfmtool, [`sfm match --derive-pairs`](../cli/image-feature/match-command.md)
-is the command that reads a cluster file and writes that pairwise file. See
+A verifier that needs two-view geometries for a cluster file reads it,
+expands its clusters into pairs, verifies them, and writes the result as that
+pairwise file. See
 [`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the design
 rationale.
 
@@ -512,8 +519,9 @@ apart:
   write-once workflow), so the detection-stage file it read is kept beside
   it.
 
-In sfmtool, `sfm match --cluster` writes detection-stage files and
-`sfm cluster-patches` writes refinement-stage files.
+A matcher writes detection-stage files; a refiner writes refinement-stage
+files. A writer may also cluster and refine in one step and write only the
+refinement-stage file.
 
 **No value is ever `NaN`, and `member_status` is the sole authority.** Every
 row holds a real position and a real shape, so a consumer that only wants
@@ -531,10 +539,9 @@ and the consistency residual — and no geometry of its own, so one file never
 holds two answers for one member.
 
 **Why `float32`.** The refinement's fit precision is on the order of 0.01 px,
-while an `float32` position quantizes to 1.5e-5..6.1e-5 px on real captures,
-and the structure-free focal vote cannot distinguish the downcast from its own
-seed-to-seed spread. The refinement kernel still computes in `float64`; only
-the write boundary rounds. Detected values are never rounded at all — they are
+while a `float32` position quantizes to 1.5e-5..6.1e-5 px on real captures,
+more than a hundred times finer. A refiner may compute in `float64`; only the
+write rounds. Detected values are never rounded at all — they are
 `float32` in the `.sift` file and are copied bit-for-bit.
 
 #### `clusters/member_positions.{K}.2.float32.zst`
@@ -623,7 +630,7 @@ refinement measured and which members stand.
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   A consumer that needs the half-width uses `patch_size / 2`, or `radius`
   as-is. The other keys record the settings for a reader to see and are not
-  read back: current files also carry `min_zncc`, `max_shift_px` and
+  read back: current files also carry `resolution`, `min_zncc`, `max_shift_px` and
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
 
@@ -661,12 +668,19 @@ refinement measured and which members stand.
     shares the reference's image
   - `not_evaluated` — degenerate shape, template/seed support out of frame, or the
     cluster itself was unrefinable
-  - `rejected_unlocalizable` — the member's own patch does not pin a position
-    (its ZNCC self-similarity radius is above the member gate's bar), so it was
-    excluded before reference selection and refinement (see
-    [`cluster-patch-refinement.md`](../core/patch/cluster-patch-refinement.md)).
-    Files written before that gate read the radius hold members refused by
-    an earlier score of the same patch with the same status
+  - `rejected_unlocalizable` — the member's own patch does not pin a position,
+    so it was excluded before reference selection and refinement. The bar is
+    `refine_options.max_member_zncc_self_similarity_radius`, in pixels of
+    the patch's sampling grid (`refine_options.resolution` samples on a
+    side): the member's patch, sampled at its detected position and affine
+    shape, is shifted over itself by whole pixels up to 3 px in each
+    direction, and its ZNCC self-similarity radius is how far it can move
+    while still matching itself as well as a true match between two views
+    would (the semi-major axis of the ellipse fitted to those shifts). A member
+    whose radius is above the bar gets this status; a flat patch or a straight
+    edge reads the maximum, 3. A bar of `0` means the gate was off. Files that
+    carry `max_keypoint_uncertainty` in place of that key hold members refused
+    by an earlier score of the same patch with the same status
 - **Canonical order**: a writer always states the whole legend in the order
   listed above, so a conforming writer stores `0` reference, `1` kept, `2`
   rejected_low_zncc, `3` rejected_shift, `4` duplicate_image, `5`
@@ -1063,9 +1077,8 @@ expansion is deterministic and cheap, while storing both
 roughly doubles the correspondence payload with derived values: per-pair data grows as
 Σ C(k,2) over cluster sizes versus the Σ k the clusters themselves cost. Consumers
 that need pairs obtain them by calling the expansion at read time; the cluster file
-remains the durable primary artifact, and the geometric-verification step
-(`sfm match --derive-pairs`) writes the COLMAP-facing pairwise derivative as a
-new file. See
+remains the durable primary artifact, and geometric verification writes the
+COLMAP-facing pairwise derivative as a new file. See
 [`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the full design
 discussion.
 
@@ -1108,17 +1121,8 @@ The flat concatenated layout with per-pair counts (same pattern as tracks in `.s
 
 ## Compression Details
 
-Every entry of a `.matches` file is written at the same zstandard level:
-`write_matches` takes it as its `zstd_level` argument, which the Python binding
-defaults to 3. The rest is the container's; see
-[archive-container.md](archive-container.md).
-
-A full read consumes every entry the file holds, so `read_matches` takes the
-container's whole-archive path — one pass over the ZIP, then the frames expanded
-in parallel — and each section reader looks its entries up by name in that
-batch. `verify_matches` and `read_matches_metadata` do not: the verifier walks
-the archive in the order the hashes were taken, and a metadata-only read wants
-one small entry.
+Every entry of a `.matches` file is written at the same zstandard level. The
+rest is the container's; see [archive-container.md](archive-container.md).
 
 ## Integrity Verification
 
@@ -1177,6 +1181,35 @@ clusters into pairs is `clusters_to_pair_matches` in
 
 `verify_matches` returns `(is_valid, error_messages)`.
 
+`write_matches` takes the zstandard level as its `zstd_level` argument, which
+the Python binding defaults to 3. A full read consumes every entry the file
+holds, so `read_matches` takes the container's whole-archive path — one pass
+over the ZIP, then the frames expanded in parallel — and each section reader
+looks its entries up by name in that batch. `verify_matches` and
+`read_matches_metadata` do not: the verifier walks the archive in the order the
+hashes were taken, and a metadata-only read wants one small entry.
+
+The writers in this repository and the `matching_method` they record:
+
+- `sfm match -e`, `sfm match -s` and `sfm match --flow` write pairwise files
+  with `"exhaustive"`, `"sequential"` and `"flow"`.
+- `sfm match --cluster` writes detection-stage cluster files with `"cluster"`.
+- `sfm cluster-patches` reads a detection-stage file and writes its
+  refinement-stage counterpart, keeping the source's `matching_method`. The
+  SfM Explorer's cluster-patches build clusters and refines in one step and
+  writes a refinement-stage file with `"cluster"`.
+- `sfm match --merge` writes `"merged"` files.
+- [`sfm match --derive-pairs`](../cli/image-feature/match-command.md#derive-pairs)
+  is the verifier that reads a cluster file and writes its verified pairwise
+  file with two-view geometries, keeping the source's `matching_method`.
+- `sfm to-colmap-db` (in `src/sfmtool/colmap/db_setup.py`) is the consumer that
+  writes stored two-view geometries into a COLMAP database; it conjugates each
+  relative pose by `S` when it builds the `pycolmap.Rigid3d`.
+
+The reader's refusal of a cluster file below version 6 names the migration as
+commands: regenerate with `sfm match --cluster`, then re-run
+`sfm cluster-patches` if the file was enriched.
+
 ## As part of a Pipeline
 
 The `.matches` file fits between `.sift` files and `.sfmr` files. The data in a collection
@@ -1214,8 +1247,7 @@ modifying an existing file.
 
 ### Writing a verified .matches file
 
-Geometric verification does not modify the file it reads.
-[`sfm match --derive-pairs`](../cli/image-feature/match-command.md#derive-pairs)
+Geometric verification does not modify the file it reads. A verifier
 reads a clusters-bearing file, expands its clusters into image pairs, verifies
 those pairs, and writes a new pairwise file at a separate path. The new file holds
 the pairs that pass verification, their matches and the
@@ -1279,8 +1311,8 @@ unchanged — only its metadata `version` moves.
 enriched. Its geometry is only in the referenced `.sift` files, which the
 format layer does not open, and its `member_affines` carries semantics the
 format no longer has, so there is nothing to upgrade from. The error names the
-migration: regenerate the backbone with `sfm match --cluster`, then re-run
-`sfm cluster-patches` if the file was enriched. Pairwise-backbone
+migration: regenerate the backbone by clustering the `.sift` features again,
+then refine it again if the file was enriched. Pairwise-backbone
 compatibility is untouched, and integrity verification stays version-aware —
 it requires the geometry pair at version 6+, forbids it before, and continues
 to pass structurally sound older files.
@@ -1297,7 +1329,7 @@ carries them.
 What survives for a **pairwise** file is `image_dims`: version ≤ 3 pairwise
 files never stored it and load with no dimensions (in-memory `image_dims` is
 absent/None); everything else loads with unchanged semantics. Integrity
-verification (`verify_matches`) remains version-aware and continues to pass
+verification remains version-aware and continues to pass
 structurally sound older files of every version, cluster ones included — hashes
 cover the stored bytes.
 
@@ -1339,9 +1371,8 @@ apply. Saving always writes the current version. Content hashes cover the stored
 bytes, so hashes verify before conversion; a converted-then-saved file is a new
 current-version file with new hashes.
 
-As a consequence, consumers that export two-view geometries to a COLMAP database
-(`sfm to-colmap-db` via `src/sfmtool/colmap/db_setup.py`) S-conjugate the canonical
-poses back to COLMAP convention when building `pycolmap.Rigid3d`. The stored
+As a consequence, a consumer that writes these relative poses into a COLMAP
+database conjugates them by `S` back to COLMAP convention. The stored
 F/E/H matrices are pixel-space and unchanged by the flip; see
 [`sfmr-file-format.md`](sfmr-file-format.md#conversions-happen-at-the-io-boundary)
 for the invariant and the `S`/`W` conversion math.
@@ -1362,8 +1393,8 @@ for the invariant and the `S`/`W` conversion math.
   refinement's answer where its cascade measured, the untouched detection where
   it did not, in a cluster-patches output. Nothing is `NaN` and
   `member_status` is the sole authority. Cluster-backbone files below version 6
-  are refused (regenerate with `sfm match --cluster`, then `sfm cluster-patches`
-  if enriched); pairwise files are unchanged.
+  are refused (regenerate the clusters from the `.sift` features, then refine
+  again if enriched); pairwise files are unchanged.
 - **Version 5**: Absolute affine shapes — `cluster_patches/member_affines`'
   leading 2×2 became the member's absolute affine shape `S = W·S_ref` rather
   than the reference-relative warp. Superseded by version 6, which removed the

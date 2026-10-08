@@ -141,6 +141,18 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
                     .into(),
             );
         }
+        if metadata.has_two_view_geometries && !has_entry(entries::two_view_geometries_metadata()) {
+            errors.push(
+                "file claims has_two_view_geometries but has no two_view_geometries/ section"
+                    .into(),
+            );
+        }
+    }
+    if !metadata.has_two_view_geometries && has_prefix("two_view_geometries/") {
+        errors.push(
+            "file contains two_view_geometries/ entries but has_two_view_geometries is false"
+                .into(),
+        );
     }
 
     errors

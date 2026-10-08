@@ -136,7 +136,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `get_viewer_3d_display` | read | The 3D viewport's display controls — the HUD's layer toggles, sizes, Maintain Z-up and the rest of its checkboxes and sliders — as one flat document |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
-| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, as a background open that fills in the thumbnails and patch bitmaps the file lacks |
+| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, filling in the thumbnails and patch bitmaps the file lacks, on a worker thread |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
 | `select_camera_image` | write | Select a camera image — and with it the intrinsics it was shot through |
@@ -164,7 +164,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
-| `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version |
+| `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version, on a worker thread |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
 | `switch_camera_model` | write | Switch one camera to a model fitted to it, or refit its spline to another count or domain, as one version |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
@@ -2620,8 +2620,9 @@ the window is showing as and what it would come back to.
 **`panels` is the arrangement indexed the other way.** "Is the Action Log open"
 should not cost the agent a tree walk. `open` is whether the panel appears
 anywhere in the document's `layout`; `active` is whether it is the front tab of
-its node — a panel alone in a node is active, and the default layout's two
-multi-tab nodes leave four of the eight behind a sibling. A closed panel is
+its node — a panel alone in a node is active, and the default layout leaves
+`image_detail`, `camera_intrinsics`, `action_log` and `edit_history` behind a
+sibling. A closed panel is
 `active: false`.
 
 Where there is no window — a headless `AppState` — `window` is `null` and the
@@ -2637,7 +2638,7 @@ The argument **is the document**, version tag optional:
 { "window": { "state": "maximized" } }
 { "window": { "state": "normal", "inner_size": [1600, 900] } }
 { "layout": { "main": { /* … */ }, "windows": [] } }
-{ "layout": "default" }                                     // the stock eight-panel grid
+{ "layout": "default" }                                     // the default layout, every panel open
 { "window": { "state": "maximized" }, "layout": "default" } // both, in that order
 { "sfm_explorer_layout": 2, "window": { /* … */ }, "layout": { /* … */ } }  // a file, or a whole reply, sent back
 ```
@@ -2824,12 +2825,13 @@ different number for a maximized window and the same one for a normal window
 
 ### The editing family
 
-Eight tools that give a node a new version or move its cursor, plus the read
-that lists them and the one that writes a file. What the ten share is worth
-stating once rather than ten times.
+The tools that give a node a new version or move its cursor, plus the read
+that lists the versions and the one that writes a file. What they share is
+stated once here rather than under each tool.
 
-**Each one is a single `AppState` call**: `delete_point`, `delete_image`,
-`resect_image`, `bundle_adjust`, `retriangulate_point`, `undo`, `save_node_as`.
+**Each one is a single `AppState` call**, for example `delete_point`,
+`delete_image`, `resect_image`, `start_bundle_adjust`, `retriangulate_point`,
+`undo` and `save_node_as`.
 It is the
 same call the menu, the panel or the keyboard makes. So an agent's edit is a
 version in the same history, with the same label, drawn on the same Edit History
@@ -2876,8 +2878,22 @@ after it ([bench.md](bench.md) § "One history for the pair"); it, the resection
 renumber points. An agent holding an index it
 read before such a call is holding a statement about something else, and should
 re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
-is what it is for. `move_camera_image` and `switch_camera_model` renumber
-nothing, and are with them only in what the drain forgets afterwards: the
+is what it is for.
+
+**Point edits close up at the next whole new base.** A point edit
+(`delete_point`, `retriangulate_point`, `commit_bench_track`) keeps every other
+index where it was by leaving the gone point's slot open. Every edit that gives
+the node a whole new base, and a `save_reconstruction` that is not a minimal
+copy, first folds those pending point edits into the value: a deleted point's
+slot closes up and every point after it moves down, a replaced point goes back
+to the base slot it replaced, and a point new to the base follows the last
+surviving base point ([document-model.md](document-model.md) § "Two kinds of
+edit"). The fold moves no image index. So `move_camera_image`, `switch_camera_model`,
+`add_camera_image_to_tracks`, `retriangulate_all_points`,
+`convert_to_embedded_patches` and `bake_reconstruction_transform`, which move no
+index of their own, renumber points whenever a point edit is pending, and
+renumber nothing otherwise. `move_camera_image` and `switch_camera_model` are
+with the renumbering edits in what the drain forgets afterwards either way: the
 panels' cached geometry and lens curves.
 
 **A camera the human is holding is committed first.** An edit arriving on a node
@@ -3101,7 +3117,8 @@ edit pushed, like every other edit's.
 The tracks that image observes are re-triangulated around the new pose where two
 or more pixels still see them; a bearing only it sees turns with it, and
 everything else keeps its position. The image table does not move and no point
-is renumbered, but the geometry a panel cached is a statement about a value the
+is renumbered unless a point edit is pending (§ "The editing family"), but the
+geometry a panel cached is a statement about a value the
 node no longer holds, so the drain drops those caches as it does after a bulk
 edit.
 
@@ -3169,7 +3186,8 @@ One camera switched to a model fitted to it, applied directly as the node's
 next version ([edits/switch-camera-model.md](edits/switch-camera-model.md)), by
 the reconstruction-level switch
 ([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)).
-Poses, points, keypoints and tracks do not move, and nothing is renumbered; the
+Poses, points, keypoints and tracks do not move, and nothing is renumbered
+unless a point edit is pending (§ "The editing family"); the
 stored errors of the points the camera's images observe are recomputed. It is
 the step the Camera Intrinsics panel's `Refit spline…` takes, with any target
 model.
@@ -3215,8 +3233,10 @@ The image menu's `Add Image to Tracks`
 ([edits/add-image-to-tracks.md](edits/add-image-to-tracks.md)): every point the
 image does not observe is looked for in its photograph, and the sightings that
 agree with the point's other observations are added, as the node's next
-version. Nothing else moves and nothing is renumbered, so point and image
-indexes read before the call still mean what they meant. It is the call to make
+version. Nothing else moves and no index of its own moves, so image indexes
+read before the call still mean what they meant, and point indexes do too
+unless a point edit was pending, whose deleted slots close up first
+(§ "The editing family"). It is the call to make
 after `resect_camera_image`. It refuses, in the greyed entry's words, an unposed
 image, a node with no points, a `sift_files` node, a node with no patch frames
 and an image whose photograph cannot be found.
@@ -3297,13 +3317,17 @@ and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Six operations run on a worker**: this one,
-`convert_to_embedded_patches`, `retriangulate_all_points`, and the bench's
-`fit_bench_track`, `fit_bench_track_normal` and `set_bench_track_stage`, which
-answer through the same
-two-level reply. Every other edit is still synchronous on the GUI thread,
-and a reconstruction large enough to take more than the apply timeout will still
-time out the call while the work goes on and finishes. An agent that gets a
+**The tools that run on a worker** are the rows of § "The tool surface"'s
+table that say so: this one, `open_reconstruction`,
+`add_camera_image_to_tracks`, `prune_covered_observations`,
+`retriangulate_all_points`, `convert_to_embedded_patches`,
+`create_track_at_pixel`, `find_nearby_tracks`, `build_index_files`, and the
+bench's `fit_bench_track`, `fit_bench_track_normal`, `set_bench_track_stage`,
+`search_bench_track_descriptors` and `search_bench_track_geometry`. Each starts
+one of the operations `background::Operation` declares, and each answers
+through the same two-level reply. Every other edit is synchronous on the GUI
+thread, and a reconstruction large enough to take more than the apply timeout
+will still time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_history` rather than retry, since the
 version may well have been pushed.
 
@@ -3333,8 +3357,10 @@ can be read, `has_patch_data: true`. If none can be read, the conversion still
 succeeds without bitmaps and reports `has_patch_data: false`. A save persists
 the conversion's bitmaps, unlike display-only bitmaps made when opening a file.
 
-Every point keeps its index, its position and its track, so a point id a caller
-is holding still names the same point and the selection does not move. The
+Every point keeps its position and its track, and its index too unless a point
+edit was pending, whose deleted slots close up first (§ "The editing family"),
+so with no such edit a point id a caller is holding still names the same point
+and the selection does not move. The
 `.sift` files have to still be where the reconstruction was made; a missing one
 is the frame builder's refusal, worded by the state and recorded once.
 
@@ -3383,8 +3409,10 @@ and the new index is the one the next call about the point has to name.
 `retriangulate_all_points` is a **bulk edit** that runs on a worker thread and
 answers the two ways `bundle_adjust` does, with `"operation": "Retriangulate all
 points"`. It deletes no point and creates none, so every index still means what
-it meant and no cache is dropped for it until the version lands. It polls the
-cancel flag between its stages, so `cancel_background_task` stops it and a
+it meant, unless a point edit was pending, whose deleted slots close up first
+(§ "The editing family"); no cache is dropped for it until the version lands.
+It polls the cancel flag between its stages, so `cancel_background_task` stops
+it and a
 cancelled retriangulation pushes no version. Its `report` counts the per-point
 statuses: points moved, crossed to or from infinity, turned into directions by
 each rule (too thin, no depth at the noise level, behind a camera, past the
@@ -4073,7 +4101,7 @@ thread, and waits for the answer.
  tools/call returns
 ```
 
-Four things this buys, each load-bearing:
+What this arrangement gives:
 
 - **Commands land before uploads.** `drain_mcp` runs first in
   `run_ui_and_paint`, ahead of the title sync and `prepare_uploads`, so a
@@ -4182,14 +4210,14 @@ command (a `Query` entry, which never reaches the status line — an agent polli
 **refusal** is recorded as a failed entry, `{tool} failed: {message}`, in the
 same words the agent receives.
 
-**A refusal the state already recorded is not recorded twice.** Three `AppState`
-methods word their own: `resect_image`, `bundle_adjust` and
-`move_camera`, whose refusals belong to the operation's vocabulary rather than
-to the tool that asked
-for it. So the drain writes its row only where the application of that command
-recorded no failed entry of its own. The test is the Action Log's revision
-before and after, which needs no list of which methods those are and cannot fall
-out of step with one.
+**A refusal the state already recorded is not recorded twice.** Some `AppState`
+methods word their own — `resect_image`, `start_bundle_adjust` and
+`move_camera` among them, with several other edits and bench steps —
+because their refusals belong to the operation's vocabulary rather than
+to the tool that asked for it. So the drain writes its row only where the
+application of that command recorded no failed entry of its own. The test is the
+Action Log's revision before and after, which needs no list of which methods
+those are and cannot fall out of step with one.
 
 **The drain drops what the panels cached about a node an edit renumbered.** A
 bulk edit gives a node a whole new base and a cursor move lands on one, so an
@@ -4201,9 +4229,10 @@ the drain's job rather than the command vocabulary's: `apply_as_agent` reports
 the nodes each successful command renumbered and the drain forgets them, exactly
 as the Scene panel's menu and the Edit History panel do around the same
 `AppState` calls. A point edit is not among them, for the same reason the GUI
-keeps its caches across one. `move_camera_image` is among them without
-renumbering anything: it installs a whole new base, so the geometry those caches
-describe has moved even though every index still means what it meant.
+keeps its caches across one. `move_camera_image` is among them even when it
+renumbers nothing, which is when no point edit was pending: it installs a whole
+new base, so the geometry those caches describe has moved even though every
+index still means what it meant.
 
 **The drain ends a camera held in hand before an editing command lands.** The
 Move Camera lock is `Viewer3D`'s, and an edit applied under one would leave the
@@ -4257,83 +4286,21 @@ testable without a window:
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
-```rust
-/// Everything the MCP surface can ask the viewer to do. One variant per tool.
-///
-/// A reconstruction is named by its label, so these carry a `String` that
-/// `apply` resolves against `AppState::scene`. `Option` means "the selected
-/// reconstruction if omitted".
-pub(crate) enum Command {
-    GetScene,
-    ListCameraImages { reconstruction_label: Option<String>, offset: usize, limit: usize },
-    GetCameraImage { reconstruction_label: Option<String>, camera_image: CameraImageSel },
-    GetCameraIntrinsics { reconstruction_label: Option<String>, camera_intrinsics_index: usize },
-    GetPoint { point: goto_point::PointQuery },
-    /// `actors` is never empty: the parse refuses `[]` and fills an omitted
-    /// field with every actor.
-    GetActionLog { since_revision: u64, limit: usize, actors: Vec<action_log::Actor> },
-    OpenReconstruction { path: PathBuf },
-    CloseReconstruction { target: CloseTarget },
-    SelectReconstruction { reconstruction_label: String },
-    SelectCameraImage { reconstruction_label: Option<String>, camera_image: CameraImageSel },
-    SelectCameraIntrinsics { reconstruction_label: Option<String>, camera_intrinsics_index: usize },
-    SelectPoint { point: goto_point::PointQuery },
-    ClearSelection { scope: SelectionScope },
-    SetReconstructionDisplay { reconstruction_label: String, change: DisplayChange },
-    SetSolo { reconstruction_label: Option<String> },
-    GetImageDetailDisplay,
-    /// Every field an `Option`, `None` meaning "leave it": the parse has
-    /// already resolved the mode name, checked the ladders and the size
-    /// bounds, so `apply` only writes and records.
-    SetImageDetailDisplay { change: ImageDetailDisplayChange },
-    SetView { view: ViewCommand },
-    GetWindowLayout,
-    /// The document as it arrived, unparsed, so that one the viewer will not
-    /// accept is a domain error in the layout parser's own words — path and
-    /// all — rather than a protocol error.
-    SetWindowLayout { document: serde_json::Value },
-    ShowPanel { panel: Tab },
-    HidePanel { panel: Tab },
-    /// The editing family. `reconstruction_label` is a plain `String` on every
-    /// one of them: an edit names the node it edits (§ "An edit names its
-    /// reconstruction").
-    GetHistory { reconstruction_label: String },
-    Undo { reconstruction_label: String },
-    Redo { reconstruction_label: String },
-    /// `serial` as the viewer spells it, `"v12"`, resolved against the node's
-    /// own version list.
-    JumpToVersion { reconstruction_label: String, serial: String },
-    /// `None` is Save, over the node's own path; `Some` is Save As.
-    SaveReconstruction { reconstruction_label: String, path: Option<PathBuf> },
-    DeletePoint { reconstruction_label: String, point: goto_point::PointQuery },
-    DeleteCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    /// World-from-camera in the node's own frame, in the pieces the wire
-    /// carries: a rotation quaternion and a camera centre.
-    MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
-                      quaternion_wxyz: [f64; 4], translation: [f64; 3] },
-    ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
-                   cameras: Vec<CameraReleaseOverride>, free_points_cross: bool },
-    SwitchCameraModel { reconstruction_label: String, request: SwitchCameraModelRequest },
-    /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
-    /// parse refuses it elsewhere, and refuses `widgets: true` beside it.
-    Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32>,
-                 crop: Option<[u32; 4]>, widgets: bool },
-    GetWidgets { panel: Option<Tab>, crop: Option<[u32; 4]> },
-    /// `click`, `hover`, `press_key` and `type_text`, parsed into
-    /// `input::InputCommand`.
-    Input(input::InputCommand),
-}
-
-impl Command {
-    /// The node whose data this command is about to change, read before it is
-    /// applied, for the drain to end a camera held in hand on that node.
-    fn edits(&self) -> Option<&str>;
-    /// The node this command may have renumbered, once it has succeeded, for
-    /// the drain to drop what the panels cached about the table it had.
-    fn renumbers(&self) -> Option<&str>;
-}
-```
+`Command`, in [`mcp/mod.rs`](../../crates/sfm-explorer/src/mcp/mod.rs), is the
+command vocabulary: one variant per tool, except that the four input tools
+share `Input`, holding the arguments as the parse left them. A reconstruction
+is named by its label, which `apply` resolves against `AppState::scene`; an
+`Option<String>` label means the selected reconstruction when the argument is
+left out, and every editing variant that names a node takes a plain `String`,
+because an edit names the node it edits (§ "An edit names its
+reconstruction"). The variants and their doc comments are in `mod.rs` rather
+than copied here. The methods in
+[`mcp/logged.rs`](../../crates/sfm-explorer/src/mcp/logged.rs) read a command
+for the drain: among them `tool_name`, the name the wire uses; `kind`, the
+Action Log kind a refusal is filed under; `edits`, the node whose data the
+command is about to change, read before it is applied so the drain can end a
+camera held in hand on that node; and `renumbers`, the node a succeeded command may have renumbered, so
+the drain can drop what the panels cached about it.
 
 `Command::kind` for `SetWindowLayout` is `Kind::Layout` when the object carries a
 `layout` key and `Kind::Window` otherwise, which is where a refusal of it is
@@ -4341,7 +4308,8 @@ filed. `SetImageDetailDisplay` is `Kind::Display` — the kind the HUD's own
 controls record under, since the Image Detail toolbar is the same sort of thing
 on a different panel — and `GetImageDetailDisplay` a `Kind::Query` like every
 other read. `SetViewer3dDisplay` is `Kind::Display` too, being the HUD's own
-controls, and `GetViewer3dDisplay` a `Kind::Query`. The seven edit commands and the three cursor moves are `Kind::Edit`
+controls, and `GetViewer3dDisplay` a `Kind::Query`. Every edit command, the three
+cursor moves, `CommitBenchTrack` and `CancelBackgroundTask` are `Kind::Edit`
 and `SaveReconstruction` is `Kind::File`, which is where the GUI's own rows for
 them go, so a refusal is filed where its success would have been.
 Everything the window portion is made of — `WindowChange`, `WindowState`,
@@ -4452,7 +4420,7 @@ pub(crate) struct Applied {
 
 /// Start the server. Returns once it is bound and listening, or with the bind
 /// error; the runtime lives on its own thread from here.
-pub(crate) fn serve(port: u16, tx: UnboundedSender<Request>,
+pub(crate) fn serve(port: u16, tx: UnboundedSender<Request>, busy: BusyNotice,
                     wake: impl Fn() + Send + Sync + 'static)
     -> Result<SocketAddr, ServeError>;
 ```
@@ -4470,10 +4438,12 @@ frame but no GPU, so `mcp::tests::widgets` and `mcp::tests::input` run them
 through `Context::run_ui` frames (§ "Testing").
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other thirty-five answer with JSON; squeezing an image through a
+picture and every other tool answers with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-thirty-five return a plain `Result<Value, ToolError>` and are widened at the
-`apply_with_window` dispatch, so nothing below it has to name the shape it is
+others build a plain `Result<Value, ToolError>` and widen it to
+`ToolOutput::Json` where the reply is sent: at the `apply_with_window` dispatch
+for one answered at once, and in the function that composes a deferred reply
+for one answered later. So a tool answered at once never names the shape it is
 not.
 
 `App` carries four fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`,
@@ -4559,7 +4529,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Seventy tools are
+relaunch would call tools the new binary does not have. The whole catalog is
 cheap to re-fetch; a stale list is not cheap to debug. `cache_scope` is
 `private`: there are no authorization contexts to share a result across.
 
@@ -4581,10 +4551,11 @@ shared with logging, is the other case.
 ## Security
 
 The endpoint hands out read access to any `.sfmr` path the process can read
-(`open_reconstruction` takes a path) and control of a window on the user's
-desktop. Both are appropriate for a tool the user explicitly started with a
-flag, and neither is appropriate for anything reachable from outside the
-machine.
+(`open_reconstruction` takes a path), write access to any path the process can
+write (`save_reconstruction` takes one too), and control of a window on the
+user's desktop. All three are appropriate for a tool the user explicitly
+started with a flag, and none is appropriate for anything reachable from
+outside the machine.
 
 1. **Off by default.** No flag, no listener, no port. This is the primary gate
    and the reason the rest can stay simple.
@@ -4597,8 +4568,13 @@ machine.
    driving their viewer through DNS rebinding. A real MCP client sends no
    `Origin` at all and is unaffected. `rmcp`'s `Host` allowlist — loopback by
    default — is left as it is.
-4. **No write path to disk.** No tool in this surface saves an `.sfmr`, exports
-   anything, or deletes a file. `close_reconstruction` unloads a reconstruction.
+4. **Two tools write to disk, and none deletes a file.** `save_reconstruction`
+   writes an `.sfmr` over the node's own file or to a path it is given
+   (§ "`save_reconstruction`"), and `build_index_files` writes a
+   reconstruction's SIFT index and cluster patches beside its `.sfmr`. Nothing
+   else in this surface writes a file, though an input tool can click File ▸
+   Save as a person can (§ "The tool surface"). `close_reconstruction` unloads
+   a reconstruction and leaves its file where it is.
 5. **The window announces it.** Title suffix and Scene panel header, always,
    while the server is live.
 
@@ -4635,7 +4611,7 @@ reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`."*
 status line and in the panel, where before only a success reached them. It is
 recorded by the drain rather than by the method that produced it, which is why
 every `AppState` method the MCP layer calls returns its failure instead of
-logging it, with the two exceptions that word their own, where the drain stands
+logging it, except for the methods that word their own, where the drain stands
 down instead (§ "Threading"). One failure, one entry, either way. Protocol errors
 are **not** logged — they never reach the viewer, and a request the GUI thread
 never saw belongs in the agent's own transcript.
@@ -4760,7 +4736,7 @@ where a test hands no host over.
 - **`get_window_layout` returns the file**: its `window_layout`, parsed back
   through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
   block beside it is the live one with `monitors`, current first; `panels` has
-  all eight, with the default layout's four behind-a-sibling tabs inactive and
+  every panel in `Tab::ALL`, with the default layout's behind-a-sibling tabs inactive and
   the rest active. A maximized fake makes the two disagree on purpose: the block
   reports the monitor-sized rectangle and the document the one it restores to.
   With no host, `window` is `null` and the document has no `window` section,
@@ -4786,7 +4762,7 @@ where a test hands no host over.
 - **`show_panel` / `hide_panel`**: hiding closes and reports `open: false`;
   hiding a closed panel succeeds and changes nothing; showing after hiding lands
   the panel in its default group-mate's node and in front; showing an open panel
-  raises it and moves nothing else; an unknown name lists the eight.
+  raises it and moves nothing else; an unknown name lists every panel name.
 - **The panel writes record the menu's own entries** — `Closed …`, `Opened …`,
   `Raised …`, and `Reset layout` for `"default"` — each under `Kind::Layout` as
   actor `MCP`, and a document records `Set layout`. A call carrying both portions
@@ -4811,7 +4787,7 @@ where a test hands no host over.
   `Panel(tab)`, the panel's name and its last laid-out size in the caption and
   in the query text; `viewer_3d` keeping the frame description. A closed panel
   is refused naming `show_panel`, one behind another is refused naming the tab
-  in front, an unknown name lists the eight, and a `show_panel` followed by a
+  in front, an unknown name lists every panel name, and a `show_panel` followed by a
   `screenshot` of that panel in one batch is accepted.
 - **`hud: false` with `viewer_3d`** defers with `ScreenshotSource::ViewportRender`
   and a query text ending `without HUD`; with another panel or with no panel it
@@ -5182,13 +5158,18 @@ is the panel's own list (§ "`get_history`"), and the save is the File menu's
 (§ "`save_reconstruction`"). An agent and a human editing the same node take
 turns rather than working in two different worlds.
 
-**Editing intrinsics is still not on the surface.** `set_camera_intrinsics`
-would be an edit like the others under this model, but it has real work behind
-it (a partial-parameter merge against `CameraModel`, and the re-upload of every
-frustum, distorted mesh and image quad built from the lens that changed), and it
-should land as its own change, with an edit spec beside the rest in
-[edits/](edits/README.md). Two tools that switch a camera to another model, as a
-proposal an agent can inspect before applying it, are proposed in
+**A lens changes through a fit or a solve, never through values the caller
+gives.** `switch_camera_model` replaces a camera with another model fitted to it
+(§ "`switch_camera_model`"), and `bundle_adjust` refines a camera's focal length
+and distortion where the call releases them (§ "`resect_camera_image` /
+`bundle_adjust`"). No tool sets a camera's parameters to given numbers. Such a
+tool would be an edit like the others under this model, but it has real work
+behind it (a partial-parameter merge against `CameraModel`, and the re-upload of
+every frustum, distorted mesh and image quad built from the lens that changed),
+and it would need an edit spec of its own beside the rest in
+[edits/](edits/README.md). Showing a model switch as a proposal an agent can
+inspect before applying it, `propose_camera_model` and the proposal form of
+`switch_camera_model`, is specified in
 [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
 
 ### Loose images, and the names held for them
@@ -5327,7 +5308,7 @@ Other candidates, in rough order of value:
   None of the three supported backends has, and a per-frame blit for a case that
   has not arisen is the wrong trade until it does.
 - **Should a panel screenshot include its tab bar?** The body is what the panel
-  shows; the tab bar is the same eight words every time. Excluded; include it if
+  shows; the tab bar is the same titles every time. Excluded; include it if
   an agent needs to see which tab is in front, which `get_window_layout`'s
   `panels` already says.
 - **Held keys.** The 3D viewport's fly keys act for as long as a key is down,

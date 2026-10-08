@@ -396,17 +396,19 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           observations) in a ninth where that typical agreement is at least \
                           0.5; blur_matched_pair_zncc, blur_matched_pair_zncc_grid and \
                           blur_matched_cell_deficit, the same three with each pair's tiles \
-                          blur-matched first (the sharper tile blurred, along each direction \
-                          in which the two tiles' self-similarity ellipses differ by more \
-                          than a quarter, to the other's sharpness), read over each pair's own \
+                          blur-matched first (where the other tile's self-similarity \
+                          semi-minor axis is at least a quarter longer than one tile's \
+                          semi-major axis, that tile blurred by a round Gaussian until its \
+                          semi-major axis reaches the other's semi-minor axis, at most 2 grid \
+                          px; any \
+                          other pair read as it is), read over each pair's own \
                           samples, null where the evaluation took no blur-matched readings; \
                           and reference_view, the reference-view \
                           rule's decision: is_reference, rejected_by (null for the reference, \
                           else the first test that turned it away: coverage under 0.99, \
                           clipped over 0.05, angle over 65 degrees, or at or past 90 once that \
-                          limit is dropped, cells for a cell deficit over 0.25 on the \
-                          blur-matched reading or 0.3 on the plain one, agreement for a pair \
-                          ZNCC more than 0.15 below the best \
+                          limit is dropped, cells for a cell deficit over 0.3, agreement \
+                          for a pair ZNCC more than 0.15 below the best \
                           candidate's, or sharpness for a candidate a sharper one beat or one \
                           with no self-similarity radius), \
                           fallback (none, or which tests the rule dropped because no view \

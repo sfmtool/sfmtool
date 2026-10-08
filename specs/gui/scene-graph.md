@@ -332,7 +332,9 @@ fixed-height for virtualization.
   ([background-tasks.md](background-tasks.md),
   [edits/retriangulate-point.md](edits/retriangulate-point.md)). It moves no
   camera and no lens, deletes no point and creates none, so every index still
-  means what it meant. It is **live only on a node whose observations carry a
+  means what it meant unless a point edit is pending, whose deleted slots close
+  up first ([document-model.md](document-model.md) § "Two kinds of edit"). It
+  is **live only on a node whose observations carry a
   pixel, some of whose images carry a pose, and that nothing is running on**,
   and greyed with the reason otherwise. Images taken through different cameras
   are not a reason, since each observation is solved through its own image's

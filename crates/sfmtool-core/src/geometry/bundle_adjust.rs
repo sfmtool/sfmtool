@@ -7,9 +7,8 @@
 //! camera's focal length and radial coefficient or spline by minimizing
 //! soft-L1 pixel reprojection error over a trim schedule with inter-round
 //! retriangulation. It is the multi-view generalization of
-//! [`crate::geometry::pose_refine`], and the native replacement for the
-//! cluster-bootstrap experiments' scipy BA
-//! (`specs/core/geometry/bundle-adjustment.md`).
+//! [`crate::geometry::pose_refine`]. The design is in
+//! `specs/core/geometry/bundle-adjustment.md`.
 //!
 //! Canonical camera frame throughout (the camera looks along `−Z`; a point in
 //! front has `z < 0`). Each Levenberg–Marquardt step is taken over a local

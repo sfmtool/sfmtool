@@ -1,19 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The anisotropic Gaussian blur of a tile, by normalized convolution over the
+//! The isotropic Gaussian blur of a tile, by normalized convolution over the
 //! samples that carry data.
 //!
-//! A Gaussian with covariance `Σ = [[a, b], [b, d]]` is split into two 1-D
-//! Gaussians (Geusebroek, Smeulders and van de Weijer, "Fast anisotropic Gauss
-//! filtering", 2003): one along the slanted line `(b/d, 1)`, with variance `d`
-//! in rows, and one along `x`, with the remaining variance `a − b²/d`. The two
-//! covariances add up to `Σ`. Where `a > d` the roles of the axes swap, so the
-//! line's slope is at most 1 in magnitude. A tap of the slanted pass lands
-//! between two samples of its row, and is read by linear interpolation, which
-//! adds a variance of `f(1 − f)` along the axis for a tap at fraction `f`; the
-//! axis pass subtracts the weighted mean of it from its own variance, so the
-//! two passes together keep the covariance asked for.
+//! A round Gaussian is the product of two 1-D Gaussians, one along each grid
+//! axis, so it is applied as two 1-D passes: one down the columns, then one
+//! along the rows.
 //!
 //! Samples without data, and positions past the tile's edge, carry neither a
 //! value nor a weight: the colour planes are blurred premultiplied by the data
@@ -27,17 +20,18 @@
 //! to 13% slower than the default build, by the kernel's shape, so there is no
 //! AVX2 form.
 
-use super::BlurCovariance;
-
-/// Buffers [`blur_tile`] reuses between calls.
+/// Buffers [`blur_tile`] and [`assess_blur`](super::assess_blur) reuse
+/// between calls.
 #[derive(Debug, Default, Clone)]
 pub struct BlurScratch {
     a: Vec<f32>,
     b: Vec<f32>,
-    line: Vec<Tap>,
-    axis: Vec<Tap>,
+    columns: Vec<Tap>,
+    rows: Vec<Tap>,
     /// One row of reciprocals of the blurred mask.
     inverse: Vec<f32>,
+    /// The blurred tile each of a blur assessment's probes is read on.
+    pub(super) probe: Vec<f32>,
 }
 
 /// One tap of a pass: `dst[y][x] += w · src[y + dy][x + dx]`.
@@ -49,9 +43,11 @@ struct Tap {
 }
 
 /// Blur the planar colour tile `values` (`channels` planes of `side × side`,
-/// row-major) by the Gaussian `cov`, over the samples `data` marks, into `out`
-/// (the same layout). A sample without data keeps its value in `out` and
-/// takes no part in the blur, and neither does anything past the tile's edge.
+/// row-major) by the isotropic Gaussian of width `sigma` grid px, over the
+/// samples `data` marks, into `out` (the same layout). A sample without data
+/// keeps its value in `out` and takes no part in the blur, and neither does
+/// anything past the tile's edge. A width of `1e-3` or less, or one that is
+/// not a number, leaves the tile as it is.
 ///
 /// # Panics
 ///
@@ -61,175 +57,26 @@ pub fn blur_tile(
     channels: usize,
     side: usize,
     data: &[bool],
-    cov: BlurCovariance,
-    out: &mut [f32],
-    scratch: &mut BlurScratch,
-) {
-    blur_with(values, channels, side, data, cov, out, scratch);
-}
-
-fn check_shapes(values: &[f32], channels: usize, side: usize, data: &[bool], out: &[f32]) {
-    let n = side * side;
-    assert_eq!(
-        values.len(),
-        channels * n,
-        "blur_tile: values do not cover the tile"
-    );
-    assert_eq!(data.len(), n, "blur_tile: one data flag per sample");
-    assert_eq!(
-        out.len(),
-        channels * n,
-        "blur_tile: out does not cover the tile"
-    );
-}
-
-/// The normalized taps `exp(−t²/2s²)` for `t = −K ..= K`, `K = ⌈3σ⌉`, with
-/// `s` chosen so the taps' variance `Σ w t²` is `σ²`.
-///
-/// From `σ = 1` up, the taps of `s = σ` have that variance to within 2% (the
-/// cut at `±K` takes up to 1.6% at `σ = 3`), and `s` is `σ`. Below, they fall short of it, more the narrower
-/// the Gaussian: `σ = 0.5` gives 0.215 for 0.25, and `σ = 0.3` under a tenth
-/// of 0.09. A pass of the slanted line is often that narrow along its rows,
-/// so there `s` is found by bisection. On the tile of sinusoids the passes are
-/// tested on (`the_two_passes_match_the_exact_blur_and_the_direct_2d_blur`),
-/// over semi-axes of 0.5 to 0.7 at every 5°, matching the variance brings the
-/// passes' worst error against the exact blur from 7.8 grey levels to 2.7.
-fn gaussian_weights(sigma: f64) -> Vec<f64> {
-    let radius = (3.0 * sigma).ceil().max(1.0) as isize;
-    let taps = |s: f64| -> Vec<f64> {
-        let raw: Vec<f64> = (-radius..=radius)
-            .map(|t| (-((t * t) as f64) / (2.0 * s * s)).exp())
-            .collect();
-        let total: f64 = raw.iter().sum();
-        raw.into_iter().map(|w| w / total).collect()
-    };
-    if sigma >= 1.0 {
-        return taps(sigma);
-    }
-    // `Σ w t²` of the normalized taps of `s`, summed over `t > 0` and doubled.
-    let variance = |s: f64| -> f64 {
-        let (mut total, mut moment) = (1.0, 0.0);
-        for t in 1..=radius {
-            let t2 = (t * t) as f64;
-            let w = (-t2 / (2.0 * s * s)).exp();
-            total += 2.0 * w;
-            moment += 2.0 * w * t2;
-        }
-        moment / total
-    };
-    // The taps' variance grows with `s`; at `s = σ` it is short of `σ²`, and
-    // at `σ + 0.5` past it for every `σ` under 1.
-    let (mut lo, mut hi) = (sigma, sigma + 0.5);
-    for _ in 0..20 {
-        let mid = 0.5 * (lo + hi);
-        if variance(mid) < sigma * sigma {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    taps(0.5 * (lo + hi))
-}
-
-/// The two passes' taps for `cov`: the slanted line's, then the axis pass's.
-/// Either is empty when its pass has nothing to do.
-fn plan(cov: BlurCovariance, line: &mut Vec<Tap>, axis: &mut Vec<Tap>) {
-    line.clear();
-    axis.clear();
-    let BlurCovariance {
-        xx: a,
-        xy: b,
-        yy: d,
-    } = cov;
-    // `along_rows`: the line steps one row per tap, `(slope, 1)`; otherwise
-    // one column per tap, `(1, slope)`.
-    let along_rows = d >= a;
-    let (major, other, slope) = if along_rows {
-        (d, a, if d > 0.0 { b / d } else { 0.0 })
-    } else {
-        (a, d, if a > 0.0 { b / a } else { 0.0 })
-    };
-    let line_sigma = major.max(0.0).sqrt();
-    let mut interpolation = 0.0;
-    if line_sigma > 1e-3 {
-        let weights = gaussian_weights(line_sigma);
-        let radius = (weights.len() / 2) as isize;
-        for (i, &w) in weights.iter().enumerate() {
-            let t = i as isize - radius;
-            let offset = t as f64 * slope;
-            let whole = offset.floor();
-            let f = offset - whole;
-            interpolation += w * f * (1.0 - f);
-            let whole = whole as isize;
-            for (shift, wi) in [(whole, w * (1.0 - f)), (whole + 1, w * f)] {
-                if wi == 0.0 {
-                    continue;
-                }
-                let (dy, dx) = if along_rows { (t, shift) } else { (shift, t) };
-                line.push(Tap {
-                    dy,
-                    dx,
-                    w: wi as f32,
-                });
-            }
-        }
-    }
-    // What is left across the line once it carries `slope² · major` of it,
-    // less what the line's interpolation already added there.
-    let rest = other - slope * slope * major - interpolation;
-    if rest > 1e-6 {
-        let weights = gaussian_weights(rest.sqrt());
-        let radius = (weights.len() / 2) as isize;
-        for (i, &w) in weights.iter().enumerate() {
-            let t = i as isize - radius;
-            // Across a line that steps through the rows is along x.
-            let (dy, dx) = if along_rows { (0, t) } else { (t, 0) };
-            axis.push(Tap {
-                dy,
-                dx,
-                w: w as f32,
-            });
-        }
-    }
-}
-
-/// How far a pass's taps reach: `(rows, columns)`.
-fn reach(taps: &[Tap]) -> (usize, usize) {
-    taps.iter().fold((0, 0), |(ry, rx), t| {
-        (ry.max(t.dy.unsigned_abs()), rx.max(t.dx.unsigned_abs()))
-    })
-}
-
-fn blur_with(
-    values: &[f32],
-    channels: usize,
-    side: usize,
-    data: &[bool],
-    cov: BlurCovariance,
+    sigma: f64,
     out: &mut [f32],
     scratch: &mut BlurScratch,
 ) {
     check_shapes(values, channels, side, data, out);
     out.copy_from_slice(values);
-    if cov.is_zero() || side == 0 {
+    if sigma.is_nan() || sigma <= 1e-3 || side == 0 {
         return;
     }
     let BlurScratch {
         a,
         b,
-        line,
-        axis,
+        columns,
+        rows,
         inverse,
+        ..
     } = scratch;
-    plan(cov, line, axis);
-    let (first, second): (&[Tap], &[Tap]) = match (line.is_empty(), axis.is_empty()) {
-        (false, false) => (line, axis),
-        (false, true) => (line, &[]),
-        (true, false) => (axis, &[]),
-        (true, true) => return,
-    };
-    let (r1y, r1x) = reach(first);
-    let (r2y, r2x) = reach(second);
+    plan(sigma, columns, rows);
+    let (r1y, r1x) = reach(columns);
+    let (r2y, r2x) = reach(rows);
     // The bands each pass writes: the first over the tile and the second's
     // reach round it, the second over the tile alone. A band's width is
     // rounded up to whole 8-lane registers; the columns past the tile it adds
@@ -277,14 +124,9 @@ fn blur_with(
             *d = if f { 1.0 } else { 0.0 };
         }
     }
-    pass(a, b, first, &band1, &g);
-    let result: &[f32] = if second.is_empty() {
-        b
-    } else {
-        pass(b, a, second, &band2, &g);
-        a
-    };
-    let mask = &result[channels * g.plane..];
+    pass(a, b, columns, &band1, &g);
+    pass(b, a, rows, &band2, &g);
+    let mask = &a[channels * g.plane..];
     inverse.resize(side, 0.0);
     for y in 0..side {
         let at = (pad_y + y) * stride + pad_x;
@@ -293,7 +135,7 @@ fn blur_with(
             *inv = if f && m > 1e-6 { 1.0 / m } else { 0.0 };
         }
         for c in 0..channels {
-            let blurred = &result[c * g.plane + at..c * g.plane + at + side];
+            let blurred = &a[c * g.plane + at..c * g.plane + at + side];
             let dst = &mut out[c * n + y * side..c * n + (y + 1) * side];
             for ((d, &v), &inv) in dst.iter_mut().zip(blurred).zip(inverse.iter()) {
                 if inv > 0.0 {
@@ -305,17 +147,95 @@ fn blur_with(
     // This call wrote `a` only on the tile's rows, from its first column:
     // the tile itself, and the second pass its band. Put the zeros back there,
     // so the next call, of any geometry, finds `a` all zero.
-    let end = if second.is_empty() {
-        pad_x + side
-    } else {
-        band2.cols.end
-    };
     for y in band2.rows.clone() {
         for p in 0..planes {
             let row = p * g.plane + y * stride;
-            a[row + pad_x..row + end].fill(0.0);
+            a[row + pad_x..row + band2.cols.end].fill(0.0);
         }
     }
+}
+
+fn check_shapes(values: &[f32], channels: usize, side: usize, data: &[bool], out: &[f32]) {
+    let n = side * side;
+    assert_eq!(
+        values.len(),
+        channels * n,
+        "blur_tile: values do not cover the tile"
+    );
+    assert_eq!(data.len(), n, "blur_tile: one data flag per sample");
+    assert_eq!(
+        out.len(),
+        channels * n,
+        "blur_tile: out does not cover the tile"
+    );
+}
+
+/// The normalized taps `exp(−t²/2s²)` for `t = −K ..= K`, `K = ⌈3σ⌉`, with
+/// `s` chosen so the taps' variance `Σ w t²` is `σ²`.
+///
+/// From `σ = 1` up, the taps of `s = σ` have that variance to within 2% (the
+/// cut at `±K` takes up to 1.6% at `σ = 3`), and `s` is `σ`. Below, they fall
+/// short of it, more the narrower the Gaussian: `σ = 0.5` gives 0.215 for
+/// 0.25, and `σ = 0.3` under a tenth of 0.09. Most pairs are blurred by less
+/// than 1 grid px, so there `s` is found by bisection, and the blur adds the
+/// variance asked for.
+fn gaussian_weights(sigma: f64) -> Vec<f64> {
+    let radius = (3.0 * sigma).ceil().max(1.0) as isize;
+    let taps = |s: f64| -> Vec<f64> {
+        let raw: Vec<f64> = (-radius..=radius)
+            .map(|t| (-((t * t) as f64) / (2.0 * s * s)).exp())
+            .collect();
+        let total: f64 = raw.iter().sum();
+        raw.into_iter().map(|w| w / total).collect()
+    };
+    if sigma >= 1.0 {
+        return taps(sigma);
+    }
+    // `Σ w t²` of the normalized taps of `s`, summed over `t > 0` and doubled.
+    let variance = |s: f64| -> f64 {
+        let (mut total, mut moment) = (1.0, 0.0);
+        for t in 1..=radius {
+            let t2 = (t * t) as f64;
+            let w = (-t2 / (2.0 * s * s)).exp();
+            total += 2.0 * w;
+            moment += 2.0 * w * t2;
+        }
+        moment / total
+    };
+    // The taps' variance grows with `s`; at `s = σ` it is short of `σ²`, and
+    // at `σ + 0.5` past it for every `σ` under 1.
+    let (mut lo, mut hi) = (sigma, sigma + 0.5);
+    for _ in 0..20 {
+        let mid = 0.5 * (lo + hi);
+        if variance(mid) < sigma * sigma {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    taps(0.5 * (lo + hi))
+}
+
+/// The two passes' taps for a blur of width `sigma`: down the columns, then
+/// along the rows.
+fn plan(sigma: f64, columns: &mut Vec<Tap>, rows: &mut Vec<Tap>) {
+    let weights = gaussian_weights(sigma);
+    let radius = (weights.len() / 2) as isize;
+    columns.clear();
+    rows.clear();
+    for (i, &w) in weights.iter().enumerate() {
+        let t = i as isize - radius;
+        let w = w as f32;
+        columns.push(Tap { dy: t, dx: 0, w });
+        rows.push(Tap { dy: 0, dx: t, w });
+    }
+}
+
+/// How far a pass's taps reach: `(rows, columns)`.
+fn reach(taps: &[Tap]) -> (usize, usize) {
+    taps.iter().fold((0, 0), |(ry, rx), t| {
+        (ry.max(t.dy.unsigned_abs()), rx.max(t.dx.unsigned_abs()))
+    })
 }
 
 struct Geometry {
@@ -358,45 +278,32 @@ fn pass(src: &[f32], dst: &mut [f32], taps: &[Tap], band: &Band, g: &Geometry) {
 }
 
 /// The same blur as [`blur_tile`], as one direct 2-D convolution with the
-/// sampled kernel `exp(−½ dᵀ Σ⁻¹ d)` over `|dx|, |dy| ≤ ⌈3 √λ_max⌉`: the
-/// reference the two passes are checked against, and the cost they are
-/// measured against. `Σ` must be positive definite; a 1-D blur has no 2-D
-/// sampled form.
-#[cfg_attr(not(test), allow(dead_code))]
+/// sampled kernel `exp(−|d|²/2σ²)` over `|dx|, |dy| ≤ ⌈3σ⌉`: the reference the
+/// two passes are checked against, and the cost they are measured against.
+/// It samples the kernel at `σ` itself, where the passes match the variance
+/// asked for, so the two agree from `σ = 1` up.
+#[cfg(test)]
 pub(crate) fn blur_tile_direct(
     values: &[f32],
     channels: usize,
     side: usize,
     data: &[bool],
-    cov: BlurCovariance,
+    sigma: f64,
     out: &mut [f32],
 ) {
     check_shapes(values, channels, side, data, out);
     out.copy_from_slice(values);
-    if cov.is_zero() {
+    if sigma.is_nan() || sigma <= 1e-3 {
         return;
     }
-    let BlurCovariance {
-        xx: a,
-        xy: b,
-        yy: d,
-    } = cov;
-    let det = a * d - b * b;
-    assert!(
-        det > 0.0,
-        "blur_tile_direct: the covariance must be positive definite"
-    );
-    let (i00, i01, i11) = (d / det, -b / det, a / det);
-    let lmax = 0.5 * (a + d + ((a - d) * (a - d) + 4.0 * b * b).sqrt());
-    let radius = (3.0 * lmax.sqrt()).ceil() as isize;
+    let radius = (3.0 * sigma).ceil() as isize;
     let side_i = side as isize;
     let n = side * side;
     let mut kernel = Vec::new();
     for dy in -radius..=radius {
         for dx in -radius..=radius {
-            let (x, y) = (dx as f64, dy as f64);
-            let w = (-0.5 * (x * x * i00 + 2.0 * x * y * i01 + y * y * i11)).exp();
-            kernel.push((dx, dy, w));
+            let r2 = (dx * dx + dy * dy) as f64;
+            kernel.push((dx, dy, (-0.5 * r2 / (sigma * sigma)).exp()));
         }
     }
     for y in 0..side_i {

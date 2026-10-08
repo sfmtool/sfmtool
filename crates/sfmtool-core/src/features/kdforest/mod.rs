@@ -23,6 +23,11 @@
 //! integer domain (`i64` squared-L2), matching
 //! [`crate::features::feature_match::descriptor`]; `sqrt` is taken only when reporting.
 //!
+//! The design is `specs/core/features/randomized-kdtree-forest.md`; the
+//! file-backed forest and the patch constellation query in this module have
+//! their own specs, `lazy-kdforest-query.md` and `kdf-constellation-query.md`
+//! in the same directory.
+//!
 //! # Example
 //! ```
 //! use sfmtool_core::features::kdforest::{KdForestU8, KdForestParams};
@@ -72,7 +77,8 @@ use rayon::prelude::*;
 
 use crate::progress::{Cancelled, Progress};
 
-/// Print per-query search diagnostics to stderr when `SFMTOOL_KDFOREST_STATS=1`.
+/// Print per-query search diagnostics to stderr when `SFMTOOL_KDFOREST_STATS` is
+/// set, to any value (`0` and the empty string included).
 ///
 /// Mirrors the SIFT/optical-flow `*_STATS`/`*_TIMING` precedent; one cached bool
 /// check per batch when unset. Reported by [`KdForest::search_batch`] et al.
@@ -429,7 +435,8 @@ impl<S: ForestScalar> KdForest<S> {
         // Optional diagnostics: accumulated lock-free, only touched when enabled.
         let stats = (*KDFOREST_STATS).then(AtomicStats::default);
 
-        // One reusable scratch per rayon worker (allocated once, reset per query)
+        // One reusable scratch per piece rayon splits the batch into (made by
+        // `for_each_init`, so a worker may make several; reset per query)
         // keeps the query inner loop free of per-query heap/bitset allocation.
         // With an `order`, row `j` of the working arrays holds query
         // `order[j]`'s results until the scatter below restores query order.
