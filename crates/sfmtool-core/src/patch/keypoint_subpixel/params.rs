@@ -129,15 +129,18 @@ pub struct KeypointSubpixelParams {
     /// offset by ~3% (the moved view's own contribution dominates the shared
     /// `T`); `N ≥ 3` is recommended.
     pub consensus_refresh: ConsensusRefresh,
-    /// Also fuse each point's **representative RGBA texture** at the FINAL
-    /// per-view keypoints (see [`KeypointRefinement::representative`]): after the
-    /// last sweep the views are re-rendered at their final offsets, the final IRLS
-    /// view weights are rebuilt from those cores, and the kept views are rendered
-    /// full-grid (`PatchViewStack`) at the
-    /// final keypoints and fused (weighted-mean RGB + agreement·coverage alpha,
-    /// exactly the normal-refine representative). Points at infinity go through the
-    /// same path (`w = 0` rendering is first-class here). Costs one extra full-grid
-    /// source render per live view per point, so it is off by default.
+    /// Also render each point's **stored bitmap** at the FINAL per-view
+    /// keypoints (see [`KeypointRefinement::representative`]): every view's
+    /// `R×R` tile is rendered at its final keypoint, the reference-view rule
+    /// is run over the tiles, and the picked view's tile is the bitmap
+    /// ([`crate::patch::stored_bitmap`]), named in
+    /// [`KeypointRefinement::reference`]. Where the rule picks no view, the
+    /// views are re-rendered at their final offsets, the final IRLS view
+    /// weights rebuilt from those cores, and the kept views rendered full-grid
+    /// and fused (weighted-mean RGB + agreement·coverage alpha). Points at
+    /// infinity go through the same path (`w = 0` rendering is first-class
+    /// here). Costs a tile render and a self-similarity reading per view and
+    /// member coherence's matrix per point, so it is off by default.
     pub render_bitmaps: bool,
 }
 
@@ -182,11 +185,17 @@ pub struct KeypointRefinement {
     /// refined core against the frozen consensus). `NaN` when the view could not be
     /// scored (e.g. fewer than two views, so no consensus was built).
     pub scores: Vec<f64>,
-    /// The point's fused representative RGBA texture (`R·R·4`, row-major), rendered
-    /// at the **final** per-view keypoints and fused with the final IRLS view
-    /// weights — only when [`KeypointSubpixelParams::render_bitmaps`] is set.
-    /// `None` when the point produced no valid cross-view consensus (fewer than
-    /// two views survive the projection gate / render at their final offsets) —
-    /// the uniform "culled point" signal, for finite and infinity points alike.
+    /// The point's stored bitmap (`R·R·4` RGBA, row-major), rendered at the
+    /// **final** per-view keypoints — only when
+    /// [`KeypointSubpixelParams::render_bitmaps`] is set: the tile of the view
+    /// [`Self::reference`] names, or the fused mean of the views where it
+    /// names none. `None` when the point produced no valid cross-view
+    /// consensus (fewer than two views survive the projection gate / render at
+    /// their final offsets) — the uniform "culled point" signal, for finite and
+    /// infinity points alike.
     pub representative: Option<Vec<u8>>,
+    /// The view, as an index into [`Self::views`], whose tile
+    /// [`Self::representative`] is; `None` where the bitmap is the fused mean,
+    /// or there is none.
+    pub reference: Option<usize>,
 }

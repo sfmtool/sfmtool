@@ -62,9 +62,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blur_matched::assess_blur, m)?)?;
     m.add_function(wrap_pyfunction!(blur_matched::blur_sigma_to_reach, m)?)?;
     m.add_function(wrap_pyfunction!(blur_matched::blur_to_length, m)?)?;
-    m.add_function(wrap_pyfunction!(blur_matched::blur_matched_zncc_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(blur_matched::score_against_bitmap, m)?)?;
     // The default bar on the ZNCC self-similarity radius, shared by the member
-    // gates, the bench and the batch culls on a point's consensus bitmap.
+    // gates, the bench and the batch culls on a point's stored bitmap.
     m.add(
         "DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS",
         sfmtool_core::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,

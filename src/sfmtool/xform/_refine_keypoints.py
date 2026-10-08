@@ -27,6 +27,7 @@ import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
+from .._patch_compaction import reference_observations_from_images
 from ._patch_params import validate_patch_params
 
 _CONSENSUS_REFRESH = ("per_sweep", "per_move")
@@ -202,27 +203,37 @@ class RefineKeypointsTransform:
 
         self._print_summary(result)
 
-        # With `bitmaps`, also persist the fused per-point RGBA textures rendered
-        # at the final refined keypoints. The stored frame is unchanged (keypoints
-        # moved, not the surfel), so re-persisting it keeps the recon consistent
-        # and lets the bitmaps attach to it.
+        # With `bitmaps`, also persist the per-point stored bitmaps rendered at
+        # the final refined keypoints, each the tile of the view the
+        # reference-view rule picked, and which observation that is. The stored
+        # frame is unchanged (keypoints moved, not the surfel), so re-persisting
+        # it keeps the recon consistent and lets the bitmaps attach to it.
         if self.bitmaps:
             npoints = recon.point_count
             bitmaps = np.zeros(
                 (npoints, self.resolution, self.resolution, 4), dtype=np.uint8
             )
+            reference_images = np.full(npoints, -1, dtype=np.int64)
             n_filled = 0
             for d in result:
                 bmp = d.get("bitmap")
                 if bmp is not None:
-                    bitmaps[int(d["point_index"])] = np.asarray(bmp, dtype=np.uint8)
+                    pid = int(d["point_index"])
+                    bitmaps[pid] = np.asarray(bmp, dtype=np.uint8)
+                    if d.get("reference_image") is not None:
+                        reference_images[pid] = int(d["reference_image"])
                     n_filled += 1
             print(
                 f"  Saving {len(result)} patches and {n_filled} bitmaps "
                 f"to the reconstruction"
             )
             return recon.clone_with_changes(
-                keypoints_xy=kxy, patches=cloud, patch_bitmaps=bitmaps
+                keypoints_xy=kxy,
+                patches=cloud,
+                patch_bitmaps=bitmaps,
+                reference_observations=reference_observations_from_images(
+                    recon, reference_images
+                ),
             )
         return recon.clone_with_changes(keypoints_xy=kxy)
 

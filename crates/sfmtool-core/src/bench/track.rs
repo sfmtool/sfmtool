@@ -431,28 +431,37 @@ pub struct TrackMeasurement {
     /// `0` where no cell is. `None` for an `out` observation and where it has
     /// no reading in any judged cell.
     pub cell_deficit: Option<f64>,
-    /// The **blur-matched pair ZNCC**: [`Self::pair_zncc`] with each pair's
-    /// tiles blur-matched first, the sharper blurred to the other's sharpness
-    /// ([`blur_matched_agreement`](crate::patch::reference_view::blur_matched_agreement)),
-    /// over each pair's own samples with data rather than member coherence's
-    /// common support. `None` for an `out` observation, where the evaluation
-    /// took no blur-matched readings
-    /// ([`ReferenceViewOptions::matching`](super::ReferenceViewOptions::matching)),
-    /// and where it has no reading.
-    pub blur_matched_pair_zncc: Option<f64>,
-    /// [`Self::pair_zncc_grid`] on the same blur-matched pairs. `None` wherever
-    /// [`Self::blur_matched_pair_zncc`] is not taken.
-    pub blur_matched_pair_zncc_grid: Option<[[f64; 3]; 3]>,
-    /// [`Self::cell_deficit`] of [`Self::blur_matched_pair_zncc_grid`]. `None`
-    /// wherever that grid is, and where it has no reading in any judged cell.
-    pub blur_matched_cell_deficit: Option<f64>,
     /// What the reference-view rule decided about this observation: picked as
-    /// the **reference view**, or the test that turned it away, which tests
-    /// the rule dropped for the track, and which readings its agreement test
-    /// and cell check read
-    /// ([`choose_reference_view_with`](crate::patch::reference_view::choose_reference_view_with)).
+    /// the **reference view**, or the test that turned it away, and which
+    /// tests the rule dropped for the track
+    /// ([`choose_reference_view`](crate::patch::reference_view::choose_reference_view)).
     /// `None` for an `out` observation, which the rule does not consider.
     pub reference_view: Option<ReferenceStanding>,
+    /// The **bitmap score**: the observation's tile's ZNCC with the track's
+    /// patch bitmap as stored ([`TrackPayload::bitmap`]), windowed, over the
+    /// samples with data in both
+    /// ([`BitmapScorer`](crate::patch::stored_bitmap::BitmapScorer)). `1`
+    /// for the observation the bitmap is the render of
+    /// ([`TrackPayload::reference`]), which is not computed. `None` where the
+    /// track has no bitmap, the tile could not be rendered, or the pair could
+    /// not be read.
+    pub bitmap_zncc: Option<f64>,
+    /// The **blur-matched bitmap score**: [`Self::bitmap_zncc`] after the
+    /// bitmap, and only the bitmap, is blurred to this observation's
+    /// sharpness where it is sharper along every direction by at least the
+    /// ratio of 1.25; the plain score where it is not. `None` wherever
+    /// [`Self::bitmap_zncc`] is.
+    pub blur_matched_bitmap_zncc: Option<f64>,
+    /// The width of the round blur, in grid px, the bitmap was blurred by for
+    /// [`Self::blur_matched_bitmap_zncc`]; `0` where the pair was read plain.
+    /// `None` wherever [`Self::bitmap_zncc`] is.
+    pub bitmap_blur_sigma: Option<f64>,
+    /// Whether this observation's tile is sharper than the bitmap along every
+    /// direction (its self-similarity semi-major axis shorter than the
+    /// bitmap's semi-minor axis), so a candidate to replace the reference.
+    /// Such a pair is read plain. `None` wherever [`Self::bitmap_zncc`] is,
+    /// and for the reference observation itself.
+    pub sharper_than_bitmap: Option<bool>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
     /// therefore kept, in patch-grid px.
@@ -660,8 +669,19 @@ pub struct TrackPayload {
     /// [`Self::position`] when both are present, and its `w` agrees with
     /// [`Self::at_infinity`].
     pub placement: Option<OrientedPatch>,
-    /// The `(R, R, C)` consensus bitmap the observations were fused into.
+    /// The `(R, R, C)` patch bitmap: the render of the reference observation
+    /// [`Self::reference`] names, or, where it names none, a mean of the `in`
+    /// observations' renders (a bitmap fused before the reference was recorded,
+    /// or one the reference-view rule found no view for).
     pub bitmap: Option<Array3<u8>>,
+    /// The observation, as an index into the track's observations, whose
+    /// render [`Self::bitmap`] is. `None` where the bitmap is not one
+    /// observation's render, or there is no bitmap.
+    ///
+    /// It follows its observation through every step that removes or reorders
+    /// observations, and is dropped with the bitmap by every step that moves
+    /// the patch. A commit writes it as the point's reference observation.
+    pub reference: Option<usize>,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
     pub color: [u8; 3],
@@ -1081,13 +1101,21 @@ impl EditableTrack {
             map.push(Some(next.observations.len()));
             next.observations.push(kept);
         }
-        if let Stage::Cluster(payload) = &mut next.stage {
-            match map.get(payload.reference).copied().flatten() {
+        match &mut next.stage {
+            Stage::Cluster(payload) => match map.get(payload.reference).copied().flatten() {
                 Some(reference) => payload.reference = reference,
                 None => {
                     payload.reference = 0;
                     payload.template = None;
                 }
+            },
+            // The bitmap is kept; the row it is the tile of follows its
+            // observation, and a bitmap whose observation was dropped names
+            // none.
+            Stage::Track(payload) => {
+                payload.reference = payload
+                    .reference
+                    .and_then(|r| map.get(r).copied().flatten());
             }
         }
         Some((next, map))

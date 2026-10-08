@@ -1,15 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `PatchCloud.render_bitmaps`: fuse every patch's RGBA bitmap at its stored
-//! frame and keypoints, moving nothing.
+//! `PatchCloud.render_bitmaps`: render every patch's stored bitmap, its
+//! reference view's tile, at its stored frame and keypoints, moving nothing.
 
-use numpy::{IntoPyArray, PyArray4};
+use numpy::{IntoPyArray, PyArray1, PyArray4};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use sfmtool_core::patch::keypoint_subpixel::{fuse_patch_cloud_bitmaps, KeypointSubpixelParams};
+use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::patch::stored_bitmap::render_patch_cloud_bitmaps;
 use sfmtool_core::progress::Progress;
 
 use super::args::parse_sampler;
@@ -17,17 +18,22 @@ use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
 
+/// The bitmap column and the reference observation of each point.
+type BitmapsAndReferences<'py> = (Bound<'py, PyArray4<u8>>, Bound<'py, PyArray1<i32>>);
+
 #[pymethods]
 impl PyPatchCloud {
-    /// Fuse an RGBA bitmap for every patch at the patch's stored frame and each
-    /// observation's stored keypoint, **moving nothing**.
+    /// Render the stored RGBA bitmap of every patch at the patch's stored frame
+    /// and each observation's stored keypoint, **moving nothing**.
     ///
-    /// The sub-pixel refiner's own fuse run with no Gauss-Newton step, so a
-    /// bitmap here equals what :meth:`refine_keypoints` renders for a patch
-    /// whose keypoints it did not move. Each patch is fused from its point's
-    /// whole track in ``recon``, at the per-observation keypoints the
-    /// reconstruction stores, which is why ``recon`` must be an
-    /// ``embedded_patches`` reconstruction.
+    /// Each point's bitmap is the ``R×R`` tile of the observation the
+    /// reference-view rule picks among its whole track in ``recon``, rendered
+    /// at that observation's stored keypoint, with alpha 255 on the samples on
+    /// the photograph and 0 elsewhere. Where the rule picks none, it is the
+    /// fused mean of the views and names no observation. A bitmap here equals
+    /// what :meth:`refine_keypoints` renders for a patch whose keypoints it did
+    /// not move. ``recon`` must carry inline keypoints, as an
+    /// ``embedded_patches`` reconstruction does.
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from, carrying inline
@@ -42,10 +48,13 @@ impl PyPatchCloud {
     ///     progress: Optional progress counter, bumped once per patch.
     ///
     /// Returns:
-    ///     The ``(P, R, R, 4)`` uint8 bitmap column for the reconstruction's
-    ///     ``P`` points, as ``clone_with_changes(patch_bitmaps=...)`` takes it.
-    ///     A point with no patch, or with fewer than two observations that
-    ///     render in frame, gets a zero row.
+    ///     ``(bitmaps, reference_observations)``: the ``(P, R, R, 4)`` uint8
+    ///     bitmap column for the reconstruction's ``P`` points, and the
+    ///     ``(P,)`` int32 index of each point's reference observation within
+    ///     its own track, ``-1`` for none, as
+    ///     ``clone_with_changes(patch_bitmaps=..., reference_observations=...)``
+    ///     takes them. A point with no patch, or with fewer than two
+    ///     observations, gets a zero row and ``-1``.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -59,7 +68,7 @@ impl PyPatchCloud {
         resolution: u32,
         sampler: &str,
         progress: Option<ProgressCounter>,
-    ) -> PyResult<Bound<'py, PyArray4<u8>>> {
+    ) -> PyResult<BitmapsAndReferences<'py>> {
         if resolution < 2 {
             return Err(PyValueError::new_err(format!(
                 "resolution must be >= 2, got {resolution}"
@@ -95,7 +104,7 @@ impl PyPatchCloud {
         let counter = progress.as_ref().map(|p| p.handle());
         let column = py
             .detach(|| {
-                fuse_patch_cloud_bitmaps(
+                render_patch_cloud_bitmaps(
                     &self.inner,
                     recon,
                     &views,
@@ -104,7 +113,10 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .expect("nothing cancels a fuse given no cancel flag");
-        Ok(column.into_pyarray(py))
+            .expect("nothing cancels a render given no cancel flag");
+        Ok((
+            column.bitmaps.into_pyarray(py),
+            PyArray1::from_vec(py, column.reference_observations),
+        ))
     }
 }

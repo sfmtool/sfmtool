@@ -509,20 +509,9 @@ class TestEvaluating:
             assert 0.0 <= entry["clipped_share"] <= 1.0
             # A committed point's rows are all in, so each is judged.
             standing = entry["reference_view"]
-            assert set(standing) == {
-                "is_reference",
-                "rejected_by",
-                "fallback",
-                "agreement_read",
-                "cells_read",
-            }
-            # The default reading takes the blur-matched agreements, and the
-            # rule reads them.
-            assert standing["agreement_read"] == "blur_matched"
-            assert standing["cells_read"] == "blur_matched"
+            assert set(standing) == {"is_reference", "rejected_by", "fallback"}
             assert entry["pair_zncc_grid"].shape == (3, 3)
-            assert entry["blur_matched_pair_zncc_grid"].shape == (3, 3)
-            assert -1.0 <= entry["blur_matched_pair_zncc"] <= 1.0
+            assert -1.0 <= entry["pair_zncc"] <= 1.0
             if standing["is_reference"]:
                 assert standing["rejected_by"] is None
                 picked.append(i)
@@ -547,6 +536,29 @@ class TestEvaluating:
             assert reference["coverage"] >= 0.99
             assert reference["viewing_angle_deg"] <= 65.0
             assert reference["clipped_share"] <= 0.05
+
+    def test_a_fit_stores_the_reference_row_s_tile_and_scores_the_rest(
+        self, edited, images, long_track_point
+    ):
+        """A fit stores the tile of the row the reference-view rule picks as
+        the bitmap and names it; every other row carries its plain and
+        blur-matched scores against that bitmap, and the bitmap's row reads 1."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        fitted, _ = fit(track, edited, images)
+        source = fitted.bitmap_observation
+        assert source is not None
+        rows = [o["track"] for o in fitted.observations]
+        assert rows[source]["reference_view"]["is_reference"]
+        assert rows[source]["bitmap_zncc"] == 1.0
+        assert "sharper_than_bitmap" not in rows[source]
+        for i, entry in enumerate(rows):
+            if i == source or "bitmap_zncc" not in entry:
+                continue
+            assert -1.0 <= entry["bitmap_zncc"] < 1.0
+            assert entry["bitmap_blur_sigma"] >= 0.0
+            if entry["bitmap_blur_sigma"] == 0.0:
+                assert entry["blur_matched_bitmap_zncc"] == entry["bitmap_zncc"]
+            assert isinstance(entry["sharper_than_bitmap"], bool)
 
     def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
         self, edited, images, long_track_point

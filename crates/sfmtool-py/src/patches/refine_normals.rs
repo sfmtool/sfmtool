@@ -106,20 +106,24 @@ impl PyPatchCloud {
     ///         comparison reference independent of recon kind. Works with
     ///         the fronto ``cache`` (each view's base is rendered at its
     ///         anchored center), so there is no speed penalty either way.
-    ///     render_bitmaps: If true, also render each refined patch's RGBA
-    ///         representative texture at the found normal and return them scattered
-    ///         to per-3D-point rows (see ``bitmaps`` below). Costs one extra
-    ///         full-grid source render per kept view per patch, so it is off by
+    ///     render_bitmaps: If true, also render each refined patch's stored
+    ///         bitmap at the found normal, the tile of the view the
+    ///         reference-view rule picks (the fused mean where it picks none),
+    ///         and return them scattered to per-3D-point rows (see ``bitmaps``
+    ///         below). Costs a tile render and a self-similarity reading per
+    ///         view and member coherence's matrix per patch, so it is off by
     ///         default.
     ///
     /// Returns a dict of per-patch results (numpy arrays parallel to the cloud):
     /// ``normal`` (Nx3), ``photoconsistency`` (N), ``init_photoconsistency`` (N),
     /// ``confidence`` (N), ``valid_view_count`` (N). The cloud's patches are
     /// updated to the refined normals in place. When ``render_bitmaps`` is true,
-    /// also ``bitmaps``: a ``(P, R, R, 4)`` uint8 array of fused RGBA patch
-    /// textures scattered to **per-3D-point** rows (``P`` = ``recon`` point count,
+    /// also ``bitmaps``: a ``(P, R, R, 4)`` uint8 array of the stored bitmaps
+    /// scattered to **per-3D-point** rows (``P`` = ``recon`` point count,
     /// ``R`` = ``resolution``), zero rows for points with no refined patch — ready
-    /// to pass straight to ``clone_with_changes(patch_bitmaps=...)``.
+    /// to pass straight to ``clone_with_changes(patch_bitmaps=...)`` — and
+    /// ``reference_images``: a ``(P,)`` int64 array of the image whose tile each
+    /// point's bitmap is, ``-1`` for a fused mean or no bitmap.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
@@ -370,17 +374,27 @@ impl PyPatchCloud {
                 });
             let stride = r * r * 4;
             let mut flat = vec![0u8; npoints * stride];
-            for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
+            // The image whose tile each point's bitmap is, -1 for a fused mean.
+            let mut reference_images = vec![-1i64; npoints];
+            for ((res, &pid), pv) in results
+                .iter()
+                .zip(&self.inner.point_indexes)
+                .zip(&patch_views)
+            {
                 if let Some(rep) = &res.representative {
                     let pid = pid as usize;
                     if pid < npoints && rep.len() == stride {
                         flat[pid * stride..(pid + 1) * stride].copy_from_slice(rep);
+                        if let Some(&image) = res.reference.and_then(|k| pv.get(k)) {
+                            reference_images[pid] = i64::from(image);
+                        }
                     }
                 }
             }
             let arr = ndarray::Array4::from_shape_vec((npoints, r, r, 4), flat)
                 .expect("bitmap scatter shape matches");
             out.set_item("bitmaps", arr.into_pyarray(py))?;
+            out.set_item("reference_images", reference_images.into_pyarray(py))?;
         }
         Ok(out)
     }

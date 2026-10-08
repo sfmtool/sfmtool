@@ -499,9 +499,9 @@ fn a_cluster_near_the_pixel_carries_it_into_the_other_photographs() {
     assert_rebuilt(&scene, &track, &report);
 }
 
-/// The returned track carries its consensus bitmap, fused where the track
+/// The returned track carries its patch bitmap, rendered where the track
 /// stands after the final slide onto the pixel, on the reconstruction's own
-/// bitmap grid, and the colour at its centre; fusing it again moves nothing.
+/// bitmap grid, and the colour at its centre; rendering it again moves nothing.
 #[test]
 fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
     let scene = Scene::new();
@@ -533,7 +533,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         "the colour is not the tile's centre"
     );
 
-    let again = crate::bench::fit::fuse_bitmap_in_place(
+    let again = crate::bench::fit::render_bitmap_in_place(
         &track,
         &edited,
         &views,

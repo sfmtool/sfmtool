@@ -218,9 +218,10 @@ class AddPatchBitmapsTransform:
     """Render the patch bitmap column at the stored frames and keypoints.
 
     Moves nothing: positions, normals, frames, keypoints and tracks come out
-    exactly as they went in. The render is the sub-pixel refiner's zero-step
-    fuse (``PatchCloud.render_bitmaps``). A point with fewer than two
-    observations that render in frame gets a zero row.
+    exactly as they went in. Each point's bitmap is the tile of the
+    observation the reference-view rule picks, and the reference observation
+    column records which (``PatchCloud.render_bitmaps``). A point with fewer
+    than two observations that render in frame gets a zero row.
     """
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
@@ -253,10 +254,12 @@ class AddPatchBitmapsTransform:
             f"  Rendering {self.resolution}x{self.resolution} patch bitmaps for "
             f"{recon.point_count} points"
         )
-        bitmaps = cloud.render_bitmaps(
+        bitmaps, references = cloud.render_bitmaps(
             recon, images, resolution=self.resolution, sampler=self.sampler
         )
-        return recon.clone_with_changes(patch_bitmaps=bitmaps)
+        return recon.clone_with_changes(
+            patch_bitmaps=bitmaps, reference_observations=references
+        )
 
     def description(self) -> str:
         return (

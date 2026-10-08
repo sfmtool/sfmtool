@@ -61,9 +61,11 @@ def _refine_subpixel(
 
     Returns:
         ``(localizations, bitmaps, valid)``. With ``render_bitmaps=True``,
-        ``bitmaps`` is a ``(point_count, R, R, 4)`` uint8 array of consensus
-        (representative) textures fused at the FINAL per-view keypoints, scattered
-        per source-point index (zero rows where no valid consensus), and ``valid``
+        each localization dict also carries ``reference_image``, the image whose
+        tile its bitmap is (``None`` for a fused mean), and
+        ``bitmaps`` is a ``(point_count, R, R, 4)`` uint8 array of the stored
+        bitmaps (each the reference view's tile) at the FINAL per-view keypoints, scattered
+        per source-point index (zero rows where no valid bitmap), and ``valid``
         the parallel bool mask — the culled-point signal
         :func:`compact_to_embedded_patches` drops on, uniform for finite and
         infinity points. With ``render_bitmaps=False`` both are ``None``.
@@ -74,8 +76,8 @@ def _refine_subpixel(
         max_outer_sweeps=max(sweeps, 1), consensus_refresh="per_sweep"
     )
     if sweeps < 1:
-        # Render-only: keep every seed (no GN step) but still fuse the
-        # representative bitmaps + validity at those seeds.
+        # Render-only: keep every seed (no GN step) but still render the
+        # stored bitmaps + validity at those seeds.
         kwargs["max_gn_steps"] = 0
     if render_bitmaps:
         kwargs["render_bitmaps"] = True
@@ -95,7 +97,7 @@ def _refine_subpixel(
         seeds[pid] = [[float(p[0]), float(p[1])] for p in kpts]
 
     if not view_sets:
-        # Nothing to refine (and nothing that could hold a consensus bitmap).
+        # Nothing to refine (and nothing that could hold a bitmap).
         return localizations, None, None
 
     refined = cloud.refine_keypoints(
@@ -110,9 +112,9 @@ def _refine_subpixel(
         **kwargs,
     )
 
-    # Scatter the per-point consensus bitmaps (fused at the final keypoints) and
+    # Scatter the per-point stored bitmaps (rendered at the final keypoints) and
     # the parallel validity mask per SOURCE point index — zero rows / False where
-    # the refiner produced no valid consensus (the culled-point signal).
+    # the refiner produced no valid bitmap (the culled-point signal).
     bitmaps: np.ndarray | None = None
     valid: np.ndarray | None = None
     if render_bitmaps:
@@ -126,8 +128,20 @@ def _refine_subpixel(
                 bitmaps[pid] = np.asarray(bm, dtype=np.uint8)
                 valid[pid] = True
 
+    # Each bitmap is the tile of one view, the one the reference-view rule
+    # picked; the localization dict carries its image (``None`` for a fused
+    # mean) so the compaction can record which observation it is.
+    reference_by_pid: dict[int, int | None] = {
+        int(r["point_index"]): r.get("reference_image") for r in refined
+    }
+
     if sweeps < 1:
         # Render-only pass: the localizer's keypoints are used as is.
+        if render_bitmaps:
+            localizations = [
+                dict(loc, reference_image=reference_by_pid.get(int(loc["point_index"])))
+                for loc in localizations
+            ]
         return localizations, bitmaps, valid
 
     # Splice the refined keypoints back into each point's localization dict.
@@ -158,6 +172,8 @@ def _refine_subpixel(
         ).reshape(-1, 2)
         new_loc = dict(loc)
         new_loc["keypoints"] = new_kpts
+        if render_bitmaps:
+            new_loc["reference_image"] = reference_by_pid.get(pid)
         out.append(new_loc)
     return out, bitmaps, valid
 
@@ -300,7 +316,7 @@ def _cull_by_zncc_self_similarity_radius(
     localizations: list[dict[str, Any]],
     max_zncc_self_similarity_radius: float,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Drop from ``localizations`` the points whose consensus bitmap slides over
+    """Drop from ``localizations`` the points whose stored bitmap slides over
     itself too far: those whose ZNCC self-similarity radius (**patch-grid px**)
     is over ``max_zncc_self_similarity_radius``. See
     ``specs/core/patch/zncc-self-similarity-radius.md``.
@@ -406,7 +422,7 @@ def embed_patches(
        bitmap** at the final keypoints (points at infinity included — they render
        through the same ``w``-aware path) and reports per-point validity.
     4. **Cull + compact**: drop points left below ``min_views`` **and** points the
-       sub-pixel pass produced no valid consensus bitmap for (the culled-point
+       sub-pixel pass produced no valid bitmap for (the culled-point
        signal, uniform for finite and infinity points), then renumber the
        survivors into a valid ``embedded_patches`` reconstruction carrying those
        bitmaps.
@@ -458,7 +474,7 @@ def embed_patches(
             sub-pixel keypoint refinement applied in each round (per-sweep
             consensus). ``0`` disables the keypoint movement (the localizer's
             keypoints are used as is; the final round still runs a render-only
-            pass to fuse the consensus bitmaps + validity at those keypoints);
+            pass to render the stored bitmaps + validity at those keypoints);
             ``>= 1`` runs it with that many sweeps.
         rounds: Number of (normal-refinement, keypoint-refinement) rounds. Round 1
             runs the SIFT-anchored normal refine, the discrete localizer (the
@@ -493,7 +509,7 @@ def embed_patches(
             fine-tuning rounds, whose view set is the ``select_views``-expanded one;
             the round-1 (raw-track) refine is untouched. Lossless for the output:
             only the refinement basis shrinks — every observation stays, and the
-            consensus bitmaps are still fused over the full view set. ``0`` uses
+            stored bitmaps still pick their reference view from the full view set. ``0`` uses
             all views (disables the cap); the default is ``8`` (cuts roughly a
             third off end-to-end time on large view sets — the round-2+ refine
             pass itself ~5x — at the cost of a different, not necessarily worse,
@@ -672,10 +688,11 @@ def embed_patches(
 
     # 3.5. Sub-pixel keypoint refinement, seeded at the localizer's kept keypoints
     #      (the localizer put each view in the basin; the LK refiner sharpens it).
-    #      The FINAL round's pass also fuses each point's consensus bitmap at the
-    #      final keypoints and reports per-point validity — the reference textures
-    #      and the culled-point drop signal the compaction consumes (with
-    #      subpixel=0 the pass is render-only: seeds kept, bitmaps still fused).
+    #      The FINAL round's pass also renders each point's stored bitmap (its
+    #      reference view's tile) at the final keypoints and reports per-point
+    #      validity — the bitmaps and the culled-point drop signal the compaction
+    #      consumes (with subpixel=0 the pass is render-only: seeds kept, bitmaps
+    #      still rendered).
     seed_loc = localizations
     with (
         _timed_step(
@@ -683,7 +700,7 @@ def embed_patches(
         ),
         _poll_progress(log, len(cloud)) as counter,
     ):
-        # Round-1 consensus bitmaps are needed for the final compaction on a
+        # Round-1 bitmaps are needed for the final compaction on a
         # single-round run AND for the early self-similarity cull (below) on any
         # run; render them whenever either consumer is active.
         localizations, bitmaps, valid = _refine_subpixel(
@@ -704,7 +721,7 @@ def embed_patches(
             f"  round 1/{rounds}: normal Δ {ndeg:.3f}°, keypoint Δ {kpx:.3f}px (vs seed)"
         )
 
-    # Early self-similarity cull: drop points whose round-1 consensus bitmap
+    # Early self-similarity cull: drop points whose round-1 bitmap
     # slides over itself further than the bar, before the multi-round refinement
     # that dominates cost. The reading is per point and depends on nothing else,
     # so an early cull has no feedback on the survivors' consensus (unlike
@@ -773,7 +790,7 @@ def embed_patches(
                 sampler=sampler,
                 # The round-2+ view set is the select_views-expanded one; the
                 # D-optimal cap (0 = off) trims the refinement basis only —
-                # membership (and the fused bitmaps) still span every view.
+                # membership (and the stored bitmaps' reference pick) still span every view.
                 max_refine_views=max_refine_views,
                 progress=counter,
             )
@@ -821,9 +838,9 @@ def embed_patches(
         hashes = emb_r.image_file_hashes
 
     # 4. Cull under-supported points (the real min_views) plus every point the
-    #    final sub-pixel pass produced no valid consensus bitmap for (finite and
+    #    final sub-pixel pass produced no valid bitmap for (finite and
     #    infinity alike), and compact into the final embedded_patches recon. The
-    #    stored bitmaps are the final-keypoint consensus textures from that pass.
+    #    stored bitmaps are the final-keypoint reference-view tiles from that pass.
     with _timed_step(log, "  compacting survivors into embedded_patches..."):
         result = compact_to_embedded_patches(
             work_recon,

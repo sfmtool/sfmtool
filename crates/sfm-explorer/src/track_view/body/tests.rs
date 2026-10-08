@@ -302,7 +302,6 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
             reference_view: Some(ReferenceStanding {
                 rejected_by,
                 fallback,
-                inputs: Default::default(),
             }),
             ..TrackMeasurement::default()
         }),
@@ -421,21 +420,14 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
     );
 }
 
-/// Where the rule read the blur-matched agreements, the cell shows the
-/// blur-matched pair ZNCC, the hover gives both readings and says which the
-/// rule read, and a rejection quotes the threshold that goes with it.
+/// The *Bitmap* cell marks the row the stored bitmap is the tile of, prints
+/// each other row's plain score over its blur-matched one where the bitmap
+/// was blurred, and says `sharper` for a row sharper than the bitmap.
 #[test]
-fn the_reference_cell_shows_the_blur_matched_readings_the_rule_read() {
+fn the_bitmap_cell_marks_the_bitmap_s_row_and_prints_the_scores() {
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
-    use sfmtool_core::patch::reference_view::{
-        PairZnccReading, ReferenceFallback, ReferenceRuleInputs, ReferenceStanding, ReferenceTest,
-    };
 
-    let inputs = ReferenceRuleInputs {
-        agreement: PairZnccReading::BlurMatched,
-        cells: PairZnccReading::BlurMatched,
-    };
-    let row = |rejected_by: Option<ReferenceTest>| Observation {
+    let row = |plain: f64, matched: f64, sigma: f64, sharper: bool| Observation {
         image: 0,
         provenance: Provenance::Origin,
         verdict: Verdict::In,
@@ -443,62 +435,50 @@ fn the_reference_cell_shows_the_blur_matched_readings_the_rule_read() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            viewing_angle_deg: Some(20.0),
-            coverage: Some(1.0),
-            clipped_share: Some(0.0),
-            pair_zncc: Some(0.834),
-            blur_matched_pair_zncc: Some(0.912),
-            cell_deficit: Some(0.12),
-            blur_matched_cell_deficit: Some(0.34),
-            pair_zncc_grid: Some([[0.9; 3]; 3]),
-            blur_matched_pair_zncc_grid: Some([[0.95; 3]; 3]),
-            reference_view: Some(ReferenceStanding {
-                rejected_by,
-                fallback: ReferenceFallback::None,
-                inputs,
-            }),
+            bitmap_zncc: Some(plain),
+            blur_matched_bitmap_zncc: Some(matched),
+            bitmap_blur_sigma: Some(sigma),
+            sharper_than_bitmap: Some(sharper),
             ..TrackMeasurement::default()
         }),
     };
     let current = crate::bench::live::Evaluation::Current;
-    let cell = |o: &Observation| super::reference::reference_cell(o, StageKind::Track, &current);
+    let cell = |i: usize, o: &Observation, bitmap_row: Option<usize>| {
+        super::reference::bitmap_cell(i, o, bitmap_row, StageKind::Track, &current)
+    };
 
-    let picked = cell(&row(None));
-    assert_eq!(picked.text, "reference\n20\u{b0}, 91%");
-    let hover = picked.hover.expect("a hover");
-    assert!(
-        hover.contains("Pair ZNCC 83%, the median with the other rows that are in.\n"),
-        "{hover}"
-    );
-    assert!(
-        hover.contains("Blur-matched pair ZNCC 91%") && hover.contains("first. The rule reads it."),
-        "{hover}"
-    );
-    assert!(
-        hover.contains("Blur-matched cell deficit 0.34. The rule reads it."),
-        "{hover}"
-    );
-    assert!(
-        hover.contains("Blur-matched pair ZNCC per ninth:"),
-        "{hover}"
-    );
-    assert!(hover.contains("   95   95   95"), "{hover}");
+    let source = cell(2, &row(1.0, 1.0, 0.0, false), Some(2));
+    assert!(source.is_bitmap);
+    assert_eq!(source.text, "bitmap\n100%");
 
-    let hover = cell(&row(Some(ReferenceTest::Cells)))
+    let blurred = cell(0, &row(0.712, 0.861, 0.83, false), Some(2));
+    assert!(!blurred.is_bitmap);
+    assert_eq!(blurred.text, "71%\n\u{23f5} 86%");
+    let hover = blurred.hover.expect("a hover");
+    assert!(hover.contains("blurred by 0.83 grid px"), "{hover}");
+
+    let sharper = cell(1, &row(0.64, 0.64, 0.0, true), Some(2));
+    assert_eq!(sharper.text, "64%\nsharper");
+    assert!(sharper
         .hover
-        .expect("a hover");
-    assert!(
-        hover.contains("0.34 below the track's typical agreement"),
-        "{hover}"
+        .expect("a hover")
+        .contains("could replace the reference"));
+
+    let plain = cell(1, &row(0.9, 0.9, 0.0, false), None);
+    assert_eq!(plain.text, "90%\n");
+
+    // Nothing at the cluster stage, nor for a row with no score.
+    let none = super::reference::bitmap_cell(
+        0,
+        &row(0.5, 0.5, 0.0, false),
+        None,
+        StageKind::Cluster,
+        &current,
     );
-    assert!(hover.contains("over the 0.3 allowed"), "{hover}");
-    let hover = cell(&row(Some(ReferenceTest::Agreement)))
-        .hover
-        .expect("a hover");
-    assert!(
-        hover.contains("its blur-matched pair ZNCC is more than 15 points below"),
-        "{hover}"
-    );
+    assert_eq!(none.text, "-");
+    let mut unscored = row(0.5, 0.5, 0.0, false);
+    unscored.track.as_mut().unwrap().bitmap_zncc = None;
+    assert_eq!(cell(0, &unscored, None).text, "-");
 }
 
 #[test]
@@ -1890,7 +1870,7 @@ fn the_headline_leaves_the_condition_number_off_a_bearing() {
 /// The track's own patch sits left of the toolbar, under the header, and the
 /// controls start to its right. Before a fit fuses the observations the
 /// demo's track, from a reconstruction that stores no bitmaps, has none and
-/// the slot is empty; after it the slot shows the consensus bitmap.
+/// the slot is empty; after it the slot shows the patch bitmap.
 #[test]
 fn the_track_s_patch_sits_left_of_the_toolbar() {
     use sfmtool_core::bench::Stage;

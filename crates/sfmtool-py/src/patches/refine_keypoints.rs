@@ -107,12 +107,14 @@ impl PyPatchCloud {
     ///         local refiner. Either run ``sfm xform --to-embedded-patches``
     ///         first or pass explicit ``starting_keypoints`` covering every
     ///         point to refine.
-    ///     render_bitmaps: If true, also fuse each point's RGBA representative
-    ///         texture at the **final** refined keypoints (final IRLS view
-    ///         weights, anisotropic sampling) and return it per point (see
-    ///         ``bitmap`` below). Points at infinity take the same render path
-    ///         (they are refined, not skipped). Costs one extra full-grid source
-    ///         render per view per point, so it is off by default.
+    ///     render_bitmaps: If true, also render each point's stored bitmap at
+    ///         the **final** refined keypoints and return it per point (see
+    ///         ``bitmap`` below): the ``R×R`` tile of the view the
+    ///         reference-view rule picks, or the fused mean of the views where
+    ///         it picks none. Points at infinity take the same render path
+    ///         (they are refined, not skipped). Costs a tile render and a
+    ///         self-similarity reading per view, and member coherence's matrix,
+    ///         per point, so it is off by default.
     ///
     /// Returns:
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
@@ -121,10 +123,12 @@ impl PyPatchCloud {
     ///     is unchanged; a guard-failed view keeps its seed). ``scores`` is the
     ///     final ECC score (channel-averaged windowed ZNCC), NaN for a view with no
     ///     consensus (fewer than two views). When ``render_bitmaps`` is true each
-    ///     dict also carries ``bitmap``: an ``(R, R, 4)`` uint8 RGBA texture fused
-    ///     at the final keypoints, or ``None`` when the point produced **no valid
-    ///     cross-view consensus** (fewer than two views rendered at their final
-    ///     offsets) — the uniform culled-point signal, finite and infinity alike.
+    ///     dict also carries ``bitmap``: the ``(R, R, 4)`` uint8 RGBA stored
+    ///     bitmap rendered at the final keypoints, or ``None`` when the point
+    ///     produced **no valid cross-view consensus** (fewer than two views
+    ///     rendered at their final offsets) — the uniform culled-point signal,
+    ///     finite and infinity alike; and ``reference_image``: the image whose
+    ///     tile the bitmap is, or ``None`` for a fused mean or no bitmap.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -382,9 +386,12 @@ impl PyPatchCloud {
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
             d.set_item("scores", res.scores.clone().into_pyarray(py))?;
             if render_bitmaps {
-                // `bitmap` is the point's fused RGBA representative at the final
-                // keypoints; `None` marks a point with no valid cross-view
-                // consensus (the culled-point signal `embed-patches` drops on).
+                // `bitmap` is the point's stored bitmap at the final keypoints,
+                // the reference view's tile; `None` marks a point with no valid
+                // cross-view consensus (the culled-point signal `embed-patches`
+                // drops on). `reference_image` is the image whose tile it is,
+                // `None` for a fused mean.
+                d.set_item("reference_image", res.reference.map(|r| res.views[r]))?;
                 match &res.representative {
                     Some(rep) => {
                         let r = resolution.max(2) as usize;

@@ -211,6 +211,12 @@ pub fn create_track(
         at_infinity: stored.is_at_infinity(),
         placement: view.placement(),
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
+        // The bench's rows are the stored track's observations in order, so
+        // the stored index names the row.
+        reference: view
+            .reference_observation()
+            .filter(|_| view.patch_bitmap().is_some())
+            .and_then(|r| usize::try_from(r).ok()),
         color: stored.color,
         normal_confidence: view.normal_confidence(),
         condition_number: None,
@@ -1231,12 +1237,12 @@ fn same_length(value: f64, was: f64) -> bool {
 ///   dividing the half-length by the same factor, which leaves every corner the
 ///   same direction and so holds the far edge there too.
 ///
-/// **What the resize invalidates is cleared.** The consensus bitmap is the
-/// observations fused over the old square, so a patch of another size no longer
+/// **What the resize invalidates is cleared.** The patch bitmap is a tile
+/// rendered over the old square, so a patch of another size no longer
 /// has a picture; and every track measurement but its keypoint was read over
 /// that square, so what is kept is where each sighting sits and what is dropped
 /// is every number about it. An [`evaluate`](super::evaluate::evaluate)
-/// restores them, and the next [`fit`](super::fit::fit) fuses a new bitmap at
+/// restores them, and the next [`fit`](super::fit::fit) renders a new bitmap at
 /// the size the patch now has.
 ///
 /// A cluster is refused: there is no world geometry to give a world half-length
@@ -1272,9 +1278,8 @@ pub fn resize_patch(
         // goes anywhere and there is no sighting to carry.
         let mut next = track.clone();
         {
-            let (_, patch, bitmap) = track_payload_mut(&mut next);
+            let (_, patch) = track_payload_mut(&mut next);
             patch.half_extent = [half_length, half_length];
-            *bitmap = None;
         }
         keep_keypoints_only(&mut next);
         return Ok((
@@ -1312,7 +1317,7 @@ pub fn resize_patch(
 
     let mut next = track.clone();
     {
-        let (position, patch, bitmap) = track_payload_mut(&mut next);
+        let (position, patch) = track_payload_mut(&mut next);
         patch.center = center;
         patch.half_extent = [half, half];
         // The track's coordinate is the patch's centre in both representations:
@@ -1320,7 +1325,6 @@ pub fn resize_patch(
         // Letting the two drift apart would commit a direction the outline has
         // already left.
         *position = Some(center);
-        *bitmap = None;
     }
     carry_keypoints(&mut next, edited, patch, displacement);
     Ok((
@@ -1724,12 +1728,11 @@ pub fn translate_patch(
 
     let mut next = track.clone();
     {
-        let (position, moved, bitmap) = track_payload_mut(&mut next);
+        let (position, moved) = track_payload_mut(&mut next);
         moved.center = center;
         // The coordinate is the centre in both representations: a world point at
         // `w = 1`, the unit bearing at `w = 0`.
         *position = Some(center);
-        *bitmap = None;
     }
     let placed = carry_keypoints(&mut next, edited, patch, displacement);
     Ok((
@@ -1970,10 +1973,9 @@ pub fn tilt_patch(
     let centre = frame.center;
     let mut next = track.clone();
     {
-        let (_, turned, bitmap) = track_payload_mut(&mut next);
+        let (_, turned) = track_payload_mut(&mut next);
         turned.u_axis = u;
         turned.v_axis = v;
-        *bitmap = None;
     }
     // Each sighting's offset read on the old axes and rebuilt on the new ones,
     // which is the tilt's whole effect on where the photographs look.
@@ -2080,12 +2082,11 @@ pub fn spin_patch(
     let changed = angle_rad.abs() > NO_EFFECT_RAD;
     if changed {
         keep_keypoints_only(&mut next);
-        let (_, frame, bitmap) = track_payload_mut(&mut next);
+        let (_, frame) = track_payload_mut(&mut next);
         let axis = nalgebra::Unit::new_normalize(frame.normal());
         let rotation = nalgebra::Rotation3::from_axis_angle(&axis, angle_rad);
         frame.u_axis = rotation * frame.u_axis;
         frame.v_axis = rotation * frame.v_axis;
-        *bitmap = None;
     }
     Ok((
         next,
@@ -2271,15 +2272,15 @@ fn placement_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError>
     }
 }
 
-/// The position, the patch and the bitmap of a track whose payload has already
-/// been read as a track stage carrying a patch.
+/// The position and the patch of a track whose payload has already been read
+/// as a track stage carrying a patch, for a step that moves the patch.
+///
+/// The bitmap and the reference observation it was rendered from are dropped
+/// here: every caller moves the patch, and a bitmap rendered through the old
+/// placement no longer shows the new one.
 fn track_payload_mut(
     track: &mut EditableTrack,
-) -> (
-    &mut Option<nalgebra::Point3<f64>>,
-    &mut OrientedPatch,
-    &mut Option<ndarray::Array3<u8>>,
-) {
+) -> (&mut Option<nalgebra::Point3<f64>>, &mut OrientedPatch) {
     let Stage::Track(payload) = &mut track.stage else {
         unreachable!("the stage was read as a track stage before the clone");
     };
@@ -2287,14 +2288,16 @@ fn track_payload_mut(
         position,
         placement,
         bitmap,
+        reference,
         ..
     } = payload;
+    *bitmap = None;
+    *reference = None;
     (
         position,
         placement
             .as_mut()
             .expect("the patch was read before the clone"),
-        bitmap,
     )
 }
 
@@ -2786,7 +2789,7 @@ pub struct DuplicateReport {
 /// has been slid, turned and sized until it covers one piece of surface is most
 /// of the work of covering the piece next to it, so the copy carries everything
 /// that describes the geometry and the judgements made about it: the stage and
-/// all of its data (the patch, the consensus bitmap, the cluster's template and
+/// all of its data (the patch, the patch bitmap, the cluster's template and
 /// radius), every observation with its keypoint, its seed, its shape, its
 /// verdict and its pin, and the thresholds. The measurements come too -- they
 /// were read against this geometry and still describe it, and the moment the
@@ -2952,6 +2955,15 @@ pub fn split(
 
     let mut first = (**track).clone();
     first.observations = kept;
+    // The bitmap stays with the first track, and the row it is the tile of
+    // moves up past the rows taken from before it; a bitmap whose row was
+    // taken names none.
+    if let Stage::Track(payload) = &mut first.stage {
+        payload.reference = payload
+            .reference
+            .filter(|r| taken.binary_search(r).is_err())
+            .map(|r| r - taken.partition_point(|&t| t < r));
+    }
     reseat_reference(&mut first);
     let mut second = (**track).clone();
     second.observations = moved;

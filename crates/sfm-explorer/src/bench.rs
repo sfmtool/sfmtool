@@ -2337,8 +2337,8 @@ impl AppState {
     /// `max_shift_px`, so it is part of the track. The photographs are decoded
     /// on the worker, from the node's cached pyramids where it has them.
     ///
-    /// A track-stage track with a placement and no consensus bitmap also gets
-    /// its bitmap fused where it stands (`bench::fuse_bitmap_in_place`), which
+    /// A track-stage track with a placement and no patch bitmap also gets
+    /// its bitmap rendered where it stands (`bench::render_bitmap_in_place`), which
     /// moves nothing either. So a tilt, a resize, a spin or a move of the
     /// patch, each of which drops the bitmap, gets it back from the
     /// photographs as the patch now lies, without waiting for a fit.
@@ -2536,9 +2536,9 @@ pub(crate) fn evaluate_job(
             Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
             Ok((measured, _)) => measured,
         };
-        // A patch step drops the consensus bitmap, since it was fused over
+        // A patch step drops the patch bitmap, since it was rendered over
         // the square as it stood. The photographs are decoded here anyway,
-        // so fuse it again over the square as it stands now, moving
+        // so render it again over the square as it stands now, moving
         // nothing, rather than leave the track without one until a fit.
         let needs_bitmap = matches!(
             &measured.stage,
@@ -2550,7 +2550,8 @@ pub(crate) fn evaluate_job(
         if progress.is_cancelled() {
             return live::Measured::Cancelled;
         }
-        let fused = bench::fuse_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
+        let fused =
+            bench::render_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
         live::Measured::Track(Box::new(fused))
     })
 }

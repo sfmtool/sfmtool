@@ -55,7 +55,10 @@ use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarity
 use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
-use super::reference::{reference_cell, reference_rank, ReferenceCell, REFERENCE_TIP};
+use super::reference::{
+    bitmap_cell, reference_cell, reference_rank, BitmapCell, ReferenceCell, BITMAP_TIP,
+    REFERENCE_TIP,
+};
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
     row_ellipse, row_grids, row_radius, row_surface, self_similarity_cell_color,
@@ -80,6 +83,8 @@ const KEEP_WIDTH: f32 = 64.0;
 const ZOOM_WIDTH: f32 = 76.0;
 /// The *Reference* column's width: room for `ninth differs` over `65°, 83%`.
 const REFERENCE_WIDTH: f32 = 112.0;
+/// The *Bitmap* column's width: room for `sharper` and `→ 100%`.
+const BITMAP_WIDTH: f32 = 66.0;
 /// Width of the *From* column: room for its longest cell, `feature 123456`.
 const FROM_WIDTH: f32 = 110.0;
 /// Width of the *Name* column, the last one. A name longer than this is
@@ -169,6 +174,9 @@ pub(crate) struct RowSummary {
     /// The *Reference* cell as drawn, with its hover text and whether the
     /// rule picks the row.
     pub reference: ReferenceCell,
+    /// The *Bitmap* cell as drawn, with its hover text and whether the
+    /// stored bitmap is the row's tile.
+    pub bitmap: BitmapCell,
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
@@ -186,6 +194,7 @@ pub(super) struct ColumnLayout {
     shift: f32,
     zoom: f32,
     reference: f32,
+    bitmap: f32,
     status: f32,
     from: f32,
 }
@@ -213,7 +222,8 @@ impl ColumnLayout {
         // Room for `12.25 px`. The tile's zoom follows it.
         let zoom = shift + 62.0;
         let reference = zoom + ZOOM_WIDTH;
-        let status = reference + REFERENCE_WIDTH;
+        let bitmap = reference + REFERENCE_WIDTH;
+        let status = bitmap + BITMAP_WIDTH;
         // The status cell holds a sentence at the track stage -- the reason a
         // row was not read, or the walk a fit refused and what it scored -- so
         // it is given room for one and elided to it.
@@ -232,6 +242,7 @@ impl ColumnLayout {
             shift,
             zoom,
             reference,
+            bitmap,
             status,
             from,
         }
@@ -305,6 +316,7 @@ impl ColumnLayout {
             (self.shift, "Shift", SHIFT_TIP),
             (self.zoom, "Zoom", ZOOM_TIP.as_str()),
             (self.reference, "Reference", REFERENCE_TIP),
+            (self.bitmap, "Bitmap", BITMAP_TIP),
             (self.status, "Status", STATUS_TIP),
         ];
         if mode == BodyMode::Edited {
@@ -339,6 +351,9 @@ pub(crate) enum SortColumn {
     /// What the reference-view rule decided: the reference first, then the
     /// rows nearest to being picked.
     Reference,
+    /// The blur-matched score against the stored bitmap, the row the bitmap
+    /// is the tile of counting as 1.
+    Bitmap,
     /// The status cell's text.
     Status,
     /// The image's name.
@@ -359,6 +374,7 @@ impl SortColumn {
             "Shift" => SortColumn::Shift,
             "Zoom" => SortColumn::Zoom,
             "Reference" => SortColumn::Reference,
+            "Bitmap" => SortColumn::Bitmap,
             "Status" => SortColumn::Status,
             "Name" => SortColumn::Name,
             _ => return None,
@@ -381,6 +397,7 @@ impl SortColumn {
             | SortColumn::Zncc
             | SortColumn::Zoom
             | SortColumn::Reference
+            | SortColumn::Bitmap
             | SortColumn::Status
             | SortColumn::Name => false,
         }
@@ -397,6 +414,7 @@ impl SortColumn {
             SortColumn::Shift => "shift",
             SortColumn::Zoom => "zoom",
             SortColumn::Reference => "reference view",
+            SortColumn::Bitmap => "bitmap score",
             SortColumn::Status => "status",
             SortColumn::Name => "name",
         }
@@ -1320,6 +1338,20 @@ impl TrackBody {
                             .filter(|_| printed && stage == StageKind::Track);
                         number_key(standing.map(reference_rank))
                     }
+                    SortColumn::Bitmap => {
+                        let bitmap_row = track.track().and_then(|p| p.reference);
+                        number_key(
+                            (printed && stage == StageKind::Track)
+                                .then(|| {
+                                    if bitmap_row == Some(i) {
+                                        Some(1.0)
+                                    } else {
+                                        row.track.as_ref().and_then(|m| m.blur_matched_bitmap_zncc)
+                                    }
+                                })
+                                .flatten(),
+                        )
+                    }
                     SortColumn::Status => Some(SortKey::Text(
                         measurements(row, stage, &self.evaluation)[4].clone(),
                     )),
@@ -1968,6 +2000,28 @@ impl TrackBody {
             .on_hover_text(egui::RichText::new(hover).monospace());
         }
 
+        // How the row scores against the stored bitmap, on a green cell for
+        // the row the bitmap is the tile of.
+        let bitmap_row = track.track().and_then(|p| p.reference);
+        let bitmap = bitmap_cell(observation, row, bitmap_row, stage, &self.evaluation);
+        let bitmap_rect = egui::Rect::from_min_max(
+            egui::pos2(x0 + cols.bitmap - 3.0, rect.min.y + 2.0),
+            egui::pos2(x0 + cols.status - 6.0, rect.max.y - 2.0),
+        );
+        if bitmap.is_bitmap {
+            ui.painter()
+                .rect_filled(bitmap_rect, 2.0, KEEP_ON_FILL.gamma_multiply(0.35 * fade));
+        }
+        lines(cols.bitmap, &bitmap.text, [number_color; 2]);
+        if let Some(hover) = &bitmap.hover {
+            ui.interact(
+                bitmap_rect,
+                ui.id().with(("track_view_bitmap", observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(hover);
+        }
+
         // The two grids, faded with the numbers while an evaluation is on its
         // way. Each is laid out as the tile is, so a cell sits over the part
         // of the tile it read.
@@ -2056,6 +2110,7 @@ impl TrackBody {
             crop: cropped,
             self_similarity_plot: plotted,
             reference,
+            bitmap,
         });
     }
 }

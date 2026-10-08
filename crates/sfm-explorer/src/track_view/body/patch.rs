@@ -172,7 +172,7 @@ pub(super) fn render_frame(
         .unwrap_or_else(|| frame.clone())
 }
 
-/// The picture of a track's own patch: the consensus bitmap at the track
+/// The picture of a track's own patch: the patch bitmap at the track
 /// stage ([`stored_patch_image`]), the template at the cluster stage, `None`
 /// where there is neither.
 ///
@@ -195,8 +195,9 @@ pub(crate) fn track_patch_image(track: &EditableTrack) -> Option<egui::ColorImag
 /// written.
 ///
 /// One channel is repeated across RGB, three are RGB, and a fourth, the
-/// per-texel cross-view confidence, is dropped for an opaque alpha. What the
-/// header's patch slot draws at the track stage: the consensus bitmap, which
+/// alpha (on the photograph for a view's tile, the cross-view confidence for a
+/// fused mean), is dropped for an opaque alpha. What the
+/// header's patch slot draws at the track stage: the patch bitmap, which
 /// for a track read from a point is that point's stored patch and which a
 /// commit writes as it.
 pub(crate) fn stored_patch_image(bitmap: ndarray::ArrayView3<'_, u8>) -> Option<egui::ColorImage> {

@@ -120,7 +120,12 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
 
     let entry = newest(&state);
     let rows = phase_rows(&entry.detail);
-    for stage in ["patch bitmaps", "decode photographs", "fuse", "thumbnails"] {
+    for stage in [
+        "patch bitmaps",
+        "decode photographs",
+        "render",
+        "thumbnails",
+    ] {
         assert!(
             rows.iter().any(|(name, _, _)| *name == stage),
             "no {stage} stage in {rows:?}"

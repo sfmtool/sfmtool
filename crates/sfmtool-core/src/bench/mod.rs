@@ -62,10 +62,9 @@ pub use classify::{classify_track_rays, ClassificationReason, TrackClassificatio
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{
     evaluate, evaluate_preconditions, open_localizer, stored_patch_resolution, EvaluateError,
-    EvaluateOptions, EvaluateReport, ReferenceViewOptions, DEFAULT_MAX_CACHE_BYTES,
-    DEFAULT_MAX_SEED_OFFSET_PX,
+    EvaluateOptions, EvaluateReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_MAX_SEED_OFFSET_PX,
 };
-pub use fit::{fit, fit_preconditions, fuse_bitmap_in_place, FitError, FitOptions, FitReport};
+pub use fit::{fit, fit_preconditions, render_bitmap_in_place, FitError, FitOptions, FitReport};
 pub use geometry_search::{
     search_geometry, GeometryMatch, GeometrySearchError, GeometrySearchOptions,
     GeometrySearchReport,

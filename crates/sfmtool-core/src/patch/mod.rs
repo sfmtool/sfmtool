@@ -15,6 +15,7 @@ pub mod pair_sharpness;
 pub mod reference_view;
 pub mod self_similarity;
 pub mod spawn;
+pub mod stored_bitmap;
 pub mod view_selection;
 
 #[cfg(test)]

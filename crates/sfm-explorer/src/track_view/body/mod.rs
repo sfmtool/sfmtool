@@ -34,7 +34,7 @@
 //! summary, and the judgement the boxes produce. These are cached against the
 //! track's own `Arc` rather than recomputed per frame, because the judgement is
 //! `verdicts_if_unpinned` run over a copy (and a copy of a track carries its
-//! consensus bitmap) and a tile is a warp of a photograph's mip pyramid.
+//! patch bitmap) and a tile is a warp of a photograph's mip pyramid.
 //! The row selection is not the panel's: it is the bench's, in
 //! `AppState::bench_rows`, and a row click in Edited mode reports through
 //! [`TrackBodyResponse::pick_row`].
@@ -682,7 +682,7 @@ impl TrackBody {
                 "Fit",
                 refusals.fit,
                 "Localize every sighting against the patch, re-triangulate the \
-                 in ones and re-fuse: this one moves the track",
+                 in ones and render the bitmap again: this one moves the track",
             ) {
                 response.fit = true;
             }
@@ -1030,7 +1030,7 @@ impl TrackBody {
     }
 
     /// The track's own patch, uploading it if this is the first frame that has
-    /// asked for it since the track moved: the consensus bitmap at the track
+    /// asked for it since the track moved: the patch bitmap at the track
     /// stage, the template at the cluster stage, `None` where there is
     /// neither.
     fn ensure_track_patch(
@@ -2260,14 +2260,14 @@ pub(crate) fn position_text(payload: &sfmtool_core::bench::TrackPayload) -> Stri
 }
 
 /// The track's own patch, at [`STORED_PATCH_SIZE`], left of the headline, the
-/// toolbar and the boxes: at the track stage the consensus bitmap the
-/// observations were fused into, which for the viewed track is the point's
-/// stored patch and which a commit writes as it, and at the cluster stage the
-/// template the members register onto. It carries no label, since the picture
-/// says what it is. With nothing to show -- a point with no stored patch, a
-/// track not yet fused, a cluster with no template cut -- the slot is an empty
-/// frame of the same size, so the controls beside it do not move when a fit or
-/// a stage change fills it.
+/// toolbar and the boxes: at the track stage the patch bitmap (the reference
+/// view's tile, or the fused mean where the rule picks none), which for the
+/// viewed track is the point's stored patch and which a commit writes as it,
+/// and at the cluster stage the template the members register onto. It carries
+/// no label, since the picture says what it is. With nothing to show -- a point
+/// with no stored patch, a track with no bitmap rendered yet, a cluster with no
+/// template cut -- the slot is an empty frame of the same size, so the controls
+/// beside it do not move when a fit or a stage change fills it.
 fn show_track_patch(
     ui: &mut egui::Ui,
     texture: Option<egui::TextureId>,

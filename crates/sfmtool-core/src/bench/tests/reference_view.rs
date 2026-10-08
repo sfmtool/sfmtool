@@ -10,8 +10,8 @@ use std::sync::Arc;
 use ndarray::Array3;
 
 use crate::bench::{
-    create_track, evaluate, set_verdict, Bench, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    ReferenceViewOptions, Verdict,
+    commit, create_track, evaluate, render_bitmap_in_place, Bench, CreateTrackOptions,
+    EditableTrack, EvaluateOptions, FitOptions, Verdict,
 };
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
@@ -20,15 +20,14 @@ use crate::camera::{PhotographCache, WarpMap};
 use crate::geometry::RigidTransform;
 use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
-use crate::patch::pair_sharpness::PairMatching;
 use crate::patch::reference_view::{
-    blur_matched_agreement, finite_middle, render_view_tile, PairZnccReading, ReferenceFallback,
-    ReferenceRuleInputs, ReferenceTest, ViewTile, REFERENCE_MAX_VIEWING_ANGLE_DEG,
-    REFERENCE_MIN_COVERAGE,
+    finite_middle, render_view_tile, ReferenceFallback, ReferenceTest, ViewTile,
+    REFERENCE_MAX_VIEWING_ANGLE_DEG, REFERENCE_MIN_COVERAGE,
 };
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipseUnits, SelfSimilarityParams,
 };
+use crate::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 use crate::reconstruction::SfmrReconstruction;
@@ -292,131 +291,87 @@ fn the_pair_zncc_is_the_median_of_member_coherence_s_row_called_directly() {
     }
 }
 
-/// Options that take blur-matched readings and have both tests read them.
-fn blur_matched_options(matching: PairMatching) -> EvaluateOptions {
-    EvaluateOptions {
-        reference_view: ReferenceViewOptions {
-            matching,
-            agreement: PairZnccReading::BlurMatched,
-            cells: PairZnccReading::BlurMatched,
-        },
-        ..EvaluateOptions::default()
-    }
-}
-
-/// The blur-matched readings are taken where the options ask for them, are
-/// those of the tiles blur-matched directly, leave the plain readings as they
-/// were, and the rule's standing says which readings it read.
-#[test]
-fn blur_matched_readings_are_those_of_the_tiles_blur_matched_directly() {
-    let truth = GroundTruth::load();
-    let views = truth.views();
-    // Plain matching takes no blur-matched readings, whatever the tests are
-    // set to read.
-    let none = blur_matched_options(PairMatching::Plain);
-    let (plain, _) = truth.evaluated_track_with(&none);
-    let options = blur_matched_options(PairMatching::BlurMatched);
-    let (read, edited) = truth.evaluated_track_with(&options);
-    let resolution = options.patch_resolution(&edited.base) as usize;
+/// The track-stage tile of row `i`, rendered as the evaluation renders it.
+fn tile_of_row(
+    read: &EditableTrack,
+    views: &[ProjectedImage<'_>],
+    i: usize,
+    resolution: usize,
+) -> ViewTile {
     let frame = read
         .track()
         .and_then(|t| t.placement.clone())
         .expect("a track-stage frame");
-    let rows: Vec<usize> = (0..read.observations.len())
-        .filter(|&i| read.observations[i].verdict == Verdict::In)
-        .collect();
-    let tiles: Vec<ViewTile> = rows
-        .iter()
-        .map(|&i| {
-            render_view_tile(
-                &frame,
-                &views[read.observations[i].image as usize],
-                Some(keypoint_of(&read, i)),
-                resolution,
-                options.localize.sampler,
-                &Progress::none(),
-            )
-        })
-        .collect();
-    let ellipses: Vec<Option<[[f64; 2]; 2]>> = rows
-        .iter()
-        .map(|&i| {
-            read.observations[i]
-                .track
-                .as_ref()
-                .and_then(|m| m.zncc_self_similarity_ellipse)
-                .map(|e| e.grid_px.matrix)
-        })
-        .collect();
-    let refs: Vec<&ViewTile> = tiles.iter().collect();
-    let direct = blur_matched_agreement(
-        &refs,
-        &ellipses,
-        PairMatching::BlurMatched,
-        PatchWindow::GaussianDisk { sigma: 0.6 },
+    render_view_tile(
+        &frame,
+        &views[read.observations[i].image as usize],
+        Some(keypoint_of(read, i)),
+        resolution,
+        EvaluateOptions::default().localize.sampler,
         &Progress::none(),
-    );
-    for (k, &i) in rows.iter().enumerate() {
+    )
+}
+
+/// A track whose bitmap names no reference observation (a fused mean, or a
+/// bitmap from before the reference was recorded) scores every row against
+/// that bitmap, plain and blur-matched, as the scorer does directly.
+#[test]
+fn every_row_is_scored_against_the_stored_bitmap() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (read, edited) = truth.evaluated_track();
+    // The minimal ground truth stores no bitmaps; render one and forget which
+    // row it came from.
+    let mut rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
+    if let crate::bench::Stage::Track(payload) = &mut rendered.stage {
+        payload.reference = None;
+    }
+    let (read, _) = evaluate(
+        &rendered,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    let payload = read.track().expect("a track stage");
+    let bitmap = payload.bitmap.as_ref().expect("a rendered bitmap");
+    let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
+    let samples: Vec<u8> = bitmap.iter().copied().collect();
+    let planes = bitmap_planes(&samples, resolution);
+    let mut scorer = BitmapScorer::new(&planes, PatchWindow::GaussianDisk { sigma: 0.6 });
+    for i in 0..read.observations.len() {
         let m = read.observations[i].track.as_ref().unwrap();
-        let p = plain.observations[i].track.as_ref().unwrap();
-        let finite = |v: f64| v.is_finite().then_some(v);
+        let ellipse = m.zncc_self_similarity_ellipse.map(|e| e.grid_px.matrix);
+        let direct = scorer.score(&tile_of_row(&read, &views, i, resolution).planes(), ellipse);
+        assert_eq!(m.bitmap_zncc, Some(direct.zncc), "row {i}");
         assert_eq!(
-            m.blur_matched_pair_zncc,
-            finite(direct.pair_zncc[k]),
+            m.blur_matched_bitmap_zncc,
+            Some(direct.blur_matched_zncc),
             "row {i}"
         );
+        assert_eq!(m.bitmap_blur_sigma, Some(direct.blur_sigma), "row {i}");
         assert_eq!(
-            format!("{:?}", m.blur_matched_pair_zncc_grid),
-            format!("{:?}", Some(direct.cells.pair_zncc_grid[k])),
+            m.sharper_than_bitmap,
+            Some(direct.sharper_than_bitmap),
             "row {i}"
         );
-        assert_eq!(m.blur_matched_cell_deficit, finite(direct.cells.deficit[k]));
-        // The plain readings are the same whether or not the blur-matched
-        // ones are taken.
-        assert_eq!(m.pair_zncc, p.pair_zncc, "row {i}");
-        assert_eq!(m.cell_deficit, p.cell_deficit, "row {i}");
-        let standing = m.reference_view.expect("an in row has a standing");
-        assert_eq!(
-            standing.inputs,
-            ReferenceRuleInputs {
-                agreement: PairZnccReading::BlurMatched,
-                cells: PairZnccReading::BlurMatched,
-            }
-        );
-        // Without blur-matched readings the rule reads the plain ones,
-        // whatever the options name.
-        assert_eq!(p.blur_matched_pair_zncc, None);
-        assert_eq!(p.blur_matched_pair_zncc_grid, None);
-        assert_eq!(p.blur_matched_cell_deficit, None);
-        assert_eq!(p.reference_view.unwrap().inputs, ReferenceRuleInputs::PLAIN);
+        // A view is at least as close to a bitmap blurred to its sharpness.
+        if direct.blur_sigma > 0.0 {
+            assert!(direct.blur_matched_zncc > direct.zncc - 0.02, "row {i}");
+        }
     }
 }
 
-/// Above a ratio, a pair whose ellipses differ by less is read plain, which
-/// is what the blur-matched reading of a pair left plain is.
+/// Rendering the bitmap where the track stands stores the tile of the row the
+/// evaluation's reference-view rule picks, names that row, and the next
+/// evaluation scores it 1 without computing it; a commit writes its place in
+/// the stored track.
 #[test]
-fn a_ratio_above_every_difference_reads_every_pair_plain() {
+fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
     let truth = GroundTruth::load();
-    let (read, _) = truth.evaluated_track_with(&blur_matched_options(
-        PairMatching::BlurMatchedAboveRatio(1e6),
-    ));
-    for (i, observation) in read.observations.iter().enumerate() {
-        let m = observation.track.as_ref().unwrap();
-        assert_eq!(
-            format!("{:?}", m.blur_matched_pair_zncc_grid),
-            format!("{:?}", m.pair_zncc_grid),
-            "row {i}: a pair read plain over each ninth reads the plain grid"
-        );
-        assert_eq!(m.blur_matched_cell_deficit, m.cell_deficit, "row {i}");
-    }
-}
-
-/// A verdict moved after the reading keeps the rule on the readings it read:
-/// the standings after the step name the same inputs.
-#[test]
-fn a_verdict_set_after_a_blur_matched_reading_keeps_the_rule_on_its_inputs() {
-    let truth = GroundTruth::load();
-    let (read, _) = truth.evaluated_track_with(&blur_matched_options(PairMatching::BlurMatched));
+    let views = truth.views();
+    let (read, edited) = truth.evaluated_track();
     let picked = read
         .observations
         .iter()
@@ -427,19 +382,44 @@ fn a_verdict_set_after_a_blur_matched_reading_keeps_the_rule_on_its_inputs() {
                 .is_some_and(|s| s.is_reference())
         })
         .expect("the rule picks one");
-    let (after, _) = set_verdict(&read, picked, Verdict::Out).expect("a live row");
-    let m = after.observations[picked].track.as_ref().unwrap();
-    assert_eq!(m.blur_matched_pair_zncc, None);
-    assert_eq!(m.blur_matched_cell_deficit, None);
-    let mut picked_again = 0;
-    for observation in &after.observations {
-        if observation.verdict != Verdict::In {
-            continue;
+    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
+    let payload = rendered.track().unwrap();
+    assert_eq!(payload.reference, Some(picked));
+    let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
+    let tile = tile_of_row(&read, &views, picked, resolution);
+    let rgba = bitmap_from_tile(&tile);
+    let stored: Vec<u8> = payload.bitmap.as_ref().unwrap().iter().copied().collect();
+    assert_eq!(stored, rgba);
+    // Alpha marks the samples on the photograph, which the stored bitmap's
+    // readers take as data.
+    assert!(rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[3] == 255 || p[3] == 0));
+
+    let (again, _) = evaluate(
+        &rendered,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    for (i, o) in again.observations.iter().enumerate() {
+        let m = o.track.as_ref().unwrap();
+        if i == picked {
+            assert_eq!(m.bitmap_zncc, Some(1.0));
+            assert_eq!(m.sharper_than_bitmap, None);
+        } else {
+            let z = m.bitmap_zncc.expect("a scored row");
+            assert!(z < 1.0 && z > 0.0, "row {i}: {z}");
         }
-        let standing = observation.track.as_ref().unwrap().reference_view.unwrap();
-        assert_eq!(standing.inputs.agreement, PairZnccReading::BlurMatched);
-        assert_eq!(standing.inputs.cells, PairZnccReading::BlurMatched);
-        picked_again += usize::from(standing.is_reference());
     }
-    assert_eq!(picked_again, 1);
+
+    let (committed, report) = commit(&edited, &again).expect("the track commits");
+    let view = committed.point(report.point).expect("the committed point");
+    let images: Vec<u32> = view.observations().iter().map(|o| o.image_index).collect();
+    let at = view.reference_observation().expect("the column is carried") as usize;
+    assert_eq!(images[at], again.observations[picked].image);
 }

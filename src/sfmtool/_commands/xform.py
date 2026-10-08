@@ -335,7 +335,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-large-features size        Remove points with max feature size > threshold
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
-      --filter-by-zncc-self-similarity-radius val  Remove points whose consensus bitmap slides over itself > val (patch-grid px)
+      --filter-by-zncc-self-similarity-radius val  Remove points whose patch bitmap slides over itself > val (patch-grid px)
       --filter-by-patch-size MULT         Remove points with world-space patch size > MULT x median
       --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
 

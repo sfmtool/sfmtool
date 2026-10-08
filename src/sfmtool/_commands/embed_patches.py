@@ -190,8 +190,8 @@ from .._cli_utils import timed_command
         "normal-informative views per point (a D-optimal geometric pick: "
         "least-oblique anchor plus azimuthally-complementary oblique views). "
         "0 uses all views (disables the cap). Only the refinement basis shrinks "
-        "— all observations stay in the output, and the consensus bitmaps are "
-        "still fused over the full view set. The default (8) cuts roughly a "
+        "— all observations stay in the output, and each stored bitmap is "
+        "still the reference view's tile, picked from the full view set. The default (8) cuts roughly a "
         "third off end-to-end time on large view sets (the round-2+ refine pass "
         "itself drops ~5x). See specs/core/patch/patch-normal-refine-view-subset.md."
     ),
@@ -202,7 +202,7 @@ from .._cli_utils import timed_command
     default=2.5,
     show_default=True,
     help=(
-        "Cull points whose cross-view consensus bitmap pins no 2D position, "
+        "Cull points whose patch bitmap pins no 2D position, "
         "EARLY — right after round 1's localize + sub-pixel refine, before the "
         "multi-round refinement: its ZNCC self-similarity radius, how far the "
         "bitmap can slide over itself and still match itself, is above this, in "

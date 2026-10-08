@@ -56,8 +56,8 @@ fn sample_rgb(img: &crate::camera::image::ImageU8, col: u32, row: u32, channels:
 /// per-view patch export, and GPU textured-surfel rendering.
 ///
 /// Shared with the sibling `keypoint_subpixel` module (via the
-/// `normal_refine` re-export), which fuses each point's representative bitmap
-/// at the final refined keypoints.
+/// `normal_refine` re-export), which fuses a point's mean bitmap at the final
+/// refined keypoints where the reference-view rule picks no view.
 pub(in crate::patch) struct PatchViewStack {
     resolution: u32,
     /// One full `R×R` render per kept view.

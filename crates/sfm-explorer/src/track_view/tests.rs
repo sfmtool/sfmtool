@@ -846,7 +846,7 @@ fn a_chip_draws_the_items_patch_or_an_empty_frame() {
     );
     let patch = chip(&panel, &track)
         .patch
-        .expect("the track's consensus bitmap");
+        .expect("the track's patch bitmap");
 
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert_eq!(

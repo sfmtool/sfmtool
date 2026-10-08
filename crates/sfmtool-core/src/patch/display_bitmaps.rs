@@ -15,13 +15,14 @@ use ndarray::Array4;
 
 use crate::camera::PhotographCache;
 use crate::geometry::RigidTransform;
-use crate::patch::keypoint_subpixel::{fuse_patch_cloud_bitmaps, KeypointSubpixelParams};
+use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::stored_bitmap::render_patch_cloud_bitmaps;
 use crate::patch::PatchCloud;
 use crate::progress::{Cancelled, Progress};
 use crate::{progress_note, SfmrReconstruction};
 
-/// Levels in the photograph pyramids the display patch bitmaps are fused from,
+/// Levels in the photograph pyramids the display patch bitmaps are rendered from,
 /// and the level count SfM Explorer builds every photograph pyramid with.
 pub const DISPLAY_PYRAMID_LEVELS: usize = 6;
 
@@ -31,8 +32,9 @@ pub const DISPLAY_PYRAMID_LEVELS: usize = 6;
 /// Two stages under `progress`: `decode photographs`, each image's photograph
 /// (`workspace_dir` joined with its name) read through `photographs`
 /// ([`PhotographCache::get_many`], which decodes the misses in parallel), and
-/// `fuse`, the whole-cloud form of the one fuse the bench commit and
-/// `--add-patch-bitmaps` use ([`fuse_patch_cloud_bitmaps`]). A photograph that cannot be read, or is not
+/// `render`, the whole-cloud form of the one render of the stored bitmap the
+/// bench commit and `--add-patch-bitmaps` use ([`render_patch_cloud_bitmaps`]):
+/// each point's reference view's tile. A photograph that cannot be read, or is not
 /// the size its camera says, is left out of every patch's views rather than
 /// failing the operation; a point that two readable views do not see gets a
 /// zero row.
@@ -61,7 +63,7 @@ pub fn render_display_patch_bitmaps(
     let Some(cloud) = PatchCloud::from_stored_frames(recon) else {
         return Ok(None);
     };
-    let [decode, fuse] = progress.split([1.0, 3.0]);
+    let [decode, render] = progress.split([1.0, 3.0]);
     let images = &recon.image_table.images;
     let total = images.len();
     let pyramids = {
@@ -126,8 +128,8 @@ pub fn render_display_patch_bitmaps(
             })
         })
         .collect();
-    let mut phase = fuse.phase("fuse");
-    let column = fuse_patch_cloud_bitmaps(
+    let mut phase = render.phase("render");
+    let column = render_patch_cloud_bitmaps(
         &cloud,
         recon,
         &views,
@@ -135,8 +137,16 @@ pub fn render_display_patch_bitmaps(
         None,
         &phase,
     )?;
-    progress_note!(phase, "{} patches at {} px", cloud.len(), column.shape()[1]);
-    Ok(Some(column))
+    let bitmaps = column.bitmaps;
+    progress_note!(
+        phase,
+        "{} patches at {} px",
+        cloud.len(),
+        bitmaps.shape()[1]
+    );
+    // The display column is not the reconstruction's own, so the references
+    // the render picked are not written into it: the file's column stands.
+    Ok(Some(bitmaps))
 }
 
 #[cfg(test)]

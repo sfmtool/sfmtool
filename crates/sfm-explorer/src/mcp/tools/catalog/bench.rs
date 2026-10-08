@@ -463,8 +463,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the reply's normal is the unit normal the patch faces after the turn, \
                           which differs from the one named when the turn was stopped. \
                           Nothing is pinned, and a track at infinity is refused: its normal is \
-                          its own bearing. The turn drops the consensus bitmap, and the live \
-                          evaluation fuses it again from the photographs as the patch now \
+                          its own bearing. The turn drops the patch bitmap, and the live \
+                          evaluation renders it again from the photographs as the patch now \
                           faces; once get_bench_track's evaluation reads current, the track \
                           can be committed without a fit.",
             kind: Write,
@@ -758,7 +758,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
                           the track stage it localizes every sighting against the patch, \
                           refines each to sub-pixel, re-triangulates the in ones, re-centres \
-                          the frame there and re-fuses the consensus bitmap; at the cluster \
+                          the frame there and renders the patch bitmap again, the reference \
+                          view's tile; at the cluster \
                           stage it is the refinement, which is what a reading is too. Nothing \
                           is dropped by a gate: a sighting that does not belong is turned out \
                           with set_bench_track_verdict or by the thresholds, not deleted from \

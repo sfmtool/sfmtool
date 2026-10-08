@@ -22,6 +22,7 @@ use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
 use crate::patch::cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
+use crate::patch::stored_bitmap::{bitmap_from_tile, render_reference};
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::SfmrReconstruction;
@@ -162,6 +163,7 @@ fn refine_patch_normal_impl(
         valid_view_count,
         confidence: 0.0,
         representative: None,
+        reference: None,
     };
 
     // A point at infinity has a fixed outward normal (`normalize(-d)`, set by its
@@ -388,26 +390,56 @@ fn refine_patch_normal_impl(
         f64::NAN
     };
 
-    // Representative RGBA texture (optional): fuse the winner's already-rendered
-    // view stack — no extra render or IRLS pass (the scoring pass produced both).
-    // Unlike scoring (which reads only the masked common support), fusion spans
-    // the full R×R grid, filling every pixel a kept view covers. `best` is `Some`
-    // exactly in the bitmap path (and then non-empty, since `best_phi` is finite).
-    let representative = best
-        .as_ref()
-        .map(|(weights, stack)| stack.fuse(weights, AGREEMENT_SIGMA));
+    let refined = if improved {
+        repose_patch(patch, &best_n)
+    } else {
+        patch.clone()
+    };
+    // The stored bitmap (optional): the tile of the view the reference-view
+    // rule picks, rendered through the refined patch at each view's keypoint.
+    // Where it picks none, the fused mean of the winner's already-rendered view
+    // stack, which needs no extra render or IRLS pass and spans the full R×R
+    // grid, filling every pixel a kept view covers. `best` is `Some` exactly in
+    // the bitmap path (and then non-empty, since `best_phi` is finite).
+    let (representative, reference) = match &best {
+        Some((weights, stack)) => {
+            let picked = (views.len() >= 2)
+                .then(|| {
+                    let set: Vec<u32> = (0..views.len() as u32).collect();
+                    let anchors: Vec<Option<[f64; 2]>> = view_keypoints
+                        .map_or_else(|| vec![None; views.len()], <[Option<[f64; 2]>]>::to_vec);
+                    let render = render_reference(
+                        &refined,
+                        views,
+                        &set,
+                        &anchors,
+                        resolution,
+                        params.sampler,
+                        progress,
+                    );
+                    render
+                        .reading
+                        .choice
+                        .reference
+                        .map(|r| (bitmap_from_tile(&render.tiles[r]), r))
+                })
+                .flatten();
+            match picked {
+                Some((rgba, r)) => (Some(rgba), Some(r)),
+                None => (Some(stack.fuse(weights, AGREEMENT_SIGMA)), None),
+            }
+        }
+        None => (None, None),
+    };
 
     NormalRefineResult {
-        patch: if improved {
-            repose_patch(patch, &best_n)
-        } else {
-            patch.clone()
-        },
+        patch: refined,
         photoconsistency: best_phi,
         init_photoconsistency: phi_init.unwrap_or(f64::NAN),
         valid_view_count,
         confidence,
         representative,
+        reference,
     }
 }
 

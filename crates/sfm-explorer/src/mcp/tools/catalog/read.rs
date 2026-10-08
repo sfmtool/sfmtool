@@ -365,7 +365,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           is off the photograph still has both. patch_zoom is null as well for \
                           a patch seen edge on, whose smaller singular value is at most 1e-9 of \
                           the larger. Each observation also carries sampler, the sampler its \
-                          tile is rendered with by the evaluation, the fuse and Track View: \
+                          tile is rendered with by the evaluation, the stored bitmap and Track View: \
                           under the default sampler rule, anisotropic where the rule moves the \
                           view, because bilinear_mip would read its less compressed axis \
                           sampler_minor_axis_loss times too coarsely and that is at least the \
@@ -394,32 +394,35 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the pair's ZNCC there; cell_deficit, the most its pair_zncc_grid falls \
                           below the track's typical agreement (the median over the in \
                           observations) in a ninth where that typical agreement is at least \
-                          0.5; blur_matched_pair_zncc, blur_matched_pair_zncc_grid and \
-                          blur_matched_cell_deficit, the same three with each pair's tiles \
-                          blur-matched first (where the other tile's self-similarity \
-                          semi-minor axis is at least a quarter longer than one tile's \
-                          semi-major axis, that tile blurred by a round Gaussian until its \
-                          semi-major axis reaches the other's semi-minor axis, at most 2 grid \
-                          px; any \
-                          other pair read as it is), read over each pair's own \
-                          samples, null where the evaluation took no blur-matched readings; \
-                          and reference_view, the reference-view \
+                          0.5; and reference_view, the reference-view \
                           rule's decision: is_reference, rejected_by (null for the reference, \
                           else the first test that turned it away: coverage under 0.99, \
                           clipped over 0.05, angle over 65 degrees, or at or past 90 once that \
                           limit is dropped, cells for a cell deficit over 0.3, agreement \
                           for a pair ZNCC more than 0.15 below the best \
                           candidate's, or sharpness for a candidate a sharper one beat or one \
-                          with no self-similarity radius), \
+                          with no self-similarity radius), and \
                           fallback (none, or which tests the rule dropped because no view \
                           passed them: without_angle, without_angle_or_cells, without_any; \
-                          without_angle drops only the 65 degree limit), and agreement_read \
-                          and cells_read, the reading the agreement test and the cell check \
-                          read: blur_matched (the default) or plain. \
+                          without_angle drops only the 65 degree limit). \
                           These are null on an out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the row \
-                          the rule picked, or null. The rule reports a view; it does not \
-                          change how the patch bitmap is computed.",
+                          the rule picked, or null. A fit stores that row's tile as the patch \
+                          bitmap: stage_data.bitmap_observation is the index of the row the \
+                          stored bitmap is the tile of, null for a bitmap that names none (a \
+                          mean of the rows, or one stored before the reference was recorded), \
+                          and has_bitmap says whether there is one. Every track-stage \
+                          observation the track has a bitmap for also carries bitmap_zncc, its \
+                          windowed ZNCC with the stored bitmap over the samples both have; \
+                          blur_matched_bitmap_zncc, the same after the bitmap alone is blurred \
+                          by a round Gaussian until its self-similarity semi-major axis reaches \
+                          the row's semi-minor axis (at most 2 grid px), where that semi-minor \
+                          axis is at least a quarter longer than the bitmap's semi-major axis, \
+                          and bitmap_zncc where it is not; bitmap_blur_sigma, the width of that \
+                          blur in grid px, 0 where the pair was read plain; and \
+                          sharper_than_bitmap, true where the row's tile is sharper than the \
+                          bitmap along every direction (read plain; a candidate to replace the \
+                          reference). The bitmap's own row reads 1 and is not computed.",
             kind: Read,
             schema: object(
                 &[("track", bench_track_schema())],

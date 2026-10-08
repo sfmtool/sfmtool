@@ -233,15 +233,21 @@ pub struct NormalRefineResult {
     /// refined or `Φ` is flat (e.g. the narrow-baseline degeneracy). `NaN` when
     /// not requested ([`NormalRefineParams::compute_confidence`] is `false`).
     pub confidence: f64,
-    /// The canonical robust-template appearance at the found normal: a fused
-    /// `R×R` RGBA texture, flat in row-major `(row, col, channel)` order (length
-    /// `R·R·4`). RGB is the cross-view fused colour (a robust IRLS-weighted mean
-    /// under [`Objective::RobustWeighted`], an unweighted mean under
-    /// [`Objective::MeanPairwise`]); the alpha channel is a per-pixel cross-view
-    /// agreement confidence (`0` where no kept view covers the pixel). `None`
-    /// when [`NormalRefineParams::render_bitmap`] is `false`, or the patch was
-    /// not refined (too few valid views).
+    /// The stored bitmap at the found normal, `R×R` RGBA flat in row-major
+    /// `(row, col, channel)` order (length `R·R·4`): the tile of the view
+    /// [`Self::reference`] names, the view the reference-view rule picks
+    /// ([`crate::patch::stored_bitmap`]), with alpha 255 on the samples on the
+    /// photograph. Where the rule picks none, the fused mean of the views: RGB
+    /// the cross-view fused colour (a robust IRLS-weighted mean under
+    /// [`Objective::RobustWeighted`], an unweighted mean under
+    /// [`Objective::MeanPairwise`]) and alpha a per-pixel cross-view agreement
+    /// confidence (`0` where no kept view covers the pixel). `None` when
+    /// [`NormalRefineParams::render_bitmap`] is `false`, or the patch was not
+    /// refined (too few valid views).
     pub representative: Option<Vec<u8>>,
+    /// The view, as an index into the views the patch was refined over, whose
+    /// tile [`Self::representative`] is; `None` for a fused mean or no bitmap.
+    pub reference: Option<usize>,
 }
 
 /// Windowed norm² below which a colour channel counts as flat (no texture

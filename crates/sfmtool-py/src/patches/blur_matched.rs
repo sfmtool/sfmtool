@@ -3,10 +3,11 @@
 
 //! Blur matching: one tile's blur assessment (`assess_blur`), the width that
 //! brings its semi-major axis to a length (`blur_sigma_to_reach`), the tile
-//! blurred to that length (`blur_to_length`), and the pairwise ZNCC of a
-//! track's views' tiles, each pair blur-matched (`blur_matched_zncc_matrix`).
+//! blurred to that length (`blur_to_length`), and each observation's score
+//! against a point's stored bitmap, plain and blur-matched
+//! (`score_against_bitmap`).
 
-use numpy::ndarray::{Array1, Array2, Array3, Array4, ArrayView2, ArrayView3};
+use numpy::ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3};
 use numpy::{IntoPyArray, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -16,10 +17,11 @@ use sfmtool_core::patch::blur_matched::{
     assess_blur as assess_tile_blur, blur_to_length as blur_tile_to_length, read_tile_ellipse,
     BlurAssessment, BlurScratch, TilePlanes, GROWTH_PROBE_SIGMAS,
 };
-use sfmtool_core::patch::reference_view::blur_matched_pairs;
-use sfmtool_core::progress::Progress;
+use sfmtool_core::patch::stored_bitmap::{
+    score_against_bitmap as core_score_against_bitmap, BitmapScore, BitmapScorer,
+};
 
-use super::args::{parse_matching, parse_patch_window};
+use super::args::parse_patch_window;
 
 /// Check a tile's shape: square, at least 3 on a side, 1 to 4 channels.
 fn check_tile(height: usize, width: usize, stride: usize) -> PyResult<()> {
@@ -277,100 +279,99 @@ pub fn blur_to_length<'py>(
     Ok(Some(out))
 }
 
-/// The ZNCC between every pair of a track's views' tiles, each pair
-/// blur-matched: where one tile's ZNCC self-similarity semi-major axis is
-/// shorter than the other's semi-minor axis, that tile is blurred by a round
-/// Gaussian until its semi-major axis reaches the other's semi-minor axis
-/// (at most 2 grid px) before the two are correlated; any other pair is
-/// correlated as it is. Each tile some pair blurs is assessed once
-/// (``assess_blur``), and every pair it is the sharper of blurs it by the
-/// width its assessment gives (``blur_to_length``). See
-/// ``specs/core/patch/blur-matched-zncc.md``.
+/// Each observation's ZNCC with a point's stored bitmap, plain and
+/// blur-matched, blurring only the bitmap. See
+/// ``specs/core/patch/blur-matched-zncc.md`` § "Scores against the stored
+/// bitmap".
 ///
-/// The ellipses compared are whole-tile readings over the samples with data,
-/// with the default parameters, which is how the blurred tiles are read; pass
-/// ``ellipses`` read another way and the blur is set against a different
-/// reading.
+/// Each pair is read over the samples with data in both tiles, weighted by the
+/// window, per colour channel, the channels averaged. Where the bitmap's ZNCC
+/// self-similarity semi-major axis is shorter than the observation's
+/// semi-minor axis, and that semi-minor axis is at least 1.25 times the
+/// bitmap's semi-major axis, the bitmap is blurred by a round Gaussian until
+/// its semi-major axis reaches the observation's semi-minor axis (at most 2
+/// grid px), by the width the bitmap's own blur assessment gives, and
+/// correlated again. Any other pair, an observation sharper than the bitmap
+/// among them, is read plain. The bitmap's assessment is read at most once.
+/// The observation ``reference`` names, whose tile the bitmap is, is not
+/// computed: its scores read 1.
 ///
-/// Each pair is read over the samples with data in both tiles: over the whole
-/// tile with the window, and over each cell of the ZNCC grid's three-by-three
-/// split with every sample weighted equally, per colour channel, the channels
-/// averaged.
-///
-/// The bench's reference-view rule reads its blur-matched readings this way,
-/// from the tiles ``OrientedPatch.render_view_tile`` renders of the track's
-/// frame at each view's keypoint, at the evaluation's resolution and with its
-/// sampler. To read the same numbers from those tiles, stack each view's
-/// ``samples`` as ``tiles`` and its ``valid`` as ``valid``, leave
-/// ``ellipses`` out, and pass
-/// ``matching="blur_matched_above_ratio"`` with the default
-/// ``min_ellipse_ratio`` of 1.25 and the default window.
-/// The ellipses read here are then the bench's, its track-stage
-/// ``zncc_self_similarity_ellipse["grid_px"]["matrix"]``, up to rounding.
+/// The bench scores every row of a track this way
+/// (``EditableTrack.observations``' ``bitmap_zncc`` and
+/// ``blur_matched_bitmap_zncc``), from the tiles
+/// ``OrientedPatch.render_view_tile`` renders at the evaluation's resolution
+/// and with its sampler.
 ///
 /// Args:
-///     tiles: A ``(k, R, R, C)`` uint8 stack, one view's tile each, as
-///         ``OrientedPatch.render_view_tile`` renders them. One channel is
-///         grey, two grey and alpha, three RGB and four RGB and alpha. Alpha
-///         is not correlated: a sample whose alpha is 0 carries no data.
+///     bitmap: The ``(R, R, 4)`` uint8 stored bitmap; a sample whose alpha is
+///         0 carries no data.
+///     tiles: A ``(k, R, R, C)`` uint8 stack of the observations' tiles. One
+///         channel is grey, two grey and alpha, three RGB and four RGB and
+///         alpha.
 ///     valid: A ``(k, R, R)`` bool stack, ``True`` where a sample carries
-///         data, as ``render_view_tile`` returns it in ``valid``; a sample
-///         carries data where it is ``True`` and its alpha, if any, is above
-///         0. When ``None`` (default), alpha alone says.
-///     ellipses: Each tile's self-similarity ellipse matrix, ``(k, 2, 2)``
-///         float64 in grid px squared (``ellipse_matrix`` of
-///         ``zncc_self_similarity_parts``), NaN for a tile without one. When
-///         ``None`` (default), each tile's whole reading is taken here with the
-///         default parameters, over the samples that carry data.
-///     matching: ``"blur_matched"`` (default), ``"blur_matched_above_ratio"``
-///         or ``"plain"``.
-///     min_ellipse_ratio: How many times the sharper tile's semi-major axis
-///         the other tile's semi-minor axis must at least be for
-///         ``"blur_matched_above_ratio"`` to blur the pair (default 1.25), at
-///         least 1.
-///     window: The whole-tile reading's window, ``"gaussian_disk"``
-///         (default), ``"gaussian"`` or ``"uniform"``.
+///         data, as ``render_view_tile`` returns it in ``valid``. When
+///         ``None`` (default), alpha alone says.
+///     reference: The index into ``tiles`` of the observation whose tile the
+///         bitmap is, or ``None`` (default) for a bitmap that names none.
+///     window: The window, ``"gaussian_disk"`` (default), ``"gaussian"`` or
+///         ``"uniform"``.
 ///     window_sigma: Its sigma.
 ///
-/// Returns a dict: ``zncc`` (``(k, k)`` float64, unit diagonal, NaN where a
-/// pair could not be read), ``zncc_grid`` (``(k, k, 3, 3)`` float64, NaN on
-/// the diagonal), ``blurred`` (``(k, k)`` bool, whether a tile of the pair
-/// was blurred), ``blur_sigma`` (``(k, k)`` float64, the width in grid px by
-/// which the row's tile was blurred against the column's, 0 where it was not
-/// blurred), ``pairs`` and ``pairs_blurred`` (int), and ``ellipse_matrix``
-/// (``(k, 2, 2)``, the ellipses read).
+/// Returns a dict: ``zncc`` and ``blur_matched_zncc`` (``(k,)`` float64, NaN
+/// where a pair could not be read, 1 for the reference), ``blur_sigma``
+/// (``(k,)`` float64, the width the bitmap was blurred by, 0 where it was
+/// not), ``sharper_than_bitmap`` (``(k,)`` bool), and ``bitmap_semi_axes``
+/// (``(2,)``, the bitmap's [major, minor] in grid px, NaN where it has no
+/// ellipse).
 ///
 /// Raises:
-///     TypeError: If ``tiles`` is not a 4-D uint8 array, or ``valid`` is not a
-///         3-D bool array.
-///     ValueError: If ``tiles`` is not a stack of square tiles at least 3 on a
-///         side with 1 to 4 channels, ``valid`` is not ``(k, R, R)``,
-///         ``ellipses`` is not ``(k, 2, 2)``, ``min_ellipse_ratio`` is under 1
-///         or not finite, or a name is unknown.
+///     TypeError: If ``bitmap`` or ``tiles`` is not a uint8 array of the right
+///         rank, or ``valid`` is not a 3-D bool array.
+///     ValueError: If a shape is wrong, ``reference`` is past the tiles, or
+///         the window name is unknown.
 #[pyfunction]
 #[pyo3(signature = (
-    tiles, *, valid=None, ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
-    window="gaussian_disk", window_sigma=0.6
+    bitmap, tiles, *, valid=None, reference=None, window="gaussian_disk", window_sigma=0.6
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn blur_matched_zncc_matrix<'py>(
+pub fn score_against_bitmap<'py>(
     py: Python<'py>,
+    bitmap: PyReadonlyArray3<'py, u8>,
     tiles: PyReadonlyArray4<'py, u8>,
     valid: Option<PyReadonlyArray3<'py, bool>>,
-    ellipses: Option<PyReadonlyArray3<'py, f64>>,
-    matching: &str,
-    min_ellipse_ratio: f64,
+    reference: Option<usize>,
     window: &str,
     window_sigma: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let matching = parse_matching(matching, min_ellipse_ratio)?;
     let window = parse_patch_window(window, window_sigma)?;
-    let tiles = tiles.as_array();
-    let &[k, height, width, stride] = tiles.shape() else {
-        unreachable!("a 4-D array has four dimensions");
+    let bitmap_view = bitmap.as_array();
+    let &[height, width, stride] = bitmap_view.shape() else {
+        unreachable!("a 3-D array has three dimensions");
     };
     check_tile(height, width, stride)?;
+    if stride != 4 {
+        return Err(PyValueError::new_err(format!(
+            "bitmap must be (R, R, 4) RGBA, got {stride} channels"
+        )));
+    }
     let side = width;
+    let bitmap_planes = tile_planes(bitmap_view, None);
+    let tiles = tiles.as_array();
+    let &[k, th, tw, ts] = tiles.shape() else {
+        unreachable!("a 4-D array has four dimensions");
+    };
+    check_tile(th, tw, ts)?;
+    if tw != side {
+        return Err(PyValueError::new_err(format!(
+            "tiles must be {side} x {side} like the bitmap, got {th} x {tw}"
+        )));
+    }
+    if reference.is_some_and(|r| r >= k) {
+        return Err(PyValueError::new_err(format!(
+            "reference {} is past the {k} tiles",
+            reference.unwrap_or_default()
+        )));
+    }
     let valid = valid.as_ref().map(|v| v.as_array());
     if let Some(v) = &valid {
         if v.shape() != [k, side, side] {
@@ -389,63 +390,37 @@ pub fn blur_matched_zncc_matrix<'py>(
             )
         })
         .collect();
-    let ellipses: Vec<Option<[[f64; 2]; 2]>> = match ellipses {
-        Some(e) => {
-            let e = e.as_array();
-            if e.shape() != [k, 2, 2] {
-                return Err(PyValueError::new_err(format!(
-                    "ellipses must be ({k}, 2, 2), got {:?}",
-                    e.shape()
-                )));
-            }
-            (0..k)
-                .map(|v| {
-                    let m = [[e[[v, 0, 0]], e[[v, 0, 1]]], [e[[v, 1, 0]], e[[v, 1, 1]]]];
-                    m.iter().flatten().all(|x| x.is_finite()).then_some(m)
-                })
-                .collect()
-        }
-        None => planes
-            .iter()
-            .map(|t| read_tile_ellipse(&t.values, t.channels, side, &t.data))
-            .collect(),
-    };
-    let pairs = py.detach(|| {
+    let (scores, bitmap_axes) = py.detach(|| {
         let refs: Vec<&TilePlanes> = planes.iter().collect();
-        blur_matched_pairs(&refs, &ellipses, matching, window, &Progress::none())
+        let scores =
+            core_score_against_bitmap(&bitmap_planes, &refs, &vec![None; k], reference, window);
+        let axes = BitmapScorer::new(&bitmap_planes, window).bitmap_semi_axes();
+        (scores, axes)
     });
+    let pick = |f: &dyn Fn(&BitmapScore) -> f64, at_reference: f64| -> Array1<f64> {
+        scores
+            .iter()
+            .map(|s| s.as_ref().map_or(at_reference, f))
+            .collect()
+    };
     let out = PyDict::new(py);
+    out.set_item("zncc", pick(&|s| s.zncc, 1.0).into_pyarray(py))?;
     out.set_item(
-        "zncc",
-        Array2::from_shape_vec((k, k), pairs.whole.clone())
-            .expect("k*k readings")
+        "blur_matched_zncc",
+        pick(&|s| s.blur_matched_zncc, 1.0).into_pyarray(py),
+    )?;
+    out.set_item("blur_sigma", pick(&|s| s.blur_sigma, 0.0).into_pyarray(py))?;
+    out.set_item(
+        "sharper_than_bitmap",
+        scores
+            .iter()
+            .map(|s| s.is_some_and(|s| s.sharper_than_bitmap))
+            .collect::<Array1<bool>>()
             .into_pyarray(py),
     )?;
     out.set_item(
-        "zncc_grid",
-        Array4::from_shape_fn((k, k, 3, 3), |(a, b, r, c)| pairs.grid[a * k + b][r][c])
-            .into_pyarray(py),
-    )?;
-    out.set_item(
-        "blurred",
-        Array2::from_shape_vec((k, k), pairs.blurred.clone())
-            .expect("k*k flags")
-            .into_pyarray(py),
-    )?;
-    out.set_item(
-        "blur_sigma",
-        Array2::from_shape_vec((k, k), pairs.sigma.clone())
-            .expect("k*k widths")
-            .into_pyarray(py),
-    )?;
-    out.set_item("pairs", pairs.pairs)?;
-    out.set_item("pairs_blurred", pairs.pairs_blurred)?;
-    out.set_item(
-        "ellipse_matrix",
-        Array3::from_shape_fn((k, 2, 2), |(v, r, c)| {
-            ellipses[v].map_or(f64::NAN, |m| m[r][c])
-        })
-        .into_pyarray(py),
+        "bitmap_semi_axes",
+        Array1::from(bitmap_axes.unwrap_or([f64::NAN; 2]).to_vec()).into_pyarray(py),
     )?;
     Ok(out)
 }

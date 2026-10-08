@@ -16,7 +16,8 @@
 //! - **`patch bitmaps`**, for a file with patch frames and inline keypoints but
 //!   no bitmaps: every photograph read through the viewer's photograph cache
 //!   ([`AppState::photographs`], so the panels and later operations find them
-//!   decoded), then every patch fused at its stored frame and keypoints by the fuse `sfm xform --add-patch-bitmaps` runs
+//!   decoded), then every patch's bitmap rendered at its stored frame and
+//!   keypoints by the render `sfm xform --add-patch-bitmaps` runs
 //!   ([`render_display_patch_bitmaps`], which `sfm web-export` also calls).
 //!   The column goes into the value marked
 //!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], so the bench, the

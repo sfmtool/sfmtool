@@ -124,8 +124,15 @@ def _prepare_from_sift(
     finite = ~np.asarray(emb.point_is_at_infinity)[point_ids]
     normals = np.asarray(emb.normals, dtype=np.float32).copy()
     normals[point_ids[finite]] = refined[finite]
+    from .._patch_compaction import reference_observations_from_images
+
     prepared = emb.clone_with_changes(
-        normals=normals, patches=cloud, patch_bitmaps=result["bitmaps"]
+        normals=normals,
+        patches=cloud,
+        patch_bitmaps=result["bitmaps"],
+        reference_observations=reference_observations_from_images(
+            emb, result["reference_images"]
+        ),
     )
     return prepared, images
 

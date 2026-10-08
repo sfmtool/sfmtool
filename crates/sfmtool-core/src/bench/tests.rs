@@ -1563,6 +1563,50 @@ fn a_split_whose_reference_moved_reseats_both_halves() {
     assert_eq!(second.observations[0].image, 0);
 }
 
+/// The row a track-stage bitmap is the tile of follows its observation through
+/// a split and an image delete, and is dropped with it.
+#[test]
+fn the_bitmap_s_row_follows_its_observation_or_goes_with_it() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let n = track.observations.len();
+    assert!(n >= 2, "{n} observations");
+    payload_of(&mut track).reference = Some(n - 1);
+    let last_image = track.observations[n - 1].image;
+    let bench = install(&bench, &label, track.clone());
+
+    // Splitting off the first row moves the bitmap's row up by one.
+    let (after, _) = split(&bench, &edited, &label, &[0]).expect("one row off");
+    let first = after.track(&label).expect("still on");
+    let row = first
+        .track()
+        .and_then(|p| p.reference)
+        .expect("still named");
+    assert_eq!(row, n - 2);
+    assert_eq!(first.observations[row].image, last_image);
+    // Splitting off the bitmap's own row leaves it naming none.
+    let (after, _) = split(&bench, &edited, &label, &[n - 1]).expect("one row off");
+    assert_eq!(
+        after.track(&label).unwrap().track().unwrap().reference,
+        None
+    );
+
+    // Deleting an earlier image renumbers the row; deleting its own drops it.
+    let earlier = track.observations[0].image;
+    if earlier != last_image {
+        let (moved, map) = track.delete_image(earlier).expect("the track sees it");
+        let row = moved
+            .track()
+            .and_then(|p| p.reference)
+            .expect("still named");
+        assert_eq!(Some(row), map[n - 1]);
+    }
+    let (gone, _) = track.delete_image(last_image).expect("the track sees it");
+    assert_eq!(gone.track().unwrap().reference, None);
+}
+
 /// The rows a person splits off are usually the ones the thresholds just turned
 /// out, so a half with no `in` observation in it is the ordinary case rather
 /// than a refusal.
@@ -1743,7 +1787,7 @@ fn a_commit_onto_the_point_that_already_holds_the_track_writes_nothing() {
 
 /// What the **first** commit of an untouched point rewrites, which is why it is
 /// a change and the ones after it are not: the colour, which the commit reads
-/// from the consensus bitmap's centre rather than carrying the stored byte, and
+/// from the patch bitmap's centre rather than carrying the stored byte, and
 /// the error, which is the mean of what an evaluation measured and so zero for
 /// a track nothing has read. Every other column round-trips exactly, and after
 /// the first write the two agree as well.
@@ -4786,7 +4830,7 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
         .zncc = Some(0.91);
     assert!(
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
-        "the column fixture should carry a consensus bitmap to drop"
+        "the column fixture should carry a patch bitmap to drop"
     );
     // The fixture's keypoints are each point's exact projection, so every
     // in-plane offset is zero and a step that reset them all would pass. Put
@@ -5013,7 +5057,7 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
         .zncc = Some(0.91);
     assert!(
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
-        "the column fixture should carry a consensus bitmap to drop"
+        "the column fixture should carry a patch bitmap to drop"
     );
     // The fixture's keypoints are each point's exact projection, so every
     // in-plane offset is zero and a step that reset them all would pass. Put

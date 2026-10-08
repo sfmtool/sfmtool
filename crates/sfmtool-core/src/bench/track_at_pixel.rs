@@ -845,7 +845,7 @@ pub fn build_track_at_pixel(
                 // drops the bitmap fused where the patch stood before; fuse it
                 // again where it stands now, moving nothing, so the track can
                 // be committed into a reconstruction that stores one.
-                let track = super::fit::fuse_bitmap_in_place(
+                let track = super::fit::render_bitmap_in_place(
                     &track,
                     edited,
                     views,

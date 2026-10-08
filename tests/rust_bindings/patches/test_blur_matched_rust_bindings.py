@@ -2,18 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the blur-matching bindings: one tile's ``assess_blur``,
-``blur_sigma_to_reach`` and ``blur_to_length``, and
-``blur_matched_zncc_matrix``, the ZNCC between every pair of a track's views'
-tiles, each pair blur-matched. See ``specs/core/patch/blur-matched-zncc.md``."""
+``blur_sigma_to_reach`` and ``blur_to_length``, and ``score_against_bitmap``,
+each observation's ZNCC with a point's stored bitmap, plain and with the
+bitmap alone blurred. See ``specs/core/patch/blur-matched-zncc.md``."""
 
 import numpy as np
 import pytest
 
 from sfmtool._sfmtool.patches import (
     assess_blur,
-    blur_matched_zncc_matrix,
     blur_sigma_to_reach,
     blur_to_length,
+    score_against_bitmap,
 )
 
 
@@ -88,15 +88,6 @@ def test_blur_to_length_leaves_a_long_enough_tile_unblurred():
     assert blur_to_length(tile, flat, 2 * a["semi_axes"][0]) is None
 
 
-def test_the_matrix_blurs_by_the_width_of_the_sharper_tiles_assessment():
-    tiles = np.stack([_texture(), _texture(blur=2.0)])
-    out = blur_matched_zncc_matrix(tiles)
-    assert out["blurred"][0, 1]
-    a = assess_blur(tiles[0])
-    target = min(assess_blur(tiles[1])["semi_axes"][1], 2.0)
-    assert out["blur_sigma"][0, 1] == blur_sigma_to_reach(a, target)
-
-
 def test_bad_tile_arguments_are_refused():
     tile = _texture()
     with pytest.raises(ValueError, match="square"):
@@ -121,108 +112,67 @@ def test_a_length_that_is_negative_or_not_finite_is_refused(length):
         blur_to_length(tile, a, length)
 
 
-def test_a_blurred_copy_reads_higher_blur_matched_than_plain():
-    tiles = np.stack([_texture(), _texture(), _texture(blur=1.5)])
-    plain = blur_matched_zncc_matrix(tiles, matching="plain")
-    matched = blur_matched_zncc_matrix(tiles)
-    assert plain["zncc"].shape == (3, 3)
-    assert matched["zncc_grid"].shape == (3, 3, 3, 3)
-    assert matched["ellipse_matrix"].shape == (3, 2, 2)
-    np.testing.assert_allclose(np.diag(matched["zncc"]), 1.0)
-    np.testing.assert_allclose(matched["zncc"], matched["zncc"].T)
-    assert plain["pairs_blurred"] == 0
-    assert matched["pairs"] == 3
-    assert matched["blurred"][0, 2] and matched["blurred"][1, 2]
-    for i in (0, 1):
-        assert matched["zncc"][i, 2] > plain["zncc"][i, 2] + 0.01
-    # The two sharp copies are the same tile: nothing to match.
-    assert not matched["blurred"][0, 1]
-    assert matched["zncc"][0, 1] == pytest.approx(1.0)
-    # Only the sharper tile of a pair is blurred, and its width is reported
-    # in its own row.
-    sigma = matched["blur_sigma"]
-    assert sigma.shape == (3, 3)
-    assert sigma[0, 2] > 0 and sigma[1, 2] > 0
-    assert sigma[2, 0] == 0 and sigma[2, 1] == 0
-    assert np.all(plain["blur_sigma"] == 0)
+def test_the_bitmap_alone_is_blurred_to_a_blurrier_observation():
+    bitmap = _texture()
+    tiles = np.stack([_texture(), _texture(blur=2.0)])
+    out = score_against_bitmap(bitmap, tiles)
+    # The same tile as the bitmap reads 1, plain.
+    assert out["zncc"][0] == pytest.approx(1.0)
+    assert out["blur_sigma"][0] == 0
+    # The blurrier observation has the bitmap blurred by the width the
+    # bitmap's own assessment gives to reach its semi-minor axis.
+    a = assess_blur(bitmap)
+    target = min(assess_blur(tiles[1])["semi_axes"][1], 2.0)
+    assert out["blur_sigma"][1] == blur_sigma_to_reach(a, target)
+    assert out["blur_matched_zncc"][1] > out["zncc"][1] + 0.01
+    assert not out["sharper_than_bitmap"].any()
+    np.testing.assert_allclose(out["bitmap_semi_axes"], a["semi_axes"])
 
 
-def test_a_ratio_and_given_ellipses_are_honoured():
-    tiles = np.stack([_texture(), _texture(blur=1.0)])
-    ellipses = blur_matched_zncc_matrix(tiles)["ellipse_matrix"]
-    above = blur_matched_zncc_matrix(
-        tiles,
-        ellipses=ellipses,
-        matching="blur_matched_above_ratio",
-        min_ellipse_ratio=1e6,
-    )
-    assert above["pairs_blurred"] == 0
-    # An ellipse that cannot be read leaves its pairs plain.
-    unread = ellipses.copy()
-    unread[1] = np.nan
-    assert blur_matched_zncc_matrix(tiles, ellipses=unread)["pairs_blurred"] == 0
+def test_an_observation_sharper_than_the_bitmap_is_read_plain():
+    bitmap = _texture(blur=2.0)
+    out = score_against_bitmap(bitmap, np.stack([_texture()]))
+    assert out["sharper_than_bitmap"][0]
+    assert out["blur_sigma"][0] == 0
+    assert out["blur_matched_zncc"][0] == out["zncc"][0]
+
+
+def test_the_reference_is_not_computed():
+    bitmap = _texture()
+    tiles = np.stack([_texture(blur=1.5), bitmap])
+    out = score_against_bitmap(bitmap, tiles, reference=1)
+    assert out["zncc"][1] == 1.0 and out["blur_matched_zncc"][1] == 1.0
+    assert out["blur_sigma"][1] == 0 and not out["sharper_than_bitmap"][1]
+    alone = score_against_bitmap(bitmap, tiles[:1])
+    assert out["zncc"][0] == alone["zncc"][0]
 
 
 def test_samples_without_data_are_left_out():
-    tile = _texture()
-    holed = tile.copy()
+    bitmap = _texture()
+    holed = bitmap.copy()
+    holed[:, :6, :3] = 0
     holed[:, :6, 3] = 0
-    holed[:, :6, :3] = 0
-    out = blur_matched_zncc_matrix(np.stack([tile, holed]), matching="plain")
-    # Over the samples both carry, the two are the same.
-    assert out["zncc"][0, 1] == pytest.approx(1.0)
+    out = score_against_bitmap(bitmap, np.stack([holed]))
+    assert out["zncc"][0] == pytest.approx(1.0)
+    # The same through the valid flags.
+    flagged = bitmap.copy()
+    flagged[:, :6, :3] = 0
+    valid = np.ones((1, 24, 24), bool)
+    valid[0, :, :6] = False
+    out = score_against_bitmap(bitmap, np.stack([flagged]), valid=valid)
+    assert out["zncc"][0] == pytest.approx(1.0)
+    unflagged = score_against_bitmap(bitmap, np.stack([flagged]))
+    assert unflagged["zncc"][0] < 0.99
 
 
-def test_valid_flags_samples_without_data():
-    tile = _texture()
-    holed = tile.copy()
-    holed[:, :6, :3] = 0
-    valid = np.ones((2, 24, 24), bool)
-    valid[1, :, :6] = False
-    out = blur_matched_zncc_matrix(
-        np.stack([tile, holed]), valid=valid, matching="plain"
-    )
-    assert out["zncc"][0, 1] == pytest.approx(1.0)
-    # Without the flags, the black columns are read as texture.
-    unflagged = blur_matched_zncc_matrix(np.stack([tile, holed]), matching="plain")
-    assert unflagged["zncc"][0, 1] < 0.99
-
-
-def test_grey_and_alpha_read_the_grey_alone():
-    grey = _texture()[..., :1]
-    blurred = _texture(blur=1.5)[..., :1]
-    tiles = np.stack([grey, blurred])
-    with_alpha = np.concatenate([tiles, np.full_like(tiles, 255)], axis=-1)
-    # Alpha is not a colour channel: two channels read as one.
-    for matching in ("plain", "blur_matched"):
-        np.testing.assert_allclose(
-            blur_matched_zncc_matrix(with_alpha, matching=matching)["zncc"],
-            blur_matched_zncc_matrix(tiles, matching=matching)["zncc"],
-        )
-    # Alpha 0 marks a sample without data.
-    holed = with_alpha.copy()
-    holed[1, :, :6, 0] = 0
-    holed[1, :, :6, 1] = 0
-    out = blur_matched_zncc_matrix(
-        np.stack([with_alpha[0], holed[1]]), matching="plain"
-    )
-    expected = blur_matched_zncc_matrix(
-        np.stack([with_alpha[0], with_alpha[1]]),
-        valid=np.stack([np.ones((24, 24), bool), holed[1, ..., 1] > 0]),
-        matching="plain",
-    )
-    assert out["zncc"][0, 1] == pytest.approx(expected["zncc"][0, 1])
-
-
-def test_bad_arguments_are_refused():
-    tiles = np.stack([_texture(), _texture()])
-    with pytest.raises(ValueError, match="matching"):
-        blur_matched_zncc_matrix(tiles, matching="sharp")
-    with pytest.raises(ValueError, match="ellipses"):
-        blur_matched_zncc_matrix(tiles, ellipses=np.zeros((3, 2, 2)))
-    with pytest.raises(ValueError, match="square"):
-        blur_matched_zncc_matrix(np.zeros((2, 24, 20, 4), np.uint8))
+def test_bad_bitmap_arguments_are_refused():
+    bitmap = _texture()
+    tiles = np.stack([_texture()])
+    with pytest.raises(ValueError, match="RGBA"):
+        score_against_bitmap(bitmap[..., :3], tiles)
+    with pytest.raises(ValueError, match="like the bitmap"):
+        score_against_bitmap(bitmap, np.zeros((1, 20, 20, 4), np.uint8))
+    with pytest.raises(ValueError, match="reference"):
+        score_against_bitmap(bitmap, tiles, reference=1)
     with pytest.raises(ValueError, match="valid"):
-        blur_matched_zncc_matrix(tiles, valid=np.ones((2, 24, 23), bool))
-    with pytest.raises(ValueError, match="min_ellipse_ratio"):
-        blur_matched_zncc_matrix(tiles, min_ellipse_ratio=0.5)
+        score_against_bitmap(bitmap, tiles, valid=np.ones((1, 24, 23), bool))

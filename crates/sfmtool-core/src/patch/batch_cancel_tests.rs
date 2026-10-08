@@ -15,13 +15,12 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_cloud_keypoints, KeypointLocalizeParams};
-use crate::patch::keypoint_subpixel::{
-    fuse_patch_cloud_bitmaps, refine_patch_cloud_keypoints, KeypointSubpixelParams,
-};
+use crate::patch::keypoint_subpixel::{refine_patch_cloud_keypoints, KeypointSubpixelParams};
 use crate::patch::member_coherence::{
     validate_patch_cloud_member_coherence, MemberCoherenceParams,
 };
 use crate::patch::normal_refine::{refine_patch_cloud_normals, NormalRefineParams, ProjectedImage};
+use crate::patch::stored_bitmap::render_patch_cloud_bitmaps;
 use crate::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 use crate::patch::PatchCloud;
 use crate::progress::{Event, Progress};
@@ -213,14 +212,14 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         .is_err()
     });
 
-    // The fuse reads its tracks and keypoints from a reconstruction.
+    // The stored bitmaps are read from a reconstruction's tracks and keypoints.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr");
     let recon = SfmrReconstruction::load(&path, &Progress::none()).expect("the ground truth loads");
     let stored = PatchCloud::from_stored_frames(&recon).expect("the ground truth has frames");
     let none: Vec<Option<ProjectedImage<'_>>> = vec![None; recon.image_count()];
-    check("the fuse", &|progress, done| {
-        fuse_patch_cloud_bitmaps(
+    check("the stored bitmaps", &|progress, done| {
+        render_patch_cloud_bitmaps(
             &stored,
             &recon,
             &none,

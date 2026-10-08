@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Filter points by the ZNCC self-similarity radius of their consensus bitmap."""
+"""Filter points by the ZNCC self-similarity radius of their stored patch bitmap."""
 
 import numpy as np
 
@@ -11,7 +11,7 @@ from .._sfmtool.patches import (
 )
 from .._sfmtool.reconstruction import SfmrReconstruction
 
-#: The default bar on a point's consensus bitmap: the same 2.5 patch-grid px as
+#: The default bar on a point's stored bitmap: the same 2.5 patch-grid px as
 #: the keypoint localizer's and cluster refinement's member gates and the bench.
 DEFAULT_MAX_ZNCC_SELF_SIMILARITY_RADIUS = DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS
 
@@ -19,7 +19,7 @@ DEFAULT_MAX_ZNCC_SELF_SIMILARITY_RADIUS = DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARIT
 def points_passing_zncc_self_similarity_radius(
     bitmaps: np.ndarray, bar: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Which points' consensus bitmaps pass a bar on the ZNCC self-similarity radius.
+    """Which points' stored bitmaps pass a bar on the ZNCC self-similarity radius.
 
     Each ``(R, R, C)`` bitmap of the ``(N, R, R, C)`` stack is read the overlap
     way (``zncc_self_similarity_parts_stack``; see
@@ -28,7 +28,7 @@ def points_passing_zncc_self_similarity_radius(
     bitmap on both sides, and whose alpha is above 0 on both sides, are
     correlated. A point passes when its whole bitmap's radius is at or below
     ``bar``; a ``NaN`` radius fails. A bitmap with no sample carrying data (a
-    point with no consensus, whose row is zero) has no reading and passes, as
+    point with no bitmap, whose row is zero) has no reading and passes, as
     the bench's painting passes a row with no reading. A ``bar`` of ``0`` or
     less turns the cull off, and since the radius reads at most 3, a bar of 3
     or more turns nothing out.
@@ -45,7 +45,7 @@ def points_passing_zncc_self_similarity_radius(
 
 
 class FilterByZnccSelfSimilarityRadiusTransform:
-    """Remove 3D points whose consensus bitmap can slide over itself too far.
+    """Remove 3D points whose stored bitmap can slide over itself too far.
 
     The ZNCC self-similarity radius of a point's stored ``patch_bitmaps`` row is
     how far, in patch-grid px up to 3, the bitmap can shift over itself and
@@ -54,7 +54,7 @@ class FilterByZnccSelfSimilarityRadiusTransform:
     itself, and a flat patch read 3. The filter removes points whose radius is
     over ``threshold``, with the pass rule of
     :func:`points_passing_zncc_self_similarity_radius`: ``0`` turns it off, and
-    a point with no consensus is kept. It reads the bitmaps the reconstruction
+    a point with no bitmap is kept. It reads the bitmaps the reconstruction
     stores; no source images are read.
     """
 
@@ -68,7 +68,7 @@ class FilterByZnccSelfSimilarityRadiusTransform:
         if bitmaps is None:
             raise ValueError(
                 "Filtering by the ZNCC self-similarity radius needs per-point patch "
-                "bitmaps (a cross-view consensus to score), which this "
+                "bitmaps to score, which this "
                 "reconstruction has none of. Produce them with `sfm embed-patches` "
                 "or `sfm xform --add-patch-bitmaps` first."
             )

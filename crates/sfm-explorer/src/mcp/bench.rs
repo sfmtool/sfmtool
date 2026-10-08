@@ -1226,7 +1226,7 @@ fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed
     })
 }
 
-/// `fit_bench_track`: the track localized, re-triangulated, re-fused and read
+/// `fit_bench_track`: the track localized, re-triangulated, its bitmap re-rendered and read
 /// back, on a worker thread.
 pub(super) fn fit_bench_track(
     state: &mut AppState,
@@ -1610,7 +1610,7 @@ pub(super) fn thresholds(bars: &Thresholds) -> Value {
 /// What the stage the track is in carries, beside the observations: the
 /// template's cut at the cluster stage, the patch at the track stage.
 ///
-/// The template's samples and the consensus bitmap are reported as present or
+/// The template's samples and the patch bitmap are reported as present or
 /// absent rather than sent: they are pictures, and this surface is not a data
 /// channel. At the track stage `patch_resolution` is the patch-grid
 /// resolution `R` of `recon` ([`crate::bench::patch_resolution`]), the grid
@@ -1643,7 +1643,10 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "color": payload.color,
                 "normal_confidence": payload.normal_confidence,
                 "placement": super::render::placement(payload.placement.as_ref()),
-                "bitmap_fused": payload.bitmap.is_some(),
+                "has_bitmap": payload.bitmap.is_some(),
+                // The row whose tile the stored bitmap is, as an index into
+                // `observations`, or null for a bitmap that names none.
+                "bitmap_observation": payload.bitmap.as_ref().and(payload.reference),
                 "patch_resolution": recon.map(crate::bench::patch_resolution),
                 // The row the reference-view rule picked at the last
                 // evaluation, as an index into `observations`, or null.
@@ -1784,20 +1787,20 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "pair_zncc": finite(measured.pair_zncc),
         "pair_zncc_grid": grid(measured.pair_zncc_grid),
         "cell_deficit": finite(measured.cell_deficit),
-        // The same three with each pair's sharper tile blurred to the other's
-        // sharpness first, where the evaluation took them.
-        "blur_matched_pair_zncc": finite(measured.blur_matched_pair_zncc),
-        "blur_matched_pair_zncc_grid": grid(measured.blur_matched_pair_zncc_grid),
-        "blur_matched_cell_deficit": finite(measured.blur_matched_cell_deficit),
-        // What the reference-view rule decided about an `in` row, and which
-        // readings its agreement test and cell check read.
+        // What the reference-view rule decided about an `in` row.
         "reference_view": measured.reference_view.map(|standing| json!({
             "is_reference": standing.is_reference(),
             "rejected_by": standing.rejected_by.map(|test| test.name()),
             "fallback": standing.fallback.name(),
-            "agreement_read": standing.inputs.agreement.name(),
-            "cells_read": standing.inputs.cells.name(),
         })),
+        // The row's ZNCC with the stored patch bitmap, plain and with the
+        // bitmap alone blurred to the row's sharpness, the blur's width in
+        // grid px (0 when read plain), and whether the row is sharper than
+        // the bitmap. The row the bitmap is the tile of reads 1.
+        "bitmap_zncc": finite(measured.bitmap_zncc),
+        "blur_matched_bitmap_zncc": finite(measured.blur_matched_bitmap_zncc),
+        "bitmap_blur_sigma": finite(measured.bitmap_blur_sigma),
+        "sharper_than_bitmap": measured.sharper_than_bitmap,
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the ZNCC the localizer scored there. Accepting the walk is

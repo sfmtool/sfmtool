@@ -381,14 +381,20 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("clipped_share", m.clipped_share),
             ("pair_zncc", m.pair_zncc),
             ("cell_deficit", m.cell_deficit),
-            // The same with each pair's tiles blur-matched first, where the
-            // evaluation took them.
-            ("blur_matched_pair_zncc", m.blur_matched_pair_zncc),
-            ("blur_matched_cell_deficit", m.blur_matched_cell_deficit),
+            // The row's ZNCC with the stored patch bitmap, plain and with the
+            // bitmap alone blurred to the row's sharpness, and the width of
+            // that blur in grid px (0 when read plain); 1 for the row the
+            // bitmap is the tile of.
+            ("bitmap_zncc", m.bitmap_zncc),
+            ("blur_matched_bitmap_zncc", m.blur_matched_bitmap_zncc),
+            ("bitmap_blur_sigma", m.bitmap_blur_sigma),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
             }
+        }
+        if let Some(sharper) = m.sharper_than_bitmap {
+            t.set_item("sharper_than_bitmap", sharper)?;
         }
         // What the reference-view rule decided about the row: picked, or the
         // test that turned it away, and the tests it dropped for the track.
@@ -397,8 +403,6 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             r.set_item("is_reference", standing.is_reference())?;
             r.set_item("rejected_by", standing.rejected_by.map(|t| t.name()))?;
             r.set_item("fallback", standing.fallback.name())?;
-            r.set_item("agreement_read", standing.inputs.agreement.name())?;
-            r.set_item("cells_read", standing.inputs.cells.name())?;
             t.set_item("reference_view", r)?;
         }
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.
@@ -406,7 +410,6 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("zncc_grid", m.zncc_grid),
             ("walked_zncc_grid", m.walked_zncc_grid),
             ("pair_zncc_grid", m.pair_zncc_grid),
-            ("blur_matched_pair_zncc_grid", m.blur_matched_pair_zncc_grid),
         ] {
             if let Some(grid) = grid {
                 t.set_item(key, grid_array(grid).into_pyarray(py))?;
@@ -571,6 +574,17 @@ impl PyEditableTrack {
         d.set_item("v_halfvec", vector(frame.v_axis * frame.half_extent[1]))?;
         d.set_item("w", frame.w)?;
         Ok(Some(d))
+    }
+
+    /// Which observation the track stage's stored bitmap is the tile of, as an
+    /// index into :attr:`observations`, or ``None``: at the cluster stage, for
+    /// a track with no bitmap, and for a bitmap that names no observation (a
+    /// mean of the views, or one stored before the reference observation was
+    /// recorded).
+    #[getter]
+    fn bitmap_observation(&self) -> Option<usize> {
+        let payload = self.inner.track()?;
+        payload.bitmap.as_ref().and(payload.reference)
     }
 
     /// Which observation the cluster stage cuts its template around, or
@@ -1219,7 +1233,7 @@ fn sight_observation(
 /// One scalar, because a patch frame is square: the stored half-vector pair has
 /// ``|u| == |v|`` and the tile grid is square with it, so a resize that moved
 /// one axis alone would stretch the template rather than enlarge it. The centre,
-/// the axes' directions and the normal are untouched. The consensus bitmap and
+/// the axes' directions and the normal are untouched. The patch bitmap and
 /// every track measurement but the keypoints are dropped, because all of them
 /// were read over the square as it stood.
 ///
@@ -1672,7 +1686,7 @@ fn evaluate(
 ///
 /// At the **track stage** the patch is localized into every view, refined to
 /// sub-pixel, the ``in`` results are re-triangulated, the frame is placed at
-/// what they resolve to and the consensus bitmap is fused over them; the
+/// what they resolve to and the patch bitmap is rendered over them; the
 /// keypoints, the coordinate, the frame and the bitmap are written. At the
 /// **cluster stage** a fit is the refinement, which is what a reading is too: a
 /// cluster has no geometry behind it to move.
