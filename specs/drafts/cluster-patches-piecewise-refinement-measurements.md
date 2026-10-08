@@ -1,0 +1,527 @@
+# Cluster Patches Piecewise Refinement Measurements
+
+This file records the fleet measurements behind the open decisions of [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md). That draft adds a stage that registers each kept member's nine cells against the cluster's template, refits the member's affine shape from the cell shifts, and stores the per-cell residuals in the `.matches` version 8 file. The measurements bear on three decisions: whether the stage runs by default (`sfm cluster-patches --piecewise`), and the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`). They also run the two fleet checks the draft's Testing section names: that the converged shapes agree with the cascade's within tolerance on members the cascade kept, and that the refinement's wall time does not rise. The last measurement runs the seed stage on the two checked-in ground truths with and without the stage, since the seed is the stage's consumer.
+
+## Setup common to every measurement
+
+- **Code.** Commit `f787be3b` (branch `bootstrap-core-migration`), with the extension rebuilt by `pixi run maturin develop --release`.
+- **Machine.** Windows 11, Intel Core i9-14900HX (32 logical processors), 63.7 GB RAM. During the refinement runs another checkout on the same machine was running a `pytest -n auto` suite, so the machine was not idle. [Wall time](#wall-time) says how the timings account for that.
+- **Data.** The 42 workspaces of `C:/DataSets/workspace-prep/wslist.txt` plus `C:/DataSets/SeoulBull` (the 17 `seoul_bull_sculpture` images): 43 entries. An entry under `PhotogrammetryVids/` is named by its capture id, and `SpainSoapmaker/ws2` and `SfmExperimentation/vid2` carry their parent directory's name. Each entry's input is the unrefined `*-clusters.matches` behind the first `*-clusters-patches.matches` in sorted order, the file the seed reads. Two workspaces hold more than one clusters file; only that one was refined.
+- **Runs.** Each entry ran `sfm cluster-patches -i <clusters> -o <scratch> --patch-size 12` twice, sequentially, with `SFMTOOL_PROFILE=1` and the other options at their defaults (resolution 25, `min_zncc` 0.85, `max_shift` 3, self-similarity bar 2.5):
+  - the *cascade* run, with `--no-piecewise`;
+  - the *piecewise* run, with `--piecewise` at the default piecewise settings (bound 2.0, `min_cell_zncc` 0.8, `min_cell_curvature` 0.02, tolerance 0.05, cap 5).
+
+  Outputs went to a scratch directory, and no workspace file was written.
+- **Baseline.** The cascade run, not the `*-clusters-patches.matches` stored in each workspace. Those were refined by an older build. On `KerryPark480` and `MossyRailing` they differ from this commit's cascade in status and shape (18,321 against 15,986 and 712,733 against 691,998 kept members). On `SeoulBull`, refined the day before, they are identical.
+- **Units.** A grid px is one template sample, `patch_size / resolution` = 0.48 keypoint-frame units. A displacement in photograph px is converted to grid px through the inverse of the member's cascade shape. The parity table gives each entry's median photograph px per grid px, which runs from 0.63 to 2.99.
+
+## Parity with the cascade
+
+**Question.** On members both runs keep, how far does the piecewise loop move the cascade's shape? The draft expects agreement "within tolerance", and this measurement finds out what that tolerance is in practice.
+
+**Method.** For every member with status `kept` in both files, three movements are measured in grid px and in photograph px:
+
+- the change of refined position;
+- the change of shape, measured as the largest movement of the nine cell centres (at ±4 keypoint units) under the shape change alone;
+- the total, the largest movement of a cell centre under the position and shape changes together.
+
+The measurement also records the change of `member_zncc`, the count of members whose status differs, and whether every member that neither run keeps is bit-identical in position, shape and ZNCC.
+
+**Result.** No member's status differs between the two runs on any entry, and every member that is not kept is bit-identical. The stage touches only kept members, as specified.
+
+The kept members do move. On each entry 80% to 99.6% of them move. Per entry, the total cell-centre movement has a median of 0.16 to 0.71 grid px, a 95th percentile of 0.64 to 2.19 grid px (1.5 to 6.3 photograph px), and a maximum of 5 to 10 grid px.
+
+The movement has no bias. This was checked on five entries (`SeoulBull`, `KerryPark480`, `fleetws`, `OmniTemple1`, `20250712_204251146`). On them the mean position change is under 0.006 grid px, the mean log scale change is under 0.002, and the mean rotation is under 0.05°. Between the 5th and 95th percentiles, the log scale change spans up to about ±0.07 and the rotation up to about ±3°.
+
+The whole-member windowed ZNCC falls. Per entry, the median change is −0.001 to −0.006, the 5th percentile is −0.009 to −0.037, and the 95th percentile is 0.000 on every entry. The cascade maximizes that score, so any move away from its optimum lowers it.
+
+So the shapes agree with the cascade only to within about 2 grid px at the 95th percentile, which is the size of the cell search bound itself. At the current settings the draft's check, that "the converged affine shapes agree with the cascade's within tolerance", fails. The movement is scatter around the cascade's shape, not a shift in one direction. Without a pose-dependent truth for the shapes, this measurement cannot say whether the scatter is error or a real refinement. The ZNCC drop and the [seed result](#seed-stage-on-the-ground-truth-entries) both point to error. A test that would settle it: score both files' shapes against the `seoul_bull_sculpture` and `kerry_park` ground truths, by projecting each kept member's cell centres through the ground-truth poses and a plane.
+
+| entry | kept | moved % | status differ | dpos grid p50/p95/max | dshape grid p50/p95/max | dtotal grid p50/p95/max | dtotal photo p50/p95/max | dzncc p5/p50/p95 | photo px per grid px p50 |
+|---|---|---|---|---|---|---|---|---|---|
+| 20240614_203547691 | 1111255 | 97.1 | 0 | 0.06/0.21/2.87 | 0.14/0.51/4.76 | 0.19/0.67/6.38 | 0.46/2.16/32.00 | -0.016/-0.002/0.000 | 2.25 |
+| 20240614_224244438 | 1386390 | 97.9 | 0 | 0.05/0.20/2.40 | 0.11/0.48/4.91 | 0.16/0.64/6.27 | 0.35/1.80/38.87 | -0.015/-0.001/0.000 | 2.05 |
+| 20240614_224422531 | 1245364 | 96.5 | 0 | 0.07/0.31/2.84 | 0.18/0.70/5.79 | 0.24/0.94/7.73 | 0.51/2.43/65.15 | -0.019/-0.002/0.000 | 1.96 |
+| 20240614_225938434 | 1239391 | 97.5 | 0 | 0.05/0.25/2.96 | 0.12/0.56/5.59 | 0.17/0.76/6.11 | 0.37/2.26/29.79 | -0.014/-0.001/0.000 | 2.05 |
+| 20240617_204133531 | 350437 | 89.6 | 0 | 0.10/0.43/3.00 | 0.25/0.99/5.31 | 0.35/1.29/7.01 | 0.82/3.26/35.19 | -0.027/-0.004/0.000 | 2.15 |
+| 20240618_001255975~2 | 464832 | 93.3 | 0 | 0.11/0.44/3.08 | 0.29/1.07/5.37 | 0.40/1.38/6.15 | 0.85/2.96/39.00 | -0.021/-0.004/0.000 | 1.94 |
+| 20240702_224718414 | 562400 | 89.1 | 0 | 0.16/0.71/3.89 | 0.34/1.45/7.60 | 0.52/1.91/8.04 | 0.71/3.60/50.20 | -0.034/-0.005/0.000 | 1.25 |
+| 20240713_205804006 | 1736056 | 98.6 | 0 | 0.05/0.26/3.30 | 0.12/0.61/5.98 | 0.17/0.82/7.57 | 0.38/1.97/31.16 | -0.012/-0.001/-0.000 | 2.06 |
+| 20240906_081206935 | 490841 | 87.6 | 0 | 0.15/0.65/3.65 | 0.35/1.43/6.06 | 0.52/1.87/6.91 | 0.95/4.18/43.87 | -0.035/-0.005/0.000 | 1.69 |
+| 20240915_071403318 | 1096006 | 95.1 | 0 | 0.10/0.40/3.29 | 0.26/1.00/5.17 | 0.36/1.27/7.50 | 0.71/2.81/38.61 | -0.020/-0.003/0.000 | 2.04 |
+| 20240915_073428267 | 610227 | 90.5 | 0 | 0.21/0.82/4.43 | 0.47/1.59/5.87 | 0.70/2.10/7.62 | 1.30/4.15/50.78 | -0.034/-0.005/0.000 | 1.67 |
+| 20240918_074134864 | 547642 | 92.8 | 0 | 0.21/0.84/4.38 | 0.48/1.63/6.06 | 0.71/2.16/9.24 | 0.73/2.96/57.05 | -0.037/-0.006/0.000 | 0.92 |
+| 20240919_040613535 | 729466 | 91.7 | 0 | 0.13/0.59/6.55 | 0.32/1.31/6.08 | 0.45/1.71/7.00 | 0.84/3.41/47.52 | -0.029/-0.004/0.000 | 1.74 |
+| 20240919_062358681 | 642485 | 88.4 | 0 | 0.19/0.76/4.59 | 0.42/1.57/7.37 | 0.62/2.06/9.19 | 1.17/4.47/58.76 | -0.036/-0.005/0.000 | 1.67 |
+| 20250425_135433677 | 1290338 | 96.1 | 0 | 0.07/0.36/3.23 | 0.17/0.98/5.40 | 0.24/1.24/7.32 | 0.56/3.20/89.10 | -0.021/-0.002/0.000 | 2.17 |
+| 20250425_141305472 | 704765 | 93.2 | 0 | 0.09/0.42/5.61 | 0.23/1.09/7.29 | 0.32/1.39/7.82 | 0.66/3.51/51.75 | -0.023/-0.003/0.000 | 2.03 |
+| 20250426_150733286 | 297275 | 85.5 | 0 | 0.18/0.72/4.22 | 0.41/1.51/4.94 | 0.60/1.96/7.11 | 1.79/6.29/42.97 | -0.030/-0.004/0.000 | 2.99 |
+| 20250706_223513674 | 549279 | 90.3 | 0 | 0.09/0.40/3.58 | 0.23/1.02/5.20 | 0.32/1.30/6.46 | 0.70/3.41/39.18 | -0.026/-0.004/0.000 | 2.08 |
+| 20250712_195736354 | 1315125 | 96.9 | 0 | 0.08/0.35/2.57 | 0.20/0.85/5.67 | 0.27/1.11/6.75 | 0.56/2.68/49.29 | -0.018/-0.002/-0.000 | 1.84 |
+| 20250712_202131684 | 1519297 | 97.6 | 0 | 0.06/0.27/2.41 | 0.16/0.66/5.80 | 0.22/0.86/6.36 | 0.49/2.25/45.44 | -0.016/-0.002/-0.000 | 2.01 |
+| 20250712_204251146 | 962616 | 97.7 | 0 | 0.05/0.22/3.19 | 0.13/0.52/4.11 | 0.17/0.69/5.19 | 0.40/2.04/29.63 | -0.016/-0.002/-0.000 | 2.10 |
+| 20250906_211742965 | 648097 | 94.9 | 0 | 0.15/0.66/5.58 | 0.35/1.36/8.49 | 0.51/1.80/10.21 | 0.47/2.29/30.04 | -0.028/-0.004/0.000 | 0.88 |
+| 20250907_000240907 | 324535 | 92.4 | 0 | 0.18/0.76/5.21 | 0.37/1.50/6.68 | 0.56/1.98/8.12 | 0.48/2.59/31.23 | -0.032/-0.004/0.000 | 0.80 |
+| 20250907_000422554 | 101475 | 90.8 | 0 | 0.20/0.75/4.17 | 0.46/1.56/6.63 | 0.67/2.04/8.15 | 0.60/3.69/36.92 | -0.033/-0.006/0.000 | 0.80 |
+| 20250907_000742129 | 279368 | 94.5 | 0 | 0.17/0.72/4.20 | 0.39/1.47/6.39 | 0.57/1.94/9.40 | 0.52/2.71/43.36 | -0.031/-0.004/0.000 | 0.81 |
+| 20250907_001316663 | 596016 | 92.8 | 0 | 0.13/0.58/4.77 | 0.32/1.27/6.72 | 0.45/1.67/8.45 | 0.57/2.53/34.12 | -0.030/-0.004/0.000 | 1.22 |
+| 20250907_211111559 | 830382 | 95.2 | 0 | 0.09/0.42/3.78 | 0.23/0.97/6.39 | 0.33/1.28/7.69 | 0.42/2.08/27.38 | -0.023/-0.003/0.000 | 1.23 |
+| AltonaGalleryInTheParkBoyReading | 555268 | 91.4 | 0 | 0.10/0.48/5.67 | 0.26/1.16/5.65 | 0.37/1.49/6.94 | 0.81/3.76/50.79 | -0.026/-0.003/0.000 | 2.11 |
+| BadlandPanorama | 1411007 | 99.6 | 0 | 0.08/0.28/2.37 | 0.20/0.64/4.46 | 0.27/0.84/5.45 | 0.62/1.87/19.00 | -0.009/-0.002/-0.000 | 2.04 |
+| DaeguArtMuseumTreeStumpExhibit | 511252 | 90.2 | 0 | 0.10/0.51/5.03 | 0.25/1.19/6.38 | 0.36/1.53/7.25 | 0.70/3.54/47.05 | -0.025/-0.004/0.000 | 1.87 |
+| DaeguMuseumMasks | 427172 | 87.2 | 0 | 0.23/0.93/4.54 | 0.45/1.63/6.09 | 0.71/2.19/8.87 | 1.15/4.38/78.07 | -0.035/-0.005/0.000 | 1.51 |
+| DnDTabletop | 1375116 | 95.8 | 0 | 0.09/0.41/2.63 | 0.23/1.05/5.57 | 0.31/1.34/6.51 | 0.88/3.85/35.79 | -0.018/-0.002/0.000 | 2.60 |
+| KerryPark360 | 40038 | 90.6 | 0 | 0.14/0.54/2.62 | 0.34/1.26/6.02 | 0.48/1.65/7.75 | 0.49/2.32/31.03 | -0.027/-0.005/0.000 | 0.97 |
+| KerryPark480 | 15986 | 91.3 | 0 | 0.17/0.62/2.46 | 0.38/1.27/4.38 | 0.54/1.67/6.41 | 0.37/1.50/13.81 | -0.026/-0.005/0.000 | 0.64 |
+| MossyRailing | 691998 | 92.0 | 0 | 0.09/0.43/2.87 | 0.25/1.08/6.89 | 0.35/1.37/7.05 | 0.95/3.82/65.14 | -0.022/-0.003/0.000 | 2.53 |
+| MurdoSmallAntiqueCat | 625198 | 90.6 | 0 | 0.11/0.49/3.72 | 0.27/1.18/7.21 | 0.39/1.51/8.12 | 0.93/4.06/51.77 | -0.026/-0.004/0.000 | 2.30 |
+| OmniCoast | 229085 | 94.9 | 0 | 0.13/0.50/3.21 | 0.32/1.17/6.10 | 0.45/1.52/7.39 | 0.62/2.41/23.54 | -0.023/-0.003/0.000 | 1.22 |
+| OmniHilltop | 511372 | 96.1 | 0 | 0.16/0.56/2.85 | 0.40/1.30/6.06 | 0.55/1.68/7.50 | 0.62/2.08/50.34 | -0.025/-0.005/-0.000 | 1.00 |
+| OmniTemple1 | 157914 | 91.9 | 0 | 0.16/0.65/5.65 | 0.36/1.37/5.49 | 0.52/1.81/6.59 | 0.62/2.74/39.22 | -0.031/-0.005/0.000 | 1.04 |
+| SeoulBull | 2953 | 87.5 | 0 | 0.21/0.80/1.95 | 0.46/1.55/3.67 | 0.69/1.98/5.25 | 0.49/1.66/9.12 | -0.031/-0.006/0.000 | 0.63 |
+| SfmExperimentation_vid2 | 453385 | 85.8 | 0 | 0.20/0.78/3.53 | 0.41/1.58/6.07 | 0.64/2.05/8.08 | 1.37/5.00/50.99 | -0.032/-0.005/0.000 | 2.05 |
+| SpainSoapmaker_ws2 | 965487 | 95.0 | 0 | 0.15/0.61/3.72 | 0.38/1.37/6.77 | 0.53/1.78/7.52 | 1.05/4.03/37.25 | -0.028/-0.004/0.000 | 1.79 |
+| fleetws | 68722 | 79.8 | 0 | 0.20/0.84/3.70 | 0.31/1.57/6.72 | 0.56/2.09/9.42 | 0.84/4.41/37.58 | -0.036/-0.005/0.000 | 1.37 |
+
+### The loop does not settle
+
+**Question.** Is the movement a product of the stopping rule? That is, does the loop stop at its iteration cap before it has converged?
+
+**Method.** Two sources:
+
+- the piecewise run's `member_cell_iterations`;
+- a sweep through the binding on seven entries (`SeoulBull`, `KerryPark480`, `fleetws`, `OmniTemple1`, `20250907_000422554`, `20250426_150733286`, `20240617_204133531`). The sweep reruns the refinement with the cap raised to 20, with the tolerance raised to 0.1 and to 0.2 grid px, and with both changes together (tolerance 0.2, cap 20). It reads the same images and seeds as the CLI. The table is under [Gate sweep](#gate-sweep).
+
+**Result.** Pooled over the fleet, 23.9% of kept members stop at the cap of 5. Of the rest, 2.7% stop after one iteration, 34.4% after two, 28.3% after three and 10.7% after four. Per entry, the share at the cap runs from 5.7% to 54.3%.
+
+Raising the cap does not make the loop converge:
+
+- with the cap at 20, 16% to 30% of the swept entries' members still reach it;
+- with the tolerance at 0.2 grid px and the cap at 20, 5% to 12% still reach it.
+
+These members do not converge slowly. They alternate between updates larger than 0.2 grid px.
+
+The stopping rule does not change how far the shapes move. In every stopping configuration of the sweep, the median of the total movement stays within 0.05 grid px of the default's, and the 95th percentile within 0.15 grid px. Members that run more iterations do move further. On `SeoulBull` the median absolute log scale change is 0.000 after one or two iterations and 0.024 at the cap.
+
+The 0.05 grid px tolerance is below the noise of the cell readings. This bears on the draft's open question of whether the loop replaces the cascade or follows it. As built, the loop does not converge for a quarter of the members, so it cannot replace the cascade until its update is damped, or until it stops when an update no longer improves the fit. A run of the loop from the detection's shape alone was not measured.
+
+## Cell statistics
+
+**Question.** How are the kept members' cells distributed over the five statuses, and where do the two provisional gates sit in the distributions they cut? The answer should show whether a data-derived default exists for `min_cell_zncc` and for `min_cell_curvature`.
+
+**Method.** Every cell of every member the piecewise run keeps, 267,059,817 cells over 43 entries, read from `member_cell_status`, `member_cell_zncc`, `member_cell_shift_px` and `member_cell_iterations`. A cell's curvature is computed in `read_cell` but **not stored** in the file, so its distribution cannot be read from the output. The [gate sweep](#gate-sweep) stands in for it. With the ZNCC gate off (`min_cell_zncc = −1`), the share of cells refused for curvature at a threshold `t` approximates the share whose curvature is below `t`. The approximation is not exact, because the loop's path changes with the threshold.
+
+**Result, pooled.**
+
+| status | share of cells |
+|---|---|
+| fitted | 77.62% |
+| refused_curvature | 4.26% |
+| refused_zncc | 5.73% |
+| not_attempted | 5.73% |
+| refused_bound | 6.67% |
+
+The number of fitted cells per kept member is distributed as follows:
+
+| fitted cells | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| share of kept members | 5.4% | 1.4% | 2.7% | 2.7% | 4.4% | 5.4% | 8.3% | 10.8% | 16.0% | 42.9% |
+
+A member with no fitted cell keeps its cascade shape.
+
+The mix varies widely by entry. The fitted share runs from 38.0% (`fleetws`) to 93.4%, and the refused_bound share from 0.8% to 24.9%. On the harder entries, refusal at the search bound is the largest refusal class. Those cells have a median ZNCC of 0.80. Many of them are cells whose optimum lies just outside ±1.5 grid px, not cells over another surface.
+
+Cell ZNCC quantiles, pooled:
+
+| cells | n | p1 | p5 | p10 | p25 | p50 | p75 | p90 | p95 | p99 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fitted | 207,283,658 | 0.812 | 0.844 | 0.869 | 0.912 | 0.949 | 0.973 | 0.986 | 0.991 | 0.997 |
+| refused_zncc | 15,303,899 | 0.263 | 0.453 | 0.543 | 0.655 | 0.731 | 0.771 | 0.789 | 0.795 | 0.799 |
+| refused_curvature (best whole-pixel shift) | 11,363,375 | 0.643 | 0.834 | 0.887 | 0.940 | 0.969 | 0.984 | 0.992 | 0.994 | 0.997 |
+| refused_bound (best whole-pixel shift) | 17,813,351 | 0.040 | 0.258 | 0.381 | 0.600 | 0.799 | 0.925 | 0.968 | 0.981 | 0.992 |
+
+For a cell that reaches a sub-pixel peak (fitted or refused_zncc), the share below each ZNCC threshold is:
+
+| below | 0.5 | 0.6 | 0.7 | 0.75 | **0.8** | 0.85 | 0.9 | 0.95 |
+|---|---|---|---|---|---|---|---|---|
+| share of peaked cells | 0.5% | 1.1% | 2.6% | 4.1% | **6.8%** | 12.4% | 25.1% | 53.5% |
+
+The density of those cells in bins of 0.05 rises monotonically up to the top bin, with one mode at 1 and no valley:
+
+| bin | 0.30 | 0.35 | 0.40 | 0.45 | 0.50 | 0.55 | 0.60 | 0.65 | 0.70 | 0.75 | 0.80 | 0.85 | 0.90 | 0.95 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| share | 0.05% | 0.08% | 0.11% | 0.16% | 0.24% | 0.36% | 0.57% | 0.93% | 1.59% | 2.70% | 5.71% | 12.85% | 28.85% | 45.71% |
+
+The residual `|shift|` of fitted cells, in grid px:
+
+| p1 | p5 | p25 | p50 | p75 | p90 | p95 | p99 |
+|---|---|---|---|---|---|---|---|
+| 0.009 | 0.023 | 0.062 | 0.117 | 0.220 | 0.394 | 0.557 | 0.949 |
+
+For scale, the draft's synthetic tilted plane at `h = [0.003, −0.002]` has a second-order term of up to 0.52 grid px.
+
+**Reading on `min_cell_zncc`.** The distribution gives no boundary to put a default on. It has one mode, at 1, and a smooth tail with no valley, so any threshold is a choice of tail fraction. At 0.8 the bar refuses 6.8% of peaked cells, which is 5.7% of all cells: a small fraction, not a large one.
+
+The refused_curvature cells have a median ZNCC of 0.969. As the draft predicts, flat cells correlate well at any shift, so ZNCC alone would not catch them.
+
+On the swept entries, raising the bar to 0.9 refuses a further 7 to 20 percentage points of cells and lowers the median shape movement by 13% to 48% (to 0.3 to 0.55 grid px). Lowering it to 0.7 moves the shapes slightly more. Fewer fitted cells mean a smaller move away from the cascade. The threshold therefore changes the stage's output, and the parity numbers cannot choose it.
+
+A data-derived default needs an outcome measure as a function of the threshold. Candidates are the normal error against the `seoul_bull_sculpture` ground truth (the draft's last Testing sentence) and the shape error against the ground-truth poses. Until that measure exists, 0.8 sits at the 7th percentile of peaked cells and can stay.
+
+**Reading on `min_cell_curvature`.** Curvature is not stored, so only the sweep's proxy is available. The proxy is smooth, with no knee, and it varies widely between entries. The share of cells refused for curvature at each threshold:
+
+| entry | 0 | 0.005 | 0.01 | 0.02 | 0.04 | 0.08 |
+|---|---|---|---|---|---|---|
+| `SeoulBull` | 0.2% | 1.1% | 2.6% | 6.5% | 14.7% | 24.9% |
+| `20240617_204133531` | 0.1% | 0.3% | 0.7% | 1.9% | 5.3% | 13.3% |
+| `20250426_150733286` | 0.6% | 3.1% | 6.8% | 14.2% | 25.0% | 30.8% |
+
+At 0.02 the bar refuses 2% to 14% of cells depending on the capture. Pooled over the fleet at the default settings, 4.3% of cells are refused for curvature. Nothing in the proxy marks 0.02 as a boundary. Doubling the bar to 0.04 roughly doubles to triples the refusals, and there is no plateau on either side.
+
+Settling this default needs the same outcome measure as the ZNCC bar. A first step is to store the curvature, or write it from a debug path, so that its distribution can be read directly instead of through reruns.
+
+| entry | cells | fitted % | ref_curv % | ref_zncc % | not_att % | ref_bound % | members 0 fitted % | at cap (5) % | fitted res p50/p95 | fitted zncc p5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 20240614_203547691 | 10001295 | 88.9 | 0.7 | 6.2 | 3.3 | 0.8 | 2.9 | 8.8 | 0.08/0.27 | 0.841 |
+| 20240614_224244438 | 12477510 | 93.4 | 0.6 | 2.7 | 2.5 | 0.8 | 2.1 | 5.7 | 0.07/0.28 | 0.867 |
+| 20240614_224422531 | 11208276 | 86.1 | 1.9 | 6.0 | 3.8 | 2.2 | 3.5 | 14.3 | 0.10/0.38 | 0.843 |
+| 20240614_225938434 | 11154519 | 89.4 | 1.3 | 4.5 | 2.9 | 1.9 | 2.5 | 9.6 | 0.07/0.28 | 0.862 |
+| 20240617_204133531 | 3153933 | 74.8 | 1.9 | 7.4 | 10.8 | 5.1 | 10.4 | 28.9 | 0.15/0.61 | 0.836 |
+| 20240618_001255975~2 | 4183488 | 75.6 | 3.5 | 8.2 | 6.9 | 5.7 | 6.7 | 25.5 | 0.18/0.66 | 0.831 |
+| 20240702_224718414 | 5061600 | 53.1 | 8.2 | 8.5 | 11.1 | 19.0 | 10.9 | 44.9 | 0.19/0.77 | 0.829 |
+| 20240713_205804006 | 15624504 | 91.5 | 1.3 | 3.4 | 1.9 | 2.0 | 1.4 | 7.9 | 0.08/0.32 | 0.877 |
+| 20240906_081206935 | 4417569 | 56.1 | 5.9 | 8.5 | 12.6 | 16.9 | 12.4 | 48.0 | 0.18/0.77 | 0.833 |
+| 20240915_071403318 | 9864054 | 83.0 | 2.1 | 6.3 | 5.1 | 3.4 | 4.9 | 19.1 | 0.16/0.62 | 0.835 |
+| 20240915_073428267 | 5492043 | 55.3 | 13.0 | 4.9 | 9.7 | 17.0 | 9.5 | 51.4 | 0.24/0.86 | 0.839 |
+| 20240918_074134864 | 4928778 | 55.2 | 14.0 | 4.3 | 7.3 | 19.2 | 7.2 | 50.9 | 0.23/0.85 | 0.846 |
+| 20240919_040613535 | 6565194 | 65.3 | 5.2 | 9.6 | 8.6 | 11.3 | 8.3 | 38.1 | 0.15/0.67 | 0.828 |
+| 20240919_062358681 | 5782365 | 50.3 | 10.3 | 7.7 | 11.8 | 20.0 | 11.6 | 54.1 | 0.20/0.82 | 0.831 |
+| 20250425_135433677 | 11613042 | 86.9 | 1.8 | 4.2 | 4.3 | 2.8 | 3.9 | 14.7 | 0.10/0.43 | 0.848 |
+| 20250425_141305472 | 6342885 | 76.7 | 2.3 | 8.9 | 7.2 | 5.0 | 6.8 | 23.7 | 0.12/0.52 | 0.830 |
+| 20250426_150733286 | 2675475 | 54.8 | 14.3 | 2.8 | 14.9 | 13.2 | 14.5 | 50.4 | 0.22/0.79 | 0.855 |
+| 20250706_223513674 | 4943511 | 72.0 | 0.9 | 11.6 | 10.0 | 5.5 | 9.7 | 24.0 | 0.12/0.52 | 0.826 |
+| 20250712_195736354 | 11836125 | 85.4 | 1.9 | 6.3 | 3.3 | 3.0 | 3.1 | 18.1 | 0.11/0.43 | 0.840 |
+| 20250712_202131684 | 13673673 | 89.5 | 1.2 | 4.6 | 2.8 | 1.9 | 2.4 | 10.6 | 0.09/0.36 | 0.853 |
+| 20250712_204251146 | 8663544 | 91.8 | 0.5 | 3.9 | 2.8 | 1.0 | 2.3 | 6.5 | 0.08/0.28 | 0.856 |
+| 20250906_211742965 | 5832873 | 67.4 | 8.8 | 5.9 | 5.4 | 12.5 | 5.1 | 37.0 | 0.18/0.72 | 0.841 |
+| 20250907_000240907 | 2920815 | 55.6 | 11.8 | 5.3 | 7.8 | 19.5 | 7.6 | 43.9 | 0.21/0.80 | 0.842 |
+| 20250907_000422554 | 913275 | 53.4 | 12.8 | 4.5 | 9.5 | 19.8 | 9.2 | 51.6 | 0.27/0.91 | 0.838 |
+| 20250907_000742129 | 2514312 | 59.3 | 13.0 | 4.6 | 5.8 | 17.4 | 5.5 | 44.5 | 0.19/0.77 | 0.849 |
+| 20250907_001316663 | 5364144 | 70.9 | 5.5 | 5.6 | 7.6 | 10.4 | 7.2 | 35.1 | 0.17/0.73 | 0.846 |
+| 20250907_211111559 | 7473438 | 81.1 | 2.1 | 6.9 | 5.2 | 4.7 | 4.8 | 20.1 | 0.14/0.57 | 0.837 |
+| AltonaGalleryInTheParkBoyReading | 4997412 | 73.4 | 3.0 | 8.5 | 9.0 | 6.1 | 8.6 | 26.5 | 0.14/0.60 | 0.831 |
+| BadlandPanorama | 12699063 | 91.3 | 5.0 | 1.7 | 0.7 | 1.3 | 0.4 | 11.3 | 0.13/0.46 | 0.873 |
+| DaeguArtMuseumTreeStumpExhibit | 4601268 | 67.6 | 3.2 | 10.1 | 10.0 | 9.0 | 9.8 | 28.3 | 0.15/0.63 | 0.822 |
+| DaeguMuseumMasks | 3844548 | 47.5 | 12.2 | 5.1 | 12.9 | 22.3 | 12.8 | 53.4 | 0.25/0.89 | 0.836 |
+| DnDTabletop | 12376044 | 83.7 | 5.1 | 2.8 | 4.7 | 3.7 | 4.2 | 20.0 | 0.13/0.54 | 0.864 |
+| KerryPark360 | 360342 | 63.6 | 2.6 | 13.8 | 9.5 | 10.4 | 9.4 | 38.9 | 0.18/0.71 | 0.823 |
+| KerryPark480 | 143874 | 61.3 | 3.8 | 12.8 | 8.9 | 13.1 | 8.7 | 34.9 | 0.22/0.76 | 0.825 |
+| MossyRailing | 6227982 | 77.4 | 2.3 | 7.3 | 8.5 | 4.5 | 8.0 | 24.3 | 0.15/0.60 | 0.831 |
+| MurdoSmallAntiqueCat | 5626782 | 71.5 | 3.1 | 8.2 | 9.8 | 7.3 | 9.4 | 28.5 | 0.15/0.64 | 0.832 |
+| OmniCoast | 2061765 | 75.2 | 5.0 | 6.9 | 5.2 | 7.7 | 5.1 | 29.8 | 0.18/0.68 | 0.839 |
+| OmniHilltop | 4602348 | 73.6 | 4.6 | 9.0 | 3.9 | 8.9 | 3.9 | 35.7 | 0.21/0.76 | 0.830 |
+| OmniTemple1 | 1421226 | 58.8 | 7.1 | 8.8 | 8.2 | 17.1 | 8.1 | 42.2 | 0.19/0.75 | 0.831 |
+| SeoulBull | 26577 | 50.4 | 6.7 | 11.8 | 13.1 | 18.0 | 12.5 | 46.2 | 0.26/0.90 | 0.821 |
+| SfmExperimentation_vid2 | 4080465 | 45.9 | 11.4 | 6.5 | 14.5 | 21.7 | 14.2 | 50.4 | 0.24/0.85 | 0.834 |
+| SpainSoapmaker_ws2 | 8689383 | 65.5 | 10.9 | 6.3 | 5.3 | 12.1 | 5.0 | 43.2 | 0.17/0.69 | 0.848 |
+| fleetws | 618498 | 38.0 | 8.7 | 8.1 | 20.2 | 24.9 | 20.2 | 54.3 | 0.24/0.91 | 0.825 |
+
+### Gate sweep
+
+**Question.** How do the cell mix, the share of members at the cap and the movement from the cascade respond to the two gates and to the stopping rule?
+
+**Method.** `refine_cluster_patches` was called through the binding on the seven entries named above. The calls load the data the way the CLI does (images decoded with OpenCV, detection seeds scattered to per-image rows) and use the CLI's settings. Each configuration varies one setting from the default:
+
+- `z` is `min_cell_zncc`;
+- `c` is `min_cell_curvature`;
+- `it` is `max_iterations`;
+- `tol` is `update_tolerance_px`.
+
+Movement is the total cell-centre movement against a cascade run in the same process. The members-at-cap column counts members at the configuration's own cap.
+
+**Result.**
+
+- The gates set how many cells are fitted, and through that how far the shapes move.
+- The stopping rule sets how many members reach the cap, but not how far the shapes move.
+- With every gate open (`z-1_c0.0`), only 0.1% to 0.9% of cells are refused for curvature. A cell rarely fails to reach a peak at all, so the curvature bar is what refuses the flat cells.
+- The bound refusals stay within about three points of the default in every configuration except the strictest curvature bar (`c` 0.08), because the search bound, not the gates, sets them.
+
+| entry | config | fitted % | ref_curv % | ref_zncc % | not_att % | ref_bound % | members 0 fitted % | at cap % | dtotal grid p50/p95 | fitted res p50 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 20240617_204133531 | default | 74.8 | 1.9 | 7.4 | 10.8 | 5.1 | 10.4 | 28.9 | 0.35/1.29 | 0.149 |
+| 20240617_204133531 | z-1_c0.0 | 84.7 | 0.1 | 0.0 | 10.6 | 4.5 | 10.2 | 33.1 | 0.37/1.44 | 0.174 |
+| 20240617_204133531 | z-1_c0.005 | 84.5 | 0.3 | 0.0 | 10.7 | 4.5 | 10.2 | 33.1 | 0.37/1.43 | 0.173 |
+| 20240617_204133531 | z-1_c0.01 | 84.0 | 0.7 | 0.0 | 10.7 | 4.6 | 10.3 | 33.0 | 0.36/1.42 | 0.172 |
+| 20240617_204133531 | z-1_c0.02 | 82.5 | 1.9 | 0.0 | 11.0 | 4.5 | 10.6 | 32.8 | 0.36/1.39 | 0.169 |
+| 20240617_204133531 | z-1_c0.04 | 78.3 | 5.3 | 0.0 | 11.9 | 4.5 | 11.5 | 32.4 | 0.35/1.32 | 0.161 |
+| 20240617_204133531 | z-1_c0.08 | 67.9 | 13.3 | 0.0 | 14.6 | 4.1 | 14.2 | 30.0 | 0.33/1.18 | 0.143 |
+| 20240617_204133531 | z0.7_c0.02 | 80.0 | 1.9 | 2.6 | 10.6 | 4.9 | 10.1 | 30.3 | 0.36/1.34 | 0.161 |
+| 20240617_204133531 | z0.9_c0.02 | 54.8 | 1.9 | 24.9 | 13.3 | 5.1 | 12.9 | 23.4 | 0.30/1.13 | 0.120 |
+| 20240617_204133531 | default_it20 | 74.6 | 1.9 | 7.4 | 11.0 | 5.1 | 10.6 | 15.7 | 0.35/1.31 | 0.149 |
+| 20240617_204133531 | tol0.1 | 75.0 | 1.9 | 7.4 | 10.6 | 5.1 | 10.1 | 19.4 | 0.34/1.29 | 0.148 |
+| 20240617_204133531 | tol0.2 | 75.2 | 2.0 | 7.5 | 10.2 | 5.2 | 9.7 | 10.7 | 0.33/1.27 | 0.148 |
+| 20240617_204133531 | tol0.2_it20 | 75.1 | 2.0 | 7.5 | 10.2 | 5.2 | 9.8 | 5.4 | 0.33/1.27 | 0.147 |
+| 20250426_150733286 | default | 54.8 | 14.3 | 2.8 | 14.9 | 13.2 | 14.5 | 50.4 | 0.60/1.96 | 0.217 |
+| 20250426_150733286 | z-1_c0.0 | 74.0 | 0.6 | 0.0 | 13.3 | 12.0 | 13.0 | 59.4 | 0.71/2.43 | 0.280 |
+| 20250426_150733286 | z-1_c0.005 | 71.2 | 3.1 | 0.0 | 13.5 | 12.2 | 13.1 | 59.1 | 0.70/2.36 | 0.271 |
+| 20250426_150733286 | z-1_c0.01 | 66.9 | 6.8 | 0.0 | 13.9 | 12.5 | 13.5 | 58.2 | 0.69/2.27 | 0.257 |
+| 20250426_150733286 | z-1_c0.02 | 57.7 | 14.2 | 0.0 | 15.3 | 12.8 | 14.9 | 54.3 | 0.64/2.09 | 0.231 |
+| 20250426_150733286 | z-1_c0.04 | 42.3 | 25.0 | 0.0 | 20.9 | 11.7 | 20.6 | 42.7 | 0.49/1.72 | 0.191 |
+| 20250426_150733286 | z-1_c0.08 | 23.6 | 30.8 | 0.0 | 38.0 | 7.6 | 37.7 | 22.8 | 0.21/1.18 | 0.140 |
+| 20250426_150733286 | z0.7_c0.02 | 56.7 | 14.3 | 1.0 | 15.0 | 13.0 | 14.7 | 52.4 | 0.62/2.03 | 0.225 |
+| 20250426_150733286 | z0.9_c0.02 | 46.9 | 14.2 | 9.8 | 15.9 | 13.2 | 15.6 | 43.3 | 0.52/1.72 | 0.190 |
+| 20250426_150733286 | default_it20 | 54.3 | 14.3 | 2.7 | 15.4 | 13.3 | 15.1 | 27.4 | 0.60/2.03 | 0.215 |
+| 20250426_150733286 | tol0.1 | 54.9 | 14.4 | 2.8 | 14.7 | 13.2 | 14.3 | 38.1 | 0.60/1.95 | 0.216 |
+| 20250426_150733286 | tol0.2 | 55.1 | 14.5 | 2.8 | 14.3 | 13.3 | 13.9 | 23.5 | 0.58/1.93 | 0.214 |
+| 20250426_150733286 | tol0.2_it20 | 54.8 | 14.6 | 2.8 | 14.5 | 13.4 | 14.1 | 10.9 | 0.57/1.96 | 0.212 |
+| 20250907_000422554 | default | 53.4 | 12.8 | 4.5 | 9.5 | 19.8 | 9.2 | 51.6 | 0.67/2.04 | 0.268 |
+| 20250907_000422554 | z-1_c0.0 | 72.1 | 0.9 | 0.0 | 8.3 | 18.7 | 8.0 | 67.0 | 0.87/2.75 | 0.333 |
+| 20250907_000422554 | z-1_c0.005 | 68.8 | 3.9 | 0.0 | 8.3 | 18.9 | 8.0 | 65.2 | 0.85/2.60 | 0.323 |
+| 20250907_000422554 | z-1_c0.01 | 65.4 | 7.0 | 0.0 | 8.6 | 19.1 | 8.3 | 62.9 | 0.82/2.47 | 0.313 |
+| 20250907_000422554 | z-1_c0.02 | 58.4 | 12.6 | 0.0 | 9.7 | 19.3 | 9.4 | 57.7 | 0.75/2.26 | 0.292 |
+| 20250907_000422554 | z-1_c0.04 | 45.7 | 21.7 | 0.0 | 14.3 | 18.3 | 14.0 | 46.6 | 0.59/1.89 | 0.252 |
+| 20250907_000422554 | z-1_c0.08 | 26.9 | 28.9 | 0.0 | 31.0 | 13.2 | 30.7 | 27.2 | 0.29/1.38 | 0.183 |
+| 20250907_000422554 | z0.7_c0.02 | 56.5 | 12.7 | 1.7 | 9.4 | 19.6 | 9.1 | 54.4 | 0.70/2.13 | 0.281 |
+| 20250907_000422554 | z0.9_c0.02 | 40.3 | 12.7 | 15.4 | 11.8 | 19.8 | 11.5 | 41.8 | 0.55/1.79 | 0.225 |
+| 20250907_000422554 | default_it20 | 52.7 | 12.8 | 4.5 | 10.2 | 19.9 | 9.9 | 29.6 | 0.67/2.17 | 0.265 |
+| 20250907_000422554 | tol0.1 | 53.4 | 12.9 | 4.5 | 9.4 | 19.8 | 9.1 | 39.8 | 0.67/2.03 | 0.267 |
+| 20250907_000422554 | tol0.2 | 53.5 | 13.1 | 4.5 | 9.0 | 19.8 | 8.7 | 24.4 | 0.64/1.99 | 0.265 |
+| 20250907_000422554 | tol0.2_it20 | 53.1 | 13.1 | 4.5 | 9.4 | 19.9 | 9.1 | 11.3 | 0.64/2.06 | 0.261 |
+| fleetws | default | 38.0 | 8.7 | 8.1 | 20.2 | 24.9 | 20.2 | 54.3 | 0.56/2.09 | 0.237 |
+| fleetws | z-1_c0.0 | 56.3 | 0.6 | 0.0 | 19.6 | 23.5 | 19.6 | 80.7 | 0.94/3.07 | 0.330 |
+| fleetws | z-1_c0.005 | 54.6 | 2.2 | 0.0 | 19.8 | 23.5 | 19.7 | 79.6 | 0.91/3.00 | 0.323 |
+| fleetws | z-1_c0.01 | 51.9 | 4.2 | 0.0 | 20.4 | 23.4 | 20.4 | 77.7 | 0.87/2.88 | 0.314 |
+| fleetws | z-1_c0.02 | 46.4 | 8.4 | 0.0 | 21.9 | 23.3 | 21.9 | 72.9 | 0.78/2.64 | 0.293 |
+| fleetws | z-1_c0.04 | 36.5 | 15.1 | 0.0 | 26.6 | 21.8 | 26.6 | 61.2 | 0.59/2.28 | 0.253 |
+| fleetws | z-1_c0.08 | 23.2 | 21.4 | 0.0 | 38.6 | 16.8 | 38.6 | 38.9 | 0.27/1.66 | 0.194 |
+| fleetws | z0.7_c0.02 | 42.3 | 8.7 | 4.3 | 20.0 | 24.7 | 20.0 | 61.7 | 0.65/2.31 | 0.261 |
+| fleetws | z0.9_c0.02 | 24.0 | 7.6 | 16.9 | 30.9 | 20.6 | 30.9 | 33.5 | 0.29/1.57 | 0.177 |
+| fleetws | default_it20 | 37.0 | 8.7 | 8.1 | 21.4 | 24.8 | 21.4 | 29.8 | 0.54/2.24 | 0.230 |
+| fleetws | tol0.1 | 38.1 | 8.8 | 8.2 | 20.0 | 24.9 | 20.0 | 43.6 | 0.55/2.08 | 0.236 |
+| fleetws | tol0.2 | 38.2 | 9.0 | 8.3 | 19.4 | 25.1 | 19.4 | 28.7 | 0.52/2.04 | 0.232 |
+| fleetws | tol0.2_it20 | 37.5 | 9.1 | 8.3 | 20.0 | 25.2 | 20.0 | 12.3 | 0.51/2.12 | 0.226 |
+| KerryPark480 | default | 61.3 | 3.8 | 12.8 | 8.9 | 13.1 | 8.7 | 34.9 | 0.54/1.67 | 0.222 |
+| KerryPark480 | z-1_c0.0 | 79.7 | 0.2 | 0.0 | 8.3 | 11.8 | 8.1 | 47.9 | 0.63/2.18 | 0.283 |
+| KerryPark480 | z-1_c0.005 | 79.2 | 0.7 | 0.0 | 8.4 | 11.8 | 8.2 | 47.7 | 0.63/2.16 | 0.282 |
+| KerryPark480 | z-1_c0.01 | 78.1 | 1.6 | 0.0 | 8.5 | 11.8 | 8.3 | 47.4 | 0.62/2.13 | 0.279 |
+| KerryPark480 | z-1_c0.02 | 75.4 | 3.9 | 0.0 | 8.9 | 11.8 | 8.7 | 46.6 | 0.62/2.02 | 0.272 |
+| KerryPark480 | z-1_c0.04 | 68.1 | 9.8 | 0.0 | 10.5 | 11.6 | 10.3 | 45.1 | 0.59/1.87 | 0.254 |
+| KerryPark480 | z-1_c0.08 | 51.9 | 22.0 | 0.0 | 15.8 | 10.3 | 15.6 | 37.3 | 0.51/1.61 | 0.216 |
+| KerryPark480 | z0.7_c0.02 | 69.5 | 3.9 | 5.5 | 8.4 | 12.7 | 8.2 | 39.1 | 0.57/1.78 | 0.247 |
+| KerryPark480 | z0.9_c0.02 | 37.4 | 3.6 | 32.4 | 14.7 | 11.9 | 14.5 | 22.8 | 0.40/1.33 | 0.169 |
+| KerryPark480 | default_it20 | 61.2 | 3.9 | 12.7 | 9.1 | 13.1 | 8.9 | 19.5 | 0.54/1.70 | 0.221 |
+| KerryPark480 | tol0.1 | 61.4 | 3.9 | 12.8 | 8.7 | 13.2 | 8.5 | 24.5 | 0.54/1.67 | 0.221 |
+| KerryPark480 | tol0.2 | 61.4 | 3.9 | 12.9 | 8.5 | 13.3 | 8.3 | 13.2 | 0.53/1.64 | 0.220 |
+| KerryPark480 | tol0.2_it20 | 61.4 | 3.9 | 12.9 | 8.6 | 13.3 | 8.4 | 6.7 | 0.52/1.65 | 0.220 |
+| OmniTemple1 | default | 58.8 | 7.1 | 8.8 | 8.2 | 17.1 | 8.1 | 42.2 | 0.52/1.81 | 0.193 |
+| OmniTemple1 | z-1_c0.0 | 75.5 | 0.6 | 0.0 | 8.0 | 15.9 | 8.0 | 57.3 | 0.67/2.49 | 0.248 |
+| OmniTemple1 | z-1_c0.005 | 73.9 | 2.1 | 0.0 | 8.1 | 15.9 | 8.1 | 56.5 | 0.66/2.42 | 0.244 |
+| OmniTemple1 | z-1_c0.01 | 72.0 | 3.7 | 0.0 | 8.3 | 16.0 | 8.3 | 55.4 | 0.64/2.34 | 0.239 |
+| OmniTemple1 | z-1_c0.02 | 68.2 | 6.9 | 0.0 | 8.8 | 16.1 | 8.7 | 52.9 | 0.61/2.20 | 0.230 |
+| OmniTemple1 | z-1_c0.04 | 61.1 | 12.6 | 0.0 | 10.3 | 16.0 | 10.2 | 47.2 | 0.55/1.98 | 0.212 |
+| OmniTemple1 | z-1_c0.08 | 48.2 | 21.5 | 0.0 | 16.2 | 14.1 | 16.1 | 35.9 | 0.42/1.61 | 0.180 |
+| OmniTemple1 | z0.7_c0.02 | 64.2 | 7.0 | 3.9 | 8.1 | 16.8 | 8.0 | 46.1 | 0.56/1.96 | 0.210 |
+| OmniTemple1 | z0.9_c0.02 | 41.7 | 6.9 | 23.4 | 11.5 | 16.5 | 11.4 | 31.1 | 0.39/1.48 | 0.155 |
+| OmniTemple1 | default_it20 | 58.4 | 7.1 | 8.7 | 8.6 | 17.2 | 8.5 | 22.6 | 0.52/1.90 | 0.191 |
+| OmniTemple1 | tol0.1 | 58.9 | 7.1 | 8.8 | 8.1 | 17.1 | 8.0 | 31.3 | 0.51/1.80 | 0.192 |
+| OmniTemple1 | tol0.2 | 58.9 | 7.2 | 8.8 | 7.8 | 17.2 | 7.7 | 18.9 | 0.49/1.77 | 0.191 |
+| OmniTemple1 | tol0.2_it20 | 58.7 | 7.3 | 8.8 | 8.0 | 17.2 | 7.9 | 9.0 | 0.49/1.81 | 0.189 |
+| SeoulBull | default | 50.4 | 6.7 | 11.8 | 13.1 | 18.0 | 12.5 | 46.2 | 0.69/1.98 | 0.261 |
+| SeoulBull | z-1_c0.0 | 71.8 | 0.2 | 0.0 | 11.6 | 16.4 | 11.0 | 61.3 | 0.86/2.50 | 0.342 |
+| SeoulBull | z-1_c0.005 | 71.0 | 1.1 | 0.0 | 11.5 | 16.5 | 10.9 | 60.8 | 0.85/2.46 | 0.340 |
+| SeoulBull | z-1_c0.01 | 69.0 | 2.6 | 0.0 | 11.8 | 16.5 | 11.2 | 60.3 | 0.83/2.42 | 0.335 |
+| SeoulBull | z-1_c0.02 | 63.7 | 6.5 | 0.0 | 13.6 | 16.2 | 13.0 | 57.9 | 0.79/2.30 | 0.318 |
+| SeoulBull | z-1_c0.04 | 52.8 | 14.7 | 0.0 | 16.7 | 15.8 | 16.1 | 51.6 | 0.69/2.04 | 0.284 |
+| SeoulBull | z-1_c0.08 | 34.7 | 24.9 | 0.0 | 27.3 | 13.1 | 26.8 | 34.9 | 0.45/1.66 | 0.219 |
+| SeoulBull | z0.7_c0.02 | 58.4 | 6.6 | 4.9 | 13.0 | 17.1 | 12.4 | 51.0 | 0.73/2.12 | 0.290 |
+| SeoulBull | z0.9_c0.02 | 30.0 | 6.2 | 25.6 | 21.4 | 16.8 | 20.8 | 27.6 | 0.42/1.64 | 0.209 |
+| SeoulBull | default_it20 | 50.1 | 6.6 | 11.7 | 13.6 | 18.1 | 13.0 | 26.0 | 0.69/2.05 | 0.261 |
+| SeoulBull | tol0.1 | 50.5 | 6.6 | 11.9 | 12.8 | 18.0 | 12.2 | 34.1 | 0.68/1.96 | 0.261 |
+| SeoulBull | tol0.2 | 50.5 | 6.7 | 12.0 | 12.7 | 18.1 | 12.0 | 20.9 | 0.67/1.94 | 0.259 |
+| SeoulBull | tol0.2_it20 | 50.2 | 6.7 | 12.0 | 12.8 | 18.2 | 12.2 | 10.4 | 0.67/1.98 | 0.260 |
+
+## Wall time
+
+**Question.** Does turning the stage on raise the refinement's wall time? The draft's test is that it does not. An entry above 1.5× is flagged.
+
+**Method.** Each run has three clocks:
+
+- the *kernel* wall is the `refine_cluster_patches` wall the profile prints, which covers the refinement alone;
+- the *process* wall covers the whole `pixi run … sfm cluster-patches` process, including image decoding, file I/O and interpreter start-up;
+- the *CPU ratio* is read from the piecewise run alone. It divides the profile's thread-summed `cluster_total` by `cluster_total` minus the `piecewise` phase, which gives the refinement's CPU cost with the stage over its cost without it.
+
+The CPU ratio comes from a single process, so contention from the other workload on the machine affects its numerator and denominator alike. The kernel and process ratios compare two processes run minutes apart, so the contention adds noise to them.
+
+**Result.** The stage raises the wall time on every entry. Summed over the fleet:
+
+| clock | cascade | piecewise | ratio |
+|---|---|---|---|
+| kernel wall | 1,494 s | 2,445 s | **1.64×** |
+| process wall | 2,410 s | 3,289 s | 1.36× |
+| CPU, pooled | | | 1.61× |
+
+The piecewise phase is 37.8% of the refinement's CPU time. Per entry, the kernel ratio runs from 1.13× to 2.64×, and **33 of the 43 entries are above 1.5×**. The per-entry CPU ratio, which contention does not affect, runs from 1.35× to 1.81×. The process ratio of `20240915_073428267` (0.57×) is an artefact: its piecewise run was rerun later, when the machine was less loaded (see [Crashes](#crashes)).
+
+The draft's test fails: with the stage on, the refinement costs about 1.6 times as much. The profile's own split shows the reason. Per kept member, the piecewise phase costs about as much as the cascade's `refine_member` phase. The Theory section expects each iteration to be a cheap render and nine small searches, much cheaper than the cascade's simplex, and on this fleet the stage costs about as much as the cascade does. If the loop converged in the two or three iterations the draft expects, the 24% of members that run five iterations would cost less, and that would change this verdict.
+
+| entry | proc cascade s | proc piecewise s | ratio | kernel cascade s | kernel piecewise s | ratio | CPU ratio | flag |
+|---|---|---|---|---|---|---|---|---|
+| 20240614_203547691 | 71.8 | 98.0 | 1.36 | 47.3 | 74.6 | 1.58 | 1.60 | **>1.5x** |
+| 20240614_224244438 | 78.9 | 133.7 | 1.69 | 54.1 | 96.4 | 1.78 | 1.58 | **>1.5x** |
+| 20240614_224422531 | 98.0 | 137.4 | 1.40 | 64.2 | 110.8 | 1.73 | 1.62 | **>1.5x** |
+| 20240614_225938434 | 77.6 | 105.5 | 1.36 | 51.6 | 79.3 | 1.54 | 1.62 | **>1.5x** |
+| 20240617_204133531 | 40.6 | 58.6 | 1.44 | 24.8 | 41.4 | 1.67 | 1.50 | **>1.5x** |
+| 20240618_001255975~2 | 36.3 | 50.8 | 1.40 | 22.9 | 37.3 | 1.63 | 1.58 | **>1.5x** |
+| 20240702_224718414 | 48.9 | 66.3 | 1.36 | 31.0 | 48.8 | 1.57 | 1.58 | **>1.5x** |
+| 20240713_205804006 | 95.9 | 149.6 | 1.56 | 62.0 | 115.8 | 1.87 | 1.65 | **>1.5x** |
+| 20240906_081206935 | 55.0 | 77.1 | 1.40 | 37.4 | 58.3 | 1.56 | 1.53 | **>1.5x** |
+| 20240915_071403318 | 82.6 | 126.1 | 1.53 | 52.3 | 96.2 | 1.84 | 1.58 | **>1.5x** |
+| 20240915_073428267 | 112.2 | 63.7 | 0.57 | 29.3 | 46.5 | 1.59 | 1.77 | **>1.5x** |
+| 20240918_074134864 | 39.9 | 57.7 | 1.45 | 22.6 | 40.4 | 1.79 | 1.79 | **>1.5x** |
+| 20240919_040613535 | 68.9 | 100.0 | 1.45 | 43.6 | 71.8 | 1.65 | 1.56 | **>1.5x** |
+| 20240919_062358681 | 52.6 | 77.7 | 1.48 | 32.3 | 57.3 | 1.77 | 1.68 | **>1.5x** |
+| 20250425_135433677 | 89.8 | 146.7 | 1.63 | 64.4 | 116.8 | 1.81 | 1.53 | **>1.5x** |
+| 20250425_141305472 | 60.6 | 80.6 | 1.33 | 40.9 | 60.7 | 1.48 | 1.49 |  |
+| 20250426_150733286 | 31.9 | 40.4 | 1.27 | 18.4 | 26.6 | 1.45 | 1.64 |  |
+| 20250706_223513674 | 64.6 | 70.5 | 1.09 | 47.5 | 53.5 | 1.13 | 1.42 |  |
+| 20250712_195736354 | 118.7 | 120.1 | 1.01 | 64.9 | 92.0 | 1.42 | 1.63 |  |
+| 20250712_202131684 | 88.6 | 126.6 | 1.43 | 60.8 | 97.1 | 1.60 | 1.64 | **>1.5x** |
+| 20250712_204251146 | 56.7 | 83.7 | 1.48 | 36.5 | 62.5 | 1.71 | 1.59 | **>1.5x** |
+| 20250906_211742965 | 42.4 | 62.2 | 1.47 | 27.8 | 47.3 | 1.70 | 1.69 | **>1.5x** |
+| 20250907_000240907 | 27.3 | 52.5 | 1.92 | 15.5 | 40.9 | 2.64 | 1.67 | **>1.5x** |
+| 20250907_000422554 | 12.7 | 22.8 | 1.80 | 6.6 | 12.8 | 1.94 | 1.70 | **>1.5x** |
+| 20250907_000742129 | 34.7 | 40.4 | 1.16 | 14.5 | 28.0 | 1.92 | 1.77 | **>1.5x** |
+| 20250907_001316663 | 62.4 | 82.4 | 1.32 | 45.6 | 61.5 | 1.35 | 1.62 |  |
+| 20250907_211111559 | 59.6 | 89.4 | 1.50 | 41.4 | 68.2 | 1.65 | 1.55 | **>1.5x** |
+| AltonaGalleryInTheParkBoyReading | 58.6 | 76.0 | 1.30 | 37.6 | 53.7 | 1.43 | 1.45 |  |
+| BadlandPanorama | 121.4 | 151.3 | 1.25 | 58.2 | 110.1 | 1.89 | 1.80 | **>1.5x** |
+| DaeguArtMuseumTreeStumpExhibit | 50.2 | 65.3 | 1.30 | 31.5 | 48.2 | 1.53 | 1.47 | **>1.5x** |
+| DaeguMuseumMasks | 37.2 | 65.3 | 1.76 | 21.3 | 48.5 | 2.28 | 1.69 | **>1.5x** |
+| DnDTabletop | 103.3 | 122.0 | 1.18 | 71.0 | 94.9 | 1.34 | 1.67 |  |
+| KerryPark360 | 6.5 | 20.0 | 3.08 | 4.1 | 8.6 | 2.06 | 1.35 | **>1.5x** |
+| KerryPark480 | 2.4 | 3.0 | 1.25 | 1.0 | 1.6 | 1.58 | 1.57 | **>1.5x** |
+| MossyRailing | 61.9 | 83.9 | 1.36 | 43.5 | 64.0 | 1.47 | 1.52 |  |
+| MurdoSmallAntiqueCat | 59.8 | 79.6 | 1.33 | 40.7 | 59.0 | 1.45 | 1.48 |  |
+| OmniCoast | 23.8 | 40.0 | 1.68 | 14.3 | 31.4 | 2.20 | 1.65 | **>1.5x** |
+| OmniHilltop | 35.5 | 50.9 | 1.43 | 25.5 | 38.8 | 1.52 | 1.73 | **>1.5x** |
+| OmniTemple1 | 23.0 | 29.1 | 1.27 | 11.0 | 15.4 | 1.40 | 1.62 |  |
+| SeoulBull | 1.2 | 1.9 | 1.58 | 0.2 | 0.4 | 1.78 | 1.43 | **>1.5x** |
+| SfmExperimentation_vid2 | 41.8 | 76.1 | 1.82 | 25.6 | 51.5 | 2.01 | 1.58 | **>1.5x** |
+| SpainSoapmaker_ws2 | 64.3 | 91.4 | 1.42 | 43.6 | 69.6 | 1.60 | 1.81 | **>1.5x** |
+| fleetws | 9.5 | 12.8 | 1.35 | 4.4 | 6.7 | 1.53 | 1.50 | **>1.5x** |
+| total | 2410 | 3289 | 1.36 | 1494 | 2445 | 1.64 | | |
+
+### Crashes
+
+Three of the 86 runs aborted with exit status `0xC0000409`:
+
+- the piecewise run of `MossyRailing`;
+- the piecewise run of `20240915_073428267`;
+- the **cascade** run of `BadlandPanorama`.
+
+Each succeeded when rerun after the fleet pass finished, and the tables use the reruns. The `MossyRailing` log was read before its rerun replaced it. It shows an allocation failure after the refinement had finished, in the warp-consistency pass:
+
+```text
+memory allocation of 13538208 bytes failed
+stack backtrace:
+   0: std::alloc::rust_oom
+   ...
+   6: rayon::iter::collect::collect_with_consumer<…cluster_refine::consistency::warp_consistency_residuals…>
+   ...
+   9: sfmtool_core::patch::cluster_refine::consistency::warp_consistency_residuals
+```
+
+The reruns replaced the other two logs before they were read. A two-million-member entry holds about 20 GB of private memory during the refinement, and the other workload on the machine was running at the same time. These were out-of-memory aborts under shared load. One of them was a cascade-only run, so the stage did not cause them.
+
+## Seed stage on the ground-truth entries
+
+**Question.** If the seed reads the piecewise file instead of the cascade file, does that change which candidates agree with the ground truth, or which candidate the seed picks?
+
+**Method.** The seed ran as `scripts/exp_fast_seed.py` with the environment of the earlier fleet seed run:
+
+- `SFMTOOL_RELAX=0`, `SFMTOOL_SEED_RUNG1=3000` and `SFMTOOL_SEED_EVO_DUMP` set;
+- `SFMTOOL_SEED_EVAL`, `SFMTOOL_PINHOLE_RAW_VOTE`, and the radius, coarse-admission, stage-1, snapshot and stage-dump variables unset.
+
+It ran twice on each of `SeoulBull` and `KerryPark480`, once reading each file. Each run used a temporary copy of the workspace holding the images, `.sfm-workspace.json`, `rig_config.json`, and a `matches/` directory with only the scratch file in it.
+
+Every finite released candidate was scored against the checked-in ground truth (`seoul_bull_sculpture_ground_truth.sfmr` or `kerry_park_ground_truth.sfmr`), after a similarity alignment of the camera centres. The scores are:
+
+- the median and maximum rotation error;
+- the median and maximum centre error, as a percentage of the ground truth's camera extent;
+- the focal error, both from the manifest focal and as the equivalent focal recomputed over the ground truth's observed radii.
+
+The pass rule is the one in [seed-photometric-candidate-score.md](seed-photometric-candidate-score.md): median rotation under 1°, median centre error under 5%, and equivalent focal within 5%. The pick is `ladder_first`. A `-spline-refused` file is the same hypothesis released without its spline rung, and the tables list it as the seed releases it.
+
+Both `KerryPark480` runs were repeated, and every number of the repeats was identical. The `SeoulBull` cascade run reproduces the earlier run of 2026-10-07 on the same file exactly.
+
+**Result.** The piecewise file changes candidates on both entries, and it breaks the pick on `KerryPark480`.
+
+On `KerryPark480`, the pick `h00` passes with the cascade file (rotation 0.71°, centre 0.91%, focal −0.1%). With the piecewise file it fails, with a rotation error of 1.13° and a centre error of 4.11% median and 34% maximum. Five of the eight finite hypotheses pass with the cascade file, and three with the piecewise file. Individual hypotheses:
+
+- `h02` and `h05` pass with both files;
+- `h03` passes with the cascade file, and with the piecewise file it has one camera rotated 178°;
+- `h06` fails with both files, and with the piecewise file it also has a camera rotated 179°.
+
+On `SeoulBull` the pick `h00` passes with both files, though only just: its rotation errors are 0.995° and 0.979°, and its focal errors +4.6% and +4.5%. With the piecewise file it is no longer `qualified`, and it is flagged `edge_scan`. `h01` passes with the cascade file. With the piecewise file its spline release is refused, and the released `h01` misses the focal bar by a hair (−5.00%), while its spline-refused variant passes (+0.5% equivalent focal). The pick does not change.
+
+As configured, the stage turns the passing pick on `KerryPark480` into a failing one, and it changes candidates' pass or fail on both captures. That agrees with the parity result, which found the stage moving shapes away from the cascade's ZNCC optimum.
+
+The decision this informs is that the stage stays off by default (`--no-piecewise`), as it is today. A version of the loop whose shapes agree with the cascade within a few tenths of a grid px at the 95th percentile would reopen the question. On such a version the per-cell residuals would be the only new output, and this comparison should show no change.
+
+### SeoulBull
+
+**(a) cascade file** (pick `ladder_first` = 0)
+
+| file | qualified | accepted | posed | rot med/max deg | centre med/max % | f err % (manifest / equiv) | pass |
+|---|---|---|---|---|---|---|---|
+| h00.sfmr | 1 | 1 | 8 | 0.995/1.97 | 0.15/0.24 | +4.68 / +4.57 | PASS |
+| h01.sfmr | 0 | 1 | 8 | 0.419/1.00 | 0.18/0.38 | +3.19 / +3.06 | PASS |
+| h02-spline-refused.sfmr | 0 | 0 | 3 | 7.233/7.47 | 0.39/0.71 | -11.16 / -15.67 | fail |
+| h02.sfmr | 0 | 0 | 3 | 7.990/8.10 | 0.29/0.55 | -11.16 / -11.16 | fail |
+
+**(b) piecewise file** (pick `ladder_first` = 0)
+
+| file | qualified | accepted | posed | rot med/max deg | centre med/max % | f err % (manifest / equiv) | pass |
+|---|---|---|---|---|---|---|---|
+| h00.sfmr | 0 | 1 | 8 | 0.979/1.94 | 0.14/0.25 | +4.56 / +4.47 | PASS |
+| h01-spline-refused.sfmr | 0 | 0 | 8 | 0.321/0.80 | 0.14/0.32 | -5.00 / +0.47 | PASS |
+| h01.sfmr | 0 | 0 | 8 | 0.219/0.37 | 0.19/0.36 | -5.00 / -5.00 | fail |
+| h02-spline-refused.sfmr | 0 | 0 | 3 | 7.162/7.38 | 0.39/0.70 | -17.40 / -16.58 | fail |
+| h02.sfmr | 0 | 0 | 3 | 7.595/7.62 | 0.31/0.59 | -17.40 / -17.40 | fail |
+
+### KerryPark480
+
+**(a) cascade file** (pick `ladder_first` = 0)
+
+| file | qualified | accepted | posed | rot med/max deg | centre med/max % | f err % (manifest / equiv) | pass |
+|---|---|---|---|---|---|---|---|
+| h00.sfmr | 1 | 1 | 18 | 0.710/1.27 | 0.91/1.67 | -0.19 / -0.11 | PASS |
+| h01.sfmr | 1 | 1 | 14 | 0.423/2.31 | 1.46/6.25 | +0.05 / -0.03 | PASS |
+| h02.sfmr | 1 | 1 | 14 | 0.930/2.32 | 2.47/7.03 | +0.64 / +0.36 | PASS |
+| h03-spline-refused.sfmr | 1 | 0 | 14 | 0.591/5.81 | 1.58/7.80 | +0.65 / +0.38 | PASS |
+| h03.sfmr | 1 | 0 | 14 | 0.963/6.07 | 3.03/10.48 | +0.65 / +0.65 | PASS |
+| h04.sfmr | 1 | 1 | 14 | 1.764/6.27 | 16.68/40.51 | +1.14 / +1.20 | fail |
+| h05.sfmr | 1 | 1 | 14 | 0.704/3.12 | 1.85/15.86 | +0.84 / +0.44 | PASS |
+| h06.sfmr | 1 | 1 | 14 | 0.644/3.99 | 8.96/46.65 | +0.71 / +0.68 | fail |
+| h07.sfmr | 1 | 1 | 10 | 0.891/2.56 | 18.47/50.58 | +1.32 / +0.78 | fail |
+
+**(b) piecewise file** (pick `ladder_first` = 0)
+
+| file | qualified | accepted | posed | rot med/max deg | centre med/max % | f err % (manifest / equiv) | pass |
+|---|---|---|---|---|---|---|---|
+| h00.sfmr | 1 | 1 | 19 | 1.134/4.98 | 4.11/34.13 | +0.49 / +0.62 | fail |
+| h01.sfmr | 1 | 1 | 14 | 0.574/1.58 | 1.44/2.78 | -0.15 / -0.10 | PASS |
+| h02.sfmr | 1 | 1 | 14 | 0.820/2.76 | 4.14/29.80 | +0.19 / +0.23 | PASS |
+| h03.sfmr | 1 | 1 | 14 | 1.512/177.78 | 10.89/39.87 | +1.23 / +1.23 | fail |
+| h04-spline-refused.sfmr | 1 | 0 | 14 | 4.650/170.38 | 22.36/38.19 | +1.62 / +1.61 | fail |
+| h04.sfmr | 1 | 0 | 14 | 4.020/172.23 | 22.50/38.07 | +1.62 / +1.62 | fail |
+| h05.sfmr | 1 | 1 | 14 | 0.894/2.01 | 4.65/24.01 | +0.04 / +0.18 | PASS |
+| h06.sfmr | 1 | 1 | 13 | 0.562/179.29 | 10.50/28.03 | +0.71 / +0.74 | fail |
+| h07.sfmr | 1 | 1 | 9 | 0.803/3.45 | 16.23/45.07 | +1.34 / +0.98 | fail |
+
+## What these measurements decide
+
+- **Default.** The stage stays off (`--no-piecewise`). On this fleet it moves kept members' shapes by up to about 2 grid px at the 95th percentile with no bias, lowers their whole-member ZNCC, costs 1.6 times the refinement's time, and breaks the seed's pick on `KerryPark480`.
+- **`min_cell_zncc`.** The provisional 0.8 refuses 6.8% of peaked cells. The distribution has one mode and no valley, so it gives no data-derived boundary. The value stays provisional until an outcome measure, normal or shape error against a ground truth, is swept over it.
+- **`min_cell_curvature`.** The curvature is not stored, so its distribution was read through reruns. That proxy is smooth, with no knee, and varies widely between captures (2% to 14% of cells refused at 0.02). The value stays provisional on the same terms. Storing the curvature would let the next measurement read it directly.
+- **Agreement with the cascade, and convergence.** The loop's actual agreement with the cascade is about 2 grid px at the 95th percentile. A quarter of the members stop at the cap, because their update alternates at a size above the 0.05 grid px tolerance. Both checks the draft's Testing section names, agreement within tolerance and no rise in wall time, fail at commit `f787be3b`.
