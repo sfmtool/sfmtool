@@ -195,7 +195,7 @@ The command lives in
 [cluster_patches.py](../../../src/sfmtool/_commands/cluster_patches.py) over the
 driver [_cluster_patches.py](../../../src/sfmtool/_cluster_patches.py), which
 calls the `patch::cluster_refine` kernel in
-[cluster_refine/](../../../crates/sfmtool-core/src/patch/cluster_refine/), bound
+[cluster_refine.rs](../../../crates/sfmtool-core/src/patch/cluster_refine.rs), bound
 as `sfmtool.matching.refine_cluster_patches`. It is a flat command in
 the Image Feature category. Inputs: a clusters-bearing
 `.matches` file plus the workspace images/`.sift` files it references.

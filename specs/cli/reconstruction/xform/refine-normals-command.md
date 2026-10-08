@@ -69,7 +69,7 @@ through `parse_refine_normals_params` in
 [_arg_parser.py](../../../../src/sfmtool/xform/_arg_parser.py) and the
 `--refine-normals` Click option in
 [xform.py](../../../../src/sfmtool/_commands/xform.py); the refinement kernel
-is [normal_refine/](../../../../crates/sfmtool-core/src/patch/normal_refine/),
+is [normal_refine.rs](../../../../crates/sfmtool-core/src/patch/normal_refine.rs),
 reached through the `PatchCloud.refine_normals` PyO3 binding.
 
 ```

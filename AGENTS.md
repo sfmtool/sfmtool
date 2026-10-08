@@ -102,8 +102,8 @@ each call rather than chosen: a camera's `K`, `R` and `t`
 per-keypoint window geometry SIFT's histogram fills share, the variational
 flow settings derived for each pyramid level. `*Config` is not a
 settings suffix (`TwoViewGeometryConfig` keeps COLMAP's name for a pair's
-geometry type), and the viewer's `*DisplaySettings` are UI state, not function
-arguments. 26 public settings structs in `sfmtool-core` still carry
+geometry type), and the viewer's `*DisplaySettings` and `SplitSettings` are UI
+state, not function arguments. 26 public settings structs in `sfmtool-core` still carry
 `*Params` or `*Config`; new ones use `*Options`. See `specs/GLOSSARY.md` §
 "Rust type names".
 

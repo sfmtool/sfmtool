@@ -308,6 +308,8 @@ is the way to converge in one pass instead.
 ## Rust API
 
 Everything below lives in
+[normal_refine.rs](../../../crates/sfmtool-core/src/patch/normal_refine.rs) (the
+entry points) and
 [normal_refine/](../../../crates/sfmtool-core/src/patch/normal_refine/), split across
 `params` (the config and result types), `parameterization` (the sphere exp-map),
 `support` / `level` (window and per-level frozen support), `znorm` (render +
