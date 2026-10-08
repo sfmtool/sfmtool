@@ -203,6 +203,17 @@ which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
 - `src/sfmtool/_progress.py` — the `_timed_step` / `_poll_progress` progress
   helpers the orchestration wraps each Rust pass in.
 
+## Non-goals
+
+- **A normal from the patch's pieces.** Each round's normal step is the
+  photometric search; the command does not fit the depths of the patch's
+  pieces and take the plane through them. A normal from gated grid pieces is
+  proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
+- **Two patch resolutions.** Every round renders every patch at one grid
+  resolution `R`; no round runs on a coarse grid and then moves the patches
+  that can support it to a finer one. A coarse and a fine tier over the same
+  half-extent are proposed in [two-tier-patch-density.md](../../drafts/two-tier-patch-density.md).
+
 ## Open questions
 
 - The discard gates (`--min-relative-zncc`, `--max-shift-px`) want tuning across

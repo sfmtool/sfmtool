@@ -30,6 +30,10 @@ patch's scale and orientation in that view, so the frame could start from those
 shapes instead of from the detections. The question is whether that start
 reduces the work or the failures of the normal refinement that follows.
 
+Per-cell displacements of each member, from which a frame and its normal
+follow once poses exist, are proposed in
+[cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md).
+
 ## Clusters as track seeds for the solver
 
 `sfm solve` reads pairs and refuses a cluster file. A solver that accepts tracks

@@ -1051,7 +1051,9 @@ the flag:
   [Per-point patch frame](#per-point-patch-frame-optional-version-3).
 - `has_patch_bitmaps`: (version 3+) Whether `patch_bitmaps_y_x_rgba` is present.
 - `patch_bitmap_resolution`: (version 3+) The `R` dimension of the square patch
-  bitmaps, or `null` when `has_patch_bitmaps` is `false`.
+  bitmaps, or `null` when `has_patch_bitmaps` is `false`. A file holds every
+  point's bitmap at this one `R`; a coarse and a fine resolution over the same
+  patch extent are proposed in [two-tier-patch-density.md](../drafts/two-tier-patch-density.md).
 
 A version-3 file includes all four original flags (`false` / `null` when the
 data is absent), a version-5 file may additionally include

@@ -790,3 +790,9 @@ and its first-seen-wins dedup, the `CameraViews`-without-`member_views` error,
 the unscored-member-kept contract end to end, and blur matching: its matrix and
 `pairs_blurred`, the plain matrix left as it was, a ratio no pair reaches
 leaving every pair plain, and the refusals.
+
+## Non-goals
+
+The validation judges a track at the size its patch was built at; no caller
+compares its readings across several patch sizes to choose a track's size.
+That use is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).

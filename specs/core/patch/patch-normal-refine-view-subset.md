@@ -225,3 +225,7 @@ might seem, because a geometry-only D-optimal pick deliberately chooses the most
 oblique views, which are also the photometrically noisiest. Weighting the pick
 by per-view ZNCC is proposed in
 [patch-normal-refine-zncc-weighted-selection-amendment.md](../../drafts/patch-normal-refine-zncc-weighted-selection-amendment.md).
+
+The subset serves the photometric normal search only; no other normal
+estimator reads it. A grid normal that would replace that search, and with it
+this subset, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).

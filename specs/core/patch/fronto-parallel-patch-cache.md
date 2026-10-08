@@ -246,3 +246,9 @@ distortion independence. That last one is a bounded-divergence check, not an
 exactness proof: the three-corner fit leaves the projection's curvature over the
 patch as fit error under any model (see "Limitations").
 `tests/xform/test_refine_normals.py` covers the preset and the CLI validation.
+
+## Non-goals
+
+The cache serves the photometric normal search only; no other normal
+estimator reads it. A grid normal that would replace that search, and with it
+this cache, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).

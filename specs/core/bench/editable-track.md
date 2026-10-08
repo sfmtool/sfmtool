@@ -3296,3 +3296,8 @@ is a number the assertions can name.
   reads a point's track and adds it is proposed in the same draft.
 - **Bundle adjustment after a commit.** The commit writes a record and nothing
   settles around it.
+- **Gating the grid's pieces.** `PieceLayout::Grid` fits every piece and weighs
+  every fitted centre equally in the plane, however little texture the piece
+  holds. Gating each piece by its own self-similarity radius and weighting it
+  by how sharply its depth is pinned is proposed in
+  [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).

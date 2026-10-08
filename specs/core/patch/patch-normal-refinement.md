@@ -697,6 +697,13 @@ breakdown and per-knob perf-vs-benefit — are reproducible with
 `SFMTOOL_PROFILE=1` turns on the hot-path phase timers (`normal_refine/prof.rs`),
 which `refine_patch_cloud_normals` reports per batch.
 
+## Non-goals
+
+`sfm embed-patches` and `sfm xform --refine-normals` estimate a normal with
+this search only; neither fits the depths of the patch's pieces and takes the
+plane through them. A normal from gated grid pieces, which would replace this
+search for those callers and retire it, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
+
 ## Open questions
 
 - **Confidence threshold** below which a caller should distrust the refined

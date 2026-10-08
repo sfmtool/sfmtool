@@ -765,6 +765,17 @@ and for each observing image call `WarpMap.from_patch(...).remap_bilinear(image)
 — removing the bespoke 2D affine warp in `patch_crossval.py` and making every
 patch in a strip the same world surfel.
 
+## Non-goals
+
+- **Choosing a size per track.** Every patch in a build is sized by the one
+  `PatchExtent` policy and factor the caller passes; the build does not try
+  several sizes for a track and keep the smallest one its readings support.
+  Choosing each track's half-extent from a short ladder of sizes is proposed in
+  [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
+- **Two resolutions.** A cloud is rendered at the one grid resolution its
+  caller passes; it carries no coarse and fine resolution over the same
+  half-extent. Two such tiers are proposed in [two-tier-patch-density.md](../../drafts/two-tier-patch-density.md).
+
 ## Open questions
 
 - **Normal source and quality.** `normals` may be noisy or absent for

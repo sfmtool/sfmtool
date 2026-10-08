@@ -76,6 +76,10 @@ Computed with the final weights `w_q` and normal:
 `sectors ≥ det_sectors` (default 3) ∧ `anisotropy ≥ det_aniso` (default
 0.10). The verdict routes points; it is not a quality score.
 
+The verdict reads the positions of neighbouring points only, not the pieces
+of a patch's own bitmap. A grid normal from a patch's own pieces that reports
+its determinacy in this form is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
+
 ## Extra neighbours
 
 Callers may pass synthesized neighbour **positions** for specific points

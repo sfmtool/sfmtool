@@ -284,6 +284,10 @@ input track, then is expanded with vetted views and filtered by drops.
   quality, waits on the format growing optional per-observation fields (out of v4
   scope today).
 
+Every patch is sized at `patch_size` times its SIFT feature scale; the
+embedding does not choose a size per track. Choosing each track's size from a
+short ladder of sizes is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
+
 ## Implementation notes
 
 `embed_patches(recon, images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,

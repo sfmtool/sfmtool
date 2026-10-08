@@ -754,6 +754,12 @@ refinement measured and which members stand.
   (e.g. ~0.3 as a RANSAC prefilter, ~0.1 for purity-first harvesting),
   mirroring how `member_zncc` enables re-vetting without re-running
 
+The section records one patch extent and one sampling `resolution` for the
+whole file, and one affine shape per member for the member's whole patch; it
+holds no displacement for the parts of a member's patch. A second, finer
+resolution is proposed in [two-tier-patch-density.md](../drafts/two-tier-patch-density.md), and a per-cell displacement for
+each member in [cluster-patches-piecewise-refinement.md](../drafts/cluster-patches-piecewise-refinement.md).
+
 ### 7. Two-View Geometries (Optional Section)
 
 The two-view geometries section stores the results of geometric verification. It is optional —

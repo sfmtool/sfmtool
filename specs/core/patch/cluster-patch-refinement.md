@@ -615,6 +615,10 @@ at least one member, and that statuses stay inside the enum.
   geometric consistency it can offer is the reconstruction-free residual, not a
   reprojection test.
 - **No gate on consistency.** The residual is stored, never thresholded here.
+- **No piecewise fit.** Each member gets one affine shape for its whole
+  template; the parts of the template are not registered separately. A
+  per-cell displacement fit after the affine one is proposed in
+  [cluster-patches-piecewise-refinement.md](../../drafts/cluster-patches-piecewise-refinement.md).
 
 ## Open questions
 

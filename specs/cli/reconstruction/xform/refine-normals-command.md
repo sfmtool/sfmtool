@@ -415,6 +415,13 @@ count is unchanged, normals change for finite points, infinity points pass
 through, and mean Φ does not decrease; the arg-parser grammar and its error cases
 are unit-tested alongside.
 
+## Non-goals
+
+The transform runs the photometric search only; it does not fit the depths of
+a patch's pieces and take the plane through them. A normal from gated grid
+pieces, which would replace the search here, is proposed in
+[piece-gated-grid-normal.md](../../../drafts/piece-gated-grid-normal.md).
+
 ## Open questions
 
 - **Subset / progress.** Long runs on dense clouds may want a progress readout

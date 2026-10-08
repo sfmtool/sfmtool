@@ -113,6 +113,10 @@ such pieces over the whole patch and a plane through them
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
 "Estimating the normal"). Each is one step: estimate and tilt, with no refit.
 
+The grid estimator with each piece gated by its own self-similarity radius and
+weighted by how sharply its depth is pinned is proposed in
+[piece-gated-grid-normal.md](piece-gated-grid-normal.md).
+
 No estimator caps how far the normal may turn from the mean viewing
 direction. The side of a house seen at grazing angles has its true normal 62
 degrees from it, and the photographs favour that normal all the way there.
