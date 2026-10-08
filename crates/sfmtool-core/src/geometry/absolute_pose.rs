@@ -317,7 +317,7 @@ pub struct AbsolutePoseOptions {
     /// `π/2` subsumes the cheirality check.
     pub max_angular_error: f64,
     /// Adaptive-termination target: stop once the probability that an
-    /// all-inlier sample was drawn exceeds this (given the best inlier count).
+    /// all-inlier sample was drawn reaches this (given the best inlier count).
     pub confidence: f64,
     /// Hard trial cap.
     pub max_iterations: u32,
@@ -542,9 +542,10 @@ fn angular_cost(
         .sum()
 }
 
-/// Gauss-Newton refinement of a pose minimizing the sum of squared angular
-/// residuals over `inliers`, with a local `SO(3) × R³` parameterization
-/// (left-composed rotation-vector increments).
+/// Gauss-Newton refinement of a pose minimizing `Σ sin²θ_i` over `inliers`
+/// (the residual is `(I − b·bᵀ)·d`, whose squared norm is `sin²θ`), with a
+/// local `SO(3) × R³` parameterization (left-composed rotation-vector
+/// increments).
 fn refine_pose(
     mut r: UnitQuaternion<f64>,
     mut t: Vector3<f64>,

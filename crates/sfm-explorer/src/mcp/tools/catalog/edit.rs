@@ -104,7 +104,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "delete_point",
             description: "Delete one 3D point and its whole track. A point edit: every other \
                           point keeps the index it had, so indexes an agent is holding stay \
-                          good, and undo puts it back.",
+                          good, and undo puts it back. The deleted point's slot stays open only \
+                          until the next edit that gives the node a whole new base, or a save \
+                          that is not a minimal copy: \
+                          that edit closes it up first, so every point after it moves down by \
+                          one, a point retriangulate_point or commit_bench_track re-added goes \
+                          back to the index it had, and a point new to the base follows the last \
+                          surviving one. Re-read point indexes after such an edit. Image indexes \
+                          do not move.",
             kind: Write,
             schema: object(
                 &[],
@@ -143,7 +150,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           camera and no lens: this is the structure re-read at a geometry \
                           somebody else decided. A bulk edit giving the node a whole new base, \
                           but it deletes no point and creates none, so every index still means \
-                          what it meant. Points the reconstruction holds at a fixed coordinate \
+                          what it meant unless a point edit is pending, in which case the \
+                          deleted slots close up first, as delete_point describes. Points the reconstruction holds at a fixed coordinate \
                           are left alone, a ranged point keeps its distance and only its \
                           direction is re-read, and a point fewer than two of whose observations \
                           state a usable ray keeps the geometry it had. The report counts the \
@@ -242,7 +250,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           The tracks that image observes are re-triangulated around the new pose \
                           where two or more pixels see them; a bearing only it sees turns with \
                           it, and anything else keeps its position. The image table stays put and \
-                          nothing is renumbered. Undo (Ctrl+Z in the window) puts the stored pose \
+                          nothing is renumbered unless a point edit is pending, in which case \
+                          the deleted slots close up first, as delete_point describes. Undo (Ctrl+Z in the window) puts the stored pose \
                           back.",
             kind: Write,
             schema: object(
@@ -306,7 +315,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the point's own track's bar and its keypoint lies within the image's \
                           positional bound of the projection. Nothing else moves: no point, \
                           frame, bitmap or camera, and nothing is re-triangulated, so every \
-                          index still means what it meant. The step to take after \
+                          index still means what it meant unless a point edit is pending, in \
+                          which case the deleted slots close up first, as delete_point \
+                          describes. The step to take after \
                           resect_camera_image. Runs on a worker thread, so one still going \
                           after 200 ms replies with running: true and an operation_id instead \
                           of the version; cancel_background_task stops it. A call that adds \
@@ -417,7 +428,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and install the answer as the reconstruction's next version. The new \
                           model is fitted to the old one where the old one is trusted; poses, \
                           points, keypoints and tracks do not move, and the stored errors of \
-                          the points the camera's images observe are recomputed. With \
+                          the points the camera's images observe are recomputed. No index \
+                          moves unless a point edit is pending, in which case the deleted \
+                          slots close up first, as delete_point describes. With \
                           camera_model omitted the target is the camera's own model, which for an \
                           SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera is a refit of its spline \
                           to another coefficient count or domain end: fitted over the whole \
@@ -501,7 +514,21 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "convert_to_embedded_patches",
-            description: "Change how one reconstruction locates its observations: from a                           feature index into a .sift file to a patch frame per point with the                           keypoint carried inline. Every point keeps its index, position and                           track; its (u, v) frame uses the mean viewing direction and 2.5x                           the median projected keypoint scale. Each observation's keypoint                           and each image's identity hash come from its .sift file. The viewer                           then renders persistent reference bitmaps from readable photographs                           without photometric adaptation. If no photographs can be read, the                           conversion still succeeds without bitmaps. One version, and it runs                           on a worker thread, so a conversion still going after 200 ms replies                           with running: true and an operation_id instead of the version.                           Refused on a reconstruction that already carries embedded patches.                           Needs the workspace's .sift files where the reconstruction was made.",
+            description: "Change how one reconstruction locates its observations: from a \
+                         feature index into a .sift file to a patch frame per point with the \
+                         keypoint carried inline. Every point keeps its position and track, \
+                         and its index unless a point edit is pending, in which case the \
+                         deleted slots close up first, as delete_point describes; its (u, v) \
+                         frame uses the mean viewing direction and 2.5x \
+                         the median projected keypoint scale. Each observation's keypoint \
+                         and each image's identity hash come from its .sift file. The viewer \
+                         then renders persistent reference bitmaps from readable photographs \
+                         without photometric adaptation. If no photographs can be read, the \
+                         conversion still succeeds without bitmaps. One version, and it runs \
+                         on a worker thread, so a conversion still going after 200 ms replies \
+                         with running: true and an operation_id instead of the version. \
+                         Refused on a reconstruction that already carries embedded patches. \
+                         Needs the workspace's .sift files where the reconstruction was made.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },

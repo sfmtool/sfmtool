@@ -304,8 +304,8 @@ fn point_schema() -> Value {
     })
 }
 
-/// A panel argument: one of the seven names, spelled as the layout file spells
-/// them.
+/// A panel argument: one of the names in `Tab::ALL`, spelled as the layout
+/// file spells them (`Tab::wire_name`).
 ///
 /// `panel_name` rather than `panel`, because the field carries a name and not
 /// a panel — the same rule that makes the reconstruction argument

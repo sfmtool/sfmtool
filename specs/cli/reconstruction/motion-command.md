@@ -74,7 +74,7 @@ sfm motion [OPTIONS] PATHS...
 | `--min-stride N` | 1 | Minimum stride (floor for adaptive shrinking). Must be at least 1. |
 | `--max-stride N` | 32 | Maximum stride (ceiling for adaptive growing). Must be at least 2; Click rejects a smaller value. |
 | `--no-adaptive` | false | Disable adaptive stride adjustment; keep stride fixed. |
-| `--save-flow-dir PATH` | | Directory to save optical flow color images (Middlebury convention). |
+| `--save-flow-dir PATH` | | Directory to save optical flow color images (hue encodes direction, saturation magnitude). |
 | `--json PATH` | | Write a machine-readable JSON report of the analysis to this path. Human-readable output is unchanged. |
 
 ### Examples
@@ -236,8 +236,9 @@ Superseded results (from retried frames) are excluded from the summary.
 
 ### Flow Image Saving
 
-When `--save-flow-dir` is provided, optical flow color images are saved using the
-Middlebury color convention (same as `sfm flow --draw`). Images are saved incrementally
+When `--save-flow-dir` is provided, optical flow color images are saved in the
+same colouring as `sfm flow --draw`: hue encodes flow direction and saturation its
+magnitude. Images are saved incrementally
 as each sample point is computed, not held in memory.
 
 For each sample point, up to two images are saved:
@@ -247,7 +248,7 @@ For each sample point, up to two images are saved:
 
 The sequence name is derived from the detected sequence pattern by stripping the
 extension and printf format specifier (e.g., `seoul_bull_sculpture_%02d.jpg` becomes
-`seoul_bull_sculpture`). Each image includes a Middlebury color wheel legend.
+`seoul_bull_sculpture`). Each image includes a legend of the right, left, down and up colours.
 
 ### Image Caching
 

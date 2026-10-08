@@ -29,20 +29,73 @@ See ``specs/cli/reconstruction/xform/localize-keypoints-command.md`` and
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
-from ._patch_params import validate_patch_params
+from ._patch_params import _SAMPLERS, _WINDOWS
 
 _SEARCH_STRATEGIES = ("exhaustive", "plus_descent")
+
+
+def _check(ok, message):
+    """A validator raising ``ValueError(message.format(v))`` unless ``ok(v)``."""
+
+    def validate(value):
+        if not ok(value):
+            raise ValueError(message.format(value))
+
+    return validate
+
+
+# The PatchCloud.localize_keypoints keyword arguments this op accepts, each with
+# the range check run on a value the caller gives. A key the caller does not give
+# is not passed on, so the binding's own default applies.
+_OPTION_VALIDATORS = {
+    "max_iters": _check(lambda v: v >= 1, "max_iters must be >= 1, got {}"),
+    "search": _check(lambda v: v > 0, "search must be positive, got {}"),
+    "max_shift_px": _check(lambda v: v > 0, "max_shift_px must be positive, got {}"),
+    "min_relative_zncc": _check(
+        lambda v: 0 <= v <= 1, "min_relative_zncc must be in [0, 1], got {}"
+    ),
+    "min_absolute_zncc": _check(
+        lambda v: 0 <= v <= 1, "min_absolute_zncc must be in [0, 1], got {}"
+    ),
+    "max_member_zncc_self_similarity_radius": _check(
+        lambda v: v >= 0, "max_member_zncc_self_similarity_radius must be >= 0, got {}"
+    ),
+    "min_grazing_cos": _check(
+        lambda v: 0 <= v <= 1, "min_grazing_cos must be in [0, 1], got {}"
+    ),
+    "resolution": _check(lambda v: v >= 2, "resolution must be >= 2, got {}"),
+    "window": _check(
+        lambda v: v in _WINDOWS, f"window must be one of {_WINDOWS}, got {{!r}}"
+    ),
+    "window_sigma": _check(lambda v: v > 0, "window_sigma must be positive, got {}"),
+    "sampler": _check(
+        lambda v: v in _SAMPLERS, f"sampler must be one of {_SAMPLERS}, got {{!r}}"
+    ),
+    "robust_iters": _check(lambda v: v >= 1, "robust_iters must be >= 1, got {}"),
+    "convergence_px": _check(
+        lambda v: v > 0, "convergence_px must be positive, got {}"
+    ),
+    "search_resolution_multiplier": _check(
+        lambda v: v > 0, "search_resolution_multiplier must be positive, got {}"
+    ),
+    "search_strategy": _check(
+        lambda v: v in _SEARCH_STRATEGIES,
+        f"search_strategy must be one of {_SEARCH_STRATEGIES}, got {{!r}}",
+    ),
+    "basis_max_views": _check(lambda v: v >= 0, "basis_max_views must be >= 0, got {}"),
+}
 
 
 class LocalizeKeypointsTransform:
     """Localize per-observation 2D keypoints by cross-view search (structural).
 
-    All search knobs default to the ``PatchCloud.localize_keypoints`` binding
-    defaults, so the two layers cannot drift; ``min_views`` (default 2) is the
-    compaction cull threshold. Localization runs over each point's full track
-    (``view_sets=None``) and the write-back rebuilds the track arrays from the
-    kept views via ``compact_to_embedded_patches`` — views and points can be
-    dropped, and the survivors are renumbered densely.
+    ``options`` are ``PatchCloud.localize_keypoints`` keyword arguments; only
+    the ones given are forwarded, so every other search setting is the binding's
+    own default. ``min_views`` (default 2) is the compaction cull threshold.
+    Localization runs over each point's full track (``view_sets=None``) and the
+    write-back rebuilds the track arrays from the kept views via
+    ``compact_to_embedded_patches`` — views and points can be dropped, and the
+    survivors are renumbered densely.
 
     Requires an ``embedded_patches`` reconstruction (enforced by
     ``apply_transforms``): the localizer searches over the stored per-point
@@ -50,105 +103,27 @@ class LocalizeKeypointsTransform:
     each view at the point's own projection. Convert first with
     ``--to-embedded-patches``.
 
-    ``basis_max_views`` caps the consensus basis (see
-    ``specs/core/patch/keypoint-localization-consensus-basis.md``); the default is
-    ``8``, and ``0`` gives the uncapped path (cleanest error metrics). This
-    surface runs over each point's own track and supplies no per-view
-    appearance scores, so when the cap bites the basis pick ranks by grazing
-    angle (most frontal first). Tracks of ``<= 8`` views — the typical case for
-    an un-expanded reconstruction — take the uncapped path either way.
+    See ``specs/cli/reconstruction/xform/localize-keypoints-command.md`` for the
+    keys and their defaults.
     """
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
     required_feature_source = "embedded_patches"
 
-    def __init__(
-        self,
-        *,
-        # compaction cull: drop a point whose kept-view count is below this
-        min_views: int = 2,
-        # forwarded to PatchCloud.localize_keypoints
-        max_iters: int = 5,
-        search: float = 6.0,
-        max_shift_px: float = 3.0,
-        min_relative_zncc: float = 0.7,
-        min_absolute_zncc: float = 0.5,
-        max_member_zncc_self_similarity_radius: float = 2.5,
-        min_grazing_cos: float = 0.1,
-        resolution: int = 24,
-        window: str = "gaussian_disk",
-        window_sigma: float = 0.6,
-        sampler: str = "per_view",
-        robust_iters: int = 3,
-        convergence_px: float = 0.05,
-        search_resolution_multiplier: float = 1.0,
-        search_strategy: str = "plus_descent",
-        basis_max_views: int = 8,
-    ):
+    def __init__(self, *, min_views: int = 2, **options):
         if min_views < 1:
             raise ValueError(f"min_views must be >= 1, got {min_views}")
-        if max_iters < 1:
-            raise ValueError(f"max_iters must be >= 1, got {max_iters}")
-        if search <= 0:
-            raise ValueError(f"search must be positive, got {search}")
-        if max_shift_px <= 0:
-            raise ValueError(f"max_shift_px must be positive, got {max_shift_px}")
-        if not 0 <= min_relative_zncc <= 1:
-            raise ValueError(
-                f"min_relative_zncc must be in [0, 1], got {min_relative_zncc}"
-            )
-        if not 0 <= min_absolute_zncc <= 1:
-            raise ValueError(
-                f"min_absolute_zncc must be in [0, 1], got {min_absolute_zncc}"
-            )
-        if max_member_zncc_self_similarity_radius < 0:
-            raise ValueError(
-                f"max_member_zncc_self_similarity_radius must be >= 0, "
-                f"got {max_member_zncc_self_similarity_radius}"
-            )
-        if not 0 <= min_grazing_cos <= 1:
-            raise ValueError(
-                f"min_grazing_cos must be in [0, 1], got {min_grazing_cos}"
-            )
-        if resolution < 2:
-            raise ValueError(f"resolution must be >= 2, got {resolution}")
-        validate_patch_params(window=window, window_sigma=window_sigma, sampler=sampler)
-        if robust_iters < 1:
-            raise ValueError(f"robust_iters must be >= 1, got {robust_iters}")
-        if convergence_px <= 0:
-            raise ValueError(f"convergence_px must be positive, got {convergence_px}")
-        if search_resolution_multiplier <= 0:
-            raise ValueError(
-                f"search_resolution_multiplier must be positive, "
-                f"got {search_resolution_multiplier}"
-            )
-        if search_strategy not in _SEARCH_STRATEGIES:
-            raise ValueError(
-                f"search_strategy must be one of {_SEARCH_STRATEGIES}, "
-                f"got {search_strategy!r}"
-            )
-        if basis_max_views < 0:
-            raise ValueError(f"basis_max_views must be >= 0, got {basis_max_views}")
+        for key, value in options.items():
+            validate = _OPTION_VALIDATORS.get(key)
+            if validate is None:
+                raise TypeError(
+                    f"LocalizeKeypointsTransform got an unexpected option {key!r}"
+                )
+            validate(value)
 
         self.min_views = min_views
-        self.max_iters = max_iters
-        self.search = search
-        self.max_shift_px = max_shift_px
-        self.min_relative_zncc = min_relative_zncc
-        self.min_absolute_zncc = min_absolute_zncc
-        self.max_member_zncc_self_similarity_radius = (
-            max_member_zncc_self_similarity_radius
-        )
-        self.min_grazing_cos = min_grazing_cos
-        self.resolution = resolution
-        self.window = window
-        self.window_sigma = window_sigma
-        self.sampler = sampler
-        self.robust_iters = robust_iters
-        self.convergence_px = convergence_px
-        self.search_resolution_multiplier = search_resolution_multiplier
-        self.search_strategy = search_strategy
-        self.basis_max_views = basis_max_views
+        # Only the options the caller gave; the binding supplies the rest.
+        self.options = dict(options)
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         from .._patch_compaction import (
@@ -176,25 +151,7 @@ class LocalizeKeypointsTransform:
         )
 
         localizations = cloud.localize_keypoints(
-            recon,
-            images,
-            view_sets=None,
-            max_iters=self.max_iters,
-            search=self.search,
-            max_shift_px=self.max_shift_px,
-            min_relative_zncc=self.min_relative_zncc,
-            min_absolute_zncc=self.min_absolute_zncc,
-            max_member_zncc_self_similarity_radius=self.max_member_zncc_self_similarity_radius,
-            min_grazing_cos=self.min_grazing_cos,
-            resolution=self.resolution,
-            window=self.window,
-            window_sigma=self.window_sigma,
-            sampler=self.sampler,
-            robust_iters=self.robust_iters,
-            convergence_px=self.convergence_px,
-            search_resolution_multiplier=self.search_resolution_multiplier,
-            search_strategy=self.search_strategy,
-            basis_max_views=self.basis_max_views,
+            recon, images, view_sets=None, **self.options
         )
 
         # An embedded_patches recon already stores its per-image hashes; the
@@ -204,10 +161,10 @@ class LocalizeKeypointsTransform:
             hashes = image_file_hashes_from_images(recon)
 
         # The structural write-back: renumber the surviving points, rebuild
-        # keypoints_xy + all three track arrays + the culled patch frames, and
-        # carry over positions/colors/errors/normals. Bitmaps are dropped
-        # (patch_bitmaps=None): the localizer renders none, and any stored ones
-        # are stale after the keypoints move and views drop.
+        # keypoints_xy + all three track arrays + the culled patch frames, carry
+        # over positions/colors/errors, and re-derive normals from the frames.
+        # Bitmaps are dropped (patch_bitmaps=None): the localizer renders none,
+        # and any stored ones are stale after the keypoints move and views drop.
         out = compact_to_embedded_patches(
             recon,
             cloud,
@@ -236,8 +193,10 @@ class LocalizeKeypointsTransform:
 
     def description(self) -> str:
         # This string is also reused as the operation name in the precondition
-        # error.
-        return (
-            f"Localize keypoints (search={self.search}, "
-            f"strategy={self.search_strategy}, min_views={self.min_views})"
+        # error. It names min_views and the options given, not the binding
+        # defaults behind the rest.
+        settings = ", ".join(
+            f"{key}={value}"
+            for key, value in {"min_views": self.min_views, **self.options}.items()
         )
+        return f"Localize keypoints ({settings})"

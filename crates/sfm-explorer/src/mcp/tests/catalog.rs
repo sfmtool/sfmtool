@@ -705,6 +705,46 @@ fn every_tool_advertises_an_object_schema_and_a_description() {
     }
 }
 
+/// Every description an agent reads, the tool's own and each one in its schema,
+/// is single-spaced. A long description is a Rust string spread over several
+/// source lines, and a line break written without a trailing `\` keeps the
+/// next line's indentation as a run of spaces inside the text.
+#[test]
+fn catalog_descriptions_have_no_runs_of_spaces() {
+    fn check(tool: &str, at: &str, value: &Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "description" {
+                        if let Some(text) = child.as_str() {
+                            assert!(
+                                !text.contains("  "),
+                                "{tool}: the description at {at} has a run of spaces: {text:?}"
+                            );
+                        }
+                    }
+                    check(tool, &format!("{at}/{key}"), child);
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    check(tool, &format!("{at}/{i}"), child);
+                }
+            }
+            _ => {}
+        }
+    }
+    for spec in tools::catalog() {
+        assert!(
+            !spec.description.contains("  "),
+            "{}: its description has a run of spaces: {:?}",
+            spec.name,
+            spec.description
+        );
+        check(spec.name, "schema", &spec.schema);
+    }
+}
+
 /// The names are the API, so the vocabulary rule is asserted rather than left
 /// to review: no abbreviation, and no bare `camera` or `image` — the two words
 /// that each name two things.
@@ -1085,6 +1125,32 @@ fn schema_descriptions(value: &Value, out: &mut Vec<String>) {
         }
         Value::Array(items) => items.iter().for_each(|item| schema_descriptions(item, out)),
         _ => {}
+    }
+}
+
+/// An edit that gives the node a whole new base first folds the pending point
+/// edits in, which closes up a deleted point's slot, so a description that
+/// says the edit keeps every index also says when it does not. A description
+/// without the exception sends an agent off with point indexes read before a
+/// `delete_point`. Spec audit of 2026-10-06.
+#[test]
+fn no_description_promises_indexes_stay_without_the_pending_fold() {
+    for spec in tools::catalog() {
+        let text = spec.description;
+        let promises = [
+            "renumbers nothing",
+            "nothing is renumbered",
+            "still means what it meant",
+        ]
+        .iter()
+        .any(|phrase| text.contains(phrase));
+        if promises {
+            assert!(
+                text.contains("unless a point edit is pending"),
+                "{} keeps every index without naming the pending point edits: {text}",
+                spec.name
+            );
+        }
     }
 }
 

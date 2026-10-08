@@ -22,6 +22,8 @@
 //! budget — the same trade FLANN's `FLANN_INDEX_KDTREE` makes. An exact bound
 //! would replace, not add, the per-axis component, needing per-axis state on
 //! every queue entry; the only exact configuration here is a single leaf.
+//!
+//! Specified in `specs/core/features/randomized-kdtree-forest.md`.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -73,7 +75,7 @@ pub struct Neighbor {
     pub dist_sq: f32,
 }
 
-/// Per-query search counters, surfaced when `SFMTOOL_KDFOREST_STATS=1`.
+/// Per-query search counters, surfaced when `SFMTOOL_KDFOREST_STATS` is set.
 #[derive(Clone, Copy, Default, Debug)]
 pub(super) struct QueryStats {
     /// Unique point distances computed (the quantity `max_leaf_checks` bounds).

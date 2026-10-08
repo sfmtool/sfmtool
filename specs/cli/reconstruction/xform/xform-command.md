@@ -360,7 +360,8 @@ same focal and coefficients, the new terms at zero, so `SIMPLE_RADIAL` to
 to a spline, a fisheye to a perspective model below 90°) gives the target's best
 fit to the same lens. A perspective target is refused for a camera with
 observations at 90° or more, and a fitted polynomial fisheye whose trusted bound
-falls short of the fit is refused too. A spline fit is not refused for turning
+falls short of the fit, or a fitted `SIMPLE_RADIAL_FISHEYE` that folds inside it,
+is refused too. A spline fit is not refused for turning
 over: it is constrained to stay monotone, the closest invertible curve to the
 source.
 A spline camera switched to its own spline model (`SFMTOOL_FISHEYE` to

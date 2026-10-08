@@ -33,7 +33,6 @@ use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
 
-use crate::patch::blur_matched::{BlurMatchKernel, PairMatching, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
@@ -45,6 +44,7 @@ use crate::patch::keypoint_localize::{
 };
 use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::pair_sharpness::{PairMatching, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::reference_view::{
     blur_matched_agreement, cell_agreement, choose_reference_view_with, finite_middle,
     render_view_tile, PairZnccReading, ReferenceReadings, ReferenceRuleInputs, ViewTile,
@@ -145,13 +145,15 @@ pub struct EvaluateOptions {
 /// read.
 ///
 /// The plain readings are always taken. The blur-matched ones cost a blur of
-/// the sharper tile for each pair whose ellipses differ.
+/// the sharper tile for each pair in which one tile is sharper than the other
+/// along every direction.
 ///
-/// The default takes the blur-matched readings, skipping a direction where
-/// the two ellipses differ by less than [`DEFAULT_MIN_ELLIPSE_RATIO`], with
-/// the anisotropic kernel, and has both tests read them: on the review cases
-/// that adds about 0.3 ms to a track's evaluation (4%) and agrees with the
-/// hand picks on two more tracks of 77. `specs/core/patch/reference-view.md`
+/// The default takes the blur-matched readings, leaving a pair plain where
+/// the other tile's semi-minor axis is less than [`DEFAULT_MIN_ELLIPSE_RATIO`]
+/// times the sharper tile's semi-major axis, and has both tests read them:
+/// on the review cases and pool samples that adds about 0.13 ms to a track's
+/// evaluation (2%), and agrees with the hand picks exactly on as many tracks
+/// as the plain readings (28 of 77). `specs/core/patch/reference-view.md`
 /// § "Blur-matched agreement" has the measurements.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceViewOptions {
@@ -159,8 +161,6 @@ pub struct ReferenceViewOptions {
     /// none, and both tests then read the plain readings whatever
     /// [`Self::agreement`] and [`Self::cells`] say.
     pub matching: PairMatching,
-    /// The shape of the blur.
-    pub kernel: BlurMatchKernel,
     /// Which pair ZNCC the agreement test reads.
     pub agreement: PairZnccReading,
     /// Which pair ZNCC grid the cell check reads.
@@ -171,7 +171,6 @@ impl Default for ReferenceViewOptions {
     fn default() -> Self {
         Self {
             matching: PairMatching::BlurMatchedAboveRatio(DEFAULT_MIN_ELLIPSE_RATIO),
-            kernel: BlurMatchKernel::Anisotropic,
             agreement: PairZnccReading::BlurMatched,
             cells: PairZnccReading::BlurMatched,
         }
@@ -1659,14 +1658,7 @@ fn read_reference_view(
                     .map(|e| e.matrix)
             })
             .collect();
-        blur_matched_agreement(
-            &refs,
-            &ellipses,
-            reference.matching,
-            reference.kernel,
-            params.window,
-            &phase,
-        )
+        blur_matched_agreement(&refs, &ellipses, reference.matching, params.window, &phase)
     });
     for (k, (i, _)) in tiles.iter().enumerate() {
         if let Some(measurement) = next.observations[*i].track.as_mut() {

@@ -18,9 +18,8 @@ use crate::geometry::PyCameraIntrinsics;
 /// Per-observation reprojection residual `(proj − observed)` in pixels.
 ///
 /// Poses are canonical world-to-camera (`x_cam = R·X + t`; the camera looks
-/// along −Z). A point behind the camera or outside the model's valid domain
-/// gets `invalid_residual` on its x component (y = 0), so it survives as a
-/// large-residual outlier for downstream trims/inlier counts.
+/// along −Z). An observation with no valid projection gets
+/// `(invalid_residual, 0)`; see `specs/core/geometry/reprojection-residuals.md`.
 ///
 /// Args:
 ///     camera: ``CameraIntrinsics`` shared by all images.

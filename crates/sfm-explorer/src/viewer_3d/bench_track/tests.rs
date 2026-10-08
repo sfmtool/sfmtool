@@ -153,7 +153,8 @@ fn a_track_at_infinity_draws_directions_and_no_normal() {
 
     assert!(
         figure.normal.is_none(),
-        "a direction patch's normal is fixed by its bearing, so there is          nothing to say and nothing to grab"
+        "a direction patch's normal is fixed by its bearing, so there is \
+        nothing to say and nothing to grab"
     );
     assert!(!figure.marks.is_empty(), "the sightings still mark the sky");
     for stroke in figure.strokes() {

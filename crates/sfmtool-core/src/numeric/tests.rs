@@ -231,7 +231,8 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "sfmtool-core/src/bench/track_at_pixel/finish.rs",
         "median_zncc",
-        "delegates: the shared median of the `in` observations' leave-one-out ZNCCs,          negative infinity when none has one",
+        "delegates: the shared median of the `in` observations' leave-one-out ZNCCs, \
+         negative infinity when none has one",
     ),
     (
         "sfmtool-core/src/bench/track_at_pixel/finish.rs",
