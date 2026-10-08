@@ -30,6 +30,13 @@ sfmtool._sfmtool.<sub> import *`, so most bindings are also reachable as
 `bench.commit(…)`, because its function names (`commit`, `split`, `fit`) name
 steps on a track and would read as something else on the flat surface.
 
+A binding's Python name carries no language suffix such as `_py` or `_rs`.
+Where the Rust function behind it is named `<name>_py` to keep it apart from
+the core function it calls, `#[pyo3(name = "<name>")]` gives Python the plain
+name. A Python wrapper of the same name in `src/sfmtool/` imports the binding
+under an alias, for example `match_image_pair as _rust_match_image_pair` in
+[`feature_match/_core.py`](../src/sfmtool/feature_match/_core.py).
+
 ## Submodules
 
 Paths in the *Source* column are relative to
@@ -127,7 +134,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [matching/descriptor.rs](../crates/sfmtool-py/src/matching/descriptor.rs), [image.rs](../crates/sfmtool-py/src/matching/image.rs), [sweep.rs](../crates/sfmtool-py/src/matching/sweep.rs) | `descriptor_distance`, `find_best_descriptor_match`, `match_candidates_by_descriptor`, `match_image_pair_py`, `match_image_pairs_batch_py`, the `*_sweep_py` and `polar_mutual_best_match*_py` functions | [descriptor-matching.md](core/features/descriptor-matching.md) |
+| [matching/descriptor.rs](../crates/sfmtool-py/src/matching/descriptor.rs), [image.rs](../crates/sfmtool-py/src/matching/image.rs), [sweep.rs](../crates/sfmtool-py/src/matching/sweep.rs) | `descriptor_distance`, `find_best_descriptor_match`, `match_candidates_by_descriptor`, `match_image_pair`, `match_image_pairs_batch`, the `*_sweep*` and `polar_mutual_best_match*` functions | [descriptor-matching.md](core/features/descriptor-matching.md) |
 | [matching/cluster.rs](../crates/sfmtool-py/src/matching/cluster.rs) | `background_floor_clusters`, `background_floor_clusters_kdf`, `clusters_to_pair_matches`, `refine_cluster_patches` | [track-cluster-matching.md](core/features/track-cluster-matching.md), [cluster-patch-refinement.md](core/patch/cluster-patch-refinement.md) |
 | [matching/covisibility.rs](../crates/sfmtool-py/src/matching/covisibility.rs) | `ClusterCovisibility`, `SeedImageGroup`, `ClusterCovisibilitySeedImageGroups` | [cluster-covisibility.md](core/features/cluster-covisibility.md), [covisibility-selection.md](core/features/covisibility-selection.md) |
 
@@ -135,14 +142,14 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [analysis/core.rs](../crates/sfmtool-py/src/analysis/core.rs) | `estimate_alignment_rs`, `ransac_alignment_rs` | [reconstruction-alignment.md](core/analysis/reconstruction-alignment.md) |
-| | `find_point_correspondences_py`, `merge_points_and_tracks_py` | [point-correspondence.md](core/reconstruction/point-correspondence.md) |
+| [analysis/core.rs](../crates/sfmtool-py/src/analysis/core.rs) | `estimate_alignment`, `ransac_alignment` | [reconstruction-alignment.md](core/analysis/reconstruction-alignment.md) |
+| | `find_point_correspondences`, `merge_points_and_tracks` | [point-correspondence.md](core/reconstruction/point-correspondence.md) |
 | | `compute_narrow_track_mask` | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
-| | `filter_tracks_by_point_mask_py` | [xform-command.md](cli/reconstruction/xform/xform-command.md) |
-| | `apply_se3_to_camera_poses_py` | none |
+| | `filter_tracks_by_point_mask` | [xform-command.md](cli/reconstruction/xform/xform-command.md) |
+| | `apply_se3_to_camera_poses` | none |
 | [analysis/triangulation.rs](../crates/sfmtool-py/src/analysis/triangulation.rs), [point_or_bearing.rs](../crates/sfmtool-py/src/analysis/point_or_bearing.rs) | `triangulate_batch`, `fit_point_and_bearing_batch`, `bearing_score_batch`, `observed_rays` and the triangulation default constants | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
 | [analysis/epipolar.rs](../crates/sfmtool-py/src/analysis/epipolar.rs) | `epipolar_curves` | [epipolar-curves.md](core/camera/epipolar-curves.md) |
-| [analysis/image_pair_graph.rs](../crates/sfmtool-py/src/analysis/image_pair_graph.rs) | `build_covisibility_pairs_py`, `build_frustum_intersection_pairs_py` | [image-pair-graph.md](core/analysis/image-pair-graph.md) |
+| [analysis/image_pair_graph.rs](../crates/sfmtool-py/src/analysis/image_pair_graph.rs) | `build_covisibility_pairs`, `build_frustum_intersection_pairs` | [image-pair-graph.md](core/analysis/image-pair-graph.md) |
 | [analysis/keypoint_reach.rs](../crates/sfmtool-py/src/analysis/keypoint_reach.rs) | `keypoint_pairs_within_reach` | [keypoint-reach.md](core/analysis/keypoint-reach.md) |
 | [analysis/covered_by_finer.rs](../crates/sfmtool-py/src/analysis/covered_by_finer.rs) | `covered_by_finer` | [covered-by-finer.md](core/analysis/covered-by-finer.md) |
 | [analysis/observation_adjacency.rs](../crates/sfmtool-py/src/analysis/observation_adjacency.rs) | `build_observation_adjacency` | [observation-adjacency-graph.md](core/analysis/observation-adjacency-graph.md) |

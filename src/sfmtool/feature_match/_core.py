@@ -14,8 +14,8 @@ import pycolmap
 from ._geometric_filter import GeometricFilterConfig
 from ..camera.cameras import get_intrinsic_matrix
 from .._sfmtool.matching import (
-    match_image_pair_py as _rust_match_image_pair,
-    match_image_pairs_batch_py as _rust_match_image_pairs_batch,
+    match_image_pair as _rust_match_image_pair,
+    match_image_pairs_batch as _rust_match_image_pairs_batch,
 )
 
 

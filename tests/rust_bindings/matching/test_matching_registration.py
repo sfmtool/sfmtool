@@ -26,15 +26,15 @@ _EXPECTED = (
     "find_best_descriptor_match",
     "match_candidates_by_descriptor",
     # image.rs
-    "match_image_pair_py",
-    "match_image_pairs_batch_py",
+    "match_image_pair",
+    "match_image_pairs_batch",
     # sweep.rs
-    "match_one_way_sweep_py",
-    "match_one_way_sweep_geometric_py",
-    "mutual_best_match_sweep_py",
-    "polar_mutual_best_match_py",
-    "mutual_best_match_sweep_geometric_py",
-    "polar_mutual_best_match_geometric_py",
+    "match_one_way_sweep",
+    "match_one_way_sweep_geometric",
+    "mutual_best_match_sweep",
+    "polar_mutual_best_match",
+    "mutual_best_match_sweep_geometric",
+    "polar_mutual_best_match_geometric",
 )
 
 

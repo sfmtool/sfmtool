@@ -11,10 +11,10 @@ import pycolmap
 from sfmtool.feature_match import GeometricFilterConfig, match_image_pair
 from sfmtool.colmap.convention import flip_camera_pose_matrix_s
 from sfmtool._sfmtool.matching import (
-    mutual_best_match_sweep_py,
-    mutual_best_match_sweep_geometric_py,
-    polar_mutual_best_match_py,
-    polar_mutual_best_match_geometric_py,
+    mutual_best_match_sweep as _rust_mutual_best_match_sweep,
+    mutual_best_match_sweep_geometric as _rust_mutual_best_match_sweep_geometric,
+    polar_mutual_best_match as _rust_polar_mutual_best_match,
+    polar_mutual_best_match_geometric as _rust_polar_mutual_best_match_geometric,
 )
 
 
@@ -85,7 +85,7 @@ def _geometric_args(geometric):
     S-flipped (S-only, D3) — the same conversion ``match_registered_images``
     performs at the Rust boundary. Note it is *that* path this mirrors, not
     ``match_image_pair``, which passes its canonical poses to
-    ``match_image_pair_py`` unflipped and lets Rust convert.
+    the ``_sfmtool.matching`` binding unflipped and lets Rust convert.
     """
     aff1, aff2, K1, K2, pose1, pose2, _R_2d, config = geometric
     R1, t1 = flip_camera_pose_matrix_s(pose1.rotation.matrix(), pose1.translation)
@@ -130,9 +130,9 @@ def mutual_best_match_sweep(
     k1, d1 = _as_positions(keypoints1), _as_descriptors(descriptors1)
     k2, d2 = _as_positions(keypoints2), _as_descriptors(descriptors2)
     if geometric is None:
-        return mutual_best_match_sweep_py(k1, d1, k2, d2, window_size, threshold)
+        return _rust_mutual_best_match_sweep(k1, d1, k2, d2, window_size, threshold)
     (aff1, aff2, K1, K2, R1, R2, t1, t2), thresholds = _geometric_args(geometric)
-    return mutual_best_match_sweep_geometric_py(
+    return _rust_mutual_best_match_sweep_geometric(
         k1,
         d1,
         k2,
@@ -171,12 +171,12 @@ def polar_mutual_best_match(
     p2, d2 = _as_positions(positions2), _as_descriptors(descriptors2)
     f_arr = np.asarray(F, dtype=np.float64)
     if geometric is None:
-        result = polar_mutual_best_match_py(
+        result = _rust_polar_mutual_best_match(
             p1, d1, p2, d2, f_arr, window_size, threshold, min_radius
         )
     else:
         (aff1, aff2, K1, K2, R1, R2, t1, t2), thresholds = _geometric_args(geometric)
-        result = polar_mutual_best_match_geometric_py(
+        result = _rust_polar_mutual_best_match_geometric(
             p1,
             d1,
             p2,

@@ -74,9 +74,11 @@ def merge_reconstructions(
     # [5/7] Merge 3D points and tracks
     click.echo("\n[5/7] Merging 3D points and tracks...")
     step_start = time.perf_counter()
-    from .._sfmtool.analysis import merge_points_and_tracks_py
+    from .._sfmtool.analysis import (
+        merge_points_and_tracks as _rust_merge_points_and_tracks,
+    )
 
-    merge_result = merge_points_and_tracks_py(
+    merge_result = _rust_merge_points_and_tracks(
         reconstructions, point_correspondences, image_mapping
     )
     merged_points = {

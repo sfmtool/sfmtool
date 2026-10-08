@@ -14,6 +14,7 @@ use sfmtool_core::features::feature_match;
 /// Both keypoint arrays must already be sorted by Y coordinate.
 /// Returns list of (sorted_idx1, sorted_idx2, distance) tuples.
 #[pyfunction]
+#[pyo3(name = "match_one_way_sweep")]
 #[pyo3(signature = (sorted_kpts1, sorted_descs1, sorted_kpts2, sorted_descs2, window_size, threshold=None))]
 pub fn match_one_way_sweep_py(
     sorted_kpts1: PyReadonlyArray2<f64>,
@@ -52,6 +53,7 @@ pub fn match_one_way_sweep_py(
 /// Both keypoint arrays must already be sorted by Y coordinate.
 /// Returns list of (sorted_idx1, sorted_idx2, distance) tuples.
 #[pyfunction]
+#[pyo3(name = "match_one_way_sweep_geometric")]
 #[pyo3(signature = (sorted_kpts1, sorted_descs1, sorted_kpts2, sorted_descs2,
                      sorted_affines1, sorted_affines2,
                      k1, k2, r1, r2, t1, t2, window_size, threshold=None,
@@ -137,6 +139,7 @@ pub fn match_one_way_sweep_geometric_py(
 /// Takes unsorted keypoints, sorts internally, and returns mutual matches.
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples.
 #[pyfunction]
+#[pyo3(name = "mutual_best_match_sweep")]
 #[pyo3(signature = (keypoints1, descriptors1, keypoints2, descriptors2, window_size, threshold=None))]
 pub fn mutual_best_match_sweep_py(
     keypoints1: PyReadonlyArray2<f64>,
@@ -172,6 +175,7 @@ pub fn mutual_best_match_sweep_py(
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples, or None if
 /// epipoles are at infinity.
 #[pyfunction]
+#[pyo3(name = "polar_mutual_best_match")]
 #[pyo3(signature = (positions1, descriptors1, positions2, descriptors2, f_matrix, window_size, threshold=None, min_radius=10.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn polar_mutual_best_match_py(
@@ -220,6 +224,7 @@ pub fn polar_mutual_best_match_py(
 /// applies two-stage geometric filtering during matching.
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples.
 #[pyfunction]
+#[pyo3(name = "mutual_best_match_sweep_geometric")]
 #[pyo3(signature = (keypoints1, descriptors1, keypoints2, descriptors2, affines1, affines2,
                      k1, k2, r1, r2, t1, t2, window_size, threshold=None,
                      max_angle_diff=15.0, min_tri_angle=5.0, size_ratio_min=0.8, size_ratio_max=1.25))]
@@ -301,6 +306,7 @@ pub fn mutual_best_match_sweep_geometric_py(
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples, or None if
 /// epipoles are at infinity.
 #[pyfunction]
+#[pyo3(name = "polar_mutual_best_match_geometric")]
 #[pyo3(signature = (positions1, descriptors1, positions2, descriptors2, affines1, affines2,
                      f_matrix, k1, k2, r1, r2, t1, t2, window_size, threshold=None, min_radius=10.0,
                      max_angle_diff=15.0, min_tri_angle=5.0, size_ratio_min=0.8, size_ratio_max=1.25))]

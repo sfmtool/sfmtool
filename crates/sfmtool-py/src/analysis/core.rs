@@ -19,6 +19,7 @@ use crate::PySfmrReconstruction;
 ///
 /// Takes transform parameters and camera pose arrays, returns transformed poses.
 #[pyfunction]
+#[pyo3(name = "apply_se3_to_camera_poses")]
 pub fn apply_se3_to_camera_poses_py(
     py: Python<'_>,
     rotation_wxyz: PyReadonlyArray1<f64>,
@@ -131,8 +132,9 @@ pub fn compute_narrow_track_mask(
 /// Returns:
 ///     An ``Se3Transform`` (scale 1.0 when ``estimate_scale`` is False).
 #[pyfunction]
+#[pyo3(name = "estimate_alignment")]
 #[pyo3(signature = (source_points, target_points, rounds=1, keep_fraction=1.0, estimate_scale=true))]
-pub fn estimate_alignment_rs(
+pub fn estimate_alignment_py(
     source_points: PyReadonlyArray2<f64>,
     target_points: PyReadonlyArray2<f64>,
     rounds: usize,
@@ -162,8 +164,9 @@ pub fn estimate_alignment_rs(
 ///
 /// Returns boolean mask (N,).
 #[pyfunction]
+#[pyo3(name = "ransac_alignment")]
 #[pyo3(signature = (source_points, target_points, max_iterations=1000, threshold=0.1, min_sample_size=3, seed=42))]
-pub fn ransac_alignment_rs(
+pub fn ransac_alignment_py(
     py: Python<'_>,
     source_points: PyReadonlyArray2<f64>,
     target_points: PyReadonlyArray2<f64>,
@@ -196,6 +199,7 @@ pub fn ransac_alignment_rs(
 ///
 /// Returns (source_ids, target_ids) as two 1D uint32 numpy arrays.
 #[pyfunction]
+#[pyo3(name = "find_point_correspondences")]
 #[allow(clippy::too_many_arguments)]
 pub fn find_point_correspondences_py(
     py: Python<'_>,
@@ -243,6 +247,7 @@ pub fn find_point_correspondences_py(
 ///
 /// Returns (track_image_indexes, track_feature_indexes, track_point_indexes) as 1D uint32 arrays.
 #[pyfunction]
+#[pyo3(name = "filter_tracks_by_point_mask")]
 pub fn filter_tracks_by_point_mask_py(
     py: Python<'_>,
     points_to_keep_mask: PyReadonlyArray1<bool>,
@@ -288,6 +293,7 @@ pub fn filter_tracks_by_point_mask_py(
 ///     Dict with keys: positions, colors, errors, track_image_indexes,
 ///     track_feature_indexes, track_point_indexes.
 #[pyfunction]
+#[pyo3(name = "merge_points_and_tracks")]
 pub fn merge_points_and_tracks_py(
     py: Python<'_>,
     reconstructions: &Bound<'_, PyList>,
@@ -388,8 +394,8 @@ pub fn merge_points_and_tracks_py(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply_se3_to_camera_poses_py, m)?)?;
     m.add_function(wrap_pyfunction!(compute_narrow_track_mask, m)?)?;
-    m.add_function(wrap_pyfunction!(estimate_alignment_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(ransac_alignment_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_alignment_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ransac_alignment_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_point_correspondences_py, m)?)?;
     m.add_function(wrap_pyfunction!(merge_points_and_tracks_py, m)?)?;
     m.add_function(wrap_pyfunction!(filter_tracks_by_point_mask_py, m)?)?;

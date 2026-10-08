@@ -16,6 +16,7 @@ use sfmtool_core::features::feature_match;
 /// to the appropriate matching algorithm. Optionally applies geometric filtering.
 /// Returns list of (idx1, idx2, distance) tuples.
 #[pyfunction]
+#[pyo3(name = "match_image_pair")]
 #[pyo3(signature = (k1, k2, r1, r2, t1, t2, width1, height1, width2, height2,
                      positions1, descriptors1, positions2, descriptors2,
                      window_size, threshold=None, rectification_margin=50,
@@ -124,9 +125,10 @@ pub fn match_image_pair_py(
 
 /// Match features across multiple image pairs in parallel using Rayon.
 ///
-/// This is the batch version of `match_image_pair_py` that processes all pairs
+/// This is the batch version of `match_image_pair` that processes all pairs
 /// concurrently, releasing the GIL so Rayon threads can run in parallel.
 #[pyfunction]
+#[pyo3(name = "match_image_pairs_batch")]
 #[pyo3(signature = (pairs, intrinsics, rotations, translations, camera_indices,
                      positions_list, descriptors_list,
                      widths, heights, window_size, threshold, rectification_margin,

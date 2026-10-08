@@ -230,9 +230,9 @@ def estimate_alignment(
     if source_points.shape != target_points.shape or source_points.shape[0] < 2:
         raise ValueError("Need at least 2 matching points with same shape")
 
-    from .._sfmtool.analysis import estimate_alignment_rs
+    from .._sfmtool.analysis import estimate_alignment as _rust_estimate_alignment
 
-    return estimate_alignment_rs(
+    return _rust_estimate_alignment(
         source_points,
         target_points,
         rounds=rounds,

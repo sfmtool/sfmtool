@@ -10,7 +10,9 @@ import numpy as np
 
 from .._histogram_utils import print_histogram
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._sfmtool.analysis import find_point_correspondences_py
+from .._sfmtool.analysis import (
+    find_point_correspondences as _rust_find_point_correspondences,
+)
 
 
 def _find_pairwise_correspondences(
@@ -22,7 +24,7 @@ def _find_pairwise_correspondences(
     shared_a = np.array([s for s, _ in shared_images], dtype=np.uint32)
     shared_b = np.array([t for _, t in shared_images], dtype=np.uint32)
 
-    return find_point_correspondences_py(
+    return _rust_find_point_correspondences(
         recon_a.track_image_indexes.astype(np.uint32),
         recon_a.track_feature_indexes.astype(np.uint32),
         recon_a.track_point_indexes.astype(np.uint32),

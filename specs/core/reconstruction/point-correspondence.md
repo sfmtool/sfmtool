@@ -13,8 +13,8 @@ merged.
 
 The kernel lives in
 [point_correspondence.rs](../../../crates/sfmtool-core/src/reconstruction/point_correspondence.rs),
-bound as `sfmtool._sfmtool.analysis.find_point_correspondences_py` and
-`merge_points_and_tracks_py`
+bound as `sfmtool._sfmtool.analysis.find_point_correspondences` and
+`merge_points_and_tracks`
 ([analysis/core.rs](../../../crates/sfmtool-py/src/analysis/core.rs)). The Python
 side wraps it twice: [_point_correspondence.py](../../../src/sfmtool/_point_correspondence.py)
 for the pairwise finders, and
@@ -109,14 +109,14 @@ observations within an image.
 > Note: `merge/correspondences.py` still contains a pure-Python
 > `merge_points_and_tracks` — the superseded reference implementation of the
 > same algorithm. The live path (`merge/reconstructions.py`) calls the Rust
-> binding `merge_points_and_tracks_py`.
+> binding of the same name in `sfmtool._sfmtool.analysis`.
 
 ## Consumers
 
 | Consumer | Path |
 |----------|------|
 | `sfm align --method points` | `align/by_points.py` → pairwise finder → least-squares/RANSAC ([reconstruction-alignment.md](../analysis/reconstruction-alignment.md)) |
-| `sfm merge` | `merge/reconstructions.py` → grouping + `merge_points_and_tracks_py` → PnP pose refinement |
+| `sfm merge` | `merge/reconstructions.py` → grouping + the `merge_points_and_tracks` binding → PnP pose refinement |
 | `sfm xform --align-to` | `xform/_align_to.py` → pairwise finder → similarity fit |
 | `sfm compare` | `compare/_core.py` → pairwise finder (feature-index or coordinate-based) |
 

@@ -32,7 +32,7 @@ The alignment core lives in
 [ransac.rs](../../../crates/sfmtool-core/src/analysis/alignment/ransac.rs) and
 [reconstructions.rs](../../../crates/sfmtool-core/src/analysis/alignment/reconstructions.rs),
 with the two point-set estimators bound as
-`sfmtool._sfmtool.analysis.estimate_alignment_rs` and `ransac_alignment_rs`.
+`sfmtool._sfmtool.analysis.estimate_alignment` and `ransac_alignment`.
 Python drives it from `sfm align --method points`
 ([by_points.py](../../../src/sfmtool/align/by_points.py)) and the `sfm xform`
 operations `--align-to` / `--align-to-input`

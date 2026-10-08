@@ -280,7 +280,7 @@ rotation.
 | `window_size` | `30` | Candidates per window. Default of `match_image_pair` in [`_core.py`](../../../src/sfmtool/feature_match/_core.py) and of `sfm densify --sweep-window-size`. |
 | `threshold` | `None` | Maximum L2 descriptor distance; `None` accepts any nearest. `sfm densify --distance-threshold`. |
 | `rectification_margin` | `50` | Pixels beyond the image border an epipole must lie for the rectified sweep. Default in `_core.py`. |
-| `min_radius` | `10.0` | Pixels around the epipole excluded from the polar sweep. Fixed in `match_image_pair`; a keyword of `polar_mutual_best_match_py`. |
+| `min_radius` | `10.0` | Pixels around the epipole excluded from the polar sweep. Fixed in `match_image_pair`; a keyword of the `polar_mutual_best_match` binding. |
 | `max_angle_difference` | `15.0` | Degrees, orientation stage. |
 | `min_triangulation_angle` | `5.0` | Degrees; below it the size stage is skipped. |
 | `geometric_size_ratio_min` | `0.8` | Size stage lower bound. `sfm densify` sets it to `1 / --geometric-size-ratio-max`. |
@@ -294,10 +294,10 @@ The four filter defaults are `GeometricFilterConfig::default()` in
 
 `sfmtool._sfmtool.matching` exposes `descriptor_distance`,
 `find_best_descriptor_match`, `match_candidates_by_descriptor`,
-`match_image_pair_py`, `match_image_pairs_batch_py`, `match_one_way_sweep_py`,
-`match_one_way_sweep_geometric_py`, `mutual_best_match_sweep_py`,
-`mutual_best_match_sweep_geometric_py`, `polar_mutual_best_match_py` and
-`polar_mutual_best_match_geometric_py`. They take NumPy arrays of shape
+`match_image_pair`, `match_image_pairs_batch`, `match_one_way_sweep`,
+`match_one_way_sweep_geometric`, `mutual_best_match_sweep`,
+`mutual_best_match_sweep_geometric`, `polar_mutual_best_match` and
+`polar_mutual_best_match_geometric`. They take NumPy arrays of shape
 `(N, 2)` for positions, `(N, desc_len)` `uint8` for descriptors and `(N, 4)` for
 affine shapes, and the counts come from the array shapes. Python code calls
 `sfmtool.feature_match.match_image_pair`, which takes `pycolmap.Rigid3d` poses

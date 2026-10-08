@@ -11,6 +11,7 @@ use sfmtool_core::analysis::image_pair_graph;
 /// Build covisibility pairs from track observations.
 /// Returns list of (i, j, count) tuples sorted by count descending.
 #[pyfunction]
+#[pyo3(name = "build_covisibility_pairs")]
 #[pyo3(signature = (quaternions_wxyz, track_point_indexes, track_image_indexes, angle_threshold_deg=90.0))]
 pub fn build_covisibility_pairs_py(
     quaternions_wxyz: PyReadonlyArray2<f64>,
@@ -36,6 +37,7 @@ pub fn build_covisibility_pairs_py(
 /// Build frustum intersection pairs using Monte Carlo volume estimation.
 /// Returns list of (i, j, volume) tuples sorted by volume descending.
 #[pyfunction]
+#[pyo3(name = "build_frustum_intersection_pairs")]
 #[pyo3(signature = (
     quaternions_wxyz, translations,
     fx, fy, cx, cy, widths, heights,

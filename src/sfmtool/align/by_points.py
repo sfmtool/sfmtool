@@ -63,9 +63,9 @@ def estimate_alignment_from_points(
             np.percentile(distances_for_stats, ransac_percentile)
         )
 
-        from .._sfmtool.analysis import ransac_alignment_rs
+        from .._sfmtool.analysis import ransac_alignment
 
-        inlier_mask = ransac_alignment_rs(
+        inlier_mask = ransac_alignment(
             source_positions,
             target_positions,
             max_iterations=ransac_iterations,

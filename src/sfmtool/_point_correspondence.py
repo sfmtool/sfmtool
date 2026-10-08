@@ -8,7 +8,9 @@ from collections import defaultdict
 import numpy as np
 
 from ._sfmtool.reconstruction import SfmrReconstruction
-from ._sfmtool.analysis import find_point_correspondences_py
+from ._sfmtool.analysis import (
+    find_point_correspondences as _rust_find_point_correspondences,
+)
 from ._sfmtool.io import read_sift_partial
 from .sift.file import get_sift_path_from_recon
 
@@ -59,7 +61,7 @@ def find_point_correspondences(
     shared_src = np.array([s for s, _ in shared_images], dtype=np.uint32)
     shared_tgt = np.array([t for _, t in shared_images], dtype=np.uint32)
 
-    source_ids, target_ids = find_point_correspondences_py(
+    source_ids, target_ids = _rust_find_point_correspondences(
         source_recon.track_image_indexes.astype(np.uint32),
         source_recon.track_feature_indexes.astype(np.uint32),
         source_recon.track_point_indexes.astype(np.uint32),

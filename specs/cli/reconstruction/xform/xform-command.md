@@ -953,7 +953,7 @@ which returns a new reconstruction:
 A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
 performs the same mask-filter-and-remap on bare track columns (no
 reconstruction object). It is exposed to Python as
-`analysis.filter_tracks_by_point_mask_py` but the xform pipeline uses the
+`analysis.filter_tracks_by_point_mask` but the xform pipeline uses the
 reconstruction-level `filter_points_by_mask` instead.
 
 ## Usage Examples
