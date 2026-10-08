@@ -284,9 +284,12 @@ pub(in crate::camera::distortion) fn equidistant_fisheye_to_ray(
 /// stops being trustworthy as it approaches its peak; from `r_d = 90°` it
 /// blends toward the identity (`θ = r_d`) ray, and past `r_d = 100°` it hands
 /// that ray back outright. With a single
-/// coefficient there is nothing to distrust — `θ_d = θ·(1 + k1·θ²)` is
-/// monotone over any field this model is used on, and the recovery is the
-/// exact inverse at every angle — while the blend would DROP the `k1` term
+/// coefficient there is no high-order polynomial to distrust —
+/// `θ_d = θ·(1 + k1·θ²)` is monotone up to its peak (every angle for
+/// `k1 > 0`, `θ = 1/√(−3·k1)` for `k1 < 0`, the bound
+/// `crate::camera::report::trustworthy_max_theta_deg` reports), and the
+/// recovery is the exact inverse at every angle below it — while the blend
+/// would DROP the `k1` term
 /// exactly where it is largest: a 105° rim at `k1 = 0.02` comes back 6° off,
 /// which is a ray, not a rounding error. This is the inverse the bundle
 /// adjustment's retriangulation and direction re-estimation read.

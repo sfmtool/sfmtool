@@ -104,7 +104,7 @@ fn document(layout: &WindowLayout) -> Value {
     serde_json::from_str(&layout.to_json()).unwrap_or(Value::Null)
 }
 
-/// One entry per panel, always all seven: whether it is docked anywhere, and
+/// One entry per panel in `Tab::ALL`: whether it is docked anywhere, and
 /// whether it is the front tab of its node.
 ///
 /// A panel alone in a node is active; a closed one is not.

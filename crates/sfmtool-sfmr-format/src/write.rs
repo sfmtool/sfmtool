@@ -157,13 +157,14 @@ impl Default for WriteOptions {
 /// absent and filled from the recomputed mean-viewing normals.
 const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 
-/// Merge the stored normals with the geometry-recomputed mean-viewing ones,
-/// *keeping* every stored normal that is present and filling only the missing
-/// (zero) rows from the recompute. Falls back to the recomputed set wholesale if
-/// the stored array's shape doesn't match (e.g. a dict-built `SfmrData` that
-/// never carried normals). Returns a borrow when no copy is needed.
-/// Whether any row of `normals` is the zero vector, the value that stands for
-/// a normal nothing has set.
+/// Whether a stored normal row counts as missing: within
+/// [`MISSING_NORMAL_NORM_SQ`] of the zero vector.
+fn is_missing_normal(x: f32, y: f32, z: f32) -> bool {
+    x * x + y * y + z * z <= MISSING_NORMAL_NORM_SQ
+}
+
+/// Whether any row of `normals` is missing (see [`is_missing_normal`]), the
+/// rows [`merge_preserving_normals`] fills.
 ///
 /// Short-circuits, so the common answer on a value read from a file -- that
 /// every normal is present, because the write that produced it filled them --
@@ -172,9 +173,14 @@ fn has_missing_normal(normals: &ndarray::Array2<f32>) -> bool {
     normals
         .rows()
         .into_iter()
-        .any(|row| row.iter().all(|&c| c == 0.0))
+        .any(|row| is_missing_normal(row[0], row[1], row[2]))
 }
 
+/// Merge the stored normals with the geometry-recomputed mean-viewing ones,
+/// *keeping* every stored normal that is present and filling only the missing
+/// (zero) rows from the recompute. Falls back to the recomputed set wholesale if
+/// the stored array's shape doesn't match (e.g. a dict-built `SfmrData` that
+/// never carried normals). Returns a borrow when no copy is needed.
 fn merge_preserving_normals<'a>(
     stored: &'a ndarray::Array2<f32>,
     recomputed: &'a ndarray::Array2<f32>,
@@ -184,10 +190,7 @@ fn merge_preserving_normals<'a>(
     }
     let mut merged: Option<ndarray::Array2<f32>> = None;
     for i in 0..stored.nrows() {
-        let x = stored[[i, 0]];
-        let y = stored[[i, 1]];
-        let z = stored[[i, 2]];
-        if x * x + y * y + z * z <= MISSING_NORMAL_NORM_SQ {
+        if is_missing_normal(stored[[i, 0]], stored[[i, 1]], stored[[i, 2]]) {
             let out = merged.get_or_insert_with(|| stored.clone());
             out[[i, 0]] = recomputed[[i, 0]];
             out[[i, 1]] = recomputed[[i, 1]];

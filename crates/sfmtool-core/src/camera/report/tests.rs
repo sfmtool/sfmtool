@@ -844,7 +844,9 @@ fn trustworthy_domain_is_decided_for_every_registered_model() {
     }
 
     // Live coefficients: exactly the four polynomial fisheye models are
-    // bounded, and the bound is a real angle rather than a placeholder.
+    // bounded, and the bound is a real angle rather than a placeholder. The
+    // corpus's SIMPLE_RADIAL_FISHEYE has `k1 > 0`, so it never folds; its
+    // `k1 < 0` bound is tested on its own below.
     let distorted = distorted_cameras(F_FISH_WIDE);
     let mut seen_bounded: Vec<&str> = Vec::new();
     for cam in &distorted {
@@ -1272,4 +1274,29 @@ fn forward_fold_is_the_peak_of_the_radius() {
     assert!(radius(fold + 1.0) < radius(fold));
     // The blend starts before the fold, so the trusted bound is the smaller.
     assert!(trustworthy_max_theta_deg(&cam).unwrap() < fold);
+}
+
+/// `SIMPLE_RADIAL_FISHEYE` has no wide-angle blend, so its trusted bound is its
+/// fold alone: with `k1 < 0`, `θ·(1 + k1·θ²)` peaks at `θ = 1/√(−3·k1)` and
+/// that is the bound; with `k1 > 0` it never peaks and there is none.
+#[test]
+fn simple_radial_fisheye_is_bounded_at_its_fold() {
+    let srf = |k1: f64| {
+        cam(CameraModel::SimpleRadialFisheye {
+            focal_length: F_FISH_WIDE,
+            principal_point_x: CX,
+            principal_point_y: CY,
+            radial_distortion_k1: k1,
+        })
+    };
+    let folding = srf(-0.1);
+    let peak_deg = (1.0 / (0.3_f64).sqrt()).to_degrees();
+    let fold = forward_fold_deg(&folding).expect("k1 < 0 folds");
+    assert_relative_eq!(fold, peak_deg, epsilon = 1e-6);
+    assert_eq!(trustworthy_max_theta_deg(&folding), Some(fold));
+
+    // A fold past the sweep's 180° is no bound inside it.
+    assert_eq!(trustworthy_max_theta_deg(&srf(-0.01)), None);
+    assert_eq!(trustworthy_max_theta_deg(&srf(0.05)), None);
+    assert_eq!(forward_fold_deg(&srf(0.05)), None);
 }

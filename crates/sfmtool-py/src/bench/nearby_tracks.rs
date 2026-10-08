@@ -194,7 +194,8 @@ fn set_option(
 ///
 /// Raises:
 ///     ValueError: the image or pixel names no place, an input does not
-///         match the reconstruction, or an option is unknown.
+///         match the reconstruction, an option is unknown, or ``label`` is
+///         empty, all whitespace or holds a control character.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (edited, images, sources, image, pixel, *, options = None, label = None,

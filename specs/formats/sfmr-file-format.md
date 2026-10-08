@@ -143,26 +143,15 @@ world data:       X_colmap = Wᵀ · X_sfmr
 sensor / relative: R_colmap = S · R_sfmr · S         t_colmap = S · t_sfmr   (W cancels)
 ```
 
-**Invariants.** Two consequences that internal code relies on:
-
-- **Pixel-space epipolar geometry is unchanged.** Fundamental / essential /
-  homography matrices stored in `.matches` files and COLMAP databases relate
-  *pixels*, which do not move, so they cross the boundary verbatim. Only code
-  that *derives* `E`/`F` from stored poses plus `K` must first map the poses
-  back to the OpenCV optical frame — equivalently, conjugate by `S`, since
-  `E' = S · E · S` (`S` is a rotation, so `[S·t]× = S·[t]×·S`).
-- **Internal round trips need only `S`.** When a pipeline exports to
-  pycolmap/COLMAP and re-imports its own output within one operation (bundle
-  adjust, densify, merge PnP, DB-mediated solves), applying `S` on the camera
-  frames both ways and leaving the world frame untouched is self-consistent;
-  `W` is reserved for *external* import/export so those round trips stay
-  stable. World-space geometry that never touches a camera axis (camera
-  centres `C = −Rᵀ·t`, triangulation, least-squares alignment, kd-trees, patch
-  `u × v` normals) is invariant under `W` and needs no per-site change.
+**Pixel-space epipolar geometry is unchanged.** Fundamental / essential /
+homography matrices stored in `.matches` files and COLMAP databases relate
+*pixels*, which do not move, so they cross the boundary verbatim. Only code
+that *derives* `E`/`F` from stored poses plus `K` must first map the poses
+back to the OpenCV optical frame — equivalently, conjugate by `S`, since
+`E' = S · E · S` (`S` is a rotation, so `[S·t]× = S·[t]×·S`).
 
 > **Migration note.** This convention was formalized after the format was
-> already in use; files written by earlier sfmtool releases (format
-> versions ≤ 4) hold COLMAP-convention data. See
+> already in use; files of format versions ≤ 4 hold COLMAP-convention data. See
 > [Versioning and Migration](#versioning-and-migration).
 
 ## File Structure
@@ -321,9 +310,10 @@ JSON structure describing the reconstruction:
   is absent. A reader takes it from whichever entry the file carries.
 - `image_count`: Number of registered images in reconstruction
 - `point_count`: Number of points (finite points and points at infinity combined)
-- `infinity_point_count`: Number of points at infinity (rows of `positions_xyzw`
-  with `w = 0`). Derivable from the points array, but stored here so a consumer
-  can read the finite/infinity split without decompressing that array. Must be
+- `infinity_point_count`: (version 2+; read as `0` when absent) Number of
+  points at infinity (rows of `positions_xyzw` with `w = 0`). Derivable from
+  the points array, but stored here so a consumer can read the finite/infinity
+  split without decompressing that array. Must be
   `0` when no points are at infinity.
 - `observation_count`: Total number of 2D-3D correspondences
 - `camera_count`: Number of unique camera intrinsics
@@ -856,13 +846,12 @@ Present exactly when `images/metadata.json`'s `has_thumbnails` is `true`:
 - **Format**: Row-major RGB data. For each image, 128 rows of 128 pixels, each pixel 3 bytes [R, G, B] in range [0, 255]
 - **Dimension order**: `(image_index, y, x, channel)` — y is the row (top-to-bottom), x is the column (left-to-right)
 - **Size**: Fixed 128×128 square, regardless of the source image aspect ratio. Source images are resized to fill the square (stretching if non-square). Consumers restore the correct aspect ratio at display time using the camera intrinsics width/height
-- **Resize method**: Area-averaging (OpenCV `INTER_AREA`), inherited from the
-  `.sift` these are copied from — all four producers (the colmap, opencv and
-  sfmtool extractors, and `sfm undistort`) use it. No producer uses bilinear
-  interpolation, so a reader that compares a row against its own resize must
-  use area averaging.
+- **Resize method**: Area averaging, each output pixel the coverage-weighted
+  mean of the source pixels under it. A conforming writer resizes by area
+  averaging, never by bilinear interpolation, so a reader that compares a row
+  against its own resize must use area averaging.
 - **Purpose**: In a file that carries the column, enables instant thumbnail display in viewers without requiring access to the workspace source images. A file that omits it has traded that convenience for size.
-- **Source**: In a file that carries the column, a producer that reads `.sift` files copies each image's `thumbnail_y_x_rgb.128.128.3.uint8.zst` during `.sfmr` creation, avoiding re-reading and re-downscaling the source images. A producer that builds the rows from the photographs decodes each one without applying its orientation tag and resizes it by the method above, which gives the same bytes the `.sift` holds.
+- **Source**: In a file that carries the column, a producer that reads `.sift` files copies each image's `thumbnail_y_x_rgb.128.128.3.uint8.zst` during `.sfmr` creation, avoiding re-reading and re-downscaling the source images. A producer that builds the rows from the photographs decodes each one without applying its orientation tag and resizes it by the method above; with the same resize implementation the `.sift` writer used, that gives the same bytes the `.sift` holds.
 
 What the column's presence asserts:
 
@@ -1110,7 +1099,13 @@ Per-point surface normals.
 - **Shape**: `(N, 3)` where N = point_count
 - **Data type**: `float32` (little-endian)
 - **Format**: [x, y, z] unit normal vectors in world coordinate system. Rows for
-  `w = 0` points are `(0, 0, 0)`.
+  `w = 0` points are `(0, 0, 0)`. A row for a finite point is a unit vector, or
+  `(0, 0, 0)` when the file has no normal for that point, for example when the
+  directions from the point to the cameras that observe it cancel out. The
+  zero row is the only marker of a missing normal: a reader treats it as "no
+  normal", never as a direction. A writer may replace a zero row of a finite
+  point with a normal it derives from the geometry, and keeps every unit-vector
+  row as it was given.
 - **Optional** (version 3+): present only when `points3d/metadata.json`'s
   `has_normals` is `true`. A reconstruction may carry no normals, in which case
   this array is absent. Versions 1 and 2 always include it.
@@ -1140,11 +1135,8 @@ Per-point confidence in the stored normal.
 - **Optional** (version 5+): present only when `points3d/metadata.json`'s
   `has_normal_confidence` is `true`. An absent array means **no confidence
   information** — not "all confident". Files of versions 1–4 never carry it.
-- **Writer responsibility**: the array passes through the writer untouched;
-  a writer that synthesizes or replaces normals (e.g. the mean-viewing
-  fill-in for rows the input left zero) and also supplies this array is
-  responsible for keeping the two coherent. The built-in writer does not
-  invent confidence values for normals it fills in.
+- **Writer responsibility**: a writer that synthesizes or replaces normals
+  and also writes this array is responsible for keeping the two coherent.
 
 **Why it exists**: a placeholder normal is bit-indistinguishable from a fitted
 one in `normals_xyz`. Downstream passes that re-fit, filter, or render normals
@@ -1707,10 +1699,42 @@ once, under [Content Hash](#2-content-hash-content_hashjsonzst).
 
 ### Verification Process
 
+A verifier checks both the hashes and the structural rules a hash cannot see.
+For the hashes:
+
 1. Decompress each file and hash the raw uncompressed bytes (do NOT re-serialize JSON)
 2. Recompute section and overall hashes as described above
-3. Compare with stored values in `content_hash.json.zst`
+3. Compare with stored values in `content_hash.json.zst`. A version 10+ file
+   must store `derived_xxh128`.
 4. If any hash mismatches, file is corrupted
+
+For the structure, a file fails verification when:
+
+- its `version` is newer than the verifier knows (it reports that and checks
+  nothing more), `feature_source` is not one of its two values, or
+  `world_space_unit` is not one of the five units;
+- a `frames/` section is present without a `rigs/` section;
+- the `has_*` flags in `points3d/metadata.json` break a presence rule between
+  the optional per-point columns and `feature_source`;
+- in a version 2+ file, `positions_xyzw` is not `point_count` rows of 32 bytes,
+  a row holds a NaN or infinite value, a `w = 0` row has a zero direction, or
+  the number of `w = 0` rows differs from `infinity_point_count`;
+- `has_point_constraints` is set without a readable `point_constraint_names`
+  legend, or the constraint triple has a column that is not `point_count` rows
+  long or breaks a rule of
+  [Per-point constraints](#per-point-constraints-optional-version-7);
+- the tracks are not sorted by `(point_indexes, image_indexes)`, an
+  `observation_counts` entry is below `1`, or the counts do not sum to
+  `observation_count`;
+- `has_feature_indexes` in `tracks/metadata.json` disagrees with
+  `feature_source`, or an `embedded_patches` file sets `has_keypoints_xy` to
+  `false`;
+- `keypoints_xy` is not `observation_count` rows of 8 bytes, or a row is not
+  finite or lies outside `[0, width) × [0, height)` of its image's camera, the
+  constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states.
+
+A verifier reports every failure it finds rather than stopping at the first; a
+file whose entries it cannot read at all is an error, not a list of failures.
 
 ## Implementations
 
@@ -1755,11 +1779,23 @@ describes. Other parts of this spec are implemented by:
 - The keypoint affine shape of an `embedded_patches` observation:
   `SfmrReconstruction::observation_affine_shape`
   ([source](../../crates/sfmtool-core/src/reconstruction/data/affine_shape.rs)).
+- Thumbnails: the colmap, opencv and sfmtool SIFT extractors and
+  `sfm undistort` all resize with OpenCV's `INTER_AREA`, and a `.sfmr` writer
+  that reads `.sift` files copies their rows. `sfm xform --add-thumbnails`
+  builds rows from the photographs through the extractors' own resize, so they
+  match the `.sift` rows byte for byte; `sfmtool-core`'s `resize_area` averages
+  the same way but does not match `INTER_AREA` bit for bit.
+- Normals and their confidence: `write_sfmr` fills each zero row of
+  `normals_xyz` from mean-viewing normals it recomputes from the geometry, and
+  passes `normal_confidence` through untouched. It never invents or adjusts a
+  confidence value, not even for a normal it fills in, so a caller that
+  supplies both keeps them coherent.
 - World orientation: `sfm xform --rotate` and `--align-to` refine it after a
   solve.
 - `world_space_unit`: `sfm xform --scale-by-measurements` scales a
-  reconstruction and sets the field. The five values are
-  `sfmtool_sfmr_format::WORLD_SPACE_UNITS`.
+  reconstruction and sets the field. The five units and their lengths in
+  metres are `sfmtool_sfmr_format::WORLD_SPACE_UNITS`, re-exported by
+  `sfmtool-core`, with `world_space_unit_in_metres` to look one up.
 - The presence rules between the optional per-point pieces and
   `feature_source`: `write_sfmr`, `read_sfmr` and `verify_sfmr` apply the one
   predicate in [`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)
@@ -1768,6 +1804,11 @@ describes. Other parts of this spec are implemented by:
   broken rule; the verifier lists each one. `read_sfmr_metadata` reads the
   top-level metadata only and checks neither these rules nor
   `world_space_unit`.
+- The fill-in of missing normals: `write_sfmr` replaces each `normals_xyz` row
+  whose squared length is at most `1e-6` with the unit vector from the point
+  toward the mean of its observing camera centres, leaving the row zero when
+  the point lies at that mean or is at infinity. The tolerance treats a
+  near-zero row as the zero row, which a conforming file does not hold.
 
 The conversions between the canonical convention and COLMAP's, given in
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary),
@@ -1776,6 +1817,19 @@ are implemented once, in
 and bound for Python as `sfmtool._sfmtool.geometry`
 ([bindings](../../crates/sfmtool-py/src/geometry/convention.rs)), with wrappers in
 [`sfmtool.colmap.convention`](../../src/sfmtool/colmap/convention.py).
+
+Operations that export to pycolmap/COLMAP and re-import their own output within
+one call (bundle adjust, densify, merge PnP, DB-mediated solves) apply only `S`
+on the camera frames both ways and leave the world frame untouched, which is
+self-consistent; `W` is applied only on *external* import and export, so those
+round trips stay stable. World-space geometry that never touches a camera axis
+(camera centres `C = −Rᵀ·t`, triangulation, least-squares alignment, kd-trees,
+patch `u × v` normals) is invariant under `W` and needs no per-site change.
+
+The viewer accepts a pasted [Point ID](#point-id-portable-3d-point-references)
+in `Go ▸ Go to Point…` (Ctrl/Cmd+G) and selects that point, switching to the
+reconstruction the hash names when several are loaded
+([goto-point.md](../gui/goto-point.md)).
 
 ## Point ID: Portable 3D Point References
 
@@ -1803,11 +1857,6 @@ verify that all points come from the expected reconstruction and report a clear
 error if the `.sfmr` file has changed since the constraints were written. The
 double-click-selectable format makes it easy to pick out individual IDs when
 editing these files in a text editor or terminal.
-
-The round trip closes in the viewer: `Go ▸ Go to Point…` (Ctrl/Cmd+G) accepts a
-pasted ID and selects that point, switching to the reconstruction the hash names
-when several are loaded. See
-[goto-point.md](../gui/goto-point.md).
 
 ### Format
 
@@ -1913,16 +1962,22 @@ the physical unit of 3D coordinates (point positions and camera translations) in
 |-------|----------|------|-------------|
 | `world_space_unit` | No | string | Physical unit of 3D world-space coordinates. One of: `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`. |
 
-These five strings are the only values the field takes. A writer refuses any
+The field is defined in every version (1+), so a file of any version may carry
+it. These five strings are the only values the field takes. A writer refuses any
 other value, and a reader and a verifier refuse a file that carries one.
 
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
 solve.
 
-The five units and their lengths in metres are
-[`WORLD_SPACE_UNITS`](../../crates/sfmtool-sfmr-format/src/types.rs) (with
-`world_space_unit_in_metres` to look one up), re-exported by `sfmtool-core`, so
-a Rust consumer converting between them reads the same table.
+The length of one unit in metres:
+
+| `world_space_unit` | Metres |
+|--------------------|--------|
+| `"mm"` | 0.001 |
+| `"cm"` | 0.01 |
+| `"m"` | 1 |
+| `"in"` | 0.0254 |
+| `"ft"` | 0.3048 |
 
 **Semantics:**
 
@@ -2065,59 +2120,6 @@ otherwise. It does not recompute or rewrite a version 7 file's stored hashes, so
 a version 7 file keeps the digest it was written with. Saving it again writes
 the current version, with a different `content_xxh128`.
 
-### Version 1 → Version 2 (history)
-
-Version 2 replaced the version 1 point representation with the unified
-homogeneous model described in [Points3D](#8-points3d). The differences:
-
-| Version 1 | Version 2 |
-|-----------|-----------|
-| `points3d/positions_xyz.{N}.3.float64.zst` — Euclidean `(x, y, z)` | `points3d/positions_xyzw.{N}.4.float64.zst` — homogeneous `(x, y, z, w)` |
-| `tracks/points3d_indexes.{M}.uint32.zst` | `tracks/point_indexes.{M}.uint32.zst` |
-| metadata `points3d_count` | metadata `point_count` |
-| (no infinity points) | metadata `infinity_point_count` |
-| `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
-
-### Version 2 → Version 3
-
-Version 3 renames the per-point normals array, makes it optional, and adds the
-optional per-point patch frame (all stored in `points3d/`). The differences:
-
-| Version 2 | Version 3 |
-|-----------|-----------|
-| `points3d/estimated_normals_xyz.{N}.3.float32.zst` (always present) | `points3d/normals_xyz.{N}.3.float32.zst` (optional, flagged by `has_normals`) |
-| (no patch data) | optional [per-point patch frame](#per-point-patch-frame-optional-version-3) (`points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) |
-
-The `points3d/` archive directory and the `points3d_xxh128` content-hash field
-keep their original names across all versions; the patch-frame files, when
-present, are part of the points3d section and its hash.
-
-**Migration is mechanical and lossless.** A version 2 file upgrades to the
-version 3 model by reading `estimated_normals_xyz` as `normals_xyz` (the bytes
-are identical; versions 1 and 2 always carry normals, so `has_normals` is
-effectively `true`); it carries no patch data, so the patch-frame files are
-absent.
-
-### Version 3 → Version 4
-
-Version 4 adds the `feature_source` discriminator and the `embedded_patches`
-observation mode (see [Observation source](#observation-source-version-4)). The
-differences:
-
-| Version 3 | Version 4 |
-|-----------|-----------|
-| (implicitly SIFT-referenced) | top-level `feature_source` ∈ {`"sift_files"`, `"embedded_patches"`} |
-| `tracks/feature_indexes` (always present) | present in `sift_files`; replaced by `tracks/keypoints_xy` in `embedded_patches` |
-| `images/feature_tool_hashes`, `images/sift_content_hashes` (always present) | present in `sift_files`; replaced by `images/image_file_hashes` in `embedded_patches` |
-| `tracks/metadata.json` `{observation_count}` | adds `has_feature_indexes`, `has_keypoints_xy` |
-
-**Migration is mechanical and lossless.** A version 1–3 file *is* a `sift_files`
-reconstruction: read it with `feature_source = "sift_files"`,
-`has_feature_indexes = true`, `has_keypoints_xy = false`. A `sift_files` v4 file
-is byte-equivalent to a v3 file apart from the `version` / `feature_source`
-metadata keys and the new `tracks/metadata.json` `has_*` keys.
-`embedded_patches` is a new mode with no v3 equivalent.
-
 ### Version 6 → Version 7
 
 | Change | Detail |
@@ -2171,6 +2173,64 @@ in a pure gauge rotation of the world (a rigid transform, scale 1, so any check
 that compares point clouds sees nothing wrong) while the second `S` cancels the
 camera flip and leaves every camera facing backwards, putting every point behind
 its camera.
+
+### Version 3 → Version 4
+
+Version 4 adds the `feature_source` discriminator and the `embedded_patches`
+observation mode (see [Observation source](#observation-source-version-4)). The
+differences:
+
+| Version 3 | Version 4 |
+|-----------|-----------|
+| (implicitly SIFT-referenced) | top-level `feature_source` ∈ {`"sift_files"`, `"embedded_patches"`} |
+| `tracks/feature_indexes` (always present) | present in `sift_files`; replaced by `tracks/keypoints_xy` in `embedded_patches` |
+| `images/feature_tool_hashes`, `images/sift_content_hashes` (always present) | present in `sift_files`; replaced by `images/image_file_hashes` in `embedded_patches` |
+| `tracks/metadata.json` `{observation_count}` | adds `has_feature_indexes`, `has_keypoints_xy` |
+
+**Migration is mechanical and lossless.** A version 1–3 file *is* a `sift_files`
+reconstruction: read it with `feature_source = "sift_files"`,
+`has_feature_indexes = true`, `has_keypoints_xy = false`. A `sift_files` v4 file
+is byte-equivalent to a v3 file apart from the `version` / `feature_source`
+metadata keys and the new `tracks/metadata.json` `has_*` keys.
+`embedded_patches` is a new mode with no v3 equivalent.
+
+### Version 2 → Version 3
+
+Version 3 renames the per-point normals array, makes it optional, and adds the
+optional per-point patch frame (all stored in `points3d/`). The differences:
+
+| Version 2 | Version 3 |
+|-----------|-----------|
+| `points3d/estimated_normals_xyz.{N}.3.float32.zst` (always present) | `points3d/normals_xyz.{N}.3.float32.zst` (optional, flagged by `has_normals`) |
+| (no patch data) | optional [per-point patch frame](#per-point-patch-frame-optional-version-3) (`points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) |
+
+The `points3d/` archive directory and the `points3d_xxh128` content-hash field
+keep their original names across all versions; the patch-frame files, when
+present, are part of the points3d section and its hash.
+
+**Migration is mechanical and lossless.** A version 2 file upgrades to the
+version 3 model by reading `estimated_normals_xyz` as `normals_xyz` (the bytes
+are identical; versions 1 and 2 always carry normals, so `has_normals` is
+effectively `true`); it carries no patch data, so the patch-frame files are
+absent.
+
+### Version 1 → Version 2 (history)
+
+Version 2 replaced the version 1 point representation with the unified
+homogeneous model described in [Points3D](#8-points3d). The differences:
+
+| Version 1 | Version 2 |
+|-----------|-----------|
+| `points3d/positions_xyz.{N}.3.float64.zst` — Euclidean `(x, y, z)` | `points3d/positions_xyzw.{N}.4.float64.zst` — homogeneous `(x, y, z, w)` |
+| `tracks/points3d_indexes.{M}.uint32.zst` | `tracks/point_indexes.{M}.uint32.zst` |
+| metadata `points3d_count` | metadata `point_count` |
+| (no infinity points) | metadata `infinity_point_count` |
+| `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
+
+**Migration is mechanical and lossless.** Every version 1 point is finite, so a
+reader upgrades a version 1 file by appending `w = 1` to each `positions_xyz`
+row, reads `tracks/points3d_indexes` as `tracks/point_indexes` and both
+`points3d_count` keys as `point_count`, and takes `infinity_point_count` as `0`.
 
 ## Version History
 
