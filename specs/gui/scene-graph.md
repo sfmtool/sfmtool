@@ -375,7 +375,7 @@ fixed-height for virtualization.
   ([background-tasks.md](background-tasks.md)): a `(u, v)` frame per point from
   its mean viewing direction, each observation's `.sift` keypoint carried
   inline, each image's identity hash read from the `.sift` metadata, and a
-  render-only bitmap fuse from readable photographs, with no photometric
+  render-only pass that renders the patch bitmaps from readable photographs, with no photometric
   adaptation
   ([sift-to-patch-reconstruction.md](../core/patch/sift-to-patch-reconstruction.md)).
   It is **live only on a node whose observations are `sift_files` and that

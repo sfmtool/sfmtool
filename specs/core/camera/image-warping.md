@@ -707,7 +707,7 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
   from the photographs: it scores them from the fronto-parallel cache, whose
   base tiles are rendered with plain bilinear, so the sampler reaches only the
   final scoring of the starting normal and the search's survivors, the
-  confidence stencil and the representative bitmap. With `CacheMode::Off` it
+  confidence stencil and the stored bitmap. With `CacheMode::Off` it
   reaches every candidate. The localizer and the sub-pixel refiner choose once
   per view, at its seed keypoint, since their tiles only slide in the patch's
   plane.
@@ -719,7 +719,7 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
   The batches that render views (`refine_patch_cloud_normals`,
   `select_patch_cloud_views`, `localize_patch_cloud_keypoints`,
   `refine_patch_cloud_keypoints`, `validate_patch_cloud_member_coherence` and
-  `fuse_patch_cloud_bitmaps`) take a `&Progress`, count `patches`, poll for
+  `render_patch_cloud_bitmaps`) take a `&Progress`, count `patches`, poll for
   cancellation before each patch and return `Cancelled` when it is set, rather
   than the patches they finished; normal refinement then leaves the cloud as
   it was. The bench's `evaluate` and `fit` work on one track; they take a
@@ -821,10 +821,11 @@ read.
   axis, `BilinearMip` reads a level clamped at the top of the pyramid and
   aliases, and the anisotropic sampler raises the ZNCC by 0.059.
 - **A view the rule leaves on `BilinearMip` renders the same tile, bit for
-  bit**, so a point none of whose views moves keeps its fused bitmap: none of
-  the 2,549 such points across the samples changed. The fused bitmaps of the
-  points with a moved view change by a median mean absolute difference of
-  0.3–4.0 grey levels.
+  bit**, so a point none of whose views moves keeps its bitmap, whether that is
+  the reference view's tile or the fused mean. Measured on the fused mean the
+  files stored when the rule was chosen, none of the 2,549 such points across
+  the samples changed, and the fused bitmaps of the points with a moved view
+  changed by a median mean absolute difference of 0.3–4.0 grey levels.
 - **No bench verdict changes at the current bars** (in 0, out 0 over 3,828
   observations), at any of the thresholds 1.42, 1.5, 1.75 and 2. The number
   of points member coherence does not keep whole changes by 0 to 6 of 400 per

@@ -7,8 +7,8 @@ direction with two degrees of freedom. View-subset selection picks a small set o
 views to refine against — the views that carry the most information about the
 normal, chosen by a greedy D-optimal rule — so refinement runs on a handful of
 views rather than dozens. It changes only which views the refinement compares;
-every observation stays in the reconstruction, and the stored patch textures are
-still fused from all of them.
+every observation stays in the reconstruction, and the stored patch bitmap is
+still the render of the reference view chosen from all of them.
 
 `sfm embed-patches` uses it in its second and later refinement rounds, where the
 view set has been expanded by view selection
@@ -164,8 +164,9 @@ a calibrated optimum.
   view count cannot leave a patch with too few views to refine.
 - **Why the output loses nothing.** Refinement changes only the patch normal; it
   does not touch the reconstruction's tracks. In `embed_patches` the stored
-  patch bitmaps are fused by the sub-pixel keypoint pass of the final round,
-  over the full view set, not by the normal refinement. And every view in the
+  patch bitmaps are rendered by the sub-pixel keypoint pass of the final round,
+  with the reference-view rule choosing among the full view set, not by the
+  normal refinement. And every view in the
   round-2 set already passed view selection's ZNCC threshold, so the photometric
   quality floor is enforced by membership; the subset only has to choose among
   vetted views by geometry.

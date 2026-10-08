@@ -200,7 +200,7 @@ well-defined and a high-error point at infinity is removed like any other.
 
 #### `--filter-by-zncc-self-similarity-radius <threshold>`
 
-Removes 3D points whose stored consensus bitmap pins no 2D position: its
+Removes 3D points whose stored patch bitmap pins no 2D position: its
 [ZNCC self-similarity radius](../../../core/patch/zncc-self-similarity-radius.md),
 how far the bitmap can slide over itself and still match itself as well as a true
 match between two views would, is over the threshold. A corner or a busy texture
@@ -214,10 +214,10 @@ as the bench and the member gates read their tiles:
 at each shift, only the samples inside the bitmap on both sides, and whose alpha is
 above 0 on both sides, are correlated. A point passes when its radius is at or below
 the threshold and fails when the radius is `NaN`; a point whose bitmap has no sample
-carrying data (a zero row, no consensus) has no reading and is **kept**. `0` turns
+carrying data (a zero row) has no reading and is **kept**. `0` turns
 the filter off, and since the radius reads at most 3, a threshold of 3 or more
 removes nothing; a negative threshold is an error. `sfm embed-patches` applies the
-same bar, by default 2.5, to each point's round-1 consensus.
+same bar, by default 2.5, to each point's round-1 bitmap.
 
 This requires a reconstruction *with* per-point patch bitmaps, and reads no source
 images. A reconstruction without them is rejected with a message naming
@@ -724,23 +724,29 @@ the step has anything to do. `sampler` takes the values and default of the
 `sampler` key of `--refine-keypoints`. Those are the only two keys: the other
 sub-pixel parameters tune a solve this step does not run.
 
-The render is the one place a representative is fused for a patch whose
-placement and keypoints are settled:
-[`fuse_patch_bitmap`](../../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs)
-runs the sub-pixel kernel with no Gauss-Newton step and a single sweep, and
-`fuse_patch_cloud_bitmaps` is its whole-cloud form, parallel over points. It takes
-one view per image as an `Option`, leaving a `None` view out of every patch's
-view set, and a `Progress` that counts `patches` and can cancel it. It is bound
-as `PatchCloud.render_bitmaps(recon, images, resolution=24,
-sampler="per_view", progress=None)`, which returns the `(P, R, R, 4)` array
-`clone_with_changes(patch_bitmaps=...)` takes. The bench commit
-(`bench::fit::fuse_bitmap`) calls the same function for one track, and the
-viewer's open runs the whole-cloud form for a file whose bitmaps are absent.
+The render is the stored bitmap of a patch whose placement and keypoints are
+settled: each point's bitmap is the tile of the observation the reference-view
+rule picks among its track, rendered at that observation's keypoint, and the
+point's `tracks/reference_observations` row records which observation it is
+([reference-view.md](../../../core/patch/reference-view.md) § "The stored
+bitmap"); where the rule picks none, the fused mean of the views, recording
+`-1`.
+[`render_patch_cloud_bitmaps`](../../../../crates/sfmtool-core/src/patch/stored_bitmap.rs)
+renders the whole cloud, parallel over points. It takes one view per image as
+an `Option`, leaving a `None` view out of every patch's view set, and a
+`Progress` that counts `patches` and can cancel it. It is bound as
+`PatchCloud.render_bitmaps(recon, images, resolution=24, sampler="per_view",
+progress=None)`, which returns the `(P, R, R, 4)` array and the `(P,)` int32
+reference observations `clone_with_changes(patch_bitmaps=...,
+reference_observations=...)` takes. A bench fit renders one track the same way
+(`render_patch_bitmap`), and the viewer's open runs the whole-cloud form for a
+file whose bitmaps are absent.
 
 Its bitmaps therefore equal what `--refine-keypoints` renders for a patch whose
 keypoints it did not move, and what the bench commits. They are not
-byte-identical to `--refine-normals` bitmaps, which fuse over a different view
-subset with an obliquity weight, so a file whose bitmaps came from
+byte-identical to `--refine-normals` bitmaps, which pick the reference view
+among the views the normal refinement kept and, where the rule picks none, fuse
+that subset with an obliquity weight, so a file whose bitmaps came from
 `--refine-normals` does not round-trip bit-exactly through
 `--drop-patch-bitmaps --add-patch-bitmaps`.
 

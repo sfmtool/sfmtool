@@ -527,7 +527,7 @@ the points' `w`), so `from_halfvec_arrays` builds every patch finite (`w = 1`).
 `from_halfvec_arrays` over its frame columns and point positions, with the rows
 of points at infinity marked `w = 0` afterward, and `None` when the
 reconstruction carries no frame. The `recon.patches` getter returns it, and the
-viewer's open fuses bitmaps onto it.
+viewer's open renders the display patch bitmaps over it.
 
 The two arrays (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the optional
 `patch_bitmaps_y_x_rgba` are stored on `SfmrData`/`SfmrReconstruction` as plain

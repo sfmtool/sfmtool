@@ -194,7 +194,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
-| `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
+| `fit_bench_track` | write | Localize, re-triangulate and re-render the bitmap of a bench track, then read it back, on a worker thread |
 | `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated photometrically, from a row of fitted pieces along each axis, or from the plane through a grid of fitted pieces, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
@@ -3350,8 +3350,10 @@ each point gets a frame from its mean viewing direction sized at `2.5 x` the
 median projected keypoint scale across its views, each observation's keypoint is
 copied verbatim from its `.sift` detection, and each image's identity hash is
 read from the `.sift` metadata. No photometric adaptation runs. The viewer then
-fuses reference bitmaps at those stored frames and keypoints from readable
-photographs, using the same render-only path as file opening. The result
+renders each point's stored bitmap at those stored frames and keypoints from
+readable photographs (the reference view's tile, or the fused mean where the
+reference-view rule picks none), using the same render-only path as file
+opening. The result
 reports `feature_source: "embedded_patches"` and, when at least one photograph
 can be read, `has_patch_data: true`. If none can be read, the conversion still
 succeeds without bitmaps and reports `has_patch_data: false`. A save persists
@@ -3790,7 +3792,7 @@ row with nothing saying where it sits, and for a patch whose centre is behind
 the camera or outside the camera model's domain; `patch_zoom` is null as well for
 a patch seen edge on ([`bench.md`](bench.md) § "The wire"). Each row also
 carries `sampler`, the sampler its tile is rendered with by the evaluation, the
-fuse and Track View, which the sampler rule reads from `patch_jacobian`:
+bitmap render and Track View, which the sampler rule reads from `patch_jacobian`:
 `anisotropic` where one mip level for both axes would read the less compressed
 axis `sampler_minor_axis_loss` times too coarsely, that is at least `1.5`, and
 the larger singular value is at least `√2`, and `bilinear_mip` otherwise; both
@@ -3810,27 +3812,34 @@ channel. An `in` row also carries `pair_zncc`, the median of its pairwise ZNCCs
 with the other `in` rows; `pair_zncc_grid`, the same per ninth, three rows of
 three, null in a ninth with no reading; `cell_deficit`, the most its
 `pair_zncc_grid` falls below the track's typical agreement, the median over
-the `in` rows, in a ninth whose typical agreement is at least `0.5`;
-`blur_matched_pair_zncc`, `blur_matched_pair_zncc_grid` and
-`blur_matched_cell_deficit`, the same three with each pair's tiles blur-matched
-first ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
-null where the evaluation took none; and
-`reference_view`, `{"is_reference",
-"rejected_by", "fallback", "agreement_read", "cells_read"}`, the reference-view
-rule's decision: `rejected_by`
+the `in` rows, in a ninth whose typical agreement is at least `0.5`; and
+`reference_view`, `{"is_reference", "rejected_by", "fallback"}`, the
+reference-view rule's decision: `rejected_by`
 is null for the row it picks and otherwise the first test that turned the row
-away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`),
+away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`), and
 `fallback` names the tests the rule dropped because no row passed them (`none`,
-`without_angle`, `without_angle_or_cells`, `without_any`), and `agreement_read`
-and `cells_read` name the reading the agreement test and the cell check read,
-`blur_matched` by default or `plain`; dropping the angle
+`without_angle`, `without_angle_or_cells`, `without_any`); dropping the angle
 test drops its 65° limit only, and a row at 90° or more is turned away by
 `angle` under every fallback. These are null on an `out` row, which the rule
 does not consider, and `stage_data` reports the row the rule picked as
 `reference_observation`, null where it picked none; a step that turns a row
 `out` clears its standing and has the rule pick again among the rows still
-`in`, so `reference_observation` never names an `out` row. No
-bar judges them and nothing on the track depends on them. The
+`in`, so `reference_observation` never names an `out` row. No bar judges them.
+A fit stores the picked row's tile as the patch bitmap
+([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
+stored bitmap"): `stage_data.has_bitmap` says whether the track has a bitmap
+and `stage_data.bitmap_observation` names the row it is the tile of, null for
+a bitmap that names none (a mean of the rows, or one stored before the
+reference was recorded). Every row of a track with a bitmap carries its score
+against it ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
+§ "Scores against the stored bitmap"): `bitmap_zncc`, the windowed ZNCC of its
+tile with the bitmap; `blur_matched_bitmap_zncc`, the same after the bitmap
+alone is blurred to the row's sharpness where it is sharper along every
+direction by the ratio of 1.25, `bitmap_zncc` where it is not;
+`bitmap_blur_sigma`, that blur's width in grid px, `0` where read plain; and
+`sharper_than_bitmap`, true where the row's tile is sharper than the bitmap
+along every direction. The bitmap's own row reads `1` and carries no
+`sharper_than_bitmap`. No bar judges the scores. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a

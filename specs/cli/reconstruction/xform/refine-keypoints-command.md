@@ -116,15 +116,18 @@ round a near-edge value up to exactly width/height, which the writer's
 `embed-patches` pipeline (`src/sfmtool/_embed_patches.py`).
 
 **Persisting the patch bitmaps (`bitmaps`).** With `bitmaps` (the default) the
-binding additionally fuses each point's RGBA representative texture at the
-**final** refined keypoints and the command scatters them into a
-`(point_count, R, R, 4)` uint8 array (zero rows where the point produced no
-valid cross-view consensus) attached via
-`clone_with_changes(patches=cloud, patch_bitmaps=…)`; the stored frame is
+binding additionally renders each point's stored bitmap at the **final**
+refined keypoints, the tile of the view the reference-view rule picks
+([reference-view.md](../../../core/patch/reference-view.md) § "The stored
+bitmap"), and the command scatters them into a `(point_count, R, R, 4)` uint8
+array (zero rows where the point produced no valid cross-view consensus) and
+records each point's reference observation, attached via
+`clone_with_changes(patches=cloud, patch_bitmaps=…,
+reference_observations=…)`; the stored frame is
 re-persisted alongside so the bitmaps have a frame to attach to (the frame
 itself is unchanged — keypoints moved, not the surfel). On by default so the
 refined reconstruction carries its per-point patch textures and can display them
-without re-rendering; it costs one extra full-grid source render per view per
+without re-rendering; it costs a tile render and a self-similarity reading per view per
 point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
 and render once on the finalizing stage.
 

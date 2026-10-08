@@ -234,9 +234,13 @@ fixed by its direction) is returned untouched without searching.
 
 With `render_bitmap` set (Python `refine_normals(render_bitmaps=True)`) this pass
 scores through a `PatchViewStack` — a retained per-view render — and keeps the
-*winner's* stack together with the consensus view-weights that scored it, so the
-`representative` texture is fused from that one render with no extra render and
-no second IRLS pass. Without it the pass stays on the lean masked-only scorer and
+*winner's* stack together with the consensus view-weights that scored it. The
+`representative` bitmap is the stored bitmap at the found normal: the tile of
+the view the [reference-view rule](reference-view.md) picks among the refined
+views, rendered through the refined patch at that view's keypoint, and named in
+`NormalRefineResult::reference`. Where the rule picks none, it is the fused
+mean of that one retained render, with no extra render and no second IRLS pass.
+Without it the pass stays on the lean masked-only scorer and
 pays nothing for a feature it does not use.
 
 **Local polish (Gauss-Newton / LK) — not implemented.** `Φ` is smooth, and
@@ -304,7 +308,7 @@ Everything below lives in
 `params` (the config and result types), `parameterization` (the sphere exp-map),
 `support` / `level` (window and per-level frozen support), `znorm` (render +
 z-normalize), `consensus` (`Φ`), `search` (the coarse-to-fine walk),
-`view_stack` (the multi-view render substrate the representative fuses),
+`view_stack` (the multi-view render substrate the fused-mean fallback reads),
 `view_subset` (the D-optimal basis cap), `obliquity` (the two priors, and
 the `surface_to_camera` direction they read, which `viewing_angle` also reads
 to give the bench each view's viewing angle and tilt direction,
@@ -426,16 +430,19 @@ pub struct NormalRefineResult {
     pub valid_view_count: u32,
     pub confidence: f64,          // peakedness of Φ at the optimum, NaN when
                                   // `compute_confidence` is false (see above)
-    /// The canonical appearance in the patch `(s, t)` frame at the found normal:
-    /// a fused `R×R` RGBA texture, flat row-major `(row, col, channel)`. RGB is
+    /// The stored bitmap at the found normal, `R×R` RGBA flat row-major
+    /// `(row, col, channel)`: the tile of the view `reference` names, the view
+    /// the reference-view rule picks, with alpha 255 on the samples on the
+    /// photograph. Where the rule picks none, the fused mean of the views: RGB
     /// the cross-view fused colour (the robust IRLS view weights under
-    /// `RobustWeighted`, an unweighted mean under `MeanPairwise`); `A` is a
+    /// `RobustWeighted`, an unweighted mean under `MeanPairwise`) and `A` a
     /// per-pixel cross-view *agreement* confidence (0 where no kept view covers
     /// the pixel). Populated when `NormalRefineParams::render_bitmap` is set;
-    /// `None` otherwise, or when the patch was not refined. This is the simple
-    /// fused-render form — the per-pixel robust *template* `m` of item 7 (a free
-    /// latent, super-resolvable) is not built.
+    /// `None` otherwise, or when the patch was not refined.
     pub representative: Option<Vec<u8>>,
+    /// The view, as an index into the views the patch was refined over, whose
+    /// tile `representative` is; `None` for a fused mean or no bitmap.
+    pub reference: Option<usize>,
 }
 
 /// Refine one patch's normal. Takes the patch and returns an updated copy.
@@ -493,9 +500,8 @@ scatters the per-patch textures to per-3D-point rows and persists them as the
 `.sfmr` `patch_bitmaps_y_x_rgba` array, and `sfm inspect --strips` renders
 through the same flag. The `sfm embed-patches` pipeline does **not**: it takes
 its stored bitmaps from the sub-pixel keypoint refiner instead
-(`refine_keypoints(render_bitmaps=True)`, which reuses this module's
-`PatchViewStack::render` / `fuse`), because that fuses each point's
-representative at the *final* per-view keypoints rather than one round stale,
+(`refine_keypoints(render_bitmaps=True)`), because that renders each point's
+stored bitmap at the *final* per-view keypoints rather than one round stale,
 and covers the points at infinity this refinement skips.
 
 ## Improvements to discuss
@@ -614,12 +620,13 @@ unnecessary. What remains open:
    - **A carryable template.** `m` is a latent patch tied to no single projection
      — super-resolvable, regularizable across neighbouring patches (ties to
      cloud smoothness), or kept as the surfel's canonical appearance. The
-     **output** it would fill is already there: `NormalRefineResult::representative`
-     carries the *fused-render* form of exactly this — an RGBA texture whose `A`
-     is a per-pixel cross-view agreement rather than a learned coverage — so this
-     and the supplied alpha of item 6 are one channel (alpha in, alpha out).
-     What is missing is the latent: the texture is fused from the winner's view
-     stack, not solved for. It stays *off*
+     **output** it would fill is `NormalRefineResult::representative`, which
+     holds the reference view's tile, and only where the reference-view rule
+     picks no view the *fused-render* form of this template — an RGBA texture
+     whose `A` is a per-pixel cross-view agreement rather than a learned
+     coverage — so this and the supplied alpha of item 6 are one channel (alpha
+     in, alpha out). What is missing is the latent: that fallback is fused from
+     the winner's view stack, not solved for. It stays *off*
      the geometric `OrientedPatch` (which `WarpMap::from_patch` consumes and the
      `PatchCloud` stores struct-of-arrays — an inline `R×R` bitmap per point is
      heavy and usually unused); today the cloud-level carrier is the

@@ -94,7 +94,7 @@ because the reference consensus and the leave-one-out scores are measured, not
 read. Poses and cameras are read from `recon`, so a view can never disagree
 with the value it is being added to. An image whose photograph is `None` is left
 out of every reference set rather than failing the call, the rule
-`fuse_patch_cloud_bitmaps` follows.
+`render_patch_cloud_bitmaps` follows.
 
 **Why the rule is an enum.** Several rules are useful, and they are compared
 with each other by the leave-one-image-out harness in
@@ -145,7 +145,7 @@ For a point `p` with existing observations in images `J`, and the target image
    side and skips the grazing and facing checks.
 2. **Reference consensus.** Each existing observation in a decoded image is
    rendered on the patch grid anchored at its own keypoint (the in-plane offset
-   its keypoint states, as the bench and the bitmap fuse anchor it). The renders
+   its keypoint states, as the bench and the bitmap render anchor it). The renders
    are z-normalised and combined into the robust IRLS consensus. From the same
    renders come each reference's leave-one-out ZNCC (against the robust
    consensus of the others) and the pairwise ZNCCs between references. Fewer

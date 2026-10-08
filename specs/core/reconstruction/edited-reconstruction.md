@@ -66,6 +66,7 @@ pub struct PointSet {
     pub normal_confidence: Option<Vec<u8>>,
     pub point_constraints: Option<PointConstraintColumns>,
     pub observation_confidence: Option<Vec<u8>>,
+    pub reference_observations: Option<Vec<i32>>, // per point, within its track; -1 none
     // Derived from the fields above and the image count.
     pub observation_offsets: Vec<usize>,
     pub image_feature_to_point: Vec<HashMap<u32, u32>>,
@@ -77,6 +78,11 @@ impl PointSet {
     pub fn point_count(&self) -> usize;
     pub fn observation_count(&self) -> usize;
     pub fn observations_for_point(&self, point_idx: usize) -> &[TrackObservation];
+    // The reference observations of a set built by selecting points and
+    // observation rows of this one, each index moved with its observation.
+    pub fn select_reference_observations(&self, point_rows: &[usize],
+        observation_rows: &[usize]) -> Option<Vec<i32>>;
+    pub fn reference_observation_row(&self, point: usize) -> Option<usize>;
     pub fn observation_row(&self, image_index: usize, point_index: u32, feature_index: u32)
         -> Option<usize>;
     pub fn feature_indexes(&self) -> Option<&[u32]>;
@@ -289,6 +295,7 @@ impl EditedReconstruction {
     pub fn has_patch_bitmaps(&self) -> bool;
     pub fn has_normal_confidence(&self) -> bool;
     pub fn has_point_constraints(&self) -> bool;
+    pub fn has_reference_observations(&self) -> bool;
 
     // Reading one point without materialising.
     pub fn point(&self, index: u32) -> Option<PointView<'_>>;
@@ -321,6 +328,7 @@ pub struct PointRecord {
     pub patch_bitmap: Option<Array3<u8>>,
     pub normal_confidence: Option<u8>,
     pub constraint: Option<(u8, f64, u32)>,
+    pub reference_observation: Option<i32>, // an index into `observations`, or -1
 }
 
 pub struct RecordObservation {
@@ -688,7 +696,11 @@ distances as agreeing, since both say the point is at no distance from anything.
 **Validation is split the same way.** `validate_observation_columns` checks the
 per-observation columns against the track count and the per-image hashes against
 the image count; `validate_point_columns` checks the constraint triple against
-the point count and its reference images against the image count. Both are
+the point count and its reference images against the image count, and each
+reference observation against its point's track. A record's
+`reference_observation` is refused unless it is `-1` or an index into its own
+observations (`EditError::ReferenceObservationOutOfRange`), and like every
+column it is present exactly when the base carries the column. Both are
 reachable from `SfmrReconstruction`, which supplies the count the point set
 cannot see, and both are what the `.sfmr` conversion and the kwargs-driven
 Python editor run before handing back a value.

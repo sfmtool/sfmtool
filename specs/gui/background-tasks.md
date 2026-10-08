@@ -387,8 +387,8 @@ rest 1 : 8 between thumbnails and bitmaps, a stage the file does not need taking
 a weight of zero. The thumbnail rows come from each image's verified `.sift`
 first and its photograph second
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
-loading"). The bitmaps are the fuse `sfm xform --add-patch-bitmaps` runs,
-`fuse_patch_cloud_bitmaps`, over every photograph that decodes at its camera's
+loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,
+`render_patch_cloud_bitmaps` (each point's reference view's tile), over every photograph that decodes at its camera's
 size; one that does not is left out of every patch's views. The photographs are
 read through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), so
@@ -438,7 +438,7 @@ bitmaps` with `decode photographs` and `fuse` beneath it. The frame build has
 its own passes nested under the first stage, with one count per image under
 each of its two `.sift` walks and a fraction reported every two-hundredth of
 the way through each pass over the points and the observations. The bitmap
-stage uses the same render-only fuse as the open, but its column belongs to
+stage uses the same render-only pass as the open, but its column belongs to
 the new version and is saved rather than marked for display only. Unreadable
 or wrong-sized photographs are left out; if none can be read, the conversion
 still succeeds without bitmaps. The conversion and bitmap stages share the

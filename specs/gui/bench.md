@@ -213,7 +213,7 @@ impl AppState {
     /// all -- a point that already holds the track is not written again.
     pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str)
         -> Result<Committed, String>;
-    /// Move it: localize, re-triangulate, re-fuse, then read the result back.
+    /// Move it: localize, re-triangulate, re-render the bitmap, then read the result back.
     /// The reading looks for each peak within the track's `max_shift_px`.
     pub(crate) fn start_bench_fit(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     pub(crate) fn start_bench_stage(&mut self, id: ReconId, label: &str, stage: StageKind)
@@ -422,7 +422,7 @@ pays for, applied to one more field.
   dirty, because what the file holds is then no version of this history.
 - **The budget counts the bench.** A version's unshared bytes are the unshared
   half of its value plus the items its predecessor's bench does not share, each
-  charged its observations and its consensus bitmap. Every item a step did not
+  charged its observations and its patch bitmap. Every item a step did not
   touch is the same `Arc` in both benches and costs nothing, so a step on one
   track costs that track. A bench is small against a bulk edit, so the budget's
   arithmetic does not change, only what it sums. A released version keeps its
@@ -842,17 +842,19 @@ their first evaluation takes them in when they clear the bars. A cluster
 started from a pixel arrives with its one seed pinned `in` for the same reason:
 it is what the person pointed at.
 
-**A track-stage track with no bitmap gets one fused.** A patch step -- a move,
-a resize, a spin or a tilt -- drops the consensus bitmap, because it was fused
-over the square as it stood. When the evaluation reads a track-stage track that
-has a placement and no bitmap, it also runs core's `fuse_bitmap_in_place` on
-the photographs it has already decoded. That renders the `in` sightings through
-the patch as it now lies, at their keypoints, and writes the bitmap and the
+**A track-stage track with no bitmap gets one rendered.** A patch step -- a
+move, a resize, a spin or a tilt -- drops the patch bitmap, because it was
+rendered over the square as it stood. When the evaluation reads a track-stage
+track that has a placement and no bitmap, it also runs core's
+`render_bitmap_in_place` on the photographs it has already decoded. That renders
+the `in` sightings through the patch as it now lies, at their keypoints, and
+writes the tile of the one the reference-view rule picks (or the fused mean of
+them where it picks none) as the bitmap, and the
 colour at its centre, moving nothing. So a tilted patch shows its texture again
 as soon as the evaluation lands, and can be committed into a reconstruction
 that stores a bitmap per point without a fit first. The bitmap is installed with
 the measurements, under the same rule: no version and no Action Log row. A track with fewer than two
-`in` sightings that carry a keypoint has nothing to fuse, and stays without one.
+`in` sightings that carry a keypoint has nothing to render, and stays without one.
 
 **The node is not locked by it.** Every step stays available while an
 evaluation runs, and taking one is what cancels it. It is not a background task
@@ -1074,8 +1076,8 @@ transfer and sweep members read neither and run as usual. The node's files are
 opened on sight and re-judged when the run starts
 (`refresh_index_files`), so the states it reads are the node's as it stands.
 
-**The track arrives with its bitmap.** `build_track_at_pixel` fuses the
-consensus bitmap and colour where the track stands before it returns
+**The track arrives with its bitmap.** `build_track_at_pixel` renders the
+patch bitmap and colour where the track stands before it returns
 ([`../core/bench/track-at-pixel.md`](../core/bench/track-at-pixel.md) § "The
 finish"), so the commit takes the track as the operation returned it, on a
 reconstruction that stores a bitmap per point as on one that does not.
@@ -1430,7 +1432,7 @@ patch whose centre is behind the camera or outside the camera model's domain;
 `patch_zoom` is null as well for a patch seen edge on. Each row also carries
 `sampler`, the sampler the evaluation's sampler choice (the sampler rule by
 default, `crate::bench::sampler_choice`) picks from `patch_jacobian` and the one
-its tile is rendered with by the evaluation, the fuse and Track View
+its tile is rendered with by the evaluation, the bitmap render and Track View
 (`anisotropic` or `bilinear_mip`), and `sampler_minor_axis_loss`, the loss the
 rule compares with its threshold; both are null where `patch_jacobian` is, and
 the loss is null as well where it is not finite. The
@@ -1452,7 +1454,7 @@ that list**, which no bench step renumbers, so an index an agent is holding afte
 a verdict or a fit still names the same observation. `delete_camera_image` is
 the one call that renumbers it (§ "One history for the pair"), and its
 description says so. The template's
-samples and the consensus bitmap are reported as present or absent rather than
+samples and the patch bitmap are reported as present or absent rather than
 sent: they are pictures, and that surface is not a data channel.
 
 **`pixel` is where the observation sits, whatever said so**: the keypoint the

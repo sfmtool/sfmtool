@@ -412,7 +412,7 @@ The unshared cost of a version is what it holds that its predecessor did not: th
 overlay alone when the two share a base, and otherwise the base's light columns
 plus the thumbnail and patch-bitmap arrays only when this base does not point at
 the same allocations; plus the bench items its predecessor's bench does not
-share, each charged its observations and its consensus bitmap
+share, each charged its observations and its patch bitmap
 ([bench.md](bench.md)). On the largest reconstruction measured -- 1 354 MB in
 memory, of which 1 189 MB are those two columns -- that is some 165 MB for a
 bulk edit, so the budget holds twenty-odd of them, or any number of point edits.

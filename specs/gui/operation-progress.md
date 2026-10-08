@@ -750,7 +750,7 @@ The operations:
 
 | Phase | Where | Seen at |
 |-------|-------|---------|
-| `open`, with `read`, `convert convention`, `derive`, `keypoints`, then `thumbnails` and `patch bitmaps` when the file lacks them, under it; then `append nodes` on the GUI thread | `state::open::open_job` over `SfmrReconstruction::load`, `DisplayThumbnails::build` and `fuse_patch_cloud_bitmaps` | 143 ms for the read of a dino open |
+| `open`, with `read`, `convert convention`, `derive`, `keypoints`, then `thumbnails` and `patch bitmaps` when the file lacks them, under it; then `append nodes` on the GUI thread | `state::open::open_job` over `SfmrReconstruction::load`, `DisplayThumbnails::build` and `render_display_patch_bitmaps` | 143 ms for the read of a dino open |
 | `save`, with `materialise` over `push version`, then `write` | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |

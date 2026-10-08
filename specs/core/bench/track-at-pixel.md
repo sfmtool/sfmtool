@@ -140,11 +140,13 @@ names no place before any member runs.
 observation carries its leave-one-out ZNCC, shift and projection offset.
 Observation 0 is the queried sighting, `in` and pinned, with its keypoint within
 `max_query_offset_px` of the pixel. The track has no origin, so a commit of it
-creates a point. It **carries its consensus bitmap and colour**, fused where it
+creates a point. It **carries its patch bitmap and colour**, rendered where it
 stands: the finish's last step slides the patch onto the pixel, and a patch step
-drops the bitmap fused over the square as it stood, so the operation fuses once
-more before it returns. The fuse is the one a fit ends with, run over the `in`
-sightings at their keypoints on the reconstruction's own bitmap grid where it
+drops the bitmap rendered over the square as it stood, so the operation renders
+once more before it returns. The render is the one a fit ends with
+(`render_bitmap_in_place`): the tile of the `in` sighting the reference-view
+rule picks, at its keypoint, or the fused mean of the `in` sightings where the
+rule picks none, on the reconstruction's own bitmap grid where it
 stores one, and the colour is read off the tile's centre; it moves nothing, so
 the position, the placement, the keypoints, the verdicts and every reported
 number are what they were before it. A reconstruction that stores a bitmap per
@@ -281,14 +283,10 @@ patch centre's projection until a fit localizes them.
    ZNCC over the same views (`zncc_middle_median`,
    [`editable-track.md`](editable-track.md) § "The middle ZNCC"), which no gate
    reads.
-6. **Bitmap.** The track that passed is given its consensus bitmap and colour
-   where it stands, by the fuse a fit ends with, which moves nothing. The last
-   anchor dropped the bitmap the fits before it had fused, because it slid the
-   patch off the square that bitmap was fused over.
-6. **Bitmap.** The track that passed is given its consensus bitmap and colour
-   where it stands, by the fuse a fit ends with, which moves nothing. The last
-   anchor dropped the bitmap the fits before it had fused, because it slid the
-   patch off the square that bitmap was fused over.
+6. **Bitmap.** The track that passed is given its patch bitmap and colour
+   where it stands, by the render a fit ends with, which moves nothing. The last
+   anchor dropped the bitmap the fits before it had rendered, because it slid
+   the patch off the square that bitmap was rendered over.
 
 ## Parameters
 

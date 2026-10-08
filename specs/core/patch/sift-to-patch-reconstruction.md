@@ -171,7 +171,7 @@ thereafter (the per-round obliquity drop).
    more than `max_obliquity_deg` off the refined normal is dropped. From round 2
    the refinement basis is capped at the `max_refine_views` most
    normal-informative views per point (output-lossless — every observation still
-   registers and fuses; see
+   registers and has its bitmap rendered; see
    [patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)).
 3. **Select the views (per point).** Run [patch-view
    selection](patch-view-selection.md): geometric candidacy plus photometric
@@ -186,16 +186,19 @@ thereafter (the per-round obliquity drop).
    `min_relative_zncc`) in-loop, and returns the kept views with their refined
    keypoints and quality signals. The sub-pixel pass
    ([keypoint-subpixel-refinement](keypoint-subpixel-refinement.md)) then settles
-   the final keypoints **and fuses each point's consensus bitmap at them**
-   (`refine_keypoints(render_bitmaps=True)`) — points at infinity included, via
-   the same `w`-aware render path — reporting per-point validity (a point with
-   no cross-view consensus gets no bitmap).
+   the final keypoints **and renders each point's stored bitmap at them**
+   (`refine_keypoints(render_bitmaps=True)`): the tile of the view the
+   [reference-view rule](reference-view.md) picks, rendered at its keypoint, or
+   the fused mean of the views where the rule picks none — points at infinity
+   included, via the same `w`-aware render path — reporting per-point validity
+   (a point with fewer than two views, or with no reference view and fewer than
+   two views in frame for the mean, gets no bitmap).
 6. **Cull unsupported points (per point).** Drop any point whose kept-view count
    fell below `min_views`, **and** any point the sub-pixel pass produced no
-   valid consensus bitmap for — one uniform rule for finite and infinity points
+   valid bitmap for — one uniform rule for finite and infinity points
    (no point is kept with an all-black bitmap).
 7. **Compact.** Renumber the surviving points and observations into a dense,
-   valid `embedded_patches` reconstruction carrying the fused bitmaps. Each
+   valid `embedded_patches` reconstruction carrying the rendered bitmaps. Each
    surviving finite point's stored normal is re-derived from the frame being
    written — `n_p = normalize(u_p × v_p)` — so the two agree in the output; the
    incoming reconstruction's `normals_xyz` predates the refinement that rotated
@@ -221,8 +224,8 @@ over Rust kernels reached through the PyO3 bindings:
   `use_stored_keypoints=True`) anchored on the carried-in SIFT keypoints
   (steps 0–2). The pipeline no longer asks normal refinement for bitmaps
   (`render_bitmaps` stays available there for the strips diagnostics); the
-  stored reference bitmaps come from the sub-pixel keypoint refinement (step 5),
-  fused at the final keypoints.
+  stored bitmaps come from the sub-pixel keypoint refinement (step 5),
+  rendered at the final keypoints.
 - Per-point view selection is [patch-view selection](patch-view-selection.md), in
   `sfmtool-core::patch` — geometric candidacy plus photometric vetting against a
   track-seeded template.
@@ -255,7 +258,7 @@ keypoint-localization spec).
 | `obliquity_weight_power` | `2.0` | normal refinement: exponent `p` of the multiplicative obliquity view-weight `\|v̂·n\|^p` in the robust consensus (`0` disables; `2` = cos²θ foreshortening) |
 | `fronto_prior_weight` | `0.05` | normal refinement: weight `λ` of the additive fronto-parallel prior `λ·mean(v̂·n)²` pulling a low-parallax normal toward facing the cameras (`0` disables) |
 | `max_refine_views` (`--refine-max-views`) | `8` | normal refinement: cap the round-2+ refinement basis at the N most normal-informative views/point (`0` = all); output-lossless ([patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)) |
-| `subpixel` | `1` | keypoint refiner: LK/ECC sub-pixel outer-sweep count applied once per round (per-sweep consensus); `0` disables movement (render-only bitmap fuse still runs), `≥1` = that many sweeps ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) |
+| `subpixel` | `1` | keypoint refiner: LK/ECC sub-pixel outer-sweep count applied once per round (per-sweep consensus); `0` disables movement (the bitmap render still runs), `≥1` = that many sweeps ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) |
 | `localize_search_strategy` | `plus_descent` | keypoint refiner: discrete shift-grid traversal — `plus_descent` (local descent) or `exhaustive` (full grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 | `search_resolution_multiplier` | `1.0` | keypoint refiner: discrete-search resolution multiplier `m` (`1.0` = no-op; `>1` = supersampled grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 
@@ -292,12 +295,12 @@ mean-viewing, feature-sized frames + inline SIFT keypoints + image hashes; the
 cloud is read back via `embedded.patches` and its normal refined photometrically
 over the embedded recon (`use_stored_keypoints=True`), anchored on the carried-in
 keypoints; then view selection, keypoint congealing, the sub-pixel refinement
-(which fuses the reference textures at the final keypoints and reports per-point
+(which renders the stored bitmaps at the final keypoints and reports per-point
 validity — with `subpixel=0` it runs render-only so the bitmaps/validity are
 still produced), and `compact_to_embedded_patches` (the write/compaction tail,
 given the original `recon` for geometry carry-over and `embedded.image_file_hashes`
 so there is no second `.sift` read; its `valid` mask drops the points with no
-consensus bitmap). The writer requires the patch frame for an
+valid bitmap). The writer requires the patch frame for an
 `embedded_patches` file (`has_uv_frames = true`).
 
 Points at infinity flow through end to end — the kernels are first-class on them
@@ -305,10 +308,10 @@ through the `w`-aware render/selection/localization paths — and
 `compact_to_embedded_patches` preserves their `w = 0` via `positions_xyzw`.
 Normal refinement remains finite-only (an infinity point keeps its fixed
 tangent-sphere frame), but the **reference bitmap does not depend on it**: the
-sub-pixel keypoint refinement fuses every point's consensus bitmap — infinity
+sub-pixel keypoint refinement renders every point's stored bitmap — infinity
 points included, through the same `w`-aware render path — so a surviving
 infinity point carries a real texture rather than a zero `patch_bitmaps` row.
-The flip side is uniform: any point (finite or infinity) for which no valid consensus bitmap could be fused is **dropped** by the final
+The flip side is uniform: any point (finite or infinity) for which no valid bitmap could be rendered is **dropped** by the final
 compaction rather than kept with an all-black bitmap.
 
 ## Open questions

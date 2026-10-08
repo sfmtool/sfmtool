@@ -33,15 +33,17 @@ read. Every pair that blurs the tile reads its width off those two readings,
 with no further reading. The blur is done to one tile; pairing the tiles, and
 choosing which to blur to what length, is the consumers' part.
 
-Two consumers read it. The bench's reference-view rule reads blur-matched
-agreement by default ([reference-view.md](reference-view.md) § "Blur-matched
-agreement"); member-coherence validation can read it, and does not by default
+Two consumers read it. Every observation of a point is scored against the
+point's stored bitmap, the reference view's render
+([reference-view.md](reference-view.md) § "The stored bitmap"), plain and
+blur-matched, with only the bitmap assessed and blurred (§ "Scores against the
+stored bitmap"); the bench reports both scores for every row it evaluates.
+Member-coherence validation can read it, and does not by default
 ([member-coherence-validation.md](member-coherence-validation.md) § "Blur
-matching"). The measurements behind both choices are below. Part 6 of
-[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-proposes a third consumer in place of the reference-view rule: every
-observation scored against the point's stored bitmap, the reference view's
-render, with only the bitmap assessed and blurred.
+matching"). The reference-view rule reads plain agreement: blur matching was
+measured there and changed its pick on 4 of 661 tracks
+([reference-view.md](reference-view.md) § "Why the agreement is read plain").
+The measurements behind each choice are below.
 
 ## Rust API
 
@@ -51,13 +53,14 @@ length, is the caller's choice. The per-tile operations live in
 the assessment and the blur to a length in
 [assess.rs](../../../crates/sfmtool-core/src/patch/blur_matched/assess.rs), the
 blur in [blur.rs](../../../crates/sfmtool-core/src/patch/blur_matched/blur.rs)
-and the tile and its reading in
-[tiles.rs](../../../crates/sfmtool-core/src/patch/blur_matched/tiles.rs). The
+and the tile, its reading and the windowed ZNCC of a pair in
+[tiles.rs](../../../crates/sfmtool-core/src/patch/blur_matched/tiles.rs) and
+[zncc.rs](../../../crates/sfmtool-core/src/patch/blur_matched/zncc.rs). The
 pairing rule the two consumers share is in
-[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs),
-and the reference-view rule's pairwise readings in
-[pair_readings.rs](../../../crates/sfmtool-core/src/patch/reference_view/pair_readings.rs);
-member coherence reads its pairs in
+[pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs);
+the scores against the stored bitmap are in
+[stored_bitmap.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap.rs),
+and member coherence reads its pairs in
 [matrix.rs](../../../crates/sfmtool-core/src/patch/member_coherence/matrix.rs).
 
 ```rust
@@ -117,22 +120,32 @@ impl TrackBlurs {
     pub fn assessed(&self) -> usize;
 }
 
-// patch::reference_view: the reference-view rule's pairwise readings.
-pub struct PairReadings { pub whole: f64, pub grid: [[f64; 3]; 3] }
-pub fn pair_zncc_readings(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> PairReadings;
-pub struct BlurMatchedPairs {
-    pub k: usize, pub whole: Vec<f64>, pub grid: Vec<[[f64; 3]; 3]>,
-    pub blurred: Vec<bool>, pub sigma: Vec<f64>, // sigma[a*k + b]: the width a was blurred by against b
-    pub pairs: usize, pub pairs_blurred: usize, pub ellipse_reads: usize,
+// The bitmap the only tile that may be blurred: pair_blur with the bitmap first,
+// None unless it is the sharper.
+pub fn bitmap_blur(bitmap: &[[f64; 2]; 2], observation: &[[f64; 2]; 2], min_ratio: f64)
+    -> Option<PairBlur>;
+
+// patch::blur_matched: a pair's windowed ZNCC over the samples with data in both.
+pub const MIN_WINDOWED_SAMPLES: usize; // 8
+pub fn windowed_zncc(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> f64;
+
+// patch::stored_bitmap: each observation against the stored bitmap.
+pub fn bitmap_planes(rgba: &[u8], resolution: usize) -> TilePlanes; // alpha > 0 is data
+pub struct BitmapScore {
+    pub zncc: f64, pub blur_matched_zncc: f64,
+    pub blur_sigma: f64,            // the bitmap's blur, 0 where read plain
+    pub sharper_than_bitmap: bool,  // read plain; a candidate to replace the reference
 }
-impl BlurMatchedPairs {
-    pub fn row_middle(&self, v: usize) -> f64; // median of view v's whole-tile readings
+pub struct BitmapScorer<'a> { /* the bitmap, its ellipse, its assessment once read */ }
+impl<'a> BitmapScorer<'a> {
+    pub fn new(bitmap: &'a TilePlanes, window: PatchWindow) -> Self;
+    pub fn bitmap_semi_axes(&self) -> Option<[f64; 2]>;
+    pub fn assessment(&self) -> Option<&BlurAssessment>;
+    pub fn score(&mut self, observation: &TilePlanes, ellipse: Option<[[f64; 2]; 2]>) -> BitmapScore;
 }
-pub fn blur_matched_pairs(tiles: &[&TilePlanes], ellipses: &[Option<[[f64; 2]; 2]>],
-    matching: PairMatching, window: PatchWindow, progress: &Progress<'_>) -> BlurMatchedPairs;
-pub struct BlurMatchedAgreement { pub pair_zncc: Vec<f64>, pub cells: CellAgreement, pub pairs: BlurMatchedPairs }
-pub fn blur_matched_agreement(tiles: &[&ViewTile], ellipses: &[Option<[[f64; 2]; 2]>],
-    matching: PairMatching, window: PatchWindow, progress: &Progress<'_>) -> BlurMatchedAgreement;
+pub fn score_against_bitmap(bitmap: &TilePlanes, observations: &[&TilePlanes],
+    ellipses: &[Option<[[f64; 2]; 2]>], reference: Option<usize>, window: PatchWindow)
+    -> Vec<Option<BitmapScore>>; // None for the reference, whose score is 1
 ```
 
 **Why it is shaped this way.** A tile's **blur assessment** depends on that
@@ -163,13 +176,14 @@ length; the consumer blurs that view's tile (`blur_to_length_into`) and
 correlates the pair with its own ZNCC code. The views to assess depend on the
 ellipses alone, so a view that no pair can blur is never blurred or read again.
 `PairMatching` is one enum for every consumer, so a consumer's option reads the
-same on the wire, in Python and in Rust. `blur_matched_pairs` reads both the
-whole tile and the ZNCC grid's cells from each pair it blurs, because the
-reference rule's agreement test and its cell check both read the same pairs.
-`sigma` reports each width, so a caller that draws the blurred tiles (the
-illustration, a test) blurs by the kernel's own width rather than working it
-out again. The blur is a function of one tile and a width, so it can be checked
-against a direct 2-D convolution and an exact answer.
+same on the wire, in Python and in Rust. The scores against the stored bitmap
+need no pairing over a track: the bitmap is one side of every pair and the only
+tile blurred, so `BitmapScorer` holds the bitmap's ellipse and its assessment,
+read at most once, and `bitmap_blur` is `pair_blur` with an observation sharper
+than the bitmap read plain. `BitmapScore::blur_sigma` reports each width, so a
+caller that draws the blurred bitmap blurs by the kernel's own width rather
+than working it out again. The blur is a function of one tile and a width, so
+it can be checked against a direct 2-D convolution and an exact answer.
 
 ```rust
 use sfmtool_core::patch::blur_matched::{
@@ -367,6 +381,70 @@ Gaussian is the product of a Gaussian along each grid axis, so it is applied as
 two 1-D passes, down the columns and then along the rows, each a sum of whole
 shifted rows.
 
+## Scores against the stored bitmap
+
+A point's stored bitmap is the tile of its reference view
+([reference-view.md](reference-view.md) § "The stored bitmap"), chosen for its
+sharpness, so most observations are blurrier than it, and plain ZNCC charges
+each of them for detail the bitmap carries and it could not. Each observation
+is scored against the bitmap twice (`BitmapScorer`, `score_against_bitmap`):
+
+- **plain**: the windowed ZNCC of the observation's tile and the bitmap as
+  stored, over the samples with data in both (`windowed_zncc`, member
+  coherence's Gaussian disk window);
+- **blur-matched**: where the bitmap is the sharper of the pair by the ratio of
+  1.25 (`bitmap_blur`: its semi-major axis shorter than the observation's
+  semi-minor axis, and that semi-minor axis at least 1.25 times it), the bitmap
+  alone is blurred to the observation's semi-minor axis, at most 2 grid px, and
+  correlated with the observation's tile as rendered; elsewhere the plain score.
+
+**Only the bitmap is blurred.** The bitmap's blur assessment is read once per
+point, on the bitmap, with the reading its own ellipse came from
+(`read_tile_ellipse`), at the first observation that needs it, and every
+observation's width is read off it. A track of `k` views costs one assessment
+at most, `k − 1` plain correlations, and a blur and a correlation for each
+observation the ratio selects. An observation is never blurred, so its score
+is always read on the tile the bench shows.
+
+**An observation sharper than the bitmap** is read plain, neither tile blurred,
+and flagged (`sharper_than_bitmap`): it is a candidate to replace the
+reference, which an operation that renders the bitmap decides by running the
+reference-view rule again, not a score.
+
+**The reference's own score is 1** and is not computed: the bitmap is its tile.
+A bitmap that names no reference (a fused mean, or one stored before the
+reference was recorded) scores every observation.
+
+**What reads the scores.** The bench writes both for every row it evaluates
+(`bitmap_zncc`, `blur_matched_bitmap_zncc`, `bitmap_blur_sigma`,
+`sharper_than_bitmap`; [editable-track.md](../bench/editable-track.md)), and
+Track View shows them in its *Bitmap* column. Nothing decides on them yet: the
+bench's `min_zncc` bars read the localizer's leave-one-out ZNCC, member
+coherence decides on its own matrix, and the per-observation covariance's
+`1 − ZNCC` is the localizer's peak; whether any of them should read the
+blur-matched score against the bitmap is an open question of
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+Part 6. Alignment never reads them.
+
+**Measured.** On the 661 pool tracks of the reference-view work, each track's
+bitmap rendered where it stands and the track evaluated again, 5,422
+observations were scored (the references left out):
+
+| | Median | p10 | p90 |
+|---|---|---|---|
+| Plain score | 0.908 | 0.758 | 0.983 |
+| Blur-matched score | 0.911 | 0.768 | 0.983 |
+
+The ratio blurred the bitmap for 569 observations (10.5%), by a median of 0.50
+grid px, and raised their score by a median of 0.025 (p90 0.062, at most
+0.216); 35 observations (0.6%) were sharper than the bitmap and read plain.
+The reference is chosen for its sharpness, so it is the sharper tile of a pair
+about twice as often as a view of the track is over all its pairs (about one
+pair in twenty). Scoring costs a median of 0.043 ms per track (p90 0.11 ms),
+0.7% of an evaluation, about 7 µs an observation; the `bitmap scores` phase of
+an evaluation times it, and its note gives how many observations had the
+bitmap blurred and how many are sharper than it.
+
 ## Cost
 
 One thread, release build, a 24 × 24 three-channel tile (the mask is a fourth
@@ -374,21 +452,22 @@ plane):
 
 | Step | µs |
 |---|---|
-| Plain pair readings (whole tile and the nine cells) | 3.6 |
+| The windowed ZNCC of a pair, plain | 2.1 |
 | The two passes, `σ` 0.5 / 1 / 2 | 4.8 / 5.7 / 9.6 |
 | Direct 2-D convolution, `σ` 0.5 / 1 / 2 | 26 / 49 / 160 |
 | `pair_blur` from two ellipses | under 0.05 |
 | The whole self-similarity reading of a tile | 8.7 |
 | One tile's blur assessment, `assess_blur` (two blurs, two readings) | 28 |
-| A blurred pair once its tile is assessed (blur, readings) | 8.6 |
+| A blurred pair once its tile is assessed (blur, windowed ZNCC) | 6.9 |
 
 The two passes run 5 to 17 times faster than the direct convolution. A tile's
 assessment costs two blurs and two whole self-similarity readings, paid once
-for each view a track blurs; a blurred pair then costs a blur and the pair's
-readings. On the pool tracks the default adds 0.047 ms to a track's pairs
-(17 µs per blurred pair with the assessments spread over them, 0.80 reads a
-pair), where a blur per direction added 0.35 ms (12.7 µs per blurred pair, on
-ten times as many pairs). A tile with samples off the photograph takes the
+for each tile some pair blurs (once per point for the scores against the
+stored bitmap); a blurred pair then costs a blur and the pair's ZNCC. When
+the reference-view rule read blur-matched pairs, the ratio of 1.25 added
+0.047 ms to a track's pairs (17 µs per blurred pair with the assessments
+spread over them), where a blur per direction added 0.35 ms (12.7 µs per
+blurred pair, on ten times as many pairs). A tile with samples off the photograph takes the
 reading's slower route, which visits every sample, at about 50 µs a reading.
 Member coherence reads its ellipses on the largest square inside its common
 support, where every sample carries data, and its blurred renders the same
@@ -456,7 +535,8 @@ datasets of the reference-view work, all in one session on one machine:
 
 | Consumer | Option | Added cost | Effect | Default |
 |---|---|---|---|---|
-| Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.13 ms per track (median; p90 0.81 ms), 2.1% of an evaluation (a blur per direction: +0.37 ms, 5.8%) | 28 of 77 hand picks exactly, as plain (tune half 18, held-out 10), against 30 for a blur per direction; the pick differs from plain on 4 of 661 tracks | on |
+| Each observation against the stored bitmap (§ "Scores against the stored bitmap") | blur-matched, ratio 1.25, the bitmap alone blurred | +0.043 ms per track (median; p90 0.11 ms), 0.7% of an evaluation | the bitmap blurred for 10.5% of observations, their score raised by a median of 0.025; reported beside the plain score, and nothing decides on it yet | on |
+| Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.13 ms per track (median; p90 0.81 ms), 2.1% of an evaluation (a blur per direction: +0.37 ms, 5.8%) | 28 of 77 hand picks exactly, as plain (tune half 18, held-out 10), against 30 for a blur per direction; the pick differs from plain on 4 of 661 tracks | off (removed) |
 | Member coherence's decision ([member-coherence-validation.md](member-coherence-validation.md)) | blur-matched, ratio 1.25 | 1.18 × the plain run on one thread (a blur per direction 1.77 ×) | a planted member blurred by `σ` 2 is evicted 2.9% of the time against 4.9% plain (1.8% for a blur per direction); verdicts change on 0.4% of real points, in both directions | off |
 
 ## Implementation notes
@@ -468,18 +548,18 @@ own render over the largest square inside the common support. An ellipse read
 on another render of the view (another resolution, sampler or support)
 describes another tile. The probes' blurred tiles must then be read the same
 way, since the width compares their readings with the partner's:
-`blur_matched_pairs` reads them with `read_tile_ellipse`, member coherence with
-its own square, and an ellipse read any other way would set the blur against a
-different scale.
+`BitmapScorer` reads the bitmap's with `read_tile_ellipse`, member coherence
+with its own square, and an ellipse read any other way would set the blur
+against a different scale. The observation's ellipse the bench passes is its
+tile's whole reading over the samples on the photograph, the same reading.
 
 **A tile's assessment depends on its own tile only.** It is read once for each
 view some pair blurs, from that view's tile and ellipse alone, and every pair
 reuses it; which views are assessed depends on the ellipses alone. So a pair
-reads the same in a track as alone, bit for bit, and
-the same whatever order the views come in (to rounding, since reversing a
-pair's two tiles reorders the sums); tests check both. Which tile is blurred
-does not depend on the order either: `pair_blur` swaps its answer with its
-arguments.
+reads the same in a track as alone, bit for bit; for the scores against the
+stored bitmap, an observation scored with the others reads what it reads
+scored alone, which a test checks. Which tile is blurred does not depend on the
+order either: `pair_blur` swaps its answer with its arguments.
 
 **The first pass covers the band the second reads.** The tile sits in a buffer
 padded with zeros by both passes' reach, and the first pass writes the tile and
@@ -500,11 +580,9 @@ pixels has less variance than its width says once the width is under about 1:
 blurred by less than 1, so under `σ` 1 the taps are those of a sampled Gaussian
 whose width is found by bisection so their variance is `σ²`.
 
-**A pair left plain reads exactly the plain value.** `pair_zncc_readings`
-gathers the cells' sums in the same order and by the same formula as
-`pair_zncc_grid` ([reference-view.md](reference-view.md)), so a pair the rule
-leaves alone reads the plain cell grid bit for bit, and member coherence copies
-its plain value for such a pair.
+**A pair left plain reads exactly the plain value.** A score the bitmap is not
+blurred for copies its plain value, bit for bit, and member coherence copies its
+plain value for such a pair.
 
 ## Parameters
 
@@ -524,7 +602,7 @@ constants are defined in
 (`GROWTH_PROBE_SIGMAS`, `MAX_BLUR_SIGMA`),
 [pair_sharpness.rs](../../../crates/sfmtool-core/src/patch/pair_sharpness.rs)
 (the pairing rule's) and
-[pair_readings.rs](../../../crates/sfmtool-core/src/patch/reference_view/pair_readings.rs)
+[zncc.rs](../../../crates/sfmtool-core/src/patch/blur_matched/zncc.rs)
 (`MIN_WINDOWED_SAMPLES`).
 
 ## Python bindings
@@ -563,46 +641,38 @@ if a["semi_axes"][0] < b["semi_axes"][1]:  # sharper along every direction
     out = blur_to_length(sharp["samples"], a, min(b["semi_axes"][1], 2.0), valid=sharp["valid"])
 ```
 
-The pair-matrix convenience below reads a track's tiles the way the bench
-does, built from the same per-tile operations and the pairing rule of
-`pair_sharpness`.
+`sfmtool._sfmtool.patches.score_against_bitmap(bitmap, tiles, *, valid=None,
+reference=None, window="gaussian_disk", window_sigma=0.6)` scores a
+`(k, R, R, C)` uint8 stack of observations' tiles against a point's `(R, R, 4)`
+stored bitmap (§ "Scores against the stored bitmap"). A tile's channels read
+as above, and `valid` is an optional `(k, R, R)` bool stack, `False` marking a
+sample without data; a bitmap sample whose alpha is 0 carries none. `reference`
+is the index of the tile the bitmap is, not computed. It returns a dict:
+`zncc` and `blur_matched_zncc` `(k,)` (NaN where a pair cannot be read, 1 for
+the reference), `blur_sigma` `(k,)` (the width the bitmap was blurred by, 0
+where it was not), `sharper_than_bitmap` `(k,)` bool and `bitmap_semi_axes`
+`(2,)`. It raises `ValueError` for a bitmap that is not square RGBA of 3 or
+more on a side, tiles of another side, a `reference` past the tiles, a `valid`
+of the wrong shape or an unknown window.
 
-`sfmtool._sfmtool.patches.blur_matched_zncc_matrix(tiles, *, valid=None,
-ellipses=None, matching="blur_matched", min_ellipse_ratio=1.25,
-window="gaussian_disk", window_sigma=0.6)` reads every pair of a
-`(k, R, R, C)` uint8 stack of tiles. One channel is grey, two grey and alpha,
-three RGB and four RGB and alpha; alpha is not correlated, and 0 there marks a
-sample without data. `valid` is an optional `(k, R, R)` bool stack, as
-`OrientedPatch.render_view_tile` returns it, `False` marking a sample without
-data. `ellipses` is `(k, 2, 2)` float64, NaN for a tile without one, or `None`
-to read each tile's whole self-similarity here, over the samples with data,
-which is how the blurred tiles are read; ellipses passed in should be read that
-way too, or the blur is set against a different reading. It returns a dict:
-`zncc` `(k, k)`, `zncc_grid` `(k, k, 3, 3)`, `blurred` `(k, k)` bool,
-`blur_sigma` `(k, k)` (the width the row's tile was blurred by against the
-column's, 0 where it was not), `pairs`, `pairs_blurred` and `ellipse_matrix`
-`(k, 2, 2)`. It raises `ValueError` for a stack that is not square tiles of 3
-or more on a side with 1 to 4 channels, a `valid` or `ellipses` of the wrong
-shape, an unknown name, or a ratio under 1 or not finite.
-
-The bench's readings are those of the tiles `render_view_tile` renders at each
+The bench's scores are those of the tiles `render_view_tile` renders at each
 view's keypoint, at the evaluation's resolution and with its sampler, read with
-their `valid` flags, the ellipses left to the function, a ratio of 1.25 and the
-default window:
+their `valid` flags against the track's bitmap and its reference:
 
 ```python
-from sfmtool._sfmtool.patches import blur_matched_zncc_matrix
+from sfmtool._sfmtool.patches import score_against_bitmap
 
 rendered = [
     patch.render_view_tile(camera, pose, image, keypoint=kp)
     for camera, pose, image, kp in views
 ]
-out = blur_matched_zncc_matrix(
+out = score_against_bitmap(
+    bitmap,
     np.stack([t["samples"] for t in rendered]),
     valid=np.stack([t["valid"] for t in rendered]),
-    matching="blur_matched_above_ratio",
+    reference=reference_index,
 )
-print(out["pairs_blurred"], "of", out["pairs"], "pairs blurred")
+print(out["zncc"], out["blur_matched_zncc"], out["blur_sigma"])
 ```
 
 `PatchCloud.validate_member_coherence(..., matching=, min_ellipse_ratio=)` and
@@ -642,21 +712,22 @@ sharper are assessed, each once and in view order, and none under `Plain`;
 that a view without an assessment leaves its pairs plain; and that which views
 are assessed, and which view of each pair is blurred to what length, do not
 depend on the order of the views.
-[reference_view/pair_readings/tests.rs](../../../crates/sfmtool-core/src/patch/reference_view/pair_readings/tests.rs)
-checks that real grained tiles at three angles read every pair plain, bit for
-bit; that only one tile of a pair is blurred, and the same tile by the same
-width with the views reversed; that each view some pair blurs is assessed once
-however many pairs blur it; that the readings do not depend on the order of
-the views; that a pair reads the same in a track as alone, bit for bit; that a
-tile and a blurred copy of it read a ZNCC near 1 blur-matched and well above
-plain; and that equally sharp views read the plain value.
+[stored_bitmap/tests.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap/tests.rs)
+checks the scores against a stored bitmap: that a sharp bitmap is blurred,
+and only the bitmap, to a blurrier observation's semi-minor axis by the width
+its own assessment gives, the blur-matched score rising over the plain one;
+that an observation sharper than the bitmap is read plain, bit for bit, and
+flagged, with no assessment read; that grain at another angle and a
+difference under the ratio are read plain; that the reference is not scored
+and every other observation scores as it does alone, against one assessment;
+and that samples without data are left out.
 [member_coherence/tests.rs](../../../crates/sfmtool-core/src/patch/member_coherence/tests.rs)
 checks that a member blurred in its photograph is lifted blur-matched, more
 than any pair of the sharp members is.
-[reference_view/tests.rs](../../../crates/sfmtool-core/src/patch/reference_view/tests.rs),
-[member_coherence/tests.rs](../../../crates/sfmtool-core/src/patch/member_coherence/tests.rs)
-and [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
-test the consumers. The Python tests are in
+[bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
+checks that every row of a track on the seoul_bull ground truth is scored
+against its bitmap as the scorer scores it directly, and that the bitmap's own
+row reads 1. The Python tests are in
 [test_blur_matched_rust_bindings.py](../../../tests/rust_bindings/patches/test_blur_matched_rust_bindings.py).
 
 ## Non-goals
@@ -684,10 +755,11 @@ test the consumers. The Python tests are in
   Whether the bars should switch at all is an open question of Part 6 of
   [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md):
   blur-matched, they would stop reacting to views that are out of focus.
-- **The fuse's IRLS residuals.** Each view's residual against the weighted mean
-  is recomputed every iteration, and the mean, the blurrier of every pair,
-  changes with the weights, so blur-matching the residuals needs the mean's
-  ellipse every iteration and changes the stored bitmap, not only a score. How
-  the bitmap is computed is Part 5 of the same draft.
+- **The fused means' IRLS residuals.** The stored bitmap is the reference
+  view's tile, not a mean ([reference-view.md](reference-view.md) § "The
+  stored bitmap"). The kernels that still build a weighted mean as their
+  template (the localizer, the sub-pixel refiner, normal refinement, and the
+  stored bitmap's fallback where the rule picks no view) read their residuals
+  plain; each would blur-match them only on its own measurement.
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.

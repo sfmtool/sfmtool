@@ -71,7 +71,7 @@ as `OUTPUT`.
 | `--obliquity-weight-power` | float ≥ 0 | `2` | Exponent `p` of the multiplicative **obliquity view-weight** `\|v̂·n\|^p` folded into the robust normal-refinement consensus (use A). `0` disables it — the consensus runs as before. `2` (default) is the `cos²θ` foreshortening weight: it softly down-weights a view the more obliquely it sees the surfel — a continuous complement to the hard `--max-obliquity-deg` cut, on points whose views span a range of obliquities. On a low-parallax point (all views near-collinear, hence near-equal obliquity) it renormalizes away; that case is what `--fronto-prior-weight` addresses. See [`specs/core/patch/patch-normal-refinement.md`](../../core/patch/patch-normal-refinement.md). |
 | `--fronto-prior-weight` | float ≥ 0 | `0.05` | Weight `λ` of the additive **fronto-parallel prior** `λ·mean_v (v̂·n)²` on each candidate normal during refinement (use B). `0` disables it. It rewards normals that face the observing cameras, supplying the constraint the data can't when `Φ` is flat — the narrow-baseline degeneracy where every candidate tilt shifts all views' patches identically, so a low-parallax surfel drifts to a photometrically-equivalent tilt and renders distorted (a stop sign's octagon shears into a smear). The prior lands it fronto-parallel instead; wherever real parallax curves `Φ` the small prior is overruled, so well-constrained normals are unaffected. The `0.05` default (with `--obliquity-weight-power 2`) straightens low-parallax surfels at negligible photoconsistency cost. See [`specs/core/patch/patch-normal-refinement.md`](../../core/patch/patch-normal-refinement.md). |
 | `--refine-max-views` | int ≥ 0 | `8` | Cap the **round-2+ normal-refinement basis** at the `N` most normal-informative views per point — the D-optimal geometric pick of [`specs/core/patch/patch-normal-refine-view-subset.md`](../../core/patch/patch-normal-refine-view-subset.md) (a least-oblique appearance anchor plus a greedy information-determinant fill; always the best `N`, no fall-back-to-all). `0` disables the cap (use all views). Applies only to the fine-tuning rounds, whose view set is the `select_views`-expanded one; the round-1 (raw-track) refine is untouched. **Lossless for the output**: only the refinement basis shrinks — every observation stays, and the consensus bitmaps are still fused over the full view set. The default `8` roughly halves end-to-end time vs all-views on large view sets. |
-| `--max-zncc-self-similarity-radius` | float ≥ 0 | `2.5` | Drop a **point** whose round-1 consensus bitmap pins no 2D position: its [ZNCC self-similarity radius](../../core/patch/zncc-self-similarity-radius.md), how far the bitmap can slide over itself and still match itself, is above this, in **patch-grid** pixels. Read right after round 1's sub-pixel refine, before the multi-round refinement, so the points it drops cost nothing further. It is read [the overlap way](../../core/patch/zncc-self-similarity-radius.md#the-overlap-reading), as the member gates read their tiles: each shift is correlated over the samples the bitmap holds, with alpha above 0, on both sides. It drops points on a straight edge or a flat patch, which the agreement gates let through. A point with no consensus has no reading and is left to the track thresholds. The radius reads at most `3`, so `3` or more turns nothing out; `0` disables it and skips the round-1 bitmap render on a multi-round run. The default is `2.5`, the member gate's bar. |
+| `--max-zncc-self-similarity-radius` | float ≥ 0 | `2.5` | Drop a **point** whose round-1 stored bitmap (the render the sub-pixel stage makes after round 1) pins no 2D position: its [ZNCC self-similarity radius](../../core/patch/zncc-self-similarity-radius.md), how far the bitmap can slide over itself and still match itself, is above this, in **patch-grid** pixels. Read right after round 1's sub-pixel refine, before the multi-round refinement, so the points it drops cost nothing further. It is read [the overlap way](../../core/patch/zncc-self-similarity-radius.md#the-overlap-reading), as the member gates read their tiles: each shift is correlated over the samples the bitmap holds, with alpha above 0, on both sides. It drops points on a straight edge or a flat patch, which the agreement gates let through. A point with no bitmap has no reading and is left to the track thresholds. The radius reads at most `3`, so `3` or more turns nothing out; `0` disables it and skips the round-1 bitmap render on a multi-round run. The default is `2.5`, the member gate's bar. |
 | `--localize-search-strategy` | choice | `plus_descent` | Per-(view, round) shift-grid traversal inside the keypoint localizer's `search_shift`. `plus_descent` (default) is steepest-descent on the 4 axis neighbors, scoring ~6 cells per call via an AVX2 single-position vgather kernel — ~1.9× faster end-to-end on dino at comparable accuracy (median per-observation keypoint shift vs `exhaustive` ~0.05 px, 91 % within 1 px). `exhaustive` scores the full `(2·margin+1)²` grid via the SIMD SAXPY accumulator — the global-argmax fallback, no local-optima risk. See [`specs/core/patch/keypoint-localization-search-cache.md`](../../core/patch/keypoint-localization-search-cache.md). |
 | `--localize-basis-views` | int ≥ 0 | `8` | Cap the **keypoint localizer's consensus basis** at `N` views per point: `N` congeal against each other — ranked by the `select_views` ZNCC, with the track views claiming seats first — and every remaining view registers **once** against the finished basis template. Bounds the `O(V²)` per-round consensus terms on the `select_views`-expanded view sets, whose tail reaches hundreds of views on a long capture. Every observation is still localized and reported: only the consensus *membership* shrinks. The `8` default roughly halves embed wall on expanded view sets; `0` congeals all views (which is also what a point with `V ≤ N` views gets) and gives the cleanest error metrics — prefer it for ground-truth cleanup. See [`specs/core/patch/keypoint-localization-consensus-basis.md`](../../core/patch/keypoint-localization-consensus-basis.md). |
 | `--sampler` | choice | `per_view` | Pyramid sampler for every photometric kernel in the pipeline (normal refinement, view selection, keypoint localization, sub-pixel refinement, the fuse): `per_view` applies the sampler rule to each view, rendering it with `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and with `bilinear_mip` otherwise, so every kernel reads the same view through the same sampler (see [`specs/core/camera/image-warping.md`](../../core/camera/image-warping.md) § "Choosing the sampler per view"). The other three render every view with one sampler: `bilinear_mip` taps the mip level nearest the warp's compression, bounding aliasing on cross-scale views at ~bilinear cost; `anisotropic` also resolves oblique footprints, with the AVX2 kernel at 0.65–1.55× the cost of `bilinear_mip` per tile (the most on views compressed 10 times or more along one axis) and 1.8–4× it on a CPU without AVX2 (the value+gradient render the sub-pixel refinement reads has no AVX2 kernel and costs 2.8–7×); `bilinear` taps the full-resolution level only. |
@@ -104,19 +104,22 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   ZNCC. Only that last, *relative* verdict is softened by the localizer's
   two-view floor; the absolute ones stand, so a point can come out of
   localization below `--min-views` and be dropped whole.
-- **Reference bitmaps.** Each surviving point's stored bitmap is the cross-view
-  **consensus texture fused in the sub-pixel keypoint-refinement stage** at the
-  final per-view keypoints (`refine_keypoints(render_bitmaps=True)`; with
-  `--subpixel 0` the stage still runs render-only at the localizer's keypoints).
-  Points at infinity go through the same `w`-aware render path and get a real
-  consensus bitmap — no zero-row exemption. (Bitmaps are no longer sourced from
-  normal refinement, whose render lagged the final keypoints by one round.)
-- **Self-similarity cull.** After round 1 the sub-pixel stage fuses each
-  point's consensus bitmap (whatever the round count, while the cull is on),
+- **Reference bitmaps.** Each surviving point's stored bitmap is the tile of
+  its **reference view**, the view the reference-view rule picks among the
+  point's views at the final per-view keypoints of the sub-pixel
+  keypoint-refinement stage (`refine_keypoints(render_bitmaps=True)`; with
+  `--subpixel 0` the stage still runs render-only at the localizer's
+  keypoints), and `tracks/reference_observations` records which observation it
+  is ([reference-view.md](../../core/patch/reference-view.md) § "The stored
+  bitmap"). Where the rule picks no view the bitmap is the views' fused mean
+  and the point records `-1`. Points at infinity go through the same
+  `w`-aware render path and get a real bitmap — no zero-row exemption.
+- **Self-similarity cull.** After round 1 the sub-pixel stage renders each
+  point's bitmap (whatever the round count, while the cull is on),
   and a point whose bitmap's ZNCC self-similarity radius is over
   `--max-zncc-self-similarity-radius` is dropped before round 2. The reading
   depends on the point's own bitmap alone, so dropping a point early changes
-  no other point's consensus. On the seoul_bull and kerry_park solves it drops
+  no other point's bitmap. On the seoul_bull and kerry_park solves it drops
   59 of 837 and 292 of 1,886 points at the default. The run records the bar
   in the file's `tool_options` as `max_zncc_self_similarity_radius`; files
   written before the cull read the radius carry `max_keypoint_uncertainty` there, and
@@ -126,8 +129,9 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   were made under (`1.5`), or null for a fixed sampler. With the threshold and a
   view's zoom a reader can work out which sampler rendered it.
 - **Track thresholds.** A point is dropped whole when its support count falls
-  below `--min-views`, or when the sub-pixel stage produced **no valid consensus
-  bitmap** for it (fewer than two of its views render at their final keypoints) —
+  below `--min-views`, or when the sub-pixel stage produced **no valid
+  bitmap** for it (fewer than two views, or no reference view and fewer than two
+  of its views render at their final keypoints for the fused mean) —
   the same rule for finite and infinity points, so no kept point carries an
   all-black bitmap.
 - **Image identity.** For each surviving image, `images/image_file_hashes[i]` is

@@ -215,7 +215,7 @@ abstraction.
   `BilinearMip` otherwise ([image-warping.md](../camera/image-warping.md) §
   "Choosing the sampler per view"). **Each view's sampler is chosen once**, for
   the observation at its seed keypoint, and the refine tile, every core read and
-  the fused representative use it: the core only slides in the patch's plane,
+  the fused mean use it: the core only slides in the patch's plane,
   so its Jacobian, and the choice, hardly change as it moves.
 - **Rendering** reuses `WarpMap::from_patch` + `remap_bilinear` /
   `remap_bilinear_mip` / `remap_aniso_with_pyramid`. Gradients come from
@@ -278,54 +278,51 @@ the final score. The view set is returned unchanged (a guard-failed view stays a
 its seed, so set and ordering are preserved).
 
 Per point (opt-in, `KeypointSubpixelParams::render_bitmaps` / the binding's
-`refine_keypoints(render_bitmaps=True)`): the fused **representative RGBA
-texture** (`R·R·4`), rendered at the **final** per-view keypoints and fused with
-the final IRLS view weights — the same weighted-mean-RGB +
-agreement·coverage-alpha fusion normal refinement uses (`PatchViewStack::fuse`,
-shared across the two modules). Because the refiner settles the final keypoints,
-this is where the pipeline's stored reference bitmaps come from (they previously
-came from normal refinement and lagged the final sub-pixel refinement by one
-round). Two properties matter to consumers:
+`refine_keypoints(render_bitmaps=True)`): the point's **stored bitmap**
+(`KeypointRefinement::representative`, `R·R·4` RGBA), rendered at the
+**final** per-view keypoints. It is the tile of the view the reference-view
+rule picks among the refined views, named in `KeypointRefinement::reference`
+(the binding's `reference_image`), as
+[reference-view.md](reference-view.md) § "The stored bitmap" describes; where
+the rule picks none, it is the fused mean below and names no view. Because the
+refiner settles the final keypoints, this is where `sfm embed-patches`' stored
+bitmaps come from. Two properties matter to consumers:
 
-- **The representative render uses the refine `sampler`**: each view with the
-  sampler its refinement read it with. The stored texture and the cores the IRLS
-  weights are scored against are then sampled the same way, so the fused
-  reference bitmap matches the pixels that drove the refinement. Under the
-  default sampler rule a view the rule leaves on `BilinearMip` contributes the
-  same tile, bit for bit, as under a fixed `BilinearMip`, so a point none of
-  whose views the rule moves fuses the same bitmap.
+- **Each view is rendered with the refine `sampler`**, the sampler rule's
+  choice by default, the same sampler its refinement read it with.
 - **`None` is the uniform culled-point signal.** A point whose final-offset
-  renders leave fewer than two usable views has no cross-view consensus and gets
-  no representative — finite and infinity alike (a `w = 0` point renders through
-  the same path and gets a *real* consensus bitmap, not a zero row).
-  `sfm embed-patches` **drops** such points instead of keeping them with an
-  all-black bitmap.
+  views leave fewer than two usable has no bitmap — finite and infinity alike
+  (a `w = 0` point renders through the same path and gets a real bitmap, not a
+  zero row). `sfm embed-patches` **drops** such points instead of keeping them
+  with an all-black bitmap.
 
-The fuse weights each view by its IRLS agreement with the mean alone, which
-favours views as blurry as the mean over sharper ones; weighting by each view's
-zoom and self-similarity, and blur-matched scoring of the fuse's residuals, is
-proposed in [sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md).
+### The fused mean
+
+Where the reference-view rule picks no view (no candidate has a
+self-similarity reading, or every view sees the patch edge on or from behind),
+the bitmap is the views' fused mean: the views are re-rendered at their final
+offsets, the final IRLS view weights rebuilt from those cores, and the kept
+views rendered whole (`PatchViewStack`) and fused, weighted-mean RGB and
+agreement·coverage alpha — the fusion normal refinement uses
+(`PatchViewStack::fuse`, shared across the two modules). The mean weights each
+view by its IRLS agreement with the mean alone, which favours views as blurry
+as the mean over sharper ones, which is why it is the fallback rather than the
+stored bitmap ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)).
 
 **Fusing without refining.** `fuse_patch_bitmap(patch, views, view_set,
 keypoints, params)` in
 [keypoint_subpixel.rs](../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs)
-is the one place a representative is rendered for a patch whose placement and
-keypoints are settled: the kernel above with `max_gn_steps = 0`,
-`max_outer_sweeps = 1` and `render_bitmaps = true`, seeded at `keypoints`, so
-nothing moves and the pass only renders and blends. It returns `None` when fewer
-than two views render in frame. `fuse_patch_cloud_bitmaps(cloud, recon, views,
-params, done, progress) -> Result<Array4<u8>, Cancelled>` is its whole-cloud
-form, parallel over points, fusing each patch from its point's track at the
-reconstruction's stored keypoints and returning the `(P, R, R, 4)` column with a
-zero row for a point that fused nothing. `views` holds one
-`Option<ProjectedImage>` per image, and a `None` view (a photograph not to hand)
-is left out of every patch's view set, so a point still fuses from the readable
-views that see it. `progress` receives a `patches` count about every hundredth
-of the way and is polled before each patch; a cancelled call returns
-`Cancelled`. It is bound as `PatchCloud.render_bitmaps`, is what `sfm xform
---add-patch-bitmaps` runs, and is what the viewer's open runs for a file that
-carries patch frames and no bitmaps. The bench commit (`bench::fit::fuse_bitmap`) calls
-`fuse_patch_bitmap` for one track.
+renders the fused mean for a patch whose placement and keypoints are settled:
+the kernel above with `max_gn_steps = 0`, `max_outer_sweeps = 1` and the mean
+asked for, seeded at `keypoints`, so nothing moves and the pass only renders
+and blends. It returns `None` when fewer than two views render in frame. The
+stored bitmap of settled keypoints is
+[`render_patch_bitmap`](../../../crates/sfmtool-core/src/patch/stored_bitmap.rs),
+which calls it as its fallback, and `render_patch_cloud_bitmaps` its
+whole-cloud form, parallel over points: `PatchCloud.render_bitmaps`, `sfm xform
+--add-patch-bitmaps`, the viewer's display bitmaps for a file that carries
+patch frames and no bitmaps, and a bench fit
+([reference-view.md](reference-view.md) § "The stored bitmap").
 
 ## Validation
 
