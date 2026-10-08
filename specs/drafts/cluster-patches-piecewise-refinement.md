@@ -42,7 +42,8 @@ pub struct CellRefinement {
     pub shift_px: [[[f32; 2]; 3]; 3],
     /// Windowed ZNCC of each cell at its optimum.
     pub zncc: [[f32; 3]; 3],
-    /// Fitted, refused by its reading, refused by ZNCC, or not attempted.
+    /// Fitted, refused by its reading, refused by ZNCC, refused because its
+    /// best shift lies on the search bound, or not attempted.
     pub status: [[CellStatus; 3]; 3],
     /// Iterations the two-level loop ran before its affine update fell
     /// below the tolerance, or the cap.
@@ -66,11 +67,11 @@ pub struct PiecewiseParams {
 
 pub struct ClusterPatchRefinement {
     // existing per-member fields …
-    pub cells: Vec<CellRefinement>,      // one per member, kept members only
+    pub cells: Vec<Option<CellRefinement>>, // one per member; None unless kept
 }
 ```
 
-**Why this shape.** Displacements are relative to the affine shape, not absolute, so a consumer that ignores them reads the file exactly as before. They are in template grid px, the unit every other refined quantity in the file uses. The status is per cell because the point of the stage is to know which cells to trust; a single per-member flag would discard that. The iteration count is reported because a member that hit the cap is one whose affine never settled, and a consumer may want to treat its residuals as less trustworthy. The shift bound and the render margin are one parameter because they must be equal: a search that can reach a shift the render did not cover reads outside the tile.
+**Why this shape.** Displacements are relative to the affine shape, not absolute, so a consumer that ignores them reads the file exactly as before. They are in template grid px, the unit every other refined quantity in the file uses. The status is per cell because the point of the stage is to know which cells to trust; a single per-member flag would discard that. The cells are one entry per member, `None` for a member that is not kept, so they index like every other per-member array and a consumer cannot pair a member with another member's cells. The iteration count is reported because a member that hit the cap is one whose affine never settled, and a consumer may want to treat its residuals as less trustworthy. The shift bound and the render margin are one parameter because they must be equal: a search that can reach a shift the render did not cover reads outside the tile.
 
 **Example.** The seed's writer, given poses, back-projects each kept member's nine cell centres plus their displacements to rays, intersects them per cell across members, and hands the nine fitted centres with their statuses to the gated plane fit.
 
@@ -97,7 +98,7 @@ The stored displacement is defined as the residual to the converged affine. That
 
 A cell over flat or repeating texture registers anywhere. Its shift is noise, and its ZNCC may still be high because a flat region correlates with a flat region at every shift. The cell's reading says so: at the sizes the cluster-patches file uses, a cell is too small for a self-similarity ellipse, so the reading is the curvature of the cell's ZNCC over its shift search. A flat curvature refuses the cell. A low ZNCC at the optimum refuses it for the other reason, that it is over a different surface. The whole-member gate in the current refinement does the same for the member; this applies it per cell.
 
-The affine update is fitted to the survivors. Six parameters need at least three non-collinear cells, and a trustworthy fit needs more. A rule on the count and the spread of the survivors chooses the model: a full affine with five or more well-spread cells, a similarity with three or four, a pure shift below that, and no update when none survive, in which case the member keeps its cascade shape and all nine cells are stored as not attempted.
+The affine update is fitted to the survivors. Six parameters need at least three non-collinear cells, and a trustworthy fit needs more. A rule on the count and the spread of the survivors chooses the model: a full affine with five or more well-spread cells, a similarity with three or more otherwise, a pure shift below that, and no update when none survive, in which case the member keeps its cascade shape and all nine cells are stored as not attempted. "Otherwise" covers three or four cells, five or more that lie along one row or column and so pin only one axis of an affine, and five or more well-spread cells whose affine normal equations are singular: each falls back one step, to the similarity, before the shift.
 
 ### Double resampling
 
@@ -118,6 +119,12 @@ Per kept member, four new entries in the cluster-patches file: `member_cell_shif
 - At `patch_size = 12` a cell is 4×4 template px. That is enough for a shift registration against a textured template, and not enough for a self-similarity ellipse, which is why the per-cell gate reads curvature here and the self-similarity gate applies when the refinement runs at a larger size.
 - The template is the cluster's reference member. The displacements are relative to that member's frame, so the reference member's own cells displace by zero by construction and carry no information; the normal fit uses the other members.
 - The affine update fit is a weighted least squares on at most nine points; it is solved in `f64` and composed into the `f32` shape, because the update is small and its composition with the shape is where a near-identity matrix is multiplied repeatedly.
+- The stored residual is exact to the returned shape. The last render measured cell `c` at `c + d` of its grid, and the returned shape's grid maps to that one by the last update `c ↦ A·c + b`, so the residual is `A⁻¹·(d − (A·c + b − c))`. Subtracting the update's movement without the `A⁻¹` leaves an error of the size of `(A⁻¹ − I)` applied to the residual.
+- The residuals follow the homography's second-order term less closely as the term grows. On the synthetic plane with `h = [0.003, −0.002]` (term up to 0.52 grid px) the largest residual error over the nine cells is 0.099 grid px and the RMS 0.054; at twice that, `h = [0.006, −0.004]` (term up to 1.08 grid px), the largest is 0.31 and the RMS 0.13.
+- The loop's result is all or nothing. When any iteration fails, the first or a later one, by a failed render, no surviving cell, or an update that reflects (`det A ≤ 0`) or is not finite, the member keeps its cascade shape and all nine cells are stored as not attempted; what earlier iterations fitted is discarded, because the cells were read at a shape that would not be the one returned.
+- After the loop moves a member, its whole-patch ZNCC, its parts and its shift from the seed are read again at the new shape, and the cascade's acceptance gates, `min_zncc` and `max_shift_px`, are applied to those readings. A member that fails either, or whose new support leaves the frame, keeps its cascade shape and readings, with all nine cells not attempted.
+- A cell's search reads the window's sum and sum of squares from summed-area tables of the working patch, built once per render; the template side is mean-removed, so the cross term needs no window mean and is the only pass over the window per shift.
+- The stage is off by default (`ClusterRefineParams::piecewise` is `None`) until the cluster-patches file carries the cells; the milestone that adds them turns it on from the CLI, and the fleet comparison decides the default.
 
 ## Determinism and precision
 

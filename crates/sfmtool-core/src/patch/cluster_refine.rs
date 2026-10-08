@@ -1000,6 +1000,7 @@ fn refine_cluster(
                         resolution,
                         step,
                         off,
+                        params,
                         pp,
                     )
                 });
@@ -1016,9 +1017,16 @@ fn refine_cluster(
 /// Run the piecewise refinement on one kept member and store its outcome:
 /// the cells always, and, when the loop moved the shape, the new shape and
 /// position with the whole-patch ZNCC, its parts and the shift from the seed
-/// read again at the new map. The member's status stays the cascade's. When
-/// the new map's support leaves the frame the member keeps its cascade
-/// readings and every cell is stored as not attempted.
+/// read again at the new map. The member's status stays the cascade's.
+///
+/// The member was kept on the cascade's readings, so the stage's shape must
+/// pass the same gates to replace it: the ZNCC read again at the new map must
+/// be at least [`ClusterRefineParams::min_zncc`], and the new position's
+/// shift from the seed at most [`ClusterRefineParams::max_shift_px`]. When
+/// either fails, or when the new map's support leaves the frame so nothing
+/// can be read, the member keeps its cascade shape, position and readings,
+/// and every cell is stored as [`CellStatus::NotAttempted`] with the loop's
+/// iteration count.
 #[allow(clippy::too_many_arguments)]
 fn refine_kept_member_cells(
     member: &mut MemberOutcome,
@@ -1031,6 +1039,7 @@ fn refine_kept_member_cells(
     resolution: u32,
     step: f64,
     off: f64,
+    params: &ClusterRefineParams,
     pp: &PiecewiseParams,
 ) {
     let s = [
@@ -1054,15 +1063,17 @@ fn refine_kept_member_cells(
         return;
     }
     let (sh, ps) = (out.shape, out.position);
-    let Some((zncc, parts)) = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off)
-    else {
+    let shift = (ps[0] - seed_pos[0]).hypot(ps[1] - seed_pos[1]);
+    let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off)
+        .filter(|&(zncc, _)| zncc >= params.min_zncc && shift <= params.max_shift_px);
+    let Some((zncc, parts)) = reread else {
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
         return;
     };
     member.affine = [[sh[0][0], sh[0][1], ps[0]], [sh[1][0], sh[1][1], ps[1]]];
     member.zncc = zncc as f32;
     member.set_parts(parts);
-    member.shift = (ps[0] - seed_pos[0]).hypot(ps[1] - seed_pos[1]) as f32;
+    member.shift = shift as f32;
     member.cells = Some(out.cells);
 }
 
@@ -1224,7 +1235,7 @@ pub fn refine_cluster_patches_borrowed(
         member_zncc_middle: vec![f32::NAN; m],
         member_zncc_grid: vec![[[f32::NAN; 3]; 3]; m],
         member_shift_px: vec![f32::NAN; m],
-        cells: Vec::new(),
+        cells: vec![None; m],
     };
     for (c, out) in outcomes.into_iter().enumerate() {
         result.reference_members[c] = out.reference;
@@ -1237,9 +1248,7 @@ pub fn refine_cluster_patches_borrowed(
             result.member_zncc_grid[k] = mo.zncc_grid;
             result.member_shift_px[k] = mo.shift;
             if mo.status == MemberStatus::Kept {
-                if let Some(cells) = mo.cells {
-                    result.cells.push(cells);
-                }
+                result.cells[k] = mo.cells;
             }
             // The 2×3 the cascade carries splits into the two arrays the
             // format stores: leading 2×2 the absolute shape, last column the

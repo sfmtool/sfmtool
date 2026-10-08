@@ -29,7 +29,7 @@ use crate::camera::image::ImageU8Pyramid;
 use crate::patch::normal_refine::{grid_bounds, FLAT_NORM_SQ_EPS};
 
 use super::kernels::TemplateKernel;
-use super::{mul2, sample_grid_window, GridEdge, Mat2};
+use super::{inv2, mul2, sample_grid_window, GridEdge, Mat2};
 
 #[cfg(test)]
 mod tests;
@@ -59,8 +59,9 @@ pub struct PiecewiseParams {
     /// px on each side (rounded up), and the shift search covers the whole
     /// shifts within it (rounded down), so no shift reads past the render.
     /// The sub-pixel peak needs a whole-pixel neighbour on each side, so a
-    /// cell whose best whole shift lies on the bound is refused, and a bound
-    /// under `1` refuses every cell.
+    /// cell whose best whole shift lies on the bound is refused as
+    /// [`CellStatus::RefusedBound`], and a bound under `1` refuses every cell
+    /// that way.
     pub cell_shift_bound_px: f32,
     /// A cell whose ZNCC at its optimum is below this is refused as
     /// [`CellStatus::RefusedZncc`]. See [`DEFAULT_MIN_CELL_ZNCC`].
@@ -100,9 +101,8 @@ pub enum CellStatus {
     /// The cell's shift was measured and the affine update was fitted to it.
     Fitted = 0,
     /// The cell's own reading refused it: the reference is flat over the cell,
-    /// the ZNCC peak is flatter than
-    /// [`PiecewiseParams::min_cell_curvature`], or the best whole shift lies
-    /// on the search bound.
+    /// or the ZNCC peak is flatter than
+    /// [`PiecewiseParams::min_cell_curvature`].
     RefusedCurvature = 1,
     /// The cell's ZNCC at its optimum is below
     /// [`PiecewiseParams::min_cell_zncc`]: it is over a different surface.
@@ -111,6 +111,11 @@ pub enum CellStatus {
     /// read, or no cell of the member survived, in which case the member
     /// keeps its cascade shape and every cell is stored this way.
     NotAttempted = 3,
+    /// The cell's best whole shift lies on the search bound
+    /// [`PiecewiseParams::cell_shift_bound_px`], so no whole-pixel neighbour
+    /// on that side was read and no sub-pixel peak can be fitted: the cell's
+    /// optimum is at or past the bound.
+    RefusedBound = 4,
 }
 
 /// Per-cell registration of one member against the template, as the residual
@@ -120,9 +125,13 @@ pub enum CellStatus {
 pub struct CellRefinement {
     /// Displacement of each cell's centre from where the converged affine
     /// shape places it, in template grid px, `[x, y]` along the grid's columns
-    /// and rows. Measured at the loop's last render, less the last update.
-    /// `NaN` where no sub-pixel shift was measured: a cell refused by
-    /// curvature or not attempted.
+    /// and rows. Measured at the loop's last render and carried into the
+    /// returned shape's grid: with the last update `c ↦ A·c + b` and a shift
+    /// `d` measured at cell centre `c`, the residual is `A⁻¹·(d − (A·c + b −
+    /// c))`, the point `c + d` of the last render's grid expressed in the
+    /// returned shape's grid, less `c`. `NaN` where no sub-pixel shift was
+    /// measured: a cell refused by curvature or by the bound, or not
+    /// attempted.
     pub shift_px: [[[f32; 2]; 3]; 3],
     /// ZNCC of each cell at its optimum at the last render: the sub-pixel
     /// peak's value where one was read, the best whole shift's otherwise.
@@ -261,14 +270,124 @@ fn centred(mut vals: Vec<f64>) -> Option<(Vec<f64>, f64)> {
 }
 
 /// The member's photograph rendered on the template's grid plus the margin,
-/// interleaved `side × side × channels`, `NaN` where a sample left the image.
+/// interleaved `side × side × channels`, `NaN` where a sample left the image,
+/// with the summed-area tables the cell search reads its window sums from.
 pub(super) struct WorkingPatch {
     pub(super) side: usize,
     pub(super) channels: usize,
     pub(super) samples: Vec<f32>,
+    sums: PatchSums,
+}
+
+/// Summed-area tables of one working patch, `(side + 1)²` entries each,
+/// row-major, entry `(y, x)` the sum over the samples above and left of it.
+///
+/// A window's sum and sum of squares come from four entries each instead of a
+/// pass over the window, which is what makes the whole-shift search cheap:
+/// the template side of the ZNCC is mean-removed, so the cross term
+/// `Σ (u − ū)·t = Σ u·t` needs no window mean, and the window's own
+/// `Σ (u − ū)² = Σ u² − (Σ u)² / n` needs only the two sums.
+struct PatchSums {
+    /// Per channel, the mean of the channel's finite samples, subtracted from
+    /// every sample before it is summed so the tables hold small numbers and
+    /// `Σ u² − (Σ u)² / n` does not cancel. The ZNCC does not depend on it.
+    offset: Vec<f64>,
+    /// Per channel, the table of `u − offset`, a missing sample counted as
+    /// `0`.
+    sum: Vec<Vec<f64>>,
+    /// Per channel, the table of `(u − offset)²`.
+    sum_sq: Vec<Vec<f64>>,
+    /// The table of missing samples: `1` where any channel of the sample is
+    /// non-finite.
+    missing: Vec<u32>,
+}
+
+impl PatchSums {
+    fn new(side: usize, channels: usize, samples: &[f32]) -> PatchSums {
+        let n = side + 1;
+        let offset: Vec<f64> = (0..channels)
+            .map(|c| {
+                let (mut s, mut k) = (0.0f64, 0usize);
+                for v in samples.iter().skip(c).step_by(channels) {
+                    if v.is_finite() {
+                        s += f64::from(*v);
+                        k += 1;
+                    }
+                }
+                if k > 0 {
+                    s / k as f64
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let mut sum = vec![vec![0.0f64; n * n]; channels];
+        let mut sum_sq = vec![vec![0.0f64; n * n]; channels];
+        let mut missing = vec![0u32; n * n];
+        for y in 0..side {
+            for x in 0..side {
+                let px = &samples[(y * side + x) * channels..][..channels];
+                let i = (y + 1) * n + x + 1;
+                let (up, left, diag) = (y * n + x + 1, (y + 1) * n + x, y * n + x);
+                let gone = px.iter().any(|v| !v.is_finite());
+                missing[i] = missing[up] + missing[left] - missing[diag] + u32::from(gone);
+                for c in 0..channels {
+                    let v = if px[c].is_finite() {
+                        f64::from(px[c]) - offset[c]
+                    } else {
+                        0.0
+                    };
+                    let (s, q) = (&mut sum[c], &mut sum_sq[c]);
+                    s[i] = s[up] + s[left] - s[diag] + v;
+                    q[i] = q[up] + q[left] - q[diag] + v * v;
+                }
+            }
+        }
+        PatchSums {
+            offset,
+            sum,
+            sum_sq,
+            missing,
+        }
+    }
+}
+
+/// A window of the working patch, columns `x0..x1` and rows `y0..y1`, read
+/// from a summed-area table whose rows are `stride` entries long.
+#[derive(Clone, Copy)]
+struct Window {
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+    stride: usize,
+}
+
+impl Window {
+    /// The window's total in `table`.
+    fn rect<T>(&self, table: &[T]) -> T
+    where
+        T: Copy + std::ops::Add<Output = T> + std::ops::Sub<Output = T>,
+    {
+        let at = |y: usize, x: usize| table[y * self.stride + x];
+        // Added before subtracted, so an unsigned table never underflows.
+        at(self.y1, self.x1) + at(self.y0, self.x0) - at(self.y0, self.x1) - at(self.y1, self.x0)
+    }
 }
 
 impl WorkingPatch {
+    /// A working patch of `side × side × channels` interleaved samples, with
+    /// its summed-area tables.
+    pub(super) fn new(side: usize, channels: usize, samples: Vec<f32>) -> WorkingPatch {
+        let sums = PatchSums::new(side, channels, &samples);
+        WorkingPatch {
+            side,
+            channels,
+            samples,
+            sums,
+        }
+    }
+
     /// Render the member at position `p` and absolute shape `s`. `None` when
     /// the map is degenerate or the selected pyramid level is too small to
     /// sample.
@@ -292,11 +411,7 @@ impl WorkingPatch {
             GridEdge::Missing,
         )?;
         let channels = samples.len() / (side * side);
-        Some(WorkingPatch {
-            side,
-            channels,
-            samples,
-        })
+        Some(WorkingPatch::new(side, channels, samples))
     }
 }
 
@@ -326,6 +441,10 @@ impl CellReading {
 /// `(dx, dy)` whole grid px, averaged over the template's textured channels.
 /// A channel the moved window is flat in, or the member image lacks, scores
 /// `0`. `None` when a sample the window reads is missing.
+///
+/// The window's sum and sum of squares come from the patch's summed-area
+/// tables; only the cross term with the mean-removed template is a pass over
+/// the window, and it reads the patch in place.
 #[allow(clippy::too_many_arguments)]
 fn cell_zncc_at(
     tc: &CellTemplate,
@@ -336,12 +455,31 @@ fn cell_zncc_at(
     col: usize,
     dx: i64,
     dy: i64,
-    window: &mut Vec<f64>,
 ) -> Option<f64> {
     let b = layout.bounds;
     let m = layout.margin as i64;
-    let side = patch.side as i64;
+    let side = patch.side;
+    let (x0, y0) = (b[col] as i64 + dx + m, b[row] as i64 + dy + m);
+    let (w, h) = (b[col + 1] - b[col], b[row + 1] - b[row]);
+    // The search never reads past the render: the margin covers the
+    // whole-shift reach on every side.
+    debug_assert!(
+        x0 >= 0 && y0 >= 0 && x0 as usize + w <= side && y0 as usize + h <= side,
+        "cell ({row}, {col}) at shift ({dx}, {dy}) reads from ({x0}, {y0}) \
+         outside the {side}x{side} working patch"
+    );
+    let (x0, y0) = (x0 as usize, y0 as usize);
+    let win = Window {
+        x0,
+        x1: x0 + w,
+        y0,
+        y1: y0 + h,
+        stride: side + 1,
+    };
+    let count = (w * h) as f64;
+    let sums = &patch.sums;
     let (mut sum, mut scored) = (0.0, 0usize);
+    let mut checked = false;
     for (tch, t) in tc.channels.iter().enumerate() {
         let Some((t, t_norm)) = t else {
             continue;
@@ -351,34 +489,26 @@ fn cell_zncc_at(
         if src >= patch.channels {
             continue;
         }
-        window.clear();
-        for y in b[row]..b[row + 1] {
-            let py = y as i64 + dy + m;
-            for x in b[col]..b[col + 1] {
-                let px = x as i64 + dx + m;
-                // The search never reads past the render: the margin covers
-                // the whole-shift reach on every side.
-                debug_assert!(
-                    (0..side).contains(&px) && (0..side).contains(&py),
-                    "cell ({row}, {col}) at shift ({dx}, {dy}) reads ({px}, {py}) \
-                     outside the {side}x{side} working patch"
-                );
-                let v = patch.samples[(py * side + px) as usize * patch.channels + src];
-                if !v.is_finite() {
-                    return None;
-                }
-                window.push(f64::from(v));
+        if !checked {
+            if win.rect(&sums.missing) > 0 {
+                return None;
             }
+            checked = true;
         }
-        let mean = window.iter().sum::<f64>() / window.len() as f64;
-        let (mut cross, mut norm_sq) = (0.0, 0.0);
-        for (u, tv) in window.iter().zip(t) {
-            let du = u - mean;
-            cross += du * tv;
-            norm_sq += du * du;
-        }
+        let su = win.rect(&sums.sum[src]);
+        let norm_sq = win.rect(&sums.sum_sq[src]) - su * su / count;
         if norm_sq < FLAT_NORM_SQ_EPS {
             continue;
+        }
+        let k = sums.offset[src];
+        let mut cross = 0.0;
+        let mut tv = t.iter();
+        for y in y0..y0 + h {
+            let line = &patch.samples[(y * side + x0) * patch.channels..];
+            for x in 0..w {
+                let u = f64::from(line[x * patch.channels + src]) - k;
+                cross += u * tv.next().expect("one template sample per window sample");
+            }
         }
         sum += cross / (norm_sq * t_norm).sqrt();
     }
@@ -407,21 +537,10 @@ fn read_cell(
     let n = layout.reach as i64;
     let w = (2 * n + 1) as usize;
     let mut surface = vec![0.0f64; w * w];
-    let mut window = Vec::new();
     let mut best = (0usize, f64::NEG_INFINITY);
     for dy in -n..=n {
         for dx in -n..=n {
-            let Some(z) = cell_zncc_at(
-                tc,
-                src_channels,
-                patch,
-                layout,
-                row,
-                col,
-                dx,
-                dy,
-                &mut window,
-            ) else {
+            let Some(z) = cell_zncc_at(tc, src_channels, patch, layout, row, col, dx, dy) else {
                 return CellReading::refused(CellStatus::NotAttempted, f64::NAN);
             };
             let k = ((dy + n) as usize) * w + (dx + n) as usize;
@@ -435,7 +554,7 @@ fn read_cell(
     if bx.abs() >= n || by.abs() >= n {
         // No whole-pixel neighbour on one side: the optimum is at or past the
         // bound.
-        return CellReading::refused(CellStatus::RefusedCurvature, best.1);
+        return CellReading::refused(CellStatus::RefusedBound, best.1);
     }
     let at = |dx: i64, dy: i64| surface[((by + dy + n) as usize) * w + (bx + dx + n) as usize];
     let z0 = at(0, 0);
@@ -503,10 +622,23 @@ pub(super) enum UpdateModel {
 type Correspondence = ([f64; 2], [f64; 2], f64);
 
 /// The weighted least-squares update through the surviving cells: each is a
-/// correspondence `centre → centre + shift` with weight `weight`. A full
-/// affine from five or more cells whose spread is that of at least two rows or
-/// two columns of cells, a similarity from three or more otherwise, a shift
-/// from one or two. `None` without a survivor or with a degenerate fit.
+/// correspondence `centre → centre + shift` with weight `weight`.
+///
+/// The model is chosen by the survivors' count and spread, falling back one
+/// step at a time:
+///
+/// - a full affine from five or more cells whose spread is that of at least
+///   two rows or two columns of cells;
+/// - a similarity from three or more cells otherwise. That covers three or
+///   four cells, five or more that are not spread over two rows and two
+///   columns (a single row or column pins only one axis of an affine), and
+///   five or more well-spread cells whose affine normal equations are
+///   singular;
+/// - a shift from one or two cells, or from three or more whose spread is
+///   zero.
+///
+/// `None` without a survivor, or when the fitted update reflects or is not
+/// finite.
 fn fit_update(points: &[Correspondence], cell_side: f64) -> Option<(Update, UpdateModel)> {
     let total: f64 = points.iter().map(|p| p.2).sum();
     let weighted = total > 0.0;
@@ -554,22 +686,27 @@ fn fit_update(points: &[Correspondence], cell_side: f64) -> Option<(Update, Upda
             UpdateModel::Shift,
         )
     };
-    let (a, model) = if n >= 5 && well_spread {
-        let det = sxx[0][0] * sxx[1][1] - sxx[0][1] * sxx[1][0];
-        let invertible = det.abs() > 1e-12 * spread_sq * spread_sq;
-        if !invertible {
-            return Some(shift_only());
-        }
-        let inv = [
-            [sxx[1][1] / det, -sxx[0][1] / det],
-            [-sxx[1][0] / det, sxx[0][0] / det],
-        ];
-        (mul2(&syx, &inv), UpdateModel::Affine)
-    } else if n >= 3 && spread_sq > 1e-12 {
-        let a = (syx[0][0] + syx[1][1]) / spread_sq;
-        let b = (syx[1][0] - syx[0][1]) / spread_sq;
-        ([[a, -b], [b, a]], UpdateModel::Similarity)
-    } else {
+    let affine = (n >= 5 && well_spread)
+        .then(|| {
+            let det = sxx[0][0] * sxx[1][1] - sxx[0][1] * sxx[1][0];
+            let invertible = det.abs() > 1e-12 * spread_sq * spread_sq;
+            invertible.then(|| {
+                let inv = [
+                    [sxx[1][1] / det, -sxx[0][1] / det],
+                    [-sxx[1][0] / det, sxx[0][0] / det],
+                ];
+                (mul2(&syx, &inv), UpdateModel::Affine)
+            })
+        })
+        .flatten();
+    let similarity = || {
+        (n >= 3 && spread_sq > 1e-12).then(|| {
+            let a = (syx[0][0] + syx[1][1]) / spread_sq;
+            let b = (syx[1][0] - syx[0][1]) / spread_sq;
+            ([[a, -b], [b, a]], UpdateModel::Similarity)
+        })
+    };
+    let Some((a, model)) = affine.or_else(similarity) else {
         return Some(shift_only());
     };
     let b = [
@@ -600,6 +737,23 @@ pub(super) struct MemberCells {
 
 /// Run the two-level loop for one kept member, starting from its cascade
 /// shape `s` and position `p`.
+///
+/// Each iteration renders the working patch at the current shape, reads the
+/// nine cells, fits an update to the cells that survive and composes it into
+/// the shape. The loop stops when the update moves no cell centre by more
+/// than [`PiecewiseParams::update_tolerance_px`], or after
+/// [`PiecewiseParams::max_iterations`] renders. The returned cells are the
+/// readings of the last render, their shifts carried into the returned
+/// shape's grid (see [`CellRefinement::shift_px`]).
+///
+/// The result is all or nothing. When any iteration fails, the first or a
+/// later one, the member is returned at its cascade shape and position with
+/// every cell [`CellStatus::NotAttempted`], and what earlier iterations
+/// fitted is discarded. An iteration fails when the render fails, when no
+/// cell survives, or when the fitted update reflects or is not finite (see
+/// `fit_update`); the loop also returns the cascade shape when the composed
+/// shape is not finite. A partly converged shape is not kept, because its
+/// cells were read at a shape that is not the one returned.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn refine_member_cells(
     pyramid: &ImageU8Pyramid,
@@ -686,8 +840,11 @@ pub(super) fn refine_member_cells(
     {
         return unchanged(iterations);
     }
-    // The residual to the shape the loop returns: the shift measured at the
-    // last render, less what the last update moved the cell centre by.
+    // The residual to the shape the loop returns. The last render read cell
+    // `c` at `c + d` of its grid; the returned shape's grid is the last
+    // render's under `c' ↦ A·c' + b`, so that point is `A⁻¹·(c + d − b)`
+    // there, and its offset from `c` is `A⁻¹·(d − moves(c))`.
+    let a_inv = inv2(&update.a);
     let mut cells = CellRefinement::not_attempted(iterations);
     for (row, line) in readings.iter().enumerate() {
         for (col, rd) in line.iter().enumerate() {
@@ -695,8 +852,8 @@ pub(super) fn refine_member_cells(
             cells.zncc[row][col] = rd.zncc as f32;
             if rd.shift.iter().all(|v| v.is_finite()) {
                 let m = update.moves(layout.centres[row][col]);
-                cells.shift_px[row][col] =
-                    [(rd.shift[0] - m[0]) as f32, (rd.shift[1] - m[1]) as f32];
+                let r = mul2v(&a_inv, [rd.shift[0] - m[0], rd.shift[1] - m[1]]);
+                cells.shift_px[row][col] = [r[0] as f32, r[1] as f32];
             }
         }
     }
@@ -707,4 +864,12 @@ pub(super) fn refine_member_cells(
         updated: true,
         model: Some(model),
     }
+}
+
+/// `a·v`.
+fn mul2v(a: &Mat2, v: [f64; 2]) -> [f64; 2] {
+    [
+        a[0][0] * v[0] + a[0][1] * v[1],
+        a[1][0] * v[0] + a[1][1] * v[1],
+    ]
 }

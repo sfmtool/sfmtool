@@ -111,7 +111,15 @@ pub struct ClusterRefineParams {
     /// member: the nine cells of the template are registered separately and
     /// their shifts refine the member's affine shape and position, and
     /// [`ClusterRefineResult::cells`] carries what each cell read. `None`
-    /// skips the stage, leaving every output the cascade's. On by default.
+    /// skips the stage, leaving every output the cascade's.
+    ///
+    /// Off (`None`) by default. The stage's cells have no column in the
+    /// cluster-patches file yet, so turning it on would change the stored
+    /// shapes and readings without storing the cells that explain the
+    /// change. The milestone that adds those columns turns the stage on from
+    /// the CLI, and a comparison over the capture fleet decides whether it
+    /// becomes the default here. See
+    /// `specs/drafts/cluster-patches-piecewise-refinement.md`.
     pub piecewise: Option<PiecewiseParams>,
 }
 
@@ -139,7 +147,7 @@ impl Default for ClusterRefineParams {
             intermediate_convergence: 1e-4,
             stall_iters: 20,
             stall_tol: 1e-4,
-            piecewise: Some(PiecewiseParams::default()),
+            piecewise: None,
         }
     }
 }
@@ -219,13 +227,14 @@ pub struct ClusterRefineResult {
     /// `(M,)` translation drift from the SIFT seed, source-image pixels
     /// (`NaN` if not evaluated).
     pub member_shift_px: Vec<f32>,
-    /// The piecewise refinement's cells, one entry per member whose status is
-    /// [`MemberStatus::Kept`], in member order: the `i`-th entry belongs to the
-    /// `i`-th kept member. Empty when [`ClusterRefineParams::piecewise`] is
-    /// `None`.
+    /// `(M,)` the piecewise refinement's cells, one entry per member, indexed
+    /// like every other per-member array: `Some` for a member whose status is
+    /// [`MemberStatus::Kept`] when the stage ran, `None` for every other
+    /// member, and `None` throughout when [`ClusterRefineParams::piecewise`]
+    /// is `None`.
     ///
     /// Where the stage moved a kept member, that member's shape and position
     /// are the stage's, and its ZNCC, middle ZNCC, ZNCC grid and shift are
     /// read again at that shape and position; its status stays the cascade's.
-    pub cells: Vec<CellRefinement>,
+    pub cells: Vec<Option<CellRefinement>>,
 }

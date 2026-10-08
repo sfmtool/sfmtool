@@ -3,13 +3,17 @@
 
 //! Tests for the piecewise refinement: recovery of a perturbed affine shape,
 //! the homography's second-order term in the residuals, refusal of the cells
-//! over a second surface, a flat member, the bounds of the cell search, and
-//! the stage as it runs inside `refine_cluster_patches`.
+//! over a second surface, a flat member, the bounds of the cell search, the
+//! window sums against a direct pass, the update's fallback models, the revert
+//! to the cascade shape when a refined shape fails a gate or leaves the
+//! frame, and the stage as it runs inside `refine_cluster_patches`, on one
+//! thread and on four.
 
 use super::super::kernels::{SupportTables, TemplateKernel};
 use super::super::{
-    build_template, inv2, mul2, refine_cluster_patches, ClusterRefineParams, FeatureGeometry, Mat2,
-    MemberGeo, MemberStatus,
+    build_template, inv2, mul2, read_member_at, refine_cluster_patches, refine_kept_member_cells,
+    ClusterRefineParams, ClusterRefineResult, FeatureGeometry, Mat2, MemberGeo, MemberOutcome,
+    MemberStatus,
 };
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
@@ -72,9 +76,11 @@ fn a_true() -> Mat2 {
 }
 
 /// The cluster's template, the cell layout and the grid constants at the
-/// default parameters, cut from [`texture`] around [`C`].
+/// default parameters with the piecewise stage on, cut from [`texture`]
+/// around [`C`].
 struct Fixture {
     params: ClusterRefineParams,
+    tables: SupportTables,
     tmpl: TemplateKernel,
     layout: CellLayout,
     templates: CellTemplates,
@@ -83,7 +89,10 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let params = ClusterRefineParams::default();
+    let params = ClusterRefineParams {
+        piecewise: Some(PiecewiseParams::default()),
+        ..ClusterRefineParams::default()
+    };
     let resolution = params.resolution;
     let step = 2.0 * params.radius / resolution as f64;
     let off = 0.5 * step - params.radius;
@@ -105,6 +114,7 @@ fn fixture() -> Fixture {
     let templates = CellTemplates::new(&tmpl, &layout);
     Fixture {
         params,
+        tables,
         tmpl,
         layout,
         templates,
@@ -212,10 +222,12 @@ fn recovers_a_perturbed_affine_with_nine_fitted_cells() {
     }
 }
 
-#[test]
-fn residuals_follow_the_homography_second_order_term() {
+/// How far the stored residuals are from the homography's second-order
+/// term, for the plane whose map has second-order coefficients `h`:
+/// `(largest error, RMS error, largest term)`, all in grid px over the nine
+/// cells, each of which must be fitted.
+fn homography_residual_errors(h: [f64; 2]) -> (f64, f64, f64) {
     let fx = fixture();
-    let h = [0.003, -0.002];
     let member = member_image(a_true(), h, None);
     let (s0, p0) = perturbed_start();
     let out = fx.run(&member, s0, p0);
@@ -226,7 +238,7 @@ fn residuals_follow_the_homography_second_order_term() {
         out.cells.iterations
     );
     let s_inv = inv2(&out.shape);
-    let (mut largest, mut sq_err) = (0.0f64, 0.0f64);
+    let (mut largest, mut worst, mut sq_err) = (0.0f64, 0.0f64, 0.0f64);
     for row in 0..3 {
         for col in 0..3 {
             assert_eq!(out.cells.status[row][col], CellStatus::Fitted);
@@ -242,20 +254,48 @@ fn residuals_follow_the_homography_second_order_term() {
             let got = out.cells.shift_px[row][col];
             largest = largest.max(want[0].hypot(want[1]));
             let err = (f64::from(got[0]) - want[0]).hypot(f64::from(got[1]) - want[1]);
+            worst = worst.max(err);
             sq_err += err * err;
-            assert!(
-                err < 0.12,
-                "cell ({row}, {col}): residual {got:?}, the homography gives {want:?}"
-            );
         }
     }
+    let rms = (sq_err / 9.0).sqrt();
+    eprintln!("h = {h:?}: largest error {worst:.4}, RMS {rms:.4}, term {largest:.4} grid px");
+    (worst, rms, largest)
+}
+
+#[test]
+fn residuals_follow_the_homography_second_order_term() {
+    let (worst, rms, largest) = homography_residual_errors([0.003, -0.002]);
     assert!(
         largest > 0.2,
         "the second-order term ({largest:.3} grid px) is too small to test"
     );
-    let rms = (sq_err / 9.0).sqrt();
+    assert!(
+        worst < 0.12,
+        "a residual is {worst:.3} grid px off the homography"
+    );
     assert!(
         rms < 0.07,
+        "residuals off the homography by {rms:.3} grid px RMS"
+    );
+}
+
+#[test]
+fn residuals_follow_a_doubled_second_order_term_less_closely() {
+    // Twice the term of the test above. The residuals still follow it, but
+    // the error grows faster than the term: measured at 0.31 grid px at worst
+    // and 0.13 RMS here, against 0.10 and 0.054 at the single term.
+    let (worst, rms, largest) = homography_residual_errors([0.006, -0.004]);
+    assert!(
+        largest > 0.8,
+        "the second-order term ({largest:.3} grid px) is too small to test"
+    );
+    assert!(
+        worst < 0.35,
+        "a residual is {worst:.3} grid px off the homography"
+    );
+    assert!(
+        rms < 0.15,
         "residuals off the homography by {rms:.3} grid px RMS"
     );
 }
@@ -337,13 +377,13 @@ fn the_cell_search_reads_only_the_working_patch() {
             let templates = CellTemplates::new(&tmpl, &layout);
             let side = layout.patch_side();
             assert_eq!(side, r + 2 * (bound.ceil() as usize));
-            let patch = WorkingPatch {
+            let patch = WorkingPatch::new(
                 side,
-                channels: 1,
-                samples: (0..side * side)
+                1,
+                (0..side * side)
                     .map(|p| texture((p % side) as f64 * 1.7, (p / side) as f64 * 1.3) as f32)
                     .collect(),
-            };
+            );
             let pp = PiecewiseParams {
                 cell_shift_bound_px: bound,
                 ..PiecewiseParams::default()
@@ -388,11 +428,7 @@ fn a_missing_sample_leaves_its_cell_not_attempted() {
     // The top-left corner of the render, which only the top-left cell's
     // search reaches.
     samples[0] = f32::NAN;
-    let patch = WorkingPatch {
-        side,
-        channels: 1,
-        samples,
-    };
+    let patch = WorkingPatch::new(side, 1, samples);
     let pp = PiecewiseParams::default();
     let read = |row: usize, col: usize| {
         read_cell(
@@ -410,24 +446,32 @@ fn a_missing_sample_leaves_its_cell_not_attempted() {
     assert_ne!(read(1, 1), CellStatus::NotAttempted);
 }
 
-/// Two images of the affine-warped plane, the member's seed perturbed, run
-/// through `refine_cluster_patches` with `params`.
-fn run_cluster(params: &ClusterRefineParams) -> crate::patch::cluster_refine::ClusterRefineResult {
+/// Two images of the affine-warped plane run through `refine_cluster_patches`
+/// with `params`, one cluster per entry of `starts`: cluster `k` is the
+/// reference feature in the first image and a member in the second whose
+/// seed shape and position are `starts[k]`.
+fn run_clusters(params: &ClusterRefineParams, starts: &[(Mat2, [f64; 2])]) -> ClusterRefineResult {
     let img1 = make_image(128, 128, texture);
     let img2 = member_image(a_true(), [0.0, 0.0], None);
-    let (s0, p0) = perturbed_start();
-    let a_mem = s0;
+    let n = starts.len();
     let mut pos = Array2::<f32>::zeros((1, 2));
     let mut aff = Array3::<f32>::zeros((1, 2, 2));
-    let mut pos2 = Array2::<f32>::zeros((1, 2));
-    let mut aff2 = Array3::<f32>::zeros((1, 2, 2));
+    let mut pos2 = Array2::<f32>::zeros((n, 2));
+    let mut aff2 = Array3::<f32>::zeros((n, 2, 2));
     for i in 0..2 {
         pos[[0, i]] = C[i] as f32;
-        pos2[[0, i]] = p0[i] as f32;
         for j in 0..2 {
             aff[[0, i, j]] = A_REF[i][j] as f32;
-            // A smaller scale than the reference, so the reference is image 0.
-            aff2[[0, i, j]] = a_mem[i][j] as f32;
+        }
+    }
+    for (k, (s, p)) in starts.iter().enumerate() {
+        for i in 0..2 {
+            pos2[[k, i]] = p[i] as f32;
+            for j in 0..2 {
+                // A smaller scale than the reference, so the reference is
+                // image 0.
+                aff2[[k, i, j]] = s[i][j] as f32;
+            }
         }
     }
     let features = [
@@ -444,22 +488,31 @@ fn run_cluster(params: &ClusterRefineParams) -> crate::patch::cluster_refine::Cl
         ImageU8Pyramid::build(&img1, 6),
         ImageU8Pyramid::build(&img2, 6),
     ];
+    let cluster_starts: Vec<u32> = (0..=n as u32).map(|c| 2 * c).collect();
+    let member_images: Vec<u32> = (0..n).flat_map(|_| [0, 1]).collect();
+    let member_features: Vec<u32> = (0..n as u32).flat_map(|k| [0, k]).collect();
     refine_cluster_patches(
         &pyramids,
         &features,
-        &[0, 2],
-        &[0, 1],
-        &[0, 0],
+        &cluster_starts,
+        &member_images,
+        &member_features,
         params,
         None,
     )
+}
+
+/// [`run_clusters`] with one cluster whose member starts at
+/// [`perturbed_start`].
+fn run_cluster(params: &ClusterRefineParams) -> ClusterRefineResult {
+    run_clusters(params, &[perturbed_start()])
 }
 
 #[test]
 fn the_stage_refines_kept_members_inside_the_kernel() {
     let fx = fixture();
     let truth = (mul2(&a_true(), &A_REF), C);
-    let shape_of = |res: &crate::patch::cluster_refine::ClusterRefineResult| {
+    let shape_of = |res: &ClusterRefineResult| {
         let s = res.member_affine_shapes.index_axis(ndarray::Axis(0), 1);
         let p = res.member_positions.index_axis(ndarray::Axis(0), 1);
         (
@@ -468,19 +521,20 @@ fn the_stage_refines_kept_members_inside_the_kernel() {
         )
     };
 
-    let off = run_cluster(&ClusterRefineParams {
-        piecewise: None,
-        ..ClusterRefineParams::default()
-    });
+    // Off by default.
+    assert_eq!(ClusterRefineParams::default().piecewise, None);
+    let off = run_cluster(&ClusterRefineParams::default());
     assert_eq!(off.reference_members[0], 0);
     assert_eq!(off.member_status[1], MemberStatus::Kept);
-    assert!(off.cells.is_empty());
+    assert_eq!(off.cells, vec![None, None], "one entry per member");
 
-    let on = run_cluster(&ClusterRefineParams::default());
+    let on = run_cluster(&fx.params);
     assert_eq!(on.member_status, off.member_status);
-    assert_eq!(on.cells.len(), 1, "one entry per kept member");
-    assert!(on.cells[0].iterations <= 3);
-    assert_eq!(on.cells[0].status, [[CellStatus::Fitted; 3]; 3]);
+    assert_eq!(on.cells.len(), 2, "one entry per member");
+    assert_eq!(on.cells[0], None, "the reference has no cells");
+    let cells = on.cells[1].expect("the kept member has cells");
+    assert!(cells.iterations <= 3);
+    assert_eq!(cells.status, [[CellStatus::Fitted; 3]; 3]);
 
     let cascade = fx.map_rmse(shape_of(&off), truth);
     let piecewise = fx.map_rmse(shape_of(&on), truth);
@@ -497,7 +551,7 @@ fn the_stage_refines_kept_members_inside_the_kernel() {
     assert!((on.member_shift_px[1] - drift).abs() < 1e-5);
 
     // Two runs agree bit for bit.
-    let again = run_cluster(&ClusterRefineParams::default());
+    let again = run_cluster(&fx.params);
     assert_eq!(
         on.member_affine_shapes.as_slice().unwrap(),
         again.member_affine_shapes.as_slice().unwrap()
@@ -509,4 +563,447 @@ fn the_stage_refines_kept_members_inside_the_kernel() {
 fn p0_f32() -> [f64; 2] {
     let (_, p0) = perturbed_start();
     [p0[0] as f32 as f64, p0[1] as f32 as f64]
+}
+
+/// One member's cells as bits: shifts, ZNCCs, statuses and iterations.
+type CellBits = (Vec<u32>, Vec<u32>, [[CellStatus; 3]; 3], u8);
+
+#[test]
+fn the_stage_gives_the_same_cells_on_one_thread_and_on_four() {
+    let fx = fixture();
+    let (s0, p0) = perturbed_start();
+    // Clusters whose members start at different perturbations, so the
+    // threads see different work.
+    let starts: Vec<(Mat2, [f64; 2])> = (0..24)
+        .map(|k| {
+            let t = k as f64;
+            let n = mul2(
+                &[
+                    [1.0 + 0.004 * (t - 12.0), 0.0],
+                    [0.0, 1.0 + 0.004 * (t - 12.0)],
+                ],
+                &rot2(0.3 * (t - 12.0)),
+            );
+            (
+                mul2(&s0, &n),
+                [p0[0] + 0.05 * (t - 12.0), p0[1] - 0.03 * (t - 12.0)],
+            )
+        })
+        .collect();
+    let run = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| run_clusters(&fx.params, &starts))
+    };
+    let (one, four) = (run(1), run(4));
+    assert_eq!(one.member_status, four.member_status);
+    assert!(one.cells.iter().filter(|c| c.is_some()).count() >= 20);
+    let bits = |r: &ClusterRefineResult| -> Vec<CellBits> {
+        r.cells
+            .iter()
+            .flatten()
+            .map(|c| {
+                (
+                    c.shift_px
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .map(|v| v.to_bits())
+                        .collect(),
+                    c.zncc.iter().flatten().map(|v| v.to_bits()).collect(),
+                    c.status,
+                    c.iterations,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        one.cells.iter().map(Option::is_some).collect::<Vec<_>>(),
+        four.cells.iter().map(Option::is_some).collect::<Vec<_>>()
+    );
+    assert_eq!(bits(&one), bits(&four));
+    let shapes = |r: &ClusterRefineResult| -> Vec<u64> {
+        r.member_affine_shapes
+            .iter()
+            .chain(r.member_positions.iter())
+            .map(|v| v.to_bits())
+            .collect()
+    };
+    assert_eq!(shapes(&one), shapes(&four));
+}
+
+/// The correspondences a known update `c ↦ A·c + b` gives at the cell centres
+/// `cells`, each of weight `1`.
+fn correspondences(a: Mat2, b: [f64; 2], cells: &[(usize, usize)]) -> Vec<Correspondence> {
+    let layout = CellLayout::new(25, 2.0);
+    cells
+        .iter()
+        .map(|&(row, col)| {
+            let c = layout.centres[row][col];
+            let ac = matvec(&a, c);
+            (c, [ac[0] + b[0] - c[0], ac[1] + b[1] - c[1]], 1.0)
+        })
+        .collect()
+}
+
+fn assert_update_near(got: &Update, a: Mat2, b: [f64; 2]) {
+    let got_a = got.a.iter().flatten();
+    for (g, w) in got_a.chain(&got.b).zip(a.iter().flatten().chain(&b)) {
+        assert!((g - w).abs() < 1e-9, "{got:?}");
+    }
+}
+
+#[test]
+fn three_or_four_survivors_fit_a_similarity() {
+    let side = CellLayout::new(25, 2.0).cell_side;
+    let a = mul2(&[[1.02, 0.0], [0.0, 1.02]], &rot2(2.0));
+    let b = [0.3, -0.2];
+    for cells in [
+        &[(0, 0), (1, 2), (2, 1)][..],
+        &[(0, 0), (0, 2), (2, 0), (2, 2)][..],
+    ] {
+        let (update, model) =
+            fit_update(&correspondences(a, b, cells), side).expect("a similarity");
+        assert_eq!(model, UpdateModel::Similarity, "{cells:?}");
+        assert_update_near(&update, a, b);
+    }
+}
+
+#[test]
+fn five_survivors_in_one_row_fit_a_similarity() {
+    let side = CellLayout::new(25, 2.0).cell_side;
+    let a = mul2(&[[0.98, 0.0], [0.0, 0.98]], &rot2(-1.5));
+    let b = [-0.1, 0.25];
+    // The middle row, and two corner cells carrying almost no weight: five
+    // cells, spread along one axis only.
+    let mut points = correspondences(a, b, &[(1, 0), (1, 1), (1, 2), (0, 0), (2, 2)]);
+    points[3].2 = 1e-3;
+    points[4].2 = 1e-3;
+    let (update, model) = fit_update(&points, side).expect("a similarity");
+    assert_eq!(model, UpdateModel::Similarity);
+    assert_update_near(&update, a, b);
+}
+
+#[test]
+fn a_singular_affine_falls_to_a_similarity_before_a_shift() {
+    // Five cells on one line, with the spread bar at zero so they count as
+    // spread: the affine's normal equations are singular, and the similarity
+    // is fitted instead.
+    let a = mul2(&[[1.01, 0.0], [0.0, 1.01]], &rot2(1.0));
+    let b = [0.2, 0.1];
+    let points: Vec<Correspondence> = [-8.0, -4.0, 0.0, 4.0, 8.0]
+        .iter()
+        .map(|&x| {
+            let c = [x, 0.0];
+            let ac = matvec(&a, c);
+            (c, [ac[0] + b[0] - c[0], ac[1] + b[1] - c[1]], 1.0)
+        })
+        .collect();
+    let (update, model) = fit_update(&points, 0.0).expect("a similarity");
+    assert_eq!(model, UpdateModel::Similarity);
+    assert_update_near(&update, a, b);
+}
+
+#[test]
+fn one_or_two_survivors_fit_a_shift() {
+    let side = CellLayout::new(25, 2.0).cell_side;
+    let a = mul2(&[[1.02, 0.0], [0.0, 1.02]], &rot2(2.0));
+    let b = [0.3, -0.2];
+    for cells in [&[(1, 1)][..], &[(0, 0), (2, 2)][..]] {
+        let points = correspondences(a, b, cells);
+        let (update, model) = fit_update(&points, side).expect("a shift");
+        assert_eq!(model, UpdateModel::Shift, "{cells:?}");
+        assert_eq!(update.a, [[1.0, 0.0], [0.0, 1.0]]);
+        // The mean of the survivors' shifts.
+        let n = points.len() as f64;
+        let mean = [
+            points.iter().map(|p| p.1[0]).sum::<f64>() / n,
+            points.iter().map(|p| p.1[1]).sum::<f64>() / n,
+        ];
+        assert!((update.b[0] - mean[0]).abs() < 1e-12);
+        assert!((update.b[1] - mean[1]).abs() < 1e-12);
+    }
+    assert!(fit_update(&[], side).is_none());
+}
+
+/// A kept member at shape `s` and position `p`, with cascade readings.
+fn kept_member(s: Mat2, p: [f64; 2]) -> MemberOutcome {
+    MemberOutcome {
+        status: MemberStatus::Kept,
+        affine: [[s[0][0], s[0][1], p[0]], [s[1][0], s[1][1], p[1]]],
+        zncc: 0.9,
+        zncc_middle: 0.9,
+        zncc_grid: [[0.9; 3]; 3],
+        shift: 0.5,
+        cells: None,
+    }
+}
+
+impl Fixture {
+    /// Run `refine_kept_member_cells` on a kept member of `member` at shape
+    /// `s` and position `p`, with the seed at `seed` and the cascade gates of
+    /// `params`.
+    fn run_kept(
+        &self,
+        member: &ImageU8,
+        s: Mat2,
+        p: [f64; 2],
+        seed: [f64; 2],
+        params: &ClusterRefineParams,
+    ) -> MemberOutcome {
+        let pyr = ImageU8Pyramid::build(member, 6);
+        let mut out = kept_member(s, p);
+        refine_kept_member_cells(
+            &mut out,
+            &pyr,
+            seed,
+            &self.tmpl,
+            &self.templates,
+            &self.layout,
+            &self.tables,
+            self.params.resolution,
+            self.step,
+            self.off,
+            params,
+            &self.pp(),
+        );
+        out
+    }
+}
+
+/// The member was left at its cascade shape, position and readings, and its
+/// cells are all not attempted after `iterations` renders.
+fn assert_reverted(out: &MemberOutcome, s: Mat2, p: [f64; 2], iterations: u8) {
+    let cascade = kept_member(s, p);
+    assert_eq!(out.affine, cascade.affine);
+    assert_eq!(out.zncc, cascade.zncc);
+    assert_eq!(out.zncc_middle, cascade.zncc_middle);
+    assert_eq!(out.shift, cascade.shift);
+    assert_eq!(out.status, MemberStatus::Kept);
+    let cells = out.cells.expect("cells are stored");
+    assert_eq!(cells.status, [[CellStatus::NotAttempted; 3]; 3]);
+    assert_eq!(cells.iterations, iterations);
+}
+
+#[test]
+fn a_refined_shape_that_fails_a_cascade_gate_is_reverted() {
+    let fx = fixture();
+    let member = member_image(a_true(), [0.0, 0.0], None);
+    let (s0, p0) = perturbed_start();
+    let accepted = fx.run_kept(&member, s0, p0, p0, &fx.params);
+    let cells = accepted.cells.expect("cells are stored");
+    assert_eq!(cells.status, [[CellStatus::Fitted; 3]; 3]);
+    assert_ne!(accepted.affine, kept_member(s0, p0).affine);
+    assert!(accepted.zncc < 0.9999, "{}", accepted.zncc);
+
+    // The ZNCC read again at the refined shape is below the bar.
+    let strict = ClusterRefineParams {
+        min_zncc: 0.9999,
+        ..fx.params.clone()
+    };
+    let out = fx.run_kept(&member, s0, p0, p0, &strict);
+    assert_reverted(&out, s0, p0, cells.iterations);
+
+    // The refined position is further from the seed than the bar allows.
+    let far_seed = [p0[0] + 5.0, p0[1]];
+    let out = fx.run_kept(&member, s0, p0, far_seed, &fx.params);
+    assert_reverted(&out, s0, p0, cells.iterations);
+}
+
+/// The member image of the affine-warped plane with the keypoint at `centre`
+/// rather than [`C`].
+fn member_image_at(a: Mat2, centre: [f64; 2]) -> ImageU8 {
+    let a_inv = inv2(&a);
+    make_image(128, 128, move |x, y| {
+        let z = matvec(&a_inv, [x - centre[0], y - centre[1]]);
+        texture(C[0] + z[0], C[1] + z[1])
+    })
+}
+
+#[test]
+fn a_refined_shape_whose_support_leaves_the_frame_is_reverted() {
+    let fx = fixture();
+    let s_true = mul2(&a_true(), &A_REF);
+    // Start a little smaller than the truth and to its right, so the start's
+    // support is in the frame.
+    let s0 = mul2(&s_true, &[[0.97, 0.0], [0.0, 0.97]]);
+    let in_frame = |pyr: &ImageU8Pyramid, s: &Mat2, p: [f64; 2]| {
+        read_member_at(
+            pyr,
+            p,
+            s,
+            &fx.tmpl,
+            &fx.tables,
+            fx.params.resolution,
+            fx.step,
+            fx.off,
+        )
+        .is_some()
+    };
+    // Move the keypoint toward the left edge until the loop, run on its own,
+    // carries the start's support, which is in the frame, out of it.
+    let mut found = None;
+    for k in 0..800 {
+        let x = 40.0 - 0.05 * k as f64;
+        let centre = [x, C[1]];
+        let p0 = [x + 1.0, C[1]];
+        let member = member_image_at(a_true(), centre);
+        let pyr = ImageU8Pyramid::build(&member, 6);
+        if !in_frame(&pyr, &s0, p0) {
+            continue;
+        }
+        let loop_out = refine_member_cells(
+            &pyr,
+            &fx.tmpl.src_channels,
+            &fx.templates,
+            &fx.layout,
+            s0,
+            p0,
+            fx.step,
+            fx.off,
+            &fx.pp(),
+        );
+        if loop_out.updated && !in_frame(&pyr, &loop_out.shape, loop_out.position) {
+            found = Some((member, p0, loop_out));
+            break;
+        }
+    }
+    let (member, p0, loop_out) =
+        found.expect("a keypoint position where the loop leaves the frame");
+    let out = fx.run_kept(&member, s0, p0, p0, &fx.params);
+    assert_reverted(&out, s0, p0, loop_out.cells.iterations);
+}
+
+/// The ZNCC of a cell against the working patch moved by `(dx, dy)`, by a
+/// direct pass over a copy of the moved window: its mean removed, its norm
+/// and its cross term with the template summed. The oracle for the
+/// summed-area-table reading `cell_zncc_at`.
+#[allow(clippy::too_many_arguments)]
+fn direct_cell_zncc(
+    tc: &CellTemplate,
+    src_channels: &[usize],
+    patch: &WorkingPatch,
+    layout: &CellLayout,
+    row: usize,
+    col: usize,
+    dx: i64,
+    dy: i64,
+) -> Option<f64> {
+    let b = layout.bounds;
+    let m = layout.margin as i64;
+    let side = patch.side as i64;
+    let (mut sum, mut scored) = (0.0, 0usize);
+    for (tch, t) in tc.channels.iter().enumerate() {
+        let Some((t, t_norm)) = t else {
+            continue;
+        };
+        scored += 1;
+        let src = src_channels[tch];
+        if src >= patch.channels {
+            continue;
+        }
+        let mut window = Vec::new();
+        for y in b[row]..b[row + 1] {
+            let py = y as i64 + dy + m;
+            for x in b[col]..b[col + 1] {
+                let px = x as i64 + dx + m;
+                let v = patch.samples[(py * side + px) as usize * patch.channels + src];
+                if !v.is_finite() {
+                    return None;
+                }
+                window.push(f64::from(v));
+            }
+        }
+        let mean = window.iter().sum::<f64>() / window.len() as f64;
+        let (mut cross, mut norm_sq) = (0.0, 0.0);
+        for (u, tv) in window.iter().zip(t) {
+            let du = u - mean;
+            cross += du * tv;
+            norm_sq += du * du;
+        }
+        if norm_sq < FLAT_NORM_SQ_EPS {
+            continue;
+        }
+        sum += cross / (norm_sq * t_norm).sqrt();
+    }
+    (scored > 0).then(|| sum / scored as f64)
+}
+
+#[test]
+fn the_window_sums_agree_with_a_direct_pass() {
+    // Two channels: a textured one, and one that is flat over the left half
+    // of the patch, so some windows are flat in it. A few missing samples.
+    for (resolution, bound) in [(25u32, 2.0f32), (12, 1.0), (26, 3.0)] {
+        let layout = CellLayout::new(resolution, bound);
+        let r = resolution as usize;
+        let side = layout.patch_side();
+        let tex = |x: f64, y: f64, c: usize| -> f64 {
+            if c == 0 || x > side as f64 / 2.0 {
+                texture(x * 1.7 + 3.0 * c as f64, y * 1.3)
+            } else {
+                131.0
+            }
+        };
+        let square: Vec<f32> = (0..2)
+            .flat_map(|c| (0..r * r).map(move |p| (c, p)))
+            .map(|(c, p)| tex((p % r) as f64 + 1.3, (p / r) as f64 + 0.6, c) as f32)
+            .collect();
+        let tmpl = TemplateKernel {
+            channels: 2,
+            src_channels: vec![0, 1],
+            kern: Vec::new(),
+            kern_sums: Vec::new(),
+            samples: Vec::new(),
+            square_samples: square,
+        };
+        let templates = CellTemplates::new(&tmpl, &layout);
+        let mut samples: Vec<f32> = (0..side * side)
+            .flat_map(|p| {
+                let (x, y) = ((p % side) as f64, (p / side) as f64);
+                [
+                    tex(x + 0.4, y - 0.2, 0) as f32,
+                    tex(x + 0.4, y - 0.2, 1) as f32,
+                ]
+            })
+            .collect();
+        for p in [0, side * side - 1, side * (side / 2)] {
+            samples[2 * p] = f32::NAN;
+            samples[2 * p + 1] = f32::NAN;
+        }
+        let patch = WorkingPatch::new(side, 2, samples);
+        let n = layout.reach as i64;
+        let (mut compared, mut missing) = (0, 0);
+        for row in 0..3 {
+            for col in 0..3 {
+                let tc = &templates.cells[row][col];
+                for dy in -n..=n {
+                    for dx in -n..=n {
+                        let src = &tmpl.src_channels;
+                        let got = cell_zncc_at(tc, src, &patch, &layout, row, col, dx, dy);
+                        let want = direct_cell_zncc(tc, src, &patch, &layout, row, col, dx, dy);
+                        match (got, want) {
+                            (Some(g), Some(w)) => {
+                                assert!(
+                                    (g - w).abs() < 1e-6,
+                                    "R {resolution}, cell ({row}, {col}) at ({dx}, {dy}): \
+                                     {g} against {w}"
+                                );
+                                compared += 1;
+                            }
+                            (None, None) => missing += 1,
+                            _ => panic!(
+                                "cell ({row}, {col}) at ({dx}, {dy}): {got:?} against {want:?}"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            compared > 0 && missing > 0,
+            "{compared} compared, {missing} missing"
+        );
+    }
 }

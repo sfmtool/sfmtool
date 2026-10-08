@@ -35,14 +35,18 @@ pub static TEMPLATE: Phase = Phase::new("build_template");
 /// Whole per-member refinement cascades (`refine_member`), enclosing
 /// [`TILE`] and [`EVAL`].
 pub static REFINE: Phase = Phase::new("refine_member");
-/// Piecewise refinements of kept members (`refine_kept_member_cells`),
-/// including the readings taken again at the refined shape.
+/// Piecewise refinements of kept members (`refine_kept_member_cells`): the
+/// working-patch renders, the cell searches and update fits, and the
+/// whole-patch readings taken again at the refined shape. Encloses the
+/// [`TILE`] build that re-reading makes; it encloses no [`EVAL`], because the
+/// re-reading's `eval_zncc` call is not timed as one.
 pub static PIECEWISE: Phase = Phase::new("piecewise");
-/// Sub-phase of [`REFINE`]: `LevelTile` builds and rebuilds inside
-/// `TileCache::get_or_build` (cache hits are not timed).
+/// Sub-phase of [`REFINE`] and of [`PIECEWISE`]: `LevelTile` builds and
+/// rebuilds inside `TileCache::get_or_build` (cache hits are not timed), by
+/// the cascade's objective and by the piecewise stage's re-reading alike.
 pub static TILE: Phase = Phase::new("tile_build");
-/// Sub-phase of [`REFINE`]: fused windowed-ZNCC objective evaluations
-/// (`eval_zncc`).
+/// Sub-phase of [`REFINE`] only: the cascade's fused windowed-ZNCC objective
+/// evaluations (`eval_zncc`).
 pub static EVAL: Phase = Phase::new("eval_zncc");
 
 // Event counters (no time attached).
@@ -64,7 +68,7 @@ pub static N_EVALS_SIM: AtomicU64 = AtomicU64::new(0);
 pub static N_EVALS_AFFINE: AtomicU64 = AtomicU64::new(0);
 /// Kept members the piecewise refinement ran on.
 pub static N_PIECEWISE: AtomicU64 = AtomicU64::new(0);
-/// `LevelTile` (re)builds.
+/// `LevelTile` (re)builds, by the cascade and the piecewise stage.
 pub static N_TILE_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Pixels copied into (re)built `LevelTile`s (tile area × channels).
 pub static N_TILE_PIXELS: AtomicU64 = AtomicU64::new(0);
@@ -153,8 +157,10 @@ pub fn report(clusters: usize, wall_secs: f64) {
     let (af, af_r) = per_refine(&N_EVALS_AFFINE);
     eprintln!(
         "[sfmtool-profile]   evals by stage: shift {sh} ({sh_r:.1}/refine)  \
-         sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)  \
-         piecewise {}",
+         sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)",
+    );
+    eprintln!(
+        "[sfmtool-profile]   piecewise members {}",
         N_PIECEWISE.load(Ordering::Relaxed),
     );
 }
