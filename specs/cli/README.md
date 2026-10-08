@@ -73,7 +73,7 @@ numpy, OpenCV, pycolmap and the command modules.
 | `--refine-normals` | [refine-normals-command.md](reconstruction/xform/refine-normals-command.md) |
 | `--refine-keypoints` | [refine-keypoints-command.md](reconstruction/xform/refine-keypoints-command.md) |
 | `--localize-keypoints` | [localize-keypoints-command.md](reconstruction/xform/localize-keypoints-command.md) |
-| `--select-by-distribution` | [select-by-distribution-command.md](reconstruction/xform/select-by-distribution-command.md) |
+| `--include-by-distribution` | [select-by-distribution-command.md](reconstruction/xform/select-by-distribution-command.md) |
 | `--find-points-at-infinity` | [find-points-at-infinity.md](reconstruction/xform/find-points-at-infinity.md) |
 | `--scale-by-measurements` | [scale-by-measurements-command.md](reconstruction/xform/scale-by-measurements-command.md) |
 

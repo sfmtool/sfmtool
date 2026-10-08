@@ -157,7 +157,7 @@ pub struct TrackBodyResponse {
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
     /// A threshold box was released, or a value typed into one was
-    /// committed: the bars the four boxes stand at, for the focused item.
+    /// committed: the bars the six boxes stand at, for the focused item.
     /// Set only when they differ from the track's own.
     pub apply_thresholds: Option<Thresholds>,
     /// A kept-at-seed row's *Accept walk*, carrying the observation: put its
@@ -811,11 +811,17 @@ impl TrackBody {
             checkbox.on_disabled_hover_text(LOCK_AT_CLUSTER);
         } else if self.lock {
             checkbox.on_hover_text(
-                "Locked: dragging a sighting's dot in Image Detail slides the patch, and                  every sighting follows it. Clear to move one keypoint on its own",
+                "Locked: dragging a sighting's dot in Image Detail slides the patch, and \
+                every sighting follows it. Clear to move one keypoint on its own",
             );
         } else {
             checkbox.on_hover_text(
-                "Unlocked: dragging a sighting's dot in Image Detail moves that keypoint                  alone, and the patch and every other sighting stay where they are. The                  outline's edges and corners take no drag while unlocked, a sighting                  having no size or turn of its own",
+                "Unlocked: dragging a sighting's dot in Image Detail moves that keypoint \
+                alone, and the patch and every other sighting stay where they are. The \
+                outline's edges and corners, the normal's segment and arrowhead, and the \
+                ghost outline in an image the track has no sighting in take no drag \
+                while unlocked, a sighting having no size, turn, depth or facing of its \
+                own and the ghost no keypoint to move",
             );
         }
     }

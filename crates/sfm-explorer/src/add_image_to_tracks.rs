@@ -108,8 +108,10 @@ impl AppState {
 
     /// Start adding `image` to the tracks of its node on a worker thread.
     ///
-    /// A bulk edit that renumbers nothing: the version it lands as holds every
-    /// point at its index, with the accepted observations added. Returns as
+    /// A bulk edit that renumbers nothing of its own: the version it lands as
+    /// holds every point at the index the folded-in value gave it (pending
+    /// point edits close up deleted slots first), with the accepted
+    /// observations added. Returns as
     /// soon as the worker is running, and **nothing is logged here**: the entry
     /// is the outcome's, written on the frame the answer lands. An `Err` is a
     /// refusal to begin, logged the way the synchronous edits log theirs.

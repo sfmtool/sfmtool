@@ -250,6 +250,10 @@ def test_the_options_and_the_query_are_checked(
         bench.find_nearby_tracks(edited, pyramids, sources, 99, pixel)
     with pytest.raises(ValueError, match="not on the"):
         bench.find_nearby_tracks(edited, pyramids, sources, image, (-5.0, 1.0))
+    with pytest.raises(ValueError, match="control character"):
+        bench.find_nearby_tracks(edited, pyramids, sources, image, pixel, label="a\nb")
+    with pytest.raises(ValueError, match="something in it"):
+        bench.find_nearby_tracks(edited, pyramids, sources, image, pixel, label="  ")
 
     # Never running the far-field sweep and no sources finds nothing.
     got = bench.find_nearby_tracks(

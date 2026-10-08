@@ -384,8 +384,9 @@ one, through the row map.
 **What the selection lights up is keyed on the version too.** The frustums of
 the images that observe the selected point are coloured from that point's
 **track**, and the track is the version's rather than the index's: a
-retriangulation of every point renumbers nothing and can leave a point observed
-from a different set of images, so a gate that compared the selection alone
+retriangulation of every point renumbers nothing of its own and can leave a
+point observed from a different set of images, so a gate that compared the
+selection alone
 would read no change at all and go on lighting the frustums of the version
 before. The selection is therefore compared as the pair `(point, version
 serial)` -- `app::selected_point_source` -- which is what the track rays are

@@ -304,6 +304,7 @@ This is a property of the **parameterization**, not of fisheyes:
 | Models | Bound |
 |--------|-------|
 | `OPENCV_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE` | the first θ at which the *distorted* radius reaches `FISHEYE_BLEND_START_RAD`, or the radius's own peak if it turns over first |
+| `SIMPLE_RADIAL_FISHEYE` | the radius's peak, `θ = 1/√(−3·k1)`, when `k1 < 0` puts it before 180°; otherwise `None` |
 | everything else | `None` — trustworthy at every angle |
 
 The four bounded models are exactly the three call sites of `blend_fisheye_ray`
@@ -314,12 +315,14 @@ distorted radius, the model's own inverse stops inverting the polynomial and
 slews toward the identity ray, so above that radius the forward and inverse
 maps are no longer each other's inverse and neither describes the lens.
 
+`SIMPLE_RADIAL_FISHEYE` is **already** excluded from the blend, deliberately
+and with the reasoning written on `simple_radial_fisheye_to_ray`: with one
+coefficient `θ_d = θ·(1 + k1·θ²)` there is no high-order polynomial to
+distrust. It still folds when `k1 < 0`, past its peak at `θ = 1/√(−3·k1)`,
+where its inverse has nothing to return, so its bound is that fold alone.
+
 The unbounded classifications are each their own argument, not a default:
 
-- `SIMPLE_RADIAL_FISHEYE` is **already** excluded from the blend, deliberately
-  and with the reasoning written on `simple_radial_fisheye_to_ray`: with one
-  coefficient `θ_d = θ·(1 + k1·θ²)` there is nothing to distrust. This section
-  is that argument generalised.
 - The two spline models continue `δ` along its end tangent past
   `bspline_*_max`, so their radial map continues linearly there, and they
   enforce `1 + δ'(θ) > 0` as a construction invariant on that tail as well as
@@ -1274,13 +1277,15 @@ egui frames for panels, real windows only for what needs one. They live in:
   parameter when a model gains one.
 - `trustworthy_max_theta_deg` is `None` for every model in the undistorted
   corpus (the same `MODEL_COUNT`-complete corpus), and `Some` for exactly the
-  four polynomial fisheye models in the distorted one — the classification
+  four polynomial fisheye models in the distorted one, whose
+  `SIMPLE_RADIAL_FISHEYE` has `k1 > 0` and so never folds — the classification
   written down twice, once as the function's exhaustive `match` and once as a
   list of model names, and compared. The bound itself is checked two ways: on a
   monotone lens the distorted radius at the reported angle is
   `FISHEYE_BLEND_START_RAD` and the round trip is exact just inside it and
   wrong outside; on a `k1 < 0` lens that folds first it is the closed-form peak
-  `θ = 1/√(3|k1|)`.
+  `θ = 1/√(3|k1|)`. A `SIMPLE_RADIAL_FISHEYE` with `k1 = −0.1` is bounded at
+  that peak, and one whose peak falls past 180° is not bounded.
 - `off_axis_angle_deg` at the four corners is `FieldOfView::max_off_axis`, is
   zero at the principal point rather than at the image centre, and matches
   `atan(r/f)` on a pinhole; every `DistortionSample::theta_deg` equals it at

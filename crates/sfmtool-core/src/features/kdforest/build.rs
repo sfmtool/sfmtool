@@ -9,6 +9,8 @@
 //! the median along that dimension, with points equal to the median distributed
 //! across both sides so the partition halves the data regardless of duplicate
 //! coordinates. A per-tree seeded RNG (`StdRng`) makes builds reproducible.
+//!
+//! Specified in `specs/core/features/randomized-kdtree-forest.md`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

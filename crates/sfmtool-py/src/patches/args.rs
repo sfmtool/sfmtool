@@ -10,9 +10,9 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use sfmtool_core::patch::blur_matched::PairMatching;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler, SamplerChoice};
+use sfmtool_core::patch::pair_sharpness::PairMatching;
 
 /// The [`PairMatching`] a `matching` string names, `ratio` the factor of
 /// `"blur_matched_above_ratio"`.

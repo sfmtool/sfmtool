@@ -108,6 +108,10 @@ textually, and all 11 are `None` resolving to the stated value.
 | `specs/cli/README.md:76` (index, outside the corpus) | xform sub-command `--select-by-distribution` | no such option; it is `--include-by-distribution` (`src/sfmtool/_commands/xform.py`; `xform-command.md:115`) | code — rename the index row |
 | `specs/formats/matches-file-format.md:223-224` | `version`: "`1` through `6`" | `MATCHES_FORMAT_VERSION = 7` (`crates/sfmtool-matches-format/src/types.rs:133`); the same spec says seven versions at :1227 | code — say `1` through `7` |
 
+> _Status (2026-10-07): **Done** (row 1) — the `specs/cli/README.md` xform index row now names `--include-by-distribution` (the spec file keeps its `select-by-distribution-command.md` name), branch `spec-fix-1006-28-matches-version-range`._
+>
+> _Status (2026-10-07): **Done** (row 2) — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
+
 ### 2. Prose duplicated between a spec and its code
 
 212 normalized lines of 60 or more characters appear in both a spec and a doc
@@ -191,6 +195,10 @@ flags only, which meets the requirement for a Python pipeline.
 | core/spherical/spherical-tiles-rig.md:3-8 | "## Motivation … Three options were considered" | design deliberation as the opening (see check 4) |
 | Future-work headings | flow-based-matching:144, patch-view-selection:324, sift-to-patch-reconstruction:271, sfmr-file-format:1945, scene-graph:1414, user-experience:261, camera-config:382 | each should become a present-tense statement plus an amendment draft, or be deleted |
 
+> _Status (2026-10-07): **Partially done** — seven rows fixed: `camera-views.md` names the HUD's "Frustum" slider; `point-cloud-rendering.md` drops the planned label; `architecture.md` says where the thumbnails come from (the file, or the open task when the file has none) and that each reconstruction's atlas holds them all with no eviction; the `xform-command.md` TODO is removed (a code cleanup, not specified behaviour, and its function names had gone stale); `epipolar-estimation.md` drops the "natural v2" deferral; `refine-normals-command.md` states the report-only confidence in the present tense, without the later-threshold plan; `mcp-server.md` says `get_scene` carries `window` beside `window_title`, without the plan to drop it. Still open: the keypoint-localization-search-cache, keypoint-localization-consensus-basis and Future-work-heading rows (the spherical-tiles-rig row is done in PR #846), PR #851._
+
+> _Status (2026-10-07): **Done** for the `spherical-tiles-rig.md:3-8` row — the spec now opens with what a tile rig is, and the comparison of three samplings sits under § "Why small pinhole tiles" in the present tense, PR #846._
+
 Acquitted: algorithm "Step N" / "Phase N" headings (motion, select-by-distribution,
 epipolar-curves, photometric-subsets-ransac), format "Versioning and Migration"
 sections, present-tense "Consumers" sections (cluster-patches:237,
@@ -221,14 +229,17 @@ should read it as a claim.
    - Current: "For per-direction work on the sphere (infinity-consistency tests, parallax-from-pose depth estimation, multi-view color aggregation) we need a discretization that samples the sphere in small, nearly-distortion-free patches. Three options were considered:"
    - Problem: design deliberation under § Motivation; it never says what a tile rig is, and two of the three listed uses have no caller (the users are `sfm panorama` and `sfm camrig spherical-tiles`).
    - Proposed: *"A spherical tile rig is a camera rig of n identical small pinhole "tile" cameras that share one optical centre and look in nearly evenly spread directions, so that per-direction work on the sphere, such as the stitching behind `sfm panorama`, runs on small, nearly undistorted images held in one atlas."* (`tile_rig.rs:8-18`)
+   > _Status (2026-10-07): **Done** — the spec opens with what a tile rig is (identical pinhole tiles sharing one optical centre, nearly evenly spread directions, one atlas image) and names its users, `sfm panorama` and `sfm camrig spherical-tiles`; the uses with no caller are gone from the opening, and § Motivation became § "Why small pinhole tiles", branch `spec-fix-1006-33-opening-spherical-tiles`._
 2. **`gui/edits/move-camera.md:3`**
    - Current: "An image whose pose is wrong is the commonest defect a reviewer can see and cannot fix: …  What the reviewer wants is to take hold of the camera and put it where the photograph lines up, the way a hand would."
    - Problem: the first paragraph states the problem only; what the action is appears in paragraph two, through a figure ("The viewer already has the hand").
    - Proposed: *"Move Camera is a viewer edit that locks an image's camera to the viewport in camera view, so the reviewer moves it with the ordinary navigation controls until its photograph lines up with the points; releasing the lock settles the points that image observes around the new pose and installs the result as the node's next version."*
+   > _Status (2026-10-07): **Done** — the opening now says what the edit is: a lock in camera view, moved with the navigation controls, and a commit that stores the pose, re-triangulates the observed points where their observations allow and pushes one undoable version. The proposed sentence was adjusted against the code: releasing the lock by `Escape` cancels and pushes nothing, and a bearing or a failed or pixel-less track is not re-triangulated (`move_camera.rs`). The problem statement follows as paragraph two and the "hand" figure is replaced by a literal description of the lock, branch `spec-fix-1006-34-opening-move-camera`._
 3. **`core/analysis/keypoint-reach.md:3`**
    - Current: "One question, asked per image of a track set: which other keypoints lie inside this keypoint's own disk? Several rules read that neighbourhood and differ only in what they then test, so the enumeration is stated once and the tests stay with the callers."
    - Problem: precise and true, but it names no rule and no use; the one consumer, covered-by-finer, appears only at :65.
    - Proposed: *"Keypoint reach lists, for each image of a set of tracks, every pair of keypoints in which one lies inside the other's disk, so that a rule such as covered-by-finer, which retires a coarse observation that a finer one covers, reads those pairs instead of searching for them itself."*
+   > _Status (2026-10-07): **Done** — the opening now says what the enumeration lists and what it is for, adapted from the proposal after checking the code: the pairs are ordered (the second keypoint lies inside the first one's disk, whose radius each keypoint carries), and covered-by-finer is named and linked as the one rule that reads them, since the same-measurement reconciliation the old opening counted among "several rules" is not in this repository (the spec's § "What consumes it" and § "Open questions" now say so), branch `spec-fix-1006-35-opening-keypoint-reach`._
 4. **`research/blender-viewport-navigation-implementation-overview.md:3`**
    - Current: "This document details how Blender implements precision trackpad/touchpad navigation in the viewport on Windows."
    - Problem: says what, not why it is in this repository.
@@ -305,16 +316,19 @@ none, and the two crate specs are about code.
 
 **matches-file-format.md**
 1. Versioning gap, :223-224: "`version`: Format version number. `1` through `6`". The format is at 7 (:1227; `types.rs:133`). Restate as `1` through `7`.
+   > _Status (2026-10-07): **Done** — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
 2. Implementation names in the format proper, :225-235: "the writers in this repository emit: `"exhaustive"`: Exhaustive pairwise matching (`sfm match -e`) … (`sfm match --cluster`, and the viewer's cluster-patches build)". Define each value by what the file holds; move the command for each value to *Implementations*.
 3. :442-443: "In sfmtool, [`sfm match --derive-pairs`](../cli/image-feature/match-command.md) is the command that reads a cluster file and writes that pairwise file." Actor should be "a verifier"; the command belongs in *Implementations*.
 4. :515-516: "In sfmtool, `sfm match --cluster` writes detection-stage files and `sfm cluster-patches` writes refinement-stage files." Same fix: "a matcher writes detection-stage files; a refiner writes refinement-stage files", commands under *Implementations*.
 5. :1342-1344 (§ Versioning): "consumers that export two-view geometries to a COLMAP database (`sfm to-colmap-db` via `src/sfmtool/colmap/db_setup.py`) S-conjugate the canonical poses back to COLMAP convention when building `pycolmap.Rigid3d`." A repo path and library type in the normative text; say "a consumer exporting to COLMAP conjugates by `S`" and move the names. (The :1067 and :1218 uses of `sfm match --derive-pairs` as the verification step are the same pattern as item 3.)
+   > _Status (2026-10-07): **Done** (items 2-5, with the :1067 and :1218 uses) — the values and actors are defined in format terms and the commands, repo path and `pycolmap.Rigid3d` moved to *Implementations*, branch `spec-fix-1006-29-matches-failure6`._
 
 **sfmr-file-format.md**
 1. :1921-1924 (§ World-Space Unit): "The five units and their lengths in metres are [`WORLD_SPACE_UNITS`](../../crates/sfmtool-sfmr-format/src/types.rs) (with `world_space_unit_in_metres` to look one up), re-exported by `sfmtool-core`". A repo-path link and two code names in the format proper; the metre lengths are standard, so state them in place (1 mm = 0.001 m … 1 ft = 0.3048 m) and move the names to *Implementations*.
 2. :859-861: "Area-averaging (OpenCV `INTER_AREA`), inherited from the `.sift` these are copied from — all four producers (the colmap, opencv and sfmtool extractors, and `sfm undistort`) use it." The resize method is defined; the producer list is implementation. Actor should be "a writer".
 3. :153-162 ("Internal round trips need only `S`" under "Invariants … that internal code relies on"): names this repository's pipelines ("bundle adjust, densify, merge PnP, DB-mediated solves"). Implementation guidance in the coordinate-convention section; move to *Implementations*.
    Discussion-grade: :1807-1810 names the viewer's `Go ▸ Go to Point…` inside § Point ID.
+   > _Status (2026-10-07): **Done** — § World-Space Unit gives the five units' lengths in metres in its own table (checked against `types.rs`) and the code names moved to *Implementations*; the thumbnail resize method is defined as area averaging that a conforming writer uses, with the extractor list and `INTER_AREA` under *Implementations*; the internal-round-trip paragraph and the `Go ▸ Go to Point…` mention moved to *Implementations*, branch `spec-fix-1006-30-sfmr-failure6`._
 
 **Other failure-6 checks:** no per-element code column without a legend
 (`member_status` gained one in version 7); no optional entry without an
@@ -328,12 +342,15 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfmtool-core/src/camera/refit_intrinsics.rs` (`refit_camera_intrinsics`, `refit_spline`, `fit_spline`, `fit_colmap`), `refit_intrinsics/constrained_lsq.rs`, `camera/report.rs` (`trustworthy_max_theta_deg`), binding `crates/sfmtool-py/src/geometry/camera_intrinsics.rs:540`, caller `reconstruction/switch_camera_model.rs:294-319`.
 **Inconsistencies:**
   - Spec :196 "Bundle adjustment never frees it" and Non-goal :480 "Nothing in the toolkit frees it" (principal point) are false: `sfm densify --ba-refine-principal-point` (`_commands/densify.py:45`, `_densify.py:373-375`) frees it through pycolmap, and `BundleAdjustTransform(refine_principal_point=…)` (`xform/_bundle_adjust.py:82,212`) takes the option. Code right; say "sfmtool's bundle adjustment never frees it".
+    > _Status (2026-10-07): **Done** — the Theory section and the Non-goal now say sfmtool's Rust bundle adjustment never frees the principal point, and the Non-goal names the pycolmap adjustment behind `sfm densify --ba-refine-principal-point` and `BundleAdjustTransform(refine_principal_point=True)` that can, whose moved principal point a refit copies, branch `spec-fix-1006-14-refit-spec`._
   - `DroppedTerm::FocalAspect` prints `"fx/fy aspect {fy_over_fx:.4} …"` (`refit_intrinsics.rs:311`); the spec defines the value as `fy / fx` (:368) and copies the wrong label into its example (:182). Code bug in a string that reaches Python `report["dropped"]`.
     > _Status (2026-10-07): **Done** — the dropped focal aspect now prints `aspect fy/fx 0.9978 dropped (single focal)`, the name the Explorer's parameter table already uses; the spec example, `xform-command.md`, the `switch-camera-model` draft and the Python and Rust tests that pin the string follow, branch `spec-fix-1006-09-refit-label`._
   - `fit_spline` doc says "one solve of the normal equations" (`refit_intrinsics.rs:1079-1080`); the code uses SVD (:1145-1148), as the spec says (:386). Fix the doc.
     > _Status (2026-10-07): **Done** — the `fit_spline` doc now says the unconstrained fit is one linear least-squares solve through the SVD of the design matrix, branch `spec-fix-1006-09-refit-label`._
   - `SIMPLE_RADIAL_FISHEYE` is missing from the spec's list of models with no trusted bound (:202-205), though `trustworthy_max_theta_deg` returns `None` for it (`report.rs:541`), so the fold check at `refit_intrinsics.rs:649` is skipped. Spec gap and possible code gap.
+    > _Status (2026-10-07): **Done** — fixed in the code: `trustworthy_max_theta_deg` now bounds a `SIMPLE_RADIAL_FISHEYE` at its fold (`forward_fold_deg`, which now covers it), `θ = 1/√(−3·k1)` for `k1 < 0`, and `None` for `k1 > 0` or a fold past 180°; the fold sweep now stops short of 180°, where the axis ray read as a fold. The refit spec, the GUI spec's trustworthy-domain table and the `report.rs` and `simple_radial_fisheye_to_ray` docs say so, with tests in `report/tests.rs` and `refit_intrinsics/tests.rs`, branch `spec-fix-1006-14-refit-spec`._
   - Spec :429-431 lists five `theta_fit_source` values for `CameraIntrinsics.refit`; that method produces only three (`refit_intrinsics.rs:578-584`), and the binding docstring (`camera_intrinsics.rs:528`) lists four. The others come from `switch_camera_model`. Update the spec.
+    > _Status (2026-10-07): **Done** — the spec and the binding docstring list the three values `CameraIntrinsics.refit` produces, and the spec says the switch's per-camera report can also carry `"observations"` and `"spline_domain"`, branch `spec-fix-1006-14-refit-spec`._
   - Quoted figures no test pins: f ≈ 129.52 (:381) vs the test's 129.56 ± 0.1 (`tests.rs:157`); tk107 rms/max and 113.2°/113.3° (:324-327) are not asserted (`tests.rs:330` checks `max_px < 5`). Not run. Minor: the `least_squares_with_inequalities` doc names a `u` argument the function does not take (`constrained_lsq.rs:32-35`).
     > _Status (2026-10-07): **Partially done** — only the minor note was in scope: the `least_squares_with_inequalities` doc now names the `singular_values` and `v_t` it takes and says why `U` is not needed; the unpinned quoted figures are still open, branch `spec-fix-1006-09-refit-label`._
 **Third copies:** `MIN_SLOPE` doc (`refit_intrinsics.rs:75-86`, 12 lines), `refit_spline` doc (:672-691, 20 lines), `fit_spline` doc (:1076-1092, drifted) and `SMOOTHING` doc (:66-69) restate the spec; shrink them to contract plus link. The LDP/NNLS derivation is in both `constrained_lsq.rs:4-16,32-41` and spec :396-407; keep it in the code, cut the spec to the choice and its reasons. `sfm-explorer/src/image_detail/intrinsics/axes.rs:651` re-implements core's `spline_domain_deg` (`refit_intrinsics.rs:769`).
@@ -341,6 +358,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** 4. Non-goal 1 (principal point) is false, as above; the other two Non-goals hold; the open question on the regularization weight is still open.
 **Recommendation:** update spec (principal point, SIMPLE_RADIAL_FISHEYE, `theta_fit_source`) and update code (the "fx/fy" label, the `fit_spline` doc).
 **Unclear / incorrect / suspicious:** a `SIMPLE_RADIAL_FISHEYE` target has no trusted bound and no monotonicity check, so a wide refit can return a camera that folds inside the fitted range; `report.rs:493-495` says this model has "nothing to distrust", but `θ·(1+k1·θ²)` folds when `k1 < 0`.
+> _Status (2026-10-07): **Done** — a `SIMPLE_RADIAL_FISHEYE` with `k1 < 0` now has its fold as its trusted bound, so a fitted target that folds inside the fit is refused (`TrustedBoundShort`) and a folding source is fitted only to its fold; `report.rs` no longer says there is nothing to distrust, branch `spec-fix-1006-14-refit-spec`._
 
 ### specs/core/geometry/absolute-pose.md
 **Summary:** The Lambda Twist P3P solver (`p3p_solve`), the seeded RANSAC estimator over angular residuals with local optimization (`estimate_absolute_pose`), the trimmed-LM pixel refiner (`refine_absolute_pose`), their bindings and test requirements.
@@ -352,11 +370,13 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Spec :188-191 says only `EQUIDISTANT_FISHEYE` among fisheyes has an analytic Jacobian; `supports_pixel_jacobian` is also true for `SIMPLE_RADIAL_FISHEYE` and `SFMTOOL_FISHEYE` (`camera/intrinsics.rs:496-502`). The `project_with_jac` doc (`pose_refine.rs:88-91`) is stale too.
   - Consumers (:17-20) name a relocalization consumer that does not exist; merge uses `pycolmap.estimate_and_refine_absolute_pose` (`merge/pose_refinement.py:114`). Bindings (:232-234): the binding also derives the angular threshold from `camera` for (N, 3) input (`sfmtool-py/src/geometry/absolute_pose.rs:172-186`), and `AbsolutePoseOptions::default()` (`absolute_pose.rs:333-344`) is undocumented, and `reconstruction_growth.rs:263-266` relies on it.
   - Nits: termination is "reach", not "exceed" (:149 vs :412); the differential test is synthetic, not "real correspondence sets" (:268-270); out-of-domain residual is `(1e6, 0)`, one component (`pose_refine.rs:179`).
+    > _Status (2026-10-07): **Done** (bullets 2-5) — the spec now states the local-optimization cost as `Σ sin²θ_i` (as does the `refine_pose` doc); lists the three fisheye models with an analytic Jacobian and the five that fall back, and the `project_with_jac` doc says the same; replaces the consumer list with the real ones (`resect_one`, `repair_poses`, the `resect_images` finite path) and notes that merge uses pycolmap; documents the `(N, 3)` threshold rule of the binding and `AbsolutePoseOptions::default()` with what `resect_one` takes from it; says "reach" for termination (spec and option doc), describes the differential test as synthetic, and gives the out-of-domain residual as `(1e6, 0)`, branch `spec-fix-1006-23-abspose-spec`._
 **Third copies:** the Kabsch rank rationale is in spec :76-85, the `KABSCH_RANK_EPS` doc (:35-39) and an inline comment (:274-278); cut the inline comment to a pointer.
 **Shape:** failure 3 (no example call, no reason for the bearings/pixels split); failure 4 (:87-92 describes the body); failure 5 (imperatives at :64-74, "Non-goals (v1)"); failure 7 ("polish" :157, :279; "hopeless" :15).
 **Non-goals / deferrals checked:** 3; none overtaken.
 **Recommendation:** update code (local-optimization acceptance and its comment), then update spec.
 **Unclear / incorrect / suspicious:** `GLOSSARY.md:118,213` defines **bearing** as a track or point at infinity, but this spec uses it for an observed unit ray throughout its API. `resect_images/finite.rs` runs its own P3P RANSAC loop, a second estimator this spec does not mention.
+  > _Status (2026-10-07): **Done** (the `resect_images/finite.rs` note) — the spec's consumer list names the finite path of `resect_images`, which calls `p3p_solve` from its own pixel-scored RANSAC loop, and says why it does not use `estimate_absolute_pose`, branch `spec-fix-1006-23-abspose-spec`._
 
 ### specs/core/features/flow-based-matching.md
 **Summary:** Sequential matching that advects SIFT keypoints through adjacent-frame DIS flow over a sliding window (default 5) and accepts the best-descriptor candidate among K=5 nearest keypoints within 10 px, L2 <= 250, with target-side deduplication. Also carries the Seoul Bull measurements, a cost table and future directions.
@@ -365,30 +385,42 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Likely code bug: sequence order. `expand_paths` returns `Path.rglob` order unsorted (`_filenames.py:58-80`), passed through `match.py:289-291` and `solve.py:265`; on ext4 adjacent frames can be arbitrary images, and rig subdirectories are concatenated and flowed across the boundary. Sort in code; state the order rule in the spec.
     > _Status (2026-10-06): **Done** — `_run_flow_matching` now sorts the images by workspace-relative path before flow matching (both `sfm match --flow` and `sfm solve --flow-match` go through it), with a test; the spec's Overview states the order rule, including zero-padded frame numbers and how several directories join into one sequence, branch `spec-fix-1006-01-flow-sort`._
   - The descriptor threshold "(default 250)" (:119) has no knob (`_run.py:456-462`); `--flow-skip` and `--flow-preset` (`match.py:120-124`) are not named. Update spec.
+    > _Status (2026-10-07): **Done** — the Overview gives `flow_match_sequential`'s signature, parameters and return, and a table of `--flow-preset`, `--flow-skip` and `--max-features`; it says `descriptor_threshold` has no command-line option, branch `spec-fix-1006-24-flowmatch-spec`._
   - The cost table (166-167) omits GPU auto-selection (`optical.rs:37`) and the background-thread pipelining (`_flow_matching.py:253-270`). Measurements contradict: :52-53 says L2 <= 100, :63-64 and :129-130 say 250; 0.58 px median vs 0.56 px in the table.
+    > _Status (2026-10-07): **Done** — Cost Analysis now says the flow runs on the GPU when one is available, with no option to choose, and that the flow runs on a background thread alongside advection and matching. The measurements now say which threshold each figure used: the table, the pass rates and the 50-match count are at the diagnostic's L2 <= 100, and 250 is the matcher's threshold chosen from the histograms. The observation uses the table's 0.56 px; the 0.58 px figure had no recorded source and is gone. The 0.24 px high-quality figure is marked as a run outside the table, branch `spec-fix-1006-24-flowmatch-spec`._
   - Memory claim (:107-108) omits the stored original positions and (N,128) descriptors (`_flow_matching.py:235-237, 309`); "Per-pair matching" (:110-121) describes `_flow_match_pair`, which only `tests/matching/test_flow.py:11` calls.
+    > _Status (2026-10-07): **Done** — the memory paragraph lists all four arrays a window entry holds and the images and flow fields held beside the window; the per-pair section now describes `_flow_match_from_advected`, the function the windowed matcher calls, and notes `_flow_match_pair` is test-only, branch `spec-fix-1006-24-flowmatch-spec`._
   - Low: no descriptor "fallback" exists (:204-208; `match.py:238-246`); `sfm match --flow` writes a `.matches` file, not the database (:10-12; `_run.py:203-213`).
+    > _Status (2026-10-07): **Done** — "Relationship to Existing Pipeline" now says one run uses one method and no descriptor matching runs in place of a failed pair; the opening says `sfm match --flow` verifies in a temporary database and saves a `.matches` file, while `sfm solve --flow-match` writes into the solve's database, branch `spec-fix-1006-24-flowmatch-spec`._
 **Third copies:** `_flow_matching.py:4-17` module docstring (14 lines, with history residue) and :174-177 re-derive the design; shrink to contract plus link. `optical-flow.md:289` repeats the error-accumulation derivation (:139-140).
 **Shape:** failure 2 (partial: no parameters, return type or CLI flags for `flow_match_sequential`); failure 5 ("Future Directions", "Relationship to Existing Pipeline").
+> _Status (2026-10-07): failure 2 **Done** — signature, parameters, return and CLI flags added to the Overview, branch `spec-fix-1006-24-flowmatch-spec`. Failure 5 is not addressed on this branch._
 **Non-goals / deferrals checked:** 6; none implemented or overtaken.
 **Recommendation:** update code (sort the sequence) and update spec.
 **Unclear / incorrect / suspicious:** `optical.rs:50-51,107-108` docstrings allow "uint8 or float32" but the signature takes `u8` only; images of different sizes fail mid-run (`optical.rs:71-75`).
+> _Status (2026-10-07): **Done** — the `compute_optical_flow` and `compute_optical_flow_with_init` docstrings now say uint8 only and list the errors raised; the spec's Overview states that all images must share one size and that the first mismatched pair raises `ValueError` with no matches written. No up-front check was added, branch `spec-fix-1006-24-flowmatch-spec`._
 
 ### specs/cli/image-processing/flow-command.md
 **Summary:** `sfm flow IMAGE1 IMAGE2` computes DIS flow, advects IMAGE1's SIFT keypoints, prints hit statistics, optionally draws images, and with `-r` compares flow hits to a reconstruction's shared tracks. All option defaults match the Click command.
 **Implementing code:** `src/sfmtool/_commands/flow.py` (14-171); `src/sfmtool/visualization/_flow_display.py` (`draw_flow_visualization` 131-378, `_get_shared_feature_pairs` 83-128).
 **Inconsistencies:**
   - Prerequisites undocumented: `.sift` files for both images (`_flow_display.py:199-205`) and identical dimensions (`optical.rs:71-75`).
+    > _Status (2026-10-07): **Done** — the spec has a "Prerequisites" section (the `.sift` lookup and the same-shape error), and the Click help names both, branch `spec-fix-1006-25-flowcmd-spec`._
   - Flow-only mode (spec 33-34) draws only hits with a categorical palette (`_flow_display.py:443-451`), not flow-coloured arrows; direction colour is only in the separate `<stem>_flow<ext>` image (661-677). The Click help (flow.py:103-105) has the same error.
+    > _Status (2026-10-07): **Done** — the spec's "Flow only" section and the Click help now say only the hits are drawn, one palette colour each, and that direction colour is in `<stem>_flow<ext>`; the `draw_flow_visualization` and `_draw_flow_only_mode` docstrings were corrected the same way, branch `spec-fix-1006-25-flowcmd-spec`._
   - `--descriptor-threshold` changes printed statistics only (`_flow_display.py:268-285`), and its default 100 differs from the matcher's 250 (`_flow_matching.py:167`).
+    > _Status (2026-10-07): **Done** — the options table and Overview say the threshold changes printed statistics only, and the Overview states the 100 vs 250 difference and that a hit takes the nearest keypoint with no descriptor choice, branch `spec-fix-1006-25-flowcmd-spec`._
   - `--max-features` affects drawing only; comparison mode can exceed N by up to 2 (527-533). Ranges and errors (flow.py:51, :58, :141-144; `_flow_display.py:107-110`) are undocumented.
+    > _Status (2026-10-07): **Done** — the table gives each range and says `--max-features` affects drawing only, with the first-N rule (flow only) and the proportional rule that can draw N + 2 (comparison); errors are listed under Prerequisites and the `-r` row, branch `spec-fix-1006-25-flowcmd-spec`._
   - Code bug: comparison mode matches images by basename, last match wins (`_flow_display.py:101-105, 288-289, 484-485`). In `kerry_park_ground_truth.sfmr`, `fisheye_left/frame_01.jpg` resolves to `fisheye_right/` and the wrong tracks are compared silently. Match the workspace-relative path; refuse ambiguous basenames.
     > _Status (2026-10-06): **Done** — `sfm flow -r` now finds each image by its workspace-relative path, refuses a workspace image the reconstruction lacks, and outside the workspace matches by file name only when exactly one image has it; tests in `tests/matching/test_flow.py`, spec § "Comparison mode" updated, branch `spec-fix-1006-02-flow-basename`._
 **Third copies:** the colour legend is in four places (spec 40-42, Click help flow.py:108-112, docstrings 150-158 and 476-479); the two internal docstrings should point at the spec. Low priority.
 **Shape:** failure 1. Proposed first sentence: "The flow command is a diagnostic for flow-based matching: it computes dense optical flow from one image to another, moves the first image's SIFT keypoints along it, and reports how many land near a keypoint of the second image, optionally drawing the result or comparing it with the matches in a reconstruction." It also never links `flow-based-matching.md`.
+> _Status (2026-10-07): **Done** — the opening is the proposed sentence with "matches" changed to "correspondences" (the comparison uses feature pairs that observe the same 3D point, not stored matches), and links `flow-based-matching.md`, branch `spec-fix-1006-25-flowcmd-spec`._
 **Non-goals / deferrals checked:** 1; still true.
 **Recommendation:** update code (basename lookup) and update spec (prerequisites, flow-only drawing, option scope, purpose sentence).
 **Unclear / incorrect / suspicious:** "Middlebury color wheel" (spec 34, `_flow_to_color` 59) is really an HSV direction wheel (69-77); `--side-by-side` rescaling (689-699) is undocumented.
+> _Status (2026-10-07): **Done** — the spec, the `_flow_display.py` docstrings, `_discontinuity_display.py` and `motion-command.md` now describe an HSV hue wheel (hue = direction, saturation = magnitude, white = zero) instead of Middlebury; the spec says the side-by-side image is twice one image's width, since the flow requires equal dimensions and the rescale in `_save_output` therefore never runs, branch `spec-fix-1006-25-flowcmd-spec`._
 
 ### specs/core/features/cluster-covisibility.md
 **Summary:** The pre-reconstruction image-pair count matrix `W[i,j]` (clusters with an accepted member in both images), its acceptance mask, dense-storage bound, the lazy greedy seed-group iterator, candidate ranking and the PyO3 surface.
@@ -399,6 +431,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - `cov.counts  # … errors above dense bound` (:281): the getter has no error path (py `covisibility.rs:213-224`). Minor: :51-52 "for unrefined clusters", but the code deduplicates every cluster (core :362-363).
   - The API block omits `next_seed_image_group` (core :591) and `displacement_neighborhood()` (core :561).
   - The Validation section's first consumer `exp_pinhole_bootstrap.py` (:347-349) is not in the tree; name the real consumers.
+    > _Status (2026-10-07): **Done** — all five bullets: the spec and the core `from_matches` doc now say every cluster file the reader opens carries positions (pre-v6 cluster files are refused); the acceptance table is labelled for version 6 or later; the complexity bound uses `span ≤ d + 2` (`d + 1` when the search returns the seed's own row) and pairs `(d + 2)(d + 1)/2`; `cov.counts` lost its error note; deduplication is stated for every cluster; the API block gains `next_seed_image_group` and `displacement_neighborhood()`; Validation names reconstruction growth, the cluster census and pose verification as consumers. Branch `spec-fix-1006-21-covisibility-spec`._
 **Third copies:** `SeedImageGroup` docs (covisibility.rs:145-209, about 45 lines) restate spec :191-233 and :261-267; shrink to contract plus link. Smaller: `MAX_DENSE_IMAGES` doc (:27-32), `prof.rs:13-17`.
 **Shape:** failure 1 (borderline). Proposed: "Cluster covisibility counts, for each pair of images, how many feature-match clusters (sets of matching SIFT features across images, stored in a `.matches` file) have a member in both images, so a caller can choose groups of mutually overlapping images and rank candidate views before any reconstruction exists." Failure 5: plan and experiment language at :86, :235, :347-355. Failure 7: "drop the rest unpaid" (:155), "pays nothing for it" (:197), "the actual scaling wall" (:92), "compact where dense is hopeless" (:98).
 **Non-goals / deferrals checked:** 7; all still unbuilt, none overtaken.
@@ -412,14 +445,21 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Code bug: the spec keeps "dist_sq <= max_dist²" (:127, :154), but `u8::cutoff_sq` rounds up (`distance.rs:78-85`), so `max_dist=2.5` admits √7 ≈ 2.65 (`search.rs:214`). Reachable from Python `KdForest.query` (py kdforest.rs:257). Floor with a small relative tolerance.
     > _Status (2026-10-06): **Done** — `u8::cutoff_sq` now rounds `max_dist²` down after a relative tolerance of `4 · f32::EPSILON`, so 2.5 keeps 6 and drops 7 while `sqrt(n)` still keeps `n`; the eager and lazy (`.kdf`) searches share it, and the cluster matcher passes no cutoff. Tests in Rust and Python, spec § "Distance cutoff" says so, branch `spec-fix-1006-04-kdforest-maxdist`._
   - `L_max` default "precision-tuned" (:190) is a fixed 128 (mod.rs:104-120); `calibrate_max_leaf_checks` has no caller outside the module.
+    > _Status (2026-10-07): **Done** — the parameter table gives `L_max` as 128 and the `L_max` note says the defaults are the fixed preset values; the calibration section says nothing outside the module's tests calls `calibrate_max_leaf_checks`, branch `spec-fix-1006-22-kdforest-spec`._
   - Pseudocode sends `diff == 0` right (:145-146); the code sends it left (search.rs:351-354), matching the spec's own rule (:99). Module tree (:271-280) omits `constellation.rs`, `neighbor_index.rs`, `persistent.rs`; "per-dimension bookkeeping" (:300) is not a field.
+    > _Status (2026-10-07): **Done** — the pseudocode sends `diff <= 0` left as the code does; the module tree is replaced by a short paragraph that links the five forest files and names the file-backed forest, constellation query and `NeighborIndex` trait as specified elsewhere; `KdForest` is described by its real fields, branch `spec-fix-1006-22-kdforest-spec`._
   - "exactly what `src/sfmtool/feature_match/` already consumes" (:359-360) is false (also py kdforest.rs:8-10); the benchmarks are synthetic, not "end-to-end image-pair matching" (:404-405).
+    > _Status (2026-10-07): **Done** — the spec and the binding's module doc now say no module under `src/sfmtool/` uses `KdForest` (the track-cluster matcher calls it from Rust); the benchmark bullet and the bench's module doc describe the synthetic benches they run, branch `spec-fix-1006-22-kdforest-spec`._
   - `SFMTOOL_KDFOREST_STATS` is on for any value including `0` (mod.rs:79-80); `SFMTOOL_KDFOREST_NO_SIMD` (distance.rs:186-187) is undocumented; the Python class exposes more than the constructor and `query` (py :153-413).
+    > _Status (2026-10-07): **Done** — the Diagnostics section says any value of `SFMTOOL_KDFOREST_STATS` turns it on, `0` included, and documents `SFMTOOL_KDFOREST_NO_SIMD`; the `=1` doc comments in `mod.rs` and `search.rs` say the same; the Python bindings section lists the properties, `leaf_layout` and the two constellation methods, branch `spec-fix-1006-22-kdforest-spec`._
 **Third copies:** no kdforest source links this spec. search.rs:14-24 (11 lines) is nearly the spec's :159-170; the progress-unit rationale is in mod.rs:163-179 (17 lines), build.rs:28-42 and spec :315-323; also search.rs:32-39 and calibrate.rs:23-27.
+> _Status (2026-10-07): **Partially done** — `mod.rs`, `build.rs`, `search.rs`, `distance.rs`, `calibrate.rs` and the binding's module doc now cite this spec; shrinking the third copies is still open, branch `spec-fix-1006-22-kdforest-spec`._
 **Shape:** failure 2 (partial: API at :308 of 414, no example); failure 4 (module tree, stale); failure 5 ("_Future:_" :377-381, :296-297, :22; `KdForestF32` "Phase 2" mod.rs:507-509); failure 7 ("slots in" :360, "dial"/"knob" :198/:172, "dwarfs" :251-252).
 **Non-goals / deferrals checked:** 7. "Potentially for patch matching" is overtaken in part: bench searches use the forest through `LazyKdForestU8` (`bench/search.rs:30-31`, `bench/nearby/{guided,constellation}.rs`).
+> _Status (2026-10-07): **Done** — the Motivation now says the forest also finds image patches through the constellation query, which the bench's descriptor search runs over `LazyKdForestU8`, branch `spec-fix-1006-22-kdforest-spec`._
 **Recommendation:** update code (`max_dist`), update spec (`L_max`, module tree, consumer and benchmark claims), and link the spec from the doc comments.
 **Unclear / incorrect / suspicious:** "each rayon worker keeps one reusable scratch" (:237-239), but `for_each_init` (mod.rs:440-441) can initialise once per job split.
+> _Status (2026-10-07): **Done** — the spec and the `search_batch_inner` comment say `for_each_init` makes one scratch per piece rayon splits the batch into, so a worker can make several, branch `spec-fix-1006-22-kdforest-spec`._
 
 ### specs/core/geometry/bundle-adjustment.md
 **Summary:** The staged soft-L1 LM bundle adjustment kernel: trim/retriangulate/solve rounds, the in-front floor, per-camera lens releases, points at infinity, point constraints (free/ranged/held), inverse-depth free points with the point-or-bearing decision, and protected observations. Interface, defaults and per-camera mechanics match the code; the Non-goals section still describes the kernel as it was before #400 and #607.
@@ -435,6 +475,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** 7; 3 overtaken (per-camera release #607, constraint handling and scale gauge #400, "serves the bootstrap experiments"). The kept-fraction follow-up (:1256-1257) is still unimplemented.
 **Recommendation:** update spec (Non-goals bullets 2, 5, 6; the degenerate-exit `None`; the progress-line quote; the bootstrap references).
 **Unclear / incorrect / suspicious:** a degenerate exit after the first round returns the state as of that round (:3053-3059), not the caller's input as :198-200 says. No code bug found; every stated default matches.
+> _Status (2026-10-07): **Done** for the five Inconsistencies bullets and the Unclear note — the spec drops the per-camera-release non-goal, narrows the gauge non-goal to gauge fixing and covariance (pointing at the point constraints), lists the kernel's callers in place of "serves the bootstrap experiments", quotes the kernel's `free points decided at noise …` line and names the CLI's own wording, says `free_point_decision` is `None` on a degenerate exit too, and says what state a degenerate exit returns in the first and in a later round; the bootstrap-spec and experiment-script references are gone from the spec and from the module doc of `bundle_adjust.rs`. Third copies, Shape and the measurement section are not addressed, branch `spec-fix-1006-13-ba-nongoals`._
 
 ### specs/cli/reconstruction/xform/localize-keypoints-command.md
 **Summary:** `sfm xform --localize-keypoints` runs the cross-view keypoint search over each point's full track on an `embedded_patches` reconstruction, drops refused views, culls points below `min_views`, and rebuilds the tracks through `compact_to_embedded_patches`. Documents the `key=value` parameter string, a 17-row key/default table, errors and the summary. Every key, caster, default, error path and the summary format match the code.
@@ -449,6 +490,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** no Non-goals section; 5 negative claims checked, all hold (normals re-derived, as above).
 **Recommendation:** update code (forward only given keys), then the spec's normals sentence, parser mechanism and sampler cell.
 **Unclear / incorrect / suspicious:** `sfm xform in.sfmr --localize-keypoints out.sfmr` takes `out.sfmr` as the parameter string (`_arg_parser.py:768-770`); the spec's syntax is correct but does not warn about this.
+> _Status (2026-10-07): **Done** — `LocalizeKeypointsTransform` now forwards only the keys given to `PatchCloud.localize_keypoints` (the binding supplies every other default), with range checks on given keys only and a test that checks the spec's Default column against the binding signature; its docstring is cut to the contract plus a spec link. The spec now says normals are re-derived from the frame, credits `parse_xform_args` with reading the optional value, links the `sampler` cell to `image-warping.md` instead of copying its cost figures, and warns that a path after `--localize-keypoints` is read as the parameter string. Branch `spec-fix-1006-12-localize-forward-keys`._
 
 ### specs/core/patch/zncc-self-similarity-radius.md
 **Summary:** Defines the ZNCC self-similarity radius, the semi-major axis of the moment ellipse of the whole-pixel shifts where a bitmap's ZNCC with itself stays within `τ`, read from the bitmap alone; covers flags, mapping to image px and patch units, the kernels and every consumer. 500 lines. Every default, constant, threshold, panic condition, binding key and the Track View colours match.
@@ -475,22 +517,27 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** 6; none overtaken.
 **Recommendation:** update spec (`INLIER_PX`, "on the fly", testing line, "thinning"; add an interface block with one call).
 **Unclear / incorrect / suspicious:** the comment at :392-393 ("its own current pose available as a fallback init") is false except above 4096 images (`covisibility.rs:525-537`; `batch_resection.rs:178-183`). `inlier_fraction_of` (:171-192) duplicates growth's helper and `reprojection::inlier_fraction`. The scaling testing line (:202-203) has no test. Nothing in production calls the kernels.
+> _Status (2026-10-07): **Partially done** — the four Inconsistencies: the spec and the `INLIER_PX` doc say it bounds only the repair (screens use batch registration's and `HomographyOptions`' own 3 px), "construct it on the fly" is gone, the testing line matches the two screen tests, "thinning" is dropped, `polar_rotation` is linked and contrasted with `orthonormalized`, the repair skip list includes `polar_rotation` returning `None`, and Screen B and the repair name the registered-neighbour ranking; a new Interface section (replacing "Inputs and outputs") gives both Rust signatures, why the caller supplies the substrate, and one `verify_poses` call from `neighborhood_arrays()`; the Screen A comment at :392-393 now says the fallback inits are neighbours' poses, own pose only above `MAX_DENSE_IMAGES`; branch `spec-fix-1006-19-pose-verification-spec`. Shape failures 2 and 3 are done; the Third copies, Shape failures 4 and 7, and the other Unclear items (`inlier_fraction_of` duplication, untested scaling line) are open._
 
 ### specs/core/geometry/reprojection-residuals.md
 **Summary:** `reprojection_residuals` (per-observation `(projection − observed)` for images sharing one `CameraIntrinsics`, invalid observations as `(invalid_residual, 0)`) and `inlier_fraction`, with bindings. Signatures and the binding default match.
 **Implementing code:** `crates/sfmtool-core/src/geometry/reprojection.rs` (:35-89, :94-103); `crates/sfmtool-py/src/geometry/reprojection.rs`. Only production caller: `analysis/cluster_census.rs:682`. No code file cites the spec.
 **Inconsistencies:**
   - Purpose (:5-6) names three shared callers that each have their own code: growth (`reconstruction_growth.rs:194, :211-230, :501-530`), pose refinement (`pose_refine.rs:45-88`), pose verification (`pose_verification.rs:171-192`). Fix the spec, or move those callers onto this function (discuss).
+    > _Status (2026-10-07): **Done** — the spec's Purpose names the cluster census as the one production caller and says growth, pose refinement and pose verification use their own code; the core module doc no longer names them; moving those callers onto the function was not done, branch `spec-fix-1006-20-reproj-spec`._
   - Bug: zero observations give shape `(0, 0)` (`PyArray2::from_vec2`, py :90), not `(n_obs, 2)` (:83), and `inlier_fraction` then refuses it (py :105) where :62-63 says 0.0. Verified by running.
     > _Status (2026-10-06): **Done** — the binding reshapes the flat result, so zero observations give `(0, 2)` and `inlier_fraction` scores it `0.0`, with a binding test, branch `spec-fix-1006-05-reproj-binding`._
   - Bug: out-of-range `obs_image`/`obs_point` and a short `translations` array raise `PanicException` (py :59-78; core :64-76), not `ValueError`. Verified.
     > _Status (2026-10-06): **Done** — the binding now reshapes the flat result so zero observations give `(0, 2)`, and raises `ValueError` for out-of-range `obs_image` / `obs_point` and a `translations` row count that differs from `quaternions_wxyz`; the spec's Bindings section and the core function's `# Panics` doc say so, with binding tests, branch `spec-fix-1006-05-reproj-binding`._
   - A non-finite pose gives `(NaN, NaN)`, not `(invalid_residual, 0)` (core :69-86); the spec (:46-53) should say so.
+    > _Status (2026-10-07): **Done** — the spec says only the point is checked for finiteness; a non-finite pose gets `(invalid_residual, 0)` only where the model's domain test rejects the ray, otherwise whatever the projection gives, usually NaN or infinite components (`(NaN, NaN)` for a NaN quaternion under a pinhole model), branch `spec-fix-1006-20-reproj-spec`._
 **Third copies:** invalid-observation rationale in spec :46-53, core doc :26-31, binding doc py :18-21; shrink the binding copy and link the spec from the module doc (:4-10).
+> _Status (2026-10-07): **Done** — the core module doc cites the spec, and the binding docstring keeps one sentence and points at the spec, branch `spec-fix-1006-20-reproj-spec`._
 **Shape:** failure 1. Proposed: "This function computes, for every observation of a world point in an image, the pixel offset between where the point projects under that image's pose and where it was observed, for a set of images that share one camera model." Failure 3: no reason for flat `&[f64]` inputs; the Python block is a signature, not a call.
 **Non-goals / deferrals checked:** 2; neither overtaken.
 **Recommendation:** update code (empty shape; `ValueError` on bad indexes) and spec (callers; cite it from the code). Discuss moving the other helpers onto it.
 **Unclear / incorrect / suspicious:** :50-51 and :97-99 distinguish `inf` from a finite value in `inlier_fraction`, which treats both alike (:99-102). Four separate helpers project, take the norm and count below 3 px; none calls this function.
+> _Status (2026-10-07): **Done** for the `inf` note — the spec says `inlier_fraction` counts an invalid observation as an outlier either way and names what the choice changes elsewhere; the Testing line matches the tests. The duplicate helpers are not merged, branch `spec-fix-1006-20-reproj-spec`._
 
 ### specs/gui/mcp-server.md
 **Summary:** The viewer's MCP endpoint (`sfm-explorer --mcp`): CLI and bind behaviour, the 86-tool catalog with argument and reply shapes, the GUI-thread drain, the Rust seam, transport, security, errors and tests. 5167 lines, updated with the code (#804, #807, #809). The tool table matches the catalog name for name (86 each; 16 read, 65 write, 4 input, 1 save), checked by `mcp/tests/catalog.rs:865,964`. Drift sits in prose no test reads.
@@ -503,17 +550,25 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Code bug: a background edit ending in `Finished::NoChange` (`background/mod.rs:1043`) replies `changed: true` (`mcp/edit.rs:584-590`), against spec 3073/3276 and `mcp/edit.rs:22-24`.
     > _Status (2026-10-07): **Done** — a background edit that ends in `Finished::NoChange` now answers `changed: false` at the version the node still stands at: `FinishedTask` records whether the run pushed a version and `background_reply` reads it; test in `mcp/tests/edit.rs`, and `background-tasks.md`, the prune and add-to-tracks sections of `mcp-server.md` and § "The wire" of `bench.md` say so, branch `spec-fix-1006-08-mcp-nochange`._
   - Spec 2725-2726, 2949, 3018, 3064, 3181, 3230 and `catalog/edit.rs:121,145,244,307` say five edits "renumber nothing"; with pending point edits each calls `edited.materialize()`, which closes deleted slots (`edited.rs:1162-1175`; `state/edits.rs:1379-1386`). Code right; after `delete_point` an agent reuses stale indexes.
+    > _Status (2026-10-07): **Done** — § "The editing family" of `mcp-server.md` now states when point indexes shift: every edit that gives the node a whole new base, and a non-minimal save, first folds pending point edits in (deleted slots close up, replaced points return to their base index, new points follow the last base point; image indexes never move), and the move, switch, add-to-tracks, retriangulate-all, convert and bake passages and tool descriptions say "unless a point edit is pending"; `delete_point`'s description says what the fold does to its open slot, and a catalog test requires the exception wherever a description promises indexes stay, branch `spec-fix-1006-16-mcp-renumber`._
   - Security item 4 (4435-4436) "No tool in this surface saves an `.sfmr`" is false: `save_reconstruction` (`catalog/edit.rs:50`), as spec 203 and 223 say.
+    > _Status (2026-10-07): **Done** — Security item 4 now names the two tools that write to disk, `save_reconstruction` and `build_index_files` (which the finding also missed), and says nothing deletes a file; the section's opening paragraph adds write access to any path the process can write, branch `spec-fix-1006-17-mcp-security-workers-panels`._
   - Panel counts: `Tab::ALL` has 9 (`layout.rs:191`); `catalog/viewer.rs:509` and `mcp/layout.rs:107` say seven, spec 2470/2486/5138 say eight.
+    > _Status (2026-10-07): **Done** — the spec, `user-experience.md`, the `set_window_layout` description and the comments in `mcp/layout.rs` and `catalog/mod.rs` no longer hand-copy a panel count: they say every panel in `Tab::ALL`, every panel name, or name the four panels the default layout puts behind a sibling. The counts left in the spec say nine, which is right, and "the nine names are the layout file's" is checked against `Tab::ALL` by `the_spec_s_counts_are_the_catalog_s_and_the_panels`, branch `spec-fix-1006-17-mcp-security-workers-panels`._
   - Spec 3145 "Six operations run on a worker" omits add-to-tracks, prune, build_index_files, open, create_track_at_pixel, find_nearby_tracks and the bench searches (`background/mod.rs:86-302`).
+    > _Status (2026-10-07): **Done** — the paragraph now lists by name, without a count, the fourteen tools that start a `background::Operation` (every `state.start_*` call under `mcp/`), and the tool-table rows for `open_reconstruction` and `add_camera_image_to_tracks` now say "on a worker thread" like the rest, branch `spec-fix-1006-17-mcp-security-workers-panels`._
   - Reply shapes: no `changed` field in 2689-2696 (`mcp/edit.rs:673,730`); bundle_adjust prose (3077-3153) and `actors` paragraphs (1751-1784) are under the wrong headings; `cancel_background_task` and `fit_bench_track_normal` have no reply section.
   - retriangulate_point verdicts (3215-3216) are a subset of `triangulation/points.rs:181-189`. Spec 3693-3699: `shape_bench_observation` has no `stage_must_be` check (`mcp/bench.rs:777-794`). The `get_bench_track` description says 24 × 24 and 8 × 8 (`catalog/read.rs:288-296`); spec 3545/3600 is right.
   - Late screenshot refusals (`frame.rs:349,438,472,514`) leave only a success `Query` row (`mod.rs:2308-2310`), against "one failure, one entry" (1950-1956, 4468).
   - Stale counts: "thirty-five" (4308/4310, is 85), "Seventy tools" (4397, is 86), "Four things" (3913, six bullets), "seven edit commands" (4179, is 14), three vs two self-wording methods (4022, 4473); `AppState::bundle_adjust` (2677, 4023) is `start_bundle_adjust`; `serve` lacks `busy` (`server.rs:125-130`); the `Command` block (4096-4162) shows about 44 of 83 variants (`mod.rs:96`).
+    > _Status (2026-10-07): **Done** — the counts are reworded so none is hand-copied ("every other tool answers with JSON", "the whole catalog", "What this arrangement gives", the `Kind::Edit` sentence names the commands' groups, "some `AppState` methods word their own" in both places, and § "The editing family" no longer counts its tools); `AppState::bundle_adjust` is `start_bundle_adjust`; `serve` shows `busy`; the `Command` transcription is replaced by a paragraph on what the enum is and how labels resolve, linking `mod.rs` and the reading methods in `logged.rs`, branch `spec-fix-1006-18-mcp-counts-intrinsics`._
   - Minor: `max_dimension: 0` and `limit: 0` are accepted (`frame.rs:629-631`); a blank line at 5095 splits the Parameters table.
 **Third copies:** `get_bench_track` description (`catalog/read.rs:262-398`, 137 lines) repeats spec 3496-3656 and `bench.md` "The wire"; shrink to fields and units, move the #809 fields to `bench.md`. `mcp/bench.rs` doc comments, `read.rs:270-285` (which also misnames `background_task`), about ten 9-27-line blocks in `display.rs`, `view.rs`, `render.rs`, `layout.rs`, and `mcp/edit.rs:29-34,209,355-365` should shrink.
 **Shape:** failure 3/4: § "The Rust seam" transcribes `Command`, `Deferred` and `serve`, all drifted; replace with rationale and links. Failure 5: 3919, 4470, the draft pointer at 5000. Failure 7: "closes the loop" (117), "defer honestly" (3927), "too blunt an instrument" (5070), "is being rude" (5123), "the representation the rays earned" (3523), "make a mess of the window" (2536).
 **Non-goals / deferrals checked:** 26. One overtaken: 4994-5001 says editing intrinsics is "still not on the surface", but `switch_camera_model` and lens releases ship (`catalog/edit.rs:327,415`).
+
+> _Status (2026-10-07): **Done** — the paragraph now says a lens changes through `switch_camera_model` or a `bundle_adjust` release, that no tool sets parameters to given numbers, and points at the draft for the proposal form only, branch `spec-fix-1006-18-mcp-counts-intrinsics`._
+
 **Recommendation:** update code for the three bugs; update spec elsewhere, starting with "renumbers nothing", Security item 4, the worker list and the panel counts; replace hand-copied counts and the `Command` transcription with ones the catalog test checks.
 **Unclear / incorrect / suspicious:** spec 1157 and 1194 disagree on whether `camera_image` or `bench_observation` wins (`display.rs:517-523`). `FakeWindow` clamps sizes (4499) though a real Windows window does not (`ui_basic.rs:1297-1300`). `catalog/edit.rs:504` carries runs of about 26 spaces. The widget-id parse accepts uppercase hex (`tools.rs:1717`); the schema allows only lowercase.
 
@@ -522,16 +577,23 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Implementing code:** `crates/sfm-explorer/src/track_view/` (`mod.rs`, `recent.rs`, `header_buttons.rs`, `body/{mod,table,tile,crop,patch,reference}.rs`); `bench.rs` (`set_editing`:1587); `dock.rs` (`show_track_view`:887).
 **Inconsistencies:**
   - Non-goal "Deciding anything from a number" (2015-2016) contradicts 1573-1582 and the code (`bench/evaluate.rs:430-437`): the bars set every unpinned verdict. Rewrite the bullet.
+    > _Status (2026-10-07): **Done** — the non-goal now reads "Acting on the track from a number beyond its verdicts": the bars set every unpinned verdict, and every other step is the person's, branch `spec-fix-1006-15-trackview-spec`._
   - `TrackBodyResponse` (92-117) lacks `normal: Option<NormalStep>` (`body/mod.rs:156`, #668).
+    > _Status (2026-10-07): **Done** — the spec's `TrackBodyResponse` carries `pub(crate) normal: Option<NormalStep>`, branch `spec-fix-1006-15-trackview-spec`._
   - Module map (44-59) omits `header_buttons.rs` and `body/reference.rs`; column prose (988-991) omits Reference between Zoom and Status (`body/table.rs:306-308`).
+    > _Status (2026-10-07): **Done** — the module map names `header_buttons.rs` and `body/reference.rs`, and the column prose puts *Reference* between the zoom and the status, branch `spec-fix-1006-15-trackview-spec`._
   - Spec 765-766 attributes the Action Log labels (`bench.rs:2422,2426`) to the boxes, which say " per axis" and "% overlap" (`body/mod.rs:781,793`).
+    > _Status (2026-10-07): **Done** — the spec gives the boxes' own `2 per axis` and `0% overlap` and attributes the cut wording to the version label and its Action Log row, branch `spec-fix-1006-15-trackview-spec`._
   - Cleared-Lock hover (`body/mod.rs:818`) names less than spec 779-783; fix the code text. `apply_thresholds` doc (`body/mod.rs:160`) says four boxes; there are six.
+    > _Status (2026-10-07): **Done** — the cleared-*Lock* hover now also names the normal's segment and arrowhead and the ghost outline, with the spec's reasons (no size, turn, depth or facing; no keypoint to move), and the `apply_thresholds` doc says six boxes, branch `spec-fix-1006-10-lock-hover-spaces`._
   - Spec 611 links a `metrics/` directory; the module is `metrics.rs`. Spec 1684 "its SIFT index" understates the refresh (`dock.rs:894-902`). Testing (1881-1986) omits the sort tests (`body/tests.rs:4274-4424`); none orders by Reference (948).
+    > _Status (2026-10-07): **Done** — the link is `metrics.rs`; the refresh sentence names both index files, the re-derived states and the remembered miss; Testing lists the sort tests and says the first-click test covers every heading but *Reference*, branch `spec-fix-1006-15-trackview-spec`._
 **Third copies:** about 220 lines of module docs in `track_view/`; `body/mod.rs` restates 170-196, 568-573; `tile.rs:4-60` restates 1347-1464. `table.rs`, `tile.rs`, `crop.rs`, `patch.rs` do not name the spec.
 **Shape:** failure 1 (mild). Proposed: "Track View is the SfM Explorer panel that lists one 3D point's observations, one per image, with the measurements of each, and, with its Edit box ticked, the controls that change that track on the bench before it is committed." Failure 4: 1634-1635, 975-977, and the Testing section (1797-2002) as a prose copy of test names. Failure 7: "only as good as" (3), "a gesture with no answer" (396), "in the same breath" (725), "a hand ruling against the bars" (1543). `frame` for patch geometry (1395, 1430, 1442, 1959) conflicts with GLOSSARY.
 **Non-goals / deferrals checked:** 11; one overtaken (above). `specs/drafts/sfm-explorer-track-editing.md` is stale (line 890; σ_pos removed in #654).
 **Recommendation:** update spec; the code-side fixes are the Lock hover text and the four-boxes doc comment.
 **Unclear / incorrect / suspicious:** code bug: the Lock hover strings contain runs of 18 spaces (`body/mod.rs:814`, `818`), as does `mcp/tools/catalog/edit.rs:504`. `AppState::set_editing` (`bench.rs:1593`) reads the raw `selected_point`; no user gesture found that reaches the bad state (`track_view/tests.rs:328`).
+> _Status (2026-10-07): **Partially done** — the space runs are fixed: each was a line break inside a string written without a trailing `\`. Both *Lock* hovers, the `convert_to_embedded_patches` description and two test strings (`background/tests.rs`, `viewer_3d/bench_track/tests.rs`) now continue with `\`, as do four error messages with the same defect (`sfmtool-py` `sift/extract.rs` and `reconstruction/clone.rs`, `sfmtool-kdf-format` `cache.rs`) and a test string in `sfmtool-core` `numeric/tests.rs`, and `catalog_descriptions_have_no_runs_of_spaces` in `mcp/tests/catalog.rs` checks every tool and schema description. The `set_editing` item is not addressed on this branch, branch `spec-fix-1006-10-lock-hover-spaces`._
 
 ### specs/core/bench/nearby-tracks.md
 **Summary:** `find_nearby_tracks`: for a pixel, run the matching sources in order with a stopping rule, run the far-field sweep when needed, group and rank into depth layers, build a track-stage `EditableTrack` per usable candidate, mark duplicates and label the rest. Matches the code (#634-#642) closely, including every parameter default and the example call.
@@ -545,13 +607,16 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 **Non-goals / deferrals checked:** 5; none overtaken.
 **Recommendation:** update spec (the `Label` refusal; move the experiment numbers out).
 **Unclear / incorrect / suspicious:** the far-field trigger groups with `DepthLayerOptions::default()` (`find.rs:1089-1092`), not `options.layers`; harmless today, unstated.
+> _Status (2026-10-07): **Partially done** — the three Inconsistencies bullets, the "bench" definition and the far-field trigger note are done: the spec lists `Label` (checked first) among the errors, states the label refusal in § The labels and § Python bindings, says `bench_order()` and not a string sort gives the best-supported-first order, names the wire's `commit` option and that `rank`/`confidence` are `None` when the layers are unranked, defines the bench in the opening with a link to bench.md, and states that the trigger groups with `DepthLayerOptions::default()` (none of whose fields affect grouping); the binding's Raises names the label refusal, and `test_the_options_and_the_query_are_checked` now checks it. Still open: the Third copies docstring and the Failure 5 experiment-number moves. Branch `spec-fix-1006-26-nearby-spec`._
 
 ### specs/formats/matches-file-format.md
 **Summary:** The `.matches` archive: a pairwise or cluster backbone, the hashes, the cluster-selection record, and versions 1-7. The v7 status legend (#805) is described accurately; the one stale statement is the version range. The v7 legend rules, the v6 and v4 presence rules and the pre-v6 refusal (read.rs:138) match the code.
 **Implementing code:** `crates/sfmtool-matches-format/src/` — `types.rs` (`MATCHES_FORMAT_VERSION`=7 :133, legend :543-619), `read.rs` (:104-152, :394-440), `write.rs` (:384), `verify.rs` (`structure_errors` :39-145, legend :896-1000), `select.rs`.
 **Inconsistencies:**
   - :223-224 "`1` through `6`"; the code (types.rs:133) and spec :1227 say 7. Code right.
+    > _Status (2026-10-07): **Done** — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
   - :1133-1135 requires the entries to match the `has_*` flags; `structure_errors` (verify.rs:39-145) checks stray `cluster_patches/` (:119-130) but not stray `two_view_geometries/`, so such a file passes. Spec right; small verifier gap.
+    > _Status (2026-10-07): **Done** — `structure_errors` reports `two_view_geometries/` entries when `has_two_view_geometries` is false (either backbone) and a missing section when it is true; test `test_verify_rejects_two_view_geometries_flag_mismatch`. Every writer goes through `write_matches`, whose `validate_structure` already requires the flag to match the section, and no `.matches` file is checked in, branch `spec-fix-1006-11-matches-verify-stray`._
 **Format independence (failure 6):**
   - CONFIRMED :225-236 — `matching_method` values defined by CLI flags; define each by what a writer asserts, move the flags to Implementations.
   - CONFIRMED :442 (`sfm match --derive-pairs`), :515-516 (`sfm match --cluster`, `sfm cluster-patches`) — move to Implementations.
@@ -561,11 +626,16 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - NEW :533-538 — focal-vote and kernel clauses in "Why `float32`".
   - NEW :664-669 — `rejected_unlocalizable` defined only through cluster-patch-refinement.md; state the bar as `refine_options.max_member_zncc_self_similarity_radius` and what the radius measures.
   - Minor: :103-106 "earlier sfmtool releases"; :760-761 acceptable; :35 and :1060-1074 acquitted as background.
+  > _Status (2026-10-07): **Done** — for the CONFIRMED, NEW and Minor (:103-106) items: each `matching_method` value is defined by what the file holds; a verifier, a matcher, a refiner and a COLMAP-exporting consumer are the actors; migration and verification text names no command or function; "Why `float32`" drops the focal-vote and kernel clauses; `rejected_unlocalizable` states its bar (`refine_options.max_member_zncc_self_similarity_radius`) and what the radius measures in place; the API, command, repo-path and `pycolmap.Rigid3d` names now sit in *Implementations*, branch `spec-fix-1006-29-matches-failure6`._
   - Versioning gaps: the `cluster_selection` record, `source_selection` and `restrict_cluster_ids` (:954-997) give no version; `refine_options` keys (:621-628) are tied to "writer generations", not versions.
+    > _Status (2026-10-07): **Done** — a "Versions" paragraph in § "Cluster Selection" says the record lives in `matching_options`, so it changed no format version, was first written into version 4 files and its `restrict_cluster_ids` / `source_selection` keys into version 5 files, and how a reader treats each when absent; `refine_options` says it entered in version 3 and which keys files of each version carry, without "writer generations" (also dropped from the `MatchesFile.refine_radius` doc), branch `spec-fix-1006-32-matches-versions`._
 **Third copies:** `MATCHES_FORMAT_VERSION` doc (types.rs:67-132, about 65 lines) restates the v1-v7 history; shrink to a spec link plus the v7 line.
+  > _Status (2026-10-07): **Done** — the doc comment is now the version 7 line, the below-6 cluster refusal and a pointer to § "Versioning and Migration"; every fact it held was already in the spec, branch `spec-fix-1006-32-matches-versions`._
 **Non-goals / deferrals checked:** 0 present.
 **Recommendation:** update spec (version range; move CLI and API names to Implementations) and add the verifier check.
 **Unclear / incorrect / suspicious:** with `has_two_view_geometries` true and the entries missing, `verify_matches` returns `Err` (verify.rs:1140) rather than reporting it in the result list (:1149-1151). The "Version 1.0rc1" line (:1385) has no migration statement.
+  > _Status (2026-10-07): **Partially done** — `structure_errors` now reports a file that claims `has_two_view_geometries` but has no `two_view_geometries/metadata.json.zst` in the result list, as it does for a missing `clusters/` or `cluster_patches/` section; a section whose metadata is present but one of its data entries is missing still returns `Err`, as for every other section. Still open: the "Version 1.0rc1" note. Branch `spec-fix-1006-11-matches-verify-stray`._
+  > _Status (2026-10-07): **Done** (the "Version 1.0rc1" part) — the line now reads "Version 1", written as the integer `1`, with its poses upgraded on load by `S`-conjugation and a link to § "Version 1 → Version 2", branch `spec-fix-1006-32-matches-versions`._
 
 ### specs/formats/sfmr-file-format.md
 **Summary:** The `.sfmr` archive (versions 1-11): the Z-up / −Z-forward convention, sections and hashes, optional columns and their presence rules, the constraint legend, thumbnails, Point IDs and `world_space_unit`. The lineage retirement (#808) and the presence and unit refusals (#806) match the code.
@@ -577,11 +647,14 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - CONFIRMED :146-161 — internal round trips (bundle adjust, densify, merge PnP, DB-mediated solves); keep the first invariant, move the second.
   - NEW :1143-1147 — "the built-in writer"; keep the coherence rule, move the fill-in to Implementations.
   - Minor: :163-165 "earlier sfmtool releases"; :545, :1103, :985-993 name implementations or a core-only test; acquitted: :449-451, :92, :566, :1810, :1955.
+    > _Status (2026-10-07): **Done** for the three CONFIRMED items, the NEW item (the coherence rule stays; the mean-viewing fill-in and the pass-through of `normal_confidence` moved to *Implementations*) and the Minor :163-165 line (now "files of format versions ≤ 4"); the versioning gaps below are on another branch, branch `spec-fix-1006-30-sfmr-failure6`._
   - Versioning gaps: `world_space_unit` (:1898-1914) gives no version (present since e881b335, so version 1+); `infinity_point_count` (:324) lacks "(version 2+; read as 0 when absent)" (types.rs:159-162).
+    > _Status (2026-10-07): **Done** — `infinity_point_count` now reads "(version 2+; read as `0` when absent)" and § World-Space Unit says the field is defined in every version (1+), branch `spec-fix-1006-31-sfmr-versions-normals`._
 **Third copies:** `SFMR_FORMAT_VERSION` doc (types.rs:576-630, about 55 lines) and `SFMR_CANONICAL_CONVENTION_VERSION` doc (:641-652) restate the spec; shrink to contract plus link.
 **Non-goals / deferrals checked:** 2 (Future Extensions :1945-1970; reserved `normal_confidence` values :1136); neither overtaken.
 **Recommendation:** update spec (remove the four implementation-name passages; add the two introducing versions). The code matches.
 **Unclear / incorrect / suspicious:** the writer replaces every all-zero normal on a finite point (write.rs:152-200, :344-358), and the format defines a zero normal only for `w = 0` rows (:1112-1113); state it. "Verification Process" (:1708-1713) lists only hash steps. Migration subsections are out of order, and 1→2 has no "how a v1 file reads" sentence (read.rs:394-407).
+> _Status (2026-10-07): **Done** — `normals_xyz` now states that a finite point's row is a unit vector or `(0, 0, 0)` for "no normal", that a reader treats zero as no normal, and that a writer may fill a zero row and keeps unit-vector rows; the writer's two checks for a missing row now share one tolerance (a near-zero row was filled by a default write but kept by one that skips the statistics), with a test. "Verification Process" now lists the structural checks the verifier makes beside the hashes. The migration subsections run newest first, and 1→2 says how a version 1 file reads. Branch `spec-fix-1006-31-sfmr-versions-normals`._
 
 ## Code without specs
 
@@ -637,6 +710,8 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
 | COLMAP binary model / database | yes | formats/colmap-interop.md |
 | Nerfstudio `transforms.json` | yes | cli/colmap-interop/to-nerfstudio-command.md |
 | web-export output directory | yes | cli/visualization/web-export-command.md |
+
+> _Status (2026-10-07): **Done** (xform `--include-by-distribution` row) — the `specs/cli/README.md` xform index row now names `--include-by-distribution`, branch `spec-fix-1006-28-matches-version-range`._
 
 Every CLI command, crate and on-disk format now has a spec; the gaps left are
 the `sfmtool-progress` crate, which links none of the spec text it duplicates,
@@ -840,44 +915,61 @@ Read 2026-09-26; open items above.
        > _Status (2026-10-07): **Done** — the label reads `aspect fy/fx`, branch `spec-fix-1006-09-refit-label`._
      - The two Track View *Lock* hover texts and `mcp/tools/catalog/edit.rs:504`
        contain runs of 18 spaces.
+       > _Status (2026-10-07): **Done** — the strings continue with `\` and read single-spaced; two test strings with the same defect are fixed too, and a catalog test asserts no tool or schema description has a run of spaces, branch `spec-fix-1006-10-lock-hover-spaces`._
      - A pairwise `.matches` file with stray `two_view_geometries/` entries
        passes verification (`verify.rs:39-145`).
+       > _Status (2026-10-07): **Done** — `structure_errors` reports `two_view_geometries/` entries in a file whose `has_two_view_geometries` is false, on either backbone, with a test, branch `spec-fix-1006-11-matches-verify-stray`._
 2. **Non-goals that shipped code has overtaken.** A reader who believes them
    will not look for a feature that exists:
    - `bundle-adjustment.md:1773` says cameras cannot be released one at a
      time, but #607 added that. :1780 says there is no constraint handling,
      but #400 added it. The spec also says the kernel "serves the bootstrap
      experiments".
+     > _Status (2026-10-07): **Done** — the per-camera-release non-goal is deleted, the gauge non-goal now names the point constraints, and the last non-goal lists the kernel's callers, branch `spec-fix-1006-13-ba-nongoals`._
    - `refit-camera-intrinsics.md:196, 480` says nothing frees the principal
      point, but `sfm densify --ba-refine-principal-point` does.
+     > _Status (2026-10-07): **Done** — the spec now says sfmtool's Rust bundle adjustment never frees it and names the pycolmap paths that can, branch `spec-fix-1006-14-refit-spec`._
    - `track-view.md:2015` gives "Deciding anything from a number" as a
      non-goal, while the bars set the verdicts.
+     > _Status (2026-10-07): **Done** — the non-goal is rewritten to say the bars set the unpinned verdicts and nothing else follows from a number, branch `spec-fix-1006-15-trackview-spec`._
    - `mcp-server.md:4994` says editing intrinsics is "still not on the
      surface", but `switch_camera_model` and lens releases exist.
+     > _Status (2026-10-07): **Done** — `mcp-server.md` now says a lens changes through `switch_camera_model` or a `bundle_adjust` release and that no tool sets parameters to given numbers, branch `spec-fix-1006-18-mcp-counts-intrinsics`._
    - `randomized-kdtree-forest.md`: "potentially for patch matching" is
      overtaken in part, because the bench searches use the forest.
+     > _Status (2026-10-07): **Done** — the Motivation names the constellation query and the bench's descriptor search as users, branch `spec-fix-1006-22-kdforest-spec`._
 3. **Spec statements that would make a caller act wrongly:**
    - `mcp-server.md` says five edits "renumber nothing", but after a
      `delete_point` they shift point indexes.
+     > _Status (2026-10-07): **Done** — the spec and the tool descriptions name the pending-point-edit fold, branch `spec-fix-1006-16-mcp-renumber`._
    - `pose-verification.md:187` says `INLIER_PX` bounds the screens; it bounds
      only the repair.
+     > _Status (2026-10-07): **Done** — spec table and the constant's doc say it bounds only the repair, branch `spec-fix-1006-19-pose-verification-spec`._
    - `reprojection-residuals.md` names three shared callers; there is one.
+     > _Status (2026-10-07): **Done** — the spec names the cluster census as the one caller, branch `spec-fix-1006-20-reproj-spec`._
    - `localize-keypoints-command.md:109` says the CLI "re-specifies nothing";
      it hardcodes all 17 defaults.
+     > _Status (2026-10-07): **Done** — the CLI now forwards only the keys given, so the binding's defaults govern, branch `spec-fix-1006-12-localize-forward-keys`._
    - `cluster-covisibility.md:323` says a pre-v6 file opens; the reader
      refuses it.
+     > _Status (2026-10-07): **Done** — spec and core `from_matches` doc corrected, branch `spec-fix-1006-21-covisibility-spec`._
    - `randomized-kdtree-forest.md` gives `L_max` as "precision-tuned"; it is a
      fixed 128.
+     > _Status (2026-10-07): **Done** — the parameter table gives 128, branch `spec-fix-1006-22-kdforest-spec`._
 4. **Format specs:**
    - `matches-file-format.md:223` says versions run `1` through `6`; the code
      is at 7.
+     > _Status (2026-10-07): **Done** — the `version` field description in `matches-file-format.md` now says `1` through `7` and that writers emit `7`, matching `MATCHES_FORMAT_VERSION` and § Versioning and Migration, branch `spec-fix-1006-28-matches-version-range`._
    - Both format specs still name `sfm` commands, repo paths and library types
      in the format proper: 5 confirmed passages in matches (plus 3 more found by
      the deep read) and 3 in sfmr (plus 1).
+     > _Status (2026-10-07): **Done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, PR #842; the sfmr passages (3 plus 1) are fixed the same way, PR #843._
    - Three entries never say which version introduced them: `world_space_unit`
      and `infinity_point_count` in `.sfmr`, and `.matches` `refine_options`.
+     > _Status (2026-10-07): **Done** — `.matches` `refine_options` now says it entered with `cluster_patches/` in version 3, that `radius` appears only in refused version 3-4 files, that the member-gate key changed during version 6 and a rewritten file keeps its refinement's keys, and how a reader treats a missing object, PR #845; the two `.sfmr` entries now give their versions, PR #844._
    - The `.sfmr` writer replaces a zero normal on a finite point, which the
      spec does not allow for or rule out.
+     > _Status (2026-10-07): **Done** — `normals_xyz` now defines the zero row of a finite point as "no normal" and allows a writer to fill it, branch `spec-fix-1006-31-sfmr-versions-normals`._
 5. **Nine opening paragraphs.** Check 4 found five:
    `spherical-tiles-rig.md`, `gui/edits/move-camera.md` and
    `keypoint-reach.md` never say what the thing is for, and
@@ -886,4 +978,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
-   > _Status (2026-10-07): **Partially done** — the `research/blender-…` opening is rewritten, branch `spec-fix-1006-36-opening-blender`; the other eight openings are open here._
+   > _Status (2026-10-07): **Partially done** — `flow-command.md` has its opening, PR #838; `spherical-tiles-rig.md` has its opening, PR #846; `gui/edits/move-camera.md` has its opening, PR #847; `keypoint-reach.md` has its opening, PR #848; `research/blender-…` has its opening, PR #849; the other four are open._
