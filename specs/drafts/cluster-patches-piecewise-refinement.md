@@ -175,7 +175,7 @@ The cell shifts are measured on a tile that is itself an interpolation of the ph
 
 ### From displacements to a normal
 
-With poses, a cell's centre in a member is a pixel, and that pixel is a ray. The same cell in each kept member gives a bundle of rays whose nearest point is the cell's position in the world. Nine positions, minus refused cells, are the input to the piece-gated plane fit. The displacements were measured photometrically at refinement time; the normal costs no rendering at seed time. That is the property the seed needs, since its releases carry no frames and it renders nothing.
+With poses, a cell's centre in a member is a pixel, and that pixel is a ray. The same cell in each kept member gives a bundle of rays whose nearest point is the cell's position in the world. Nine positions, minus refused cells, are the input to the piece-gated plane fit. The displacements were measured photometrically at refinement time; the normal costs no rendering at seed time. That is the property the seed needs, since its releases carry no frames and it renders nothing. The kernel that does this is [cell-plane-normals.md](cell-plane-normals.md).
 
 ## Format
 

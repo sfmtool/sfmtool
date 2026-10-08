@@ -210,6 +210,7 @@ Paths in the *Source* column are relative to
 | [analysis/observation_coverage.rs](../crates/sfmtool-py/src/analysis/observation_coverage.rs) | `ObservationCoverage` | [observation-coverage.md](core/analysis/observation-coverage.md) |
 | [analysis/source_clusters.rs](../crates/sfmtool-py/src/analysis/source_clusters.rs), [cluster_radii.rs](../crates/sfmtool-py/src/analysis/cluster_radii.rs) | `source_clusters`, `assign_bands`, `cluster_radii`, `coarsest_cluster_ids` | [source-clusters.md](core/analysis/source-clusters.md) |
 | [analysis/adjacency_surfel_normals.rs](../crates/sfmtool-py/src/analysis/adjacency_surfel_normals.rs) | `estimate_adjacency_surfel_normals` | [adjacency-surfel-normals.md](core/analysis/adjacency-surfel-normals.md) |
+| [analysis/cell_plane_normals.rs](../crates/sfmtool-py/src/analysis/cell_plane_normals.rs) | `cell_plane_normals` | [cell-plane-normals.md](drafts/cell-plane-normals.md) (draft) |
 | [analysis/cluster_census.rs](../crates/sfmtool-py/src/analysis/cluster_census.rs) | `cluster_census` | [cluster-census.md](core/analysis/cluster-census.md) |
 
 ### `flow`

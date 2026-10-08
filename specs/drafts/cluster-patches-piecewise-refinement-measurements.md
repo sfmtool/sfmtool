@@ -709,3 +709,94 @@ Shares are of the cells of kept members. The robust fit now refuses 2.6% to 3.4%
 The seven member columns compared in the section above (`reference_members`, `member_status`, `member_positions`, `member_affine_shapes`, `member_zncc`, `member_shift_px`, `member_consistency_residual`) are byte-for-byte equal to the cascade-only file's on all five entries. The seed was not rerun: it does not read the cells, as file A of the [acceptance-rule section](#subset-with-the-acceptance-rule-2026-10-08) showed.
 
 Under Gaussian noise alone a cut-off at 4.685σ would refuse a cell with probability exp(−4.685²/2), under 0.002%. The 2.6% to 3.4% refused here say that the cells' residuals have a heavier tail than Gaussian noise; this measurement does not say whether the newly refused cells are wrong.
+
+## Cell plane normals against the ground truths (2026-10-08)
+
+**Question.** With poses, the stored cell displacements give a patch normal per cluster through [cell-plane-normals.md](cell-plane-normals.md). How close is that normal to the ground truth's patch normal, compared with the mean viewing direction and with the same triangulation run on the members' affine shapes alone? How often does it fix both axes, one, or none, and does admitting `refused_outlier` cells change it?
+
+**Data.**
+
+- **Code.** Branch `bootstrap-core-migration` at `35442934`, with the commit that adds this section (the kernel and its binding), the extension rebuilt with `pixi run maturin develop --release`.
+- **Machine.** Windows 11, Intel Core (family 6 model 183), 32 threads.
+- **Cluster files.** `sfm cluster-patches --patch-size 12 --piecewise` (the measuring default, `move_shape` off, `resolution` 25) on the `SeoulBull` and `KerryPark480` cluster files of the [two-dimensional residual scale section](#subset-with-the-two-dimensional-residual-scale-2026-10-08), written to scratch.
+- **Poses and truth.** Cameras and poses from `seoul_bull_sculpture_ground_truth.sfmr` and `kerry_park_ground_truth.sfmr`, read with `SfmrReconstruction.load`; every image of both cluster files is posed. The truth normal is `u × v` of the ground truth's stored patch frame.
+- **Matching.** A cluster is mapped to a ground-truth point when its reference member's position lies within a tolerance of one of that point's stored keypoints in the same image (the nearest). The planned tolerance is 1 px; a second run at 3 px is reported because 1 px matches too few clusters to read.
+- **Variants.** *cells*: the kernel at its defaults. *cells+outliers*: `include_refused_outlier`. *shapes only*: every kept member's nine cells taken as `fitted` with zero displacement, so the cells sit where the affine shapes place them; this is the whole-member warp tilt read through the same triangulation. *view_dir*: the mean unit direction from the cells toward their rays' cameras, the kernel's own prior.
+- **Seed writer's tilt solve.** Not run. It is inline in `scripts/seed_camera.py`'s writer, reads the writer's local state (a `.sift` read per image, its poses flipped to the COLMAP frame) and is not callable on its own; *shapes only* stands in for it, without its fronto prior and its 80° cap.
+- **Errors.** Both-axes clusters: the angle between the kernel's normal and the truth, as lines. One-axis clusters: the error of the component the cells fix, the difference of the two normals' tilts along the free axis.
+
+**Matching.** The ground truths' keypoints are not this cluster file's detections: the nearest member of any status to a ground-truth observation is a median 4.4 px away on `SeoulBull` and 4.8 px on `KerryPark480`, and only 4.9% and 6.6% of the observations have a member within 1 px.
+
+| entry | clusters with a reference | matched at 1 px | GT points hit | matched at 3 px | GT points hit |
+|---|---|---|---|---|---|
+| SeoulBull | 3934 | 27 (0.69%) | 23 / 280 | 164 (4.2%) | 116 / 280 |
+| KerryPark480 | 11865 | 80 (0.67%) | 43 / 391 | 323 (2.7%) | 161 / 391 |
+
+**Verdicts.** Over the clusters with a reference, at the defaults:
+
+| entry | both axes % | one axis % | none % | cells in plane % | too few rays % | narrow baseline % | in-plane cells from two rays % |
+|---|---|---|---|---|---|---|---|
+| SeoulBull | 14.9 | 4.5 | 80.6 | 21.6 | 72.2 | 4.8 | 70.1 |
+| KerryPark480 | 11.2 | 6.1 | 82.7 | 15.2 | 50.8 | 30.8 | 58.3 |
+
+Most clusters get no normal because most cells have one ray: `SeoulBull` keeps 2953 members over 3934 references, so most clusters have no kept member at all. On `KerryPark480` the distant city adds narrow baselines. Admitting `refused_outlier` cells raises the both-axes share by half a point (to 13.8% and 10.1% of all clusters, against 13.3% and 9.7%). *Shapes only* raises it to 21.7% and 14.5%, since every kept member then contributes all nine cells. The ray-intersection residual of in-plane cells is a median 0.17 px (`SeoulBull`) and 0.13 px (`KerryPark480`), p90 0.42 and 4.2 px, which says the grid-to-pixel map and the poses agree. The kernel takes 3 ms on `SeoulBull`'s 4407 clusters and 10 ms on `KerryPark480`'s 13699.
+
+**Both-axes clusters**, median / p90 error in degrees:
+
+| entry @ tolerance | n | cells | view_dir |
+|---|---|---|---|
+| SeoulBull @ 1 px | 7 | 17.6 / 24.6 | 29.9 / 36.1 |
+| SeoulBull @ 3 px | 45 | 15.5 / 56.6 | 29.8 / 49.6 |
+| KerryPark480 @ 1 px | 20 | 41.2 / 72.0 | 23.8 / 54.7 |
+| KerryPark480 @ 3 px | 69 | 17.6 / 61.1 | 32.8 / 62.9 |
+
+**Paired**, on the clusters every variant calls both-axes:
+
+| entry @ tolerance | n | cells | cells+outliers | shapes only | view_dir |
+|---|---|---|---|---|---|
+| SeoulBull @ 1 px | 5 | 17.6 / 24.1 | 17.6 / 24.1 | 21.3 / 27.8 | 29.9 / 35.5 |
+| SeoulBull @ 3 px | 33 | 16.6 / 56.7 | 16.6 / 56.7 | 17.6 / 58.4 | 29.3 / 43.4 |
+| KerryPark480 @ 1 px | 14 | 39.0 / 69.3 | 39.0 / 70.1 | 25.7 / 66.6 | 28.9 / 58.4 |
+| KerryPark480 @ 3 px | 55 | 15.8 / 56.6 | 17.8 / 59.8 | 14.3 / 49.0 | 33.5 / 63.5 |
+
+**One-axis clusters**, error of the fixed component, median / p90:
+
+| entry @ tolerance | n | cells | view_dir |
+|---|---|---|---|
+| SeoulBull @ 1 px | 1 | 7.4 | 23.7 |
+| SeoulBull @ 3 px | 10 | 14.1 / 64.2 | 22.5 / 57.2 |
+| KerryPark480 @ 1 px | 8 | 46.1 / 72.3 | 15.6 / 37.3 |
+| KerryPark480 @ 3 px | 25 | 13.4 / 65.2 | 28.6 / 64.1 |
+
+**Where the error is.** On the 3 px sets, split by the precision the cell weights predict for the normal, `1 / √(Σ wⱼ (dⱼ · e)²)` along the plane's weaker in-plane axis `e` (computed in the script from the kernel's outputs), and by how far the truth is from the viewing direction; medians in degrees:
+
+| entry | predicted < 5° | 5° to 15° | over 15° | truth within 20° of view_dir | 20° to 40° | 40° to 60° | over 60° |
+|---|---|---|---|---|---|---|---|
+| SeoulBull, cells | 7.7 (n=28) | 30.0 (n=10) | 27.9 (n=7) | 25.1 (n=14) | 14.4 (n=23) | 8.4 (n=8) | none |
+| SeoulBull, view_dir | 33.1 | 20.3 | 25.8 | 11.6 | 31.8 | 50.5 | none |
+| KerryPark480, cells | 11.1 (n=36) | 20.8 (n=27) | 29.7 (n=6) | 47.8 (n=17) | 17.6 (n=31) | 10.5 (n=12) | 7.0 (n=9) |
+| KerryPark480, view_dir | 35.4 | 29.3 | 29.2 | 13.2 | 31.7 | 51.6 | 67.7 |
+
+66% of `SeoulBull`'s and 54% of `KerryPark480`'s both-axes clusters predict a precision under 5°.
+
+**Sensitivity**, 3 px, both-axes clusters, median / p90 against view_dir on the same clusters:
+
+| entry | `min_triangulation_angle_deg` 5: share of all clusters, n, cells, view_dir | `min_rays` 3: share, n, cells, view_dir |
+|---|---|---|
+| SeoulBull | 11.7%, 34, 10.7 / 31.2, 30.9 / 50.5 | 5.3%, 22, 12.5 / 58.3, 31.4 / 46.9 |
+| KerryPark480 | 5.8%, 39, 10.8 / 48.8, 35.5 / 62.9 | 3.8%, 29, 25.0 / 72.2, 32.9 / 59.1 |
+
+**Result.**
+
+- On the 3 px sets the cell plane normal halves the median error of the mean viewing direction (15.5° against 29.8° on `SeoulBull`, 17.6° against 32.8° on `KerryPark480`), and on its one-axis clusters the fixed component improves the same way. Its p90 is not better: 56.6° and 61.1°, against 49.6° and 62.9°.
+- The error follows the predicted precision: under 5° predicted, the median is 7.7° and 11.1°; above 15°, 27.9° and 29.7°. A minimum triangulation angle of 5° gives a similar subset (medians 10.7° and 10.8°) at the cost of the both-axes share (11.7% and 5.8% of all clusters).
+- Where the truth faces the cameras (within 20° of the viewing direction) the cell normal is worse than the viewing direction itself (25.1° against 11.6°, 47.8° against 13.2°); where the truth is tilted 40° or more it is far better (7.0° to 10.5° against 50.5° to 67.7°). The measurement cannot separate a noisy cell normal from a truth normal held near the viewing direction by the estimator that made it.
+- The displacements add little over the affine shapes here. On the paired sets *cells* and *shapes only* are within 1.5° in median (16.6° against 17.6°, 15.8° against 14.3°), and on `KerryPark480` the shapes are better at p90. The draft's test that the cell normals beat the whole-member warp tilt on the `seoul_bull_sculpture` ground truth is not met by a margin this sample can show.
+- Admitting `refused_outlier` cells changes no median on `SeoulBull` and worsens `KerryPark480`'s paired median by 2.0°.
+- At 1 px the samples are 5 to 20 clusters. `KerryPark480`'s 1 px set is the one where the cell normal loses to the viewing direction (41.2° against 23.8°); 8 of its 20 clusters have a truth within 20° of the viewing direction.
+
+**What this decides.**
+
+- **The kernel stays as built, with `refused_outlier` cells excluded by default.** Including them does not help.
+- **No consumer reads it yet.** A cell normal is better than the viewing direction where it predicts itself precise, and worse where the surface faces the cameras, and the seed has no way to know the second case in advance. The next step is to return the predicted precision from the kernel and measure a gate on it; a minimum angle of 5° is the alternative gate.
+- **The ground truth decides less than it should.** Its keypoints are not the cluster files' detections, so 1 px matches under 1% of clusters, and its normals are estimates. A ground truth with independently measured normals, or one built from the same detections, is needed before the cell normal is compared with the warp tilt solve again.

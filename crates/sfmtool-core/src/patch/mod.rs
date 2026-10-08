@@ -1,9 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Patch clouds: point-patch storage and normal refinement.
+//! Patch clouds: point-patch storage and normal refinement, and the patch
+//! normal a refined cluster's cell displacements give once poses exist.
 
 pub mod blur_matched;
+pub mod cell_plane_normals;
 pub mod cloud;
 pub mod cluster_refine;
 pub mod display_bitmaps;
