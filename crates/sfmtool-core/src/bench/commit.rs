@@ -354,14 +354,16 @@ pub fn commit(
             f64::NAN,
             sfmtool_sfmr_format::NO_REFERENCE_IMAGE,
         )),
-        // The observation the bitmap is the render of, where it is written
-        // out: its place in the sorted track. A bitmap whose observation is
-        // no longer `in`, or a fused mean, names none. A track read from a
-        // file that keeps the column without its bitmaps carries the stored
-        // reference with no bitmap, and writes it back.
+        // The observation the bitmap is the render of: its place in the
+        // sorted track. A fused mean, and a track with no bitmap, name none.
+        // A bitmap whose observation is not `in` was dropped with its
+        // reference by the step that turned it out, so `rows` holds it; a
+        // reference set by hand on a row that is not `in` is written as none.
         reference_observation: edited.has_reference_observations().then(|| {
             payload
-                .reference
+                .bitmap
+                .as_ref()
+                .and(payload.reference)
                 .and_then(|r| rows.iter().position(|&(_, i)| i == r))
                 .map_or(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION, |k| k as i32)
         }),

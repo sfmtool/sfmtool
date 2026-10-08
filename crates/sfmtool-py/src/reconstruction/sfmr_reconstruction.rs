@@ -388,15 +388,20 @@ impl PySfmrReconstruction {
 
     /// Per point, the index of its **reference observation** within its own
     /// track (``0`` to ``observation_counts[i] - 1``), the observation whose
-    /// ``R×R`` render the point's patch bitmap is, ``-1`` where there is none,
-    /// as a 1-D int32 array; ``None`` for a reconstruction without patch
-    /// frames. A file below version 12 with patch frames reads with every row
-    /// ``-1``.
+    /// ``R×R`` render the point's patch bitmap is, ``-1`` where there is none
+    /// (a fused-mean bitmap, or no bitmap: every row is ``-1`` without
+    /// :attr:`patch_bitmaps`), as a 1-D int32 array; ``None`` for a
+    /// reconstruction without patch frames. A file below version 12 with patch
+    /// frames reads with every row ``-1``.
     ///
-    /// Set it with ``clone_with_changes(reference_observations=...)``. A call
-    /// that replaces the tracks without passing it moves each reference to the
-    /// observation of the same image in the point's new track, and one that
-    /// changes the point count resets it to ``-1``.
+    /// Set it with ``clone_with_changes(reference_observations=...)``, which
+    /// refuses a value naming an observation when the result has no patch
+    /// bitmaps. A call that does not pass it keeps the old references only
+    /// while it keeps the old bitmaps: passing ``patch_bitmaps`` or
+    /// ``patches``, or leaving no bitmaps, resets every row to ``-1``. A call
+    /// that replaces the tracks moves each kept reference to the observation of
+    /// the same image in the point's new track, and one that changes the point
+    /// count resets it to ``-1``.
     #[getter]
     fn reference_observations<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<i32>>> {
         let references = self.inner.point_set.reference_observations.as_ref()?;

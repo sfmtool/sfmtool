@@ -572,15 +572,45 @@ pub fn fit(
 ) -> Result<(EditableTrack, FitReport), FitError>;
 
 // Render the stored bitmap (the reference-view rule's pick among the `in` rows,
-// named in `TrackPayload::reference`) and colour where the track-stage patch
-// stands, and move nothing. A cluster, a track with no placement, and one with
-// fewer than two `in` sightings that carry a keypoint come back unchanged.
+// named in `TrackPayload::reference`, or the fused mean naming none) and colour
+// where the track-stage patch stands, and move nothing. A cluster, a track with
+// no placement, and one with fewer than two `in` sightings that carry a keypoint
+// come back unchanged. The rows' bitmap scores still read the old bitmap, so a
+// caller scores them against the new one with `score_bitmap` afterwards.
 pub fn render_bitmap_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
     options: &FitOptions,
 ) -> EditableTrack;
+
+// Score every row of a track-stage track against the bitmap it holds, writing
+// the bitmap scores `evaluate` writes and changing nothing else. A track with no
+// placement or no bitmap comes back unchanged.
+pub fn score_bitmap(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) -> Result<EditableTrack, EvaluateError>;
+
+// `evaluate`, then, for a track-stage track with a placement and no bitmap,
+// `render_bitmap_in_place` under `fit` and `score_bitmap`: the same answer as
+// the three calls in turn. Where the repaint left the `in` set as the rule
+// read it, every `in` row has a keypoint, and the evaluation's tiles are on the
+// bitmap's grid with the render's sampler, the bitmap is taken from the
+// evaluation's own tile of the row its rule picked and the rows are scored on
+// the evaluation's tiles, so nothing is rendered twice. The viewer's live
+// evaluation and `fit_normal` / `finite_difference_normal` end with it.
+pub fn evaluate_rendering_bitmap(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &EvaluateOptions,
+    fit: &FitOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, EvaluateReport), EvaluateError>;
 
 pub fn set_stage(
     track: &EditableTrack,
@@ -1439,7 +1469,8 @@ against the stored bitmap"):
 The row the bitmap is the tile of (`TrackPayload::reference`) reads `1`, `1`
 and `0`, with no `sharper_than_bitmap`, and is not computed. No bar judges the
 scores. A step that moves verdicts afterwards leaves them, since they are read
-against the bitmap, which a verdict does not change.
+against the bitmap, which a verdict does not change, except where it turns the
+bitmap's own row `out` (§ "The stored bitmap's reference").
 
 The standing always agrees with the verdicts. The rule decides over the rows
 that are `in` when the track is read, so a step that then moves a verdict --
@@ -1457,13 +1488,45 @@ and `stage_data.reference_observation` never points at one. The other readings
 are kept on the row as they are, and are as stale as they are after a step
 until the next evaluation.
 
+### The stored bitmap's reference
+
+`TrackPayload::reference` names the row whose render `TrackPayload::bitmap`
+is, and is `None` where the bitmap is a fused mean or there is no bitmap; the
+two always agree. Where the reference-view rule reaches its pick only through
+its last fallback, the bitmap is the fused mean and the reference is `None`,
+so the row marked as the reference view is then not the bitmap's row
+([../patch/reference-view.md](../patch/reference-view.md) § "The stored
+bitmap", `ReferenceRender::stored_reference`). `create_track` reads the
+stored reference only together with a bitmap, so a point with no stored
+bitmap comes onto the bench with `None`.
+
+The reference follows its row through every step that reorders or removes
+other rows. A step after which the bitmap no longer shows what its reference
+row sees drops the bitmap and the reference together:
+
+- a step that moves the patch (§ "Placing, sizing and turning by hand");
+- `sight_observation` on the reference row, which moves its keypoint;
+- `delete_image` or `split` taking the reference row off the track;
+- a verdict step that turns the reference row `out`: `set_verdict`, and
+  `apply_thresholds` (which the evaluation's repaint and `unpin_verdicts`
+  run), both of which bring the reference view into line with the verdicts
+  (`restate_reference_view`).
+
+The viewer's live evaluation then renders the bitmap again from the `in` rows
+(`render_bitmap_in_place`) and scores every row against it (`score_bitmap`),
+both through `evaluate_rendering_bitmap`.
+A fused-mean bitmap (reference `None`) is not one row's render, so these
+steps keep it. A commit of a track whose reconstruction has bitmaps but whose
+payload has none is refused (`CommitError::NoBitmap`).
+
 ## The steps
 
 ### Putting a point on the bench
 
 `create_track` reads the point through the reconstruction's overlay and builds a
-track-stage track from it: the point's own frame, bitmap, colour and keypoints,
-its origin set to that point, and every observation `in` and **pinned**. The
+track-stage track from it: the point's own frame, bitmap with its reference
+observation (read only where there is a bitmap), colour and keypoints, its
+origin set to that point, and every observation `in` and **pinned**. The
 point's observations are ones a reconstruction already decided on, so they stand
 as that decision until a person hands them to the bars with `unpin_verdicts`;
 an evaluation's repaint does not move them. **Nothing is recomputed.** The leave-one-out ZNCC is `observation_confidence` read back out
@@ -1602,8 +1665,10 @@ belongs to the track next door are both `out`, and a verdict cannot say which of
 them the new track should take. The moved observations keep their verdicts,
 their provenance and both stages' measurements. The second track has no origin,
 so a commit of it creates a point while a commit of the first still replaces the
-one it came from. An empty list, or every observation, is refused: neither
-leaves two tracks.
+one it came from. The first track's `TrackPayload::reference` follows its row
+past the rows taken; where the reference row itself is taken, the first track
+drops its bitmap with the reference (§ "The stored bitmap's reference"). An
+empty list, or every observation, is refused: neither leaves two tracks.
 
 **The second track is a cluster.** A split is the step for a track that is two
 surfaces, and the half being taken off is a set of sightings that agree with
@@ -1745,7 +1810,10 @@ self-similarity readings and the reason were all computed for a pixel that is no
 one, and an evaluation recomputes all of them from the track as it stands. **The
 observation is pinned**, at both stages: a sighting a person placed is a sighting
 they have ruled on, so `apply_thresholds` leaves its verdict where it is rather
-than painting over a placement by hand. Nothing else on the track moves -- which
+than painting over a placement by hand. At the track stage, sighting the row the
+bitmap is the render of drops the bitmap and its reference, since the bitmap
+was rendered at the old keypoint (§ "The stored bitmap's reference"). Nothing
+else on the track moves -- which
 is the difference from `translate_patch_to_pixel`, and why the two are separate steps: the
 viewer's dot is the translation at the track stage and this at the cluster stage,
 unless Track View's *Lock* is cleared, when the track stage's dot is this too.
@@ -2258,11 +2326,14 @@ The bitmap is `render_patch_bitmap`
 bitmap"), run over the `in` views at the keypoints the fit settled: the tile of
 the `in` sighting the reference-view rule picks, rendered at its keypoint,
 named in `TrackPayload::reference`, or the fused mean of the `in` sightings,
-naming none, where the rule picks none. It moves nothing. Its grid is the
-reconstruction's own bitmap grid where it stores one, so what is rendered is a
-tile the column can hold and a commit can write. The evaluation the fit ends
-with reads its pick from the same readings, so the row Track View marks as the
-reference is the row the bitmap is the tile of until a verdict moves.
+naming none, where the rule picks none or reaches its pick only through its
+last fallback ([../patch/reference-view.md](../patch/reference-view.md) §
+"The stored bitmap", `ReferenceRender::stored_reference`). It moves nothing.
+Its grid is the reconstruction's own bitmap grid where it stores one, so what
+is rendered is a tile the column can hold and a commit can write. The
+evaluation the fit ends with reads its pick from the same readings, so the
+row Track View marks as the reference is the row the bitmap is the tile of,
+except where the bitmap is that fused mean and names no row.
 
 **A fit ends by evaluating its result**, and that reading is where every
 per-observation number and every count in the `FitReport` comes from. `placed`
@@ -2282,8 +2353,9 @@ proposed in
 A fit moves the patch along the sightings' rays and keeps the way it faces.
 Two steps do the opposite: each estimates which way the surface under the patch
 faces, turns the patch to that normal with `tilt_patch` (§ "Placing, sizing and
-turning by hand"), and ends as a fit does, by reading the track back and fusing
-its bitmap over the turned square. The centre does not move, the turn is the
+turning by hand"), and ends as a fit does, by reading the track back, rendering
+its stored bitmap over the turned square and scoring every row against it. The
+centre does not move, the turn is the
 least rotation, and it stops where `tilt_patch`'s cap stops it, which the
 `NormalReport`'s `tilt` says. Both take the track stage only, refuse a track at
 infinity (whose patch faces along its own bearing) and need two `in`
@@ -2507,6 +2579,10 @@ in, and a commit would write those pixels into the wrong images.
   in `image`, it is pointed at the first observation left and the template is
   dropped, as a split does, because the template is a cut around the old
   reference;
+- a track-stage track's `TrackPayload::reference` follows its observation the
+  same way. When the observation the bitmap is the render of was in `image`,
+  the bitmap is dropped with the reference (§ "The stored bitmap's
+  reference");
 - the origin is left alone. It names a point by version and index, and the
   caller follows it through the delete's own point map like any other.
 

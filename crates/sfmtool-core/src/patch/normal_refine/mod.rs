@@ -402,9 +402,13 @@ fn refine_patch_normal_impl(
     // The stored bitmap (optional): the tile of the view the reference-view
     // rule picks among every input view (not only a `max_refine_views`
     // subset), rendered through the refined patch at each view's keypoint.
-    // Where it picks none, the fused mean of the winner's already-rendered view
-    // stack, which needs no extra render or IRLS pass and spans the full R×R
-    // grid, filling every pixel a kept view covers. `best` is `Some` exactly in
+    // Where it picks none, or reaches its pick only through its last fallback
+    // (`ReferenceRender::stored_reference`), the fused mean of the winner's
+    // already-rendered view stack, which needs no extra render or IRLS pass and
+    // spans the full R×R grid, filling every pixel a kept view covers. That
+    // stack holds only the views the refinement scored, so under a
+    // `max_refine_views` cap the mean fills only the samples some view of that
+    // subset covers, while the pick spans every input view. `best` is `Some` exactly in
     // the bitmap path (and then non-empty, since `best_phi` is finite).
     let (representative, reference) = match &best {
         Some((weights, stack)) => {

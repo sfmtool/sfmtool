@@ -103,6 +103,9 @@ pub struct PatchBitmap { pub rgba: Vec<u8>, pub reference: Option<usize> }
 pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8>; // alpha 255 on the photograph
 pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<[f64; 2]>>,
     pub reading: TrackReading }
+impl ReferenceRender {
+    pub fn stored_reference(&self) -> Option<usize>; // the pick, unless reached by WithoutAny
+}
 pub fn render_reference(patch: &OrientedPatch, views: &[ProjectedImage<'_>], view_set: &[u32],
     keypoints: &[Option<[f64; 2]>], resolution: u32, sampler: SamplerChoice,
     progress: &Progress<'_>) -> ReferenceRender;
@@ -345,15 +348,30 @@ into the point's own track, in `tracks/reference_observations`.
   with fewer than two views gets no bitmap.
 - **Where the rule's pick is not stored.** A pick the rule reaches only by its
   last fallback, `without_any`, is one no view passed the coverage and clipping
-  tests for: every candidate's tile is cut by its photograph's border. Such a
-  tile can hold few samples, so the stored bitmap is the fused mean instead,
+  tests for: every candidate's tile has too little of the patch on its
+  photograph, has no coverage reading, or has too large a share of clipped
+  (blown-out) pixels. Such a tile can hold few samples or little texture, so
+  the stored bitmap is the fused mean instead,
   which fills every sample some view covers, and the point names no reference
   (`ReferenceRender::stored_reference`). Where no fused mean renders either,
   because no view has the patch in frame, the pick is stored after all, since
   a part of the patch is better than none. On a solve of `dino_dog_toy`, 559
   of 18,991 points (3%) take the fused mean by this rule. The evaluation's
   pick, which Track View and the wire show, is the rule's and is not changed
-  by it.
+  by it, so for these points the row Track View marks as the reference is not
+  the stored bitmap's tile.
+
+**The bitmap and its reference agree.** Wherever a reconstruction stores a
+point's bitmap, `tracks/reference_observations` names the observation whose
+tile it is, or is `-1` where the bitmap is a fused mean; where a point has no
+stored bitmap, its reference is `-1`. A writer that drops the bitmaps writes
+the column as all `-1`, and the format refuses a reference other than `-1` in
+a file without bitmaps
+([sfmr-file-format.md](../../formats/sfmr-file-format.md) § "9. Tracks").
+On the bench, a step after which the bitmap no longer shows what its
+reference observation sees drops the bitmap and the reference together
+([editable-track.md](../bench/editable-track.md) § "The stored bitmap's
+reference").
 
 Every operation that renders the stored bitmap renders it this way:
 
@@ -363,7 +381,7 @@ Every operation that renders the stored bitmap renders it this way:
 | `sfm embed-patches` and `sfm xform --refine-keypoints bitmaps=…` | the sub-pixel refiner with `render_bitmaps`, at the final keypoints |
 | `sfm xform --refine-normals bitmaps=…` | normal refinement with `render_bitmap`, through the refined patch |
 | A bench fit, and `render_bitmap_in_place` | `render_patch_bitmap` over the `in` rows ([editable-track.md](../bench/editable-track.md)) |
-| The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_display_patch_bitmaps`; the references it picks are not written, since the column is not the file's |
+| The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; the viewer keeps the references it picks beside the display bitmaps, so Track View marks the row the display bitmap is the tile of, and a save writes neither (every reference `-1`) |
 | SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; the bitmaps are the converted value's own, so the references are written with them (`to_embedded_patches` alone gives every point `-1`) |
 
 The templates the localizer, the sub-pixel refiner, congealing and normal
@@ -550,9 +568,13 @@ self-similarity readings are those of its tile rendered directly; that each
 row's pair ZNCC is the median of its row of `member_zncc_matrix` called
 directly; that rendering the bitmap where the track stands stores the tile of
 the row the evaluation picked and names it, and that a commit writes its place
-in the stored track; and that a track from a file that keeps its reference
-column without bitmaps carries the stored reference, which an untouched commit
-writes back. The Python tests are in
+in the stored track; that sighting the bitmap's observation elsewhere, or
+turning it `out` by hand or by the thresholds, drops the bitmap with its
+reference while the same step on another row keeps both; and that a bitmap
+column rendered for display carries the references its render picked, which
+the bench reads with the bitmap and a commit writes back beside it, while a
+save writes neither, and that without a bitmap the bench reads no reference.
+The Python tests are in
 [test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 and
 [test_view_tile_rust_bindings.py](../../../tests/rust_bindings/patches/test_view_tile_rust_bindings.py).

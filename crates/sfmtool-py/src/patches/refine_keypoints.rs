@@ -111,7 +111,8 @@ impl PyPatchCloud {
     ///         the **final** refined keypoints and return it per point (see
     ///         ``bitmap`` below): the ``R×R`` tile of the view the
     ///         reference-view rule picks, or the fused mean of the views where
-    ///         it picks none. Points at infinity take the same render path
+    ///         it picks none or reaches its pick only through its last
+    ///         fallback (``"without_any"``). Points at infinity take the same render path
     ///         (they are refined, not skipped). Costs a tile render and a
     ///         self-similarity reading per view, and member coherence's matrix,
     ///         per point, so it is off by default.

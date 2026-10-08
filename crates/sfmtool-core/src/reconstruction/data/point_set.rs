@@ -162,7 +162,13 @@ pub struct PointSet {
     /// Per point (parallel to `points`), the index of its **reference
     /// observation** within its own track, `0` to `observation_counts[i] - 1`:
     /// the observation whose `R×R` render the point's patch bitmap is.
-    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has none. Persisted as
+    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has none: its bitmap
+    /// is not known to be one observation's render (a fused mean), or there is
+    /// no bitmap, so every row is `-1` without [`Self::patch_bitmaps_y_x_rgba`]
+    /// ([`validate_point_columns`](super::SfmrReconstruction::validate_point_columns)).
+    /// With a column rendered for display ([`Self::patch_bitmaps_for_display`])
+    /// it names that render's observations, and a save writes every row as
+    /// `-1`, since it writes no bitmaps. Persisted as
     /// `tracks/reference_observations` (version 12+).
     ///
     /// `Some` exactly when the patch frame is: a file below version 12 with

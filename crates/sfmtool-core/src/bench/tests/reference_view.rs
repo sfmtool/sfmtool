@@ -10,15 +10,21 @@ use std::sync::Arc;
 use ndarray::Array3;
 
 use crate::bench::{
-    commit, create_track, evaluate, render_bitmap_in_place, Bench, CreateTrackOptions,
-    EditableTrack, EvaluateOptions, FitOptions, Verdict,
+    commit, create_track, evaluate, evaluate_rendering_bitmap, render_bitmap_in_place,
+    score_bitmap, tilt_patch, Bench, CreateTrackOptions, EditableTrack, EvaluateOptions,
+    FitOptions, Verdict,
 };
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::{PhotographCache, WarpMap};
 use crate::geometry::RigidTransform;
+use crate::patch::cloud::{OrientedPatch, PatchCloud};
+use crate::patch::keypoint_subpixel::{
+    fuse_patch_bitmap, refine_patch_keypoints, KeypointSubpixelParams,
+};
 use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
+use crate::patch::normal_refine::{refine_patch_normal, NormalRefineParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
 use crate::patch::reference_view::{
     finite_middle, render_view_tile, ReferenceFallback, ReferenceTest, ViewTile,
@@ -28,6 +34,7 @@ use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipseUnits, SelfSimilarityParams,
 };
 use crate::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
+use crate::patch::stored_bitmap::{render_patch_bitmap, render_reference};
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 use crate::reconstruction::SfmrReconstruction;
@@ -424,11 +431,12 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
     assert_eq!(images[at], again.observations[picked].image);
 }
 
-/// A file that keeps its reference column but not its bitmaps puts the stored
-/// reference on the bench, and committing such a track untouched writes it
-/// back rather than clearing it.
+/// A bitmap column rendered for display carries the references its render
+/// picked: the bench reads the reference with the bitmap, a commit writes it
+/// back beside the bitmap, and a save writes neither. Without a bitmap the
+/// bench reads no reference, whatever the column says.
 #[test]
-fn an_untouched_commit_without_a_bitmap_keeps_the_stored_reference() {
+fn a_display_bitmap_s_reference_reaches_the_bench_and_never_a_file() {
     let truth = GroundTruth::load();
     let mut recon = truth.recon.clone();
     assert!(recon.point_set.patch_bitmaps_y_x_rgba.is_none());
@@ -439,6 +447,27 @@ fn an_untouched_commit_without_a_bitmap_keeps_the_stored_reference() {
     let mut references = vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; recon.point_count()];
     references[point] = 2;
     recon.point_set.reference_observations = Some(references);
+
+    // With no bitmap the column is not read.
+    let bare = EditedReconstruction::new(Arc::new(recon.clone()));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &bare,
+        point as u32,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = bench.track(&report.label).expect("just put on");
+    assert_eq!(track.track().unwrap().reference, None);
+    assert!(track.track().unwrap().bitmap.is_none());
+
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(ndarray::Array4::zeros((
+        recon.point_count(),
+        4,
+        4,
+        4,
+    ))));
+    recon.point_set.patch_bitmaps_for_display = true;
     let edited = EditedReconstruction::new(Arc::new(recon));
     let (bench, report) = create_track(
         &Bench::new(),
@@ -449,11 +478,247 @@ fn an_untouched_commit_without_a_bitmap_keeps_the_stored_reference() {
     .expect("the point is live");
     let track = bench.track(&report.label).expect("just put on");
     assert_eq!(track.track().unwrap().reference, Some(2));
-    assert!(track.track().unwrap().bitmap.is_none());
+    assert!(track.track().unwrap().bitmap.is_some());
 
-    // The first commit rewrites the colour and the error, which an untouched
-    // commit does, and writes the stored reference back with them.
     let (committed, report) = commit(&edited, track).expect("the track commits");
     let view = committed.point(report.point).expect("the point");
     assert_eq!(view.reference_observation(), Some(2));
+    let saved = committed.materialize().0.to_sfmr_data();
+    assert!(saved.patch_bitmaps_y_x_rgba.is_none());
+    assert!(saved
+        .reference_observations
+        .expect("framed")
+        .iter()
+        .all(|&r| r == sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION));
+}
+
+// ---- The last fallback: the fused mean stands ------------------------------
+
+/// A ground-truth point the reference-view rule reaches only through its last
+/// fallback ([`ReferenceFallback::WithoutAny`]), with a fused mean of its views
+/// that renders, so the fused mean is stored with no reference.
+const WITHOUT_ANY_POINT: usize = 53;
+
+/// Point `p`'s patch, its images and its stored keypoints.
+fn point_inputs(recon: &SfmrReconstruction, p: usize) -> (OrientedPatch, Vec<u32>, Vec<[f64; 2]>) {
+    let cloud = PatchCloud::from_stored_frames(recon).expect("patch frames");
+    let kxy = recon.keypoints_xy().expect("inline keypoints");
+    let offsets = &recon.point_set.observation_offsets;
+    let rows = offsets[p]..offsets[p + 1];
+    let images = rows
+        .clone()
+        .map(|o| recon.point_set.tracks[o].image_index)
+        .collect();
+    let keypoints = rows
+        .map(|o| [f64::from(kxy[[o, 0]]), f64::from(kxy[[o, 1]])])
+        .collect();
+    (cloud.patch(p).clone(), images, keypoints)
+}
+
+fn anchors(keypoints: &[[f64; 2]]) -> Vec<Option<[f64; 2]>> {
+    keypoints.iter().map(|&k| Some(k)).collect()
+}
+
+#[test]
+fn a_last_fallback_pick_stores_the_fused_mean_with_no_reference() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let params = KeypointSubpixelParams {
+        resolution: 24,
+        ..Default::default()
+    };
+    let render = render_reference(
+        &patch,
+        &views,
+        &images,
+        &anchors(&keypoints),
+        24,
+        params.sampler,
+        &Progress::none(),
+    );
+    assert_eq!(
+        render.reading.choice.fallback,
+        ReferenceFallback::WithoutAny
+    );
+    assert!(render.reading.choice.reference.is_some(), "the rule picks");
+    assert_eq!(render.stored_reference(), None);
+    let fused = fuse_patch_bitmap(&patch, &views, &images, &keypoints, &params)
+        .expect("a fused mean renders");
+    let stored = render_patch_bitmap(
+        &patch,
+        &views,
+        &images,
+        &keypoints,
+        &params,
+        &Progress::none(),
+    )
+    .expect("a bitmap");
+    assert_eq!(stored.reference, None);
+    assert_eq!(stored.rgba, fused);
+}
+
+#[test]
+fn the_sub_pixel_refiner_stores_the_fused_mean_for_a_last_fallback_pick() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let params = KeypointSubpixelParams {
+        resolution: 24,
+        render_bitmaps: true,
+        ..Default::default()
+    };
+    let out = refine_patch_keypoints(&patch, &views, &images, Some(&anchors(&keypoints)), &params);
+    // The rule runs over the views the refiner kept, at their final keypoints.
+    let render = render_reference(
+        &patch,
+        &views,
+        &out.views,
+        &anchors(&out.keypoints),
+        24,
+        params.sampler,
+        &Progress::none(),
+    );
+    assert_eq!(
+        render.reading.choice.fallback,
+        ReferenceFallback::WithoutAny
+    );
+    assert_eq!(out.reference, None);
+    assert!(out.representative.is_some(), "the fused mean");
+}
+
+#[test]
+fn normal_refinement_stores_the_bitmap_its_reference_names() {
+    let truth = GroundTruth::load();
+    let all = truth.views();
+    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let views: Vec<ProjectedImage<'_>> = images
+        .iter()
+        .map(|&i| {
+            let v = &all[i as usize];
+            ProjectedImage {
+                camera: v.camera,
+                cam_from_world: v.cam_from_world,
+                pyramid: v.pyramid,
+            }
+        })
+        .collect();
+    let params = NormalRefineParams {
+        render_bitmap: true,
+        min_views: 2,
+        ..Default::default()
+    };
+    let out = refine_patch_normal(&patch, &views, 24, &params, Some(&anchors(&keypoints)));
+    let rgba = out.representative.as_ref().expect("a bitmap");
+    // The stored bitmap agrees with its reference: the named view's tile at
+    // the refined frame, and no view named where the rule's pick does not
+    // stand.
+    let all_views: Vec<u32> = (0..views.len() as u32).collect();
+    let render = render_reference(
+        &out.patch,
+        &views,
+        &all_views,
+        &anchors(&keypoints),
+        24,
+        KeypointSubpixelParams::default().sampler,
+        &Progress::none(),
+    );
+    assert_eq!(out.reference, render.stored_reference());
+    if let Some(r) = out.reference {
+        assert_eq!(rgba, &bitmap_from_tile(&render.tiles[r]));
+    }
+}
+
+/// [`score_bitmap`] after [`render_bitmap_in_place`] writes the scores the
+/// next [`evaluate`] reads against that bitmap, here for a fused mean, which
+/// names no reference, so every row is scored.
+#[test]
+fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let edited = EditedReconstruction::new(Arc::new(truth.recon.clone()));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        WITHOUT_ANY_POINT as u32,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = bench.track(&report.label).expect("just put on");
+    let options = EvaluateOptions::default();
+    let (read, _) = evaluate(track, &edited, &views, &options, &Progress::none()).unwrap();
+    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
+    let payload = rendered.track().unwrap();
+    assert!(payload.bitmap.is_some());
+    assert_eq!(payload.reference, None, "the fused mean names no row");
+    let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    let (again, _) = evaluate(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    for (i, (a, b)) in scored
+        .observations
+        .iter()
+        .zip(&again.observations)
+        .enumerate()
+    {
+        let (a, b) = (a.track.as_ref().unwrap(), b.track.as_ref().unwrap());
+        assert!(a.bitmap_zncc.is_some(), "row {i} is scored");
+        assert_eq!(a.bitmap_zncc, b.bitmap_zncc, "row {i}");
+        assert_eq!(
+            a.blur_matched_bitmap_zncc, b.blur_matched_bitmap_zncc,
+            "row {i}"
+        );
+        assert_eq!(a.sharper_than_bitmap, b.sharper_than_bitmap, "row {i}");
+    }
+    // The combined call gives the same answer.
+    let (combined, _) = evaluate_rendering_bitmap(
+        track,
+        &edited,
+        &views,
+        &options,
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    assert_same_bitmap_and_scores(&combined, &scored);
+}
+
+/// After a patch step, [`evaluate_rendering_bitmap`] reads the bitmap off the
+/// evaluation's own tiles, and gives what [`evaluate`],
+/// [`render_bitmap_in_place`] and [`score_bitmap`] give in turn.
+#[test]
+fn rendering_from_the_evaluation_matches_the_three_calls() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (read, edited) = truth.evaluated_track();
+    let p = read.track().unwrap().placement.clone().unwrap();
+    let aim = (p.normal() + p.u_axis.normalize() * 0.05).normalize();
+    let (tilted, _) = tilt_patch(&read, &edited, aim).expect("a small turn");
+    assert!(tilted.track().unwrap().bitmap.is_none());
+    let options = EvaluateOptions::default();
+    let fit = FitOptions::default();
+
+    let (combined, _) =
+        evaluate_rendering_bitmap(&tilted, &edited, &views, &options, &fit, &Progress::none())
+            .unwrap();
+    let (measured, _) = evaluate(&tilted, &edited, &views, &options, &Progress::none()).unwrap();
+    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit);
+    let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    assert!(scored.track().unwrap().reference.is_some(), "a picked row");
+    assert_same_bitmap_and_scores(&combined, &scored);
+}
+
+fn assert_same_bitmap_and_scores(a: &EditableTrack, b: &EditableTrack) {
+    let (pa, pb) = (a.track().unwrap(), b.track().unwrap());
+    assert_eq!(pa.reference, pb.reference);
+    assert_eq!(pa.bitmap, pb.bitmap);
+    assert_eq!(pa.color, pb.color);
+    for (i, (x, y)) in a.observations.iter().zip(&b.observations).enumerate() {
+        let (x, y) = (x.track.as_ref().unwrap(), y.track.as_ref().unwrap());
+        assert_eq!(x.bitmap_zncc, y.bitmap_zncc, "row {i}");
+        assert_eq!(
+            x.blur_matched_bitmap_zncc, y.blur_matched_bitmap_zncc,
+            "row {i}"
+        );
+        assert_eq!(x.bitmap_blur_sigma, y.bitmap_blur_sigma, "row {i}");
+        assert_eq!(x.sharper_than_bitmap, y.sharper_than_bitmap, "row {i}");
+    }
 }

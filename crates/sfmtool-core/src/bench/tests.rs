@@ -1564,7 +1564,8 @@ fn a_split_whose_reference_moved_reseats_both_halves() {
 }
 
 /// The row a track-stage bitmap is the tile of follows its observation through
-/// a split and an image delete, and is dropped with it.
+/// a split and an image delete, and the bitmap goes with its reference when
+/// that observation leaves the track.
 #[test]
 fn the_bitmap_s_row_follows_its_observation_or_goes_with_it() {
     let scene = Scene::new();
@@ -1574,6 +1575,7 @@ fn the_bitmap_s_row_follows_its_observation_or_goes_with_it() {
     let n = track.observations.len();
     assert!(n >= 2, "{n} observations");
     payload_of(&mut track).reference = Some(n - 1);
+    payload_of(&mut track).bitmap = Some(Array3::zeros((4, 4, 4)));
     let last_image = track.observations[n - 1].image;
     let bench = install(&bench, &label, track.clone());
 
@@ -1586,12 +1588,12 @@ fn the_bitmap_s_row_follows_its_observation_or_goes_with_it() {
         .expect("still named");
     assert_eq!(row, n - 2);
     assert_eq!(first.observations[row].image, last_image);
-    // Splitting off the bitmap's own row leaves it naming none.
+    assert!(first.track().unwrap().bitmap.is_some());
+    // Splitting off the bitmap's own row drops the bitmap with it.
     let (after, _) = split(&bench, &edited, &label, &[n - 1]).expect("one row off");
-    assert_eq!(
-        after.track(&label).unwrap().track().unwrap().reference,
-        None
-    );
+    let payload = after.track(&label).unwrap().track().unwrap();
+    assert_eq!(payload.reference, None);
+    assert!(payload.bitmap.is_none());
 
     // Deleting an earlier image renumbers the row; deleting its own drops it.
     let earlier = track.observations[0].image;
@@ -1602,9 +1604,64 @@ fn the_bitmap_s_row_follows_its_observation_or_goes_with_it() {
             .and_then(|p| p.reference)
             .expect("still named");
         assert_eq!(Some(row), map[n - 1]);
+        assert!(moved.track().unwrap().bitmap.is_some());
     }
     let (gone, _) = track.delete_image(last_image).expect("the track sees it");
     assert_eq!(gone.track().unwrap().reference, None);
+    assert!(gone.track().unwrap().bitmap.is_none());
+}
+
+/// Sighting the observation a track-stage bitmap is the render of at another
+/// keypoint drops the bitmap with its reference, since it was rendered at the
+/// old keypoint; sighting any other observation keeps both.
+#[test]
+fn sighting_the_bitmap_s_observation_drops_the_bitmap() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let n = track.observations.len();
+    assert!(n >= 2, "{n} observations");
+    payload_of(&mut track).reference = Some(0);
+    payload_of(&mut track).bitmap = Some(Array3::zeros((4, 4, 4)));
+    let pixel_of = |track: &EditableTrack, i: usize| {
+        let [x, y] = track.observations[i].site().expect("a sighting");
+        [x + 8.0, y + 8.0]
+    };
+
+    let (other, _) = sight_observation(&track, &edited, 1, pixel_of(&track, 1)).expect("sighted");
+    assert_eq!(other.track().unwrap().reference, Some(0));
+    assert!(other.track().unwrap().bitmap.is_some());
+
+    let (own, _) = sight_observation(&track, &edited, 0, pixel_of(&track, 0)).expect("sighted");
+    assert_eq!(own.track().unwrap().reference, None);
+    assert!(own.track().unwrap().bitmap.is_none());
+}
+
+/// Turning out the observation a track-stage bitmap is the render of drops
+/// the bitmap with its reference, by hand or by the thresholds; turning out
+/// another keeps both.
+#[test]
+fn turning_out_the_bitmap_s_observation_drops_the_bitmap() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let n = track.observations.len();
+    assert!(n >= 2, "{n} observations");
+    for observation in &mut track.observations {
+        observation.verdict = Verdict::In;
+    }
+    payload_of(&mut track).reference = Some(0);
+    payload_of(&mut track).bitmap = Some(Array3::zeros((4, 4, 4)));
+
+    let (other, _) = set_verdict(&track, 1, Verdict::Out).expect("a verdict");
+    assert_eq!(other.track().unwrap().reference, Some(0));
+    assert!(other.track().unwrap().bitmap.is_some());
+
+    let (own, _) = set_verdict(&track, 0, Verdict::Out).expect("a verdict");
+    assert_eq!(own.track().unwrap().reference, None);
+    assert!(own.track().unwrap().bitmap.is_none());
 }
 
 /// The rows a person splits off are usually the ones the thresholds just turned

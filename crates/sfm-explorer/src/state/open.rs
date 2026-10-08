@@ -18,11 +18,12 @@
 //!   ([`AppState::photographs`], so the panels and later operations find them
 //!   decoded), then every patch's bitmap rendered at its stored frame and
 //!   keypoints by the render `sfm xform --add-patch-bitmaps` runs
-//!   ([`render_display_patch_bitmaps`], which `sfm web-export` also calls).
-//!   The column goes into the value marked
-//!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], so the bench, the
-//!   edits and Track View read it as they would a file's own, while no save
-//!   writes it and no content hash covers it.
+//!   ([`render_patch_bitmap_column`], whose bitmaps `sfm web-export` also
+//!   renders). The column goes into the value marked
+//!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], with the reference
+//!   observation each row is the render of, so the bench, the edits and Track
+//!   View read the two as they would a file's own, while no save writes the
+//!   bitmaps or those references and no content hash covers them.
 //!
 //! The GUI thread then appends one node per file, in the order asked for
 //! ([`AppState::append_opened`]).
@@ -31,9 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sfmtool_core::camera::PhotographCache;
-use sfmtool_core::patch::display_bitmaps::{
-    render_display_patch_bitmaps, render_patch_bitmap_column,
-};
+use sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column;
 use sfmtool_core::patch::stored_bitmap::PatchBitmapColumn;
 use sfmtool_core::progress::{Cancelled, Progress};
 use sfmtool_core::progress_note;
@@ -261,7 +260,7 @@ fn load_for_display(
         && recon.point_set.patch_bitmaps_y_x_rgba.is_none()
         && recon.keypoints_xy().is_some();
     // Weighed by what each costs: a thumbnail is mostly a `.sift` read, and a
-    // bitmap column is a decode of every photograph and a fuse per point.
+    // bitmap column is a decode of every photograph and a render per point.
     let [thumbnails, bitmaps] = rest.split([
         if wants_thumbnails { 1.0 } else { 0.0 },
         if wants_bitmaps { 8.0 } else { 0.0 },
@@ -283,8 +282,13 @@ fn load_for_display(
     if wants_bitmaps {
         let phase = bitmaps.phase("patch bitmaps");
         if let Some(column) = render_patch_bitmaps(&recon, photographs, &phase)? {
-            recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column));
+            recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column.bitmaps));
             recon.point_set.patch_bitmaps_for_display = true;
+            // The references this render picked, beside the bitmaps they name,
+            // so the bench and Track View mark the row each display bitmap
+            // is the tile of. A file without bitmaps stores every reference
+            // as -1, and a save writes them so again, with no bitmaps.
+            recon.point_set.reference_observations = Some(column.reference_observations);
         }
     }
     progress.set_fraction(1.0);
@@ -294,23 +298,14 @@ fn load_for_display(
     })
 }
 
-/// Render `recon`'s display patch bitmaps at its stored frames and keypoints,
-/// moving nothing: [`render_display_patch_bitmaps`], reading the photographs
-/// through `photographs`. `Ok(None)` when not one photograph could be read,
-/// since a column of zero rows would draw nothing.
+/// Render `recon`'s patch bitmaps at its stored frames and keypoints, moving
+/// nothing, with the reference observation each row is the render of
+/// ([`render_patch_bitmap_column`]), reading the photographs through
+/// `photographs`. The open keeps the column for display only, and the
+/// conversion worker keeps it as a stored column; both keep the references
+/// with it. `Ok(None)` when not one photograph could be read, since a column
+/// of zero rows would draw nothing.
 pub(super) fn render_patch_bitmaps(
-    recon: &SfmrReconstruction,
-    photographs: &PhotographCache,
-    progress: &Progress<'_>,
-) -> Result<Option<ndarray::Array4<u8>>, Cancelled> {
-    render_display_patch_bitmaps(recon, photographs, progress)
-}
-
-/// [`render_patch_bitmaps`] with the reference observation each row is the
-/// render of ([`render_patch_bitmap_column`]). The conversion worker calls
-/// this, and keeps the bitmaps as a stored column with its references rather
-/// than marking them for display only.
-pub(super) fn render_stored_patch_bitmaps(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
     progress: &Progress<'_>,

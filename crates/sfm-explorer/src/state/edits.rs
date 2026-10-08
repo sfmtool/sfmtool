@@ -1679,8 +1679,7 @@ impl AppState {
                 };
             conversion.set_fraction(1.0);
             let bitmap_phase = bitmaps.phase("patch bitmaps");
-            match super::open::render_stored_patch_bitmaps(&converted, &photographs, &bitmap_phase)
-            {
+            match super::open::render_patch_bitmaps(&converted, &photographs, &bitmap_phase) {
                 Ok(Some(column)) => {
                     // The bitmaps are the converted value's own, so the
                     // references the render picked are recorded with them.

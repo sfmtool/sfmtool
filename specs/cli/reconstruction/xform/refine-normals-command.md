@@ -140,7 +140,9 @@ that is the step which builds the frame this one reuses (see "Patch frame"
 below). Persisting the frame is not a knob either — the refined cloud is always
 written back, so the stored frame cannot fall out of step with the rewritten
 normals. `bitmaps` is the only persistence choice here, and it governs the RGBA
-textures alone.
+textures alone. Writing the refined patch frame drops any bitmaps the input
+stored, so with `bitmaps=false` the output has none and every
+`tracks/reference_observations` row is `-1`.
 
 ### Candidate-scoring cache (`cache` / `cache_supersample` / `quality`)
 
@@ -291,7 +293,8 @@ through the refined patch at that view's stored keypoint, with alpha `255` on
 the samples on the photograph and `0` elsewhere, and the point's
 `tracks/reference_observations` row names that observation
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
-bitmap"). Where the rule picks no view, the texture is the cross-view
+bitmap"). Where the rule picks no view, or reaches its pick only through its
+last fallback, the texture is the cross-view
 **fusion** of the kept views at the optimum: RGB the robust IRLS-weighted mean
 (an unweighted mean under `objective=mean`) and alpha a per-pixel cross-view
 agreement confidence, and the point names no observation. Rendering costs a

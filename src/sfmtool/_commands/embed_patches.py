@@ -257,7 +257,8 @@ from .._cli_utils import timed_command
     help=(
         "Pyramid sampler for every photometric kernel in the pipeline (normal "
         "refinement, view selection, keypoint localization, sub-pixel "
-        "refinement, the fuse). 'per_view' applies the sampler rule to each view: "
+        "refinement, the stored bitmap's render). 'per_view' applies the sampler "
+        "rule to each view: "
         "'anisotropic' where 'bilinear_mip' would read the view's less "
         "compressed axis too coarsely, 'bilinear_mip' otherwise. The other "
         "three render every view with one sampler. 'bilinear_mip' taps the mip level nearest the warp's "

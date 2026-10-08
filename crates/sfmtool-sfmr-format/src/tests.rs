@@ -2209,11 +2209,13 @@ fn test_observation_confidence_reordered_in_lockstep_by_sort() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// `make_test_data` with a patch frame, so it carries reference observations.
+/// `make_test_data` with a patch frame and patch bitmaps, so it carries
+/// reference observations that may name an observation.
 fn make_framed_test_data(references: Vec<i32>) -> SfmrData {
     let mut data = make_test_data();
     data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
     data.patch_v_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.25));
+    data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
     data.reference_observations = Some(Array1::from_vec(references));
     data
 }
@@ -2291,6 +2293,20 @@ fn test_reference_observations_presence_and_range_refused_on_write() {
         "{result:?}"
     );
 
+    // Without the bitmaps every reference is -1: there is no render for one
+    // to name.
+    let mut data = make_framed_test_data(vec![-1, 0, -1, -1, -1]);
+    data.patch_bitmaps_y_x_rgba = None;
+    let result = write_sfmr(&path, &mut data);
+    assert!(
+        matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("no patch bitmaps")),
+        "{result:?}"
+    );
+    let mut data = make_framed_test_data(vec![-1; 5]);
+    data.patch_bitmaps_y_x_rgba = None;
+    write_sfmr(&path, &mut data).expect("every reference -1 without bitmaps");
+    std::fs::remove_file(&path).unwrap();
+
     // Point 0 has two observations, so 2 is past its track; -2 is not -1.
     for bad in [vec![2, 0, 0, 0, 0], vec![-2, 0, 0, 0, 0]] {
         let mut data = make_framed_test_data(bad);
@@ -2326,6 +2342,30 @@ fn test_reference_observations_out_of_range_refused_on_read_and_verify() {
     let (valid, errors) = verify_sfmr(&edited).unwrap();
     assert!(!valid);
     assert!(errors.iter().any(|e| e.contains("row 1 = 3")), "{errors:?}");
+
+    // A reference in a file that stores no bitmaps is refused the same way.
+    let mut data = make_framed_test_data(vec![-1; 5]);
+    data.patch_bitmaps_y_x_rgba = None;
+    let bare = dir.join("bare.sfmr");
+    write_sfmr(&bare, &mut data).unwrap();
+    let named = dir.join("named.sfmr");
+    rewrite_entries(&bare, &named, |name, _| {
+        name.starts_with("tracks/reference_observations")
+            .then(|| bytemuck::cast_slice::<i32, u8>(&[-1, 0, -1, -1, -1]).to_vec())
+    });
+    let Err(err) = read_sfmr(&named) else {
+        panic!("a reference without bitmaps was read");
+    };
+    assert!(
+        matches!(&err, SfmrError::InvalidFormat(m) if m.contains("no patch bitmaps")),
+        "{err}"
+    );
+    let (valid, errors) = verify_sfmr(&named).unwrap();
+    assert!(!valid);
+    assert!(
+        errors.iter().any(|e| e.contains("no patch bitmaps")),
+        "{errors:?}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -2363,6 +2403,42 @@ fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::P
         zip.write_all(&compressed).unwrap();
     }
     zip.finish().unwrap();
+    restamp_hashes(path, dir);
+}
+
+/// Store the hashes `verify_sfmr` computes for `path` in its
+/// `content_hash.json.zst`, so a file built by editing entries verifies.
+/// The section hashes are restamped first and the overall hash, which reads
+/// them, on the next pass.
+fn restamp_hashes(path: &std::path::Path, dir: &std::path::Path) {
+    for _ in 0..3 {
+        let (valid, errors) = verify_sfmr(path).unwrap();
+        if valid {
+            return;
+        }
+        let pairs: Vec<(String, String)> = errors
+            .iter()
+            .filter_map(|e| {
+                let (_, rest) = e.split_once("mismatch: computed ")?;
+                let (computed, stored) = rest.split_once(", stored ")?;
+                Some((stored.to_string(), computed.to_string()))
+            })
+            .collect();
+        assert_eq!(pairs.len(), errors.len(), "not only hashes: {errors:?}");
+        let staged = dir.join("restamp.sfmr");
+        rewrite_entries(path, &staged, |name, raw| {
+            (name == "content_hash.json.zst").then(|| {
+                let mut text = String::from_utf8(raw.to_vec()).unwrap();
+                for (stored, computed) in &pairs {
+                    text = text.replace(stored.as_str(), computed);
+                }
+                text.into_bytes()
+            })
+        });
+        std::fs::rename(&staged, path).unwrap();
+    }
+    let (valid, errors) = verify_sfmr(path).unwrap();
+    assert!(valid, "{errors:?}");
 }
 
 #[test]
@@ -2373,6 +2449,10 @@ fn test_version_11_with_patch_frames_reads_every_reference_as_none() {
     let old = dir.join("v11.sfmr");
     write_version_11_with_patch_frames(&old, &dir);
 
+    // The version 11 file verifies: the gate reads no reference column
+    // below version 12.
+    let (valid, errors) = verify_sfmr(&old).unwrap();
+    assert!(valid, "{errors:?}");
     let mut loaded = read_sfmr(&old).unwrap();
     assert_eq!(loaded.metadata.version, 11);
     assert_eq!(

@@ -279,5 +279,5 @@ in
 - Reference-selection policy (largest scale vs self-agreement/centrality) —
   measurable with the existing harness; the format does not constrain it.
 - Whether the operation should also emit a per-cluster fused reference
-  template (the 2D counterpart of a fused patch bitmap) for downstream photometric
+  template (the 2D counterpart of a fused mean of a 3D point's views) for downstream photometric
   gates; deferred until a consumer needs it.

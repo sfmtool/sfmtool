@@ -209,7 +209,9 @@ pub fn refine_patch_keypoints_reporting(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BitmapKind {
     /// The reference view's tile, the fused mean where the reference-view
-    /// rule picks none: the stored bitmap.
+    /// rule picks none or reaches its pick only through its last fallback
+    /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)):
+    /// the stored bitmap.
     Reference,
     /// The fused mean of the views ([`fuse_patch_bitmap`]).
     FusedMean,
@@ -442,8 +444,8 @@ fn refine_patch_keypoints_impl(
     if params.render_bitmaps {
         // The stored bitmap is the tile of the view the reference-view rule
         // picks at the final keypoints; where it picks none, or picks one only
-        // by dropping the coverage tests, the fused mean, and the pick after
-        // all where no fused mean renders.
+        // by dropping the coverage and clipping tests (its last fallback), the
+        // fused mean, and the pick after all where no fused mean renders.
         let (picked, stands) = match bitmap {
             BitmapKind::Reference if out.views.len() >= 2 => {
                 let anchors: Vec<Option<[f64; 2]>> =
@@ -1095,7 +1097,9 @@ pub fn refine_patch_cloud_keypoints(
 ///
 /// The stored bitmap is the reference view's render
 /// ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)),
-/// which falls back to this mean where the reference-view rule picks no view.
+/// which falls back to this mean where the reference-view rule picks no view
+/// or reaches its pick only through its last fallback
+/// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)).
 /// This is the sub-pixel kernel's fuse run with no Gauss-Newton step and a
 /// single sweep, so the keypoints come out where they went in and the pass
 /// only renders and blends. `keypoints` is parallel to `view_set`, in

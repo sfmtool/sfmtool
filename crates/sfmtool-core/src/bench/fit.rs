@@ -66,8 +66,10 @@ pub struct FitOptions {
     /// ([`stored_patch_resolution`](super::evaluate::stored_patch_resolution)),
     /// the grid the evaluation it ends with reads at.
     pub localize: KeypointLocalizeParams,
-    /// The sub-pixel kernel, chained after the discrete one, and the fuse that
-    /// renders the patch bitmap.
+    /// The sub-pixel kernel, chained after the discrete one, and the render of
+    /// the patch bitmap: its resolution and sampler shape the reference view's
+    /// tile, and its window and robust iterations the fused mean where that
+    /// is stored.
     pub refine: KeypointSubpixelParams,
     /// The evaluation a fit ends with, which is where every number it reports
     /// comes from. A caller that reads with its own search radius fits with the
@@ -305,8 +307,8 @@ impl std::fmt::Display for FitReport {
     }
 }
 
-/// Fit `track` at the stage it is in: localize, refine, re-triangulate and fuse
-/// at the track stage, and read the result back.
+/// Fit `track` at the stage it is in: localize, refine, re-triangulate and
+/// render the patch bitmap at the track stage, and read the result back.
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, indexed by image
 /// index, exactly as every other photometric step of the bench takes them.
@@ -428,9 +430,16 @@ pub fn fit(
 /// step. The placement, the position, the verdicts and every keypoint come
 /// back as they were; what is written is the tile of the `in` sighting the
 /// reference-view rule picks (or the mean of the `in` sightings' tiles where
-/// it picks none), with [`TrackPayload::reference`] naming that sighting, on
-/// the reconstruction's own bitmap grid where it stores one, and the colour
-/// at its centre.
+/// it picks none or reaches its pick only through its last fallback, see
+/// [`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
+/// with [`TrackPayload::reference`] naming that sighting, on the
+/// reconstruction's own bitmap grid where it stores one, and the colour at its
+/// centre.
+///
+/// The rows' bitmap scores are not touched: a caller scores them against the
+/// new bitmap with [`score_bitmap`](super::evaluate::score_bitmap), or runs
+/// [`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap),
+/// which reads, renders and scores in one call.
 ///
 /// A cluster, a track with no placement, and one with fewer than two `in`
 /// sightings that carry a keypoint come back unchanged, since there is
@@ -477,14 +486,62 @@ fn rendered_in_place(
         return track.clone();
     };
     let mut next = track.clone();
-    if let Stage::Track(payload) = &mut next.stage {
+    install_bitmap(&mut next, bitmap, reference, color);
+    next
+}
+
+/// Write a rendered bitmap, the row it is the render of, and the colour at its
+/// centre into `track`'s track-stage payload.
+pub(super) fn install_bitmap(
+    track: &mut EditableTrack,
+    bitmap: Array3<u8>,
+    reference: Option<usize>,
+    color: Option<[u8; 3]>,
+) {
+    if let Stage::Track(payload) = &mut track.stage {
         payload.bitmap = Some(bitmap);
         payload.reference = reference;
         if let Some(color) = color {
             payload.color = color;
         }
     }
-    next
+}
+
+/// The `(resolution, channels)` a track's bitmap is rendered at: the
+/// reconstruction's own bitmap grid where it stores one, and otherwise the
+/// sub-pixel kernel's resolution with four channels.
+pub(super) fn bitmap_layout(edited: &EditedReconstruction, options: &FitOptions) -> (usize, usize) {
+    match edited.base.point_set.patch_bitmaps_y_x_rgba.as_ref() {
+        Some(bitmaps) => (bitmaps.shape()[1], bitmaps.shape()[3]),
+        None => (options.refine.resolution.max(2) as usize, 4),
+    }
+}
+
+/// An `R·R·4` RGBA render as a `(R, R, channels)` bitmap, keeping as many
+/// channels as the column carries, and the colour at its centre.
+pub(super) fn column_bitmap(
+    rgba: &[u8],
+    resolution: usize,
+    channels: usize,
+) -> (Array3<u8>, [u8; 3]) {
+    let mut bitmap = Array3::<u8>::zeros((resolution, resolution, channels));
+    for row in 0..resolution {
+        for col in 0..resolution {
+            for c in 0..channels {
+                bitmap[[row, col, c]] = if c < 4 {
+                    rgba[(row * resolution + col) * 4 + c]
+                } else {
+                    u8::MAX
+                };
+            }
+        }
+    }
+    let (row, col) = (resolution / 2, resolution / 2);
+    let mut color = [0u8; 3];
+    for (c, out) in color.iter_mut().enumerate() {
+        *out = bitmap[[row, col, if channels >= 3 { c } else { 0 }]];
+    }
+    (bitmap, color)
 }
 
 /// Whether `track` can be fitted at the stage it stands in, judged on the track
@@ -709,8 +766,8 @@ pub(super) fn placed_frame(
     }
 }
 
-/// Register `frame` into every view, re-triangulate the `in` results, fuse the
-/// patch bitmap, write the geometry, and read the whole of it back.
+/// Register `frame` into every view, re-triangulate the `in` results, render
+/// the patch bitmap, write the geometry, and read the whole of it back.
 ///
 /// Shared by [`fit`] at the track stage and by the upgrade
 /// ([`set_stage`](super::stage::set_stage)), which differ only in where the
@@ -1110,7 +1167,8 @@ pub(super) fn triangulate_rays(
 ///
 /// The bitmap is [`render_patch_bitmap`]: the tile of the observation the
 /// reference-view rule picks among the `in` observations, or the fused mean
-/// where it picks none. Nothing moves: the keypoints are the ones the fit
+/// where it picks none or reaches its pick only through its last fallback.
+/// Nothing moves: the keypoints are the ones the fit
 /// already settled. The grid is the reconstruction's own bitmap grid where it
 /// stores one, so what is rendered is a tile the column can hold. The second
 /// value is the row of the track whose tile the bitmap is.
@@ -1123,11 +1181,7 @@ fn render_bitmap(
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> (Option<Array3<u8>>, Option<usize>, Option<[u8; 3]>) {
-    let stored = edited.base.point_set.patch_bitmaps_y_x_rgba.as_ref();
-    let (resolution, channels) = match stored {
-        Some(bitmaps) => (bitmaps.shape()[1], bitmaps.shape()[3]),
-        None => (options.refine.resolution.max(2) as usize, 4),
-    };
+    let (resolution, channels) = bitmap_layout(edited, options);
     let mut rows: Vec<usize> = Vec::with_capacity(ins.len());
     let mut view_set: Vec<u32> = Vec::with_capacity(ins.len());
     let mut keypoints: Vec<[f64; 2]> = Vec::with_capacity(ins.len());
@@ -1153,23 +1207,7 @@ fn render_bitmap(
         return (None, None, None);
     };
     // The kernel renders RGBA; the column takes as many channels as it carries.
-    let mut bitmap = Array3::<u8>::zeros((resolution, resolution, channels));
-    for row in 0..resolution {
-        for col in 0..resolution {
-            for c in 0..channels {
-                bitmap[[row, col, c]] = if c < 4 {
-                    rendered.rgba[(row * resolution + col) * 4 + c]
-                } else {
-                    u8::MAX
-                };
-            }
-        }
-    }
-    let (row, col) = (resolution / 2, resolution / 2);
-    let mut color = [0u8; 3];
-    for (c, out) in color.iter_mut().enumerate() {
-        *out = bitmap[[row, col, if channels >= 3 { c } else { 0 }]];
-    }
+    let (bitmap, color) = column_bitmap(&rendered.rgba, resolution, channels);
     (
         Some(bitmap),
         rendered.reference.map(|r| rows[r]),

@@ -21,8 +21,10 @@ use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::evaluate::{check_views, evaluate, seed_of, EvaluateError, EvaluateReport};
-use super::fit::{fit, render_bitmap_in_place, FitError, FitOptions};
+use super::evaluate::{
+    check_views, evaluate_rendering_bitmap, seed_of, EvaluateError, EvaluateReport,
+};
+use super::fit::{fit, FitError, FitOptions};
 use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackEditError};
 use super::track::{EditableTrack, Stage, StageKind};
 
@@ -55,7 +57,7 @@ pub struct FitNormalOptions {
     pub refine: NormalRefineParams,
     /// The side of the square grid the consensus is scored on, in samples.
     pub resolution: u32,
-    /// The reading the step ends with, and the fuse.
+    /// The reading the step ends with, and the render of the patch bitmap.
     pub fit: FitOptions,
 }
 
@@ -799,7 +801,8 @@ fn perpendicular_part(normal: Vector3<f64>, line: Vector3<f64>) -> Option<Vector
 }
 
 /// Turn the track to `normal` with [`tilt_patch`], read the result back and
-/// render its bitmap, as a fit ends.
+/// render its bitmap, as a fit ends, with every row scored against that
+/// bitmap ([`evaluate_rendering_bitmap`]).
 fn turn_and_read(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -811,11 +814,17 @@ fn turn_and_read(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     progress.check_cancel()?;
     let (turned, tilt) = tilt_patch(track, edited, normal)?;
-    let (read, evaluate) = evaluate(&turned, edited, images, &options.evaluate, progress)?;
-    debug_assert_eq!(read.stage_kind(), StageKind::Track);
-    let fused = render_bitmap_in_place(&read, edited, images, options);
+    let (rendered, evaluate) = evaluate_rendering_bitmap(
+        &turned,
+        edited,
+        images,
+        &options.evaluate,
+        options,
+        progress,
+    )?;
+    debug_assert_eq!(rendered.stage_kind(), StageKind::Track);
     Ok((
-        fused,
+        rendered,
         NormalReport {
             estimate,
             tilt,

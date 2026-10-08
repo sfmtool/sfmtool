@@ -189,7 +189,8 @@ thereafter (the per-round obliquity drop).
    the final keypoints **and renders each point's stored bitmap at them**
    (`refine_keypoints(render_bitmaps=True)`): the tile of the view the
    [reference-view rule](reference-view.md) picks, rendered at its keypoint, or
-   the fused mean of the views where the rule picks none — points at infinity
+   the fused mean of the views where the rule picks none or reaches its pick
+   only through its last fallback — points at infinity
    included, via the same `w`-aware render path — reporting per-point validity
    (a point with fewer than two views, or with no reference view and fewer than
    two views in frame for the mean, gets no bitmap).

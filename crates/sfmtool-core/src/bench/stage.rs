@@ -87,7 +87,8 @@ pub struct StageReport {
     /// reported rather than refused, and the caller pushes no version for it.
     pub changed: bool,
     /// The fit the upgrade ran, which is the track stage's own localization,
-    /// triangulation and fuse, with its reading of the result inside it.
+    /// triangulation and bitmap render, with its reading of the result inside
+    /// it.
     pub fit: Option<FitReport>,
     /// At a downgrade, the observation the cluster is now cut around.
     pub reference: Option<usize>,

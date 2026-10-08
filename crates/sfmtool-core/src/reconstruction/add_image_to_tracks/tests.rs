@@ -638,6 +638,13 @@ fn an_added_observation_moves_the_reference_index_past_it() {
         keypoints_xy: Array2::<f32>::zeros((m, 2)),
         image_file_hashes: vec![[0u8; 16]; recon.image_count()],
     };
+    // A reference names the observation a bitmap is the render of, so the
+    // points carry a frame and a bitmap.
+    let n = recon.point_count();
+    recon.point_set.patch_u_halfvec_xyz = Some(Array2::from_elem((n, 3), 0.5));
+    recon.point_set.patch_v_halfvec_xyz = Some(Array2::from_elem((n, 3), 0.25));
+    recon.point_set.patch_bitmaps_y_x_rgba =
+        Some(std::sync::Arc::new(ndarray::Array4::zeros((n, 4, 4, 4))));
     // Point 2 sees images 2 and 3; point 3 sees images 3 and 4.
     recon.point_set.reference_observations = Some(vec![-1, -1, 1, 0]);
     let image_of = |r: &SfmrReconstruction, p: usize| {

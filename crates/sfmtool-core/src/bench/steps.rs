@@ -212,11 +212,13 @@ pub fn create_track(
         placement: view.placement(),
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         // The bench's rows are the stored track's observations in order, so
-        // the stored index names the row. Read with or without a bitmap: a
-        // file whose bitmaps were dropped keeps its references, and a commit
-        // writes this one back.
+        // the stored index names the row. The column names the observation
+        // the bitmap beside it is the render of -- for a column rendered for
+        // display, the observation that render picked -- and `-1` where there
+        // is no bitmap, so the two are read together.
         reference: view
-            .reference_observation()
+            .patch_bitmap()
+            .and(view.reference_observation())
             .and_then(|r| usize::try_from(r).ok()),
         color: stored.color,
         normal_confidence: view.normal_confidence(),
@@ -1115,7 +1117,10 @@ pub struct SightReport {
 ///   answer about the new one.
 ///
 /// Nothing else on the track moves: the patch keeps its place, its size and
-/// its turn, and every other sighting keeps its own.
+/// its turn, and every other sighting keeps its own. When the observation is
+/// the one the track's patch bitmap is the render of, the bitmap was rendered
+/// at its old keypoint, so it is dropped with its reference and the next
+/// evaluation renders another ([`TrackPayload::reference`]).
 ///
 /// **The observation is pinned either way**, at both stages: a sighting a
 /// person placed is a sighting they have ruled on, and
@@ -1137,6 +1142,14 @@ pub fn sight_observation(
     let (clamped_from, pixel) = clamped_to_view(edited, image, pixel);
 
     let mut next = track.clone();
+    // The bitmap of a track whose reference observation is sighted elsewhere
+    // is that observation's render at its old keypoint, so it goes with its
+    // reference.
+    if let Stage::Track(payload) = &mut next.stage {
+        if payload.reference == Some(observation) {
+            payload.drop_bitmap();
+        }
+    }
     let target = &mut next.observations[observation];
     match track.stage {
         Stage::Track(_) => {
@@ -2285,15 +2298,12 @@ fn track_payload_mut(
     let Stage::Track(payload) = &mut track.stage else {
         unreachable!("the stage was read as a track stage before the clone");
     };
+    payload.drop_bitmap();
     let TrackPayload {
         position,
         placement,
-        bitmap,
-        reference,
         ..
     } = payload;
-    *bitmap = None;
-    *reference = None;
     (
         position,
         placement
@@ -2911,7 +2921,10 @@ pub struct SplitReport {
 /// as its reference, and the new track takes the one the downgrade picks -- the
 /// observation the patch is largest in, whatever its verdict -- or its own
 /// first when it was already a cluster; the template is dropped on both,
-/// because a template is a cut around a particular reference.
+/// because a template is a cut around a particular reference. A first track
+/// at the track stage keeps its patch bitmap while the observation it is the
+/// render of stays with it, and drops the bitmap with that reference when it
+/// moved out ([`TrackPayload::reference`]).
 ///
 /// **A half whose every row is `out` still splits.** The rows the thresholds
 /// rejected are exactly the ones a person cuts off to look at on their own, so
@@ -2957,13 +2970,17 @@ pub fn split(
     let mut first = (**track).clone();
     first.observations = kept;
     // The bitmap stays with the first track, and the row it is the tile of
-    // moves up past the rows taken from before it; a bitmap whose row was
-    // taken names none.
+    // moves up past the rows taken from before it. A bitmap whose row was
+    // taken is the tile of a sighting the first track no longer has, so it
+    // goes with its reference.
     if let Stage::Track(payload) = &mut first.stage {
-        payload.reference = payload
-            .reference
-            .filter(|r| taken.binary_search(r).is_err())
-            .map(|r| r - taken.partition_point(|&t| t < r));
+        if let Some(r) = payload.reference {
+            if taken.binary_search(&r).is_ok() {
+                payload.drop_bitmap();
+            } else {
+                payload.reference = Some(r - taken.partition_point(|&t| t < r));
+            }
+        }
     }
     reseat_reference(&mut first);
     let mut second = (**track).clone();

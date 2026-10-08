@@ -146,10 +146,14 @@ drops the bitmap rendered over the square as it stood, so the operation renders
 once more before it returns. The render is the one a fit ends with
 (`render_bitmap_in_place`): the tile of the `in` sighting the reference-view
 rule picks, at its keypoint, or the fused mean of the `in` sightings where the
-rule picks none, on the reconstruction's own bitmap grid where it
-stores one, and the colour is read off the tile's centre; it moves nothing, so
-the position, the placement, the keypoints, the verdicts and every reported
-number are what they were before it. A reconstruction that stores a bitmap per
+rule picks none or reaches its pick only through its last fallback
+([../patch/reference-view.md](../patch/reference-view.md) § "The stored
+bitmap"), on the reconstruction's own bitmap grid where it
+stores one, and the colour is read off the tile's centre. Every row is then
+scored against the new bitmap (`score_bitmap`), so the rows' bitmap scores are
+the new bitmap's; the render moves nothing, so the position, the placement,
+the keypoints, the verdicts and every other reported number are what they were
+before it. A reconstruction that stores a bitmap per
 point can therefore take the track in a commit as it is returned.
 
 ```rust
@@ -284,7 +288,8 @@ patch centre's projection until a fit localizes them.
    [`editable-track.md`](editable-track.md) § "The middle ZNCC"), which no gate
    reads.
 6. **Bitmap.** The track that passed is given its patch bitmap and colour
-   where it stands, by the render a fit ends with, which moves nothing. The last
+   where it stands, by the render a fit ends with, which moves nothing, and
+   every row is scored against that bitmap. The last
    anchor dropped the bitmap the fits before it had rendered, because it slid
    the patch off the square that bitmap was rendered over.
 
@@ -416,7 +421,8 @@ point is absent from the observation index; clusters are matched to images by
 name and found by their nearest member; every member refusing reports each
 refusal in order; a query that names no place is refused before any member
 runs; and the returned track carries a bitmap on the reconstruction's own
-bitmap grid, with the colour at its centre, which fusing again does not move.
+bitmap grid, with the colour at its centre, which rendering again does not
+change.
 The arithmetic (the weighted affine, depth modes, the median) is tested
 directly.
 [`test_track_at_pixel_rust_bindings.py`](../../../tests/rust_bindings/bench/test_track_at_pixel_rust_bindings.py)

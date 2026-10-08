@@ -2532,31 +2532,21 @@ pub(crate) fn evaluate_job(
             return live::Measured::Cancelled;
         }
         let views = decoded.views();
-        let measured = match bench::evaluate(&track, &edited, &views, &options, progress) {
-            Err(sfmtool_core::bench::EvaluateError::Cancelled) => return live::Measured::Cancelled,
-            Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
-            Ok((measured, _)) => measured,
-        };
-        // A patch step drops the patch bitmap, since it was rendered over
-        // the square as it stood. The photographs are decoded here anyway,
-        // so render it again over the square as it stands now, moving
-        // nothing, rather than leave the track without one until a fit.
-        let needs_bitmap = matches!(
-            &measured.stage,
-            Stage::Track(payload) if payload.placement.is_some() && payload.bitmap.is_none()
-        );
-        if !needs_bitmap {
-            return live::Measured::Track(Box::new(measured));
-        }
-        if progress.is_cancelled() {
-            return live::Measured::Cancelled;
-        }
-        let rendered =
-            bench::render_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
-        // The evaluation scored the rows against no bitmap, so score them
-        // against the one just rendered.
-        match bench::score_bitmap(&rendered, &edited, &views, &options, progress) {
-            Ok(scored) => live::Measured::Track(Box::new(scored)),
+        // A step that drops the patch bitmap -- one that moves the patch, or
+        // removes, re-sights or turns out the row it is the render of --
+        // leaves the track without one. The photographs are decoded here
+        // anyway, so the evaluation renders it again where the patch stands,
+        // moving nothing, and scores every row against it, rather than leave
+        // the track without one until a fit.
+        match bench::evaluate_rendering_bitmap(
+            &track,
+            &edited,
+            &views,
+            &options,
+            &FitOptions::default(),
+            progress,
+        ) {
+            Ok((measured, _)) => live::Measured::Track(Box::new(measured)),
             Err(sfmtool_core::bench::EvaluateError::Cancelled) => live::Measured::Cancelled,
             Err(e) => live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
         }

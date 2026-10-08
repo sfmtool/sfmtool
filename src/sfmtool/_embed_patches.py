@@ -323,7 +323,8 @@ def _cull_by_zncc_self_similarity_radius(
 
     The radius is read from each point's stored ``bitmaps`` (the reference
     view's render, or the views' fused mean where the reference-view rule picks
-    none; scattered per source point) the overlap way, by the same pass rule the
+    none or reaches its pick only through its last fallback; scattered per
+    source point) the overlap way, by the same pass rule the
     ``xform`` filter uses (``points_passing_zncc_self_similarity_radius``): at or
     below the bar passes, a ``NaN`` radius fails, and a point whose bitmap has
     no sample carrying data (no bitmap) has no reading and is kept. The radius
@@ -422,8 +423,9 @@ def embed_patches(
        The final round's sub-pixel pass also renders each point's **stored
        bitmap** at the final keypoints: the tile of the reference view the
        reference-view rule picks, or the views' fused mean where it picks none
-       (points at infinity included — they render through the same ``w``-aware
-       path), and reports per-point validity and the reference view's image.
+       or reaches its pick only through its last fallback (points at infinity
+       included — they render through the same ``w``-aware path), and reports
+       per-point validity and the reference view's image.
     4. **Cull + compact**: drop points left below ``min_views`` **and** points the
        sub-pixel pass produced no valid bitmap for (the culled-point
        signal, uniform for finite and infinity points), then renumber the

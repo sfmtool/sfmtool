@@ -298,8 +298,8 @@ impl Operation {
     /// until it finishes, so it locks nothing and every loaded node stays
     /// editable while it runs. Cancellable because the open polls the flag
     /// between files and between the stages of each, before every thumbnail it
-    /// builds and every photograph it decodes, and before every patch it fuses,
-    /// and a cancelled open appends no node at all.
+    /// builds and every photograph it decodes, and before every patch bitmap it
+    /// renders, and a cancelled open appends no node at all.
     pub(crate) const OPEN: Operation = Operation {
         name: "Open",
         cancellable: true,

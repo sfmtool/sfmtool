@@ -221,8 +221,9 @@ class AddPatchBitmapsTransform:
     exactly as they went in. Each point's bitmap is the tile of the
     observation the reference-view rule picks, and the reference observation
     column records which (``PatchCloud.render_bitmaps``); where the rule picks
-    none, the bitmap is the observations' fused mean and the column records
-    ``-1``. A point with fewer than two observations, or one where the rule
+    none, or reaches its pick only through its last fallback, the bitmap is
+    the observations' fused mean and the column records ``-1``. A point with
+    fewer than two observations, or one where the rule
     picks none and fewer than two observations render in frame for the mean,
     gets a zero row.
     """

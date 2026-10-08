@@ -763,7 +763,8 @@ row reads 1. The Python tests are in
   view's tile, not a mean ([reference-view.md](reference-view.md) § "The
   stored bitmap"). The kernels that still build a weighted mean as their
   template (the localizer, the sub-pixel refiner, normal refinement, and the
-  stored bitmap's fallback where the rule picks no view) read their residuals
+  stored bitmap's fallback where the rule picks no view or reaches its pick
+  only through its last fallback) read their residuals
   plain; each would blur-match them only on its own measurement.
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.

@@ -149,11 +149,13 @@ pub struct NormalRefineParams {
     /// the coarse-to-fine search and the final winner pass, but **not** in the
     /// confidence stencil (which reports the data curvature alone).
     pub fronto_prior_weight: f64,
-    /// Whether to render the per-patch RGBA representative texture
+    /// Whether to render the per-patch stored bitmap
     /// ([`NormalRefineResult::representative`]) at the found normal. Off by
-    /// default: it is one extra full-grid source render per kept view per patch
-    /// (the search and scoring only touch the masked common support), so it is
-    /// computed only when a caller wants to persist the patch bitmaps. When
+    /// default: it costs one extra full-grid source render per kept view per
+    /// patch (the search and scoring only touch the masked common support),
+    /// and, for the reference-view rule, a tile render and a self-similarity
+    /// reading per input view and member coherence's matrix per patch, so it
+    /// is computed only when a caller wants to persist the patch bitmaps. When
     /// `false`, [`NormalRefineResult::representative`] is `None`.
     pub render_bitmap: bool,
     /// Cap on the per-patch **refinement basis**: when `> 0` and a patch has
@@ -237,7 +239,11 @@ pub struct NormalRefineResult {
     /// `(row, col, channel)` order (length `R·R·4`): the tile of the view
     /// [`Self::reference`] names, the view the reference-view rule picks
     /// ([`crate::patch::stored_bitmap`]), with alpha 255 on the samples on the
-    /// photograph. Where the rule picks none, the fused mean of the views: RGB
+    /// photograph. Where the rule picks none, or reaches its pick only through
+    /// its last fallback
+    /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
+    /// the fused mean of the refined views (the `max_refine_views` subset
+    /// under a cap): RGB
     /// the cross-view fused colour (a robust IRLS-weighted mean under
     /// [`Objective::RobustWeighted`], an unweighted mean under
     /// [`Objective::MeanPairwise`]) and alpha a per-pixel cross-view agreement

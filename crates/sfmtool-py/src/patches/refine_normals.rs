@@ -108,7 +108,9 @@ impl PyPatchCloud {
     ///         anchored center), so there is no speed penalty either way.
     ///     render_bitmaps: If true, also render each refined patch's stored
     ///         bitmap at the found normal, the tile of the view the
-    ///         reference-view rule picks (the fused mean where it picks none),
+    ///         reference-view rule picks among every input view (the fused
+    ///         mean of the refined views where it picks none or reaches its
+    ///         pick only through its last fallback, ``"without_any"``),
     ///         and return them scattered to per-3D-point rows (see ``bitmaps``
     ///         below). Costs a tile render and a self-similarity reading per
     ///         view and member coherence's matrix per patch, so it is off by

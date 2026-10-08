@@ -286,7 +286,9 @@ Per point (opt-in, `KeypointSubpixelParams::render_bitmaps` / the binding's
 rule picks among the refined views, named in `KeypointRefinement::reference`
 (the binding's `reference_image`), as
 [reference-view.md](reference-view.md) § "The stored bitmap" describes; where
-the rule picks none, it is the fused mean below and names no view. Because the
+the rule picks none, or reaches its pick only through its last fallback
+(`ReferenceRender::stored_reference`), it is the fused mean below and names no
+view. Because the
 refiner settles the final keypoints, this is where `sfm embed-patches`' stored
 bitmaps come from. Two properties matter to consumers:
 
@@ -302,6 +304,8 @@ bitmaps come from. Two properties matter to consumers:
 
 Where the reference-view rule picks no view (no candidate has a
 self-similarity reading, or every view sees the patch edge on or from behind),
+or reaches its pick only through its last fallback, `without_any` (no view
+passed the coverage and clipping tests),
 the bitmap is the views' fused mean: the views are re-rendered at their final
 offsets, the final IRLS view weights rebuilt from those cores, and the kept
 views rendered whole (`PatchViewStack`) and fused, weighted-mean RGB and

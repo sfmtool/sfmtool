@@ -1405,7 +1405,10 @@ rules are checked on the flags alone.
   rendered, alpha `255` on the samples on the photograph and `0` on the rest.
   A point whose reference is `-1` holds a fused mean of its views, alpha their
   agreement and coverage (every bitmap written before version 12, and a point
-  for which the reference-view rule picked no view).
+  for which the reference-view rule picked no view or reached its pick only
+  through its last fallback, `without_any`; see
+  [../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
+  stored bitmap", `ReferenceRender::stored_reference`).
 
 ### 9. Tracks
 
@@ -1568,23 +1571,40 @@ Which observation each point's patch bitmap is the render of:
   observation's `R×R` render: through the point's patch re-anchored on that
   observation's keypoint, at `R`, with the sampler the sampler rule picks for
   that view ([../core/patch/reference-view.md](../core/patch/reference-view.md)
-  § "The stored bitmap"). `-1` where the point has no reference: its bitmap is
-  not one observation's render (a fused mean, from before version 12 or where
-  no view qualified), or nothing has rendered one.
+  § "The stored bitmap"). `-1` where the point's bitmap is not known to be one
+  observation's render (a fused mean: from before version 12, or where the
+  reference-view rule picks no view or reaches its pick only through its last
+  fallback, `without_any`), or where the point has no stored bitmap. A file
+  with no `points3d/patch_bitmaps_y_x_rgba` has every row `-1`.
 - **Presence**: required in a version 12 file whose `points3d/metadata.json`
   has `has_uv_frames: true`, and absent otherwise, so it needs no flag of its
-  own. It is present with the patch frame, not with the bitmaps: a file that
-  drops its bitmaps keeps the column. A reader and a verifier refuse a value
-  that is neither `-1` nor within its point's run; a writer refuses the column
-  missing beside a patch frame, present without one, or out of range.
-- **Keeping it true**: a writer that removes a point removes its row, so a
-  point filter leaves every surviving point's index unchanged. A writer that
-  removes or reorders a point's observations moves the index with the
-  reference observation, and writes `-1` where it removes the reference
-  observation itself. A writer that renders the bitmap from another
-  observation writes that observation's index. A writer that moves geometry
-  without rendering the bitmap again (a bundle adjustment, a similarity, a
-  normal turned without `bitmaps`) keeps the index, as it keeps the bitmap.
+  own. It is present with the patch frame, not with the bitmaps: a file
+  without bitmaps still has the column, with every row `-1`. A reader and a
+  verifier refuse a value that is neither `-1` nor within its point's run, and
+  a value other than `-1` in a file without bitmaps; a writer refuses the
+  column missing beside a patch frame, present without one, out of range, or
+  naming an observation without bitmaps.
+- **Keeping it true**: the stored bitmap and its reference always agree. A
+  writer that removes a point removes its row, so a point filter leaves every
+  surviving point's index unchanged. A writer that removes or reorders a
+  point's observations moves the index with the reference observation, and
+  writes `-1` where it removes the reference observation itself. A writer that
+  renders the bitmap from another observation writes that observation's
+  index. A writer that moves geometry without rendering the bitmap again and
+  keeps the bitmap (a bundle adjustment, a similarity) keeps the index with
+  it. A writer that drops the bitmaps writes every row `-1`: `--minimal`,
+  `--drop-patch-bitmaps`, `--localize-keypoints`, and `--refine-normals`
+  without `bitmaps`, which writes a new patch frame. In memory,
+  `SfmrReconstruction::to_sfmr_data` writes every row `-1` when the
+  reconstruction has no stored bitmap column (none, or one SfM Explorer
+  rendered for display), and `validate_point_columns` refuses a reference
+  other than `-1` without bitmaps and the column without patch frames. Python
+  `clone_with_changes` carries the old references across only while the
+  bitmaps they name carry across unchanged: passing `patch_bitmaps` without
+  `reference_observations`, passing `patches` (which clears the bitmaps), or
+  ending with no bitmaps sets every row to `-1`, and passing
+  `reference_observations` that name an observation while the result has no
+  bitmaps is refused.
 - **Older files**: a reader that reads a file below version 12 with patch
   frames creates the column with every row `-1`, so every reconstruction with
   patch frames has one in memory and every later save writes it. A file below
@@ -2039,8 +2059,8 @@ introduced this way, and a writer that picked its version by content would make
 | `points3d/patch_bitmaps_y_x_rgba` | Writers store a point's reference view's render, with alpha `255` on the samples on the photograph and `0` elsewhere, in place of a fused mean of the views ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The stored bitmap"). The entry's layout is unchanged. |
 
 Migration is mechanical. A version 11 file with patch frames reads with every
-point's reference observation `-1`, which says its bitmap (a fused mean) is no
-one observation's render; it saves as version 12 with that column, and the
+point's reference observation `-1`, which says its bitmap (a fused mean) is not
+known to be one observation's render; it saves as version 12 with that column, and the
 tracks section's hash changes by its bytes. A version 11 file without patch
 frames reads and saves with no column, and its tracks section is unchanged. A
 version 12 file maps back to version 11 by dropping the column, which loses

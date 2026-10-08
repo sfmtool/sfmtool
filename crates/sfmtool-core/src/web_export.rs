@@ -284,7 +284,7 @@ pub fn build_web_export(
     } else {
         let mut phase = bitmap_progress.phase("patch bitmaps");
         // Nothing else in the export reads a photograph, so a cache that
-        // keeps nothing: each pyramid is dropped once the fuse is done.
+        // keeps nothing: each pyramid is dropped once the render is done.
         let photographs = PhotographCache::new(0, DISPLAY_PYRAMID_LEVELS);
         rendered_bitmaps = render_display_patch_bitmaps(recon, &photographs, &phase)?;
         report.patch_bitmaps_rendered = rendered_bitmaps.is_some();

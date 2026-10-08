@@ -111,8 +111,9 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   `--subpixel 0` the stage still runs render-only at the localizer's
   keypoints), and `tracks/reference_observations` records which observation it
   is ([reference-view.md](../../core/patch/reference-view.md) § "The stored
-  bitmap"). Where the rule picks no view the bitmap is the views' fused mean
-  and the point records `-1`. Points at infinity go through the same
+  bitmap"). Where the rule picks no view, or reaches its pick only through its
+  last fallback, the bitmap is the views' fused mean and the point records
+  `-1`. Points at infinity go through the same
   `w`-aware render path and get a real bitmap — no zero-row exemption.
 - **Self-similarity cull.** After round 1 the sub-pixel stage renders each
   point's bitmap (whatever the round count, while the cull is on),

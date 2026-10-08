@@ -844,13 +844,25 @@ it is what the person pointed at.
 
 **A track-stage track with no bitmap gets one rendered.** A patch step -- a
 move, a resize, a spin or a tilt -- drops the patch bitmap, because it was
-rendered over the square as it stood. When the evaluation reads a track-stage
+rendered over the square as it stood. So does a step that sights the bitmap's
+own row elsewhere, takes it off the track (a delete of its image, a split) or
+turns it `out`, since the bitmap is that row's render
+([../core/bench/editable-track.md](../core/bench/editable-track.md) § "The
+stored bitmap's reference"). When the evaluation reads a track-stage
 track that has a placement and no bitmap, it also runs core's
 `render_bitmap_in_place` on the photographs it has already decoded. That renders
 the `in` sightings through the patch as it now lies, at their keypoints, and
-writes the tile of the one the reference-view rule picks (or the fused mean of
-them where it picks none) as the bitmap, and the
-colour at its centre, moving nothing. So a tilted patch shows its texture again
+writes the tile of the one the reference-view rule picks as the bitmap (or the
+fused mean of them where it picks none or reaches its pick only through its
+last fallback; [../core/patch/reference-view.md](../core/patch/reference-view.md)
+§ "The stored bitmap"), and the
+colour at its centre, moving nothing. It then scores every row against the new
+bitmap (core's `score_bitmap`), since the evaluation's own bitmap scores were
+read before there was one. The three run as one call, core's
+`evaluate_rendering_bitmap`, which takes the bitmap and the scores from the
+tiles the evaluation already rendered where its reference-view rule ran over
+the same `in` rows on the same grid, so a patch step on a long track costs
+about one evaluation rather than an evaluation plus a render. So a tilted patch shows its texture again
 as soon as the evaluation lands, and can be committed into a reconstruction
 that stores a bitmap per point without a fit first. The bitmap is installed with
 the measurements, under the same rule: no version and no Action Log row. A track with fewer than two

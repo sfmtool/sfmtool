@@ -757,7 +757,8 @@ the patch along the sightings' rays and keeps the way it faces; *Fit Normal*,
 *Finite Diff Normal* and *Grid Plane Normal* do the opposite, each estimating a
 normal and turning
 the patch to it by the same least rotation the 3D viewer's arrowhead drag makes,
-then reading the track back and fusing its bitmap as a fit does
+then reading the track back, rendering its stored bitmap and scoring every row
+against it, as a fit does
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
 "Estimating the normal"). *Fit Normal* takes the normal at which the `in`
 sightings' tiles agree best. *Finite Diff Normal* fits a row of smaller square
@@ -1352,7 +1353,11 @@ direction in the patch's plane the ray from the camera leans along, from `u`
 towards `v`), the coverage, the clipped share, the pair ZNCC, the cell deficit,
 and the pair ZNCC of each ninth. The cell prints `-` at the cluster stage,
 before the track is evaluated, and where it could not be evaluated. A fit
-stores the picked row's tile as the bitmap; no bar reads the pick.
+stores the picked row's tile as the bitmap, except where the rule reached the
+pick only through its last fallback, when it stores the fused mean of the `in`
+rows and names no row
+([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
+stored bitmap"); no bar reads the pick.
 
 **The *Bitmap* column says how each row scores against the stored bitmap.**
 The row the bitmap is the tile of (`TrackPayload::reference`) reads `bitmap`
@@ -1365,10 +1370,18 @@ which is read plain and could replace the reference
 ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
 § "Scores against the stored bitmap"). Hovering it (`reference::bitmap_cell`)
 gives both scores and the blur's width in grid px, or says why the pair was
-read plain. The row the column marks is the row the *Reference* column marks
-until a verdict moves after the fit, since a fit picks the bitmap from the same
-readings. A track with no bitmap, the cluster stage, and a track that could not
-be evaluated print `-`. No bar reads the scores.
+read plain. The row the column marks is the row the *Reference* column marks,
+since a fit picks the bitmap from the same readings, except where the bitmap is
+the fused mean of a last-fallback pick, when the column marks no row and
+scores every row. A step that sights the marked row elsewhere, takes it off the
+track or turns it `out` drops the bitmap with it, and the live evaluation
+renders and scores a new one
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+stored bitmap's reference"). On a file with patch frames but no stored
+bitmaps, the bitmap is the one SfM Explorer rendered for display when it
+opened the file, and the marked row is that render's own pick. A track with no
+bitmap, the cluster stage, and a track that could not be evaluated print `-`.
+No bar reads the scores.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its

@@ -48,7 +48,10 @@ left out.
 
 **Patch bitmaps come from the file** when it carries them. A file with patch
 frames and inline keypoints but no bitmaps has them rendered from its
-photographs by the fuse SfM Explorer's open runs for its display patch bitmaps;
+photographs by the render SfM Explorer's open runs for its display patch
+bitmaps (each point's stored bitmap, the reference view's tile or the fused
+mean, as [reference-view.md](../../core/patch/reference-view.md) § "The stored
+bitmap" describes);
 when no photograph can be read, the points are drawn as splats. A point with no
 frame, an all-zero bitmap row or a place at infinity is drawn as a splat either
 way.

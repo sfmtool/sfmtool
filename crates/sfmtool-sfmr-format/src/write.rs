@@ -1393,6 +1393,7 @@ fn validate_dimensions_with(
         if let Err(e) = validate_reference_observations(
             reference_observations.as_slice().unwrap(),
             data.observation_counts.as_slice().unwrap(),
+            data.patch_bitmaps_y_x_rgba.is_some(),
         ) {
             check!(false, e);
         }

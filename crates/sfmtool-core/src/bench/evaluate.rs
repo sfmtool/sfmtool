@@ -52,7 +52,7 @@ use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
     SelfSimilarityParams,
 };
-use crate::patch::stored_bitmap::BitmapScorer;
+use crate::patch::stored_bitmap::{bitmap_from_tile, stored_view, BitmapScorer};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -199,8 +199,8 @@ impl EvaluateOptions {
 /// declares as `patch_bitmap_resolution`, or `None` where it stores none.
 ///
 /// A column the viewer rendered for display because the file had none counts
-/// as well, as it does for the fit's fuse: the bench reads it as it would the
-/// file's own.
+/// as well, as it does for the fit's bitmap render: the bench reads it as it
+/// would the file's own.
 pub fn stored_patch_resolution(recon: &SfmrReconstruction) -> Option<u32> {
     let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_deref()?;
     u32::try_from(bitmaps.shape()[1]).ok().filter(|&r| r > 0)
@@ -489,17 +489,49 @@ pub fn evaluate(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
+    evaluate_keeping_tiles(track, edited, images, options, progress)
+        .map(|(read, report, _)| (read, report))
+}
+
+/// The tiles a track-stage evaluation rendered, kept for a bitmap render that
+/// follows it ([`evaluate_rendering_bitmap`]).
+struct KeptTiles {
+    /// Per observation that had a pixel to render at: its row and its tile.
+    tiles: Vec<(usize, ViewTile)>,
+    /// The `in` rows the reference-view rule ran over, in the order it read
+    /// them.
+    in_rows: Vec<usize>,
+    /// The row whose tile stands as the stored bitmap ([`stored_view`]), or
+    /// `None` where the rule picked none or reached its pick only through its
+    /// last fallback.
+    stored: Option<usize>,
+    /// The resolution the tiles were rendered at.
+    resolution: usize,
+}
+
+/// [`evaluate`], with the tiles a track-stage reading rendered.
+fn evaluate_keeping_tiles(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, EvaluateReport, Option<KeptTiles>), EvaluateError> {
     check_views(edited, images)?;
     evaluate_preconditions(track)?;
-    let (read, mut report) = match &track.stage {
-        Stage::Cluster(payload) => evaluate_cluster(track, payload, images, options, progress)?,
+    let (read, mut report, kept) = match &track.stage {
+        Stage::Cluster(payload) => {
+            let (read, report) = evaluate_cluster(track, payload, images, options, progress)?;
+            (read, report, None)
+        }
         Stage::Track(payload) => {
             let options = options.at_resolution(options.patch_resolution(&edited.base));
-            evaluate_track(track, images, payload, &options, progress)?
+            let (read, report, kept) = evaluate_track(track, images, payload, &options, progress)?;
+            (read, report, Some(kept))
         }
     };
     if track.repainted() {
-        return Ok((read, report));
+        return Ok((read, report, kept));
     }
     let (mut painted, repaint) = apply_thresholds(&read);
     report.turned_in = repaint.turned_in;
@@ -507,7 +539,97 @@ pub fn evaluate(
     if repaint.changed {
         painted.repaint = RepaintMark::of(&painted);
     }
-    Ok((painted, report))
+    Ok((painted, report, kept))
+}
+
+/// [`evaluate`], and then, for a track-stage track with a patch and no bitmap,
+/// its bitmap rendered where the patch stands, moving nothing
+/// ([`render_bitmap_in_place`](super::fit::render_bitmap_in_place) under
+/// `fit`), with every row scored against it ([`score_bitmap`]).
+///
+/// What a caller runs after a step that dropped the bitmap: SfM Explorer's
+/// live evaluation after a patch step, and the end of
+/// [`fit_normal`](super::normal::fit_normal). The answer is the one those
+/// three calls give in turn, but the render reuses what the evaluation already
+/// read where it can. When the evaluation's repaint left the `in` set as the
+/// rule read it, every `in` row carries a keypoint, and the evaluation's tiles
+/// are on the bitmap's grid with the render's sampler, the reference-view rule
+/// the render would run is the one the evaluation ran, over the same tiles:
+/// the bitmap is then the evaluation's tile of the row the rule picked, and
+/// the scores are read off the evaluation's tiles. Otherwise, and where the
+/// rule stores the fused mean, the render and the scoring run as their own
+/// calls.
+///
+/// A track that has a bitmap, a cluster, and a track with no patch come back
+/// as [`evaluate`] returns them.
+///
+/// # Errors
+///
+/// [`evaluate`]'s.
+pub fn evaluate_rendering_bitmap(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &EvaluateOptions,
+    fit: &super::fit::FitOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
+    let (read, report, kept) = evaluate_keeping_tiles(track, edited, images, options, progress)?;
+    let needs_bitmap = matches!(
+        &read.stage,
+        Stage::Track(payload) if payload.placement.is_some() && payload.bitmap.is_none()
+    );
+    if !needs_bitmap {
+        return Ok((read, report));
+    }
+    progress.check_cancel()?;
+    if let Some(next) =
+        kept.and_then(|kept| bitmap_from_reading(&read, edited, options, fit, kept, progress))
+    {
+        return Ok((next, report));
+    }
+    let rendered = super::fit::render_bitmap_in_place(&read, edited, images, fit);
+    let scored = score_bitmap(&rendered, edited, images, options, progress)?;
+    Ok((scored, report))
+}
+
+/// The bitmap [`render_bitmap_in_place`](super::fit::render_bitmap_in_place)
+/// would render for `read`, taken from the tiles its evaluation `kept`, with
+/// every row scored against it; `None` where the two could differ.
+fn bitmap_from_reading(
+    read: &EditableTrack,
+    edited: &EditedReconstruction,
+    options: &EvaluateOptions,
+    fit: &super::fit::FitOptions,
+    kept: KeptTiles,
+    progress: &Progress<'_>,
+) -> Option<EditableTrack> {
+    let (resolution, channels) = super::fit::bitmap_layout(edited, fit);
+    // The render reads the `in` rows that carry a keypoint, at its own grid
+    // and sampler; the rule's pick is the evaluation's only where those are
+    // the rows, the grid and the sampler the evaluation read.
+    let ins = read.in_observations();
+    let keyed = ins.iter().all(|&i| {
+        read.observations[i]
+            .track
+            .as_ref()
+            .is_some_and(|m| m.keypoint.is_some())
+    });
+    if !keyed
+        || ins != kept.in_rows
+        || ins.len() < 2
+        || resolution != kept.resolution
+        || fit.refine.sampler != options.localize.sampler
+    {
+        return None;
+    }
+    let row = kept.stored?;
+    let tile = &kept.tiles.iter().find(|(i, _)| *i == row)?.1;
+    let (bitmap, color) = super::fit::column_bitmap(&bitmap_from_tile(tile), resolution, channels);
+    let mut next = read.clone();
+    super::fit::install_bitmap(&mut next, bitmap, Some(row), Some(color));
+    score_against_bitmap(&mut next, &kept.tiles, progress);
+    Some(next)
 }
 
 /// Whether `track` can be read at the stage it stands in, judged on the track
@@ -1095,7 +1217,7 @@ fn evaluate_track(
     payload: &TrackPayload,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
-) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
+) -> Result<(EditableTrack, EvaluateReport, KeptTiles), EvaluateError> {
     let frame = payload.placement.clone().ok_or(EvaluateError::NoFrame)?;
     check_observation_views(track, images)?;
 
@@ -1246,8 +1368,15 @@ fn evaluate_track(
         .filter(|(i, _)| next.observations[*i].verdict == Verdict::In)
         .map(|(i, tile)| (*i, tile))
         .collect();
-    read_reference_view(&mut next, images, &frame, &in_tiles, options, progress);
+    let in_rows: Vec<usize> = in_tiles.iter().map(|(i, _)| *i).collect();
+    let stored = read_reference_view(&mut next, images, &frame, &in_tiles, options, progress);
     score_against_bitmap(&mut next, &kept_tiles, progress);
+    let kept = KeptTiles {
+        tiles: kept_tiles,
+        in_rows,
+        stored,
+        resolution,
+    };
 
     Ok((
         next,
@@ -1265,6 +1394,7 @@ fn evaluate_track(
             turned_in: 0,
             turned_out: 0,
         },
+        kept,
     ))
 }
 
@@ -1559,9 +1689,9 @@ fn read_reference_view(
     tiles: &[(usize, &ViewTile)],
     options: &EvaluateOptions,
     progress: &Progress<'_>,
-) {
+) -> Option<usize> {
     if tiles.is_empty() {
-        return;
+        return None;
     }
     let mut phase = progress.phase("reference view");
     let members: Vec<u32> = tiles
@@ -1604,6 +1734,7 @@ fn read_reference_view(
         ),
         None => progress_note!(phase, "{} views, none picked", tiles.len()),
     }
+    stored_view(&reading.choice).map(|k| tiles[k].0)
 }
 
 /// Score every observation whose tile is in `tiles` against the track's
@@ -1688,14 +1819,18 @@ fn score_against_bitmap(
 /// return the track with those bitmap scores written into its rows.
 ///
 /// [`evaluate`] scores against the bitmap a track holds when it is read. A
-/// caller that renders the bitmap after the evaluation, as SfM Explorer does
-/// once a patch step has dropped it and Track at Pixel does after its member's
-/// evaluation ([`render_bitmap_in_place`](super::fit::render_bitmap_in_place)),
-/// calls this so that every row carries its score against the bitmap that
-/// stands. The scores are the ones [`evaluate`] writes, at the same
-/// resolution and sampler; nothing else in the rows changes. A track that is
-/// not at the track stage, or has no placement or no bitmap, comes back
-/// unchanged.
+/// caller that renders the bitmap after the evaluation, as Track at Pixel does
+/// after its member's evaluation
+/// ([`render_bitmap_in_place`](super::fit::render_bitmap_in_place)), calls
+/// this so that every row carries its score against the bitmap that stands;
+/// [`evaluate_rendering_bitmap`] does both after an evaluation. The scores are
+/// the ones [`evaluate`] writes, at the same resolution
+/// ([`EvaluateOptions::patch_resolution`]) and sampler; nothing else in the
+/// rows changes. A track that is not at the track stage, or has no placement
+/// or no bitmap, comes back unchanged, and so does every row of one whose
+/// bitmap is on another grid than that resolution -- a bitmap rendered under
+/// a [`FitOptions`](super::fit::FitOptions) whose resolution differs from the
+/// evaluation's, on a reconstruction that stores no bitmaps, is not scored.
 ///
 /// # Example
 ///
@@ -1781,8 +1916,14 @@ pub fn score_bitmap(
 /// A row turned `in` since the reading has no pair readings and no standing
 /// until then, because the rule has not read it. So the reference view is
 /// always an `in` row, and there is at most one. The bitmap scores stay: they
-/// are read against the bitmap, which a verdict does not change.
+/// are read against the bitmap, which a verdict does not change -- except
+/// where the observation the bitmap is the render of turned `out`, when the
+/// bitmap is dropped with its reference ([`TrackPayload::reference`]) and the
+/// next evaluation renders one from the rows that are `in`.
 pub(super) fn restate_reference_view(track: &mut EditableTrack) {
+    if let Stage::Track(payload) = &mut track.stage {
+        payload.drop_bitmap_unless_in(&track.observations);
+    }
     let mut rows = Vec::new();
     for (i, observation) in track.observations.iter_mut().enumerate() {
         let Some(measurement) = observation.track.as_mut() else {

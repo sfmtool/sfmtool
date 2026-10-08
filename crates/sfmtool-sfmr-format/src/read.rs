@@ -85,6 +85,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         &images.camera_indexes,
         &cameras,
         points.patch_u_halfvec_xyz.is_some(),
+        points.patch_bitmaps_y_x_rgba.is_some(),
     )?;
     let rig_frame_data = read_rig_frames(&mut archive, image_count)?;
 
@@ -619,7 +620,9 @@ struct TracksSection {
 }
 
 /// `has_patch_frame` is whether the points section carries the patch frame,
-/// which is what says whether `reference_observations` is there.
+/// which is what says whether `reference_observations` is there, and
+/// `has_patch_bitmaps` whether it carries the bitmaps, without which every
+/// reference is `-1`.
 fn read_tracks_section(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
@@ -627,6 +630,7 @@ fn read_tracks_section(
     camera_indexes: &Array1<u32>,
     cameras: &[SfmrCamera],
     has_patch_frame: bool,
+    has_patch_bitmaps: bool,
 ) -> Result<TracksSection, SfmrError> {
     let observation_count = metadata.observation_count as usize;
     let point_count = metadata.point_count as usize;
@@ -728,8 +732,12 @@ fn read_tracks_section(
             &entries::tracks_reference_observations(point_count),
             point_count,
         )?;
-        validate_reference_observations(&values, observation_counts.as_slice().unwrap())
-            .map_err(SfmrError::InvalidFormat)?;
+        validate_reference_observations(
+            &values,
+            observation_counts.as_slice().unwrap(),
+            has_patch_bitmaps,
+        )
+        .map_err(SfmrError::InvalidFormat)?;
         Some(Array1::from_vec(values))
     };
 

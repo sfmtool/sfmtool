@@ -676,14 +676,17 @@ pub struct TrackPayload {
     pub bitmap: Option<Array3<u8>>,
     /// The observation, as an index into the track's observations, whose
     /// render [`Self::bitmap`] is. `None` where the bitmap is not one
-    /// observation's render. A track read from a file that keeps its
-    /// reference column without its bitmaps carries the stored reference
-    /// with no bitmap; a reader that wants the row the bitmap is the tile of
-    /// asks for both.
+    /// observation's render (a fused mean) and where there is no bitmap: the
+    /// two always agree.
     ///
-    /// It follows its observation through every step that removes or reorders
-    /// observations, and is dropped with the bitmap by every step that moves
-    /// the patch. A commit writes it as the point's reference observation.
+    /// It follows its observation through every step that reorders or removes
+    /// other observations. A step after which the bitmap no longer shows what
+    /// its reference observation sees drops both together
+    /// (`drop_bitmap`): one that moves the patch, sights the
+    /// reference observation at another keypoint, removes it from the track,
+    /// or turns it `out`. The live evaluation then renders the bitmap again
+    /// from the observations that are `in`. A commit writes it as the point's
+    /// reference observation.
     pub reference: Option<usize>,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
@@ -692,6 +695,27 @@ pub struct TrackPayload {
     pub normal_confidence: Option<u8>,
     /// The last triangulation's condition number.
     pub condition_number: Option<f64>,
+}
+
+impl TrackPayload {
+    /// Drop the bitmap and the reference observation it is the render of,
+    /// together, for a step after which the bitmap no longer shows what the
+    /// track sees.
+    pub(crate) fn drop_bitmap(&mut self) {
+        self.bitmap = None;
+        self.reference = None;
+    }
+
+    /// Drop the bitmap with its reference observation when that observation
+    /// is not one of `observations`' `in` rows: a stored bitmap is the render
+    /// of an observation the track keeps.
+    pub(crate) fn drop_bitmap_unless_in(&mut self, observations: &[Observation]) {
+        if let Some(r) = self.reference {
+            if observations.get(r).is_none_or(|o| o.verdict != Verdict::In) {
+                self.drop_bitmap();
+            }
+        }
+    }
 }
 
 /// Which of the two representations a track is in, and that representation's
@@ -1077,7 +1101,9 @@ impl EditableTrack {
     /// A cluster's reference follows its observation. When the reference
     /// itself was dropped, it is pointed at the first observation left and the
     /// template is dropped, because the template is a cut around the old
-    /// reference.
+    /// reference. A track-stage reference follows its observation the same
+    /// way; when it was dropped, the patch bitmap, its render, is dropped with
+    /// it ([`TrackPayload::reference`]).
     ///
     /// Returns `None` when the track observes no image at or past `image`,
     /// since then nothing about it changes. Otherwise returns the new track and
@@ -1112,13 +1138,17 @@ impl EditableTrack {
                     payload.template = None;
                 }
             },
-            // The bitmap is kept; the row it is the tile of follows its
-            // observation, and a bitmap whose observation was dropped names
-            // none.
+            // The row the bitmap is the tile of follows its observation. A
+            // bitmap whose observation was dropped is the tile of a sighting
+            // the track no longer has, so it goes with its reference, and the
+            // live evaluation renders one from the rows that remain.
             Stage::Track(payload) => {
-                payload.reference = payload
-                    .reference
-                    .and_then(|r| map.get(r).copied().flatten());
+                if let Some(r) = payload.reference {
+                    match map.get(r).copied().flatten() {
+                        Some(kept) => payload.reference = Some(kept),
+                        None => payload.drop_bitmap(),
+                    }
+                }
             }
         }
         Some((next, map))

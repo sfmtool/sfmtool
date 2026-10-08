@@ -699,7 +699,9 @@ the rows' `bitmap_zncc` scores are read against, and `bitmap_observation` is
 the row the bitmap is the tile of, null for a bitmap that names none (a mean of
 the rows, or one stored before the reference was recorded) or where there is no
 bitmap, as `stage_data.has_bitmap` and `stage_data.bitmap_observation` report
-them on the bench. For any other point the block is absent:
+them on the bench. On a file with patch frames but no stored bitmaps, the
+bitmap is the one the viewer rendered for display at open, and
+`bitmap_observation` is that render's own pick. For any other point the block is absent:
 there is no call that evaluates an arbitrary point on request, since that is a
 separate operation with a cost. A `select_point` earlier in the same batch of
 calls moves the viewed point with it, since `get_point` asks for the viewed
@@ -3359,7 +3361,9 @@ copied verbatim from its `.sift` detection, and each image's identity hash is
 read from the `.sift` metadata. No photometric adaptation runs. The viewer then
 renders each point's stored bitmap at those stored frames and keypoints from
 readable photographs (the reference view's tile, or the fused mean where the
-reference-view rule picks none), using the same render-only path as file
+reference-view rule picks none or reaches its pick only through its last
+fallback; [../core/patch/reference-view.md](../core/patch/reference-view.md)
+§ "The stored bitmap"), using the same render-only path as file
 opening. The result
 reports `feature_source: "embedded_patches"` and, when at least one photograph
 can be read, `has_patch_data: true`. If none can be read, the conversion still
@@ -3832,12 +3836,17 @@ does not consider, and `stage_data` reports the row the rule picked as
 `reference_observation`, null where it picked none; a step that turns a row
 `out` clears its standing and has the rule pick again among the rows still
 `in`, so `reference_observation` never names an `out` row. No bar judges them.
-A fit stores the picked row's tile as the patch bitmap
+A fit stores the picked row's tile as the patch bitmap, except where the rule
+reached the pick only through its last fallback, when the bitmap is the fused
+mean of the `in` rows and `bitmap_observation` is null although
+`reference_observation` names a row
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 stored bitmap"): `stage_data.has_bitmap` says whether the track has a bitmap
 and `stage_data.bitmap_observation` names the row it is the tile of, null for
 a bitmap that names none (a mean of the rows, or one stored before the
-reference was recorded). Every row of a track with a bitmap carries its score
+reference was recorded). A step that sights that row elsewhere, takes it off
+the track or turns it `out` drops the bitmap with it, and the live evaluation
+renders a new one and scores every row against it. Every row of a track with a bitmap carries its score
 against it ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
 § "Scores against the stored bitmap"): `bitmap_zncc`, the windowed ZNCC of its
 tile with the bitmap; `blur_matched_bitmap_zncc`, the same after the bitmap

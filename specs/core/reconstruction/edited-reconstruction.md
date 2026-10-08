@@ -150,7 +150,15 @@ edits and the panels read it as they would a file's own. A marked column is
 **left out of what `to_sfmr_data` emits**, and so out of every save and every
 content hash (`content_xxh128` runs the writer over `to_sfmr_data`): the value
 keeps the identity of the file it was read from, and a save writes the columns
-that file had. Every pass that selects or reorders the column's rows
+that file had. The open also keeps the display render's own reference picks in
+`reference_observations`, so the bench and Track View mark the row the display
+bitmap is the tile of; `to_sfmr_data` writes every reference row as `-1` when
+the value has no stored bitmap column (none, or a marked one), since a file
+without bitmaps names no reference, and `validate_point_columns` refuses a
+reference other than `-1` without a bitmap column and the reference column
+without patch frames
+([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md) §
+"9. Tracks"). Every pass that selects or reorders the column's rows
 (`filter_points_by_mask`, `subset_by_image_indices`, the similarity transform,
 the materialisation, the prune) carries the mark with them; a producer that
 builds a new column clears it, as `clone_with_changes(patch_bitmaps=...)` does.

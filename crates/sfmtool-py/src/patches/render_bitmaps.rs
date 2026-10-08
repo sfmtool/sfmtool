@@ -29,10 +29,13 @@ impl PyPatchCloud {
     /// Each point's bitmap is the ``R×R`` tile of the observation the
     /// reference-view rule picks among its whole track in ``recon``, rendered
     /// at that observation's stored keypoint, with alpha 255 on the samples on
-    /// the photograph and 0 elsewhere. Where the rule picks none, it is the
+    /// the photograph and 0 elsewhere. Where the rule picks none, or reaches
+    /// its pick only through its last fallback (``"without_any"``), it is the
     /// fused mean of the views and names no observation. A bitmap here equals
     /// what :meth:`refine_keypoints` renders for a patch whose keypoints it did
-    /// not move. ``recon`` must carry inline keypoints, as an
+    /// not move and whose every view passes the refiner's projection gate,
+    /// since the refiner runs the rule over the views that pass it.
+    /// ``recon`` must carry inline keypoints, as an
     /// ``embedded_patches`` reconstruction does.
     ///
     /// Args:

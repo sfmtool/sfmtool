@@ -236,10 +236,14 @@ With `render_bitmap` set (Python `refine_normals(render_bitmaps=True)`) this pas
 scores through a `PatchViewStack` — a retained per-view render — and keeps the
 *winner's* stack together with the consensus view-weights that scored it. The
 `representative` bitmap is the stored bitmap at the found normal: the tile of
-the view the [reference-view rule](reference-view.md) picks among the refined
-views, rendered through the refined patch at that view's keypoint, and named in
-`NormalRefineResult::reference`. Where the rule picks none, it is the fused
-mean of that one retained render, with no extra render and no second IRLS pass.
+the view the [reference-view rule](reference-view.md) picks among every input
+view (not only a `max_refine_views` subset), rendered through the refined patch
+at that view's keypoint, and named in `NormalRefineResult::reference`, an
+index into the caller's views. Where the rule picks none, or reaches its pick
+only through its last fallback (`ReferenceRender::stored_reference`), it is
+the fused mean of that one retained render, with no extra render and no second
+IRLS pass; that render holds the refined views, so under a `max_refine_views`
+cap the mean covers only what that subset covers.
 Without it the pass stays on the lean masked-only scorer and
 pays nothing for a feature it does not use.
 
@@ -433,7 +437,8 @@ pub struct NormalRefineResult {
     /// The stored bitmap at the found normal, `R×R` RGBA flat row-major
     /// `(row, col, channel)`: the tile of the view `reference` names, the view
     /// the reference-view rule picks, with alpha 255 on the samples on the
-    /// photograph. Where the rule picks none, the fused mean of the views: RGB
+    /// photograph. Where the rule picks none, or reaches its pick only through
+    /// its last fallback, the fused mean of the refined views: RGB
     /// the cross-view fused colour (the robust IRLS view weights under
     /// `RobustWeighted`, an unweighted mean under `MeanPairwise`) and `A` a
     /// per-pixel cross-view *agreement* confidence (0 where no kept view covers
@@ -623,7 +628,8 @@ unnecessary. What remains open:
      cloud smoothness), or kept as the surfel's canonical appearance. The
      **output** it would fill is `NormalRefineResult::representative`, which
      holds the reference view's tile, and only where the reference-view rule
-     picks no view the *fused-render* form of this template — an RGBA texture
+     picks no view or reaches its pick only through its last fallback the
+     *fused-render* form of this template — an RGBA texture
      whose `A` is a per-pixel cross-view agreement rather than a learned
      coverage — so this and the supplied alpha of item 6 are one channel (alpha
      in, alpha out). What is missing is the latent: that fallback is fused from

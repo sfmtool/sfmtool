@@ -39,11 +39,14 @@ pub(super) const REFERENCE_TIP: &str = "Which row's tile a fit stores as the pat
     the angle between the patch's normal and the direction to the camera, and the pair \
     ZNCC the rule read. Hover a cell for every reading. An out row is not considered.\n\n\
     A fit stores the picked row's tile as the patch bitmap, and the Bitmap column marks \
-    the row the stored bitmap is the tile of.";
+    the row the stored bitmap is the tile of. Where the rule picked the row only after \
+    dropping the coverage and clipping tests, the fit stores the mean of the rows that are \
+    in instead, and the Bitmap column marks no row.";
 
 /// The *Bitmap* heading's hover text.
 pub(super) const BITMAP_TIP: &str = "How each row's tile scores against the track's patch \
-    bitmap, which is the tile of the reference row.\n\n\
+    bitmap, which is the tile of the reference row, or, where the rule reached its pick only \
+    through its last fallback, the mean of the in rows' tiles, the tile of no row.\n\n\
     The row the bitmap is the tile of reads bitmap; its score is 100% and is not computed. \
     Every other row reads its ZNCC with the bitmap, over the samples both have on the \
     photograph. Where the bitmap is sharper than the row's tile along every direction (the \

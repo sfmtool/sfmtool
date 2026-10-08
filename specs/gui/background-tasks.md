@@ -388,7 +388,10 @@ a weight of zero. The thumbnail rows come from each image's verified `.sift`
 first and its photograph second
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
 loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,
-`render_patch_cloud_bitmaps` (each point's reference view's tile), over every photograph that decodes at its camera's
+`render_patch_cloud_bitmaps` (each point's reference view's tile, or the fused
+mean), through `render_patch_bitmap_column`, which also returns the reference
+observation each row is the tile of; the open keeps those beside the bitmaps.
+It runs over every photograph that decodes at its camera's
 size; one that does not is left out of every patch's views. The photographs are
 read through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), so

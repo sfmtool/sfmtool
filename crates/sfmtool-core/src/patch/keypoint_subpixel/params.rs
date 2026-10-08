@@ -134,8 +134,10 @@ pub struct KeypointSubpixelParams {
     /// `R×R` tile is rendered at its final keypoint, the reference-view rule
     /// is run over the tiles, and the picked view's tile is the bitmap
     /// ([`crate::patch::stored_bitmap`]), named in
-    /// [`KeypointRefinement::reference`]. Where the rule picks no view, the
-    /// views are re-rendered at their final offsets, the final IRLS view
+    /// [`KeypointRefinement::reference`]. Where the rule picks no view, or
+    /// reaches its pick only through its last fallback
+    /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
+    /// the views are re-rendered at their final offsets, the final IRLS view
     /// weights rebuilt from those cores, and the kept views rendered full-grid
     /// and fused (weighted-mean RGB + agreement·coverage alpha). Points at
     /// infinity go through the same path (`w = 0` rendering is first-class
@@ -189,12 +191,13 @@ pub struct KeypointRefinement {
     /// **final** per-view keypoints — only when
     /// [`KeypointSubpixelParams::render_bitmaps`] is set: the tile of the view
     /// [`Self::reference`] names, or the fused mean of the views where it
-    /// names none. `None` when fewer than two views survive the projection
-    /// gate, or when the rule picks no view and fewer than two views render in
-    /// frame at their final offsets for the fused mean — the uniform "culled
-    /// point" signal, for finite and infinity points alike. A view the rule
-    /// picks stands as the bitmap even where it is the only one that renders
-    /// in frame.
+    /// names none (the rule picks no view, or reaches its pick only through
+    /// its last fallback). `None` when fewer than two views survive the
+    /// projection gate, or when the rule picks no view and fewer than two
+    /// views render in frame at their final offsets for the fused mean — the
+    /// uniform "culled point" signal, for finite and infinity points alike. A
+    /// view the rule picks stands as the bitmap where no fused mean renders,
+    /// even where it is the only one that renders in frame.
     pub representative: Option<Vec<u8>>,
     /// The view, as an index into [`Self::views`], whose tile
     /// [`Self::representative`] is; `None` where the bitmap is the fused mean,

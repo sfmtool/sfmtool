@@ -742,11 +742,15 @@ fn finalize(
         carry_sift_keypoints(inner, &mut recon);
     }
 
+    // The old references name renders in the old bitmap column, so they come
+    // across only while that column does.
+    let bitmaps_carried = !kw.contains("patch_bitmaps")? && !kw.contains("patches")?;
     settle_reference_observations(
         inner,
         &mut recon,
         old_point_count,
         replacing_tracks,
+        bitmaps_carried,
         reference_observations,
     )?;
 
@@ -851,20 +855,26 @@ fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -
 /// A value passed in is taken as it is (and checked with the other point
 /// columns); `None` drops the column. Either is refused where it would leave
 /// the column present without patch frames or absent with them, which a save
-/// would otherwise drop or fill with `-1` without a word. Otherwise the column
-/// follows the patch
-/// frame: a value with no frame carries none, and one with a frame carries one.
-/// The column `inner` carried comes across where the points are the same
-/// points: unchanged where the tracks are, and where the tracks were replaced,
-/// each point's reference moves to the observation of the same image in its
-/// new track, `-1` where there is none. Where the point count changed there is
-/// no mapping from the old points to the new, and every row is `-1`, as it is
-/// for a frame that is new.
+/// would otherwise drop or fill with `-1` without a word, and a value that
+/// names an observation is refused where the result has no patch bitmaps for
+/// it to be the render of. Otherwise the column follows the patch frame: a
+/// value with no frame carries none, and one with a frame carries one.
+///
+/// A reference names the observation a bitmap is the render of, so the column
+/// `inner` carried comes across only where its bitmaps do
+/// (`bitmaps_carried`: neither `patch_bitmaps` nor `patches` was passed) and
+/// the points are the same points: unchanged where the tracks are, and where
+/// the tracks were replaced, each point's reference moves to the observation
+/// of the same image in its new track, `-1` where there is none. Every row is
+/// `-1` otherwise: for bitmaps passed in without their references, for a
+/// result with no bitmaps, where the point count changed and there is no
+/// mapping from the old points to the new, and for a frame that is new.
 fn settle_reference_observations(
     inner: &SfmrReconstruction,
     recon: &mut SfmrReconstruction,
     old_point_count: usize,
     replacing_tracks: bool,
+    bitmaps_carried: bool,
     given: Option<Option<Vec<i32>>>,
 ) -> PyResult<()> {
     use sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
@@ -880,6 +890,17 @@ fn settle_reference_observations(
                  and this reconstruction has none"
             }));
         }
+        let has_bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.is_some();
+        if !has_bitmaps
+            && given
+                .iter()
+                .flatten()
+                .any(|&r| r != NO_REFERENCE_OBSERVATION)
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "clone_with_changes(): reference_observations names an observation, but the                  result has no patch bitmaps for it to be the render of; pass -1 for every                  point",
+            ));
+        }
         recon.point_set.reference_observations = given;
         return Ok(());
     }
@@ -892,7 +913,8 @@ fn settle_reference_observations(
         .point_set
         .reference_observations
         .as_ref()
-        .filter(|_| point_count == old_point_count);
+        .filter(|_| point_count == old_point_count)
+        .filter(|_| bitmaps_carried && recon.point_set.patch_bitmaps_y_x_rgba.is_some());
     recon.point_set.reference_observations = Some(match carried {
         None => vec![NO_REFERENCE_OBSERVATION; point_count],
         Some(old) if !replacing_tracks => old.clone(),

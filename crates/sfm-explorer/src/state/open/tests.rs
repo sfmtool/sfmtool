@@ -121,6 +121,35 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     );
     assert!(tile(0).iter().all(|&b| b == 0), "a one-view point is not");
 
+    // The references are the ones this render picked, not the file's, which
+    // without bitmaps names none.
+    let on_disk = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
+        .expect("the file reads");
+    assert!(on_disk
+        .point_set
+        .reference_observations
+        .as_ref()
+        .expect("framed")
+        .iter()
+        .all(|&r| r == -1));
+    let picked = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
+        &on_disk,
+        &sfmtool_core::camera::PhotographCache::new(
+            0,
+            sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS,
+        ),
+        &sfmtool_core::progress::Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("photographs read");
+    let references = recon
+        .point_set
+        .reference_observations
+        .as_ref()
+        .expect("framed");
+    assert_eq!(references, &picked.reference_observations);
+    assert!(references.iter().any(|&r| r >= 0), "{references:?}");
+
     let entry = newest(&state);
     let rows = phase_rows(&entry.detail);
     for stage in [

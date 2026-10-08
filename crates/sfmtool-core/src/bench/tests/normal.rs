@@ -75,10 +75,27 @@ fn fit_normal_turns_a_tilted_patch_back_toward_the_plane() {
     };
     assert!(z1 >= z0, "{z0} -> {z1}");
     assert_eq!(views, 3);
-    // The centre does not move, and the result is read back and fused.
+    // The centre does not move, and the result is read back, its bitmap
+    // rendered, and every row scored against that bitmap.
     assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
     assert!(turned.track().expect("track stage").bitmap.is_some());
     assert_eq!(report.evaluate.measured, 3);
+    assert_rows_scored_against_the_bitmap(&turned);
+}
+
+/// Every row that has a pixel carries a score against the track's bitmap,
+/// and the row the bitmap is the render of scores 1.
+fn assert_rows_scored_against_the_bitmap(track: &EditableTrack) {
+    let reference = track.track().expect("track stage").reference;
+    for (i, o) in track.observations.iter().enumerate() {
+        let m = o.track.as_ref().expect("a reading");
+        let z = m
+            .bitmap_zncc
+            .unwrap_or_else(|| panic!("row {i} is not scored"));
+        if Some(i) == reference {
+            assert_eq!(z, 1.0);
+        }
+    }
 }
 
 #[test]
@@ -112,6 +129,7 @@ fn finite_difference_normal_turns_a_tilted_patch_back_toward_the_plane() {
             }
         );
         assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+        assert_rows_scored_against_the_bitmap(&turned);
     }
 }
 
