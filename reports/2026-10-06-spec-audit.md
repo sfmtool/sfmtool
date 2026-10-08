@@ -195,7 +195,9 @@ flags only, which meets the requirement for a Python pipeline.
 | core/spherical/spherical-tiles-rig.md:3-8 | "## Motivation … Three options were considered" | design deliberation as the opening (see check 4) |
 | Future-work headings | flow-based-matching:144, patch-view-selection:324, sift-to-patch-reconstruction:271, sfmr-file-format:1945, scene-graph:1414, user-experience:261, camera-config:382 | each should become a present-tense statement plus an amendment draft, or be deleted |
 
-> _Status (2026-10-07): **Done** for the `spherical-tiles-rig.md:3-8` row — the spec now opens with what a tile rig is, and the comparison of three samplings sits under § "Why small pinhole tiles" in the present tense, branch `spec-fix-1006-33-opening-spherical-tiles`._
+> _Status (2026-10-07): **Partially done** — seven rows fixed: `camera-views.md` names the HUD's "Frustum" slider; `point-cloud-rendering.md` drops the planned label; `architecture.md` says where the thumbnails come from (the file, or the open task when the file has none) and that each reconstruction's atlas holds them all with no eviction; the `xform-command.md` TODO is removed (a code cleanup, not specified behaviour, and its function names had gone stale); `epipolar-estimation.md` drops the "natural v2" deferral; `refine-normals-command.md` states the report-only confidence in the present tense, without the later-threshold plan; `mcp-server.md` says `get_scene` carries `window` beside `window_title`, without the plan to drop it. Still open: the keypoint-localization-search-cache, keypoint-localization-consensus-basis and Future-work-heading rows (the spherical-tiles-rig row is done in PR #846), PR #851._
+
+> _Status (2026-10-07): **Done** for the `spherical-tiles-rig.md:3-8` row — the spec now opens with what a tile rig is, and the comparison of three samplings sits under § "Why small pinhole tiles" in the present tense, PR #846._
 
 Acquitted: algorithm "Step N" / "Phase N" headings (motion, select-by-distribution,
 epipolar-curves, photometric-subsets-ransac), format "Versioning and Migration"
@@ -323,6 +325,7 @@ none, and the two crate specs are about code.
 2. :859-861: "Area-averaging (OpenCV `INTER_AREA`), inherited from the `.sift` these are copied from — all four producers (the colmap, opencv and sfmtool extractors, and `sfm undistort`) use it." The resize method is defined; the producer list is implementation. Actor should be "a writer".
 3. :153-162 ("Internal round trips need only `S`" under "Invariants … that internal code relies on"): names this repository's pipelines ("bundle adjust, densify, merge PnP, DB-mediated solves"). Implementation guidance in the coordinate-convention section; move to *Implementations*.
    Discussion-grade: :1807-1810 names the viewer's `Go ▸ Go to Point…` inside § Point ID.
+   > _Status (2026-10-07): **Done** — § World-Space Unit gives the five units' lengths in metres in its own table (checked against `types.rs`) and the code names moved to *Implementations*; the thumbnail resize method is defined as area averaging that a conforming writer uses, with the extractor list and `INTER_AREA` under *Implementations*; the internal-round-trip paragraph and the `Go ▸ Go to Point…` mention moved to *Implementations*, branch `spec-fix-1006-30-sfmr-failure6`._
 
 **Other failure-6 checks:** no per-element code column without a legend
 (`member_status` gained one in version 7); no optional entry without an
@@ -641,6 +644,7 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - CONFIRMED :146-161 — internal round trips (bundle adjust, densify, merge PnP, DB-mediated solves); keep the first invariant, move the second.
   - NEW :1143-1147 — "the built-in writer"; keep the coherence rule, move the fill-in to Implementations.
   - Minor: :163-165 "earlier sfmtool releases"; :545, :1103, :985-993 name implementations or a core-only test; acquitted: :449-451, :92, :566, :1810, :1955.
+    > _Status (2026-10-07): **Done** for the three CONFIRMED items, the NEW item (the coherence rule stays; the mean-viewing fill-in and the pass-through of `normal_confidence` moved to *Implementations*) and the Minor :163-165 line (now "files of format versions ≤ 4"); the versioning gaps below are on another branch, branch `spec-fix-1006-30-sfmr-failure6`._
   - Versioning gaps: `world_space_unit` (:1898-1914) gives no version (present since e881b335, so version 1+); `infinity_point_count` (:324) lacks "(version 2+; read as 0 when absent)" (types.rs:159-162).
 **Third copies:** `SFMR_FORMAT_VERSION` doc (types.rs:576-630, about 55 lines) and `SFMR_CANONICAL_CONVENTION_VERSION` doc (:641-652) restate the spec; shrink to contract plus link.
 **Non-goals / deferrals checked:** 2 (Future Extensions :1945-1970; reserved `normal_confidence` values :1136); neither overtaken.
@@ -954,7 +958,7 @@ Read 2026-09-26; open items above.
    - Both format specs still name `sfm` commands, repo paths and library types
      in the format proper: 5 confirmed passages in matches (plus 3 more found by
      the deep read) and 3 in sfmr (plus 1).
-     > _Status (2026-10-07): **Partially done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, branch `spec-fix-1006-29-matches-failure6`; the sfmr passages are still open._
+     > _Status (2026-10-07): **Done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, PR #842; the sfmr passages (3 plus 1) are fixed the same way, PR #843._
    - Three entries never say which version introduced them: `world_space_unit`
      and `infinity_point_count` in `.sfmr`, and `.matches` `refine_options`.
      > _Status (2026-10-07): **Partially done** — `.matches` `refine_options` now says it entered with `cluster_patches/` in version 3, that `radius` appears only in refused version 3-4 files, that the member-gate key changed during version 6 and a rewritten file keeps its refinement's keys, and how a reader treats a missing object, branch `spec-fix-1006-32-matches-versions`; the two `.sfmr` entries are open._
