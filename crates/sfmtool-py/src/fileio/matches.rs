@@ -3,14 +3,14 @@
 
 //! Python bindings for `.matches` file I/O.
 
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
+use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::path::PathBuf;
 
 use sfmtool_matches_format::{
-    ClusterPatchData, ClustersData, MatchesContentHash, MatchesData, MatchesMetadata, PairsData,
-    TvgMetadata, TwoViewGeometryConfig, TwoViewGeometryData,
+    ClusterPatchData, ClustersData, MatchesContentHash, MatchesData, MatchesMetadata,
+    MemberCellData, PairsData, TvgMetadata, TwoViewGeometryConfig, TwoViewGeometryData,
 };
 
 use crate::helpers::{
@@ -89,6 +89,14 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
             "member_consistency_residual",
             cp.member_consistency_residual.into_pyarray(py),
         )?;
+        // The piecewise refinement's per-cell columns (format version 8),
+        // present together when the file carries them, absent otherwise.
+        if let Some(cells) = cp.member_cells {
+            dict.set_item("member_cell_shift_px", cells.shift_px.into_pyarray(py))?;
+            dict.set_item("member_cell_zncc", cells.zncc.into_pyarray(py))?;
+            dict.set_item("member_cell_status", cells.status.into_pyarray(py))?;
+            dict.set_item("member_cell_iterations", cells.iterations.into_pyarray(py))?;
+        }
         dict.set_item("refine_options", serde_to_py(py, &cp.refine_options)?)?;
     } else {
         dict.set_item("has_cluster_patches", false)?;
@@ -131,6 +139,48 @@ pub fn read_matches_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny
     let metadata = sfmtool_matches_format::read_matches_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     serde_to_py(py, &metadata)
+}
+
+/// The per-cell columns of a `write_matches` dict: the four
+/// `member_cell_*` keys together, or none of them (a missing key and `None`
+/// alike).
+fn member_cells_from_py(data: &Bound<'_, PyDict>) -> PyResult<Option<MemberCellData>> {
+    let keys = [
+        "member_cell_shift_px",
+        "member_cell_zncc",
+        "member_cell_status",
+        "member_cell_iterations",
+    ];
+    let items = keys
+        .iter()
+        .map(|key| get_optional_item(data, key))
+        .collect::<PyResult<Vec<_>>>()?;
+    let present = items.iter().filter(|item| item.is_some()).count();
+    if present == 0 {
+        return Ok(None);
+    }
+    if present != keys.len() {
+        let missing: Vec<&str> = keys
+            .iter()
+            .zip(&items)
+            .filter(|(_, item)| item.is_none())
+            .map(|(key, _)| *key)
+            .collect();
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "the member_cell_* columns are written together; missing {missing:?}"
+        )));
+    }
+    let item = |i: usize| items[i].as_ref().expect("checked present");
+    let shift_px: PyReadonlyArray4<f32> = item(0).extract()?;
+    let zncc: PyReadonlyArray3<f32> = item(1).extract()?;
+    let status: PyReadonlyArray3<u8> = item(2).extract()?;
+    let iterations: PyReadonlyArray1<u8> = item(3).extract()?;
+    Ok(Some(MemberCellData {
+        shift_px: shift_px.as_array().as_standard_layout().into_owned(),
+        zncc: zncc.as_array().as_standard_layout().into_owned(),
+        status: status.as_array().as_standard_layout().into_owned(),
+        iterations: iterations.as_array().as_standard_layout().into_owned(),
+    }))
 }
 
 /// Extract an optional boolean flag from the dict; a missing key or an
@@ -242,6 +292,7 @@ pub fn write_matches(
             get_item(data, "member_consistency_residual")?.extract()?;
         let refine_options: serde_json::Value =
             py_to_serde(py, &get_item(data, "refine_options")?)?;
+        let member_cells = member_cells_from_py(data)?;
         Some(ClusterPatchData {
             reference_members: reference_members
                 .as_array()
@@ -254,6 +305,7 @@ pub fn write_matches(
                 .as_array()
                 .as_standard_layout()
                 .into_owned(),
+            member_cells,
             refine_options,
         })
     } else {

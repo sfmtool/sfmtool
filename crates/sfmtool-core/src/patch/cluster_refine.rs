@@ -65,7 +65,8 @@ pub use params::{
     ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
-    CellRefinement, CellStatus, PiecewiseParams, DEFAULT_MIN_CELL_CURVATURE, DEFAULT_MIN_CELL_ZNCC,
+    member_cell_data, CellRefinement, CellStatus, PiecewiseParams, DEFAULT_MIN_CELL_CURVATURE,
+    DEFAULT_MIN_CELL_ZNCC,
 };
 
 /// A member's SIFT affine shape is usable when `|det A|` clears this floor.

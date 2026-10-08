@@ -290,6 +290,12 @@ impl DecodedEntries {
         Ok(Self { entries })
     }
 
+    /// The name of every entry read, in no particular order. For a format
+    /// whose optional entries are identified by a name prefix.
+    pub fn names(&self) -> impl Iterator<Item = &str> + Clone {
+        self.entries.keys().map(String::as_str)
+    }
+
     /// The decompressed bytes of `name`.
     pub fn zst_entry(&self, name: &str) -> Result<&[u8], ArchiveIoError> {
         self.entries

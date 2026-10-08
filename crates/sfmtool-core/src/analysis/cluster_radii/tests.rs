@@ -141,6 +141,7 @@ fn file(starts: &[u32], shapes: &[f32], patch_size: f64, with_patches: bool) -> 
             member_zncc: Array1::from_vec(vec![1.0f32; m]),
             member_shift_px: Array1::from_vec(vec![0.0f32; m]),
             member_consistency_residual: Array1::from_vec(vec![f32::NAN; m]),
+            member_cells: None,
             refine_options: serde_json::json!({ "patch_size": patch_size }),
         }),
         two_view_geometries: None,

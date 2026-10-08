@@ -17,8 +17,8 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 use sfmtool_core::patch::cluster_refine::{
-    refine_cluster_patches as core_refine_cluster_patches, warp_consistency_residuals,
-    ClusterRefineParams, FeatureGeometry,
+    member_cell_data, refine_cluster_patches as core_refine_cluster_patches,
+    warp_consistency_residuals, ClusterRefineParams, FeatureGeometry, PiecewiseParams,
 };
 
 use crate::patches::args::parse_patch_window;
@@ -408,6 +408,12 @@ pub fn clusters_to_pair_matches(
 ///         keypoint localizer's member gate
 ///         (specs/core/patch/zncc-self-similarity-radius.md).
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
+///     piecewise: Run the piecewise refinement after the cascade for every
+///         kept member, with its default parameters: the nine cells of the
+///         reference's patch are registered separately and their shifts refine
+///         the member's affine shape and position (default False, which leaves
+///         every output the cascade's). See
+///         specs/drafts/cluster-patches-piecewise-refinement.md.
 ///     progress: Optional ProgressCounter, bumped once per finished cluster.
 ///
 /// Returns:
@@ -430,7 +436,16 @@ pub fn clusters_to_pair_matches(
 ///     weak-perspective factorization of all cluster warps (lower = more
 ///     consistent; NaN where not fitted; see
 ///     specs/core/patch/cluster-warp-consistency.md). A stored signal, not a
-///     gate.
+///     gate. With ``piecewise`` the dict also carries the per-cell columns of
+///     the ``cluster_patches/`` section, cells ``[m, row, col]`` from the
+///     top-left, with readings only for kept members:
+///     ``member_cell_shift_px`` (M, 3, 3, 2) float32 (each cell's displacement
+///     from where the member's affine shape places it, template grid px; NaN
+///     where not measured), ``member_cell_zncc`` (M, 3, 3) float32,
+///     ``member_cell_status`` (M, 3, 3) uint8 (0 fitted, 1 refused_curvature,
+///     2 refused_zncc, 3 not_attempted, 4 refused_bound) and
+///     ``member_cell_iterations`` (M,) uint8. Without it those four keys are
+///     None.
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
@@ -438,7 +453,7 @@ pub fn clusters_to_pair_matches(
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_member_zncc_self_similarity_radius = 2.5,
-                    max_iters = 120, progress = None))]
+                    max_iters = 120, piecewise = false, progress = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches<'py>(
     py: Python<'py>,
@@ -456,6 +471,7 @@ pub fn refine_cluster_patches<'py>(
     max_shift_px: f64,
     max_member_zncc_self_similarity_radius: f64,
     max_iters: u32,
+    piecewise: bool,
     progress: Option<ProgressCounter>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let n_images = images.len();
@@ -524,6 +540,7 @@ pub fn refine_cluster_patches<'py>(
         max_shift_px,
         max_member_zncc_self_similarity_radius,
         max_iters,
+        piecewise: piecewise.then(PiecewiseParams::default),
         ..ClusterRefineParams::default()
     };
 
@@ -595,6 +612,23 @@ pub fn refine_cluster_patches<'py>(
     dict.set_item("member_zncc_grid", grid.into_pyarray(py))?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
+    let cell_keys = [
+        "member_cell_shift_px",
+        "member_cell_zncc",
+        "member_cell_status",
+        "member_cell_iterations",
+    ];
+    if piecewise {
+        let cells = member_cell_data(&result.cells);
+        dict.set_item(cell_keys[0], cells.shift_px.into_pyarray(py))?;
+        dict.set_item(cell_keys[1], cells.zncc.into_pyarray(py))?;
+        dict.set_item(cell_keys[2], cells.status.into_pyarray(py))?;
+        dict.set_item(cell_keys[3], cells.iterations.into_pyarray(py))?;
+    } else {
+        for key in cell_keys {
+            dict.set_item(key, py.None())?;
+        }
+    }
     Ok(dict)
 }
 

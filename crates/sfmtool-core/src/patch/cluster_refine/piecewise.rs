@@ -25,6 +25,8 @@
 //! `p + S·(step·c)`. An update `c ↦ A·c + b` in those coordinates therefore
 //! composes into the shape as `S' = S·A`, `p' = p + S·(step·b)`.
 
+use sfmtool_matches_format::{ClusterCellStatus, MemberCellData};
+
 use crate::camera::image::ImageU8Pyramid;
 use crate::patch::normal_refine::{grid_bounds, FLAT_NORM_SQ_EPS};
 
@@ -93,8 +95,8 @@ impl Default for PiecewiseParams {
 
 /// What the piecewise refinement concluded about one cell of a member.
 ///
-/// The discriminants are the values a `u8` column of cell statuses would
-/// carry.
+/// The discriminants are the canonical codes of the `.matches` cell-status
+/// column, [`ClusterCellStatus`], which [`member_cell_data`] stores them as.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CellStatus {
@@ -143,6 +145,46 @@ pub struct CellRefinement {
     /// [`PiecewiseParams::update_tolerance_px`], or the cap
     /// [`PiecewiseParams::max_iterations`].
     pub iterations: u8,
+}
+
+impl From<CellStatus> for ClusterCellStatus {
+    /// The `.matches` cell status a [`CellStatus`] is stored as. The two
+    /// enums share their discriminants, which a test checks, so the stored
+    /// code is the discriminant either way.
+    fn from(status: CellStatus) -> ClusterCellStatus {
+        match status {
+            CellStatus::Fitted => ClusterCellStatus::Fitted,
+            CellStatus::RefusedCurvature => ClusterCellStatus::RefusedCurvature,
+            CellStatus::RefusedZncc => ClusterCellStatus::RefusedZncc,
+            CellStatus::NotAttempted => ClusterCellStatus::NotAttempted,
+            CellStatus::RefusedBound => ClusterCellStatus::RefusedBound,
+        }
+    }
+}
+
+/// The per-cell columns of a cluster-patches file for one refinement's
+/// [`ClusterRefineResult::cells`](super::ClusterRefineResult::cells), one row
+/// per member in member order.
+///
+/// A member with cells gets its shifts, ZNCCs, statuses and iteration count;
+/// a member without (`None`, every member that is not kept) gets `NaN`
+/// shifts and ZNCCs, every cell not attempted and `0` iterations, which is
+/// what the format stores for a member the stage did not run on.
+pub fn member_cell_data(cells: &[Option<CellRefinement>]) -> MemberCellData {
+    let mut out = MemberCellData::not_attempted(cells.len());
+    for (m, cell) in cells.iter().enumerate() {
+        let Some(cell) = cell else { continue };
+        for row in 0..3 {
+            for col in 0..3 {
+                out.shift_px[[m, row, col, 0]] = cell.shift_px[row][col][0];
+                out.shift_px[[m, row, col, 1]] = cell.shift_px[row][col][1];
+                out.zncc[[m, row, col]] = cell.zncc[row][col];
+                out.status[[m, row, col]] = ClusterCellStatus::from(cell.status[row][col]) as u8;
+            }
+        }
+        out.iterations[m] = cell.iterations;
+    }
+    out
 }
 
 impl CellRefinement {

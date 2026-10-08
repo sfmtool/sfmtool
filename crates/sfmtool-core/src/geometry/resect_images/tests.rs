@@ -938,6 +938,7 @@ fn cluster_file(recon: &SfmrReconstruction, clusters: &[Vec<Member>]) -> Matches
         member_zncc: ndarray::Array1::from_elem(m, f32::NAN),
         member_shift_px: ndarray::Array1::zeros(m),
         member_consistency_residual: ndarray::Array1::from_elem(m, f32::NAN),
+        member_cells: None,
         refine_options: serde_json::json!({}),
     });
     data

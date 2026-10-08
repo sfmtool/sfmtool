@@ -396,3 +396,120 @@ def test_select_clusters_errors(matches_path):
     by_int = mf.select_clusters(accepted_statuses=[0, 1])
     by_name = mf.select_clusters(accepted_statuses=["reference", "kept"])
     npt.assert_array_equal(by_int.cluster_starts, by_name.cluster_starts)
+
+
+# sfmtool_matches_format::ClusterCellStatus discriminants and legend.
+CELL_FITTED = 0
+CELL_REFUSED_ZNCC = 2
+CELL_NOT_ATTEMPTED = 3
+CELL_STATUS_NAMES = [
+    "fitted",
+    "refused_curvature",
+    "refused_zncc",
+    "not_attempted",
+    "refused_bound",
+]
+
+
+def _member_cells(member_count: int, kept: list[int]) -> dict:
+    """Per-cell columns with readings on the `kept` members only."""
+    shift = np.full((member_count, 3, 3, 2), np.nan, dtype=np.float32)
+    zncc = np.full((member_count, 3, 3), np.nan, dtype=np.float32)
+    status = np.full((member_count, 3, 3), CELL_NOT_ATTEMPTED, dtype=np.uint8)
+    iterations = np.zeros(member_count, dtype=np.uint8)
+    for k, m in enumerate(kept):
+        status[m] = CELL_FITTED
+        status[m, 1, 2] = CELL_REFUSED_ZNCC
+        shift[m] = np.linspace(-0.5, 0.5, 18, dtype=np.float32).reshape(3, 3, 2) + k
+        zncc[m] = np.linspace(0.6, 0.98, 9, dtype=np.float32).reshape(3, 3)
+        iterations[m] = 2 + k
+    return {
+        "member_cell_shift_px": shift,
+        "member_cell_zncc": zncc,
+        "member_cell_status": status,
+        "member_cell_iterations": iterations,
+    }
+
+
+def _stored_cluster_patches_metadata(path) -> dict:
+    """The `cluster_patches/metadata.json` of a file, read from the archive."""
+    import json
+    import zipfile
+    from compression import zstd
+
+    with zipfile.ZipFile(path) as archive:
+        raw = archive.read("cluster_patches/metadata.json.zst")
+    return json.loads(zstd.decompress(raw))
+
+
+def test_member_cells_round_trip(tmp_path):
+    data = _cluster_patch_dict()
+    cells = _member_cells(8, kept=[1, 2, 6, 7])
+    data.update(cells)
+    path = tmp_path / "cells.matches"
+    write_matches(path, data)
+
+    valid, errors = verify_matches(path)
+    assert valid, errors
+    # The legend is stated beside the column, in the canonical order.
+    cp_meta = _stored_cluster_patches_metadata(path)
+    assert cp_meta["member_cell_status_names"] == CELL_STATUS_NAMES
+
+    mf = MatchesFile(path)
+    assert mf.metadata["version"] == 8
+    assert mf.has_member_cells
+    assert mf.member_cell_status_names == CELL_STATUS_NAMES
+    assert mf.member_cell_shift_px.shape == (8, 3, 3, 2)
+    assert mf.member_cell_shift_px.dtype == np.float32
+    assert mf.member_cell_zncc.shape == (8, 3, 3)
+    assert mf.member_cell_status.dtype == np.uint8
+    assert mf.member_cell_iterations.shape == (8,)
+    npt.assert_array_equal(mf.member_cell_shift_px, cells["member_cell_shift_px"])
+    npt.assert_array_equal(mf.member_cell_zncc, cells["member_cell_zncc"])
+    npt.assert_array_equal(mf.member_cell_status, cells["member_cell_status"])
+    npt.assert_array_equal(mf.member_cell_iterations, cells["member_cell_iterations"])
+
+    # A selection keeps each member's cells, and a save states the legend again.
+    sel = mf.select_clusters()
+    assert sel.has_member_cells
+    assert sel.member_cell_status.shape == (len(sel.member_status), 3, 3)
+    saved = tmp_path / "selected.matches"
+    sel.save(saved)
+    assert verify_matches(saved)[0]
+    assert (
+        _stored_cluster_patches_metadata(saved)["member_cell_status_names"]
+        == CELL_STATUS_NAMES
+    )
+    npt.assert_array_equal(
+        MatchesFile(saved).member_cell_status, sel.member_cell_status
+    )
+
+
+def test_file_without_member_cells(matches_path):
+    mf = MatchesFile(matches_path)
+    assert not mf.has_member_cells
+    assert mf.member_cell_shift_px is None
+    assert mf.member_cell_zncc is None
+    assert mf.member_cell_status is None
+    assert mf.member_cell_status_names is None
+    assert mf.member_cell_iterations is None
+    assert "member_cell_status_names" not in _stored_cluster_patches_metadata(
+        matches_path
+    )
+
+
+def test_member_cells_written_together_or_not_at_all(tmp_path):
+    data = _cluster_patch_dict()
+    cells = _member_cells(8, kept=[1, 2, 6, 7])
+    del cells["member_cell_zncc"]
+    data.update(cells)
+    with pytest.raises(ValueError, match="member_cell_zncc"):
+        write_matches(tmp_path / "partial.matches", data)
+
+
+def test_member_cells_rejected_on_a_member_not_kept(tmp_path):
+    data = _cluster_patch_dict()
+    # Member 3 is not_evaluated, so it carries no cell readings.
+    data.update(_member_cells(8, kept=[1, 3]))
+    with pytest.raises(OSError, match="member 3 is not_evaluated, not kept"):
+        write_matches(tmp_path / "bad.matches", data)

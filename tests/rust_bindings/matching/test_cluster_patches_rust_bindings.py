@@ -16,6 +16,10 @@ STATUS_REJECTED_LOW_ZNCC = 2
 STATUS_NOT_EVALUATED = 5
 STATUS_REJECTED_UNLOCALIZABLE = 6
 
+# sfmtool_matches_format::ClusterCellStatus discriminants.
+CELL_FITTED = 0
+CELL_NOT_ATTEMPTED = 3
+
 
 def _texture(w: int, h: int) -> np.ndarray:
     """Deterministic texture (no clipping).
@@ -83,7 +87,19 @@ class TestRefineClusterPatches:
             "member_zncc_grid",
             "member_shift_px",
             "member_consistency_residual",
+            "member_cell_shift_px",
+            "member_cell_zncc",
+            "member_cell_status",
+            "member_cell_iterations",
         }
+        # Without piecewise=True the per-cell columns are absent.
+        for key in (
+            "member_cell_shift_px",
+            "member_cell_zncc",
+            "member_cell_status",
+            "member_cell_iterations",
+        ):
+            assert result[key] is None, key
         assert result["reference_members"].dtype == np.uint32
         assert result["reference_members"].shape == (1,)
         assert result["member_status"].dtype == np.uint8
@@ -127,6 +143,43 @@ class TestRefineClusterPatches:
         # ... and the relative warp recovers as S @ S_ref^-1.
         w = shape @ np.linalg.inv(result["member_affine_shapes"][0])
         np.testing.assert_allclose(w, np.eye(2), atol=0.02)
+
+    def test_piecewise_returns_the_cells(self):
+        images, pos, aff, starts, m_img, m_feat = _inputs()
+        plain = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        result = refine_cluster_patches(
+            images, pos, aff, starts, m_img, m_feat, piecewise=True
+        )
+        shift = result["member_cell_shift_px"]
+        zncc = result["member_cell_zncc"]
+        status = result["member_cell_status"]
+        iterations = result["member_cell_iterations"]
+        assert shift.dtype == np.float32 and shift.shape == (2, 3, 3, 2)
+        assert zncc.dtype == np.float32 and zncc.shape == (2, 3, 3)
+        assert status.dtype == np.uint8 and status.shape == (2, 3, 3)
+        assert iterations.dtype == np.uint8 and iterations.shape == (2,)
+        assert set(np.unique(status).tolist()) <= set(range(5))
+
+        # The reference is not kept: no readings.
+        assert result["member_status"][0] == STATUS_REFERENCE
+        assert (status[0] == CELL_NOT_ATTEMPTED).all()
+        assert np.isnan(shift[0]).all() and np.isnan(zncc[0]).all()
+        assert iterations[0] == 0
+
+        # The kept member is a pure translation: the stage runs on it, its
+        # fitted cells sit where its affine shape places them, and it stays
+        # kept with the shape the cascade found, to within the fit.
+        assert result["member_status"][1] == STATUS_KEPT
+        assert iterations[1] >= 1
+        fitted = status[1] == CELL_FITTED
+        assert fitted.sum() >= 5
+        np.testing.assert_allclose(shift[1][fitted], 0.0, atol=0.2)
+        assert (zncc[1][fitted] > 0.8).all()
+        np.testing.assert_allclose(
+            result["member_affine_shapes"][1],
+            plain["member_affine_shapes"][1],
+            atol=0.05,
+        )
 
     def test_out_of_range_feature_is_not_evaluated(self):
         images, pos, aff, starts, m_img, m_feat = _inputs()

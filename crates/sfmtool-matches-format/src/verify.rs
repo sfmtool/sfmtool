@@ -29,6 +29,10 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipArchive;
 
+use crate::cells::{
+    cell_entry_errors, cell_entry_names, normalize_cell_statuses, not_kept_with_readings,
+    read_member_cell_status_legend,
+};
 use crate::entries;
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, raw_to_f32, raw_to_u32, read_zst_entry};
@@ -920,6 +924,46 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     let member_count = backbone.member_count;
     let mut cp_hasher = Xxh3::new();
 
+    // The section's metadata says whether the per-cell columns are present, so
+    // it is read before them; it is hashed in its own place below.
+    let cp_meta_raw = read_zst_entry(archive, entries::cluster_patches_metadata())?;
+    let cp_meta: serde_json::Value = serde_json::from_slice(&cp_meta_raw)?;
+
+    // cluster_patches/member_cell_* (optional, version 8). Every entry under
+    // that name is hashed, in name order, whatever its shape, as the writer's
+    // lexicographic order would have taken it; they sort before
+    // member_consistency_residual. A wrong or unpaired entry is reported
+    // below, not left out of the digest.
+    let cell_legend = match read_member_cell_status_legend(&cp_meta, version) {
+        Ok(legend) => legend,
+        Err(e) => {
+            errors.push(e);
+            None
+        }
+    };
+    let entry_names: Vec<String> = archive.file_names().map(String::from).collect();
+    let mut cell_names: Vec<&String> = entry_names
+        .iter()
+        .filter(|n| n.starts_with("cluster_patches/member_cell_"))
+        .collect();
+    cell_names.sort();
+    let mut cell_raw: Vec<(String, Vec<u8>)> = Vec::with_capacity(cell_names.len());
+    for name in cell_names {
+        let raw = read_zst_entry(archive, name)?;
+        cp_hasher.update(&raw);
+        cell_raw.push((name.clone(), raw));
+    }
+    let has_cell_legend = cp_meta
+        .get(crate::cells::MEMBER_CELL_STATUS_NAMES_KEY)
+        .is_some();
+    let cell_entries_errors = cell_entry_errors(
+        entry_names.iter().map(String::as_str),
+        member_count,
+        has_cell_legend,
+    );
+    let cells_ok = cell_entries_errors.is_empty();
+    errors.extend(cell_entries_errors);
+
     // cluster_patches/member_consistency_residual
     let consistency_raw = read_zst_entry(
         archive,
@@ -946,7 +990,6 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     cp_hasher.update(&zncc_raw);
 
     // cluster_patches/metadata.json
-    let cp_meta_raw = read_zst_entry(archive, entries::cluster_patches_metadata())?;
     cp_hasher.update(&cp_meta_raw);
 
     // cluster_patches/reference_members
@@ -966,7 +1009,6 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     );
 
     // Cross-check cluster_patches section metadata counts
-    let cp_meta: serde_json::Value = serde_json::from_slice(&cp_meta_raw)?;
     if cp_meta.get("cluster_count").and_then(|v| v.as_u64()) != Some(cluster_count as u64) {
         errors.push(
             "cluster_patches/metadata.json.zst cluster_count doesn't match top-level \
@@ -1015,8 +1057,65 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     if statuses_ok && backbone.consistent {
         check_cluster_references(&raw, backbone, errors);
     }
+    if let (true, Some(legend)) = (cells_ok, &cell_legend) {
+        check_member_cells(
+            &cell_raw,
+            member_count,
+            legend,
+            statuses_ok.then_some(raw.member_status.as_slice()),
+            errors,
+        );
+    }
 
     Ok(cp_hash)
+}
+
+/// Check the per-cell columns, all four present at the member count's shape:
+/// each sized by the member count, every status code within the file's
+/// legend, and, when the member statuses could be read (`member_status`, in
+/// the canonical numbering), no reading on a member that is not `kept`.
+fn check_member_cells(
+    cell_raw: &[(String, Vec<u8>)],
+    member_count: usize,
+    legend: &[u8],
+    member_status: Option<&[u8]>,
+    errors: &mut Vec<String>,
+) {
+    let bytes = |name: &str| -> &[u8] {
+        cell_raw
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, raw)| raw.as_slice())
+            .unwrap_or(&[])
+    };
+    let [(_, iterations_name), (_, shift_name), (_, status_name), (_, zncc_name)] =
+        cell_entry_names(member_count);
+    let mut ok = true;
+    for (name, expected) in [
+        (&iterations_name, member_count),
+        (&shift_name, member_count * 18 * 4),
+        (&status_name, member_count * 9),
+        (&zncc_name, member_count * 9 * 4),
+    ] {
+        let len = bytes(name).len();
+        if len != expected {
+            errors.push(format!("{name} byte length {len} != expected {expected}"));
+            ok = false;
+        }
+    }
+    if !ok {
+        return;
+    }
+    let mut status = bytes(&status_name).to_vec();
+    if let Err(e) = normalize_cell_statuses(&mut status, legend) {
+        errors.push(e);
+        return;
+    }
+    if let Some(member_status) = member_status {
+        if let Some(e) = not_kept_with_readings(member_status, &status, bytes(&iterations_name)) {
+            errors.push(e);
+        }
+    }
 }
 
 /// Check every `cluster_patches/` array against the count it is sized by.

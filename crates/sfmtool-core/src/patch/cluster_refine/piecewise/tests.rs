@@ -1007,3 +1007,54 @@ fn the_window_sums_agree_with_a_direct_pass() {
         );
     }
 }
+
+#[test]
+fn cell_statuses_share_the_matches_format_codes() {
+    let all = [
+        CellStatus::Fitted,
+        CellStatus::RefusedCurvature,
+        CellStatus::RefusedZncc,
+        CellStatus::NotAttempted,
+        CellStatus::RefusedBound,
+    ];
+    assert_eq!(all.len(), ClusterCellStatus::ALL.len());
+    for status in all {
+        assert_eq!(status as u8, ClusterCellStatus::from(status) as u8);
+    }
+}
+
+#[test]
+fn member_cell_data_fills_kept_rows_and_leaves_the_rest_not_attempted() {
+    let mut cell = CellRefinement::not_attempted(3);
+    cell.shift_px[0][2] = [0.25, -0.5];
+    cell.zncc[0][2] = 0.93;
+    cell.status[0][2] = CellStatus::Fitted;
+    cell.status[1][1] = CellStatus::RefusedBound;
+    let data = member_cell_data(&[None, Some(cell), None]);
+
+    assert_eq!(data.shift_px.shape(), &[3, 3, 3, 2]);
+    assert_eq!(data.zncc.shape(), &[3, 3, 3]);
+    assert_eq!(data.status.shape(), &[3, 3, 3]);
+    assert_eq!(data.iterations.to_vec(), vec![0, 3, 0]);
+    assert_eq!(data.shift_px[[1, 0, 2, 0]], 0.25);
+    assert_eq!(data.shift_px[[1, 0, 2, 1]], -0.5);
+    assert_eq!(data.zncc[[1, 0, 2]], 0.93);
+    assert_eq!(data.status[[1, 0, 2]], ClusterCellStatus::Fitted as u8);
+    assert_eq!(
+        data.status[[1, 1, 1]],
+        ClusterCellStatus::RefusedBound as u8
+    );
+    assert!(data.shift_px[[1, 1, 1, 0]].is_nan());
+    for m in [0, 2] {
+        assert!(data
+            .status
+            .index_axis(ndarray::Axis(0), m)
+            .iter()
+            .all(|&s| s == ClusterCellStatus::NotAttempted as u8));
+        assert!(data
+            .zncc
+            .index_axis(ndarray::Axis(0), m)
+            .iter()
+            .all(|z| z.is_nan()));
+    }
+}

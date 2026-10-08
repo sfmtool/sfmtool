@@ -230,6 +230,7 @@ pub(in crate::bench) fn matches_file(
             member_zncc: Array1::from_vec(vec![0.9f32; m]),
             member_shift_px: Array1::from_vec(vec![0.0f32; m]),
             member_consistency_residual: Array1::from_vec(vec![f32::NAN; m]),
+            member_cells: None,
             refine_options: serde_json::json!({ "patch_size": 16.0 }),
         }),
         two_view_geometries: None,

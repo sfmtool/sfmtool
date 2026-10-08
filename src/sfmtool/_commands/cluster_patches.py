@@ -83,6 +83,19 @@ from .._cli_utils import timed_command
         "specs/core/patch/zncc-self-similarity-radius.md."
     ),
 )
+@click.option(
+    "--piecewise/--no-piecewise",
+    "piecewise",
+    default=False,
+    show_default=True,
+    help=(
+        "After the affine fit, register each of the nine cells of every kept "
+        "member's patch separately, refine the member's shape from their "
+        "shifts, and store each cell's displacement, ZNCC and status in the "
+        "output (format version 8 per-cell columns). See "
+        "specs/drafts/cluster-patches-piecewise-refinement.md."
+    ),
+)
 def cluster_patches(
     input_path,
     output_path,
@@ -91,6 +104,7 @@ def cluster_patches(
     min_zncc,
     max_shift,
     max_member_zncc_self_similarity_radius,
+    piecewise,
 ):
     """Refine a cluster-bearing .matches file into patch clusters.
 
@@ -99,7 +113,10 @@ def cluster_patches(
     Gaussian-windowed-ZNCC affine warp from the reference's patch to every
     other member (seeded from the SIFT affine shapes), vet members by
     achieved ZNCC and translation drift, and keep at most one member per
-    image. Each member is stored fully absolute — its affine SHAPE (the
+    image. With --piecewise, every kept member's patch is then cut into
+    nine cells that are registered separately, the member's shape is refined
+    from their shifts, and each cell's displacement, ZNCC and status are
+    stored beside the member. Each member is stored fully absolute — its affine SHAPE (the
     refined warp composed onto the reference feature's detector shape) plus
     its refined keypoint position — so a consumer reads a member's extent and
     position with no .sift lookup. Writes a NEW .matches file that copies the
@@ -121,6 +138,7 @@ def cluster_patches(
             min_zncc,
             max_shift,
             max_member_zncc_self_similarity_radius,
+            piecewise,
         )
     except click.UsageError:
         raise

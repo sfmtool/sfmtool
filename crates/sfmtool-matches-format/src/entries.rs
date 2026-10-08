@@ -277,3 +277,64 @@ pub(crate) fn cluster_patches_member_consistency_residual(
 ) -> String {
     format!("cluster_patches/member_consistency_residual.{member_count}.float32.zst")
 }
+
+/// `cluster_patches/member_cell_iterations` — renders of the piecewise
+/// refinement per member (format version 8, optional).
+pub(crate) fn cluster_patches_member_cell_iterations(
+    member_count: impl std::fmt::Display,
+) -> String {
+    format!(
+        "{}{member_count}.uint8.zst",
+        cluster_patches_member_cell_iterations_prefix()
+    )
+}
+
+/// The `cluster_patches/member_cell_iterations` name up to the dot before its
+/// count.
+pub(crate) fn cluster_patches_member_cell_iterations_prefix() -> &'static str {
+    "cluster_patches/member_cell_iterations."
+}
+
+/// `cluster_patches/member_cell_shift_px` — each cell's displacement per
+/// member (format version 8, optional).
+pub(crate) fn cluster_patches_member_cell_shift_px(member_count: impl std::fmt::Display) -> String {
+    format!(
+        "{}{member_count}.3.3.2.float32.zst",
+        cluster_patches_member_cell_shift_px_prefix()
+    )
+}
+
+/// The `cluster_patches/member_cell_shift_px` name up to the dot before its
+/// count.
+pub(crate) fn cluster_patches_member_cell_shift_px_prefix() -> &'static str {
+    "cluster_patches/member_cell_shift_px."
+}
+
+/// `cluster_patches/member_cell_status` — each cell's status code per member,
+/// an index into `member_cell_status_names` (format version 8, optional).
+pub(crate) fn cluster_patches_member_cell_status(member_count: impl std::fmt::Display) -> String {
+    format!(
+        "{}{member_count}.3.3.uint8.zst",
+        cluster_patches_member_cell_status_prefix()
+    )
+}
+
+/// The `cluster_patches/member_cell_status` name up to the dot before its
+/// count.
+pub(crate) fn cluster_patches_member_cell_status_prefix() -> &'static str {
+    "cluster_patches/member_cell_status."
+}
+
+/// `cluster_patches/member_cell_zncc` — each cell's ZNCC per member (format
+/// version 8, optional).
+pub(crate) fn cluster_patches_member_cell_zncc(member_count: impl std::fmt::Display) -> String {
+    format!(
+        "{}{member_count}.3.3.float32.zst",
+        cluster_patches_member_cell_zncc_prefix()
+    )
+}
+
+/// The `cluster_patches/member_cell_zncc` name up to the dot before its count.
+pub(crate) fn cluster_patches_member_cell_zncc_prefix() -> &'static str {
+    "cluster_patches/member_cell_zncc."
+}

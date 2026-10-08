@@ -185,9 +185,11 @@ relative warp `W = S·S_ref⁻¹` (unavailable in a derived file whose reference
 member is absent, where the absolute shapes and positions stay valid
 regardless). Top-level metadata gains `"has_cluster_patches": true`.
 
-A member carries one shape for its whole patch; the file holds no separate
-displacement for the parts of a member's patch. Per-cell displacements with a
-per-cell status are proposed in
+A member carries one shape for its whole patch. A file written with
+`--piecewise` also holds, for each kept member, a displacement and a status
+for each of the nine cells of its patch (format version 8's per-cell entries,
+[matches-file-format.md](../../formats/matches-file-format.md)); the stage
+that measures them is specified in
 [cluster-patches-piecewise-refinement.md](../../drafts/cluster-patches-piecewise-refinement.md).
 
 ## The operation

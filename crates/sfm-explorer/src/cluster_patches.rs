@@ -1028,6 +1028,7 @@ fn matches_data(
             member_zncc: Array1::from(refined.member_zncc),
             member_shift_px: Array1::from(refined.member_shift_px),
             member_consistency_residual: Array1::from(refined.member_consistency_residual),
+            member_cells: None,
             refine_options: serde_json::json!({
                 "patch_size": PATCH_SIZE,
                 "resolution": refine_defaults.resolution,

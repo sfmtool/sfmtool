@@ -18,6 +18,7 @@ compile_error!(
     "sfmtool-matches-format requires a little-endian target (binary arrays are stored as little-endian)"
 );
 
+mod cells;
 mod entries;
 mod read;
 mod select;
@@ -25,6 +26,7 @@ mod types;
 mod verify;
 mod write;
 
+pub use cells::{ClusterCellStatus, MemberCellData};
 pub use read::{read_matches, read_matches_image_names, read_matches_metadata};
 pub use select::ClusterSelect;
 pub use types::*;

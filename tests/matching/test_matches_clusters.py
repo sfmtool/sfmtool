@@ -165,7 +165,7 @@ def test_clusters_round_trip(tmp_path):
     assert valid, f"verification failed: {errors}"
 
     loaded = read_matches(path)
-    assert loaded["metadata"]["version"] == 7
+    assert loaded["metadata"]["version"] == 8
     assert loaded["metadata"]["has_clusters"] is True
     assert loaded["metadata"]["has_cluster_patches"] is False
     assert loaded["metadata"]["cluster_count"] == 2

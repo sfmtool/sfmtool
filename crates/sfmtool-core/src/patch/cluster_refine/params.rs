@@ -113,13 +113,11 @@ pub struct ClusterRefineParams {
     /// [`ClusterRefineResult::cells`] carries what each cell read. `None`
     /// skips the stage, leaving every output the cascade's.
     ///
-    /// Off (`None`) by default. The stage's cells have no column in the
-    /// cluster-patches file yet, so turning it on would change the stored
-    /// shapes and readings without storing the cells that explain the
-    /// change. The milestone that adds those columns turns the stage on from
-    /// the CLI, and a comparison over the capture fleet decides whether it
-    /// becomes the default here. See
-    /// `specs/drafts/cluster-patches-piecewise-refinement.md`.
+    /// Off (`None`) by default. `sfm cluster-patches --piecewise` turns it on
+    /// and stores the cells as the `.matches` per-cell entries (format
+    /// version 8, through [`member_cell_data`](super::member_cell_data)); a
+    /// comparison over the capture fleet decides whether it becomes the
+    /// default here. See `specs/drafts/cluster-patches-piecewise-refinement.md`.
     pub piecewise: Option<PiecewiseParams>,
 }
 

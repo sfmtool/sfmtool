@@ -47,6 +47,7 @@ def _run_cluster_patches(
     min_zncc: float,
     max_shift: float,
     max_member_zncc_self_similarity_radius: float,
+    piecewise: bool = False,
 ):
     import os
     from concurrent.futures import ThreadPoolExecutor
@@ -159,6 +160,7 @@ def _run_cluster_patches(
             min_zncc=min_zncc,
             max_shift_px=max_shift,
             max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
+            piecewise=piecewise,
             progress=counter,
         )
 
@@ -220,9 +222,20 @@ def _run_cluster_patches(
             "min_zncc": min_zncc,
             "max_shift_px": max_shift,
             "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
+            "piecewise": piecewise,
         },
         "has_two_view_geometries": False,
     }
+    # The piecewise refinement's per-cell columns, written only when the stage
+    # ran (the binding returns None for each otherwise).
+    for key in (
+        "member_cell_shift_px",
+        "member_cell_zncc",
+        "member_cell_status",
+        "member_cell_iterations",
+    ):
+        if result[key] is not None:
+            out_data[key] = result[key]
     click.echo(f"Writing {out}...")
     write_matches(out, out_data)
     consistency = result["member_consistency_residual"]
@@ -232,6 +245,14 @@ def _run_cluster_patches(
             f"Warp consistency (stored signal, lower = better): median "
             f"{np.median(finite):.3f}, p90 {np.percentile(finite, 90):.3f} "
             f"over {len(finite)} fitted members"
+        )
+    if piecewise:
+        # Cell status 0 is fitted in the canonical numbering the binding
+        # returns.
+        cells_fitted = int((result["member_cell_status"][statuses == 1] == 0).sum())
+        click.echo(
+            f"Piecewise refinement: {cells_fitted} of {9 * n_kept} cells of kept "
+            "members fitted"
         )
     click.echo(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "

@@ -5,6 +5,8 @@ use crate::*;
 use ndarray::{Array1, Array2, Array3};
 use std::collections::BTreeMap;
 
+mod cells;
+
 /// Create minimal valid MatchesData without TVGs for testing.
 fn make_test_data() -> MatchesData {
     // 3 images, 2 pairs, 5 total matches
@@ -285,6 +287,7 @@ fn make_cluster_patch_test_data() -> MatchesData {
         member_zncc: Array1::from_vec(vec![1.0, 0.93, 0.41, f32::NAN, f32::NAN]),
         member_shift_px: Array1::from_vec(vec![0.0, 1.25, 0.8, f32::NAN, f32::NAN]),
         member_consistency_residual: Array1::from_vec(vec![0.02, 0.05, 0.31, f32::NAN, f32::NAN]),
+        member_cells: None,
         refine_options: serde_json::json!({
             "patch_size": 12.0, "resolution": 15, "min_zncc": 0.85, "max_shift_px": 3.0
         }),
@@ -317,11 +320,11 @@ fn test_round_trip_no_tvg() {
     let data = make_test_data();
     let (dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
-    // Frozen from the writer at format version 7 (the version is in the
+    // Frozen from the writer at format version 8 (the version is in the
     // hashed top-level metadata, so a version bump moves this value).
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "c78185e6732752e2e6a11f79290345c9"
+        "571ce3985e3fe1ba09c442f9350fc861"
     );
 
     // Verify metadata
@@ -1138,8 +1141,9 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
 /// for `version <= 2`, the version-4 `images/image_dims` entry for
 /// `version <= 3`, the version-6 `clusters/member_positions` /
 /// `clusters/member_affine_shapes` entries for `version <= 5` and the
-/// version-7 `member_status_names` legend for `version <= 6`, matching what
-/// old writers produced), then recomputing the
+/// version-7 `member_status_names` legend for `version <= 6` and the version-8
+/// per-cell columns and their `member_cell_status_names` legend for
+/// `version <= 7`, matching what old writers produced), then recomputing the
 /// stored hashes so the result is an internally consistent file of that
 /// version — for authoring old- or future-version fixture bytes.
 fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
@@ -1162,6 +1166,16 @@ fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version
             !n.starts_with("clusters/member_positions.")
                 && !n.starts_with("clusters/member_affine_shapes.")
         });
+    }
+    if version <= 7 {
+        entries.retain(|(n, _)| !n.starts_with("cluster_patches/member_cell_"));
+        if entries.iter().any(|(n, _)| n == CP_METADATA) {
+            mutate_cp_metadata(&mut entries, |json| {
+                json.as_object_mut()
+                    .unwrap()
+                    .remove("member_cell_status_names");
+            });
+        }
     }
     if version <= 6 && entries.iter().any(|(n, _)| n == CP_METADATA) {
         mutate_cp_metadata(&mut entries, |json| {
@@ -2262,6 +2276,7 @@ fn make_select_test_data() -> MatchesData {
             0.25,
             0.35,
         ]),
+        member_cells: None,
         refine_options: serde_json::json!({"patch_size": 12.0, "resolution": 15}),
     });
     data
@@ -3236,7 +3251,10 @@ fn test_member_status_legend_round_trip() {
         stored_member_status_names(&path),
         serde_json::json!(ClusterMemberStatus::NAMES)
     );
-    assert_eq!(read_matches_metadata(&path).unwrap().version, 7);
+    assert_eq!(
+        read_matches_metadata(&path).unwrap().version,
+        MATCHES_FORMAT_VERSION
+    );
 
     let loaded = read_matches(&path).unwrap();
     assert_eq!(

@@ -132,12 +132,16 @@ match-output-file.matches (ZIP archive)
 │   ├── member_positions.{K}.2.float32.zst         # Keypoint position per member, at this file's stage
 │   └── member_affine_shapes.{K}.2.2.float32.zst   # Affine shape per member, at this file's stage
 ├── cluster_patches/                               # (Optional section, requires clusters/)
-│   ├── metadata.json.zst                          # Refinement options, summary counts, status legend
+│   ├── metadata.json.zst                          # Refinement options, summary counts, status legends
 │   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
 │   ├── member_status.{K}.uint8.zst                # Status code per member, an index into the legend
 │   ├── member_consistency_residual.{K}.float32.zst # Warp-consistency residual (NaN if not fitted)
 │   ├── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
-│   └── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
+│   ├── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
+│   ├── member_cell_shift_px.{K}.3.3.2.float32.zst # (Optional, v8+) Per-cell displacement (NaN if not measured)
+│   ├── member_cell_zncc.{K}.3.3.float32.zst       # (Optional, v8+) Per-cell ZNCC (NaN if not read)
+│   ├── member_cell_status.{K}.3.3.uint8.zst       # (Optional, v8+) Per-cell status, an index into its legend
+│   └── member_cell_iterations.{K}.uint8.zst       # (Optional, v8+) Piecewise refinement passes per member
 └── two_view_geometries/                           # (Optional section, requires image_pairs/)
     ├── metadata.json.zst                          # TVG metadata
     ├── config_types.json.zst                        # Unique TwoViewGeometryConfig type strings
@@ -607,6 +611,10 @@ refinement measured and which members stand.
     "reference", "kept", "rejected_low_zncc", "rejected_shift",
     "duplicate_image", "not_evaluated", "rejected_unlocalizable"
   ],
+  "member_cell_status_names": [
+    "fitted", "refused_curvature", "refused_zncc", "not_attempted",
+    "refused_bound"
+  ],
   "refine_options": {
     "patch_size": 8.0,
     "resolution": 15,
@@ -625,15 +633,22 @@ refinement measured and which members stand.
   [`member_status`](#cluster_patchesmember_statuskuint8zst)). A writer always
   states the whole list in the canonical order; a reader accepts any legend and
   normalises the column onto that order
+- `member_cell_status_names`: (version 8+, optional) The legend
+  `member_cell_status` indexes, one name per code in code order. Present
+  exactly when the section carries the
+  [per-cell entries](#per-cell-entries-optional-version-8), and absent
+  otherwise. A writer states the whole list in the canonical order; a reader
+  accepts any legend and normalises the column onto that order
 - `refine_options`: The refinement parameters used, present since the section
   was introduced in version 3. The patch extent appears
   under one of two keys: `patch_size` (the full
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   A consumer that needs the half-width uses `patch_size / 2`, or `radius`
   as-is. The other keys record the settings for a reader to see and are not
-  read back: current files also carry `resolution`, `min_zncc`, `max_shift_px` and
+  read back: current files also carry `resolution`, `min_zncc`, `max_shift_px`,
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
+  and `piecewise`, whether the per-cell refinement ran
 
   Which keys `refine_options` holds is not tied to the format version, since
   the object is a record of settings rather than a stored layout. `radius` was
@@ -644,7 +659,7 @@ refinement measured and which members stand.
   `max_keypoint_uncertainty` is in files refined before that change and
   `max_member_zncc_self_similarity_radius` in files refined after it. A file
   rewritten at a later version, or a selection of it, keeps the keys of the
-  refinement it holds, so a version 7 file can carry either. A reader treats
+  refinement it holds, so a version 7 or later file can carry either. A reader treats
   a missing `refine_options`, or one with neither extent key, as recording no
   patch extent.
 
@@ -755,10 +770,102 @@ refinement measured and which members stand.
   mirroring how `member_zncc` enables re-vetting without re-running
 
 The section records one patch extent and one sampling `resolution` for the
-whole file, and one affine shape per member for the member's whole patch; it
-holds no displacement for the parts of a member's patch. A second, finer
-resolution is proposed in [two-tier-patch-density.md](../drafts/two-tier-patch-density.md), and a per-cell displacement for
-each member in [cluster-patches-piecewise-refinement.md](../drafts/cluster-patches-piecewise-refinement.md).
+whole file. A second, finer resolution is proposed in
+[two-tier-patch-density.md](../drafts/two-tier-patch-density.md).
+
+#### Per-cell entries (optional, version 8+)
+
+A member's affine shape describes its whole patch. The four entries below
+describe the parts of the patch: the reference's `R × R` sampling grid
+(`R` = `refine_options.resolution`) is cut into a three-by-three split of
+**cells**, rows and columns cut at `⌊R/3⌋` and `R − ⌊R/3⌋`, and each cell of
+the reference is registered separately against the member's image, as seen
+through the member's affine shape. A cell's displacement is where its content
+lies in the member's patch relative to where the shape places it. The affine
+shape absorbs everything one linear map can express, so what remains in the
+displacements is the part that varies across the patch in a way no affine
+map matches: for a planar surface, the perspective term a surface normal is
+derived from once camera poses are known; for a patch that spans two
+surfaces, the parallax of the cells off the one the shape follows.
+
+The four entries are present together or absent together, and present exactly
+when `cluster_patches/metadata.json` carries `member_cell_status_names`. A
+file without them carries no per-cell reading; a version 7 file never does.
+Cells are indexed `[k, row, col]`, from the top-left cell of the grid in the
+orientation the grid is sampled in (columns along the grid's first axis, rows
+along its second). Only a member whose status is `kept` carries readings:
+every other member's row is `NaN` displacements, `NaN` ZNCCs,
+`not_attempted` throughout and `0` passes.
+
+##### `cluster_patches/member_cell_shift_px.{K}.3.3.2.float32.zst`
+
+- **Shape**: `(K, 3, 3, 2)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Each cell's displacement `[x, y]`, along the grid's columns and rows, from
+  where the member's affine shape (`clusters/member_affine_shapes`, with its
+  position `clusters/member_positions`) places the cell's centre, in pixels of
+  the sampling grid. A displacement of `d` means the cell's content lies at
+  `c + d` of the member's grid, where `c` is the cell's centre
+- `NaN` where no displacement was measured: a cell whose status is
+  `refused_curvature`, `refused_bound` or `not_attempted`
+- The reference member's own cells would displace by zero by construction, so
+  it is not attempted and carries none
+
+##### `cluster_patches/member_cell_zncc.{K}.3.3.float32.zst`
+
+- **Shape**: `(K, 3, 3)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Each cell's ZNCC against the reference's cell at its best displacement,
+  every sample of the cell weighted equally; `NaN` where nothing was read
+
+##### `cluster_patches/member_cell_status.{K}.3.3.uint8.zst`
+
+- **Shape**: `(K, 3, 3)` where K = cluster_member_count
+- **Data type**: `uint8`
+- **Format**: an index into `cluster_patches/metadata.json`'s
+  `member_cell_status_names`, the file's own legend for this column, read the
+  same way `member_status` reads its legend: a code past the end of the list
+  is invalid, and nothing else about the numbering is fixed by this format
+- **Names**: the only names this format defines, each saying what became of
+  the cell:
+  - `fitted` — the displacement was measured and the member's affine shape was
+    fitted to it together with the other fitted cells
+  - `refused_curvature` — the cell does not pin a displacement: the reference
+    is flat over it, or its ZNCC over the displacements searched is too flat
+    at the best one
+  - `refused_zncc` — its ZNCC at the best displacement is below the bar, so it
+    lies over a different surface in this view; its displacement is measured
+    but the shape was not fitted to it
+  - `not_attempted` — the cell was not registered: the member is not `kept`,
+    a sample the search needs lies outside the image, or no cell of the member
+    survived, in which case the member keeps the shape its whole-patch fit
+    found
+  - `refused_bound` — the best displacement lies on the edge of the range
+    searched, so the optimum is at or past it and no sub-pixel displacement
+    can be read
+- **Canonical order**: a writer always states the whole legend in the order
+  listed above, `0` fitted, `1` refused_curvature, `2` refused_zncc, `3`
+  not_attempted, `4` refused_bound. A reader accepts any legend, in any order
+  and naming any subset of the defined names, and normalises the column onto
+  the canonical order as it loads
+- **Constraint**: The legend is a non-empty list of names, names only cell
+  statuses this format defines, and names none twice
+- **Constraint**: Every value is below the legend's length
+
+##### `cluster_patches/member_cell_iterations.{K}.uint8.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `uint8`
+- How many times the member's image was sampled through its current shape
+  before the shape stopped changing by more than the refinement's tolerance,
+  or the refinement's cap on passes was reached; `0` for a member it did not
+  run on. A member that reached the cap is one whose shape had not settled,
+  and its displacements are less trustworthy
+
+**Integrity.** The four entries are files of the `cluster_patches/` section,
+hashed into `cluster_patches_xxh128` in the section's lexicographic order (they
+sort before `member_consistency_residual`), and the legend rides inside
+`metadata.json`, which the same digest covers.
 
 ### 7. Two-View Geometries (Optional Section)
 
@@ -961,6 +1068,11 @@ the backbone — a file never carries both sets.
    member's `member_affine_shapes` entry is non-singular — its value is that
    feature's own detector affine shape `S_ref`, which every reference-relative
    warp is recovered through
+8. **Per-cell entries paired with their legend**: The four
+   `cluster_patches/member_cell_*` entries are present exactly when
+   `member_cell_status_names` is, each sized by `K` as its name states; every
+   `member_cell_status` value is below the legend's length; and a member
+   whose status is not `kept` has every cell `not_attempted` and `0` passes
 
 ### No required ordering within a pair
 
@@ -1202,7 +1314,16 @@ are the canonical codes and whose `NAMES` is the canonical
 `CLUSTER_REFERENCE_UNREFINABLE`, both in
 [`types.rs`](../../crates/sfmtool-matches-format/src/types.rs). The Rust and
 Python readers hand back `member_status` in the canonical numbering, whatever
-legend the file stated.
+legend the file stated. The per-cell entries are
+`ClusterPatchData::member_cells`, a `MemberCellData`, `None` when the file
+carries none, and the cell statuses are the `ClusterCellStatus` enum, whose
+`NAMES` is the canonical `member_cell_status_names` legend, both in
+[`cells.rs`](../../crates/sfmtool-matches-format/src/cells.rs); readers hand
+back the cell statuses in the canonical numbering too. In Python,
+`read_matches` carries them as `member_cell_shift_px`, `member_cell_zncc`,
+`member_cell_status` and `member_cell_iterations` when the file has them,
+`write_matches` writes the four keys together, and `MatchesFile` exposes them
+under the same names (`None` when absent) beside `has_member_cells`.
 `ClusterPatchData::refine_radius` (and `MatchesFile.refine_radius` in Python)
 returns the patch half-width from either `refine_options` key. The expansion of
 clusters into pairs is `clusters_to_pair_matches` in
@@ -1285,11 +1406,28 @@ the pairs that pass verification, their matches and the
 
 ## Versioning and Migration
 
-The format has seven released versions (`1` through `7`). The format is versioned
+The format has eight released versions (`1` through `8`). The format is versioned
 (`metadata.json` `version`) precisely so that changes like the ones below can upgrade
 on load instead of breaking old files. Writers always emit the current version;
 readers accept any version up to it, with one exception — a cluster-backbone
 file below version 6, which is refused.
+
+### Version 7 → Version 8
+
+| Change | Detail |
+|---|---|
+| `cluster_patches/member_cell_shift_px`, `member_cell_zncc`, `member_cell_status`, `member_cell_iterations` | Four new optional entries, present together or absent together: each member's per-cell displacement, ZNCC, status and refinement passes. See [Per-cell entries](#per-cell-entries-optional-version-8). They are files of the `cluster_patches/` section and are hashed into `cluster_patches_xxh128` with it. |
+| `cluster_patches/metadata.json` `member_cell_status_names` | New key, present exactly when the per-cell entries are: the legend `member_cell_status` indexes. |
+
+Nothing that a version 7 file stores changes meaning or layout. **A version 7
+file reads unchanged** and has no per-cell entries, so a reader reports that it
+carries no cells. A version 7 file that carries `member_cell_status_names` or
+any `member_cell_*` entry is refused, since no version 7 writer wrote one; a
+version 8 file with the entries but no legend, or the legend but not all four
+entries, is refused, since it would leave the column unexplained or the cells
+incomplete. Integrity verification follows the same rule. A re-written file is
+a new version 8 file, with new hashes. Pairwise files have no
+`cluster_patches/` section, so only their metadata `version` moves.
 
 ### Version 6 → Version 7
 
@@ -1408,6 +1546,12 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
+- **Version 8**: Per-cell entries — `cluster_patches/` may carry
+  `member_cell_shift_px`, `member_cell_zncc`, `member_cell_status` and
+  `member_cell_iterations`, present together with a `member_cell_status_names`
+  legend in its metadata: each member's displacement, ZNCC and status per cell
+  of a three-by-three split of its patch, and its refinement passes. Version 7
+  files read unchanged and carry no cells.
 - **Version 7**: Status legend — `cluster_patches/metadata.json` carries
   `member_status_names`, and a `member_status` code is an index into it. A
   writer states the canonical legend; a reader accepts any legend and

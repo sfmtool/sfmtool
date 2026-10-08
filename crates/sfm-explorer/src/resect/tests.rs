@@ -130,6 +130,7 @@ pub(crate) fn write_cluster_patches_like_tracks(recon: &SfmrReconstruction, path
             member_zncc: ndarray::Array1::from_elem(m, 1.0),
             member_shift_px: ndarray::Array1::zeros(m),
             member_consistency_residual: ndarray::Array1::zeros(m),
+            member_cells: None,
             refine_options: serde_json::json!({}),
         }),
         two_view_geometries: None,

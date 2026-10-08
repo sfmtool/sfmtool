@@ -5,8 +5,11 @@
 
 use std::path::Path;
 
-use ndarray::{Array1, Array2, Array3};
+use ndarray::{Array1, Array2, Array3, Array4};
 
+use crate::cells::{
+    cell_entry_errors, normalize_cell_statuses, read_member_cell_status_legend, MemberCellData,
+};
 use crate::entries;
 use crate::types::*;
 use sfmtool_archive_io::{read_json_entry, DecodedEntries};
@@ -459,14 +462,79 @@ fn read_cluster_patches_section(
     )?;
     let member_consistency_residual = Array1::from_vec(member_consistency_vec);
 
+    let member_cells = read_member_cells(decoded, &cp_meta, stored_version, &member_status)?;
+
     Ok(ClusterPatchData {
         reference_members,
         member_status,
         member_zncc,
         member_shift_px,
         member_consistency_residual,
+        member_cells,
         refine_options,
     })
+}
+
+/// Read the optional per-cell columns of `cluster_patches/` (format version
+/// 8), resolving `member_cell_status` through the file's own
+/// `member_cell_status_names` legend.
+///
+/// The legend and the four columns are present together or absent together;
+/// a file with neither, which includes every file below version 8, has no
+/// cells and reads as `None`.
+fn read_member_cells(
+    decoded: &DecodedEntries,
+    cp_meta: &serde_json::Value,
+    stored_version: u32,
+    member_status: &Array1<u8>,
+) -> Result<Option<MemberCellData>, MatchesError> {
+    let member_count = member_status.len();
+    let legend = read_member_cell_status_legend(cp_meta, stored_version)
+        .map_err(MatchesError::InvalidFormat)?;
+    if let Some(error) = cell_entry_errors(decoded.names(), member_count, legend.is_some())
+        .into_iter()
+        .next()
+    {
+        return Err(MatchesError::InvalidFormat(error));
+    }
+    let Some(legend) = legend else {
+        return Ok(None);
+    };
+
+    let iterations: Vec<u8> = decoded.binary_array(
+        &entries::cluster_patches_member_cell_iterations(member_count),
+        member_count,
+    )?;
+    let shift_px: Vec<f32> = decoded.binary_array(
+        &entries::cluster_patches_member_cell_shift_px(member_count),
+        member_count * 18,
+    )?;
+    let mut status: Vec<u8> = decoded.binary_array(
+        &entries::cluster_patches_member_cell_status(member_count),
+        member_count * 9,
+    )?;
+    let zncc: Vec<f32> = decoded.binary_array(
+        &entries::cluster_patches_member_cell_zncc(member_count),
+        member_count * 9,
+    )?;
+    // As for member_status, the file's own numbering stops here.
+    normalize_cell_statuses(&mut status, &legend).map_err(MatchesError::InvalidFormat)?;
+    let reshape = |name: &str, e: ndarray::ShapeError| {
+        MatchesError::ShapeMismatch(format!("{name} reshape: {e}"))
+    };
+    let cells = MemberCellData {
+        shift_px: Array4::from_shape_vec((member_count, 3, 3, 2), shift_px)
+            .map_err(|e| reshape("member_cell_shift_px", e))?,
+        zncc: Array3::from_shape_vec((member_count, 3, 3), zncc)
+            .map_err(|e| reshape("member_cell_zncc", e))?,
+        status: Array3::from_shape_vec((member_count, 3, 3), status)
+            .map_err(|e| reshape("member_cell_status", e))?,
+        iterations: Array1::from_vec(iterations),
+    };
+    if let Some(error) = cells.validation_error(member_status.as_slice().unwrap()) {
+        return Err(MatchesError::InvalidFormat(error));
+    }
+    Ok(Some(cells))
 }
 
 fn read_tvg_section(

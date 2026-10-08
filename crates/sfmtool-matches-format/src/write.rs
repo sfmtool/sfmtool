@@ -9,6 +9,7 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipWriter;
 
+use crate::cells::{ClusterCellStatus, MEMBER_CELL_STATUS_NAMES_KEY};
 use crate::entries;
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entry};
@@ -31,7 +32,11 @@ use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entr
 /// `member_affine_shapes` `(M, 2, 2)`. A `cluster_patches` section's
 /// `member_status` holds canonical [`ClusterMemberStatus`] discriminants, and
 /// the writer states the canonical `member_status_names` legend beside them
-/// (format version 7).
+/// (format version 7). Its optional per-cell columns
+/// ([`ClusterPatchData::member_cells`]) hold canonical [`ClusterCellStatus`]
+/// discriminants, are sized by the member count, carry readings only for
+/// `kept` members, and are written with the canonical
+/// `member_cell_status_names` legend (format version 8).
 pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result<(), MatchesError> {
     let image_count = data.metadata.image_count as usize;
 
@@ -340,6 +345,43 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         let member_count = cp.member_status.len();
         let mut cp_hasher = Xxh3::new();
 
+        // cluster_patches/member_cell_* (optional, version 8): they sort
+        // before member_consistency_residual, so they are hashed first.
+        if let Some(cells) = &cp.member_cells {
+            let iterations = cells.iterations.as_standard_layout();
+            write_binary_entry_hashed(
+                zip,
+                &entries::cluster_patches_member_cell_iterations(member_count),
+                iterations.as_slice().unwrap(),
+                zstd_level,
+                &mut cp_hasher,
+            )?;
+            let shift = cells.shift_px.as_standard_layout();
+            write_binary_entry_hashed(
+                zip,
+                &entries::cluster_patches_member_cell_shift_px(member_count),
+                bytemuck::cast_slice(shift.as_slice().unwrap()),
+                zstd_level,
+                &mut cp_hasher,
+            )?;
+            let status = cells.status.as_standard_layout();
+            write_binary_entry_hashed(
+                zip,
+                &entries::cluster_patches_member_cell_status(member_count),
+                status.as_slice().unwrap(),
+                zstd_level,
+                &mut cp_hasher,
+            )?;
+            let zncc = cells.zncc.as_standard_layout();
+            write_binary_entry_hashed(
+                zip,
+                &entries::cluster_patches_member_cell_zncc(member_count),
+                bytemuck::cast_slice(zncc.as_slice().unwrap()),
+                zstd_level,
+                &mut cp_hasher,
+            )?;
+        }
+
         // cluster_patches/member_consistency_residual
         write_binary_entry_hashed(
             zip,
@@ -378,12 +420,16 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
 
         // cluster_patches/metadata.json, with the whole canonical legend the
         // member_status codes index (validated against it above).
-        let cp_meta = serde_json::json!({
+        let mut cp_meta = serde_json::json!({
             "cluster_count": cluster_count,
             "member_count": member_count,
             "member_status_names": ClusterMemberStatus::NAMES,
             "refine_options": cp.refine_options,
         });
+        // The per-cell columns' legend, present exactly when they are.
+        if cp.member_cells.is_some() {
+            cp_meta[MEMBER_CELL_STATUS_NAMES_KEY] = serde_json::json!(ClusterCellStatus::NAMES);
+        }
         let bytes = write_json_entry(
             zip,
             entries::cluster_patches_metadata(),
@@ -792,6 +838,35 @@ fn validate_dimensions(data: &MatchesData, image_count: usize) -> Result<(), Mat
                 cp.member_shift_px.len()
             )
         );
+        if let Some(cells) = &cp.member_cells {
+            for (name, shape, expected) in [
+                (
+                    "member_cell_shift_px",
+                    cells.shift_px.shape(),
+                    &[member_count, 3, 3, 2][..],
+                ),
+                (
+                    "member_cell_zncc",
+                    cells.zncc.shape(),
+                    &[member_count, 3, 3],
+                ),
+                (
+                    "member_cell_status",
+                    cells.status.shape(),
+                    &[member_count, 3, 3],
+                ),
+                (
+                    "member_cell_iterations",
+                    cells.iterations.shape(),
+                    &[member_count],
+                ),
+            ] {
+                check!(
+                    shape == expected,
+                    format!("{name} shape {shape:?} != {expected:?} (cluster_member_count {member_count})")
+                );
+            }
+        }
     }
 
     // TVG dimensions
@@ -1076,6 +1151,13 @@ fn validate_cluster_patches_constraints(
             return Err(MatchesError::InvalidFormat(format!(
                 "member_status[{k}] = {status} is not a valid ClusterMemberStatus discriminant"
             )));
+        }
+    }
+
+    if let Some(cells) = &cp.member_cells {
+        let member_status: Vec<u8> = cp.member_status.iter().copied().collect();
+        if let Some(error) = cells.validation_error(&member_status) {
+            return Err(MatchesError::InvalidFormat(error));
         }
     }
 

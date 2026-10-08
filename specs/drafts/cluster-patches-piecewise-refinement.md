@@ -8,7 +8,7 @@
 - a cell whose own reading fails its gate is not fitted and is stored as refused, and the affine update is fitted only to the cells that survive, dropping to a similarity or a shift when too few do;
 - the seed's writer turns the per-cell displacements into a normal and a determinacy verdict once poses exist, replacing the tilt solve on whole-member warps its debug snapshots carry today.
 
-Not decided: whether cells are fitted as pure shifts or as shift plus scale; whether the cell fit runs on every member or only on kept ones; the `.matches` version that carries the columns; whether the loop replaces the affine cascade or runs after it. See [Open questions](#open-questions).
+Not decided: whether cells are fitted as pure shifts or as shift plus scale; whether the cell fit runs on every member or only on kept ones; whether the loop replaces the affine cascade or runs after it; whether the stage runs by default. See [Open questions](#open-questions).
 
 Amends:
 - [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md): the shape fit and a second output per member
@@ -110,7 +110,7 @@ With poses, a cell's centre in a member is a pixel, and that pixel is a ray. The
 
 ## Format
 
-Per kept member, four new entries in the cluster-patches file: `member_cell_shift_px` of shape `(members, 3, 3, 2)`, `member_cell_zncc` of shape `(members, 3, 3)`, `member_cell_status` of shape `(members, 3, 3)` with its legend in the section's metadata, following the convention `member_status` adopted in version 7, and `member_cell_iterations` of shape `(members,)`. They are optional entries introduced in the next version; a reader of an older file has no cells and a consumer that needs them says so.
+Per kept member, four new entries in the cluster-patches file: `member_cell_shift_px` of shape `(members, 3, 3, 2)`, `member_cell_zncc` of shape `(members, 3, 3)`, `member_cell_status` of shape `(members, 3, 3)` with its legend `member_cell_status_names` in the section's metadata, following the convention `member_status` adopted in version 7, and `member_cell_iterations` of shape `(members,)`. They are optional entries of `.matches` version 8, present together with the legend or absent together with it, and a member that is not kept carries `NaN` / `NaN` / `not_attempted` / `0`. A reader of an older file has no cells and a consumer that needs them says so. The format side is specified in [formats/matches-file-format.md](../formats/matches-file-format.md) § "Per-cell entries"; the Rust types are `MemberCellData` and `ClusterCellStatus` in [cells.rs](../../crates/sfmtool-matches-format/src/cells.rs), filled from `ClusterRefineResult::cells` by `member_cell_data` in [piecewise.rs](../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs). The binding takes `piecewise=True` and returns the four arrays; `sfm cluster-patches --piecewise` writes them.
 
 ## Implementation notes
 
@@ -124,7 +124,7 @@ Per kept member, four new entries in the cluster-patches file: `member_cell_shif
 - The loop's result is all or nothing. When any iteration fails, the first or a later one, by a failed render, no surviving cell, or an update that reflects (`det A ≤ 0`) or is not finite, the member keeps its cascade shape and all nine cells are stored as not attempted; what earlier iterations fitted is discarded, because the cells were read at a shape that would not be the one returned.
 - After the loop moves a member, its whole-patch ZNCC, its parts and its shift from the seed are read again at the new shape, and the cascade's acceptance gates, `min_zncc` and `max_shift_px`, are applied to those readings. A member that fails either, or whose new support leaves the frame, keeps its cascade shape and readings, with all nine cells not attempted.
 - A cell's search reads the window's sum and sum of squares from summed-area tables of the working patch, built once per render; the template side is mean-removed, so the cross term needs no window mean and is the only pass over the window per shift.
-- The stage is off by default (`ClusterRefineParams::piecewise` is `None`) until the cluster-patches file carries the cells; the milestone that adds them turns it on from the CLI, and the fleet comparison decides the default.
+- The stage is off by default (`ClusterRefineParams::piecewise` is `None`, the binding's `piecewise=False`, `sfm cluster-patches --no-piecewise`). `--piecewise` turns it on and stores the cells; the fleet comparison decides the default.
 
 ## Determinism and precision
 
@@ -154,5 +154,4 @@ Fitting cells with a full affine. A cell that needs one is over another surface.
 
 - **Shift only, or shift and scale.** Scale per cell would read the perspective term's radial component; it also costs a two-dimensional search per cell. Start with shift.
 - **All members or kept members.** Refused members have no trustworthy affine shape to start from. Kept members only.
-- **Version.** Whether these columns ride with the next planned `.matches` version or get their own.
 - **Replace or follow the cascade.** The loop can start from the cascade's shape, or from the detection's shape with the cascade removed. Start after the cascade, measure how many iterations the loop needs from the detection alone, and decide whether the cascade still earns its cost.

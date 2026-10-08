@@ -320,6 +320,10 @@ impl MatchesData {
                 member_zncc: gather_f32(&cp.member_zncc),
                 member_shift_px: gather_f32(&cp.member_shift_px),
                 member_consistency_residual: gather_f32(&cp.member_consistency_residual),
+                member_cells: cp.member_cells.as_ref().map(|cells| {
+                    let members: Vec<usize> = kept_members.iter().map(|&m| m as usize).collect();
+                    cells.select(&members)
+                }),
                 refine_options: cp.refine_options.clone(),
             }
         });
