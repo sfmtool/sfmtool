@@ -188,7 +188,10 @@ def test_localize_keypoints_remaps_stored_references(embedded):
     recon = embedded.clone_with_changes(reference_observations=stored)
     out = LocalizeKeypointsTransform().apply(recon)
     assert out.patch_bitmaps is None
-    _assert_references_follow_their_images(recon, stored, out, picks=False)
+    _, lost = _assert_references_follow_their_images(recon, stored, out, picks=False)
+    # The localizer drops some reference images on this fixture, so the -1
+    # branch is exercised.
+    assert lost > 0
 
 
 def test_bundle_adjust_keeps_stored_references(embedded):

@@ -2591,11 +2591,14 @@ agree, a free point's constraint distance being `NaN` by definition. The
 observations are compared in the order they are stored, which the commit sorts
 into, so a bench holding the same sightings in another order is the same track.
 
-Three things are therefore changes even where the record is the one the point
+Four things are therefore changes even where the record is the one the point
 holds: a track with **no origin** (it creates, which a second copy of one
 landmark is meant to do -- nothing here looks for an identical point elsewhere in
 the value), an origin whose point has **gone** since, and a track with a sighting
-still to **absorb** from a live point.
+still to **absorb** from a live point, and an origin whose reference observation
+only the display render picked (**display-only**): a commit saves the reference
+the bench holds, so it writes that point again with the mark cleared, and a save
+then writes the reference rather than `-1`.
 
 Two columns the commit writes are not carried across from the point, so the
 *first* commit of a point put on the bench and left alone is in general a change:
@@ -2976,6 +2979,8 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   presses after the one that wrote the point leave the value, the indexes and
   the point count where the first left them and report the same point each time.
   The same sightings in another order are the same track.
+- An unedited commit of a point whose reference only the display render picked
+  writes it again, and a save then names that reference rather than `-1`.
 - A sighting turned out, a point taken back, a track with no origin and a
   sighting still to absorb each write again; every column the commit writes is
   moved in turn and each is seen.

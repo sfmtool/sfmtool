@@ -404,10 +404,12 @@ impl PySfmrReconstruction {
     /// that does not pass it keeps the references, whether it keeps, replaces
     /// or drops the bitmaps or passes a new ``patches`` frame for the same
     /// points. A call that replaces the tracks moves each reference to the
-    /// observation of the same image in the point's new track (``-1`` where
-    /// there is none). A call that keeps patch frames and either changes the
-    /// point count or replaces the tracks together with the image names has no
-    /// way to carry the references, and is refused unless it passes
+    /// observation of the image of the same name in the point's new track
+    /// (``-1`` where there is none), so images appended or reordered in the same
+    /// call carry it. A call that keeps patch frames and either changes the
+    /// point count, or replaces the tracks while an image a reference is in no
+    /// longer has its name on exactly one image, has no way to carry the
+    /// references, and is refused unless it passes
     /// ``reference_observations`` (or the input names none). A point left with
     /// a zero patch frame keeps its reference: the observation is still in its
     /// track.

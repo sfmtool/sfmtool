@@ -1626,11 +1626,13 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   patch frames. Python `clone_with_changes` keeps the old references unless
   new ones are passed, whether it keeps, replaces or drops the bitmaps or
   passes `patches` for the same points; it moves each reference with its
-  image where the tracks are replaced, and gives every row `-1` where the frame
-  is new. A call that keeps patch frames and changes the point count, or
-  replaces the tracks together with the image names, has no way to carry the
-  references and is refused unless it passes the column, where the input
-  names any reference.
+  image, matched by name, where the tracks are replaced, and gives every row
+  `-1` where the frame is new. A call that keeps patch frames and changes the
+  point count, or replaces the tracks while an image a reference is in no
+  longer has its name on exactly one image, has no way to carry the references
+  and is refused unless it passes the column, where the input names any
+  reference. A call that changes the point count and keeps the input's patch
+  frames is refused for the frames first.
 - **Older files**: a reader that reads a file below version 12 with patch
   frames creates the column with every row `-1`, so every reconstruction with
   patch frames has one in memory and every later save writes it. A file below

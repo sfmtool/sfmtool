@@ -213,7 +213,11 @@ impl From<EditError> for CommitError {
 /// value comes back as it stands with `changed: false` and `point` naming the
 /// point that already holds the track. Committing the same track twice
 /// otherwise deletes a point and re-adds an identical one at a new index for
-/// every press of the button.
+/// every press of the button. The exception is an origin whose reference
+/// observation only the display render picked
+/// ([`PointRecord::display_only_reference`]): a commit saves the reference the
+/// bench holds, so that origin is written again with the mark cleared, and a
+/// save then writes its reference rather than `-1`.
 ///
 /// Nothing here triangulates. The track commits with the position it carries,
 /// and a track that carries none refuses naming the fit as the step that
@@ -399,12 +403,15 @@ pub fn commit(
     //
     // The origin's own record, column for column, against the one above. A
     // track with something to absorb has an edit to make whatever the two say.
+    // So has an origin whose reference only the display render picked: the
+    // commit saves the reference the bench holds, which the mark would save
+    // as `-1`.
     if let Some(point) = origin.filter(|_| absorbed.is_empty()) {
         let held = edited
             .point(point)
             .expect("the origin resolves")
             .to_record();
-        if held.agrees_with(&record) {
+        if held.agrees_with(&record) && !held.display_only_reference {
             return Ok((
                 edited.clone(),
                 CommitReport {

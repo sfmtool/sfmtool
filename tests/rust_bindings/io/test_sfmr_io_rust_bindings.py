@@ -287,7 +287,7 @@ class TestReferenceObservations:
     def test_a_clone_that_cannot_carry_the_references_is_refused(
         self, embedded_patches_sfmr
     ):
-        # A changed point count, or new tracks over renamed images, leaves no
+        # A changed point count, or new tracks over a renamed image, leaves no
         # way to carry a reference; resetting every row to -1 would cut each
         # bitmap from its observation without a word.
         recon = SfmrReconstruction.load(embedded_patches_sfmr)
@@ -329,10 +329,16 @@ class TestReferenceObservations:
             unnamed.clone_with_changes(**columns).reference_observations == -1
         )
 
-        # New tracks over swapped image names: the image index no longer
-        # names the image the reference was in.
+        # A changed point count with the input's patch frames kept is refused
+        # for the frames, which no longer describe the points, not for the
+        # references.
+        with pytest.raises(ValueError, match="patch frames have"):
+            recon.clone_with_changes(positions=columns["positions"])
+
+        # New tracks over a renamed image: no image of the result has the
+        # name a reference is carried by.
         names = list(recon.image_names)
-        names[0], names[1] = names[1], names[0]
+        names[0] = "renamed.jpg"
         tracks = dict(
             track_image_indexes=np.ascontiguousarray(recon.track_image_indexes),
             track_feature_indexes=np.zeros(
@@ -351,6 +357,30 @@ class TestReferenceObservations:
         np.testing.assert_array_equal(
             recon.clone_with_changes(image_names=names).reference_observations, refs
         )
+        # New tracks over images appended, or reordered, carry each reference
+        # by its image's name.
+        appended = recon.clone_with_changes(
+            **tracks,
+            image_names=list(recon.image_names) + ["extra.jpg"],
+            image_file_hashes=list(recon.image_file_hashes) + [bytes(16)],
+        )
+        np.testing.assert_array_equal(appended.reference_observations, refs)
+        old_names = list(recon.image_names)
+        swapped = list(old_names)
+        swapped[0], swapped[1] = swapped[1], swapped[0]
+        reordered = recon.clone_with_changes(**tracks, image_names=swapped)
+        counts = np.asarray(recon.observation_counts).astype(np.int64)
+        offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        imgs = np.asarray(recon.track_image_indexes)
+        new_refs = np.asarray(reordered.reference_observations)
+        for p in range(recon.point_count):
+            if refs[p] < 0:
+                assert new_refs[p] == -1
+                continue
+            name = old_names[imgs[offsets[p] + refs[p]]]
+            track = imgs[offsets[p] : offsets[p] + counts[p]]
+            here = [k for k, i in enumerate(track) if swapped[i] == name]
+            assert new_refs[p] == (here[0] if here else -1)
 
     def test_references_stay_when_the_bitmaps_change_or_go(
         self, embedded_patches_sfmr, tmp_path

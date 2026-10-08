@@ -517,6 +517,58 @@ fn a_reference_reaches_the_bench_with_or_without_a_bitmap() {
     assert_eq!(named, vec![1, 2]);
 }
 
+#[test]
+fn committing_an_unedited_display_pick_saves_it() {
+    let truth = GroundTruth::load();
+    let mut recon = truth.recon.clone();
+    let offsets = &recon.point_set.observation_offsets;
+    let point = (0..recon.point_count())
+        .find(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK)
+        .expect("the ground truth has a long track");
+    let mut references = vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; recon.point_count()];
+    references[point] = 2;
+    recon.point_set.reference_observations = Some(references);
+
+    // A first commit settles the point on what the bench writes.
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        point as u32,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = bench.track(&report.label).expect("just put on").clone();
+    assert_eq!(track.track().unwrap().reference, Some(2));
+    let (next, first) = commit(&edited, &track).expect("the track commits");
+    let (mut settled_recon, map) = next.materialize();
+    let settled_point = map.forward(first.point).expect("the point is live");
+    let settled = track.with_origin(1, settled_point);
+
+    // A stored reference: committing the unedited track again writes nothing.
+    let unmarked = EditedReconstruction::new(Arc::new(settled_recon.clone()));
+    let (_, report) = commit(&unmarked, &settled).expect("the track commits");
+    assert!(!report.changed);
+
+    // The same reference picked only by the display render: the commit saves
+    // the reference the bench holds, rather than leaving the mark to save -1.
+    let mut marks = vec![false; settled_recon.point_count()];
+    marks[settled_point as usize] = true;
+    settled_recon.point_set.display_only_references = Some(marks);
+    let marked = EditedReconstruction::new(Arc::new(settled_recon));
+    let saved = marked.materialize().0.to_sfmr_data();
+    let column = saved.reference_observations.expect("framed");
+    assert!(column.iter().all(|&r| r < 0), "the mark saves -1");
+    let (committed, report) = commit(&marked, &settled).expect("the track commits");
+    assert!(report.changed);
+    let view = committed.point(report.point).expect("the point");
+    assert!(!view.display_only_reference());
+    let saved = committed.materialize().0.to_sfmr_data();
+    let column = saved.reference_observations.expect("framed");
+    let named: Vec<i32> = column.iter().copied().filter(|&r| r >= 0).collect();
+    assert_eq!(named, vec![2]);
+}
+
 // ---- The last fallback: the fused mean stands ------------------------------
 
 /// A ground-truth point the reference-view rule reaches only through its last

@@ -697,7 +697,8 @@ reference-view rule picked, as `stage_data.reference_observation` reports it on
 the bench. `has_bitmap` says whether the track has a stored patch bitmap, which
 the rows' `bitmap_zncc` scores are read against, and `bitmap_observation` is
 the row the bitmap is the tile of, null for a bitmap that names none (a mean of
-the rows, or one stored before the reference was recorded) or where there is no
+the rows, one stored before the reference was recorded, or the render of an
+observation since removed from the point) or where there is no
 bitmap, as `stage_data.has_bitmap` and `stage_data.bitmap_observation` report
 them on the bench. On a file with patch frames but no stored bitmaps, the
 bitmap is the one the viewer rendered for display at open, and

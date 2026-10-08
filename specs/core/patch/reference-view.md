@@ -648,7 +648,6 @@ template the localizer aligns to is decided separately
 Part 5). Replacing a point's defined reference when a sharper observation is
 added or fitted is not done: a render renders from the defined reference, an
 operation that only adds an observation (Add Image to Tracks) keeps the bitmap
-and its reference, and the refiners keep a stored reference. Replacing a
-defined reference with the rule's current pick is a separate operation, not
-built ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
+and its reference, and the refiners keep a stored reference. No operation
+replaces a defined reference with the rule's current pick ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
 open questions).

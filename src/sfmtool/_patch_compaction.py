@@ -158,7 +158,7 @@ def compact_to_embedded_patches(
     the image the point's bitmap names (``reference_image``) where
     ``patch_bitmaps`` is passed and the new track holds that image, and
     ``-1`` otherwise. A point whose stored reference is kept has a bitmap that
-    is not that observation's render, so a caller passing ``patch_bitmaps``
+    is not necessarily that observation's render, so a caller passing ``patch_bitmaps``
     renders those points again (:func:`render_from_references`).
 
     Returns:

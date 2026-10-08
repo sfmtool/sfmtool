@@ -159,7 +159,7 @@ mark the row the display bitmap is the tile of, and is marked in
 `display_only_references` (`Some` only beside a marked column). A display pick
 is shown and never saved, as the display bitmaps are not:
 `PointSet::saved_reference_observations`, which `to_sfmr_data` writes, gives
-`-1` for each marked row, and `PointSet::drop_patch_bitmaps` drops the column
+`-1` for each marked row, and `PointSet::drop_patch_bitmaps` drops the bitmap column
 and resets the marked rows to `-1`. Every pass that drops or reorders points
 selects the marks in lockstep with the points
 (`PointSet::select_display_only_references`); a point an edit adds, such as a
