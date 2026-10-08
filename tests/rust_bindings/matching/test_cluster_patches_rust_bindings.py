@@ -91,6 +91,7 @@ class TestRefineClusterPatches:
             "member_cell_zncc",
             "member_cell_status",
             "member_cell_iterations",
+            "piecewise_options",
         }
         # Without piecewise=True the per-cell columns are absent.
         for key in (
@@ -98,6 +99,7 @@ class TestRefineClusterPatches:
             "member_cell_zncc",
             "member_cell_status",
             "member_cell_iterations",
+            "piecewise_options",
         ):
             assert result[key] is None, key
         assert result["reference_members"].dtype == np.uint32
@@ -159,6 +161,14 @@ class TestRefineClusterPatches:
         assert status.dtype == np.uint8 and status.shape == (2, 3, 3)
         assert iterations.dtype == np.uint8 and iterations.shape == (2,)
         assert set(np.unique(status).tolist()) <= set(range(5))
+        # The settings the run used: the Rust defaults.
+        assert result["piecewise_options"] == {
+            "cell_shift_bound_px": 2.0,
+            "min_cell_zncc": 0.8,
+            "min_cell_curvature": 0.02,
+            "update_tolerance_px": 0.05,
+            "max_iterations": 5,
+        }
 
         # The reference is not kept: no readings.
         assert result["member_status"][0] == STATUS_REFERENCE
@@ -180,6 +190,32 @@ class TestRefineClusterPatches:
             plain["member_affine_shapes"][1],
             atol=0.05,
         )
+
+    def test_piecewise_settings_are_passed_through(self):
+        images, pos, aff, starts, m_img, m_feat = _inputs()
+        result = refine_cluster_patches(
+            images,
+            pos,
+            aff,
+            starts,
+            m_img,
+            m_feat,
+            piecewise=True,
+            cell_shift_bound_px=3.0,
+            min_cell_zncc=0.9,
+            min_cell_curvature=0.05,
+            update_tolerance_px=0.1,
+            max_iterations=1,
+        )
+        assert result["piecewise_options"] == {
+            "cell_shift_bound_px": 3.0,
+            "min_cell_zncc": 0.9,
+            "min_cell_curvature": 0.05,
+            "update_tolerance_px": 0.1,
+            "max_iterations": 1,
+        }
+        # A cap of one render stops every member's loop after one pass.
+        assert result["member_cell_iterations"].max() <= 1
 
     def test_out_of_range_feature_is_not_evaluated(self):
         images, pos, aff, starts, m_img, m_feat = _inputs()

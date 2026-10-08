@@ -110,8 +110,12 @@ pub enum CellStatus {
     /// [`PiecewiseParams::min_cell_zncc`]: it is over a different surface.
     RefusedZncc = 2,
     /// The cell was not registered: a sample the search needs could not be
-    /// read, or no cell of the member survived, in which case the member
-    /// keeps its cascade shape and every cell is stored this way.
+    /// read, or no cell of the member survived. Every cell is stored this way
+    /// when the refined shape could not be accepted (the render failed, the
+    /// update was not finite or reflected, the readings at the refined shape
+    /// failed the member's gates, or its support left the frame), in which
+    /// case the member keeps its cascade shape and the iteration count
+    /// includes the pass that failed.
     NotAttempted = 3,
     /// The cell's best whole shift lies on the search bound
     /// [`PiecewiseParams::cell_shift_bound_px`], so no whole-pixel neighbour

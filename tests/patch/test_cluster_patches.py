@@ -78,6 +78,7 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     assert data["refine_options"]["max_member_zncc_self_similarity_radius"] == 2.5
     # Without --piecewise the file carries no per-cell columns.
     assert data["refine_options"]["piecewise"] is False
+    assert "min_cell_zncc" not in data["refine_options"]
     assert "member_cell_status" not in data
 
     statuses = data["member_status"]
@@ -302,6 +303,24 @@ def test_cluster_patches_piecewise_writes_the_cells(cluster_matches_file: Path):
         )
     assert cp_meta["member_cell_status_names"] == CELL_STATUS_NAMES
     assert cp_meta["refine_options"]["piecewise"] is True
+    # The piecewise settings sit beside `piecewise` as flat keys, at the
+    # kernel's defaults since the command exposes none of them.
+    assert {
+        key: cp_meta["refine_options"][key]
+        for key in (
+            "cell_shift_bound_px",
+            "min_cell_zncc",
+            "min_cell_curvature",
+            "update_tolerance_px",
+            "max_iterations",
+        )
+    } == {
+        "cell_shift_bound_px": 2.0,
+        "min_cell_zncc": 0.8,
+        "min_cell_curvature": 0.02,
+        "update_tolerance_px": 0.05,
+        "max_iterations": 5,
+    }
 
     data = read_matches(out_path)
     m = data["metadata"]["cluster_member_count"]

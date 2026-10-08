@@ -223,6 +223,9 @@ def _run_cluster_patches(
             "max_shift_px": max_shift,
             "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
             "piecewise": piecewise,
+            # The piecewise refinement's settings, as flat keys beside
+            # `piecewise`, when the stage ran.
+            **(result["piecewise_options"] or {}),
         },
         "has_two_view_geometries": False,
     }

@@ -175,7 +175,7 @@ always store the pairwise backbone.
 
 ```json
 {
-  "version": 7,
+  "version": 8,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -224,7 +224,7 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `7`; writers emit `7` (see
+- `version`: Format version number. `1` through `8`; writers emit `8` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches. The
   format does not restrict the string; these values have a defined meaning:
@@ -648,7 +648,10 @@ refinement measured and which members stand.
   read back: current files also carry `resolution`, `min_zncc`, `max_shift_px`,
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
-  and `piecewise`, whether the per-cell refinement ran
+  and `piecewise`, whether the per-cell refinement ran. When it ran, the
+  piecewise refinement's settings sit beside it as flat keys:
+  `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
+  `update_tolerance_px` and `max_iterations`
 
   Which keys `refine_options` holds is not tied to the format version, since
   the object is a record of settings rather than a stored layout. `radius` was
@@ -816,7 +819,8 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
 - **Shape**: `(K, 3, 3)` where K = cluster_member_count
 - **Data type**: `float32` (little-endian)
 - Each cell's ZNCC against the reference's cell at its best displacement,
-  every sample of the cell weighted equally; `NaN` where nothing was read
+  every sample of the cell weighted equally and averaged over the template's
+  textured colour channels; `NaN` where nothing was read
 
 ##### `cluster_patches/member_cell_status.{K}.3.3.uint8.zst`
 
@@ -836,10 +840,15 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   - `refused_zncc` — its ZNCC at the best displacement is below the bar, so it
     lies over a different surface in this view; its displacement is measured
     but the shape was not fitted to it
-  - `not_attempted` — the cell was not registered: the member is not `kept`,
-    a sample the search needs lies outside the image, or no cell of the member
-    survived, in which case the member keeps the shape its whole-patch fit
-    found
+  - `not_attempted` — the cell was not registered, or its registration was
+    not used: the member is not `kept`, a sample the search needs lies outside
+    the image, no cell of the member survived, or the refined shape could not
+    be accepted — the image could not be sampled through it, the fitted
+    update was not finite or reflected the patch, the whole-patch ZNCC or the
+    shift from the seed read again at the refined shape failed the bars the
+    member was kept on, or the refined shape's support left the image. In
+    every case but the first, every cell of the member is `not_attempted` and
+    the member keeps the shape its whole-patch fit found
   - `refused_bound` — the best displacement lies on the edge of the range
     searched, so the optimum is at or past it and no sub-pixel displacement
     can be read
@@ -859,7 +868,8 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
 - How many times the member's image was sampled through its current shape
   before the shape stopped changing by more than the refinement's tolerance,
   or the refinement's cap on passes was reached; `0` for a member it did not
-  run on. A member that reached the cap is one whose shape had not settled,
+  run on. A member whose refined shape could not be accepted (every cell
+  `not_attempted`) counts the passes made, including the one that failed. A member that reached the cap is one whose shape had not settled,
   and its displacements are less trustworthy
 
 **Integrity.** The four entries are files of the `cluster_patches/` section,
@@ -1072,7 +1082,8 @@ the backbone — a file never carries both sets.
    `cluster_patches/member_cell_*` entries are present exactly when
    `member_cell_status_names` is, each sized by `K` as its name states; every
    `member_cell_status` value is below the legend's length; and a member
-   whose status is not `kept` has every cell `not_attempted` and `0` passes
+   whose status is not `kept` has every cell `not_attempted`, every
+   displacement and ZNCC `NaN`, and `0` passes
 
 ### No required ordering within a pair
 
@@ -1323,7 +1334,10 @@ back the cell statuses in the canonical numbering too. In Python,
 `read_matches` carries them as `member_cell_shift_px`, `member_cell_zncc`,
 `member_cell_status` and `member_cell_iterations` when the file has them,
 `write_matches` writes the four keys together, and `MatchesFile` exposes them
-under the same names (`None` when absent) beside `has_member_cells`.
+under the same names beside `member_cell_status_names` and
+`has_member_cells`: each is `None` when the `cluster_patches/` section carries
+no cells, and raises, like the section's other getters, when the file has no
+`cluster_patches/` section.
 `ClusterPatchData::refine_radius` (and `MatchesFile.refine_radius` in Python)
 returns the patch half-width from either `refine_options` key. The expansion of
 clusters into pairs is `clusters_to_pair_matches` in

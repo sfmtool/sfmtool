@@ -47,8 +47,14 @@ pub enum ClusterCellStatus {
     /// Refused because its ZNCC at the best shift is below the bar: the cell
     /// lies over a different surface in this view.
     RefusedZncc = 2,
-    /// Not registered: the member is not kept, a sample the search needs
-    /// could not be read, or no cell of the member survived.
+    /// Not registered, or registered without effect: the member is not
+    /// kept, a sample the search needs could not be read, no cell of the
+    /// member survived, or the refined shape could not be accepted (the
+    /// render failed, the fitted update was not finite or reflected, the
+    /// whole-patch ZNCC or shift read again at the refined shape failed the
+    /// member's gates, or the refined shape's support left the frame). In
+    /// every case but the first the member keeps its whole-patch shape, and
+    /// its `member_cell_iterations` count includes the pass that failed.
     NotAttempted = 3,
     /// Refused because its best shift lies on the search bound, so the
     /// optimum is at or past the bound.
@@ -189,8 +195,10 @@ impl MemberCellData {
                 locate_cell(i)
             ));
         }
+        let shift_px: Vec<f32> = self.shift_px.iter().copied().collect();
+        let zncc: Vec<f32> = self.zncc.iter().copied().collect();
         let iterations: Vec<u8> = self.iterations.iter().copied().collect();
-        not_kept_with_readings(member_status, &status, &iterations)
+        not_kept_with_readings(member_status, &status, &shift_px, &zncc, &iterations)
     }
 }
 
@@ -200,14 +208,18 @@ pub(crate) fn locate_cell(i: usize) -> String {
 }
 
 /// The first member that is not `kept` yet carries a cell reading (a status
-/// other than not attempted, or a non-zero iteration count), as a message.
+/// other than not attempted, a displacement or ZNCC that is not `NaN`, or a
+/// non-zero iteration count), as a message.
 ///
-/// `status` is the `(M, 3, 3)` canonical cell codes in row-major order and
-/// `iterations` the `(M,)` counts, both already checked to be sized by the
-/// member count.
+/// `status` is the `(M, 3, 3)` canonical cell codes, `shift_px` the
+/// `(M, 3, 3, 2)` displacements and `zncc` the `(M, 3, 3)` ZNCCs, all in
+/// row-major order, and `iterations` the `(M,)` counts, each already checked
+/// to be sized by the member count.
 pub(crate) fn not_kept_with_readings(
     member_status: &[u8],
     status: &[u8],
+    shift_px: &[f32],
+    zncc: &[f32],
     iterations: &[u8],
 ) -> Option<String> {
     let not_attempted = ClusterCellStatus::NotAttempted as u8;
@@ -218,20 +230,39 @@ pub(crate) fn not_kept_with_readings(
         let name = ClusterMemberStatus::from_u8(member)
             .map(|s| s.as_str())
             .unwrap_or("unknown");
+        let not_kept = format!("but member {m} is {name}, not kept, and carries no cell readings");
         let cells = &status[m * 9..m * 9 + 9];
         if let Some(i) = cells.iter().position(|&c| c != not_attempted) {
             return Some(format!(
-                "{} is {}, but member {m} is {name}, not kept, and carries no cell readings",
+                "{} is {}, {not_kept}",
                 locate_cell(m * 9 + i),
                 ClusterCellStatus::from_u8(cells[i])
                     .map(|s| s.as_str())
                     .unwrap_or("unknown")
             ));
         }
+        let shifts = &shift_px[m * 18..m * 18 + 18];
+        if let Some(i) = shifts.iter().position(|v| !v.is_nan()) {
+            return Some(format!(
+                "member_cell_shift_px[{m}][{}][{}][{}] is {}, {not_kept}",
+                i / 6,
+                (i / 2) % 3,
+                i % 2,
+                shifts[i]
+            ));
+        }
+        let znccs = &zncc[m * 9..m * 9 + 9];
+        if let Some(i) = znccs.iter().position(|v| !v.is_nan()) {
+            return Some(format!(
+                "member_cell_zncc[{m}][{}][{}] is {}, {not_kept}",
+                i / 3,
+                i % 3,
+                znccs[i]
+            ));
+        }
         if iterations[m] != 0 {
             return Some(format!(
-                "member_cell_iterations[{m}] is {}, but member {m} is {name}, not kept, and \
-                 carries no cell readings",
+                "member_cell_iterations[{m}] is {}, {not_kept}",
                 iterations[m]
             ));
         }

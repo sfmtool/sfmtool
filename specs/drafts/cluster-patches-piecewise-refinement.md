@@ -6,9 +6,10 @@
 - the stored per-cell displacement is the residual to the converged affine, so the affine absorbs the first-order correction and the residual carries the second-order term a normal is derived from;
 - those per-cell displacements are stored in the cluster-patches file beside the member's shape, with a per-cell status, so that a consumer with poses can turn them into a normal without rendering anything;
 - a cell whose own reading fails its gate is not fitted and is stored as refused, and the affine update is fitted only to the cells that survive, dropping to a similarity or a shift when too few do;
+- the cell fit runs on kept members only, since a member that is not kept has no trustworthy affine shape to start from, and `.matches` version 8 refuses a file that stores readings on any other member;
 - the seed's writer turns the per-cell displacements into a normal and a determinacy verdict once poses exist, replacing the tilt solve on whole-member warps its debug snapshots carry today.
 
-Not decided: whether cells are fitted as pure shifts or as shift plus scale; whether the cell fit runs on every member or only on kept ones; whether the loop replaces the affine cascade or runs after it; whether the stage runs by default. See [Open questions](#open-questions).
+Not decided: whether cells are fitted as pure shifts or as shift plus scale; whether the loop replaces the affine cascade or runs after it; whether the stage runs by default. See [Open questions](#open-questions).
 
 Amends:
 - [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md): the shape fit and a second output per member
@@ -65,11 +66,37 @@ pub struct PiecewiseParams {
     pub max_iterations: u8,
 }
 
-pub struct ClusterPatchRefinement {
+pub struct ClusterRefineResult {
     // existing per-member fields …
     pub cells: Vec<Option<CellRefinement>>, // one per member; None unless kept
 }
+
+/// In sfmtool-core: the result's cells as the format's columns, one row per
+/// member, `NaN` / `NaN` / not attempted / `0` for a member without cells.
+pub fn member_cell_data(cells: &[Option<CellRefinement>]) -> MemberCellData;
+
+// In sfmtool-matches-format (`cells.rs`):
+
+/// The four per-cell columns of `cluster_patches/`, member-parallel.
+pub struct MemberCellData {
+    pub shift_px: Array4<f32>,  // (M, 3, 3, 2)
+    pub zncc: Array3<f32>,      // (M, 3, 3)
+    pub status: Array3<u8>,     // (M, 3, 3) ClusterCellStatus codes
+    pub iterations: Array1<u8>, // (M,)
+}
+
+/// The stored cell status, with the same discriminants as `CellStatus`.
+#[repr(u8)]
+pub enum ClusterCellStatus {
+    Fitted = 0,
+    RefusedCurvature = 1,
+    RefusedZncc = 2,
+    NotAttempted = 3,
+    RefusedBound = 4,
+}
 ```
+
+The binding `refine_cluster_patches` takes `piecewise=` (default `False`) and the five `PiecewiseParams` settings as keyword arguments under their field names, `cell_shift_bound_px=`, `min_cell_zncc=`, `min_cell_curvature=`, `update_tolerance_px=` and `max_iterations=`, each `None` by default for the Rust default. With `piecewise=True` it returns the four columns as `member_cell_shift_px`, `member_cell_zncc`, `member_cell_status` and `member_cell_iterations`, and the settings it ran with as `piecewise_options`; without it those keys are `None`.
 
 **Why this shape.** Displacements are relative to the affine shape, not absolute, so a consumer that ignores them reads the file exactly as before. They are in template grid px, the unit every other refined quantity in the file uses. The status is per cell because the point of the stage is to know which cells to trust; a single per-member flag would discard that. The cells are one entry per member, `None` for a member that is not kept, so they index like every other per-member array and a consumer cannot pair a member with another member's cells. The iteration count is reported because a member that hit the cap is one whose affine never settled, and a consumer may want to treat its residuals as less trustworthy. The shift bound and the render margin are one parameter because they must be equal: a search that can reach a shift the render did not cover reads outside the tile.
 
@@ -110,7 +137,7 @@ With poses, a cell's centre in a member is a pixel, and that pixel is a ray. The
 
 ## Format
 
-Per kept member, four new entries in the cluster-patches file: `member_cell_shift_px` of shape `(members, 3, 3, 2)`, `member_cell_zncc` of shape `(members, 3, 3)`, `member_cell_status` of shape `(members, 3, 3)` with its legend `member_cell_status_names` in the section's metadata, following the convention `member_status` adopted in version 7, and `member_cell_iterations` of shape `(members,)`. They are optional entries of `.matches` version 8, present together with the legend or absent together with it, and a member that is not kept carries `NaN` / `NaN` / `not_attempted` / `0`. A reader of an older file has no cells and a consumer that needs them says so. The format side is specified in [formats/matches-file-format.md](../formats/matches-file-format.md) § "Per-cell entries"; the Rust types are `MemberCellData` and `ClusterCellStatus` in [cells.rs](../../crates/sfmtool-matches-format/src/cells.rs), filled from `ClusterRefineResult::cells` by `member_cell_data` in [piecewise.rs](../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs). The binding takes `piecewise=True` and returns the four arrays; `sfm cluster-patches --piecewise` writes them.
+Per member, with readings only for kept members, four new entries in the cluster-patches file: `member_cell_shift_px` of shape `(members, 3, 3, 2)`, `member_cell_zncc` of shape `(members, 3, 3)`, `member_cell_status` of shape `(members, 3, 3)` with its legend `member_cell_status_names` in the section's metadata, following the convention `member_status` adopted in version 7, and `member_cell_iterations` of shape `(members,)`. They are optional entries of `.matches` version 8, present together with the legend or absent together with it, and a member that is not kept carries `NaN` / `NaN` / `not_attempted` / `0`. A reader of an older file has no cells and a consumer that needs them says so. The format side is specified in [formats/matches-file-format.md](../formats/matches-file-format.md) § "Per-cell entries"; the Rust types are `MemberCellData` and `ClusterCellStatus` in [cells.rs](../../crates/sfmtool-matches-format/src/cells.rs), filled from `ClusterRefineResult::cells` by `member_cell_data` in [piecewise.rs](../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs). The binding takes `piecewise=True` and returns the four arrays; `sfm cluster-patches --piecewise` writes them and records the five settings in `refine_options` beside `piecewise`.
 
 ## Implementation notes
 
@@ -153,5 +180,4 @@ Fitting cells with a full affine. A cell that needs one is over another surface.
 ## Open questions
 
 - **Shift only, or shift and scale.** Scale per cell would read the perspective term's radial component; it also costs a two-dimensional search per cell. Start with shift.
-- **All members or kept members.** Refused members have no trustworthy affine shape to start from. Kept members only.
 - **Replace or follow the cascade.** The loop can start from the cascade's shape, or from the detection's shape with the cascade removed. Start after the cascade, measure how many iterations the loop needs from the detection alone, and decide whether the cascade still earns its cost.

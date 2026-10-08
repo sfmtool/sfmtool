@@ -89,10 +89,10 @@ from .._cli_utils import timed_command
     default=False,
     show_default=True,
     help=(
-        "After the affine fit, register each of the nine cells of every kept "
-        "member's patch separately, refine the member's shape from their "
-        "shifts, and store each cell's displacement, ZNCC and status in the "
-        "output (format version 8 per-cell columns). See "
+        "After the affine fit, register each of the reference's nine cells "
+        "separately against each kept member's image, refine the member's "
+        "shape from their shifts, and store each cell's displacement, ZNCC "
+        "and status in the output (format version 8 per-cell columns). See "
         "specs/drafts/cluster-patches-piecewise-refinement.md."
     ),
 )

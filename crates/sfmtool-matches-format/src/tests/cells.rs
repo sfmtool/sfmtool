@@ -242,6 +242,53 @@ fn test_member_cell_status_read_through_another_legend() {
 }
 
 #[test]
+fn test_member_cell_status_partial_legend() {
+    // Like `member_status_names`, the cell legend may name any subset of the
+    // defined statuses: a file whose cells use four of them may state only
+    // those four, and its codes are read through that shorter legend.
+    let mut expected = make_cell_test_data()
+        .cluster_patches
+        .unwrap()
+        .member_cells
+        .unwrap();
+    // The one refused_bound cell becomes refused_curvature, so no cell uses
+    // refused_bound and the legend can leave it out.
+    expected.status[[1, 2, 0]] = ClusterCellStatus::RefusedCurvature as u8;
+    let legend = [
+        ClusterCellStatus::NotAttempted,
+        ClusterCellStatus::Fitted,
+        ClusterCellStatus::RefusedZncc,
+        ClusterCellStatus::RefusedCurvature,
+    ];
+    let names: Vec<&str> = legend.iter().map(|s| s.as_str()).collect();
+    let stored: Vec<u8> = expected
+        .status
+        .iter()
+        .map(|&code| legend.iter().position(|s| *s as u8 == code).unwrap() as u8)
+        .collect();
+    let (dir, path) = craft_cell_file("matches_test_member_cell_legend_partial", |entries| {
+        mutate_cp_metadata(entries, |json| {
+            json["member_cell_status_names"] = serde_json::json!(names)
+        });
+        mutate_entry(entries, STATUS, |bytes| bytes.copy_from_slice(&stored));
+    });
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "{errors:?}");
+    let loaded = read_matches(&path).unwrap();
+    assert_cells_eq(
+        loaded
+            .cluster_patches
+            .as_ref()
+            .unwrap()
+            .member_cells
+            .as_ref()
+            .unwrap(),
+        &expected,
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_malformed_member_cells_rejected() {
     // Each case is refused by the reader and reported by the verifier.
     type Mutation = Box<dyn FnOnce(&mut Vec<(String, Vec<u8>)>)>;
@@ -295,6 +342,25 @@ fn test_malformed_member_cells_rejected() {
             "reading_on_a_member_not_kept",
             Box::new(|entries| mutate_entry(entries, STATUS, |bytes| bytes[2 * 9 + 4] = 0)),
             "member_cell_status[2][1][1] is fitted, but member 2 is rejected_low_zncc, not kept",
+        ),
+        (
+            "zncc_on_a_member_not_kept",
+            Box::new(|entries| {
+                mutate_entry(entries, ZNCC, |bytes| {
+                    bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes())
+                })
+            }),
+            "member_cell_zncc[0][0][0] is 0.5, but member 0 is reference, not kept",
+        ),
+        (
+            "shift_on_a_member_not_kept",
+            Box::new(|entries| {
+                mutate_entry(entries, SHIFT, |bytes| {
+                    let at = 4 * (2 * 18 + 2 * 6 + 2 + 1);
+                    bytes[at..at + 4].copy_from_slice(&0.25f32.to_le_bytes())
+                })
+            }),
+            "member_cell_shift_px[2][2][1][1] is 0.25, but member 2 is rejected_low_zncc, not kept",
         ),
         (
             "iterations_on_a_member_not_kept",
@@ -355,6 +421,21 @@ fn test_write_validation_member_cells() {
         "matches_test_write_member_cells_status",
         &bad_status,
         "member_cell_status[1][0][0] = 9 is not a valid ClusterCellStatus discriminant",
+    );
+
+    let mut zncc_not_kept = make_cell_test_data();
+    zncc_not_kept
+        .cluster_patches
+        .as_mut()
+        .unwrap()
+        .member_cells
+        .as_mut()
+        .unwrap()
+        .zncc[[4, 1, 2]] = 0.75;
+    expect_write_error(
+        "matches_test_write_member_cells_zncc_not_kept",
+        &zncc_not_kept,
+        "member_cell_zncc[4][1][2] is 0.75, but member 4 is",
     );
 
     let mut not_kept = make_cell_test_data();

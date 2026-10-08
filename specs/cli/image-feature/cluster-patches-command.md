@@ -42,7 +42,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
 | `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
 | `--max-member-zncc-self-similarity-radius` | float ≥ 0 | 2.5 | Member gate: exclude members whose own patch's ZNCC self-similarity radius (template-grid px) is above this, before reference selection and refinement; `0` disables, `3` or more turns nothing out |
-| `--piecewise/--no-piecewise` | flag | off | After the affine fit, register each of the nine cells of every kept member's patch separately, refine the member's shape from their shifts, and store the per-cell entries in the output |
+| `--piecewise/--no-piecewise` | flag | off | After the affine fit, register each of the reference's nine cells separately against each kept member's image, refine the member's shape from their shifts, and store the per-cell entries in the output |
 
 The `patch_size` default sits at SIFT's ~12× descriptor window — the template
 vets a member against roughly the texture context the detector deemed
@@ -94,7 +94,8 @@ default is decided by a comparison over the capture fleet.
    similarity → affine Nelder-Mead cascade seeded from the SIFT affine
    shapes, vetting, one kept member per image), with a `ProgressCounter`
    poller reporting per-cluster progress. With `--piecewise` the call passes
-   `piecewise=True`, and the kernel follows the cascade with the piecewise
+   `piecewise=True` and leaves the piecewise settings at the kernel's
+   defaults, and the kernel follows the cascade with the piecewise
    refinement of every kept member: it registers the nine cells of the
    reference's patch separately, refits the member's shape and position to
    their shifts, and returns each cell's displacement, ZNCC and status and the
@@ -116,8 +117,13 @@ default is decided by a comparison over the capture fleet.
    `min_zncc`, `max_shift_px`, `max_member_zncc_self_similarity_radius`,
    `piecewise`; a
    file written before the gate read the radius carries
-   `max_keypoint_uncertainty` in place of the last, and nothing reads either
-   back), metadata updated
+   `max_keypoint_uncertainty` in place of the radius bar, and nothing reads
+   either back). With `--piecewise`, `refine_options` also records the
+   piecewise refinement's settings as flat keys beside `piecewise`:
+   `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
+   `update_tolerance_px` and `max_iterations`, the values the binding reports
+   it used in its `piecewise_options` (the kernel's defaults, since the
+   command exposes none of them). Metadata updated
    (`has_cluster_patches: true`, fresh timestamp, workspace `relative_path`
    recomputed from the output location; the content hash is recomputed by
    the writer). With `--piecewise` the section also gets the four per-cell

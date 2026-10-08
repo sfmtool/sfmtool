@@ -409,11 +409,25 @@ pub fn clusters_to_pair_matches(
 ///         (specs/core/patch/zncc-self-similarity-radius.md).
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     piecewise: Run the piecewise refinement after the cascade for every
-///         kept member, with its default parameters: the nine cells of the
-///         reference's patch are registered separately and their shifts refine
-///         the member's affine shape and position (default False, which leaves
-///         every output the cascade's). See
+///         kept member: the nine cells of the reference's patch are
+///         registered separately and their shifts refine the member's affine
+///         shape and position (default False, which leaves every output the
+///         cascade's). See
 ///         specs/drafts/cluster-patches-piecewise-refinement.md.
+///     cell_shift_bound_px: Piecewise setting: the search bound for a cell's
+///         shift from its affine placement, template grid px (default 2.0).
+///     min_cell_zncc: Piecewise setting: a cell whose ZNCC at its optimum is
+///         below this is refused as refused_zncc (default 0.8).
+///     min_cell_curvature: Piecewise setting: a cell whose ZNCC peak is
+///         flatter than this along its flattest direction, ZNCC per grid
+///         px squared, is refused as refused_curvature (default 0.02).
+///     update_tolerance_px: Piecewise setting: the loop stops when the affine
+///         update moves every cell centre by less than this, grid px
+///         (default 0.05).
+///     max_iterations: Piecewise setting: the most renders the loop makes for
+///         one member (default 5). Each piecewise setting left as None
+///         takes the Rust default of ``PiecewiseParams``, the value given
+///         above; the settings are ignored without ``piecewise``.
 ///     progress: Optional ProgressCounter, bumped once per finished cluster.
 ///
 /// Returns:
@@ -444,8 +458,9 @@ pub fn clusters_to_pair_matches(
 ///     where not measured), ``member_cell_zncc`` (M, 3, 3) float32,
 ///     ``member_cell_status`` (M, 3, 3) uint8 (0 fitted, 1 refused_curvature,
 ///     2 refused_zncc, 3 not_attempted, 4 refused_bound) and
-///     ``member_cell_iterations`` (M,) uint8. Without it those four keys are
-///     None.
+///     ``member_cell_iterations`` (M,) uint8, and ``piecewise_options``, a
+///     dict of the five piecewise settings the run used, keyed by their
+///     argument names. Without it those five keys are None.
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
@@ -453,7 +468,10 @@ pub fn clusters_to_pair_matches(
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_member_zncc_self_similarity_radius = 2.5,
-                    max_iters = 120, piecewise = false, progress = None))]
+                    max_iters = 120, piecewise = false,
+                    cell_shift_bound_px = None, min_cell_zncc = None,
+                    min_cell_curvature = None, update_tolerance_px = None,
+                    max_iterations = None, progress = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches<'py>(
     py: Python<'py>,
@@ -472,6 +490,11 @@ pub fn refine_cluster_patches<'py>(
     max_member_zncc_self_similarity_radius: f64,
     max_iters: u32,
     piecewise: bool,
+    cell_shift_bound_px: Option<f32>,
+    min_cell_zncc: Option<f32>,
+    min_cell_curvature: Option<f32>,
+    update_tolerance_px: Option<f32>,
+    max_iterations: Option<u8>,
     progress: Option<ProgressCounter>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let n_images = images.len();
@@ -540,7 +563,16 @@ pub fn refine_cluster_patches<'py>(
         max_shift_px,
         max_member_zncc_self_similarity_radius,
         max_iters,
-        piecewise: piecewise.then(PiecewiseParams::default),
+        piecewise: piecewise.then(|| {
+            let default = PiecewiseParams::default();
+            PiecewiseParams {
+                cell_shift_bound_px: cell_shift_bound_px.unwrap_or(default.cell_shift_bound_px),
+                min_cell_zncc: min_cell_zncc.unwrap_or(default.min_cell_zncc),
+                min_cell_curvature: min_cell_curvature.unwrap_or(default.min_cell_curvature),
+                update_tolerance_px: update_tolerance_px.unwrap_or(default.update_tolerance_px),
+                max_iterations: max_iterations.unwrap_or(default.max_iterations),
+            }
+        }),
         ..ClusterRefineParams::default()
     };
 
@@ -618,14 +650,24 @@ pub fn refine_cluster_patches<'py>(
         "member_cell_status",
         "member_cell_iterations",
     ];
-    if piecewise {
+    if let Some(pp) = params.piecewise.as_ref() {
+        // The settings as the decimal values they were written as (0.8, not
+        // the f32's 0.800000011920929), so a recorded value reads as given.
+        let decimal = |v: f32| -> f64 { v.to_string().parse().expect("an f32 prints as a float") };
+        let options = PyDict::new(py);
+        options.set_item("cell_shift_bound_px", decimal(pp.cell_shift_bound_px))?;
+        options.set_item("min_cell_zncc", decimal(pp.min_cell_zncc))?;
+        options.set_item("min_cell_curvature", decimal(pp.min_cell_curvature))?;
+        options.set_item("update_tolerance_px", decimal(pp.update_tolerance_px))?;
+        options.set_item("max_iterations", pp.max_iterations)?;
+        dict.set_item("piecewise_options", options)?;
         let cells = member_cell_data(&result.cells);
         dict.set_item(cell_keys[0], cells.shift_px.into_pyarray(py))?;
         dict.set_item(cell_keys[1], cells.zncc.into_pyarray(py))?;
         dict.set_item(cell_keys[2], cells.status.into_pyarray(py))?;
         dict.set_item(cell_keys[3], cells.iterations.into_pyarray(py))?;
     } else {
-        for key in cell_keys {
+        for key in cell_keys.into_iter().chain(["piecewise_options"]) {
             dict.set_item(key, py.None())?;
         }
     }

@@ -1112,7 +1112,21 @@ fn check_member_cells(
         return;
     }
     if let Some(member_status) = member_status {
-        if let Some(e) = not_kept_with_readings(member_status, &status, bytes(&iterations_name)) {
+        let floats = |name: &str| -> Vec<f32> {
+            bytes(name)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&b| f32::from_le_bytes(b))
+                .collect()
+        };
+        if let Some(e) = not_kept_with_readings(
+            member_status,
+            &status,
+            &floats(&shift_name),
+            &floats(&zncc_name),
+            bytes(&iterations_name),
+        ) {
             errors.push(e);
         }
     }

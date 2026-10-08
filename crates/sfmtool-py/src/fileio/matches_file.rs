@@ -312,8 +312,11 @@ impl PyMatchesFile {
 
     /// `(M, 3, 3, 2)` float32 each cell's displacement `[x, y]` from where the
     /// member's affine shape places it, in patch grid px, cells `[m, row,
-    /// col]` from the top-left; NaN where no shift was measured. None when the
-    /// file carries no cells.
+    /// col]` from the top-left; NaN where no shift was measured.
+    ///
+    /// None when the cluster_patches/ section carries no cells; raises
+    /// `ValueError`, like the section's other getters, when the file has no
+    /// cluster_patches/ section.
     #[getter]
     fn member_cell_shift_px<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyAny>>> {
         Ok(self
@@ -324,7 +327,12 @@ impl PyMatchesFile {
     }
 
     /// `(M, 3, 3)` float32 each cell's ZNCC against the reference at its best
-    /// shift; NaN where nothing was read. None when the file carries no cells.
+    /// shift, averaged over the template's textured colour channels; NaN
+    /// where nothing was read.
+    ///
+    /// None when the cluster_patches/ section carries no cells; raises
+    /// `ValueError`, like the section's other getters, when the file has no
+    /// cluster_patches/ section.
     #[getter]
     fn member_cell_zncc<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyAny>>> {
         Ok(self
@@ -336,8 +344,11 @@ impl PyMatchesFile {
 
     /// `(M, 3, 3)` uint8 cell statuses in the canonical numbering, whatever
     /// legend the file stated: 0 fitted, 1 refused_curvature, 2 refused_zncc,
-    /// 3 not_attempted, 4 refused_bound (`member_cell_status_names`). None
-    /// when the file carries no cells.
+    /// 3 not_attempted, 4 refused_bound (`member_cell_status_names`).
+    ///
+    /// None when the cluster_patches/ section carries no cells; raises
+    /// `ValueError`, like the section's other getters, when the file has no
+    /// cluster_patches/ section.
     #[getter]
     fn member_cell_status<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyAny>>> {
         Ok(self
@@ -348,7 +359,11 @@ impl PyMatchesFile {
     }
 
     /// The canonical names of the `member_cell_status` codes, one per code in
-    /// code order. None when the file carries no cells.
+    /// code order.
+    ///
+    /// None when the cluster_patches/ section carries no cells; raises
+    /// `ValueError`, like the section's other getters, when the file has no
+    /// cluster_patches/ section.
     #[getter]
     fn member_cell_status_names(&self) -> PyResult<Option<Vec<&'static str>>> {
         Ok(self
@@ -359,7 +374,11 @@ impl PyMatchesFile {
     }
 
     /// `(M,)` uint8 renders the piecewise refinement made per member; 0 for a
-    /// member it did not run on. None when the file carries no cells.
+    /// member it did not run on.
+    ///
+    /// None when the cluster_patches/ section carries no cells; raises
+    /// `ValueError`, like the section's other getters, when the file has no
+    /// cluster_patches/ section.
     #[getter]
     fn member_cell_iterations<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyAny>>> {
         Ok(self

@@ -14,7 +14,8 @@ use sfmtool_matches_format::{
 };
 
 use crate::helpers::{
-    get_item, get_optional_item, py_to_serde, py_to_u128_bytes, serde_to_py, u128_bytes_to_py,
+    dtype_name, get_item, get_optional_item, py_to_serde, py_to_u128_bytes, serde_to_py,
+    u128_bytes_to_py,
 };
 
 /// Convert MatchesData to a Python dict.
@@ -171,10 +172,26 @@ fn member_cells_from_py(data: &Bound<'_, PyDict>) -> PyResult<Option<MemberCellD
         )));
     }
     let item = |i: usize| items[i].as_ref().expect("checked present");
-    let shift_px: PyReadonlyArray4<f32> = item(0).extract()?;
-    let zncc: PyReadonlyArray3<f32> = item(1).extract()?;
-    let status: PyReadonlyArray3<u8> = item(2).extract()?;
-    let iterations: PyReadonlyArray1<u8> = item(3).extract()?;
+    // A column of the wrong dtype or rank names its key, so the caller can
+    // tell which of the four it handed over wrong.
+    let wrong_type = |i: usize, expected: &str| {
+        let actual = dtype_name(item(i)).unwrap_or_else(|_| "unknown".to_string());
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "{} must be a {expected} array, got dtype {actual}",
+            keys[i]
+        ))
+    };
+    let shift_px: PyReadonlyArray4<f32> = item(0)
+        .extract()
+        .map_err(|_| wrong_type(0, "(M, 3, 3, 2) float32"))?;
+    let zncc: PyReadonlyArray3<f32> = item(1)
+        .extract()
+        .map_err(|_| wrong_type(1, "(M, 3, 3) float32"))?;
+    let status: PyReadonlyArray3<u8> = item(2)
+        .extract()
+        .map_err(|_| wrong_type(2, "(M, 3, 3) uint8"))?;
+    let iterations: PyReadonlyArray1<u8> =
+        item(3).extract().map_err(|_| wrong_type(3, "(M,) uint8"))?;
     Ok(Some(MemberCellData {
         shift_px: shift_px.as_array().as_standard_layout().into_owned(),
         zncc: zncc.as_array().as_standard_layout().into_owned(),

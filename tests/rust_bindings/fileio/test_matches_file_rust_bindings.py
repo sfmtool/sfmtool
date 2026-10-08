@@ -507,6 +507,42 @@ def test_member_cells_written_together_or_not_at_all(tmp_path):
         write_matches(tmp_path / "partial.matches", data)
 
 
+def test_member_cells_wrong_dtype_names_the_key(tmp_path):
+    data = _cluster_patch_dict()
+    cells = _member_cells(8, kept=[1, 2])
+    cells["member_cell_status"] = cells["member_cell_status"].astype(np.int32)
+    data.update(cells)
+    with pytest.raises(TypeError, match="member_cell_status must be a .* uint8"):
+        write_matches(tmp_path / "bad_dtype.matches", data)
+
+
+def test_member_cells_zncc_rejected_on_a_member_not_kept(tmp_path):
+    data = _cluster_patch_dict()
+    cells = _member_cells(8, kept=[1])
+    # Member 3 is not_evaluated, so its ZNCCs must be NaN.
+    cells["member_cell_zncc"][3, 0, 0] = 0.5
+    data.update(cells)
+    with pytest.raises(OSError, match="member_cell_zncc\[3\]\[0\]\[0\] is 0.5"):
+        write_matches(tmp_path / "bad_zncc.matches", data)
+
+
+def test_member_cells_without_cluster_patches_raise(pairwise_path):
+    # Like the section's other getters, the cell getters raise on a file with
+    # no cluster_patches/ section; only has_member_cells answers.
+    mf = MatchesFile(pairwise_path)
+    assert not mf.has_member_cells
+    for name in (
+        "member_cell_shift_px",
+        "member_cell_zncc",
+        "member_cell_status",
+        "member_cell_status_names",
+        "member_cell_iterations",
+        "member_status",
+    ):
+        with pytest.raises(ValueError, match="no cluster_patches/ section"):
+            getattr(mf, name)
+
+
 def test_member_cells_rejected_on_a_member_not_kept(tmp_path):
     data = _cluster_patch_dict()
     # Member 3 is not_evaluated, so it carries no cell readings.
