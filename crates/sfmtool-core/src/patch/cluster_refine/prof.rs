@@ -35,6 +35,9 @@ pub static TEMPLATE: Phase = Phase::new("build_template");
 /// Whole per-member refinement cascades (`refine_member`), enclosing
 /// [`TILE`] and [`EVAL`].
 pub static REFINE: Phase = Phase::new("refine_member");
+/// Piecewise refinements of kept members (`refine_kept_member_cells`),
+/// including the readings taken again at the refined shape.
+pub static PIECEWISE: Phase = Phase::new("piecewise");
 /// Sub-phase of [`REFINE`]: `LevelTile` builds and rebuilds inside
 /// `TileCache::get_or_build` (cache hits are not timed).
 pub static TILE: Phase = Phase::new("tile_build");
@@ -59,17 +62,20 @@ pub static N_EVALS_SHIFT: AtomicU64 = AtomicU64::new(0);
 pub static N_EVALS_SIM: AtomicU64 = AtomicU64::new(0);
 /// Objective evaluations spent in the affine stage.
 pub static N_EVALS_AFFINE: AtomicU64 = AtomicU64::new(0);
+/// Kept members the piecewise refinement ran on.
+pub static N_PIECEWISE: AtomicU64 = AtomicU64::new(0);
 /// `LevelTile` (re)builds.
 pub static N_TILE_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Pixels copied into (re)built `LevelTile`s (tile area × channels).
 pub static N_TILE_PIXELS: AtomicU64 = AtomicU64::new(0);
 
-const PHASES: [&Phase; 7] = [
+const PHASES: [&Phase; 8] = [
     &TOTAL,
     &GATE_SAMPLE,
     &GATE_SCORE,
     &TEMPLATE,
     &REFINE,
+    &PIECEWISE,
     &TILE,
     &EVAL,
 ];
@@ -87,6 +93,7 @@ pub fn reset() {
             &N_EVALS_SHIFT,
             &N_EVALS_SIM,
             &N_EVALS_AFFINE,
+            &N_PIECEWISE,
             &N_TILE_BUILDS,
             &N_TILE_PIXELS,
         ],
@@ -102,7 +109,7 @@ pub fn report(clusters: usize, wall_secs: f64) {
     );
     report_phases(PHASES, total_ns, &PATCH_ROWS);
     report_overhead(
-        &[&GATE_SAMPLE, &GATE_SCORE, &TEMPLATE, &REFINE],
+        &[&GATE_SAMPLE, &GATE_SCORE, &TEMPLATE, &REFINE, &PIECEWISE],
         total_ns,
         "cluster_total",
         &PATCH_ROWS,
@@ -146,6 +153,8 @@ pub fn report(clusters: usize, wall_secs: f64) {
     let (af, af_r) = per_refine(&N_EVALS_AFFINE);
     eprintln!(
         "[sfmtool-profile]   evals by stage: shift {sh} ({sh_r:.1}/refine)  \
-         sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)",
+         sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)  \
+         piecewise {}",
+        N_PIECEWISE.load(Ordering::Relaxed),
     );
 }

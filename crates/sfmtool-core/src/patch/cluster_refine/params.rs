@@ -11,6 +11,8 @@ use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS;
 use crate::patch::normal_refine::PatchWindow;
 
+use super::piecewise::{CellRefinement, PiecewiseParams};
+
 /// Per-member refinement status.
 ///
 /// Discriminants MUST match `sfmtool_matches_format::ClusterMemberStatus` — this crate
@@ -105,6 +107,12 @@ pub struct ClusterRefineParams {
     /// Minimum best-value improvement (ZNCC units) that counts as progress
     /// for the stall exit.
     pub stall_tol: f64,
+    /// The piecewise refinement that follows the cascade for every kept
+    /// member: the nine cells of the template are registered separately and
+    /// their shifts refine the member's affine shape and position, and
+    /// [`ClusterRefineResult::cells`] carries what each cell read. `None`
+    /// skips the stage, leaving every output the cascade's. On by default.
+    pub piecewise: Option<PiecewiseParams>,
 }
 
 impl Default for ClusterRefineParams {
@@ -131,6 +139,7 @@ impl Default for ClusterRefineParams {
             intermediate_convergence: 1e-4,
             stall_iters: 20,
             stall_tol: 1e-4,
+            piecewise: Some(PiecewiseParams::default()),
         }
     }
 }
@@ -210,4 +219,13 @@ pub struct ClusterRefineResult {
     /// `(M,)` translation drift from the SIFT seed, source-image pixels
     /// (`NaN` if not evaluated).
     pub member_shift_px: Vec<f32>,
+    /// The piecewise refinement's cells, one entry per member whose status is
+    /// [`MemberStatus::Kept`], in member order: the `i`-th entry belongs to the
+    /// `i`-th kept member. Empty when [`ClusterRefineParams::piecewise`] is
+    /// `None`.
+    ///
+    /// Where the stage moved a kept member, that member's shape and position
+    /// are the stage's, and its ZNCC, middle ZNCC, ZNCC grid and shift are
+    /// read again at that shape and position; its status stays the cascade's.
+    pub cells: Vec<CellRefinement>,
 }
