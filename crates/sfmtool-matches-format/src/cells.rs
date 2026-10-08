@@ -43,8 +43,9 @@ pub(crate) const MEMBER_CELL_STATUS_NAMES_KEY: &str = "member_cell_status_names"
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClusterCellStatus {
-    /// The cell's shift was measured and the member's affine shape was fitted
-    /// to it.
+    /// The cell's shift was measured and it agrees with the affine map the
+    /// robust fit over the member's cells found (a refinement allowed to
+    /// change the shape may also have moved the shape by that map).
     Fitted = 0,
     /// Refused because the cell does not pin a shift: the reference is flat
     /// over it, or its ZNCC over the shift search is too flat at the peak.
@@ -54,19 +55,20 @@ pub enum ClusterCellStatus {
     RefusedZncc = 2,
     /// Not registered, or registered without effect: the member is not
     /// kept, a sample the search needs could not be read, no cell of the
-    /// member survived, or the refined shape could not be accepted (the
-    /// render failed, the fitted update was not finite or reflected, the
-    /// whole-patch ZNCC or shift read again at the refined shape failed the
-    /// member's gates, or the refined shape's support left the frame). In
-    /// every case but the first the member keeps its whole-patch shape, and
-    /// its `member_cell_iterations` count includes the pass that failed.
+    /// member survived, the image could not be sampled through the shape,
+    /// the fitted affine map was not finite or reflected the patch, or, in a
+    /// refinement allowed to change the shape, the refined shape could not be
+    /// accepted (the whole-patch ZNCC or shift read again at it failed the
+    /// member's gates, or its support left the frame). In every case but the
+    /// first the member keeps its whole-patch shape, and its
+    /// `member_cell_iterations` count includes the pass that failed.
     NotAttempted = 3,
     /// Refused because its best shift lies on the search bound, so the
     /// optimum is at or past the bound.
     RefusedBound = 4,
-    /// Refused because its shift disagrees with the shape update the member's
-    /// other fitted cells agree on, so the robust fit of that update gave it
-    /// no weight. Its shift is measured and stored. Defined from version 9.
+    /// Refused because its shift disagrees with the affine map the member's
+    /// other fitted cells agree on, so the robust fit of that map gave it no
+    /// weight. Its shift is measured and stored. Defined from version 9.
     RefusedOutlier = 5,
 }
 
@@ -131,8 +133,8 @@ impl fmt::Display for ClusterCellStatus {
 #[derive(Debug, Clone)]
 pub struct MemberCellData {
     /// `(M, 3, 3, 2)` each cell's displacement `[x, y]` from where the
-    /// member's affine shape places it, in patch grid px; `NaN` where no
-    /// shift was measured.
+    /// member's stored affine shape places it, in patch grid px, with no
+    /// fitted affine map removed; `NaN` where no shift was measured.
     pub shift_px: Array4<f32>,
     /// `(M, 3, 3)` each cell's ZNCC against the reference at its best shift;
     /// `NaN` where nothing was read.

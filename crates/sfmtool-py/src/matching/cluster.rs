@@ -471,9 +471,10 @@ pub fn clusters_to_pair_matches(
 ///     argument names. It also carries two per-member readings of the loop
 ///     that the ``.matches`` file does not store:
 ///     ``member_cell_loop_stop`` (M,) uint8, why the loop stopped (0 not run,
-///     1 converged, 2 reached the cap, 3 an update that would lower the
-///     whole-member ZNCC was rejected, 4 the update stopped shrinking, 5
-///     measured without ``move_shape``), and
+///     which every member that is not kept also reads, 1 converged, 2
+///     reached the cap, 3 an update that would lower the whole-member ZNCC
+///     was rejected, 4 the update stopped shrinking, 5 measured without
+///     ``move_shape``), and
 ///     ``member_cell_update_accepted`` (M,) bool, whether the last fitted
 ///     update was applied to the returned shape, always False without
 ///     ``move_shape``. Without ``piecewise`` those seven keys are None.

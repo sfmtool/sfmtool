@@ -286,8 +286,9 @@ fn recovers_a_perturbed_affine_with_nine_fitted_cells() {
 /// How far the stored residuals are from the homography's second-order
 /// term, for the plane whose map has second-order coefficients `h`:
 /// `(largest error, RMS error, largest term)`, all in grid px over the nine
-/// cells, each of which must be fitted.
-fn homography_residual_errors(h: [f64; 2]) -> (f64, f64, f64) {
+/// cells. The cells in `outliers` must be refused as outliers and every other
+/// cell fitted.
+fn homography_residual_errors(h: [f64; 2], outliers: &[(usize, usize)]) -> (f64, f64, f64) {
     let fx = fixture();
     let member = member_image(a_true(), h, None);
     let (s0, p0) = perturbed_start();
@@ -298,7 +299,7 @@ fn homography_residual_errors(h: [f64; 2]) -> (f64, f64, f64) {
         "{} iterations",
         out.cells.iterations
     );
-    let (worst, rms, largest) = truth_residual_errors(&fx, &out, h);
+    let (worst, rms, largest) = truth_residual_errors(&fx, &out, h, outliers);
     eprintln!(
         "h = {h:?}: largest error {worst:.4}, RMS {rms:.4}, term {largest:.4} grid px; {:?} {} {}",
         out.cells.stop, out.cells.iterations, out.cells.final_update_accepted
@@ -309,14 +310,29 @@ fn homography_residual_errors(h: [f64; 2]) -> (f64, f64, f64) {
 /// How far `out`'s stored residuals are from where the plane with
 /// second-order coefficients `h` puts each cell's content relative to the
 /// returned shape's placement of the cell: `(largest error, RMS error,
-/// largest true residual)`, in grid px over the nine cells, each of which
-/// must be fitted.
-fn truth_residual_errors(fx: &Fixture, out: &MemberCells, h: [f64; 2]) -> (f64, f64, f64) {
+/// largest true residual)`, in grid px over the nine cells. The cells in
+/// `outliers` must be refused as outliers, which still stores their shifts,
+/// and every other cell fitted.
+fn truth_residual_errors(
+    fx: &Fixture,
+    out: &MemberCells,
+    h: [f64; 2],
+    outliers: &[(usize, usize)],
+) -> (f64, f64, f64) {
     let s_inv = inv2(&out.shape);
     let (mut largest, mut worst, mut sq_err) = (0.0f64, 0.0f64, 0.0f64);
     for row in 0..3 {
         for col in 0..3 {
-            assert_eq!(out.cells.status[row][col], CellStatus::Fitted);
+            let want_status = if outliers.contains(&(row, col)) {
+                CellStatus::RefusedOutlier
+            } else {
+                CellStatus::Fitted
+            };
+            assert_eq!(
+                out.cells.status[row][col], want_status,
+                "{:?}",
+                out.cells.status
+            );
             // Where the true map sends the cell centre, in the returned
             // shape's grid coordinates.
             let c = fx.layout.centres[row][col];
@@ -339,7 +355,7 @@ fn truth_residual_errors(fx: &Fixture, out: &MemberCells, h: [f64; 2]) -> (f64, 
 
 #[test]
 fn residuals_follow_the_homography_second_order_term() {
-    let (worst, rms, largest) = homography_residual_errors([0.003, -0.002]);
+    let (worst, rms, largest) = homography_residual_errors([0.003, -0.002], &[]);
     assert!(
         largest > 0.2,
         "the second-order term ({largest:.3} grid px) is too small to test"
@@ -357,9 +373,12 @@ fn residuals_follow_the_homography_second_order_term() {
 #[test]
 fn residuals_follow_a_doubled_second_order_term_less_closely() {
     // Twice the term of the test above. The residuals still follow it, but
-    // the error grows faster than the term: measured at 0.31 grid px at worst
-    // and 0.13 RMS here, against 0.10 and 0.054 at the single term.
-    let (worst, rms, largest) = homography_residual_errors([0.006, -0.004]);
+    // the error grows faster than the term: measured at 0.29 grid px at worst
+    // and 0.13 RMS here, against 0.093 and 0.058 at the single term. The
+    // bottom-left corner cell, where the term is largest, is far enough off
+    // the affine the other eight agree on that the robust fit refuses it as
+    // an outlier; its shift is still stored and counted here.
+    let (worst, rms, largest) = homography_residual_errors([0.006, -0.004], &[(2, 0)]);
     assert!(
         largest > 0.8,
         "the second-order term ({largest:.3} grid px) is too small to test"
@@ -1162,7 +1181,7 @@ fn an_update_that_lowers_the_whole_member_zncc_is_rejected() {
     // The stored shifts are the residual to the returned shape, the start:
     // they carry the start's whole first-order error, which the rejected
     // update would have removed.
-    let (worst, rms, largest) = truth_residual_errors(&fx, &out, [0.0, 0.0]);
+    let (worst, rms, largest) = truth_residual_errors(&fx, &out, [0.0, 0.0], &[]);
     assert!(
         largest > 0.5,
         "the start is only {largest:.3} grid px off the truth"
@@ -1371,7 +1390,7 @@ fn measuring_stores_the_raw_shifts_which_carry_the_start_affine() {
     // fitted map is removed from. Measured at the perturbed start, where each
     // cell is itself scaled and rotated against the template, they follow it
     // to within a fifth of a grid px.
-    let (worst, rms, largest) = truth_residual_errors(&fx, &out, [0.0, 0.0]);
+    let (worst, rms, largest) = truth_residual_errors(&fx, &out, [0.0, 0.0], &[]);
     assert!(
         largest > 0.5,
         "the start is only {largest:.3} grid px off the truth"
@@ -1447,8 +1466,8 @@ fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
     assert_eq!(out.cells.iterations, 1);
     assert_eq!(out.cells.stop, LoopStop::Measured);
     assert!(!out.cells.final_update_accepted);
-    for row in 0..3 {
-        for col in 0..3 {
+    for (row, readings_row) in readings.iter().enumerate() {
+        for (col, reading) in readings_row.iter().enumerate() {
             let want = if (row, col) == outlier {
                 CellStatus::RefusedOutlier
             } else {
@@ -1456,7 +1475,7 @@ fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
             };
             assert_eq!(out.cells.status[row][col], want);
             // Every shift is stored as read, the fitted map not removed.
-            let rd = readings[row][col].shift;
+            let rd = reading.shift;
             assert_eq!(out.cells.shift_px[row][col], [rd[0] as f32, rd[1] as f32]);
         }
     }
@@ -1476,4 +1495,15 @@ fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
     assert_eq!(failed.cells.iterations, 1);
     assert_eq!(failed.cells.stop, LoopStop::NotRun);
     assert_eq!(failed.cells.status, [[CellStatus::NotAttempted; 3]; 3]);
+}
+
+#[test]
+fn the_residual_scale_is_the_rayleigh_median_factor() {
+    // The residuals are 2-D lengths: under isotropic Gaussian noise of
+    // per-axis σ their median is σ·√(2 ln 2).
+    let want = 1.0 / (2.0 * std::f64::consts::LN_2).sqrt();
+    assert!(
+        (MEDIAN_LENGTH_TO_SIGMA - want).abs() < 1e-15,
+        "{MEDIAN_LENGTH_TO_SIGMA} vs {want}"
+    );
 }

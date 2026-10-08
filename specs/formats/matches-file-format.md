@@ -792,7 +792,10 @@ lies in the member's patch relative to where the member's stored shape places
 it. No affine map fitted to the cells is removed from the displacements, so
 they carry three things: the part one affine map over the nine cells can
 express, which is how far the cells' own best fits disagree with the shape
-fitted to the whole patch; for a planar surface, the perspective term a
+fitted to the whole patch (in full only when the refinement left the shape
+alone; see
+[`member_cell_shift_px`](#cluster_patchesmember_cell_shift_pxk332float32zst));
+for a planar surface, the perspective term a
 surface normal is derived from once camera poses are known, the part no
 affine map matches; and for a patch that spans two surfaces, the parallax of
 the cells off the one the shape follows. A consumer that wants only the part
@@ -818,6 +821,17 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   pixels of the sampling grid. A displacement of `d` means the cell's content
   lies at `c + d` of the member's grid, where `c` is the cell's centre. It is
   the measured displacement, with no affine map fitted to the cells removed
+- The part of the displacements one affine map over the cells can express is
+  present in full only when `refine_options.move_shape` is `false`: the
+  refinement then sampled the image once, through the stored shape, and left
+  that shape as the whole-patch fit found it. When `move_shape` is `true`, or
+  the key is absent (every version 8 file, and a version 9 file written before
+  the key was recorded), the refinement may have moved the shape by the affine
+  map the cells agreed on, so the stored shape may have absorbed that part and
+  the displacements hold what remained. The definition above holds either
+  way. When the refinement did move the shape, the cell's ZNCC and status were
+  read at the sampling made before the last update that moved it, not through
+  the stored shape
 - `NaN` where no displacement was measured: a cell whose status is
   `refused_curvature`, `refused_bound` or `not_attempted`. A `fitted`,
   `refused_zncc` or `refused_outlier` cell carries its displacement
@@ -831,6 +845,10 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
 - Each cell's ZNCC against the reference's cell at its best displacement,
   every sample of the cell weighted equally and averaged over the template's
   textured colour channels; `NaN` where nothing was read
+- Read through the stored shape when `refine_options.move_shape` is `false`;
+  otherwise possibly through the shape before the last update, as
+  [`member_cell_shift_px`](#cluster_patchesmember_cell_shift_pxk332float32zst)
+  describes. The same holds for `member_cell_status`
 
 ##### `cluster_patches/member_cell_status.{K}.3.3.uint8.zst`
 
@@ -1453,9 +1471,13 @@ file below version 6, which is refused.
 | `cluster_patches/metadata.json` `member_cell_status_names` | The legend may name a sixth cell status, `refused_outlier`, code `5` in the canonical order. A writer states the whole legend, so every version 9 file with per-cell entries names it. |
 | `cluster_patches/metadata.json` `refine_options` | A file with per-cell entries may record `move_shape`, whether the refinement was allowed to change the member's shape. It is a recorded setting like the others and is not read back. |
 
-Nothing that a version 8 file stores changes meaning or layout, and a version
-8 file reads unchanged. A version 8 file whose legend names `refused_outlier`
-is refused, since no version 8 writer wrote that name. The bump exists because
+No entry a version 8 file stores changes its definition or layout, and a
+version 8 file reads unchanged. A version 8 file never records `move_shape`,
+so its cells are read as those of a refinement that may have moved the shape
+(see
+[`member_cell_shift_px`](#cluster_patchesmember_cell_shift_pxk332float32zst)).
+A version 8 file whose legend names `refused_outlier` is refused, since no
+version 8 writer wrote that name. The bump exists because
 a version 8 reader refuses a legend name it does not define: without it, a
 version 8 reader would meet `refused_outlier` in a file that claims a version
 it reads. Integrity verification follows the same rule. A re-written file is a
@@ -1596,7 +1618,9 @@ for the invariant and the `S`/`W` conversion math.
 ## Version History
 
 - **Version 9**: The cell status `refused_outlier` — `member_cell_status_names`
-  may name it, and a writer always does. Version 8 files read unchanged.
+  may name it, and a writer always does — and the `refine_options` key
+  `move_shape`, whether the refinement was allowed to change the member's
+  shape. Version 8 files read unchanged.
 - **Version 8**: Per-cell entries — `cluster_patches/` may carry
   `member_cell_shift_px`, `member_cell_zncc`, `member_cell_status` and
   `member_cell_iterations`, present together with a `member_cell_status_names`

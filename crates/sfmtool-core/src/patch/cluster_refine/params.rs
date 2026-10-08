@@ -117,9 +117,10 @@ pub struct ClusterRefineParams {
     ///
     /// Off (`None`) by default. `sfm cluster-patches --piecewise` turns it on
     /// and stores the cells as the `.matches` per-cell entries (format
-    /// version 8, through [`member_cell_data`](super::member_cell_data)); a
-    /// comparison over the capture fleet decides whether it becomes the
-    /// default here. See `specs/drafts/cluster-patches-piecewise-refinement.md`.
+    /// version 8 and later, through
+    /// [`member_cell_data`](super::member_cell_data)). Whether it becomes the
+    /// default is decided once a consumer reads the cells. See
+    /// `specs/drafts/cluster-patches-piecewise-refinement.md`.
     pub piecewise: Option<PiecewiseParams>,
 }
 

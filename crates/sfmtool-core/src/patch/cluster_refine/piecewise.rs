@@ -59,11 +59,17 @@ const IRLS_ROUNDS: usize = 3;
 
 /// The Tukey biweight's cut-off, in units of the residual scale: a cell whose
 /// residual to the fitted update is this many scales or more gets weight `0`.
-/// `4.685` is the usual choice, which keeps 95% efficiency on Gaussian noise.
+/// `4.685` is the conventional cut-off for one-dimensional residuals; here it
+/// is applied to the length of a two-dimensional residual, in units of the
+/// per-axis scale [`MEDIAN_LENGTH_TO_SIGMA`] estimates.
 const TUKEY_CUTOFF: f64 = 4.685;
 
-/// Converts the median absolute residual to a Gaussian standard deviation.
-const MAD_TO_SIGMA: f64 = 1.4826;
+/// Converts the median length of the cells' two-dimensional residuals to the
+/// per-axis standard deviation `σ` of isotropic Gaussian noise: the length of
+/// such a residual is Rayleigh-distributed, with median `σ·√(2 ln 2)`, so
+/// `σ = median / √(2 ln 2)`. The factor `1.4826` used for one-dimensional
+/// residuals would overstate `σ` here by a factor of 1.75.
+const MEDIAN_LENGTH_TO_SIGMA: f64 = 0.849_321_800_288_019_1;
 
 /// The smallest residual scale the reweighting uses, grid px. Without it a
 /// fit through cells that agree to a few hundredths of a pixel would refuse a
@@ -222,7 +228,12 @@ pub struct CellRefinement {
     pub shift_px: [[[f32; 2]; 3]; 3],
     /// ZNCC of each cell at its optimum at the last render: the sub-pixel
     /// peak's value where one was read, the best whole shift's otherwise.
-    /// `NaN` where nothing was read.
+    /// `NaN` where nothing was read. Without
+    /// [`PiecewiseParams::move_shape`] the last render is at the returned
+    /// shape. With it, when the last update was applied
+    /// ([`Self::final_update_accepted`]), the last render is at the shape
+    /// before that update, so this ZNCC and [`Self::status`] were read there,
+    /// not at the returned shape.
     pub zncc: [[f32; 3]; 3],
     /// Each cell's status at the last render.
     pub status: [[CellStatus; 3]; 3],
@@ -865,7 +876,7 @@ fn fit_update(points: &[Correspondence], cell_side: f64) -> Option<(Update, Upda
 /// The first fit takes each cell's own weight (its peak's curvature). Each of
 /// the [`IRLS_ROUNDS`] that follow measures every cell's residual to the last
 /// fit, the distance from `c + d` to `A·c + b`, takes the residual scale as
-/// [`MAD_TO_SIGMA`] times the median residual, floored at
+/// [`MEDIAN_LENGTH_TO_SIGMA`] times the median residual length, floored at
 /// [`MIN_RESIDUAL_SCALE_PX`], and multiplies the cell's own weight by the
 /// biweight `(1 − (r / (TUKEY_CUTOFF·scale))²)²`, which is `0` at and past the
 /// cut-off. The update is refitted to the cells with a positive weight, so the
@@ -899,7 +910,7 @@ fn fit_update_robust(
             })
             .collect();
         let median = median_in_place(&mut residuals.clone());
-        let scale = (MAD_TO_SIGMA * median).max(MIN_RESIDUAL_SCALE_PX);
+        let scale = (MEDIAN_LENGTH_TO_SIGMA * median).max(MIN_RESIDUAL_SCALE_PX);
         let cut = TUKEY_CUTOFF * scale;
         weights = prior
             .iter()
@@ -1014,11 +1025,11 @@ fn compose(s: &Mat2, p: [f64; 2], update: &Update, step: f64) -> (Mat2, [f64; 2]
 ///   update is applied.
 ///
 /// The returned cells are the readings of the last render. Their shifts are
-/// the residual to the returned shape: a shift measured at a render whose
-/// update was applied is carried into the updated shape's grid (see
-/// [`CellRefinement::shift_px`]); one measured at a render whose update was
-/// not applied is already relative to the returned shape and is stored as
-/// measured. A fitted cell the robust fit gave weight `0` is stored as
+/// each cell's displacement from where the returned shape places it: a shift
+/// measured at a render whose update was applied is carried into the updated
+/// shape's grid (see [`CellRefinement::shift_px`]); one measured at a render
+/// whose update was not applied is already relative to the returned shape and
+/// is stored as measured. A fitted cell the robust fit gave weight `0` is stored as
 /// [`CellStatus::RefusedOutlier`].
 ///
 /// A failed iteration leaves the member at its cascade shape and position
