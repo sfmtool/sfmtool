@@ -325,7 +325,6 @@ the local 3D structure around the target by making nearby points glow brighter.
 
 Inspired by Hubble imagery of supernova light echoes — see
 [SN 2014J in M82](https://science.nasa.gov/asset/hubble/light-echo-around-sn-2014j-in-m82/).
-The planned UI label for this effect is **"Target Light Echoes"**.
 
 ### Purpose
 

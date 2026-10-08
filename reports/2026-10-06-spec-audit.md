@@ -195,6 +195,10 @@ flags only, which meets the requirement for a Python pipeline.
 | core/spherical/spherical-tiles-rig.md:3-8 | "## Motivation … Three options were considered" | design deliberation as the opening (see check 4) |
 | Future-work headings | flow-based-matching:144, patch-view-selection:324, sift-to-patch-reconstruction:271, sfmr-file-format:1945, scene-graph:1414, user-experience:261, camera-config:382 | each should become a present-tense statement plus an amendment draft, or be deleted |
 
+> _Status (2026-10-07): **Partially done** — seven rows fixed: `camera-views.md` names the HUD's "Frustum" slider; `point-cloud-rendering.md` drops the planned label; `architecture.md` says where the thumbnails come from (the file, or the open task when the file has none) and that each reconstruction's atlas holds them all with no eviction; the `xform-command.md` TODO is removed (a code cleanup, not specified behaviour, and its function names had gone stale); `epipolar-estimation.md` drops the "natural v2" deferral; `refine-normals-command.md` states the report-only confidence in the present tense, without the later-threshold plan; `mcp-server.md` says `get_scene` carries `window` beside `window_title`, without the plan to drop it. Still open: the keypoint-localization-search-cache, keypoint-localization-consensus-basis and Future-work-heading rows (the spherical-tiles-rig row is done in PR #846), PR #851._
+
+> _Status (2026-10-07): **Done** for the `spherical-tiles-rig.md:3-8` row — the spec now opens with what a tile rig is, and the comparison of three samplings sits under § "Why small pinhole tiles" in the present tense, PR #846._
+
 Acquitted: algorithm "Step N" / "Phase N" headings (motion, select-by-distribution,
 epipolar-curves, photometric-subsets-ransac), format "Versioning and Migration"
 sections, present-tense "Consumers" sections (cluster-patches:237,
@@ -225,6 +229,7 @@ should read it as a claim.
    - Current: "For per-direction work on the sphere (infinity-consistency tests, parallax-from-pose depth estimation, multi-view color aggregation) we need a discretization that samples the sphere in small, nearly-distortion-free patches. Three options were considered:"
    - Problem: design deliberation under § Motivation; it never says what a tile rig is, and two of the three listed uses have no caller (the users are `sfm panorama` and `sfm camrig spherical-tiles`).
    - Proposed: *"A spherical tile rig is a camera rig of n identical small pinhole "tile" cameras that share one optical centre and look in nearly evenly spread directions, so that per-direction work on the sphere, such as the stitching behind `sfm panorama`, runs on small, nearly undistorted images held in one atlas."* (`tile_rig.rs:8-18`)
+   > _Status (2026-10-07): **Done** — the spec opens with what a tile rig is (identical pinhole tiles sharing one optical centre, nearly evenly spread directions, one atlas image) and names its users, `sfm panorama` and `sfm camrig spherical-tiles`; the uses with no caller are gone from the opening, and § Motivation became § "Why small pinhole tiles", branch `spec-fix-1006-33-opening-spherical-tiles`._
 2. **`gui/edits/move-camera.md:3`**
    - Current: "An image whose pose is wrong is the commonest defect a reviewer can see and cannot fix: …  What the reviewer wants is to take hold of the camera and put it where the photograph lines up, the way a hand would."
    - Problem: the first paragraph states the problem only; what the action is appears in paragraph two, through a figure ("The viewer already has the hand").
@@ -642,10 +647,12 @@ for sfmr (11), sift (1), camrig (2) and kdf (3).
   - Minor: :163-165 "earlier sfmtool releases"; :545, :1103, :985-993 name implementations or a core-only test; acquitted: :449-451, :92, :566, :1810, :1955.
     > _Status (2026-10-07): **Done** for the three CONFIRMED items, the NEW item (the coherence rule stays; the mean-viewing fill-in and the pass-through of `normal_confidence` moved to *Implementations*) and the Minor :163-165 line (now "files of format versions ≤ 4"); the versioning gaps below are on another branch, branch `spec-fix-1006-30-sfmr-failure6`._
   - Versioning gaps: `world_space_unit` (:1898-1914) gives no version (present since e881b335, so version 1+); `infinity_point_count` (:324) lacks "(version 2+; read as 0 when absent)" (types.rs:159-162).
+    > _Status (2026-10-07): **Done** — `infinity_point_count` now reads "(version 2+; read as `0` when absent)" and § World-Space Unit says the field is defined in every version (1+), branch `spec-fix-1006-31-sfmr-versions-normals`._
 **Third copies:** `SFMR_FORMAT_VERSION` doc (types.rs:576-630, about 55 lines) and `SFMR_CANONICAL_CONVENTION_VERSION` doc (:641-652) restate the spec; shrink to contract plus link.
 **Non-goals / deferrals checked:** 2 (Future Extensions :1945-1970; reserved `normal_confidence` values :1136); neither overtaken.
 **Recommendation:** update spec (remove the four implementation-name passages; add the two introducing versions). The code matches.
 **Unclear / incorrect / suspicious:** the writer replaces every all-zero normal on a finite point (write.rs:152-200, :344-358), and the format defines a zero normal only for `w = 0` rows (:1112-1113); state it. "Verification Process" (:1708-1713) lists only hash steps. Migration subsections are out of order, and 1→2 has no "how a v1 file reads" sentence (read.rs:394-407).
+> _Status (2026-10-07): **Done** — `normals_xyz` now states that a finite point's row is a unit vector or `(0, 0, 0)` for "no normal", that a reader treats zero as no normal, and that a writer may fill a zero row and keeps unit-vector rows; the writer's two checks for a missing row now share one tolerance (a near-zero row was filled by a default write but kept by one that skips the statistics), with a test. "Verification Process" now lists the structural checks the verifier makes beside the hashes. The migration subsections run newest first, and 1→2 says how a version 1 file reads. Branch `spec-fix-1006-31-sfmr-versions-normals`._
 
 ## Code without specs
 
@@ -957,9 +964,10 @@ Read 2026-09-26; open items above.
      > _Status (2026-10-07): **Done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, PR #842; the sfmr passages (3 plus 1) are fixed the same way, PR #843._
    - Three entries never say which version introduced them: `world_space_unit`
      and `infinity_point_count` in `.sfmr`, and `.matches` `refine_options`.
-     > _Status (2026-10-07): **Partially done** — `.matches` `refine_options` now says it entered with `cluster_patches/` in version 3, that `radius` appears only in refused version 3-4 files, that the member-gate key changed during version 6 and a rewritten file keeps its refinement's keys, and how a reader treats a missing object, branch `spec-fix-1006-32-matches-versions`; the two `.sfmr` entries are open._
+     > _Status (2026-10-07): **Done** — `.matches` `refine_options` now says it entered with `cluster_patches/` in version 3, that `radius` appears only in refused version 3-4 files, that the member-gate key changed during version 6 and a rewritten file keeps its refinement's keys, and how a reader treats a missing object, PR #845; the two `.sfmr` entries now give their versions, PR #844._
    - The `.sfmr` writer replaces a zero normal on a finite point, which the
      spec does not allow for or rule out.
+     > _Status (2026-10-07): **Done** — `normals_xyz` now defines the zero row of a finite point as "no normal" and allows a writer to fill it, branch `spec-fix-1006-31-sfmr-versions-normals`._
 5. **Nine opening paragraphs.** Check 4 found five:
    `spherical-tiles-rig.md`, `gui/edits/move-camera.md` and
    `keypoint-reach.md` never say what the thing is for, and
@@ -968,4 +976,4 @@ Read 2026-09-26; open items above.
    `reprojection-residuals.md` and `track-view.md`. Land them **one spec per
    PR**: each proposed sentence is a claim about the code, and a reviewer
    checks it properly only when reading it alone.
-   > _Status (2026-10-07): **Partially done** — `flow-command.md` has its opening, PR #838; `gui/edits/move-camera.md` has its opening, PR #847; the other seven are open._
+   > _Status (2026-10-07): **Partially done** — `flow-command.md` has its opening, PR #838; `spherical-tiles-rig.md` has its opening, PR #846; `gui/edits/move-camera.md` has its opening, PR #847; the other six are open._

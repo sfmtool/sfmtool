@@ -491,18 +491,6 @@ patch frames carried through unchanged — note that the patch `(u, v)` frames a
 *not* re-fit to the adjusted geometry, so re-run `sfm embed-patches` (or
 `--refine-normals`) afterward if the poses/points moved materially.
 
-> **TODO (implementation cleanup):** the "where does an observation's 2D
-> keypoint come from" distinction (`.sift` file vs inline `keypoints_xy`) is
-> currently special-cased at several sites — `save_colmap_binary` and the BA
-> readback in `_bundle_adjust.py`, plus two parallel reprojection-error loops in
-> `reconstruction/data/recompute.rs` (`compute_observation_reprojection_errors` for
-> `sift_files`, `embedded_point_reprojection_errors` for `embedded_patches`).
-> These should collapse onto a single source-agnostic accessor on the
-> reconstruction (an "observed keypoint for (point, observation)" lookup, plus a
-> `keypoints_per_image()` helper) so a new feature source or a change to the
-> reprojection/at-infinity semantics is a one-place edit rather than several
-> kept-in-sync copies.
-
 #### `--refine-normals [<params>]`
 
 Refines each finite point's `normal` to the one that maximizes photometric
