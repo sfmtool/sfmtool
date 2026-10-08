@@ -304,7 +304,7 @@ focal_from_fundamental(
 ## Non-goals (v1)
 
 - Essential-matrix estimation and relative-pose decomposition (R, t from
-  E) — a natural v2 once calibrated consumers exist.
+  E).
 - Homography estimation and F-vs-H model selection (GRIC/QDEGSAC); the
   estimator documents the planar/rotation-only caveat instead.
 - Degeneracy-aware sampling (DEGENSAC) and PROSAC-style guided sampling.

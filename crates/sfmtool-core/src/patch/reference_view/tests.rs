@@ -726,10 +726,11 @@ fn a_view_of_the_patch_edge_on_or_from_behind_is_never_a_candidate() {
 
 // ---- Blur-matched readings -------------------------------------------------------
 
-/// The rule on blur-matched readings applies the thresholds that go with them,
-/// and says so in its standings.
+/// The rule on blur-matched readings applies the margin that goes with them
+/// and the same cell bar as on the plain readings, and says so in its
+/// standings.
 #[test]
-fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
+fn the_blur_matched_inputs_apply_their_own_margin_and_the_same_cell_bar() {
     let inputs = ReferenceRuleInputs {
         agreement: PairZnccReading::BlurMatched,
         cells: PairZnccReading::BlurMatched,
@@ -738,10 +739,7 @@ fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
         inputs.agreement_margin(),
         REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN
     );
-    assert_eq!(
-        inputs.max_cell_deficit(),
-        REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT
-    );
+    assert_eq!(inputs.max_cell_deficit(), REFERENCE_MAX_CELL_DEFICIT);
     assert_eq!(
         ReferenceRuleInputs::PLAIN.agreement_margin(),
         REFERENCE_AGREEMENT_MARGIN
@@ -756,14 +754,20 @@ fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
     assert_eq!(choice.reference, Some(1));
     assert_eq!(choice.rejected_by[2], Some(ReferenceTest::Agreement));
     assert_eq!(choice.standing(0).unwrap().inputs, inputs);
-    // A cell deficit between the two bars.
-    let mut cells = good(0.95, 0.2);
-    cells.cell_deficit =
-        Some(0.5 * (REFERENCE_MAX_CELL_DEFICIT + REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT));
-    let views = [good(0.95, 0.9), cells];
-    assert_eq!(choose_reference_view(&views).reference, Some(1));
-    let choice = choose_reference_view_with(&views, inputs);
-    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Cells));
+    // A cell deficit at the bar passes and one past it fails, on either
+    // reading.
+    let mut at_bar = good(0.95, 0.2);
+    at_bar.cell_deficit = Some(REFERENCE_MAX_CELL_DEFICIT);
+    let mut past_bar = good(0.95, 0.1);
+    past_bar.cell_deficit = Some(REFERENCE_MAX_CELL_DEFICIT + 0.01);
+    let views = [good(0.95, 0.9), at_bar, past_bar];
+    for choice in [
+        choose_reference_view(&views),
+        choose_reference_view_with(&views, inputs),
+    ] {
+        assert_eq!(choice.reference, Some(1));
+        assert_eq!(choice.rejected_by[2], Some(ReferenceTest::Cells));
+    }
 }
 
 /// Blur-matched agreement with [`PairMatching::Plain`] reads the cells exactly
@@ -771,8 +775,9 @@ fn the_blur_matched_inputs_apply_their_own_margin_and_cell_bar() {
 /// it lifts the blurriest view's agreement.
 #[test]
 fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_view() {
-    use crate::patch::blur_matched::{BlurCovariance, BlurMatchKernel, BlurScratch, PairMatching};
+    use crate::patch::blur_matched::BlurScratch;
     use crate::patch::normal_refine::PatchWindow;
+    use crate::patch::pair_sharpness::PairMatching;
     use crate::patch::self_similarity::{
         zncc_self_similarity_parts, PatchTile, SelfSimilarityParams,
     };
@@ -787,7 +792,7 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
     };
     let mut tiles: Vec<ViewTile> = (0..4).map(|_| tile_of(smooth)).collect();
     let planes = tiles[3].planes();
-    let blurred = planes.blurred(BlurCovariance::isotropic(1.5), &mut BlurScratch::default());
+    let blurred = planes.blurred(1.5, &mut BlurScratch::default());
     for (k, v) in blurred.values.iter().enumerate() {
         tiles[3].samples[[k / 24, k % 24, 0]] = v.round() as u8;
     }
@@ -814,7 +819,6 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
         &refs,
         &ellipses,
         PairMatching::Plain,
-        BlurMatchKernel::Anisotropic,
         window,
         &Progress::none(),
     );
@@ -827,7 +831,6 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
         &refs,
         &ellipses,
         PairMatching::BlurMatched,
-        BlurMatchKernel::Anisotropic,
         window,
         &Progress::none(),
     );
@@ -838,5 +841,5 @@ fn blur_matched_agreement_reads_plain_cells_without_blur_and_lifts_a_blurred_vie
         matched.pair_zncc[3],
         plain.pair_zncc[3]
     );
-    assert!(matched.pair_zncc[3] > 0.95, "{}", matched.pair_zncc[3]);
+    assert!(matched.pair_zncc[3] > 0.92, "{}", matched.pair_zncc[3]);
 }

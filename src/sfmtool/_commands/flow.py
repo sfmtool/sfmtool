@@ -95,14 +95,18 @@ def flow(
     """Visualize optical flow between two images.
 
     Computes dense optical flow from IMAGE1 to IMAGE2 using the Rust DIS
-    algorithm, then visualizes the flow field overlaid with SIFT keypoint
-    advection.
+    algorithm, moves IMAGE1's SIFT keypoints along it, and reports how many
+    land within --tolerance of an IMAGE2 keypoint (a hit). Both images need
+    .sift files and must have the same dimensions. --descriptor-threshold
+    affects the printed statistics only; --max-features affects the drawing
+    only. With --draw, '<stem>_flow<ext>' shows the flow field, hue encoding
+    direction and saturation magnitude.
 
     \b
     Without --reconstruction:
-        Shows flow-colored arrows from SIFT keypoints in IMAGE1 to their
-        advected positions in IMAGE2. Keypoints that land near an IMAGE2
-        keypoint are highlighted with connecting lines.
+        Draws only the hits, each in its own palette colour: the keypoint in
+        IMAGE1, and in IMAGE2 the advected position joined by a line to the
+        IMAGE2 keypoint it landed near.
 
     \b
     With --reconstruction:

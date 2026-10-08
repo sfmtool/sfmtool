@@ -526,7 +526,7 @@ impl PyCameraIntrinsics {
     /// Returns:
     ///     ``(CameraIntrinsics, report)``. The report carries ``camera_model``,
     ///     ``theta_fit_deg``, ``theta_fit_source`` (``"trusted_bound"``,
-    ///     ``"observations"``, ``"image_corner"`` or ``"given"``),
+    ///     ``"image_corner"`` or ``"given"``),
     ///     ``spline_domain_deg`` (``None`` for a non-spline target),
     ///     ``rms_px``, ``max_px``, ``radial_rms_px``, ``dropped`` (one
     ///     sentence per term the target cannot represent) and ``extent``:

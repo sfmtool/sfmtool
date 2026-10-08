@@ -419,6 +419,20 @@ fn surface_a(x: f64, y: f64) -> f64 {
     127.5 + 55.0 * (x * 17.0).sin() + 45.0 * (y * 23.0).cos() + 25.0 * ((x + y) * 31.0).sin()
 }
 
+/// A surface of twelve sinusoids at every 15°, of frequencies from coarse to
+/// fine: blurred, it loses its fine detail along every direction alike, so
+/// its self-similarity ellipse lengthens along every direction, where a blur
+/// of [`surface_a`] leaves its lowest sinusoid, a set of stripes.
+fn surface_round(x: f64, y: f64) -> f64 {
+    let mut v = 127.5;
+    for k in 0..12 {
+        let (s, c) = (k as f64 * std::f64::consts::PI / 12.0).sin_cos();
+        let f = [11.0, 19.0, 31.0, 47.0][k % 4];
+        v += 14.0 * ((c * x + s * y) * f + 1.3 * k as f64).sin();
+    }
+    v
+}
+
 /// A different surface — a member showing this disagrees photometrically.
 fn surface_b(x: f64, y: f64) -> f64 {
     127.5 + 60.0 * (y * 13.0 + 1.7).sin() + 40.0 * (x * 29.0 - 0.4).cos()
@@ -1495,10 +1509,12 @@ fn blurred_image(image: &ImageU8, sigma: f64) -> ImageU8 {
 
 /// Four members of one surface, the last photographed out of focus: blur
 /// matching lifts its agreement with the others, and leaves the plain table
-/// and the coarse tables as they were.
+/// and the coarse tables as they were. The surface holds detail along every
+/// direction, so the blurred member is blurrier than the others along every
+/// direction.
 #[test]
 fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
-    use crate::patch::blur_matched::PairMatching;
+    use crate::patch::pair_sharpness::PairMatching;
     let mut scene = Scene::new(
         &[
             [0.0, 0.0, 0.0],
@@ -1506,7 +1522,7 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
             [-0.6, 0.2, 0.3],
             [0.3, -0.5, 0.2],
         ],
-        &[surface_a, surface_a, surface_a, surface_a],
+        &[surface_round, surface_round, surface_round, surface_round],
     );
     scene.pyrs[3] = ImageU8Pyramid::build(&blurred_image(scene.pyrs[3].level(0), 5.0), 5);
     let views = scene.views();
@@ -1533,10 +1549,23 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
     assert!(matched.pairs_blurred >= 3, "{}", matched.pairs_blurred);
     for i in 0..3 {
         assert!(
-            bm(i, 3) > plain.get(i, 3) + 0.02,
+            bm(i, 3) > plain.get(i, 3) + 0.01,
             "member {i} with the blurred one: blur-matched {} against plain {}",
             bm(i, 3),
             plain.get(i, 3)
+        );
+    }
+    // The lift goes to the blurred member's pairs: each gains more than any
+    // pair of the sharp members does.
+    let sharp_gain = [(0, 1), (0, 2), (1, 2)]
+        .iter()
+        .map(|&(i, j)| bm(i, j) - plain.get(i, j))
+        .fold(f64::NEG_INFINITY, f64::max);
+    for i in 0..3 {
+        let gain = bm(i, 3) - plain.get(i, 3);
+        assert!(
+            gain > sharp_gain + 0.01,
+            "member {i} with the blurred one gains {gain}, the sharp pairs up to {sharp_gain}"
         );
     }
 
@@ -1555,7 +1584,7 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
         );
     }
     for i in 0..3 {
-        assert!(above.blur_matched_zncc[i * 4 + 3] > plain.get(i, 3) + 0.02);
+        assert!(above.blur_matched_zncc[i * 4 + 3] > plain.get(i, 3) + 0.01);
     }
 }
 

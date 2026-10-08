@@ -34,8 +34,10 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   output; the observation count can only shrink.
 - **Points can be dropped.** After localization, a point whose kept-view count
   falls below `min_views` (default 2) is culled entirely; surviving points are
-  renumbered densely (ascending source order), and positions, colors, errors,
-  normals, and patch frames are carried over per survivor.
+  renumbered densely (ascending source order). Positions, colors, errors and
+  patch frames are carried over per survivor; each finite survivor's normal is
+  re-derived from its patch frame (`normalize(u × v)`), and a point at
+  infinity keeps its stored row.
 - **The track structure is rebuilt.** `keypoints_xy`,
   `track_image_indexes` / `track_point_indexes` / `observation_counts` are all
   reconstructed from the kept views — nothing structural from the input is
@@ -91,11 +93,18 @@ sfm xform <input.sfmr> [<output.sfmr>] --localize-keypoints [<params>] [...]
 ```
 
 `--localize-keypoints` takes an **optional** comma-separated parameter string
-of `key=value` modifiers (the Click option is `is_flag=False, flag_value=""`,
-so all three forms work: bare `--localize-keypoints`, space-separated
-`--localize-keypoints search=8`, and joined `--localize-keypoints=search=8` —
-while a following option, e.g. `--localize-keypoints --refine-keypoints`, is
-left untouched). With no value it runs the binding defaults plus `min_views=2`.
+of `key=value` modifiers. `parse_xform_args` reads the value, so all three
+forms work: bare `--localize-keypoints`, space-separated
+`--localize-keypoints search=8`, and joined `--localize-keypoints=search=8`; a
+following option, e.g. `--localize-keypoints --refine-keypoints`, is left
+untouched. The Click option is declared `is_flag=False, flag_value=""`, and
+the values Click collects are checked against that walk. With no value it runs
+the binding defaults plus `min_views=2`.
+
+Because the next token is taken as the value whenever it is not an option, the
+output path must come before the operation: in
+`sfm xform in.sfmr --localize-keypoints out.sfmr`, `out.sfmr` is read as the
+parameter string and rejected as a malformed `key=value` token.
 
 ```
 --localize-keypoints
@@ -105,11 +114,11 @@ left untouched). With no value it runs the binding defaults plus `min_views=2`.
 
 ### `key=value` modifiers
 
-All keys except `min_views` pass straight through to
-`PatchCloud.localize_keypoints`, reusing the binding's own defaults — the
-"Default" column matches each binding default exactly, so the CLI re-specifies
-nothing and the two layers cannot drift. `min_views` is the compaction cull
-threshold consumed by `compact_to_embedded_patches`.
+All keys except `min_views` are `PatchCloud.localize_keypoints` keyword
+arguments, and only the keys given are passed to it, so a key left out takes
+the binding's own default. The "Default" column lists those binding defaults.
+`min_views` is the compaction cull threshold consumed by
+`compact_to_embedded_patches`.
 
 | Key                            | Default         | Forwards to                                    |
 |--------------------------------|-----------------|------------------------------------------------|
@@ -124,7 +133,7 @@ threshold consumed by `compact_to_embedded_patches`.
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |
 | `window`                       | `gaussian_disk` | `localize_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`                 | `0.6`           | `localize_keypoints`                           |
-| `sampler`                      | `per_view`      | `localize_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` applies the sampler rule to each view, `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and `bilinear_mip` otherwise; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression, bounding the aliasing `bilinear` suffers on cross-scale views at the same cost; `anisotropic` resolves oblique footprints; with the AVX2 kernel a tile costs 0.65–1.55× what a `bilinear_mip` one does (the most on views compressed 10 times or more along one axis), and 1.8–4× it on a CPU without AVX2) |
+| `sampler`                      | `per_view`      | `localize_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` picks `anisotropic` or `bilinear_mip` for each view by the rule in [image-warping.md](../../../core/camera/image-warping.md#choosing-the-sampler-per-view), which also gives each sampler's cost) |
 | `robust_iters`                 | `3`             | `localize_keypoints` (IRLS passes for the consensus) |
 | `convergence_px`               | `0.05`          | `localize_keypoints` (round-level stop, patch-grid px) |
 | `search_resolution_multiplier` | `1.0`           | `localize_keypoints` (supersampled search grid; `> 1` resolves sub-pixel offsets at ~m² cost) |

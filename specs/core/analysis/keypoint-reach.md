@@ -1,9 +1,13 @@
 # Keypoint Reach Pairs
 
-One question, asked per image of a track set: which other keypoints lie inside
-this keypoint's own disk? Several rules read that neighbourhood and differ only
-in what they then test, so the enumeration is stated once and the tests stay
-with the callers.
+Keypoint reach lists, for each image of a set of tracks, every ordered pair of
+keypoints in which the second lies inside the first one's disk, whose radius in
+pixels each keypoint carries as its own. It exists so that a rule judging
+nearby observations reads those pairs instead of searching the image for them
+itself: [covered-by-finer](covered-by-finer.md), which retires a coarse
+observation when a finer observation of another track lies inside its
+footprint, is the rule that reads it. The enumeration is stated once here, and
+what each rule then tests of a pair stays with that rule.
 
 The domain is the image plane. A KEYPOINT here is a row of a track set: an
 image index, a pixel position, and its own query radius (its REACH) in pixels.
@@ -70,11 +74,11 @@ footprint, keeps the pairs at least one radius band apart, and retires the
 coarse side. It reads the pair stream directly and adds its own tests over it,
 which is the calling pattern this module is shaped for.
 
-The other rule extracted from was **reconciling points that rest on one
-measurement**, which would set the reach to a fraction of the row's refined unit
-scale, keep the pairs whose radii agree, and join their points into one tangle.
-It still expands the neighbourhood for itself in NumPy; see
-[Open questions](#open-questions).
+The other rule the enumeration was extracted from, **reconciling points that
+rest on one measurement**, would set the reach to a fraction of the row's
+refined unit scale, keep the pairs whose radii agree, and join their points into
+one tangle. That rule is not in this repository, so covered-by-finer is the only
+caller today; see [Open questions](#open-questions).
 
 ## Binding
 
@@ -109,12 +113,13 @@ the documented "asks nothing" value, not an error.
 
 ## Open questions
 
-**Whether the same-measurement reconciliation should migrate onto it.** It asks
-this question of these rows and differs only in what it then tests, which is why
-the enumeration was stated once. Its verdict would be an exact function of the
-pair set, so the enumeration would carry its determinism. What a migration has to
-establish, and what nothing asserts today, is that the rule's mask comes out byte
-for byte identical to what its NumPy expansion produces now — including on the
-members the reconciliation's tolerance was drawn from. That is the parity the
-covering rule's own binding test establishes for its half of the pair
-([covered-by-finer.md](covered-by-finer.md) § "Testing").
+**Whether the same-measurement reconciliation should migrate onto it, if that
+rule is brought into this repository.** It asks this question of these rows and
+differs only in what it then tests, which is why the enumeration was stated
+once. Its verdict would be an exact function of the pair set, so the
+enumeration would carry its determinism. What a migration has to establish is
+that the rule's mask comes out byte for byte identical to what its own NumPy
+expansion produced, including on the members the reconciliation's tolerance was
+drawn from. That is the parity the covering rule's own binding test establishes
+for its half of the pair ([covered-by-finer.md](covered-by-finer.md) §
+"Testing").

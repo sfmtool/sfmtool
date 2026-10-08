@@ -9,6 +9,8 @@
 //! the forest's top-1 result — meets a target. This is the narrow slice of the
 //! paper's auto-tuning we support: `T`, `D`, and `leaf_size` stay fixed; only
 //! the budget is fitted.
+//!
+//! Specified in `specs/core/features/randomized-kdtree-forest.md`.
 
 use super::distance::ForestScalar;
 use super::KdForest;
