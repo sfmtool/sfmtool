@@ -108,10 +108,12 @@ pub struct ClusterRefineParams {
     /// for the stall exit.
     pub stall_tol: f64,
     /// The piecewise refinement that follows the cascade for every kept
-    /// member: the nine cells of the template are registered separately and
-    /// their shifts refine the member's affine shape and position, and
-    /// [`ClusterRefineResult::cells`] carries what each cell read. `None`
-    /// skips the stage, leaving every output the cascade's.
+    /// member: the nine cells of the template are registered separately at
+    /// the member's cascade shape, and [`ClusterRefineResult::cells`] carries
+    /// what each cell read. The member's shape, position and readings stay
+    /// the cascade's unless [`PiecewiseParams::move_shape`] lets the cells'
+    /// shifts refine them. `None` skips the stage, leaving every output the
+    /// cascade's.
     ///
     /// Off (`None`) by default. `sfm cluster-patches --piecewise` turns it on
     /// and stores the cells as the `.matches` per-cell entries (format
@@ -231,7 +233,8 @@ pub struct ClusterRefineResult {
     /// member, and `None` throughout when [`ClusterRefineParams::piecewise`]
     /// is `None`.
     ///
-    /// Where the stage moved a kept member, that member's shape and position
+    /// Where the stage moved a kept member, which it does only with
+    /// [`PiecewiseParams::move_shape`], that member's shape and position
     /// are the stage's, and its ZNCC, middle ZNCC, ZNCC grid and shift are
     /// read again at that shape and position; its status stays the cascade's.
     pub cells: Vec<Option<CellRefinement>>,

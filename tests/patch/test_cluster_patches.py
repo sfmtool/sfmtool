@@ -309,6 +309,7 @@ def test_cluster_patches_piecewise_writes_the_cells(cluster_matches_file: Path):
     assert {
         key: cp_meta["refine_options"][key]
         for key in (
+            "move_shape",
             "cell_shift_bound_px",
             "min_cell_zncc",
             "min_cell_curvature",
@@ -316,6 +317,7 @@ def test_cluster_patches_piecewise_writes_the_cells(cluster_matches_file: Path):
             "max_iterations",
         )
     } == {
+        "move_shape": False,
         "cell_shift_bound_px": 2.0,
         "min_cell_zncc": 0.8,
         "min_cell_curvature": 0.02,

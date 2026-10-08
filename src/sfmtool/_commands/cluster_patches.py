@@ -90,9 +90,10 @@ from .._cli_utils import timed_command
     show_default=True,
     help=(
         "After the affine fit, register each of the reference's nine cells "
-        "separately against each kept member's image, refine the member's "
-        "shape from their shifts, and store each cell's displacement, ZNCC "
-        "and status in the output (format version 8 per-cell columns). See "
+        "separately against each kept member's image at the member's fitted "
+        "shape, and store each cell's displacement, ZNCC and status in the "
+        "output (format version 8 per-cell columns). The member's shape is "
+        "left as the affine fit found it. See "
         "specs/drafts/cluster-patches-piecewise-refinement.md."
     ),
 )
@@ -114,9 +115,9 @@ def cluster_patches(
     other member (seeded from the SIFT affine shapes), vet members by
     achieved ZNCC and translation drift, and keep at most one member per
     image. With --piecewise, every kept member's patch is then cut into
-    nine cells that are registered separately, the member's shape is refined
-    from their shifts, and each cell's displacement, ZNCC and status are
-    stored beside the member. Each member is stored fully absolute — its affine SHAPE (the
+    nine cells that are registered separately at the member's fitted shape,
+    and each cell's displacement, ZNCC and status are stored beside the
+    member. Each member is stored fully absolute — its affine SHAPE (the
     refined warp composed onto the reference feature's detector shape) plus
     its refined keypoint position — so a consumer reads a member's extent and
     position with no .sift lookup. Writes a NEW .matches file that copies the

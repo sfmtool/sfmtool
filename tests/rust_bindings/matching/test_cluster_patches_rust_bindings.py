@@ -21,6 +21,7 @@ CELL_FITTED = 0
 CELL_NOT_ATTEMPTED = 3
 # sfmtool_core's LoopStop discriminants, as `member_cell_loop_stop` returns them.
 LOOP_NOT_RUN = 0
+LOOP_MEASURED = 5
 
 
 def _texture(w: int, h: int) -> np.ndarray:
@@ -173,6 +174,7 @@ class TestRefineClusterPatches:
         assert accepted.dtype == np.bool_ and accepted.shape == (2,)
         # The settings the run used: the Rust defaults.
         assert result["piecewise_options"] == {
+            "move_shape": False,
             "cell_shift_bound_px": 2.0,
             "min_cell_zncc": 0.8,
             "min_cell_curvature": 0.02,
@@ -187,16 +189,39 @@ class TestRefineClusterPatches:
         assert iterations[0] == 0
         assert stop[0] == LOOP_NOT_RUN and not accepted[0]
 
-        # The kept member is a pure translation: the stage runs on it, its
-        # fitted cells sit where its affine shape places them, and it stays
-        # kept with the shape the cascade found, to within the fit.
+        # The kept member is a pure translation: the stage measures it once,
+        # its fitted cells sit where its affine shape places them, and every
+        # member output is the cascade's, bit for bit.
         assert result["member_status"][1] == STATUS_KEPT
-        assert iterations[1] >= 1
-        assert stop[1] != LOOP_NOT_RUN
+        assert iterations[1] == 1
+        assert stop[1] == LOOP_MEASURED and not accepted[1]
         fitted = status[1] == CELL_FITTED
         assert fitted.sum() >= 5
         np.testing.assert_allclose(shift[1][fitted], 0.0, atol=0.2)
         assert (zncc[1][fitted] > 0.8).all()
+        for key in (
+            "member_status",
+            "member_positions",
+            "member_affine_shapes",
+            "member_zncc",
+            "member_zncc_middle",
+            "member_zncc_grid",
+            "member_shift_px",
+        ):
+            np.testing.assert_array_equal(result[key], plain[key], err_msg=key)
+
+    def test_piecewise_move_shape_runs_the_loop(self):
+        images, pos, aff, starts, m_img, m_feat = _inputs()
+        plain = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        result = refine_cluster_patches(
+            images, pos, aff, starts, m_img, m_feat, piecewise=True, move_shape=True
+        )
+        assert result["piecewise_options"]["move_shape"] is True
+        assert result["member_status"][1] == STATUS_KEPT
+        assert result["member_cell_iterations"][1] >= 1
+        assert result["member_cell_loop_stop"][1] not in (LOOP_NOT_RUN, LOOP_MEASURED)
+        # The kept member stays with the shape the cascade found, to within
+        # the fit.
         np.testing.assert_allclose(
             result["member_affine_shapes"][1],
             plain["member_affine_shapes"][1],
@@ -213,6 +238,7 @@ class TestRefineClusterPatches:
             m_img,
             m_feat,
             piecewise=True,
+            move_shape=True,
             cell_shift_bound_px=3.0,
             min_cell_zncc=0.9,
             min_cell_curvature=0.05,
@@ -220,6 +246,7 @@ class TestRefineClusterPatches:
             max_iterations=1,
         )
         assert result["piecewise_options"] == {
+            "move_shape": True,
             "cell_shift_bound_px": 3.0,
             "min_cell_zncc": 0.9,
             "min_cell_curvature": 0.05,

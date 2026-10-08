@@ -1019,6 +1019,8 @@ fn refine_cluster(
 /// the cells always, and, when the loop moved the shape, the new shape and
 /// position with the whole-patch ZNCC, its parts and the shift from the seed
 /// read again at the new map. The member's status stays the cascade's.
+/// Without [`PiecewiseParams::move_shape`] the shape never moves, so only the
+/// cells are stored and every other reading of the member is left untouched.
 ///
 /// The member was kept on the cascade's readings, so the stage's shape must
 /// pass the same gates to replace it: the ZNCC read again at the new map must

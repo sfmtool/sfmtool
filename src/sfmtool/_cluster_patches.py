@@ -253,12 +253,17 @@ def _run_cluster_patches(
         # Cell status 0 is fitted in the canonical numbering the binding
         # returns.
         cells_fitted = int((result["member_cell_status"][statuses == 1] == 0).sum())
-        n_accepted = int(result["member_cell_update_accepted"][statuses == 1].sum())
-        click.echo(
+        summary = (
             f"Piecewise refinement: {cells_fitted} of {9 * n_kept} cells of kept "
-            f"members fitted; the last shape update was applied to {n_accepted} "
-            f"of {n_kept} kept members"
+            f"members fitted"
         )
+        if result["piecewise_options"]["move_shape"]:
+            n_accepted = int(result["member_cell_update_accepted"][statuses == 1].sum())
+            summary += (
+                f"; the last shape update was applied to {n_accepted} "
+                f"of {n_kept} kept members"
+            )
+        click.echo(summary)
     click.echo(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "
         f"{n_unloc} unlocalizable, {n_dup} duplicate-image, "

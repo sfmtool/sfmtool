@@ -9,7 +9,10 @@
 //! frame, the rejection of an update that lowers the whole-member ZNCC, the
 //! early stop of an oscillating loop, the robust fit's refusal of an outlier
 //! cell, and the stage as it runs inside `refine_cluster_patches`, on one
-//! thread and on four.
+//! thread and on four. Those run the shape-moving loop
+//! (`PiecewiseParams::move_shape`); the tests at the end run the default,
+//! which measures the cells at the cascade's shape and leaves the member
+//! bit-identical to the cascade's.
 
 use super::super::kernels::{SupportTables, TemplateKernel};
 use super::super::{
@@ -90,9 +93,30 @@ struct Fixture {
     off: f64,
 }
 
+/// The default piecewise settings with the shape-moving loop turned on.
+fn loop_params() -> PiecewiseParams {
+    PiecewiseParams {
+        move_shape: true,
+        ..PiecewiseParams::default()
+    }
+}
+
+/// The fixture with the shape-moving loop on, which most tests here exercise.
 fn fixture() -> Fixture {
+    fixture_with(loop_params())
+}
+
+/// The fixture at the default settings, which measure the cells at the
+/// cascade's shape and never move it.
+fn measuring_fixture() -> Fixture {
+    let fx = fixture_with(PiecewiseParams::default());
+    assert!(!fx.pp().move_shape, "measuring is the default");
+    fx
+}
+
+fn fixture_with(pp: PiecewiseParams) -> Fixture {
     let params = ClusterRefineParams {
-        piecewise: Some(PiecewiseParams::default()),
+        piecewise: Some(pp),
         ..ClusterRefineParams::default()
     };
     let resolution = params.resolution;
@@ -1176,7 +1200,7 @@ fn scripted_pass(b: [f64; 2]) -> Pass {
 #[test]
 fn an_oscillating_loop_stops_early_with_the_better_shape() {
     let layout = CellLayout::new(25, 2.0);
-    let pp = PiecewiseParams::default();
+    let pp = loop_params();
     let step = 0.48;
     let (s0, p0) = (A_REF, C);
     // The updates alternate in sign and do not shrink: 0.3 grid px right,
@@ -1256,7 +1280,7 @@ fn an_outlier_cell_is_refused_and_the_fit_follows_the_inliers() {
 
     // Through the loop: the outlier is stored as refused_outlier with its
     // shift, the inliers as fitted with no residual.
-    let pp = PiecewiseParams::default();
+    let pp = loop_params();
     let out = run_loop(
         A_REF,
         C,
@@ -1278,4 +1302,178 @@ fn an_outlier_cell_is_refused_and_the_fit_follows_the_inliers() {
             }
         }
     }
+}
+
+#[test]
+fn measuring_leaves_every_cascade_output_bit_identical_inside_the_kernel() {
+    let fx = measuring_fixture();
+    let off = run_cluster(&ClusterRefineParams::default());
+    let on = run_cluster(&fx.params);
+    assert_eq!(on.member_status, off.member_status);
+    assert_eq!(on.reference_members, off.reference_members);
+    let bits64 = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let bits32 = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(
+        bits64(on.member_affine_shapes.as_slice().unwrap()),
+        bits64(off.member_affine_shapes.as_slice().unwrap())
+    );
+    assert_eq!(
+        bits64(on.member_positions.as_slice().unwrap()),
+        bits64(off.member_positions.as_slice().unwrap())
+    );
+    assert_eq!(bits32(&on.member_zncc), bits32(&off.member_zncc));
+    assert_eq!(
+        bits32(&on.member_zncc_middle),
+        bits32(&off.member_zncc_middle)
+    );
+    let grid = |r: &ClusterRefineResult| {
+        r.member_zncc_grid
+            .iter()
+            .flatten()
+            .flatten()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(grid(&on), grid(&off));
+    assert_eq!(bits32(&on.member_shift_px), bits32(&off.member_shift_px));
+
+    // The kept member, whose start is perturbed, is measured once and not
+    // moved, with every cell read.
+    assert_eq!(on.member_status[1], MemberStatus::Kept);
+    let cells = on.cells[1].expect("the kept member has cells");
+    assert_eq!(cells.iterations, 1);
+    assert_eq!(cells.stop, LoopStop::Measured);
+    assert!(!cells.final_update_accepted);
+    assert_eq!(cells.status, [[CellStatus::Fitted; 3]; 3]);
+}
+
+#[test]
+fn measuring_stores_the_raw_shifts_which_carry_the_start_affine() {
+    let fx = measuring_fixture();
+    let member = member_image(a_true(), [0.0, 0.0], None);
+    let (s0, p0) = perturbed_start();
+    let pyr = ImageU8Pyramid::build(&member, 6);
+    // The whole-member ZNCC is not read when the shape cannot move.
+    let out = fx.run_scored(&pyr, s0, p0, |_: &Mat2, _: [f64; 2]| -> Option<f64> {
+        panic!("the score is read only by the shape-moving loop")
+    });
+    assert!(!out.updated);
+    assert_eq!(out.shape, s0);
+    assert_eq!(out.position, p0);
+    assert_eq!(out.cells.iterations, 1);
+    assert_eq!(out.cells.stop, LoopStop::Measured);
+    assert!(!out.cells.final_update_accepted);
+    assert_eq!(out.model, Some(UpdateModel::Affine));
+    assert_eq!(out.cells.status, [[CellStatus::Fitted; 3]; 3]);
+
+    // The stored shifts are the displacements from the start's placement of
+    // each cell, as the plane puts them: the perturbation's affine, which no
+    // fitted map is removed from. Measured at the perturbed start, where each
+    // cell is itself scaled and rotated against the template, they follow it
+    // to within a fifth of a grid px.
+    let (worst, rms, largest) = truth_residual_errors(&fx, &out, [0.0, 0.0]);
+    assert!(
+        largest > 0.5,
+        "the start is only {largest:.3} grid px off the truth"
+    );
+    assert!(
+        worst < 0.2 && rms < 0.1,
+        "a shift is {worst:.3} grid px off the start's displacement (RMS {rms:.3})"
+    );
+
+    // They are the shifts the loop reads at its first render, bit for bit:
+    // the loop with its first update rejected stores those as measured.
+    let lp = fixture();
+    let rejected = lp.run_scored(&pyr, s0, p0, |s: &Mat2, p: [f64; 2]| {
+        Some(if *s == s0 && p == p0 { 0.99 } else { 0.5 })
+    });
+    assert_eq!(rejected.cells.stop, LoopStop::Rejected);
+    assert_eq!(
+        format!(
+            "{:?}",
+            (out.cells.shift_px, out.cells.zncc, out.cells.status)
+        ),
+        format!(
+            "{:?}",
+            (
+                rejected.cells.shift_px,
+                rejected.cells.zncc,
+                rejected.cells.status
+            )
+        )
+    );
+}
+
+#[test]
+fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
+    let layout = CellLayout::new(25, 2.0);
+    let a = mul2(&[[1.01, 0.0], [0.0, 1.01]], &rot2(0.5));
+    let b = [0.1, -0.05];
+    let outlier = (0, 2);
+    let readings: [[CellReading; 3]; 3] = std::array::from_fn(|row| {
+        std::array::from_fn(|col| {
+            let c = layout.centres[row][col];
+            let ac = matvec(&a, c);
+            let mut shift = [ac[0] + b[0] - c[0], ac[1] + b[1] - c[1]];
+            if (row, col) == outlier {
+                shift[0] += 1.5;
+                shift[1] -= 1.0;
+            }
+            CellReading {
+                status: CellStatus::Fitted,
+                shift,
+                zncc: 0.95,
+                curvature: 0.05 + 0.02 * (row * 3 + col) as f64,
+            }
+        })
+    });
+    let pass = fit_pass(readings, &layout).expect("a fit");
+    let mut renders = 0;
+    let out = run_loop(
+        A_REF,
+        C,
+        0.48,
+        &layout,
+        &PiecewiseParams::default(),
+        |_: &Mat2, _: [f64; 2]| {
+            renders += 1;
+            Some(pass)
+        },
+        |_: &Mat2, _: [f64; 2]| -> Option<f64> { panic!("the score is not read") },
+    );
+    assert_eq!(renders, 1);
+    assert!(!out.updated);
+    assert_eq!((out.shape, out.position), (A_REF, C));
+    assert_eq!(out.cells.iterations, 1);
+    assert_eq!(out.cells.stop, LoopStop::Measured);
+    assert!(!out.cells.final_update_accepted);
+    for row in 0..3 {
+        for col in 0..3 {
+            let want = if (row, col) == outlier {
+                CellStatus::RefusedOutlier
+            } else {
+                CellStatus::Fitted
+            };
+            assert_eq!(out.cells.status[row][col], want);
+            // Every shift is stored as read, the fitted map not removed.
+            let rd = readings[row][col].shift;
+            assert_eq!(out.cells.shift_px[row][col], [rd[0] as f32, rd[1] as f32]);
+        }
+    }
+
+    // A failed render or fit leaves every cell not attempted after one
+    // render, at the cascade's shape.
+    let failed = run_loop(
+        A_REF,
+        C,
+        0.48,
+        &layout,
+        &PiecewiseParams::default(),
+        |_: &Mat2, _: [f64; 2]| None,
+        |_: &Mat2, _: [f64; 2]| Some(0.9),
+    );
+    assert!(!failed.updated);
+    assert_eq!(failed.cells.iterations, 1);
+    assert_eq!(failed.cells.stop, LoopStop::NotRun);
+    assert_eq!(failed.cells.status, [[CellStatus::NotAttempted; 3]; 3]);
 }

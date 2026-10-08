@@ -2,25 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Piecewise refinement of a kept member: the nine cells of the template are
-//! registered separately against the member's photograph, and their shifts
-//! are fitted back to an update of the member's affine shape.
+//! registered separately against the member's photograph at the member's
+//! cascade shape, and a robust affine map is fitted to their shifts.
 //!
-//! See `specs/drafts/cluster-patches-piecewise-refinement.md`. The fit is a
-//! loop with two levels. The outer level renders the photograph through the
-//! member's current affine shape into a working patch: the template's `R×R`
-//! grid plus a margin of [`PiecewiseParams::cell_shift_bound_px`] on every
-//! side. The inner level registers each of the nine cells of the reference's
-//! square against that working patch by ZNCC over whole-pixel shifts within the
-//! bound, reads a sub-pixel peak and its curvature, refuses flat and
-//! low-scoring cells, and fits an update of the affine shape to the cells that
-//! remain by iteratively reweighted least squares with a Tukey biweight, so a
-//! cell that disagrees with the others is refused as an outlier. An update is
-//! applied only when the cascade's own objective, the whole-member windowed
-//! ZNCC, does not fall at the updated shape (see [`ACCEPT_ZNCC_TOLERANCE`]).
-//! The loop renders again with the updated shape until the update moves no
-//! cell centre by more than [`PiecewiseParams::update_tolerance_px`], until an
-//! update is rejected, until the update's largest movement stops shrinking,
-//! or until [`PiecewiseParams::max_iterations`].
+//! See `specs/drafts/cluster-patches-piecewise-refinement.md`. The photograph
+//! is rendered through the member's affine shape into a working patch: the
+//! template's `R×R` grid plus a margin of
+//! [`PiecewiseParams::cell_shift_bound_px`] on every side. Each of the nine
+//! cells of the reference's square is registered against that working patch by
+//! ZNCC over whole-pixel shifts within the bound, with a sub-pixel peak and its
+//! curvature read at the best one; flat and low-scoring cells are refused, and
+//! an affine map is fitted to the cells that remain by iteratively reweighted
+//! least squares with a Tukey biweight, so a cell that disagrees with the
+//! others is refused as an outlier.
+//!
+//! By default ([`PiecewiseParams::move_shape`] is `false`) that is the whole
+//! stage: one render, and the member's shape is left as the cascade found it.
+//! With `move_shape`, the fitted map is an update of the shape and the stage is
+//! a loop with two levels. An update is applied only when the cascade's own
+//! objective, the whole-member windowed ZNCC, does not fall at the updated
+//! shape (see [`ACCEPT_ZNCC_TOLERANCE`]), and the loop renders again with the
+//! updated shape until the update moves no cell centre by more than
+//! [`PiecewiseParams::update_tolerance_px`], until an update is rejected, until
+//! the update's largest movement stops shrinking, or until
+//! [`PiecewiseParams::max_iterations`].
 //!
 //! The cells are the `[0, R/3, R - R/3, R]` split the ZNCC grid uses. Shifts
 //! and cell centres are in template grid px. A grid position `g` (column,
@@ -85,6 +90,14 @@ pub const DEFAULT_MIN_CELL_CURVATURE: f32 = 0.02;
 /// every kept member.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiecewiseParams {
+    /// Whether the fitted affine map may move the member's shape. `false`, the
+    /// default, measures the cells once at the cascade's shape and leaves the
+    /// member's shape, position and readings exactly as the cascade produced
+    /// them. `true` runs the loop that applies the fitted map as an update of
+    /// the shape while the whole-member ZNCC does not fall. It is off by
+    /// default because, on captures, the few members the loop moves, each to a
+    /// shape of higher whole-member ZNCC, changed which seed candidate passes.
+    pub move_shape: bool,
     /// Search bound for a cell's shift from its affine placement, in template
     /// grid px. The working patch is rendered with a margin of this many grid
     /// px on each side (rounded up), and the shift search covers the whole
@@ -104,15 +117,17 @@ pub struct PiecewiseParams {
     /// whole shift. See [`DEFAULT_MIN_CELL_CURVATURE`].
     pub min_cell_curvature: f32,
     /// The loop stops when the affine update moves every cell centre by less
-    /// than this, in grid px.
+    /// than this, in grid px. Read only with [`Self::move_shape`].
     pub update_tolerance_px: f32,
-    /// The most renders the loop makes for one member.
+    /// The most renders the loop makes for one member. Read only with
+    /// [`Self::move_shape`]; without it the stage renders once.
     pub max_iterations: u8,
 }
 
 impl Default for PiecewiseParams {
     fn default() -> Self {
         Self {
+            move_shape: false,
             cell_shift_bound_px: 2.0,
             min_cell_zncc: DEFAULT_MIN_CELL_ZNCC,
             min_cell_curvature: DEFAULT_MIN_CELL_CURVATURE,
@@ -129,7 +144,8 @@ impl Default for PiecewiseParams {
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CellStatus {
-    /// The cell's shift was measured and the affine update was fitted to it.
+    /// The cell's shift was measured and the robust affine fit over the
+    /// member's cells gave it weight.
     Fitted = 0,
     /// The cell's own reading refused it: the reference is flat over the cell,
     /// or the ZNCC peak is flatter than
@@ -140,11 +156,11 @@ pub enum CellStatus {
     RefusedZncc = 2,
     /// The cell was not registered: a sample the search needs could not be
     /// read, or no cell of the member survived. Every cell is stored this way
-    /// when the refined shape could not be accepted (the render failed, the
-    /// update was not finite or reflected, the readings at the refined shape
-    /// failed the member's gates, or its support left the frame), in which
-    /// case the member keeps its cascade shape and the iteration count
-    /// includes the pass that failed.
+    /// when a render failed or the fitted map was not finite or reflected,
+    /// and, with [`PiecewiseParams::move_shape`], when the refined shape could
+    /// not be accepted (the readings at it failed the member's gates, or its
+    /// support left the frame). The member then keeps its cascade shape, and
+    /// the iteration count includes the pass that failed.
     NotAttempted = 3,
     /// The cell's best whole shift lies on the search bound
     /// [`PiecewiseParams::cell_shift_bound_px`], so no whole-pixel neighbour
@@ -152,16 +168,18 @@ pub enum CellStatus {
     /// optimum is at or past the bound.
     RefusedBound = 4,
     /// The cell passed its own gates, but its shift disagrees with the
-    /// affine update the other cells agree on by so much that the robust fit
+    /// affine map the other cells agree on by so much that the robust fit
     /// gave it weight `0`. Its shift is measured and stored.
     RefusedOutlier = 5,
 }
 
-/// Why the loop of one member stopped.
+/// Why the loop of one member stopped. Without
+/// [`PiecewiseParams::move_shape`] there is no loop, and a member with
+/// readings reads [`LoopStop::Measured`].
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LoopStop {
-    /// The loop produced no reading: every cell is
+    /// The stage produced no reading: every cell is
     /// [`CellStatus::NotAttempted`] and the member keeps its cascade shape.
     NotRun = 0,
     /// The last update moved no cell centre by more than
@@ -179,22 +197,28 @@ pub enum LoopStop {
     /// member keeps whichever of the last two shapes has the higher
     /// whole-member ZNCC.
     Oscillation = 4,
+    /// [`PiecewiseParams::move_shape`] is off: the cells were measured once
+    /// at the cascade's shape, and no update was applied.
+    Measured = 5,
 }
 
-/// Per-cell registration of one member against the template, as the residual
-/// to the member's converged affine shape. `[row][col]` from the top-left
-/// cell, rows and columns cut at `R/3` and `R - R/3`.
+/// Per-cell registration of one member against the template, relative to the
+/// affine shape the stage returns for the member. `[row][col]` from the
+/// top-left cell, rows and columns cut at `R/3` and `R - R/3`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CellRefinement {
-    /// Displacement of each cell's centre from where the converged affine
+    /// Displacement of each cell's centre from where the returned affine
     /// shape places it, in template grid px, `[x, y]` along the grid's columns
-    /// and rows. Measured at the loop's last render and carried into the
-    /// returned shape's grid: with the last update `c ↦ A·c + b` and a shift
-    /// `d` measured at cell centre `c`, the residual is `A⁻¹·(d − (A·c + b −
-    /// c))`, the point `c + d` of the last render's grid expressed in the
-    /// returned shape's grid, less `c`. `NaN` where no sub-pixel shift was
-    /// measured: a cell refused by curvature or by the bound, or not
-    /// attempted.
+    /// and rows. No fitted affine map is removed from it, so it carries
+    /// whatever first-order disagreement the cells have with that shape.
+    /// Without [`PiecewiseParams::move_shape`] the returned shape is the
+    /// cascade's, and the displacement is the shift `d` as measured. With it,
+    /// a shift `d` measured at cell centre `c` at a render whose update
+    /// `c ↦ A·c + b` was applied is carried into the returned shape's grid as
+    /// `A⁻¹·(d − (A·c + b − c))`: the point `c + d` of the last render's grid
+    /// expressed in the returned shape's grid, less `c`. `NaN` where no
+    /// sub-pixel shift was measured: a cell refused by curvature or by the
+    /// bound, or not attempted.
     pub shift_px: [[[f32; 2]; 3]; 3],
     /// ZNCC of each cell at its optimum at the last render: the sub-pixel
     /// peak's value where one was read, the best whole shift's otherwise.
@@ -202,13 +226,16 @@ pub struct CellRefinement {
     pub zncc: [[f32; 3]; 3],
     /// Each cell's status at the last render.
     pub status: [[CellStatus; 3]; 3],
-    /// Renders the loop made before it stopped (see [`Self::stop`]).
+    /// Renders the stage made (see [`Self::stop`]): `1` without
+    /// [`PiecewiseParams::move_shape`].
     pub iterations: u8,
-    /// Why the loop stopped.
+    /// Why the loop stopped: [`LoopStop::Measured`] without
+    /// [`PiecewiseParams::move_shape`].
     pub stop: LoopStop,
     /// Whether the last fitted update was applied to the returned shape.
     /// `false` when it was rejected, when an oscillation kept the shape before
-    /// it, and when the loop did not run.
+    /// it, when the loop did not run, and always without
+    /// [`PiecewiseParams::move_shape`].
     pub final_update_accepted: bool,
 }
 
@@ -933,14 +960,15 @@ fn fit_pass(readings: [[CellReading; 3]; 3], layout: &CellLayout) -> Option<Pass
 
 /// The outcome of the piecewise refinement of one member.
 pub(super) struct MemberCells {
-    /// The refined absolute shape and position; the cascade's when nothing
-    /// survived or every update was rejected.
+    /// The refined absolute shape and position; the cascade's without
+    /// [`PiecewiseParams::move_shape`], when nothing survived, or when every
+    /// update was rejected.
     pub(super) shape: Mat2,
     pub(super) position: [f64; 2],
     pub(super) cells: CellRefinement,
     /// Whether the shape or position differs from the cascade's.
     pub(super) updated: bool,
-    /// The model the last update was fitted with.
+    /// The model the last affine map was fitted with.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) model: Option<UpdateModel>,
 }
@@ -956,10 +984,18 @@ fn compose(s: &Mat2, p: [f64; 2], update: &Update, step: f64) -> (Mat2, [f64; 2]
     (mul2(s, &update.a), p)
 }
 
-/// Run the two-level loop for one kept member, starting from its cascade
-/// shape `s` and position `p`.
+/// Run the piecewise refinement for one kept member, starting from its
+/// cascade shape `s` and position `p`.
 ///
-/// Each iteration renders the working patch at the current shape, reads the
+/// Without [`PiecewiseParams::move_shape`] the stage renders the working patch
+/// once at `(s, p)`, reads the nine cells and fits the robust affine map to the
+/// cells that survive, only to find the cells it refuses as outliers. The
+/// member keeps `(s, p)`, `score` is not read, the stored shifts are the
+/// shifts as measured, and the cells read one iteration and
+/// [`LoopStop::Measured`]. A failed render or fit leaves every cell
+/// [`CellStatus::NotAttempted`] after one iteration.
+///
+/// With `move_shape`, it runs the two-level loop. Each iteration renders the working patch at the current shape, reads the
 /// nine cells and fits an update to the cells that survive (see
 /// [`fit_update_robust`]). `score` reads the whole-member windowed ZNCC the
 /// cascade maximised at a shape and position, `None` when the support leaves
@@ -1042,6 +1078,18 @@ fn run_loop(
         updated: false,
         model: None,
     };
+    if !params.move_shape {
+        let Some(only) = pass(&s, p) else {
+            return unchanged(1);
+        };
+        return MemberCells {
+            shape: s,
+            position: p,
+            cells: stored_cells(&only, layout, 1, LoopStop::Measured, false),
+            updated: false,
+            model: Some(only.model),
+        };
+    }
     if params.max_iterations == 0 {
         return unchanged(0);
     }
@@ -1097,12 +1145,31 @@ fn run_loop(
         }
         break (last, stop, apply);
     };
-    // The residual to the shape the loop returns. The last render read cell
-    // `c` at `c + d` of its grid. When its update was applied, the returned
-    // shape's grid is the last render's under `c' ↦ A·c' + b`, so that point
-    // is `A⁻¹·(c + d − b)` there, and its offset from `c` is
+    MemberCells {
+        shape,
+        position,
+        cells: stored_cells(&last, layout, iterations, stop, apply),
+        updated: shape != s || position != p,
+        model: Some(last.model),
+    }
+}
+
+/// The cells of the last pass as stored, relative to the shape the stage
+/// returns. A fitted cell the robust fit gave weight `0` is stored as
+/// [`CellStatus::RefusedOutlier`].
+fn stored_cells(
+    last: &Pass,
+    layout: &CellLayout,
+    iterations: u8,
+    stop: LoopStop,
+    apply: bool,
+) -> CellRefinement {
+    // The displacement from the shape the stage returns. The last render read
+    // cell `c` at `c + d` of its grid. When its update was applied, the
+    // returned shape's grid is the last render's under `c' ↦ A·c' + b`, so
+    // that point is `A⁻¹·(c + d − b)` there, and its offset from `c` is
     // `A⁻¹·(d − moves(c))`. When it was not, the returned shape is the one
-    // the last render was made at, and `d` is already the residual.
+    // the last render was made at, and `d` is already the displacement.
     let a_inv = inv2(&last.update.a);
     let mut cells = CellRefinement::not_attempted(iterations);
     cells.stop = stop;
@@ -1125,13 +1192,7 @@ fn run_loop(
             }
         }
     }
-    MemberCells {
-        shape,
-        position,
-        cells,
-        updated: shape != s || position != p,
-        model: Some(last.model),
-    }
+    cells
 }
 
 /// `a·v`.

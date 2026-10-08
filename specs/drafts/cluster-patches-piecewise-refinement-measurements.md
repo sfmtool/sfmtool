@@ -1,6 +1,6 @@
 # Cluster Patches Piecewise Refinement Measurements
 
-This file records the fleet measurements behind the open decisions of [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md). That draft adds a stage that registers each kept member's nine cells against the cluster's template, refits the member's affine shape from the cell shifts, and stores the per-cell residuals in the `.matches` version 8 file. The measurements bear on three decisions: whether the stage runs by default (`sfm cluster-patches --piecewise`), and the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`). They also run the two fleet checks the draft's Testing section names: that the converged shapes agree with the cascade's within tolerance on members the cascade kept, and that the refinement's wall time does not rise. The last measurement runs the seed stage on the two checked-in ground truths with and without the stage, since the seed is the stage's consumer. The last section repeats the comparison on five entries after the loop was changed to keep the cascade's ZNCC.
+This file records the fleet measurements behind the open decisions of [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md). That draft adds a stage that registers each kept member's nine cells against the cluster's template, refits the member's affine shape from the cell shifts, and stores the per-cell residuals in the `.matches` version 8 file. The measurements bear on three decisions: whether the stage runs by default (`sfm cluster-patches --piecewise`), and the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`). They also run the two fleet checks the draft's Testing section names: that the converged shapes agree with the cascade's within tolerance on members the cascade kept, and that the refinement's wall time does not rise. The last measurement runs the seed stage on the two checked-in ground truths with and without the stage, since the seed is the stage's consumer. The last section repeats the comparison on five entries after the loop was changed to keep the cascade's ZNCC. The section after it repeats the comparison once more after the stage was changed to measure the cells at the cascade's shape and leave the shape alone, with the loop kept behind an option.
 
 ## Setup common to every measurement
 
@@ -624,3 +624,49 @@ Files A and B reproduce every number of the cascade run, so neither the cells no
 - **The seed criterion still fails on `KerryPark480`.** The stage does not lower any score. The pick fails because it is sensitive to 0.34% of members moving to shapes that the cascade's own objective prefers. ZNCC alone cannot say whether those 55 shapes are actually worse. Two measurements could settle it: score the moved members' shapes against the `kerry_park` ground truth, or find which of them carry the seed's choice. Until then the stage stays off by default.
 - **A variant that never moves the shape would leave the seed exactly as the cascade does.** Such a variant only stores the cells read at the cascade's shape; file A is its output. It is the conservative choice if the stage is wanted only for its residuals.
 - **The loop's stop reason and acceptance are not stored.** Why the loop stopped and whether its last update was applied are available through the binding but not in the file. Storing them is a follow-up, if a consumer needs them.
+
+## Subset with the shape left to the cascade (2026-10-08)
+
+**Question.** The section above found that moving 55 kept members on `KerryPark480` is enough to fail the seed's pick, and that the cells alone (file A) leave the seed exactly as the cascade does. The stage was changed to match: by default (`PiecewiseParams::move_shape` false) it renders each kept member once at the cascade's shape, registers the nine cells, fits the robust affine map only to find the outlier cells, and stores the shifts as measured. The member's shape, position, ZNCC and shift are not touched, and the whole-member ZNCC is not read. The loop is still available with `move_shape`. Does the default leave every member output bit-identical to the cascade-only run, what does it cost, and does the seed give the cascade-only result on both ground-truth entries?
+
+**Method.**
+
+- **Code.** Branch `bootstrap-core-migration` at `c494bf5b`, with the changes of the commit that adds this section, and the extension rebuilt with `pixi run maturin develop --release`. Same machine, with no other workload running.
+- **Data and runs.** The five entries and the two CLI runs of the section above (`--no-piecewise` and `--piecewise`, `--patch-size 12`, `SFMTOOL_PROFILE=1`), the piecewise run now at the measuring default. A third run through the binding with `piecewise=True` read `member_cell_loop_stop` and `member_cell_update_accepted`; its statuses and cells are identical to the CLI file's on every entry.
+- **Comparison.** `reference_members`, `member_status`, `member_positions`, `member_affine_shapes`, `member_zncc`, `member_shift_px` and `member_consistency_residual` compared byte for byte between the two files.
+- **Seed.** As under [Seed stage on the ground-truth entries](#seed-stage-on-the-ground-truth-entries), with the same environment, scoring and pass rule, on `SeoulBull` and `KerryPark480`, each with its new cascade and piecewise files.
+
+**Result: every member output is bit-identical to the cascade's on all five entries.** Each of the seven columns above is byte-for-byte equal between the two files. Every kept member reads one iteration, no update is applied anywhere, and the loop stop is `measured` for every kept member except those whose render left no cell to fit (`not run`, 0.1% to 5.0%).
+
+The cells are the readings the loop of the section above stored for members whose first update it rejected: on the 2,838 to 1,353,196 such members of each entry, the statuses, shifts and ZNCCs are identical to that run's.
+
+| entry | kept | member outputs bit-identical | kernel wall cascade/piecewise s | wall ratio | CPU ratio |
+|---|---|---|---|---|---|
+| SeoulBull | 2953 | yes | 0.16/0.17 | 1.09 | 1.09 |
+| KerryPark480 | 15986 | yes | 0.70/0.99 | 1.42 | 1.13 |
+| fleetws | 68722 | yes | 5.4/5.8 | 1.06 | 1.11 |
+| MurdoSmallAntiqueCat | 625198 | yes | 44.8/45.2 | 1.01 | 1.12 |
+| DnDTabletop | 1375116 | yes | 56.4/64.7 | 1.15 | 1.17 |
+
+The CPU ratio, which contention does not affect, is 1.09× to 1.17×, against 1.12× to 1.25× for the loop with the acceptance rule; each kept member now costs one render, nine cell searches and the affine fit, and no reading of the whole-member ZNCC. The wall ratio is noisier: `KerryPark480`'s kernel runs for under a second, and its 1.42× is a difference of 0.3 s.
+
+The next table gives the cell statuses, as a share of the cells of kept members, the length of the stored displacement of fitted cells, and the loop stop of kept members:
+
+| entry | fitted | refused_curvature | refused_zncc | not_attempted | refused_bound | refused_outlier | fitted displacement p50/p95 grid px | measured / not run % |
+|---|---|---|---|---|---|---|---|---|
+| SeoulBull | 52.9 | 7.8 | 14.4 | 4.6 | 19.8 | 0.6 | 0.36/1.31 | 96.3 / 3.7 |
+| KerryPark480 | 63.9 | 4.4 | 14.7 | 2.0 | 14.5 | 0.6 | 0.28/1.13 | 98.3 / 1.7 |
+| fleetws | 44.1 | 11.3 | 10.2 | 5.0 | 28.8 | 0.6 | 0.33/1.36 | 95.0 / 5.0 |
+| MurdoSmallAntiqueCat | 75.5 | 3.9 | 9.7 | 1.4 | 8.9 | 0.7 | 0.20/1.00 | 99.1 / 0.9 |
+| DnDTabletop | 85.8 | 5.7 | 3.1 | 0.7 | 4.2 | 0.5 | 0.17/0.82 | 99.9 / 0.1 |
+
+The shares are within 0.1 point of the section above, as they should be, since that run measured nearly every member at the cascade's shape too. The stored displacements are the measured shifts with no affine map removed, so their median of 0.17 to 0.36 grid px includes the first-order disagreement between the cells and the whole-patch fit.
+
+**Seed.** On both entries the seed gives the cascade-only result exactly. Every released `.sfmr` (8 on `SeoulBull`, 18 on `KerryPark480`) is byte-for-byte identical between the two runs in every entry but the write timestamp, the content hash over it and the workspace's absolute path, and the manifests' hypotheses differ only in their timings. The scores therefore repeat the cascade-only tables of the [seed section](#seed-stage-on-the-ground-truth-entries) to the last digit: `SeoulBull`'s pick `h00` passes (0.995°, 0.15%, +4.57%), and `KerryPark480`'s pick `h00` passes (0.710°, 0.91%, −0.11%), with the same five of its finite hypotheses passing.
+
+**What this decides.**
+
+- **The default stage is a measurement.** With `move_shape` off, the cells are added to the file and nothing else in it changes, so a consumer that does not read the cells sees the cascade's file exactly. Its cost is about 1.1× the refinement's CPU time.
+- **The seed is unaffected by the stage.** The piecewise file gives the seed the cascade file's result bit for bit, as file A of the section above predicted, so the stage can be turned on for its cells without changing any seed outcome.
+- **The loop stays behind `move_shape`.** Whether the shapes it moves are better or worse than the cascade's is still open, and the question is now separate from whether the cells are stored.
+- **The stage itself stays off by default** (`--no-piecewise`). Its cost is now small and it no longer changes the seed, so the remaining reason is that no consumer reads the cells yet.

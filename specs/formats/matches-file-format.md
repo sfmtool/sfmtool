@@ -650,9 +650,12 @@ refinement measured and which members stand.
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
   and `piecewise`, whether the per-cell refinement ran. When it ran, the
-  piecewise refinement's settings sit beside it as flat keys:
+  piecewise refinement's settings sit beside it as flat keys: `move_shape`
+  (whether the refinement was allowed to change the member's shape),
   `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
-  `update_tolerance_px` and `max_iterations`
+  `update_tolerance_px` and `max_iterations`. A file written before
+  `move_shape` was recorded lacks the key; its refinement could change the
+  shape
 
   Which keys `refine_options` holds is not tied to the format version, since
   the object is a record of settings rather than a stored layout. `radius` was
@@ -785,12 +788,16 @@ describe the parts of the patch: the reference's `R × R` sampling grid
 **cells**, rows and columns cut at `⌊R/3⌋` and `R − ⌊R/3⌋`, and each cell of
 the reference is registered separately against the member's image, as seen
 through the member's affine shape. A cell's displacement is where its content
-lies in the member's patch relative to where the shape places it. The affine
-shape absorbs everything one linear map can express, so what remains in the
-displacements is the part that varies across the patch in a way no affine
-map matches: for a planar surface, the perspective term a surface normal is
-derived from once camera poses are known; for a patch that spans two
-surfaces, the parallax of the cells off the one the shape follows.
+lies in the member's patch relative to where the member's stored shape places
+it. No affine map fitted to the cells is removed from the displacements, so
+they carry three things: the part one affine map over the nine cells can
+express, which is how far the cells' own best fits disagree with the shape
+fitted to the whole patch; for a planar surface, the perspective term a
+surface normal is derived from once camera poses are known, the part no
+affine map matches; and for a patch that spans two surfaces, the parallax of
+the cells off the one the shape follows. A consumer that wants only the part
+no affine map matches fits an affine map to the member's `fitted` cells'
+displacements and removes it.
 
 The four entries are present together or absent together, and present exactly
 when `cluster_patches/metadata.json` carries `member_cell_status_names`. A
@@ -806,10 +813,11 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
 - **Shape**: `(K, 3, 3, 2)` where K = cluster_member_count
 - **Data type**: `float32` (little-endian)
 - Each cell's displacement `[x, y]`, along the grid's columns and rows, from
-  where the member's affine shape (`clusters/member_affine_shapes`, with its
-  position `clusters/member_positions`) places the cell's centre, in pixels of
-  the sampling grid. A displacement of `d` means the cell's content lies at
-  `c + d` of the member's grid, where `c` is the cell's centre
+  where the member's stored affine shape (`clusters/member_affine_shapes`,
+  with its position `clusters/member_positions`) places the cell's centre, in
+  pixels of the sampling grid. A displacement of `d` means the cell's content
+  lies at `c + d` of the member's grid, where `c` is the cell's centre. It is
+  the measured displacement, with no affine map fitted to the cells removed
 - `NaN` where no displacement was measured: a cell whose status is
   `refused_curvature`, `refused_bound` or `not_attempted`. A `fitted`,
   `refused_zncc` or `refused_outlier` cell carries its displacement
@@ -834,30 +842,32 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   is invalid, and nothing else about the numbering is fixed by this format
 - **Names**: the only names this format defines, each saying what became of
   the cell:
-  - `fitted` — the displacement was measured and the member's affine shape was
-    fitted to it together with the other fitted cells
+  - `fitted` — the displacement was measured, and it agrees with the affine
+    map that best explains the displacements of the member's fitted cells
+    together (a refinement allowed to change the shape may also have moved
+    the shape by that map)
   - `refused_curvature` — the cell does not pin a displacement: the reference
     is flat over it, or its ZNCC over the displacements searched is too flat
     at the best one
   - `refused_zncc` — its ZNCC at the best displacement is below the bar, so it
     lies over a different surface in this view; its displacement is measured
-    but the shape was not fitted to it
+    but the affine map was not fitted to it
   - `not_attempted` — the cell was not registered, or its registration was
     not used: the member is not `kept`, a sample the search needs lies outside
-    the image, no cell of the member survived, or the refined shape could not
-    be accepted — the image could not be sampled through it, the fitted
-    update was not finite or reflected the patch, the whole-patch ZNCC or the
-    shift from the seed read again at the refined shape failed the bars the
-    member was kept on, or the refined shape's support left the image. In
-    every case but the first, every cell of the member is `not_attempted` and
-    the member keeps the shape its whole-patch fit found
+    the image, no cell of the member survived, the image could not be sampled
+    through the shape, the fitted affine map was not finite or reflected the
+    patch, or, in a refinement allowed to change the shape, the refined shape
+    could not be accepted — the whole-patch ZNCC or the shift from the seed
+    read again at it failed the bars the member was kept on, or its support
+    left the image. In every case but the first, every cell of the member is
+    `not_attempted` and the member keeps the shape its whole-patch fit found
   - `refused_bound` — the best displacement lies on the edge of the range
     searched, so the optimum is at or past it and no sub-pixel displacement
     can be read
   - `refused_outlier` — (version 9+) the displacement was measured and the
-    cell passed the bars above, but it disagrees with the change of shape the
-    member's other fitted cells agree on by so much that the fit of that
-    change gave it no weight
+    cell passed the bars above, but it disagrees with the affine map the
+    member's other fitted cells agree on by so much that the fit of that map
+    gave it no weight
 - **Canonical order**: a writer always states the whole legend in the order
   listed above, `0` fitted, `1` refused_curvature, `2` refused_zncc, `3`
   not_attempted, `4` refused_bound, `5` refused_outlier. A reader accepts any
@@ -872,12 +882,15 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
 
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `uint8`
-- How many times the member's image was sampled through its current shape
-  before the shape stopped changing by more than the refinement's tolerance,
-  or the refinement's cap on passes was reached; `0` for a member it did not
-  run on. A member whose refined shape could not be accepted (every cell
-  `not_attempted`) counts the passes made, including the one that failed. A member that reached the cap is one whose shape had not settled,
-  and its displacements are less trustworthy
+- How many times the member's image was sampled through a shape of the
+  member; `0` for a member the refinement did not run on. A refinement that
+  does not change the shape (`refine_options.move_shape` false) samples once.
+  One that may change it samples once per pass, until the shape stops
+  changing by more than the refinement's tolerance, a change is refused, or
+  the refinement's cap on passes is reached; a member that reached the cap is
+  one whose shape had not settled, and its displacements are less
+  trustworthy. A member whose cells are all `not_attempted` after a failed
+  pass counts the passes made, including the one that failed
 
 **Integrity.** The four entries are files of the `cluster_patches/` section,
 hashed into `cluster_patches_xxh128` in the section's lexicographic order (they
@@ -1438,6 +1451,7 @@ file below version 6, which is refused.
 | Change | Detail |
 |---|---|
 | `cluster_patches/metadata.json` `member_cell_status_names` | The legend may name a sixth cell status, `refused_outlier`, code `5` in the canonical order. A writer states the whole legend, so every version 9 file with per-cell entries names it. |
+| `cluster_patches/metadata.json` `refine_options` | A file with per-cell entries may record `move_shape`, whether the refinement was allowed to change the member's shape. It is a recorded setting like the others and is not read back. |
 
 Nothing that a version 8 file stores changes meaning or layout, and a version
 8 file reads unchanged. A version 8 file whose legend names `refused_outlier`

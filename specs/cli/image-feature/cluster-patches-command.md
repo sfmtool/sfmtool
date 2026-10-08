@@ -16,8 +16,9 @@ it is: the images and clusters sections are carried over, with each refined
 member's position and shape replacing its detection, and the reference choice,
 the member statuses and the measured scores go in a `cluster_patches/` section.
 With `--piecewise`, each kept member's patch is also cut into nine cells that
-are registered separately, the member's shape is refined from their shifts, and
-each cell's displacement, ZNCC and status go in the same section.
+are registered separately at the member's refined shape, and each cell's
+displacement, ZNCC and status go in the same section; the member's shape is
+left as the affine fit found it.
 
 Design: [`specs/core/patch/cluster-patches.md`](../../core/patch/cluster-patches.md).
 Implementation (Rust kernel, algorithm, bindings):
@@ -42,7 +43,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
 | `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
 | `--max-member-zncc-self-similarity-radius` | float ≥ 0 | 2.5 | Member gate: exclude members whose own patch's ZNCC self-similarity radius (template-grid px) is above this, before reference selection and refinement; `0` disables, `3` or more turns nothing out |
-| `--piecewise/--no-piecewise` | flag | off | After the affine fit, register each of the reference's nine cells separately against each kept member's image, refine the member's shape from their shifts, and store the per-cell entries in the output |
+| `--piecewise/--no-piecewise` | flag | off | After the affine fit, register each of the reference's nine cells separately against each kept member's image at the member's refined shape, and store the per-cell entries in the output; the member's shape, position and scores are unchanged |
 
 The `patch_size` default sits at SIFT's ~12× descriptor window — the template
 vets a member against roughly the texture context the detector deemed
@@ -64,8 +65,10 @@ radius. Its default, `2.5`, is the same bar as the keypoint localizer's member
 gate (`embed-patches --max-member-zncc-self-similarity-radius`).
 `--piecewise` runs the piecewise refinement of
 [cluster-patches-piecewise-refinement.md](../../drafts/cluster-patches-piecewise-refinement.md)
-with its default parameters. It is off by default: whether it becomes the
-default is decided by a comparison over the capture fleet.
+with its default parameters, which measure the cells and never move the
+member's shape (`move_shape` false), so every other output is the one the
+command writes without the flag. It is off by default: whether it becomes the
+default is decided once a consumer reads the cells.
 
 ## Process
 
@@ -97,9 +100,10 @@ default is decided by a comparison over the capture fleet.
    `piecewise=True` and leaves the piecewise settings at the kernel's
    defaults, and the kernel follows the cascade with the piecewise
    refinement of every kept member: it registers the nine cells of the
-   reference's patch separately, refits the member's shape and position to
-   their shifts, and returns each cell's displacement, ZNCC and status and the
-   member's pass count.
+   reference's patch separately at the member's cascade shape, fits a robust
+   affine map to their shifts to find the cells that disagree, and returns
+   each cell's displacement, ZNCC and status and the member's pass count,
+   leaving the member's shape, position and scores as the cascade found them.
 4. **Write.** A new `.matches` file at the current format version: the images
    and clusters sections carried over, with the backbone's geometry advanced
    to this file's stage. For every member the cascade **measured** — status
@@ -120,7 +124,7 @@ default is decided by a comparison over the capture fleet.
    `max_keypoint_uncertainty` in place of the radius bar, and nothing reads
    either back). With `--piecewise`, `refine_options` also records the
    piecewise refinement's settings as flat keys beside `piecewise`:
-   `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
+   `move_shape`, `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
    `update_tolerance_px` and `max_iterations`, the values the binding reports
    it used in its `piecewise_options` (the kernel's defaults, since the
    command exposes none of them). Metadata updated

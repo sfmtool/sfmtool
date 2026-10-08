@@ -410,10 +410,15 @@ pub fn clusters_to_pair_matches(
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     piecewise: Run the piecewise refinement after the cascade for every
 ///         kept member: the nine cells of the reference's patch are
-///         registered separately and their shifts refine the member's affine
-///         shape and position (default False, which leaves every output the
-///         cascade's). See
+///         registered separately at the member's cascade shape, and a robust
+///         affine map is fitted to their shifts (default False, which
+///         carries no cells). See
 ///         specs/drafts/cluster-patches-piecewise-refinement.md.
+///     move_shape: Piecewise setting: let the fitted map move the member's
+///         shape and position, by a loop that applies it as an update while
+///         the whole-member ZNCC does not fall (default False, which measures
+///         the cells once and leaves every member output exactly the
+///         cascade's).
 ///     cell_shift_bound_px: Piecewise setting: the search bound for a cell's
 ///         shift from its affine placement, template grid px (default 2.0).
 ///     min_cell_zncc: Piecewise setting: a cell whose ZNCC at its optimum is
@@ -421,13 +426,15 @@ pub fn clusters_to_pair_matches(
 ///     min_cell_curvature: Piecewise setting: a cell whose ZNCC peak is
 ///         flatter than this along its flattest direction, ZNCC per grid
 ///         px squared, is refused as refused_curvature (default 0.02).
-///     update_tolerance_px: Piecewise setting: the loop stops when the affine
-///         update moves every cell centre by less than this, grid px
-///         (default 0.05).
-///     max_iterations: Piecewise setting: the most renders the loop makes for
-///         one member (default 5). Each piecewise setting left as None
-///         takes the Rust default of ``PiecewiseParams``, the value given
-///         above; the settings are ignored without ``piecewise``.
+///     update_tolerance_px: Piecewise setting, read only with
+///         ``move_shape``: the loop stops when the affine update moves every
+///         cell centre by less than this, grid px (default 0.05).
+///     max_iterations: Piecewise setting, read only with ``move_shape``: the
+///         most renders the loop makes for one member (default 5); without
+///         ``move_shape`` the stage renders once. Each piecewise setting
+///         left as None takes the Rust default of ``PiecewiseParams``, the
+///         value given above; the settings are ignored without
+///         ``piecewise``.
 ///     progress: Optional ProgressCounter, bumped once per finished cluster.
 ///
 /// Returns:
@@ -454,20 +461,22 @@ pub fn clusters_to_pair_matches(
 ///     the ``cluster_patches/`` section, cells ``[m, row, col]`` from the
 ///     top-left, with readings only for kept members:
 ///     ``member_cell_shift_px`` (M, 3, 3, 2) float32 (each cell's displacement
-///     from where the member's affine shape places it, template grid px; NaN
-///     where not measured), ``member_cell_zncc`` (M, 3, 3) float32,
+///     from where the member's returned affine shape places it, template grid
+///     px, with no fitted affine map removed; NaN where not measured),
+///     ``member_cell_zncc`` (M, 3, 3) float32,
 ///     ``member_cell_status`` (M, 3, 3) uint8 (0 fitted, 1 refused_curvature,
 ///     2 refused_zncc, 3 not_attempted, 4 refused_bound, 5 refused_outlier)
 ///     and ``member_cell_iterations`` (M,) uint8, and ``piecewise_options``, a
-///     dict of the five piecewise settings the run used, keyed by their
+///     dict of the six piecewise settings the run used, keyed by their
 ///     argument names. It also carries two per-member readings of the loop
 ///     that the ``.matches`` file does not store:
 ///     ``member_cell_loop_stop`` (M,) uint8, why the loop stopped (0 not run,
 ///     1 converged, 2 reached the cap, 3 an update that would lower the
-///     whole-member ZNCC was rejected, 4 the update stopped shrinking), and
+///     whole-member ZNCC was rejected, 4 the update stopped shrinking, 5
+///     measured without ``move_shape``), and
 ///     ``member_cell_update_accepted`` (M,) bool, whether the last fitted
-///     update was applied to the returned shape. Without ``piecewise`` those
-///     seven keys are None.
+///     update was applied to the returned shape, always False without
+///     ``move_shape``. Without ``piecewise`` those seven keys are None.
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
@@ -475,7 +484,7 @@ pub fn clusters_to_pair_matches(
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_member_zncc_self_similarity_radius = 2.5,
-                    max_iters = 120, piecewise = false,
+                    max_iters = 120, piecewise = false, move_shape = None,
                     cell_shift_bound_px = None, min_cell_zncc = None,
                     min_cell_curvature = None, update_tolerance_px = None,
                     max_iterations = None, progress = None))]
@@ -497,6 +506,7 @@ pub fn refine_cluster_patches<'py>(
     max_member_zncc_self_similarity_radius: f64,
     max_iters: u32,
     piecewise: bool,
+    move_shape: Option<bool>,
     cell_shift_bound_px: Option<f32>,
     min_cell_zncc: Option<f32>,
     min_cell_curvature: Option<f32>,
@@ -573,6 +583,7 @@ pub fn refine_cluster_patches<'py>(
         piecewise: piecewise.then(|| {
             let default = PiecewiseParams::default();
             PiecewiseParams {
+                move_shape: move_shape.unwrap_or(default.move_shape),
                 cell_shift_bound_px: cell_shift_bound_px.unwrap_or(default.cell_shift_bound_px),
                 min_cell_zncc: min_cell_zncc.unwrap_or(default.min_cell_zncc),
                 min_cell_curvature: min_cell_curvature.unwrap_or(default.min_cell_curvature),
@@ -664,6 +675,7 @@ pub fn refine_cluster_patches<'py>(
         // the f32's 0.800000011920929), so a recorded value reads as given.
         let decimal = |v: f32| -> f64 { v.to_string().parse().expect("an f32 prints as a float") };
         let options = PyDict::new(py);
+        options.set_item("move_shape", pp.move_shape)?;
         options.set_item("cell_shift_bound_px", decimal(pp.cell_shift_bound_px))?;
         options.set_item("min_cell_zncc", decimal(pp.min_cell_zncc))?;
         options.set_item("min_cell_curvature", decimal(pp.min_cell_curvature))?;
