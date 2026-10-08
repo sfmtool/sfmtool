@@ -187,10 +187,18 @@ pub struct PointRecord {
     /// The constraint triple `(constraint, distance, reference image)`, when the
     /// base carries the columns.
     pub constraint: Option<(u8, f64, u32)>,
-    /// Which of [`Self::observations`] the patch bitmap is the render of, as an
-    /// index into them, or `-1` for none, when the base carries the column
-    /// (`tracks/reference_observations`, present with the patch frame).
+    /// Which of [`Self::observations`] the patch bitmap is, or is to be,
+    /// rendered from, as an index into them, or `-1` for no reference chosen,
+    /// when the base carries the column (`tracks/reference_observations`,
+    /// present with the patch frame).
     pub reference_observation: Option<i32>,
+    /// Whether [`Self::reference_observation`] is a pick only the display
+    /// render made ([`PointSet::display_only_references`]), which a save writes
+    /// as `-1`. Carried so that a point rewritten through
+    /// [`EditedReconstruction::replace_point`] keeps the mark, as the same edit
+    /// made in place does. Not compared by [`Self::agrees_with`]: a record
+    /// that agrees leaves the point untouched, mark and all.
+    pub display_only_reference: bool,
 }
 
 impl PointRecord {
@@ -389,13 +397,23 @@ impl<'a> PointView<'a> {
         })
     }
 
-    /// The index, among [`Self::observations`], of the observation whose render
-    /// the patch bitmap is, `-1` for none, when the base carries the column.
+    /// The index, among [`Self::observations`], of the observation the patch
+    /// bitmap is, or is to be, rendered from, `-1` for no reference chosen,
+    /// when the base carries the column.
     pub fn reference_observation(&self) -> Option<i32> {
         self.set
             .reference_observations
             .as_ref()
             .map(|r| r[self.local])
+    }
+
+    /// Whether this point's reference is a pick only the display render made
+    /// ([`PointSet::display_only_references`]), which a save writes as `-1`.
+    pub fn display_only_reference(&self) -> bool {
+        self.set
+            .display_only_references
+            .as_ref()
+            .is_some_and(|m| m[self.local])
     }
 
     /// The owned form of everything above.
@@ -420,6 +438,7 @@ impl<'a> PointView<'a> {
             normal_confidence: self.normal_confidence(),
             constraint: self.constraint(),
             reference_observation: self.reference_observation(),
+            display_only_reference: self.display_only_reference(),
         }
     }
 }
@@ -1018,6 +1037,9 @@ impl EditedReconstruction {
         if let Some(r) = &mut set.reference_observations {
             r.push(record.reference_observation.expect("validated present"));
         }
+        if let Some(m) = &mut set.display_only_references {
+            m.push(record.display_only_reference);
+        }
         set.rebuild_derived_fields(image_count);
         self.replaces.push(replaces);
         Ok(base_count as u32 + local as u32)
@@ -1380,12 +1402,18 @@ impl EditedReconstruction {
                 })
                 .collect()
         });
-        // A point an edit added names a reference of the edit's own, never a
-        // pick only the display render made.
+        // An added point carries the mark its record did: a point rewritten
+        // through `replace_point` keeps it, and a record an edit built fresh
+        // is unmarked.
         let display_only_references = base.display_only_references.as_ref().map(|marks| {
+            let added = self
+                .added
+                .display_only_references
+                .as_ref()
+                .expect("column parity");
             point_rows
                 .iter()
-                .map(|&(is_base, i)| is_base && marks[i])
+                .map(|&(is_base, i)| if is_base { marks[i] } else { added[i] })
                 .collect()
         });
 
@@ -1756,8 +1784,8 @@ fn empty_like(base: &PointSet, image_count: usize) -> PointSet {
             .map(|_| PointConstraintColumns::all_free(0)),
         observation_confidence: base.observation_confidence.as_ref().map(|_| Vec::new()),
         reference_observations: base.reference_observations.as_ref().map(|_| Vec::new()),
-        // Every added point is unmarked, so the added set carries no marks.
-        display_only_references: None,
+        // Present with the base's marks, so a rewritten point keeps its own.
+        display_only_references: base.display_only_references.as_ref().map(|_| Vec::new()),
         observation_offsets: vec![0],
         image_feature_to_point: vec![HashMap::new(); image_count],
         max_track_feature_index: vec![0; image_count],

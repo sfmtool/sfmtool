@@ -383,10 +383,14 @@ not pick another view for it. Only a point at `-1` runs the rule
 caller that has bitmaps for those points already (Python:
 `PatchCloud.render_bitmaps(..., referenced_only=True)`). The refiners render
 every point by the rule over the views they keep; the `xform` steps and `sfm
-embed-patches` that write their bitmaps then render each point that stores a
-reference again from it, through `render_from_references` in
-[`_patch_compaction.py`](../../../src/sfmtool/_patch_compaction.py), so only a
-point at `-1` keeps the refiner's pick. The bench is where a reference is
+embed-patches` that write their bitmaps keep each point's stored reference and
+give only a point at `-1` the refiner's pick, then render every point with a
+reference again from that observation through the stored value, through
+`render_from_references` in
+[`_patch_compaction.py`](../../../src/sfmtool/_patch_compaction.py). That
+render reads the `f32` keypoints and frame the file stores rather than the
+refiner's `f64` working values, so dropping and adding the bitmaps gives the
+same bytes. The bench is where a reference is
 replaced: its renders run the rule over the `in` rows and set the bitmap and
 the reference together
 ([editable-track.md](../bench/editable-track.md) § "The stored bitmap's
@@ -544,7 +548,7 @@ tile = patch.render_view_tile(camera, pose, photo, keypoint=(812.4, 377.9))
 print(tile["coverage"], tile["clipped_share"], tile["viewing_angle_deg"])
 ```
 
-`PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view", progress=None)`
+`PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view", referenced_only=False, progress=None)`
 returns `(bitmaps, reference_observations)`: the `(P, R, R, 4)` bitmap column
 and the `(P,)` int32 reference observation of each point, which
 `clone_with_changes(patch_bitmaps=…, reference_observations=…)` takes.

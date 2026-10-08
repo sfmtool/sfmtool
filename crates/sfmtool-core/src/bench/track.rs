@@ -719,14 +719,14 @@ impl TrackPayload {
     /// Drop the bitmap and keep the reference observation, for a step after
     /// which the bitmap no longer shows what the reference observation sees
     /// but that observation is still on the track.
-    pub(crate) fn drop_stale_bitmap(&mut self) {
+    pub fn drop_stale_bitmap(&mut self) {
         self.bitmap = None;
     }
 
     /// Drop the bitmap with its reference observation when that observation
     /// is not one of `observations`' `in` rows: a reference is an observation
     /// the track keeps.
-    pub(crate) fn drop_bitmap_unless_in(&mut self, observations: &[Observation]) {
+    pub fn drop_bitmap_unless_in(&mut self, observations: &[Observation]) {
         if let Some(r) = self.reference {
             if observations.get(r).is_none_or(|o| o.verdict != Verdict::In) {
                 self.drop_bitmap();

@@ -367,6 +367,7 @@ pub fn commit(
                 .and_then(|r| rows.iter().position(|&(_, i)| i == r))
                 .map_or(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION, |k| k as i32)
         }),
+        display_only_reference: false,
     };
 
     // ---- The edit ----

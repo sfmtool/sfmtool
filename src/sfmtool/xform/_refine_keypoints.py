@@ -230,9 +230,11 @@ class RefineKeypointsTransform:
                 f"  Saving {len(result)} patches and {n_filled} bitmaps "
                 f"to the reconstruction"
             )
-            # A point that already names a reference observation keeps it:
-            # its bitmap is rendered again from that observation at the
-            # refined keypoint, and only a point at -1 keeps the refiner's pick.
+            # A point that already names a reference observation keeps it,
+            # and only a point at -1 takes the refiner's pick. Every bitmap
+            # with a reference is rendered again from the stored (f32)
+            # keypoints, so dropping and adding the bitmaps later gives the
+            # same bytes.
             moved = recon.clone_with_changes(keypoints_xy=kxy, patches=cloud)
             bitmaps, references = render_from_references(
                 moved,
@@ -245,7 +247,9 @@ class RefineKeypointsTransform:
             return moved.clone_with_changes(
                 patch_bitmaps=bitmaps, reference_observations=references
             )
-        return recon.clone_with_changes(keypoints_xy=kxy)
+        # Stored bitmaps were rendered at the old keypoints, so they go, as
+        # ``--refine-normals bitmaps=false`` drops them; the references stay.
+        return recon.clone_with_changes(keypoints_xy=kxy, patch_bitmaps=None)
 
     def _print_summary(self, result: list[dict]) -> None:
         """One-line ``xform``-style summary over the views actually scored.

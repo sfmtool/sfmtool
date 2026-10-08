@@ -317,9 +317,11 @@ type RenderedRow = (Vec<u8>, i32);
 /// whose photograph is not to hand, and it is left out of every patch's view
 /// set rather than failing the call. Each point's reference is reported as
 /// the index of that observation within the point's track, so the column is
-/// what `tracks/reference_observations` holds; a point with no patch, or one
-/// at `-1` left with no bitmap or a fused-mean bitmap, gets `-1`, and a point
-/// with no bitmap a zero row. `done`, when given, is bumped once per patch, and `progress` receives
+/// what `tracks/reference_observations` holds. A point with no patch in
+/// `cloud` (a zero patch frame) gets a zero row and keeps the reference `recon`
+/// stores for it, since the observation is still in its track; a point at `-1`
+/// left with no bitmap or a fused-mean bitmap gets `-1`, and a point with no
+/// bitmap a zero row. `done`, when given, is bumped once per patch, and `progress` receives
 /// a `patches` count about every hundredth of the way through and is polled
 /// for cancellation before each patch.
 ///
@@ -431,7 +433,11 @@ pub fn render_patch_cloud_bitmaps(
         .collect();
     progress.check_cancel()?;
     let mut bitmaps = ndarray::Array4::<u8>::zeros((point_count, resolution, resolution, 4));
-    let mut reference_observations = vec![-1i32; point_count];
+    // A point the cloud has no patch for keeps the reference it stores.
+    let mut reference_observations = match stored_references {
+        Some(stored) if stored.len() == point_count => stored.to_vec(),
+        _ => vec![-1i32; point_count],
+    };
     let row_len = resolution * resolution * 4;
     let flat = bitmaps
         .as_slice_mut()

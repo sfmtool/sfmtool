@@ -3015,6 +3015,12 @@ fn lacks_frame(track: &EditableTrack) -> bool {
 /// which may carry readings the old one could not. An item nobody edited
 /// comes out as `fresh` with the item's own verdicts and thresholds, which are
 /// the ones `fresh` was built with.
+///
+/// `fresh`'s bitmap is the render of its reference observation as `fresh`
+/// holds that row. A kept row the person turned out drops the bitmap with its
+/// reference, and a kept row sighted elsewhere drops the bitmap and keeps the
+/// reference, as the same edits made on a track with a frame do, so the next
+/// evaluation renders a bitmap from the rows the item holds.
 fn with_frame_of(old: &EditableTrack, fresh: &EditableTrack) -> EditableTrack {
     let keypoint = |o: &Observation| o.track.as_ref().and_then(|t| t.keypoint);
     // A keypoint the old item never knew (a node loaded without its keypoint
@@ -3040,10 +3046,25 @@ fn with_frame_of(old: &EditableTrack, fresh: &EditableTrack) -> EditableTrack {
             }
             _ => kept.clone(),
         })
-        .collect();
+        .collect::<Vec<Observation>>();
+    let mut stage = fresh.stage.clone();
+    if let Stage::Track(payload) = &mut stage {
+        payload.drop_bitmap_unless_in(&observations);
+        if let Some(r) = payload.reference {
+            let same_row = match (observations.get(r), fresh.observations.get(r)) {
+                (Some(kept), Some(made)) => {
+                    kept.image == made.image && keypoint(kept) == keypoint(made)
+                }
+                _ => false,
+            };
+            if !same_row {
+                payload.drop_stale_bitmap();
+            }
+        }
+    }
     EditableTrack {
         observations,
-        stage: fresh.stage.clone(),
+        stage,
         origin: fresh.origin,
         thresholds: old.thresholds.clone(),
         repaint: old.repaint.clone(),

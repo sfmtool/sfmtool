@@ -45,7 +45,7 @@ use super::evaluate::{
     grid_distance, open_localizer, plan_rounds, seed_of, shown_bytes, EvaluateError,
     EvaluateOptions, EvaluateReport,
 };
-use super::track::{EditableTrack, Stage, StageKind, TrackPayload};
+use super::track::{EditableTrack, Stage, StageKind, TrackPayload, Verdict};
 
 /// What the kernels a fit runs are allowed to do, and how its result is read
 /// back.
@@ -903,6 +903,17 @@ pub(super) fn fit_track(
     };
 
     let previous = track.track();
+    // A render that drew nothing leaves the reference the track carried, as
+    // `render_bitmap_in_place` does, where that observation is still `in`.
+    let reference = if bitmap.is_some() {
+        reference
+    } else {
+        previous.and_then(|p| p.reference).filter(|&r| {
+            next.observations
+                .get(r)
+                .is_some_and(|o| o.verdict == Verdict::In)
+        })
+    };
     next.stage = Stage::Track(TrackPayload {
         position: Some(position),
         at_infinity: classification.at_infinity,

@@ -289,3 +289,38 @@ fn the_conversion_gives_every_point_an_empty_reference() {
         ])
     );
 }
+
+#[test]
+fn the_conversion_keeps_the_references_and_drops_the_old_bitmaps() {
+    // An input with frames, bitmaps and references: the conversion replaces
+    // the frames, which is a geometry change, so the references stay; the
+    // bitmaps were rendered through the old frames, so they go, and a pick
+    // only the display render made goes back to -1.
+    let dir = tempfile::tempdir().unwrap();
+    let mut recon = fixture(&dir);
+    let n = recon.point_set.points.len();
+    recon.point_set.patch_u_halfvec_xyz = Some(Array2::from_elem((n, 3), 0.1));
+    recon.point_set.patch_v_halfvec_xyz = Some(Array2::from_elem((n, 3), 0.2));
+    recon.point_set.patch_bitmaps_y_x_rgba =
+        Some(std::sync::Arc::new(ndarray::Array4::zeros((n, 2, 2, 4))));
+    recon.point_set.patch_bitmaps_for_display = true;
+    let references: Vec<i32> = (0..n).map(|p| (p % 2) as i32).collect();
+    recon.point_set.reference_observations = Some(references.clone());
+    let mut marks = vec![false; n];
+    marks[3] = true;
+    recon.point_set.display_only_references = Some(marks);
+
+    let embedded = recon
+        .to_embedded_patches(
+            PatchNormal::MeanViewing,
+            PatchExtent::default(),
+            &Progress::none(),
+        )
+        .expect("the fixture has a .sift file per image");
+    let mut want = references;
+    want[3] = sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+    assert_eq!(embedded.point_set.reference_observations, Some(want));
+    assert!(embedded.point_set.patch_bitmaps_y_x_rgba.is_none());
+    assert!(!embedded.point_set.patch_bitmaps_for_display);
+    assert!(embedded.point_set.display_only_references.is_none());
+}

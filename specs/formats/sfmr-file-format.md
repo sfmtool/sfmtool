@@ -1597,10 +1597,15 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   writes `-1` where it removes the reference observation itself. A writer that
   moves geometry (a bundle adjustment, a similarity, moved keypoints, a refit
   normal or a new patch frame) keeps the index: the bitmap rendered after it
-  is rendered from the same observation. A writer that drops the bitmaps keeps
+  is rendered from the same observation. That includes a writer that zeroes a
+  point's patch frame (`--convert-infinity` where a point's patch has no extent
+  to keep): the point then has no patch and a zero bitmap row, and keeps its
+  reference, since the observation is still in its track, so a render after a
+  later writer gives it a frame again renders from it. A writer that drops the bitmaps keeps
   the column: `--minimal`, `--drop-patch-bitmaps`, `--localize-keypoints`
   (which carries each point's reference to the observation of the same image
-  in its new track) and `--refine-normals` without `bitmaps`. A writer that
+  in its new track), and `--refine-keypoints` and `--refine-normals` without
+  `bitmaps`. A writer that
   renders the bitmaps renders each point that has a reference from that
   observation, and runs the reference-view rule only for a point at `-1`,
   writing the observation it picks: `--add-patch-bitmaps`, `--refine-keypoints`

@@ -53,6 +53,12 @@ impl SfmrReconstruction {
     /// - **Image hashes:** each image's `image_file_hashes` entry is read from its
     ///   `.sift` metadata (`image_file_xxh128`) — a minimal metadata read, no
     ///   re-hashing of the image bytes.
+    /// - **Bitmaps and references:** the tracks are kept as they are, so a
+    ///   reconstruction that carries reference observations keeps them, except
+    ///   a pick only the viewer's display render made, which goes back to `-1`;
+    ///   one without the column gets it with every row `-1`. Any patch bitmaps
+    ///   were rendered through the old frames, so they are dropped, display
+    ///   bitmaps included; a caller renders new ones through the new frames.
     ///
     /// `progress` is where this call names its three stages -- `patch frames`
     /// (the [`PatchCloud::from_reconstruction`] build, which names stages of
@@ -240,14 +246,17 @@ impl SfmrReconstruction {
         out.metadata.feature_source = out.point_set.observations.name().to_string();
         out.point_set.patch_u_halfvec_xyz = Some(patch_u);
         out.point_set.patch_v_halfvec_xyz = Some(patch_v);
-        // The column is present exactly when patch frames are. No bitmap here
-        // is a reference view's render yet; a caller that renders the stored
-        // bitmaps through the new frames writes the references it picks.
-        out.point_set.reference_observations = Some(vec![
-            sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
-            out.point_set.points.len()
-        ]);
-        out.point_set.display_only_references = None;
+        // The column is present exactly when patch frames are. The tracks are
+        // unchanged and the frames are a geometry change, so references the
+        // input carries are kept; the bitmaps were rendered through the old
+        // frames, so they go, and a display-only pick with them.
+        out.point_set.drop_patch_bitmaps();
+        if out.point_set.reference_observations.is_none() {
+            out.point_set.reference_observations = Some(vec![
+                sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+                out.point_set.points.len()
+            ]);
+        }
         out.rebuild_derived_fields();
         out.validate_observation_columns()
             .map_err(ReconstructionError::Unsupported)?;

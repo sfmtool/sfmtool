@@ -69,8 +69,12 @@ impl PyPatchCloud {
     ///     ``(P,)`` int32 index of each point's reference observation within
     ///     its own track, ``-1`` for none, as
     ///     ``clone_with_changes(patch_bitmaps=..., reference_observations=...)``
-    ///     takes them. A point with no patch, or one at ``-1`` with fewer than
-    ///     two observations, gets a zero row and ``-1``.
+    ///     takes them. A point with a stored reference whose photograph is
+    ///     missing gets a zero row and keeps its reference. A point with no
+    ///     patch (a zero patch frame) gets a zero row and keeps the reference
+    ///     it stores. A point at ``-1`` with fewer than two observations, or
+    ///     any point at ``-1`` with ``referenced_only``, gets a zero row and
+    ///     ``-1``.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.

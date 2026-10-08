@@ -613,8 +613,9 @@ impl OptionalPresence {
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
 /// Version 12 added `tracks/reference_observations`, per point the index of the
-/// observation whose render the point's patch bitmap is, among the point's own
-/// observations, `-1` for none (see [`SfmrData::reference_observations`]). It
+/// observation the point's patch bitmap is, or is to be, rendered from, among
+/// the point's own observations, `-1` for no reference chosen (see
+/// [`SfmrData::reference_observations`]). It
 /// is required in a file whose `points3d/metadata.json` has `has_uv_frames`
 /// set, and absent otherwise, so it has no flag of its own. A file below
 /// version 12 with patch frames reads with the column filled with `-1`.
@@ -676,8 +677,9 @@ pub const SFMR_FORMAT_VERSION: u32 = 12;
 /// the column with [`NO_REFERENCE_OBSERVATION`].
 pub const SFMR_REFERENCE_OBSERVATIONS_VERSION: u32 = 12;
 
-/// The value of a [`SfmrData::reference_observations`] row for a point whose
-/// patch bitmap is not the render of one of its observations.
+/// The value of a [`SfmrData::reference_observations`] row for a point with no
+/// reference chosen: no observation its patch bitmap is, or is to be, rendered
+/// from.
 pub const NO_REFERENCE_OBSERVATION: i32 = -1;
 
 /// The first `.sfmr` version that stores its write timestamp in `written.json`

@@ -1681,9 +1681,12 @@ impl AppState {
             let bitmap_phase = bitmaps.phase("patch bitmaps");
             match super::open::render_patch_bitmaps(&converted, &photographs, &bitmap_phase) {
                 Ok(Some(column)) => {
-                    // The bitmaps are the converted value's own, so the
-                    // references the render picked are recorded with them.
+                    // The bitmaps are the converted value's own, saved with
+                    // it rather than shown for display, so the references the
+                    // render picked are recorded with them.
                     converted.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column.bitmaps));
+                    converted.point_set.patch_bitmaps_for_display = false;
+                    converted.point_set.display_only_references = None;
                     converted.point_set.reference_observations =
                         Some(column.reference_observations);
                 }

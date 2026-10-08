@@ -682,6 +682,9 @@ fn classify_demotes_a_point_seen_from_one_centre() {
         Vector3::new(0.1, 0.0, 0.0),
         Vector3::new(0.0, 0.1, 0.0),
     );
+    let mut references = vec![-1; recon.point_count()];
+    references[0] = 1;
+    recon.point_set.reference_observations = Some(references);
     let c0 = recon.image_table.images[0].camera_center();
     let r1 = recon.image_table.images[1].quaternion_wxyz;
     recon.image_table.images[1].translation_xyz = -(r1 * c0.coords);
@@ -709,6 +712,16 @@ fn classify_demotes_a_point_seen_from_one_centre() {
     assert_eq!(
         patch_row(&classified.point_set.patch_u_halfvec_xyz),
         Vector3::zeros()
+    );
+    // The cleared frame is a geometry change: the reference observation is
+    // still in the track, so the point keeps it.
+    assert_eq!(
+        classified
+            .point_set
+            .reference_observations
+            .as_ref()
+            .unwrap()[0],
+        1
     );
 }
 

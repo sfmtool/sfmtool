@@ -118,10 +118,13 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   input that is already `embedded_patches` and stores reference observations
   keeps them: the compaction carries each point's reference to the
   observation of the same image in its final track
-  (`compact_to_embedded_patches(keep_references=True)`), and each such point's
-  bitmap is rendered again from it at the final keypoints and frame
-  (`render_from_references`), so only a point at `-1`, or one whose reference
-  image the refinement dropped, takes the rule's pick.
+  (`compact_to_embedded_patches(keep_references=True)`), so only a point at
+  `-1`, or one whose reference image the refinement dropped, takes the rule's
+  pick. Every point with a reference, kept or picked, then has its bitmap
+  rendered again from that observation through the compacted value's stored
+  `f32` keypoints and frame (`render_from_references`), so dropping and adding
+  the bitmaps later gives the same bytes; a fused mean stays as the pass
+  rendered it.
 - **Self-similarity cull.** After round 1 the sub-pixel stage renders each
   point's bitmap (whatever the round count, while the cull is on),
   and a point whose bitmap's ZNCC self-similarity radius is over

@@ -403,7 +403,8 @@ impl PySfmrReconstruction {
     /// points. A call that replaces the tracks moves each reference to the
     /// observation of the same image in the point's new track (``-1`` where
     /// there is none), and one that changes the point count resets it to
-    /// ``-1``.
+    /// ``-1``. A point left with a zero patch frame keeps its reference: the
+    /// observation is still in its track.
     #[getter]
     fn reference_observations<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<i32>>> {
         let references = self.inner.point_set.reference_observations.as_ref()?;

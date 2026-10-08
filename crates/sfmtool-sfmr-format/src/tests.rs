@@ -2433,7 +2433,7 @@ fn restamp_hashes(path: &std::path::Path, dir: &std::path::Path) {
 }
 
 #[test]
-fn test_version_11_with_patch_frames_reads_every_reference_as_none() {
+fn test_version_11_with_patch_frames_reads_every_reference_as_minus_one() {
     let dir = std::env::temp_dir().join("sfmr_test_reference_observations_v11");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -2463,7 +2463,7 @@ fn test_version_11_with_patch_frames_reads_every_reference_as_none() {
     let (valid, errors) = verify_sfmr(&saved).unwrap();
     assert!(valid, "{errors:?}");
 
-    // A version 11 file without patch frames gets no column.
+    // A file without patch frames gets no column.
     let plain = dir.join("plain.sfmr");
     write_sfmr(&plain, &mut make_test_data()).unwrap();
     assert!(read_sfmr(&plain).unwrap().reference_observations.is_none());

@@ -299,11 +299,13 @@ last fallback, the texture is the cross-view
 **fusion** of the kept views at the optimum: RGB the robust IRLS-weighted mean
 (an unweighted mean under `objective=mean`) and alpha a per-pixel cross-view
 agreement confidence, and the point names no observation. A point whose
-`tracks/reference_observations` entry already names an observation keeps it:
-its texture is rendered again from that observation through the refined patch
-(`render_from_references` in
-[`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)), and
-only a point at `-1` takes the rule's pick. Rendering costs a
+`tracks/reference_observations` entry already names an observation keeps it,
+and only a point at `-1` takes the rule's pick. Every point with a reference
+then has its texture rendered again from that observation through the refined
+patch as the file stores it, in `f32` (`render_from_references` in
+[`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)), so
+dropping and adding the bitmaps later gives the same bytes; a fusion stays as
+the refinement rendered it. Rendering costs a
 tile render and a self-similarity reading per view and member coherence's
 matrix per patch. It is on by default so the refined reconstruction carries its
 per-point patch textures and can display them without re-rendering; a multi-stage

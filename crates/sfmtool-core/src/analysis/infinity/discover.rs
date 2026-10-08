@@ -728,6 +728,10 @@ impl SfmrReconstruction {
             if let Some(references) = recon.point_set.reference_observations.as_mut() {
                 references.push(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION);
             }
+            // Nor a pick the display render made, so its mark stays in step.
+            if let Some(marks) = recon.point_set.display_only_references.as_mut() {
+                marks.push(false);
+            }
             recon
                 .point_set
                 .observation_counts

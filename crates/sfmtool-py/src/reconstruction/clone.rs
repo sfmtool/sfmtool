@@ -916,18 +916,9 @@ fn settle_reference_observations(
             })
             .collect(),
     });
-    // A point left with a zero frame has no patch and so no bitmap, and names
-    // no reference observation, as the infinity conversion clears it.
-    if let (Some(u), Some(references)) = (
-        recon.point_set.patch_u_halfvec_xyz.as_ref(),
-        recon.point_set.reference_observations.as_mut(),
-    ) {
-        for (row, reference) in u.rows().into_iter().zip(references.iter_mut()) {
-            if row.iter().all(|&x| x == 0.0) {
-                *reference = NO_REFERENCE_OBSERVATION;
-            }
-        }
-    }
+    // A point left with a zero frame keeps its reference: the frame is the
+    // point's geometry, and the reference observation is still in its track,
+    // so a later render that gives the point a frame renders from it.
     Ok(())
 }
 

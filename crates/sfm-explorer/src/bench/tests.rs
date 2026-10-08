@@ -1777,3 +1777,65 @@ fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
         rows[0].1
     );
 }
+
+/// A re-bench after Convert to Embedded Patches takes the converted point's
+/// bitmap, which is the render of its reference row as the conversion left
+/// it. Where the item kept the person's edit of that row, the bitmap does not
+/// stay beside it: a row turned out drops the bitmap with its reference, and a
+/// row sighted elsewhere drops the bitmap and keeps the reference, as the same
+/// steps do on a track with a frame. An unedited row keeps both.
+#[test]
+fn a_rebench_drops_a_bitmap_its_kept_reference_row_no_longer_matches() {
+    use sfmtool_core::bench::{create_track, Bench, CreateTrackOptions, Stage};
+
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+    state.finish_background_task();
+    let (made, report) = create_track(
+        &Bench::new(),
+        state.scene[0].edited(),
+        3,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point goes on");
+    let mut fresh = (**made.track(&report.label).expect("on")).clone();
+    let r = 1;
+    let Stage::Track(payload) = &mut fresh.stage else {
+        panic!("a track");
+    };
+    assert!(
+        payload.placement.is_some(),
+        "the converted point has a frame"
+    );
+    // The fixture has no photographs to render from; a stored bitmap stands
+    // in for the conversion's render of row `r`.
+    payload.bitmap = Some(ndarray::Array3::zeros((4, 4, 4)));
+    payload.reference = Some(r);
+
+    let outcome = |old: &sfmtool_core::bench::EditableTrack| {
+        let Stage::Track(p) = super::with_frame_of(old, &fresh).stage else {
+            panic!("a track");
+        };
+        (p.bitmap.is_some(), p.reference)
+    };
+
+    assert_eq!(
+        outcome(&fresh),
+        (true, Some(r)),
+        "an unedited row keeps both"
+    );
+
+    let mut turned_out = fresh.clone();
+    turned_out.observations[r].verdict = Verdict::Out;
+    turned_out.observations[r].pinned = true;
+    assert_eq!(outcome(&turned_out), (false, None));
+
+    let mut sighted = fresh.clone();
+    let measurement = sighted.observations[r].track.as_mut().expect("a track row");
+    let [x, y] = measurement.keypoint.expect("a keypoint");
+    measurement.keypoint = Some([x + 7.0, y - 3.0]);
+    assert_eq!(outcome(&sighted), (false, Some(r)));
+}

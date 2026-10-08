@@ -430,9 +430,11 @@ def embed_patches(
        included — they render through the same ``w``-aware path), and reports
        per-point validity and the reference view's image. An input that is
        already ``embedded_patches`` and stores reference observations keeps
-       them: after the compaction, each point that still holds its reference
-       observation's image is rendered again from that observation
-       (:func:`~sfmtool._patch_compaction.render_from_references`).
+       them for each point that still holds its reference observation's
+       image. After the compaction, every point with a reference is rendered
+       again from that observation through the stored ``f32`` keypoints and
+       frame (:func:`~sfmtool._patch_compaction.render_from_references`), so
+       dropping and adding the bitmaps gives the same bytes.
     4. **Cull + compact**: drop points left below ``min_views`` **and** points the
        sub-pixel pass produced no valid bitmap for (the culled-point
        signal, uniform for finite and infinity points), then renumber the
@@ -853,9 +855,11 @@ def embed_patches(
     #    final sub-pixel pass produced no valid bitmap for (finite and
     #    infinity alike), and compact into the final embedded_patches recon. The
     #    stored bitmaps are the final-keypoint reference-view tiles from that pass.
-    #    An input that already stores reference observations keeps them: each
-    #    such point is rendered again from its own reference at the final
-    #    keypoints and frame, and only a point at -1 keeps the pass's pick.
+    #    An input that already stores reference observations keeps them, and
+    #    only a point at -1 takes the pass's pick. Every bitmap with a
+    #    reference is then rendered again from the compacted value's stored
+    #    (f32) keypoints and frames, so dropping and adding the bitmaps later
+    #    gives the same bytes.
     stored = work_recon.reference_observations
     keep_references = stored is not None and bool(np.any(np.asarray(stored) >= 0))
     with _timed_step(log, "  compacting survivors into embedded_patches..."):
@@ -869,7 +873,7 @@ def embed_patches(
             min_views=min_views,
             keep_references=keep_references,
         )
-    if keep_references:
+    if result.patch_bitmap_resolution is not None:
         with _timed_step(log, "  rendering bitmaps from the stored references..."):
             final_bitmaps, references = render_from_references(
                 result,

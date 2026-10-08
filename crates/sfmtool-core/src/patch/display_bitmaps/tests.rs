@@ -300,3 +300,126 @@ fn a_stored_reference_is_rendered_from_and_kept() {
 }
 
 const NO_REFERENCE: i32 = sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+
+/// The column form of [`render_patch_cloud_bitmaps`] with references stored,
+/// and with photographs missing. A point whose stored reference is in a
+/// missing image gets a zero row and keeps that reference rather than a render
+/// of another observation; with [`UnreferencedPoints::Skip`] a point at `-1`
+/// gets a zero row and stays `-1`; a point with a zero patch frame has no
+/// patch in the cloud, gets a zero row, and keeps its reference.
+///
+/// [`render_patch_cloud_bitmaps`]: crate::patch::stored_bitmap::render_patch_cloud_bitmaps
+/// [`UnreferencedPoints::Skip`]: crate::patch::stored_bitmap::UnreferencedPoints::Skip
+#[test]
+fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
+    use crate::geometry::RigidTransform;
+    use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
+    use crate::patch::normal_refine::ProjectedImage;
+    use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
+    use crate::patch::PatchCloud;
+    use sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+
+    let mut recon = seoul_bull();
+    let count = recon.point_count();
+    let images = &recon.image_table.images;
+    let paths: Vec<PathBuf> = images
+        .iter()
+        .map(|i| recon.workspace_dir.join(&i.name))
+        .collect();
+    let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+    let cache = PhotographCache::new(1 << 30, DISPLAY_PYRAMID_LEVELS);
+    let (found, _) = cache
+        .get_many(&refs, &Progress::none())
+        .expect("not cancelled");
+    let pyramids: Vec<_> = found
+        .into_iter()
+        .map(|p| p.expect("every photograph is checked in"))
+        .collect();
+    let poses: Vec<RigidTransform> = images
+        .iter()
+        .map(|image| {
+            let q = image.quaternion_wxyz;
+            let t = image.translation_xyz;
+            RigidTransform::from_wxyz_translation([q.w, q.i, q.j, q.k], [t.x, t.y, t.z])
+        })
+        .collect();
+
+    // Every even point names its first observation; every odd point is -1.
+    let stored: Vec<i32> = (0..count)
+        .map(|p| {
+            if p % 2 == 0 {
+                0
+            } else {
+                NO_REFERENCE_OBSERVATION
+            }
+        })
+        .collect();
+    recon.point_set.reference_observations = Some(stored.clone());
+    // Point 0 loses its patch frame.
+    for half in [
+        recon.point_set.patch_u_halfvec_xyz.as_mut(),
+        recon.point_set.patch_v_halfvec_xyz.as_mut(),
+    ] {
+        half.expect("the file has patch frames")
+            .row_mut(0)
+            .fill(0.0);
+    }
+    let cloud = PatchCloud::from_stored_frames(&recon).expect("the file has patch frames");
+    assert!(
+        !cloud.point_indexes.contains(&0),
+        "a zero frame is no patch"
+    );
+
+    let dropped = [0usize, 3, 7];
+    let images = &recon.image_table.images;
+    let views: Vec<Option<ProjectedImage<'_>>> = (0..images.len())
+        .map(|i| {
+            (!dropped.contains(&i)).then(|| ProjectedImage {
+                camera: &recon.image_table.cameras[images[i].camera_index as usize],
+                cam_from_world: &poses[i],
+                pyramid: &pyramids[i],
+            })
+        })
+        .collect();
+    let column = render_patch_cloud_bitmaps(
+        &cloud,
+        &recon,
+        &views,
+        &KeypointSubpixelParams::default(),
+        UnreferencedPoints::Skip,
+        None,
+        &Progress::none(),
+    )
+    .expect("not cancelled");
+
+    assert_eq!(
+        column.reference_observations, stored,
+        "every reference kept"
+    );
+    let tracks = &recon.point_set.tracks;
+    let offsets = &recon.point_set.observation_offsets;
+    let blank = |p: usize| {
+        column
+            .bitmaps
+            .index_axis(ndarray::Axis(0), p)
+            .iter()
+            .all(|&v| v == 0)
+    };
+    assert!(blank(0), "a point with no patch has no bitmap");
+    let (mut missing, mut rendered) = (0, 0);
+    for &pid in &cloud.point_indexes {
+        let p = pid as usize;
+        if p % 2 == 1 {
+            assert!(blank(p), "a skipped point {p} has no bitmap");
+        } else if dropped.contains(&(tracks[offsets[p]].image_index as usize)) {
+            assert!(blank(p), "point {p}'s reference photograph is missing");
+            missing += 1;
+        } else if !blank(p) {
+            rendered += 1;
+        }
+    }
+    assert!(
+        missing > 0 && rendered > 0,
+        "{missing} missing, {rendered} rendered"
+    );
+}

@@ -138,16 +138,11 @@ fn apply_patch_fixes(recon: &mut SfmrReconstruction, fixes: Vec<(usize, PatchFix
         .take()
         .map(Arc::unwrap_or_clone);
     for (pidx, fix) in fixes {
+        // The reference observation is left as it is: a cleared row is a
+        // geometry change, and the observation is still in the track, so a
+        // later render that gives the point a frame renders from it; a moved
+        // frame keeps its bitmap and the reference with it.
         apply_patch_fix(&mut patch_u, &mut patch_v, &mut patch_bitmaps, pidx, fix);
-        // A cleared row has no patch and no bitmap, so it names no reference
-        // observation; a moved frame keeps its bitmap and the reference with it.
-        let cleared = patch_u
-            .as_ref()
-            .is_some_and(|u| u.row(pidx).iter().all(|&x| x == 0.0));
-        if let (true, Some(references)) = (cleared, recon.point_set.reference_observations.as_mut())
-        {
-            references[pidx] = sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
-        }
     }
     recon.point_set.patch_u_halfvec_xyz = patch_u;
     recon.point_set.patch_v_halfvec_xyz = patch_v;

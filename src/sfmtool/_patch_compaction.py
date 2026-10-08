@@ -363,33 +363,40 @@ def render_from_references(
     resolution: int,
     sampler: str = "per_view",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Re-render the bitmap of each point ``recon`` stores a reference for.
+    """Render each point's bitmap from its reference, as ``recon`` stores it.
 
     ``recon`` carries the final patch frames and keypoints, and the reference
     observation each point is to be rendered from (``-1`` where none has been
     chosen). ``bitmaps`` and ``references`` are a render of every point by the
-    reference-view rule, such as a refinement's. The result keeps those for
-    each point at ``-1`` and, for each point ``recon`` stores a reference for,
-    replaces the bitmap with that observation's tile and the reference with
-    the stored one (``PatchCloud.render_bitmaps(referenced_only=True)``), so a
-    refinement that moves keypoints or the frame keeps each point's reference.
+    reference-view rule, such as a refinement's. Each point ``recon`` stores a
+    reference for keeps it, and a point at ``-1`` takes the one in
+    ``references``. Every point with a reference then gets that observation's
+    tile rendered from ``recon`` itself
+    (``PatchCloud.render_bitmaps(referenced_only=True)``), and a point left at
+    ``-1`` keeps its bitmap from ``bitmaps``, a fused mean. So a refinement
+    that moves keypoints or the frame keeps each point's reference, and each
+    referenced bitmap is rendered from the ``f32`` keypoints and frame the
+    file stores rather than the refiner's ``f64`` ones, which makes it
+    byte-identical to what ``--drop-patch-bitmaps`` then
+    ``--add-patch-bitmaps`` renders for the point.
 
     Returns:
         ``(bitmaps, references)``, as
         ``clone_with_changes(patch_bitmaps=..., reference_observations=...)``
         takes them.
     """
+    references = np.asarray(references, dtype=np.int32)
     stored = recon.reference_observations
-    if stored is None:
-        return bitmaps, references
-    stored = np.asarray(stored, dtype=np.int32)
-    named = stored >= 0
+    if stored is not None:
+        stored = np.asarray(stored, dtype=np.int32)
+        references = np.where(stored >= 0, stored, references).astype(np.int32)
+    named = references >= 0
+    bitmaps = np.array(bitmaps, dtype=np.uint8, copy=True)
     if not named.any():
         return bitmaps, references
-    own, _ = recon.patches.render_bitmaps(
-        recon, images, resolution=resolution, sampler=sampler, referenced_only=True
+    picked = recon.clone_with_changes(reference_observations=references)
+    own, _ = picked.patches.render_bitmaps(
+        picked, images, resolution=resolution, sampler=sampler, referenced_only=True
     )
-    bitmaps = np.array(bitmaps, dtype=np.uint8, copy=True)
     bitmaps[named] = np.asarray(own)[named]
-    references = np.where(named, stored, np.asarray(references, dtype=np.int32))
-    return bitmaps, references.astype(np.int32)
+    return bitmaps, references

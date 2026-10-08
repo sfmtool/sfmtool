@@ -236,11 +236,11 @@ class RefineNormalsTransform:
                 f"  Saving {len(point_ids)} patches and {n_filled} bitmaps "
                 f"to the reconstruction"
             )
-            # Each bitmap is the tile of the view the reference-view rule
-            # picked at the refined normal; record which observation it is. A
-            # point that already names a reference observation keeps it, and
-            # its bitmap is rendered again from that observation at the
-            # refined normal.
+            # A point that already names a reference observation keeps it,
+            # and a point at -1 takes the view the reference-view rule picked
+            # at the refined normal. Every bitmap with a reference is rendered
+            # again from the stored (f32) frame, so dropping and adding the
+            # bitmaps later gives the same bytes; a fusion stays as rendered.
             out = recon.clone_with_changes(normals=normals, patches=cloud)
             bitmaps, references = render_from_references(
                 out,

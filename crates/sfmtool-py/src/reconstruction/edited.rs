@@ -180,6 +180,9 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
         reference_observation: get(d, "reference_observation")?
             .map(|v| v.extract())
             .transpose()?,
+        // Only the viewer's display render marks a pick, and a reconstruction
+        // Python holds never carries the marks.
+        display_only_reference: false,
     })
 }
 

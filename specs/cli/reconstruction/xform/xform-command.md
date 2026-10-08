@@ -735,8 +735,13 @@ The render is the stored bitmap of a patch whose placement and keypoints are
 settled. A point whose `tracks/reference_observations` entry names an
 observation (one the file kept when its bitmaps were dropped) gets that
 observation's tile at its keypoint and keeps the entry, so
-`--drop-patch-bitmaps` followed by `--add-patch-bitmaps` gives back the same
-bitmaps and references. A point at `-1` gets the tile of the observation the
+`--drop-patch-bitmaps` followed by `--add-patch-bitmaps` at the same resolution
+and sampler gives back the same references and, byte for byte, the bitmap of
+every point that has one. The writers that render bitmaps after moving
+keypoints or frames (`--refine-keypoints`, `--refine-normals`, `sfm
+embed-patches`) render each point that has a reference from the `f32`
+keypoints and frame the file stores, not their own `f64` working values, for
+this reason. A point at `-1` gets the tile of the observation the
 reference-view rule picks among its track, rendered at that observation's
 keypoint, and its entry records which observation it is
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored

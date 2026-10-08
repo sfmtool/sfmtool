@@ -1922,3 +1922,24 @@ fn a_copy_taken_for_an_edit_leaves_the_files_hashes_behind() {
     assert_eq!(edited.point_count(), recon.point_count());
     assert_eq!(edited.image_count(), recon.image_count());
 }
+
+/// The display-only marks are a per-point column like the references they
+/// qualify: present only beside them, and as long as the points.
+#[test]
+fn display_only_marks_are_checked_against_the_points_and_the_references() {
+    let mut recon = SfmrReconstruction::demo(5);
+    let n = recon.point_count();
+    recon.point_set.reference_observations = None;
+    recon.point_set.display_only_references = Some(vec![false; n]);
+    let error = recon.validate_point_columns().unwrap_err();
+    assert!(error.contains("requires reference_observations"), "{error}");
+
+    recon.point_set.patch_u_halfvec_xyz = Some(ndarray::Array2::zeros((n, 3)));
+    recon.point_set.patch_v_halfvec_xyz = Some(ndarray::Array2::zeros((n, 3)));
+    recon.point_set.reference_observations = Some(vec![-1; n]);
+    recon.validate_point_columns().unwrap();
+
+    recon.point_set.display_only_references = Some(vec![false; n - 1]);
+    let error = recon.validate_point_columns().unwrap_err();
+    assert!(error.contains("display_only_references length"), "{error}");
+}

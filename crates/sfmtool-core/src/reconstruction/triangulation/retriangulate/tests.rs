@@ -1527,3 +1527,48 @@ fn statuses_of_every_point_are_read_back_through_the_fold() {
     assert_statuses_agree(&report);
     assert_statuses_follow_the_map(&report, &map, &layered, &next);
 }
+
+/// A reference only the display render picked stays display-only through a
+/// retriangulation, whether the point is rewritten on its own (through a whole
+/// record) or with every other point (in place), so both save it as `-1`.
+#[test]
+fn a_display_pick_stays_display_only_whether_one_point_or_all_are_retriangulated() {
+    let mut recon = nudged();
+    let mut refs = vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; POINTS];
+    refs[1] = 0;
+    recon.point_set.reference_observations = Some(refs);
+    let mut marks = vec![false; POINTS];
+    marks[1] = true;
+    recon.point_set.display_only_references = Some(marks);
+    let start = edited(recon);
+
+    let saved = |next: &EditedReconstruction, map: &PointMap| -> (i32, Option<i32>) {
+        let to = map.forward(1).expect("the point survived");
+        let view = next.point(to).expect("live");
+        assert!(view.display_only_reference(), "the mark was lost");
+        let (value, rows) = next.materialize();
+        let row = rows
+            .forward(to)
+            .expect("the point is in the materialised value") as usize;
+        let written = value
+            .point_set
+            .saved_reference_observations()
+            .expect("the column")[row];
+        (written, view.reference_observation())
+    };
+
+    let mut results = Vec::new();
+    for which in [RetriangulateWhich::These(&[1]), RetriangulateWhich::All] {
+        let (next, map, report) = retriangulate_points(
+            &start,
+            which,
+            &RetriangulateOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the fixture retriangulates");
+        assert!(report.moved() >= 1);
+        results.push(saved(&next, &map));
+    }
+    assert_eq!(results[0], (-1, Some(0)));
+    assert_eq!(results[0], results[1]);
+}

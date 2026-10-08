@@ -200,10 +200,11 @@ pub struct PointSet {
     /// A display pick is shown, never saved, as the display bitmaps are not:
     /// [`Self::saved_reference_observations`] writes `-1` for a marked row.
     /// Every pass that drops or reorders points selects its rows in lockstep
-    /// with `points` ([`Self::select_display_only_references`]); a point added
-    /// by an edit, such as a bench commit, is unmarked, since its reference is
-    /// the edit's own; a pass that drops or replaces the bitmap column clears
-    /// it.
+    /// with `points` ([`Self::select_display_only_references`]); a point an
+    /// edit rewrites through a whole record keeps its mark with the record,
+    /// and a point an edit builds fresh, such as a bench commit, is unmarked,
+    /// since its reference is the edit's own; a pass that drops or replaces the
+    /// bitmap column clears it.
     pub display_only_references: Option<Vec<bool>>,
 
     // --- Derived data (computed from the fields above, not stored in .sfmr) ---
