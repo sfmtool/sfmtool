@@ -9,8 +9,10 @@ where the point's patch appears in the photograph, checks that the appearance
 there agrees with the point's other observations, and adds the observation when
 it does. Nothing else moves: every point keeps its index, position, patch frame
 and bitmap, every existing observation stays as it is, and nothing is
-re-triangulated or adjusted. What a caller does afterwards (retriangulate,
-adjust, or nothing) is the caller's.
+re-triangulated or adjusted. Each point's `reference_observations` entry moves
+with its observation where the new one lands before it in the track, so it names
+the same image as before; the bitmap is not re-rendered. What a caller does
+afterwards (retriangulate, adjust, or nothing) is the caller's.
 
 It answers a narrower question than the bench's evaluation
 ([editable-track.md](../bench/editable-track.md)). The bench reads a track by
@@ -279,7 +281,9 @@ on a synthetic capture (pinhole cameras over a textured plane): a removed
 observation is found again within 0.1 px of its projection; the same with a
 stored bitmap as the template, fused by `fuse_patch_bitmap`, which pins the
 bitmap's grid orientation; existing observations, positions and frames come back
-unchanged and tracks stay in image order; a two-reference track is judged by the
+unchanged and tracks stay in image order; a reference observation moves with
+its observation where the new one lands before it in the track and stays where
+it lands after it; a two-reference track is judged by the
 pair rule; `PooledOrTrack` accepts what either bar accepts; a photograph of a
 different texture is refused by every rule; a point out of frame is
 `not_in_frame`; a camera behind the plane is `back_facing`; two points at one

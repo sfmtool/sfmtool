@@ -695,7 +695,8 @@ pub struct TrackPayload {
     /// **A render keeps a defined reference.** Every render of a new bitmap
     /// on the bench -- the live evaluation's, a fit's, a normal step's --
     /// renders from this reference where it is defined (`Some`, naming an
-    /// `in` row with a keypoint). Only where it is `None` does the render run
+    /// `in` row with a keypoint). Only where it is undefined (`None`, or naming
+    /// a row that is not `in` or has no keypoint) does the render run
     /// the reference-view rule over the `in` rows and set the bitmap and this
     /// reference together. So the rule's pick that an evaluation reports per
     /// row (`TrackMeasurement::reference_view`) can differ from this

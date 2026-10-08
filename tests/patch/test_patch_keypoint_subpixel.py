@@ -549,12 +549,13 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
         )
 
 
-def test_refine_keypoints_render_bitmaps_returns_consensus_bitmaps(
+def test_refine_keypoints_render_bitmaps_returns_reference_bitmaps(
     seoul_bull_workspace: Path,
 ):
     """``render_bitmaps=True`` adds a per-point ``bitmap``: an ``(R, R, 4)`` uint8
-    consensus texture fused at the final keypoints for a point with a valid
-    cross-view consensus, or ``None`` for one without (fewer than two usable
+    texture rendered at the final keypoints (the reference view's tile, or the
+    fused mean where the reference-view rule reaches its pick only through its
+    last fallback) for a point with a valid cross-view consensus, or ``None`` for one without (fewer than two usable
     views — the culled-point signal). Without the flag the key is absent, so the
     existing return shape is preserved."""
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
@@ -585,4 +586,4 @@ def test_refine_keypoints_render_bitmaps_returns_consensus_bitmaps(
         assert bm.dtype == np.uint8
         if bm[..., 3].any():
             got_bitmap = True
-    assert got_bitmap, "no sampled point produced a nonzero consensus bitmap"
+    assert got_bitmap, "no sampled point produced a nonzero stored bitmap"

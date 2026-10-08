@@ -322,7 +322,8 @@ bitmap").
 
 A point's patch bitmap, the row of `points3d/patch_bitmaps_y_x_rgba` in an
 `.sfmr` file ([sfmr-file-format.md](../../formats/sfmr-file-format.md)), is the
-tile of the view the rule picks, stored as the rule read it: rendered through
+tile of its reference observation, which the rule picks where the point has
+none, stored as the rule read it: rendered through
 the point's patch re-anchored on that observation's keypoint, at the
 reconstruction's patch resolution `R`, with the sampler the sampler rule picks
 for that view (`render_patch_bitmap`, `render_reference`). Its colour is the
@@ -418,10 +419,10 @@ standing, and Track View's *Reference* column and the wire's
 current readings. The reference in use is the row the bitmap is the render
 of: Track View's *Bitmap* column marks it, and the wire names it as
 `bitmap_observation`. The two differ where a defined reference is no longer
-the row the rule would pick. Replacing a defined reference with the rule's
-current pick is a separate operation, which is not built
-([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
-open questions).
+the row the rule would pick. No operation replaces a defined reference with
+the rule's current pick; see
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+§ "Open questions", "Replacing the reference".
 
 Every operation that renders the stored bitmap renders it this way:
 
@@ -432,7 +433,7 @@ Every operation that renders the stored bitmap renders it this way:
 | `sfm xform --refine-normals bitmaps=…` | normal refinement with `render_bitmap`, through the refined patch; a point that stores a reference is then rendered from it (`render_from_references`) |
 | A bench fit, `render_bitmap_in_place` and `evaluate_rendering_bitmap` | the tile of the track's reference where it is defined; `render_patch_bitmap` over the `in` rows where it is not ([editable-track.md](../bench/editable-track.md)) |
 | The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`: each point from the file's reference; a point at `-1` gets the render's pick, held in the value's references and marked `PointSet::display_only_references`, so Track View marks the row the display bitmap is the tile of, while a save writes neither the bitmaps nor those picks (it writes the file's `-1`) |
-| SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; `to_embedded_patches` gives every point `-1`, so every point gets the rule's pick, and the bitmaps are the converted value's own, so the references are written with them |
+| SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; `to_embedded_patches` keeps the input's references (a display-only pick goes back to `-1`; an input without the column gets every row `-1`) and drops the old bitmaps; a point with a reference is rendered from it, a point at `-1` gets the rule's pick, and the bitmaps are the converted value's own, so the references are written with them |
 
 The templates the localizer, the sub-pixel refiner, congealing and normal
 refinement align views to are not changed by this: they read their own

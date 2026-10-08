@@ -220,6 +220,49 @@ class TestHashes:
         assert len(edited.point_edit_hash([one])) == 32
 
 
+class TestReferenceObservationRecords:
+    """A record's ``reference_observation`` key reads the base's column, and
+    ``replace_point`` and ``add_point`` write it into the materialised value."""
+
+    @pytest.fixture
+    def framed(self, seoul_bull_ground_truth_sfmr):
+        base = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        counts = np.asarray(base.observation_counts).astype(np.int64)
+        refs = np.where(counts > 1, 1, 0).astype(np.int32)
+        refs[::3] = -1
+        base = base.clone_with_changes(reference_observations=refs)
+        return EditedReconstruction(base), refs
+
+    def test_a_record_reads_the_reference(self, framed):
+        edited, refs = framed
+        assert edited.columns["reference_observations"]
+        for i in (0, 1, 2, 3):
+            assert edited.point(i)["reference_observation"] == refs[i]
+
+    def test_replace_and_add_write_the_reference(self, framed):
+        edited, refs = framed
+        # Point 1 is not a multiple of 3, so it names a reference; move it to
+        # its last observation and give point 0's copy a reference it lacked.
+        record = edited.point(1)
+        last = len(record["image_indexes"]) - 1
+        assert last > 0
+        record["reference_observation"] = last
+        replaced = edited.replace_point(1, record)
+        added_record = edited.point(0)
+        assert added_record["reference_observation"] == -1
+        added_record["reference_observation"] = 0
+        added = edited.add_point(added_record)
+        assert edited.point(replaced)["reference_observation"] == last
+        assert edited.point(added)["reference_observation"] == 0
+
+        recon, forward, _ = edited.materialize()
+        out = np.asarray(recon.reference_observations)
+        assert out[forward[replaced]] == last
+        assert out[forward[added]] == 0
+        for i in (0, 2, 3):
+            assert out[forward[i]] == refs[i]
+
+
 class TestResectImageInPlace:
     """The bulk edit: one image re-posed against structure held out from it."""
 

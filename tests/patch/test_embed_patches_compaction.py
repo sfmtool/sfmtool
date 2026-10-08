@@ -348,7 +348,7 @@ def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
 
 def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
     """A point at infinity (w = 0) with enough covering views produces a real
-    cross-view **consensus bitmap** in the sub-pixel refiner (it is refined, not
+    **stored bitmap** in the sub-pixel refiner (it is refined, not
     skipped), passes the uniform validity cull — there is no infinity exemption
     any more — and stays at infinity through compaction, carrying that bitmap
     (nonzero alpha) instead of the zero row the old pipeline stored."""
@@ -420,22 +420,22 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
         )
     hashes = [b"\x00" * 16] * recon.image_count
 
-    # The sub-pixel refiner fuses the consensus bitmaps + validity — the pipeline
+    # The sub-pixel refiner renders the stored bitmaps + validity — the pipeline
     # source for both (points at infinity go through the same path).
     locs, bitmaps, valid = _refine_subpixel(
         cloud, recon, images, locs, sweeps=1, resolution=12, render_bitmaps=True
     )
     assert valid is not None and bool(valid[pi]), (
-        "the well-observed infinity point must produce a consensus bitmap"
+        "the well-observed infinity point must produce a stored bitmap"
     )
-    assert bitmaps[pi][..., 3].any(), "its consensus bitmap has real agreement"
+    assert bitmaps[pi][..., 3].any(), "its stored bitmap has real samples"
 
     out = compact_to_embedded_patches(
         recon, cloud, locs, hashes, patch_bitmaps=bitmaps, valid=valid, min_views=2
     )
 
     # The infinity point survived, is still at infinity, and carries its nonzero
-    # consensus bitmap (not the old zero row).
+    # stored bitmap (not the old zero row).
     is_inf = np.asarray(out.point_is_at_infinity)
     assert is_inf.sum() == 1, "the one infinity point should survive as w = 0"
     out_bitmaps = np.asarray(out.patch_bitmaps)
@@ -487,11 +487,11 @@ def _project_direction(recon, d: np.ndarray, image_idx: int, margin: float = 0.0
     return uv
 
 
-def test_compact_drops_points_without_consensus_bitmap(
+def test_compact_drops_points_without_a_valid_bitmap(
     seoul_bull_workspace: Path,
 ):
     """The validity mask is a hard cull: a point with enough kept views but no
-    valid consensus bitmap (``valid[pid] == False`` — the refiner produced no
+    valid stored bitmap (``valid[pid] == False`` — the refiner produced no
     representative) is dropped by the final compact instead of being kept with an
     all-black bitmap."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -571,3 +571,16 @@ def test_drop_grazing_observations_skips_points_at_infinity():
     # Infinity point: untouched despite the (meaningless) grazing geometry.
     assert len(by_pid[1]["views"]) == 1
     assert dropped == 1
+
+
+def test_reference_observations_from_images_takes_the_first_observation():
+    """A track with two observations in the reference image names the first."""
+    recon = SimpleNamespace(
+        # Point 0 sees images 3, 5, 5; point 1 sees 2, 2; point 2 sees 4.
+        track_point_indexes=np.array([0, 0, 0, 1, 1, 2]),
+        track_image_indexes=np.array([3, 5, 5, 2, 2, 4]),
+        observation_counts=np.array([3, 2, 1]),
+    )
+    out = reference_observations_from_images(recon, np.array([5, 2, 7]))
+    np.testing.assert_array_equal(out, [1, 0, -1])
+    assert out.dtype == np.int32

@@ -20,7 +20,9 @@ from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import (
     AddPatchBitmapsTransform,
+    BundleAdjustTransform,
     DropPatchBitmapsTransform,
+    LocalizeKeypointsTransform,
     RefineKeypointsTransform,
     RefineNormalsTransform,
 )
@@ -60,6 +62,58 @@ def _other_references(recon: SfmrReconstruction) -> np.ndarray:
     stored[::5] = -1
     assert moved.any() and (stored >= 0).any()
     return stored
+
+
+def _reference_images(recon: SfmrReconstruction, refs=None) -> np.ndarray:
+    """The image each point's reference observation is in, -1 for none."""
+    refs = np.asarray(recon.reference_observations if refs is None else refs).astype(
+        np.int64
+    )
+    counts = np.asarray(recon.observation_counts).astype(np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    images = np.asarray(recon.track_image_indexes).astype(np.int64)
+    return np.where(refs >= 0, images[offsets + np.maximum(refs, 0)], -1)
+
+
+def _point_images(recon: SfmrReconstruction, p: int) -> np.ndarray:
+    counts = np.asarray(recon.observation_counts).astype(np.int64)
+    start = int(counts[:p].sum())
+    return np.asarray(recon.track_image_indexes)[start : start + counts[p]]
+
+
+def _assert_references_follow_their_images(
+    recon: SfmrReconstruction,
+    stored: np.ndarray,
+    out: SfmrReconstruction,
+    *,
+    picks: bool,
+) -> tuple[int, int]:
+    """Each output point, found by its position among ``recon``'s (the
+    compaction does not move it), names the image its stored reference was
+    in where its new track still holds that image. Where it does not, the
+    point names no reference, or with ``picks`` (a pass that renders bitmaps)
+    may name the observation its new bitmap is the tile of. Returns how many
+    references were kept and how many images were dropped."""
+    want = _reference_images(recon, stored)
+    got = _reference_images(out)
+    src = np.asarray(recon.positions)
+    kept = lost = 0
+    for k, position in enumerate(np.asarray(out.positions)):
+        distances = np.linalg.norm(src - position, axis=1)
+        nearest, second = np.partition(distances, 1)[:2]
+        if second <= nearest:
+            continue
+        s = int(np.argmin(distances))
+        if want[s] < 0:
+            continue
+        if want[s] in _point_images(out, k):
+            assert got[k] == want[s], k
+            kept += 1
+        else:
+            assert got[k] == -1 or (picks and got[k] in _point_images(out, k)), k
+            lost += 1
+    assert kept > 0
+    return kept, lost
 
 
 def _assert_drop_then_add_reproduces(out: SfmrReconstruction, sampler="per_view"):
@@ -115,38 +169,38 @@ def test_refine_normals_keeps_stored_references(embedded):
     np.testing.assert_array_equal(np.asarray(bare.reference_observations), stored)
 
 
-def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded):
+@pytest.mark.parametrize("rounds", [1, 2])
+def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded, rounds):
     stored = _other_references(embedded)
     recon = embedded.clone_with_changes(reference_observations=stored)
-    counts = np.asarray(recon.observation_counts).astype(np.int64)
-    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
-    images_of = np.asarray(recon.track_image_indexes).astype(np.int64)
-    want = np.where(stored >= 0, images_of[offsets + np.maximum(stored, 0)], -1)
-
     out = embed_patches(
-        recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=1
+        recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=rounds
     )
-    refs = np.asarray(out.reference_observations)
-    out_counts = np.asarray(out.observation_counts).astype(np.int64)
-    out_offsets = np.concatenate([[0], np.cumsum(out_counts)[:-1]])
-    out_images = np.asarray(out.track_image_indexes).astype(np.int64)
-    # Find each survivor's source by its position, which the compaction does
-    # not move, leaving out a position two source points share.
-    src = np.asarray(recon.positions)
-    kept = 0
-    for k, position in enumerate(np.asarray(out.positions)):
-        distances = np.linalg.norm(src - position, axis=1)
-        nearest, second = np.partition(distances, 1)[:2]
-        if second <= nearest:
-            continue
-        s = int(np.argmin(distances))
-        track = out_images[out_offsets[k] : out_offsets[k] + out_counts[k]]
-        if want[s] >= 0 and want[s] in track:
-            assert refs[k] >= 0
-            assert out_images[out_offsets[k] + refs[k]] == want[s], k
-            kept += 1
-    assert kept > 0
+    _assert_references_follow_their_images(recon, stored, out, picks=True)
     _assert_drop_then_add_reproduces(out)
+
+
+def test_localize_keypoints_remaps_stored_references(embedded):
+    """The localizer rebuilds the tracks and drops the bitmaps; each point keeps
+    its reference where its track still holds that image, and -1 where the
+    localizer dropped it."""
+    stored = _other_references(embedded)
+    recon = embedded.clone_with_changes(reference_observations=stored)
+    out = LocalizeKeypointsTransform().apply(recon)
+    assert out.patch_bitmaps is None
+    _assert_references_follow_their_images(recon, stored, out, picks=False)
+
+
+def test_bundle_adjust_keeps_stored_references(embedded):
+    """Bundle adjustment rebuilds the tracks from its own solve; every point
+    keeps the reference to the same image."""
+    stored = _other_references(embedded)
+    recon = embedded.clone_with_changes(reference_observations=stored)
+    out = BundleAdjustTransform().apply(recon)
+    assert out.point_count == recon.point_count
+    np.testing.assert_array_equal(
+        _reference_images(out), _reference_images(recon, stored)
+    )
 
 
 def test_render_bitmaps_referenced_only_skips_points_at_minus_one(embedded):

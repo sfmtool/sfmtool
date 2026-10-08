@@ -289,8 +289,14 @@ rule picks among the refined views, named in `KeypointRefinement::reference`
 the rule picks none, or reaches its pick only through its last fallback
 (`ReferenceRender::stored_reference`), it is the fused mean below and names no
 view. Because the
-refiner settles the final keypoints, this is where `sfm embed-patches`' stored
-bitmaps come from. Two properties matter to consumers:
+refiner settles the final keypoints, `sfm embed-patches` takes a point's
+reference observation from the refiner's pick where the point stores none.
+It then renders the bitmap of every point with a reference again from that
+observation, at the compacted value's stored keypoints and frame
+(`render_from_references`,
+[embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md)),
+so only a fused mean, at `-1`, is stored as the refiner rendered it.
+Two properties matter to consumers:
 
 - **Each view is rendered with the refine `sampler`**, the sampler rule's
   choice by default, the same sampler its refinement read it with.

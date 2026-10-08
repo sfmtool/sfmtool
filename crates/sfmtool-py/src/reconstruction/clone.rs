@@ -863,8 +863,16 @@ fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -
 /// points are the same points: unchanged where the tracks are, and where the
 /// tracks were replaced, each point's reference moves to the observation of
 /// the same image in its new track, `-1` where there is none. Every row is
-/// `-1` where the point count changed, since there is no mapping from the old
-/// points to the new, and for a frame that is new.
+/// `-1` for a frame that is new.
+///
+/// Two changes leave no way to carry a reference, and are refused when the
+/// input names any reference (a row `>= 0`) and the result keeps patch frames
+/// without a `reference_observations` value: a changed point count, since
+/// there is no mapping from the old points to the new, and replaced tracks
+/// with changed image names, since a reference is carried across new tracks by
+/// its image's index, which renamed images no longer pin. Resetting every row
+/// to `-1` there would cut each stored bitmap from its observation without a
+/// word, so the caller passes the remapped column (or `-1` rows) instead.
 fn settle_reference_observations(
     inner: &SfmrReconstruction,
     recon: &mut SfmrReconstruction,
@@ -893,11 +901,27 @@ fn settle_reference_observations(
         recon.point_set.reference_observations = None;
         return Ok(());
     }
-    let carried = inner
-        .point_set
-        .reference_observations
-        .as_ref()
-        .filter(|_| point_count == old_point_count);
+    let names_changed = inner.image_table.images.len() != recon.image_table.images.len()
+        || inner
+            .image_table
+            .images
+            .iter()
+            .zip(&recon.image_table.images)
+            .any(|(a, b)| a.name != b.name);
+    let carried = inner.point_set.reference_observations.as_ref();
+    if carried.is_some_and(|old| old.iter().any(|&r| r >= 0)) {
+        if point_count != old_point_count {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "clone_with_changes(): the point count changed and the result keeps patch                  frames, but reference_observations was not passed; the input's references                  cannot be mapped to the new points, so pass the remapped column (-1 for a                  point with no reference observation)",
+            ));
+        }
+        if replacing_tracks && names_changed {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "clone_with_changes(): the tracks and image_names were both replaced and the                  result keeps patch frames, but reference_observations was not passed; the                  input's references are carried across new tracks by image index, which the                  new image names no longer pin, so pass the remapped column (-1 for a point                  with no reference observation)",
+            ));
+        }
+    }
+    let carried = carried.filter(|_| point_count == old_point_count);
     recon.point_set.reference_observations = Some(match carried {
         None => vec![NO_REFERENCE_OBSERVATION; point_count],
         Some(old) if !replacing_tracks => old.clone(),

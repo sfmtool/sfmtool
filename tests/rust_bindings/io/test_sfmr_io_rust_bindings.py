@@ -284,6 +284,74 @@ class TestReferenceObservations:
         )
         assert shorter.reference_observations is None
 
+    def test_a_clone_that_cannot_carry_the_references_is_refused(
+        self, embedded_patches_sfmr
+    ):
+        # A changed point count, or new tracks over renamed images, leaves no
+        # way to carry a reference; resetting every row to -1 would cut each
+        # bitmap from its observation without a word.
+        recon = SfmrReconstruction.load(embedded_patches_sfmr)
+        refs = np.zeros(recon.point_count, dtype=np.int32)
+        refs[::4] = -1
+        recon = recon.clone_with_changes(reference_observations=refs)
+        keep = np.ones(recon.point_count, dtype=bool)
+        keep[-1] = False
+        small = recon.filter_points_by_mask(keep)
+        columns = dict(
+            positions=np.ascontiguousarray(np.asarray(small.positions_xyzw)),
+            colors=np.ascontiguousarray(np.asarray(small.colors)),
+            errors=np.ascontiguousarray(np.asarray(small.errors)),
+            normals=np.ascontiguousarray(np.asarray(small.normals)),
+            track_image_indexes=np.ascontiguousarray(small.track_image_indexes),
+            track_feature_indexes=np.zeros(
+                len(small.track_image_indexes), dtype=np.uint32
+            ),
+            track_point_indexes=np.ascontiguousarray(small.track_point_indexes),
+            keypoints_xy=np.ascontiguousarray(small.keypoints_xy),
+            observation_confidence=np.ascontiguousarray(small.observation_confidence),
+            patches=small.patches,
+            patch_bitmaps=np.ascontiguousarray(np.asarray(small.patch_bitmaps)),
+        )
+        if small.normal_confidence is not None:
+            columns["normal_confidence"] = np.ascontiguousarray(small.normal_confidence)
+        with pytest.raises(ValueError, match="point count changed"):
+            recon.clone_with_changes(**columns)
+        # Passing the column, remapped by the caller, is accepted.
+        shorter = recon.clone_with_changes(
+            **columns, reference_observations=small.reference_observations
+        )
+        np.testing.assert_array_equal(shorter.reference_observations, refs[:-1])
+        # An input that names no reference loses nothing, and is accepted.
+        unnamed = recon.clone_with_changes(
+            reference_observations=np.full(recon.point_count, -1, dtype=np.int32)
+        )
+        assert np.all(
+            unnamed.clone_with_changes(**columns).reference_observations == -1
+        )
+
+        # New tracks over swapped image names: the image index no longer
+        # names the image the reference was in.
+        names = list(recon.image_names)
+        names[0], names[1] = names[1], names[0]
+        tracks = dict(
+            track_image_indexes=np.ascontiguousarray(recon.track_image_indexes),
+            track_feature_indexes=np.zeros(
+                len(recon.track_image_indexes), dtype=np.uint32
+            ),
+            track_point_indexes=np.ascontiguousarray(recon.track_point_indexes),
+            keypoints_xy=np.ascontiguousarray(recon.keypoints_xy),
+            observation_confidence=np.ascontiguousarray(recon.observation_confidence),
+        )
+        with pytest.raises(ValueError, match="image_names"):
+            recon.clone_with_changes(**tracks, image_names=names)
+        # Either change alone carries the references.
+        np.testing.assert_array_equal(
+            recon.clone_with_changes(**tracks).reference_observations, refs
+        )
+        np.testing.assert_array_equal(
+            recon.clone_with_changes(image_names=names).reference_observations, refs
+        )
+
     def test_references_stay_when_the_bitmaps_change_or_go(
         self, embedded_patches_sfmr, tmp_path
     ):

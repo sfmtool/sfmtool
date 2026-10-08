@@ -47,7 +47,7 @@ def synthetic_bitmaps(n: int, resolution: int = R) -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def embedded_with_bitmaps(seoul_bull_workspace_once) -> SfmrReconstruction:
-    """An ``embedded_patches`` recon carrying per-point consensus bitmaps."""
+    """An ``embedded_patches`` recon carrying per-point stored bitmaps."""
     recon = SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
         normal="mean_viewing", extent_value=5.0
     )

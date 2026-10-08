@@ -824,7 +824,7 @@ row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
-Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Reference  Status  ...  Name
+Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Reference  Bitmap  Status  ...  Name
 Thresholds              [70]% whole         [2.5] px whole      [3.0] px   [6.0] px
                         [70]% mid
 ```
@@ -956,6 +956,7 @@ name is *Sort by …*. The keys are what the rows print:
 | Shift | the shift in px |
 | Zoom | the geometric mean of the two zooms, `1 / sqrt(abs(det J))` |
 | Reference | what the reference-view rule decided: the reference first, then the rows turned away for sharpness, agreement, a ninth, the angle, clipping and coverage, in that order, so the rows nearest to being picked come first; an `out` row has no key |
+| Bitmap | the blur-matched score against the stored bitmap, which is the plain score where the pair was read plain, the bitmap's own row reading 1; a row with no score has no key |
 | Status | the Status cell's text, compared character by character |
 | Name | the image's file name, compared character by character |
 
@@ -1062,6 +1063,7 @@ that is not there prints a bare `-`, with no unit.
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
 | Reference | `-` | what the reference-view rule decided about the row over its viewing angle and pair ZNCC: `reference` over `24°, 87%` on a green cell for the row it picks, or the test that turned the row away, `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less` or `less sharp`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell gives the reason and every reading |
+| Bitmap | `-` | on the row the stored bitmap is the tile of (the track's reference observation), `bitmap` over `100%` on a green cell; on every other row its ZNCC with the bitmap over the blur-matched score after an arrow, `sharper` for a row sharper than the bitmap along every direction, or nothing where the pair was read plain; `-` where the track has no bitmap or the row was not scored; hovering the cell gives both scores and the blur's width |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
@@ -1354,10 +1356,10 @@ them, and every reading: the viewing angle and the tilt direction (the
 direction in the patch's plane the ray from the camera leans along, from `u`
 towards `v`), the coverage, the clipped share, the pair ZNCC, the cell deficit,
 and the pair ZNCC of each ninth. The cell prints `-` at the cluster stage,
-before the track is evaluated, and where it could not be evaluated. A fit
-stores the picked row's tile as the bitmap, except where the rule reached the
-pick only through its last fallback, when it stores the fused mean of the `in`
-rows and names no row
+before the track is evaluated, and where it could not be evaluated. A render
+stores the tile of the track's reference where it is defined, and the picked
+row's tile only where it is not, or the fused mean of the `in` rows, naming no
+row, where the rule reached that pick only through its last fallback
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 stored bitmap"); no bar reads the pick.
 

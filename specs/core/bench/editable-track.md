@@ -1562,10 +1562,9 @@ bitmap is the render of. The two differ where a defined reference is no
 longer the row the rule picks; Track View's *Reference* column and the wire's
 `reference_observation` show the rule's pick, and Track View's *Bitmap*
 column and the wire's `bitmap_observation` show the reference in use.
-Replacing a defined reference with the rule's current pick is a separate
-operation, not built
-([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
-open questions).
+No operation replaces a defined reference with the rule's current pick; see
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+§ "Open questions", "Replacing the reference".
 
 A commit writes `TrackPayload::reference` as the point's reference
 observation, with or without a bitmap: with one, it is the row the bitmap is
@@ -3233,9 +3232,9 @@ unit-tested in `normal.rs` itself.
   bitmap from before the reference was recorded, or the render of a row since
   removed) scores every row against that
   bitmap, plain and blur-matched, as the scorer does when called directly.
-- Rendering the bitmap where the track stands (`render_bitmap_in_place`) stores
-  the tile of the row the evaluation's reference-view rule picks and names that
-  row; the next evaluation scores that row 1 without computing it, and a commit
+- On a track with no reference, rendering the bitmap where the track stands
+  (`render_bitmap_in_place`) stores the tile of the row the evaluation's
+  reference-view rule picks and names that row; the next evaluation scores that row 1 without computing it, and a commit
   writes its place in the stored track.
 - A track opened from a file whose reference is an `in` row the rule does not
   pick renders from that reference, and keeps rendering from it after a patch

@@ -105,8 +105,8 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   two-view floor; the absolute ones stand, so a point can come out of
   localization below `--min-views` and be dropped whole.
 - **Reference bitmaps.** Each surviving point's stored bitmap is the tile of
-  its **reference view**, the view the reference-view rule picks among the
-  point's views at the final per-view keypoints of the sub-pixel
+  its **reference observation**, which the reference-view rule picks among the
+  point's views where the point has none, at the final per-view keypoints of the sub-pixel
   keypoint-refinement stage (`refine_keypoints(render_bitmaps=True)`; with
   `--subpixel 0` the stage still runs render-only at the localizer's
   keypoints), and `tracks/reference_observations` records which observation it
@@ -118,7 +118,7 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   input that is already `embedded_patches` and stores reference observations
   keeps them: the compaction carries each point's reference to the
   observation of the same image in its final track
-  (`compact_to_embedded_patches(keep_references=True)`), so only a point at
+  (`compact_to_embedded_patches`), so only a point at
   `-1`, or one whose reference image the refinement dropped, takes the rule's
   pick. Every point with a reference, kept or picked, then has its bitmap
   rendered again from that observation through the compacted value's stored

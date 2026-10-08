@@ -405,9 +405,12 @@ impl PySfmrReconstruction {
     /// or drops the bitmaps or passes a new ``patches`` frame for the same
     /// points. A call that replaces the tracks moves each reference to the
     /// observation of the same image in the point's new track (``-1`` where
-    /// there is none), and one that changes the point count resets it to
-    /// ``-1``. A point left with a zero patch frame keeps its reference: the
-    /// observation is still in its track.
+    /// there is none). A call that keeps patch frames and either changes the
+    /// point count or replaces the tracks together with the image names has no
+    /// way to carry the references, and is refused unless it passes
+    /// ``reference_observations`` (or the input names none). A point left with
+    /// a zero patch frame keeps its reference: the observation is still in its
+    /// track.
     #[getter]
     fn reference_observations<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<i32>>> {
         let references = self.inner.point_set.reference_observations.as_ref()?;
@@ -746,6 +749,12 @@ impl PySfmrReconstruction {
     /// If ``drop_orphaned_points`` is true, 3D points with zero remaining
     /// observations are removed and point IDs are remapped. Otherwise, all
     /// 3D points are kept (some may have zero observations).
+    ///
+    /// Each kept point's :attr:`reference_observations` entry moves with its
+    /// observation to the observation's place in the shortened track. A point
+    /// whose reference observation was in a dropped image gets ``-1`` and
+    /// keeps its patch bitmap, which is then the render of an observation the
+    /// point no longer has.
     #[pyo3(signature = (image_indices, drop_orphaned_points=false))]
     fn subset_by_image_indices(
         &self,
@@ -767,7 +776,9 @@ impl PySfmrReconstruction {
     /// Filter 3D points by a boolean mask, returning a new reconstruction.
     ///
     /// Points where `mask[i]` is `true` are kept. Tracks are filtered and
-    /// remapped to contiguous point IDs. Image data is copied unchanged.
+    /// remapped to contiguous point IDs. Image data is copied unchanged. Each
+    /// kept point keeps its :attr:`reference_observations` entry and its patch
+    /// bitmap, since its track is unchanged.
     fn filter_points_by_mask(&self, mask: PyReadonlyArray1<bool>) -> PyResult<Self> {
         let mask_slice = mask.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("mask must be a contiguous array: {e}"))
@@ -873,6 +884,12 @@ impl PySfmrReconstruction {
     /// image's ``image_file_hashes`` entry is read from the ``.sift`` metadata
     /// (``image_file_xxh128`` — a minimal metadata read). The ``.sift`` files must
     /// still be present where the reconstruction was created.
+    ///
+    /// The result stores no patch bitmaps and keeps each point's
+    /// :attr:`reference_observations` entry, so a later render renders a point
+    /// from its reference and runs the reference-view rule only for a point at
+    /// ``-1``. An input without the column (no patch frames) gives every point
+    /// ``-1``.
     ///
     /// Args:
     ///     normal: Patch-frame normal policy — ``"mean_viewing"`` (default; mean

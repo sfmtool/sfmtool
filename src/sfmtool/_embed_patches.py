@@ -860,8 +860,6 @@ def embed_patches(
     #    reference is then rendered again from the compacted value's stored
     #    (f32) keypoints and frames, so dropping and adding the bitmaps later
     #    gives the same bytes.
-    stored = work_recon.reference_observations
-    keep_references = stored is not None and bool(np.any(np.asarray(stored) >= 0))
     with _timed_step(log, "  compacting survivors into embedded_patches..."):
         result = compact_to_embedded_patches(
             work_recon,
@@ -871,7 +869,6 @@ def embed_patches(
             patch_bitmaps=bitmaps,
             valid=valid,
             min_views=min_views,
-            keep_references=keep_references,
         )
     if result.patch_bitmap_resolution is not None:
         with _timed_step(log, "  rendering bitmaps from the stored references..."):

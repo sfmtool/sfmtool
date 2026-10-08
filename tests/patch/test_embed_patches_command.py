@@ -117,9 +117,9 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     """The full orchestration runs on an infinity-bearing input (feature_size
     sizing doesn't choke on w=0 points) and produces a valid embedded_patches
     reconstruction; any surviving infinity point stays at infinity. Every kept
-    point — finite or infinity — carries a real consensus bitmap (nonzero alpha):
+    point — finite or infinity — carries a real stored bitmap (nonzero alpha):
     culled points are dropped instead of kept with an all-black bitmap, and
-    infinity points get a fused consensus texture, not a zero row."""
+    infinity points get a rendered texture, not a zero row."""
     import cv2
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -154,7 +154,7 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     # The run completed and verifies; any kept infinity point is still w = 0.
     assert int(np.asarray(out.point_is_at_infinity).sum()) <= 1
 
-    # The two-bugs invariant: every surviving point has a consensus bitmap with
+    # The two-bugs invariant: every surviving point has a stored bitmap with
     # cross-view agreement somewhere (alpha > 0) — no all-black rows survive.
     bitmaps = np.asarray(out.patch_bitmaps)
     assert bitmaps.shape[0] == out.point_count
@@ -280,8 +280,8 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
 def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
     """`--refine-max-views` caps only the round-2+ normal-refinement *basis*
     (see specs/core/patch/patch-normal-refine-view-subset.md): every observation stays
-    in the output and the consensus bitmaps are still fused over the full view
-    set, so a capped run must produce the same output shape (point and
+    in the output and each stored bitmap's reference view is still picked from
+    the full view set, so a capped run must produce the same output shape (point and
     observation counts) as the all-views default — within a hair's tolerance:
     the cap never drops an observation itself, but the slightly different
     round-2 normal can flip a borderline grazing-drop / sub-pixel-cull decision
@@ -381,7 +381,7 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
     Repaint the workspace images red-dominant on disk (blue heavily suppressed;
     red + green carry the grayscale texture), then drive the pipeline through
     ``read_workspace_image`` — the exact load boundary the bug lived in. Every
-    rendered consensus bitmap must then carry a much larger red channel (0) than
+    rendered stored bitmap must then carry a much larger red channel (0) than
     blue channel (2). Under the old BGR behaviour ``read_workspace_image`` handed
     the renderer blue in channel 0, so the stored channel 0 held the (suppressed)
     blue and channel 2 held the red — inverting this ratio and FAILING the test.
