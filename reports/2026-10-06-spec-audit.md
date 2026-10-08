@@ -950,11 +950,7 @@ Read 2026-09-26; open items above.
    - Both format specs still name `sfm` commands, repo paths and library types
      in the format proper: 5 confirmed passages in matches (plus 3 more found by
      the deep read) and 3 in sfmr (plus 1).
-<<<<<<< HEAD
-     > _Status (2026-10-07): **Partially done** — the sfmr passages (3 plus 1) are fixed, branch `spec-fix-1006-30-sfmr-failure6`; the matches passages are on another open branch._
-=======
-     > _Status (2026-10-07): **Partially done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, branch `spec-fix-1006-29-matches-failure6`; the sfmr passages are still open._
->>>>>>> origin/main
+     > _Status (2026-10-07): **Done** — the matches passages are restated in format terms, with the names moved to that spec's *Implementations* section, PR #842; the sfmr passages (3 plus 1) are fixed the same way, PR #843._
    - Three entries never say which version introduced them: `world_space_unit`
      and `infinity_point_count` in `.sfmr`, and `.matches` `refine_options`.
    - The `.sfmr` writer replaces a zero normal on a finite point, which the
