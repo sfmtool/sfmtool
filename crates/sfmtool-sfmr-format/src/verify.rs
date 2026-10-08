@@ -700,6 +700,26 @@ fn verify_tracks_section<R: Read + Seek>(
     let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
     let track_point_indexes_raw = read_zst_entry(archive, &point_indexes_name)?;
     tracks_hasher.update(&track_point_indexes_raw);
+    // tracks/reference_observations (version 12+, present exactly with the
+    // patch frame; sorts after point_indexes)
+    let points3d_meta: serde_json::Value =
+        serde_json::from_slice(&read_zst_entry(archive, entries::points3d_metadata())?)
+            .unwrap_or(serde_json::Value::Null);
+    let has_uv_frames = points3d_meta
+        .get("has_uv_frames")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let reference_raw = if has_uv_frames && metadata.version >= SFMR_REFERENCE_OBSERVATIONS_VERSION
+    {
+        let raw = read_zst_entry(
+            archive,
+            &entries::tracks_reference_observations(point_count),
+        )?;
+        tracks_hasher.update(&raw);
+        Some(raw)
+    } else {
+        None
+    };
 
     let tracks_hash = tracks_hasher.digest128();
     if format_hash(tracks_hash) != stored.tracks_xxh128 {
@@ -737,6 +757,24 @@ fn verify_tracks_section<R: Read + Seek>(
         }
         if obs_counts.iter().any(|&c| c < 1) {
             errors.push("observation_counts contains values < 1".into());
+        }
+        if let Some(raw) = &reference_raw {
+            let size = std::mem::size_of::<i32>();
+            if raw.len() != point_count * size {
+                errors.push(format!(
+                    "tracks/reference_observations holds {} bytes, expected {}",
+                    raw.len(),
+                    point_count * size
+                ));
+            } else {
+                let values: Vec<i32> = raw
+                    .chunks_exact(size)
+                    .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                if let Err(e) = validate_reference_observations(&values, &obs_counts) {
+                    errors.push(e);
+                }
+            }
         }
     }
 

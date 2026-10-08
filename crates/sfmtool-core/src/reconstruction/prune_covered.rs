@@ -593,6 +593,9 @@ fn prune_rows(
             .observation_confidence
             .as_ref()
             .map(|c| kept_obs.iter().map(|&row| c[row]).collect()),
+        // A point whose reference observation is pruned keeps its bitmap and
+        // loses its reference.
+        reference_observations: set.select_reference_observations(&keep_idx, &kept_obs),
         observation_offsets: Vec::new(),
         image_feature_to_point: Vec::new(),
         max_track_feature_index: Vec::new(),

@@ -22,8 +22,8 @@ use xxhash_rust::xxh3::Xxh3;
 
 use sfmtool_archive_io::format_hash;
 use sfmtool_sfmr_format::{
-    ContentHash, SfmrError, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
-    POINT_CONSTRAINT_RANGED,
+    ContentHash, SfmrError, NO_REFERENCE_IMAGE, NO_REFERENCE_OBSERVATION, POINT_CONSTRAINT_FREE,
+    POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
 use crate::patch::cloud::OrientedPatch;
@@ -74,6 +74,14 @@ pub enum EditError {
     UnknownConstraint(u8),
     /// A constraint whose reference image the base's image table does not hold.
     ConstraintImageOutOfRange(u32),
+    /// A reference observation that is neither `-1` nor an index into the
+    /// record's observations.
+    ReferenceObservationOutOfRange {
+        /// The record's reference observation.
+        reference: i32,
+        /// How many observations the record carries.
+        observations: usize,
+    },
     /// [`RowMap::by_scan`] was given an image map that is not one entry per
     /// image of the *before* reconstruction.
     ScanImageMap {
@@ -117,6 +125,14 @@ impl std::fmt::Display for EditError {
                           does not hold"
                 )
             }
+            EditError::ReferenceObservationOutOfRange {
+                reference,
+                observations,
+            } => write!(
+                f,
+                "reference observation {reference} is neither -1 nor one of the record's \
+                 {observations} observations"
+            ),
             EditError::ScanImageMap { got, expected } => write!(
                 f,
                 "the image map has {got} entries and the original reconstruction has \
@@ -171,6 +187,10 @@ pub struct PointRecord {
     /// The constraint triple `(constraint, distance, reference image)`, when the
     /// base carries the columns.
     pub constraint: Option<(u8, f64, u32)>,
+    /// Which of [`Self::observations`] the patch bitmap is the render of, as an
+    /// index into them, or `-1` for none, when the base carries the column
+    /// (`tracks/reference_observations`, present with the patch frame).
+    pub reference_observation: Option<i32>,
 }
 
 impl PointRecord {
@@ -202,6 +222,7 @@ impl PointRecord {
             && self.patch_bitmap == other.patch_bitmap
             && self.normal_confidence == other.normal_confidence
             && constraint_triples_agree(self.constraint, other.constraint)
+            && self.reference_observation == other.reference_observation
     }
 }
 
@@ -368,6 +389,15 @@ impl<'a> PointView<'a> {
         })
     }
 
+    /// The index, among [`Self::observations`], of the observation whose render
+    /// the patch bitmap is, `-1` for none, when the base carries the column.
+    pub fn reference_observation(&self) -> Option<i32> {
+        self.set
+            .reference_observations
+            .as_ref()
+            .map(|r| r[self.local])
+    }
+
     /// The owned form of everything above.
     pub fn to_record(&self) -> PointRecord {
         let observations = self
@@ -389,6 +419,7 @@ impl<'a> PointView<'a> {
             patch_bitmap: self.patch_bitmap().map(|b| b.to_owned()),
             normal_confidence: self.normal_confidence(),
             constraint: self.constraint(),
+            reference_observation: self.reference_observation(),
         }
     }
 }
@@ -499,6 +530,7 @@ fn point_sets_equal(a: &PointSet, b: &PointSet) -> bool {
         && a.patch_bitmaps_y_x_rgba.as_deref() == b.patch_bitmaps_y_x_rgba.as_deref()
         && a.normal_confidence == b.normal_confidence
         && constraints_agree(&a.point_constraints, &b.point_constraints)
+        && a.reference_observations == b.reference_observations
 }
 
 /// Whether two constraint columns say the same thing.
@@ -825,6 +857,12 @@ impl EditedReconstruction {
         self.base.point_set.point_constraints.is_some()
     }
 
+    /// Whether points carry a reference observation, which they do exactly
+    /// when they carry a patch frame.
+    pub fn has_reference_observations(&self) -> bool {
+        self.base.point_set.reference_observations.is_some()
+    }
+
     /// How many camera models the **posed** images of this value are taken
     /// through, which is zero when none of them carries a pose.
     ///
@@ -976,6 +1014,9 @@ impl EditedReconstruction {
             c.constraint_distances.push(d);
             c.constraint_reference_images.push(r);
         }
+        if let Some(r) = &mut set.reference_observations {
+            r.push(record.reference_observation.expect("validated present"));
+        }
         set.rebuild_derived_fields(image_count);
         self.replaces.push(replaces);
         Ok(base_count as u32 + local as u32)
@@ -1037,6 +1078,21 @@ impl EditedReconstruction {
             self.has_point_constraints(),
             record.constraint.is_some(),
         )?;
+        check_column(
+            "reference_observations",
+            self.has_reference_observations(),
+            record.reference_observation.is_some(),
+        )?;
+        if let Some(r) = record.reference_observation {
+            if r != NO_REFERENCE_OBSERVATION
+                && !(r >= 0 && (r as usize) < record.observations.len())
+            {
+                return Err(EditError::ReferenceObservationOutOfRange {
+                    reference: r,
+                    observations: record.observations.len(),
+                });
+            }
+        }
         if let (Some(bitmap), Some(base)) = (
             &record.patch_bitmap,
             &self.base.point_set.patch_bitmaps_y_x_rgba,
@@ -1306,12 +1362,31 @@ impl EditedReconstruction {
                 .collect()
         });
 
+        // A point's observations are copied as one run in their stored order,
+        // so its index within the run is unchanged.
+        let reference_observations = base.reference_observations.as_ref().map(|r| {
+            point_rows
+                .iter()
+                .map(|&(is_base, i)| {
+                    if is_base {
+                        r[i]
+                    } else {
+                        self.added
+                            .reference_observations
+                            .as_ref()
+                            .expect("column parity")[i]
+                    }
+                })
+                .collect()
+        });
+
         PointSet {
             points,
             observation_counts,
             tracks,
             observations,
             observation_confidence,
+            reference_observations,
             patch_u_halfvec_xyz: self.merge_halfvec(&base.patch_u_halfvec_xyz, &point_rows, true),
             patch_v_halfvec_xyz: self.merge_halfvec(&base.patch_v_halfvec_xyz, &point_rows, false),
             patch_bitmaps_y_x_rgba: self.merge_bitmaps(&point_rows),
@@ -1670,6 +1745,7 @@ fn empty_like(base: &PointSet, image_count: usize) -> PointSet {
             .as_ref()
             .map(|_| PointConstraintColumns::all_free(0)),
         observation_confidence: base.observation_confidence.as_ref().map(|_| Vec::new()),
+        reference_observations: base.reference_observations.as_ref().map(|_| Vec::new()),
         observation_offsets: vec![0],
         image_feature_to_point: vec![HashMap::new(); image_count],
         max_track_feature_index: vec![0; image_count],

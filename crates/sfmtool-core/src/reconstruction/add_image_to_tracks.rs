@@ -1040,10 +1040,24 @@ fn insert_observations(
         .as_ref()
         .map(|_| Vec::with_capacity(total));
     let mut counts = set.observation_counts.clone();
+    // A point's reference observation moves down one place where the new
+    // observation lands before it; the bitmap is not re-rendered.
+    let mut references = set.reference_observations.clone();
     for (p, count) in counts.iter_mut().enumerate() {
         let start = set.observation_offsets[p];
         let end = set.observation_offsets[p + 1];
         let mut pending = added.get(&(p as u32)).copied();
+        if let (Some(references), Some(_)) = (references.as_mut(), pending) {
+            let r = references[p];
+            if r >= 0 {
+                let landed_before = (start..end)
+                    .position(|row| set.tracks[row].image_index > image)
+                    .is_some_and(|k| k as i32 <= r);
+                if landed_before {
+                    references[p] = r + 1;
+                }
+            }
+        }
         let push_new = |tracks: &mut Vec<TrackObservation>,
                         kp_flat: &mut Vec<f32>,
                         confidence: &mut Option<Vec<u8>>,
@@ -1091,6 +1105,7 @@ fn insert_observations(
         image_file_hashes: image_file_hashes.clone(),
     };
     out.observation_confidence = confidence;
+    out.reference_observations = references;
     out.rebuild_derived_fields(source.image_count());
     next.metadata.observation_count = n as u32;
     // The hashes on a value describe the file it came from, and this value is

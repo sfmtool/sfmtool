@@ -182,7 +182,7 @@ impl From<EditError> for CommitError {
 /// Write `track` into `edited` as one point.
 ///
 /// The record is the track's payload plus its `in` observations' keypoints: the
-/// coordinate it carries, the frame it stands on, the consensus bitmap, the
+/// coordinate it carries, the frame it stands on, the patch bitmap, the
 /// colour read from that bitmap's centre, the normal the frame states, and one
 /// observation per `in` observation with its keypoint and its leave-one-out
 /// ZNCC in `observation_confidence` where the column exists.
@@ -354,6 +354,16 @@ pub fn commit(
             f64::NAN,
             sfmtool_sfmr_format::NO_REFERENCE_IMAGE,
         )),
+        // The observation the bitmap is the render of, where it is written
+        // out: its place in the sorted track. A bitmap whose observation is
+        // no longer `in`, or a fused mean, names none.
+        reference_observation: edited.has_reference_observations().then(|| {
+            payload
+                .reference
+                .filter(|_| payload.bitmap.is_some())
+                .and_then(|r| rows.iter().position(|&(_, i)| i == r))
+                .map_or(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION, |k| k as i32)
+        }),
     };
 
     // ---- The edit ----
@@ -443,7 +453,7 @@ pub fn commit(
     ))
 }
 
-/// The colour the committed point carries: the centre of the consensus bitmap
+/// The colour the committed point carries: the centre of the patch bitmap
 /// when there is one, and the colour the payload carries otherwise.
 ///
 /// The bitmap is the appearance every `in` observation agreed on, so its centre

@@ -933,6 +933,17 @@ fn write_tracks<S: EntrySink>(
         &mut tracks_hasher,
     )?;
 
+    // tracks/reference_observations (version 12+, present exactly with the
+    // patch frame; lexicographically after point_indexes)
+    if let Some(reference_observations) = &data.reference_observations {
+        binary_hashed(
+            sink,
+            &entries::tracks_reference_observations(point_count),
+            bytemuck::cast_slice(reference_observations.as_slice().unwrap()),
+            &mut tracks_hasher,
+        )?;
+    }
+
     Ok(tracks_hasher.digest128())
 }
 
@@ -1062,6 +1073,7 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
     // Build permutation indices and sort by (points3d_index, image_index)
     let mut perm: Vec<usize> = (0..n).collect();
     perm.sort_unstable_by(|&a, &b| p3d[a].cmp(&p3d[b]).then_with(|| img[a].cmp(&img[b])));
+    let p3d_before: Vec<u32> = p3d.to_vec();
 
     // Apply permutation to every present per-observation array.
     let reorder = |arr: &mut ndarray::Array1<u32>, perm: &[usize]| {
@@ -1086,6 +1098,38 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
         let old: Vec<u8> = oc.as_slice().unwrap().to_vec();
         for (i, &pi) in perm.iter().enumerate() {
             oc[i] = old[pi];
+        }
+    }
+    // A reference observation counts within its point's run, so it moves with
+    // the observation it names: the `k`-th of the point's observations in the
+    // order they were handed in, found again in the sorted run.
+    if let Some(reference) = data.reference_observations.as_mut() {
+        // Per point, the input positions of its observations, in input order.
+        let mut runs: Vec<Vec<usize>> = vec![Vec::new(); reference.len()];
+        for (i, &p) in p3d_before.iter().enumerate() {
+            if let Some(run) = runs.get_mut(p as usize) {
+                run.push(i);
+            }
+        }
+        let mut sorted_at = vec![0usize; n];
+        for (i, &pi) in perm.iter().enumerate() {
+            sorted_at[pi] = i;
+        }
+        // Where each point's run starts in the sorted arrays.
+        let mut run_start = vec![usize::MAX; reference.len()];
+        for (i, &p) in data.point_indexes.iter().enumerate() {
+            if let Some(start) = run_start.get_mut(p as usize) {
+                *start = (*start).min(i);
+            }
+        }
+        for (p, r) in reference.iter_mut().enumerate() {
+            if *r < 0 {
+                continue;
+            }
+            *r = match runs[p].get(*r as usize) {
+                Some(&input) => (sorted_at[input] - run_start[p]) as i32,
+                None => NO_REFERENCE_OBSERVATION,
+            };
         }
     }
 }
@@ -1334,6 +1378,24 @@ fn validate_dimensions_with(
             data.observation_counts.len()
         )
     );
+    // The reference observations are present exactly with the patch frame.
+    let has_patch_frame = data.patch_u_halfvec_xyz.is_some();
+    check!(
+        data.reference_observations.is_some() == has_patch_frame,
+        if has_patch_frame {
+            "reference_observations is required with the patch frame".to_string()
+        } else {
+            "reference_observations requires the patch frame".to_string()
+        }
+    );
+    if let Some(reference_observations) = &data.reference_observations {
+        if let Err(e) = validate_reference_observations(
+            reference_observations.as_slice().unwrap(),
+            data.observation_counts.as_slice().unwrap(),
+        ) {
+            check!(false, e);
+        }
+    }
     check!(
         observed_depth_histogram_counts.shape() == [image_count, num_buckets],
         format!(

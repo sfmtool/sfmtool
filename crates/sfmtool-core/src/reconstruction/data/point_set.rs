@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use ndarray::{Array2, Array4};
 
-use sfmtool_sfmr_format::{FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES};
+use sfmtool_sfmr_format::{
+    FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES, NO_REFERENCE_OBSERVATION,
+};
 
 use super::PointConstraintColumns;
 use super::{compute_observation_offsets, count_points_at_infinity, Point3D, TrackObservation};
@@ -157,6 +159,26 @@ pub struct PointSet {
     /// rides along untouched, and every pass that drops or reorders observations
     /// selects its rows in lockstep with `tracks`.
     pub observation_confidence: Option<Vec<u8>>,
+    /// Per point (parallel to `points`), the index of its **reference
+    /// observation** within its own track, `0` to `observation_counts[i] - 1`:
+    /// the observation whose `R×R` render the point's patch bitmap is.
+    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has none. Persisted as
+    /// `tracks/reference_observations` (version 12+).
+    ///
+    /// `Some` exactly when the patch frame is: a file below version 12 with
+    /// patch frames loads with every row `-1`, and
+    /// [`to_sfmr_data`](super::SfmrReconstruction::to_sfmr_data) writes `-1`
+    /// rows for a value that has a frame and no column.
+    ///
+    /// Every pass that drops or reorders points selects its rows in lockstep
+    /// with `points`. A pass that drops or reorders a point's observations
+    /// moves the index with the reference observation
+    /// ([`Self::select_reference_observations`]), `-1` where it drops it. A pass
+    /// that renders a point's bitmap from another observation writes that
+    /// observation's index.
+    ///
+    /// [`NO_REFERENCE_OBSERVATION`]: sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION
+    pub reference_observations: Option<Vec<i32>>,
 
     // --- Derived data (computed from the fields above, not stored in .sfmr) ---
     /// Prefix sum of `observation_counts`: `observation_offsets[i]` is the
@@ -317,6 +339,81 @@ impl PointSet {
         }
 
         self.infinity_point_count = count_points_at_infinity(&self.points);
+    }
+
+    /// The reference observations of a point set built from this one by
+    /// selecting rows: `point_rows[q]` is the point of this set that new point
+    /// `q` is, and `observation_rows` the observation rows of this set, in the
+    /// new set's order, that the new tracks are. `None` where this set carries
+    /// no column.
+    ///
+    /// Each new point's index is where its reference observation landed in its
+    /// new run, `-1` where that observation was not selected or the point had
+    /// no reference. An observation counts as the new point's when this set
+    /// gives it to the point the new point is; the new run starts at the first
+    /// such observation, so `observation_rows` must keep each point's
+    /// observations together, as the tracks are.
+    ///
+    /// ```
+    /// # use sfmtool_core::reconstruction::PointSet;
+    /// # fn run(set: &PointSet) {
+    /// // Keep every point, and drop each point's first observation.
+    /// let points: Vec<usize> = (0..set.point_count()).collect();
+    /// let rows: Vec<usize> = (0..set.point_count())
+    ///     .flat_map(|p| set.observation_offsets[p] + 1..set.observation_offsets[p + 1])
+    ///     .collect();
+    /// let references = set.select_reference_observations(&points, &rows);
+    /// # let _ = references;
+    /// # }
+    /// ```
+    pub fn select_reference_observations(
+        &self,
+        point_rows: &[usize],
+        observation_rows: &[usize],
+    ) -> Option<Vec<i32>> {
+        let references = self.reference_observations.as_ref()?;
+        let mut new_point_of = vec![usize::MAX; self.points.len()];
+        for (q, &p) in point_rows.iter().enumerate() {
+            if new_point_of[p] == usize::MAX {
+                new_point_of[p] = q;
+            }
+        }
+        // Where each old observation row went, and where each new run starts.
+        let mut new_row_of = vec![usize::MAX; self.tracks.len()];
+        let mut run_start = vec![usize::MAX; point_rows.len()];
+        for (k, &row) in observation_rows.iter().enumerate() {
+            new_row_of[row] = k;
+            let q = new_point_of[self.tracks[row].point_index as usize];
+            if q != usize::MAX && run_start[q] == usize::MAX {
+                run_start[q] = k;
+            }
+        }
+        Some(
+            point_rows
+                .iter()
+                .enumerate()
+                .map(|(q, &p)| {
+                    let r = references[p];
+                    if r < 0 {
+                        return NO_REFERENCE_OBSERVATION;
+                    }
+                    let row = self.observation_offsets[p] + r as usize;
+                    match new_row_of.get(row) {
+                        Some(&k) if k != usize::MAX && k >= run_start[q] => {
+                            (k - run_start[q]) as i32
+                        }
+                        _ => NO_REFERENCE_OBSERVATION,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// The observation row of point `point`'s reference observation, or `None`
+    /// where the set carries no column or the point has no reference.
+    pub fn reference_observation_row(&self, point: usize) -> Option<usize> {
+        let r = *self.reference_observations.as_ref()?.get(point)?;
+        (r >= 0).then(|| self.observation_offsets[point] + r as usize)
     }
 
     /// Check that the observation-source columns are parallel to the structures

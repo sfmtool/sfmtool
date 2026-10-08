@@ -35,6 +35,12 @@ pub(super) fn fixture(num_points: usize) -> SfmrReconstruction {
         |(i, y, x, c)| ((i * 13 + y * 5 + x * 3 + c) % 256) as u8,
     )));
     recon.point_set.normal_confidence = Some((0..p).map(|i| (i * 7 % 256) as u8).collect());
+    // Every demo point has two observations.
+    recon.point_set.reference_observations = Some(
+        (0..p)
+            .map(|i| if i % 3 == 0 { -1 } else { (i % 2) as i32 })
+            .collect(),
+    );
     let mut constraints = PointConstraintColumns::all_free(p);
     if p > 1 {
         constraints.point_constraints[1] = POINT_CONSTRAINT_RANGED;
@@ -86,6 +92,7 @@ pub(super) fn new_record(seed: u32, image_count: u32) -> PointRecord {
         })),
         normal_confidence: Some(42),
         constraint: Some((POINT_CONSTRAINT_FREE, f64::NAN, NO_REFERENCE_IMAGE)),
+        reference_observation: Some(1),
     }
 }
 

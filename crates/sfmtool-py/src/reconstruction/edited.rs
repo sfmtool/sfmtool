@@ -177,6 +177,9 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
             .map(|v| v.extract())
             .transpose()?,
         constraint,
+        reference_observation: get(d, "reference_observation")?
+            .map(|v| v.extract())
+            .transpose()?,
     })
 }
 
@@ -248,6 +251,9 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
     }
     if let Some(c) = r.constraint {
         d.set_item("constraint", c)?;
+    }
+    if let Some(reference) = r.reference_observation {
+        d.set_item("reference_observation", reference)?;
     }
     Ok(d)
 }
@@ -438,6 +444,10 @@ impl PyEditedReconstruction {
         d.set_item("patch_bitmaps", self.inner.has_patch_bitmaps())?;
         d.set_item("normal_confidence", self.inner.has_normal_confidence())?;
         d.set_item("point_constraints", self.inner.has_point_constraints())?;
+        d.set_item(
+            "reference_observations",
+            self.inner.has_reference_observations(),
+        )?;
         Ok(d)
     }
 

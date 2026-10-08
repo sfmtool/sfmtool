@@ -84,6 +84,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         &tracks_meta,
         &images.camera_indexes,
         &cameras,
+        points.patch_u_halfvec_xyz.is_some(),
     )?;
     let rig_frame_data = read_rig_frames(&mut archive, image_count)?;
 
@@ -133,6 +134,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         observation_confidence: tracks.observation_confidence,
         point_indexes: tracks.point_indexes,
         observation_counts: tracks.observation_counts,
+        reference_observations: tracks.reference_observations,
     })
 }
 
@@ -613,14 +615,18 @@ struct TracksSection {
     observation_confidence: Option<Array1<u8>>,
     point_indexes: Array1<u32>,
     observation_counts: Array1<u32>,
+    reference_observations: Option<Array1<i32>>,
 }
 
+/// `has_patch_frame` is whether the points section carries the patch frame,
+/// which is what says whether `reference_observations` is there.
 fn read_tracks_section(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
     tracks_meta: &serde_json::Value,
     camera_indexes: &Array1<u32>,
     cameras: &[SfmrCamera],
+    has_patch_frame: bool,
 ) -> Result<TracksSection, SfmrError> {
     let observation_count = metadata.observation_count as usize;
     let point_count = metadata.point_count as usize;
@@ -709,6 +715,24 @@ fn read_tracks_section(
     )?;
     let observation_counts = Array1::from_vec(observation_counts_vec);
 
+    // The reference observations (version 12+), present exactly with the patch
+    // frame. An older file with patch frames has none on disk, and reads with
+    // every row `-1`: its bitmaps are fused means, no one observation's render.
+    let reference_observations = if !has_patch_frame {
+        None
+    } else if metadata.version < SFMR_REFERENCE_OBSERVATIONS_VERSION {
+        Some(Array1::from_elem(point_count, NO_REFERENCE_OBSERVATION))
+    } else {
+        let values: Vec<i32> = read_binary_array(
+            archive,
+            &entries::tracks_reference_observations(point_count),
+            point_count,
+        )?;
+        validate_reference_observations(&values, observation_counts.as_slice().unwrap())
+            .map_err(SfmrError::InvalidFormat)?;
+        Some(Array1::from_vec(values))
+    };
+
     Ok(TracksSection {
         image_indexes,
         feature_indexes,
@@ -716,6 +740,7 @@ fn read_tracks_section(
         observation_confidence,
         point_indexes,
         observation_counts,
+        reference_observations,
     })
 }
 

@@ -225,6 +225,7 @@ impl SfmrReconstruction {
                 normal_confidence: None,
                 point_constraints: None,
                 observation_confidence: None,
+                reference_observations: None,
                 observations: ObservationSource::SiftFiles {
                     feature_indexes,
                     keypoints_xy: None,

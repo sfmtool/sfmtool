@@ -49,6 +49,7 @@ ARRAY_KEYS = (
     "observation_confidence",
     "point_indexes",
     "observation_counts",
+    "reference_observations",
     "observed_depth_histogram_counts",
 )
 
@@ -188,6 +189,97 @@ class TestDictRoundTrip:
 
         with pytest.raises(OSError, match="requires patch_u_halfvec_xyz"):
             write_sfmr(tmp_path / "dropped.sfmr", data, skip_recompute_depth_stats=True)
+
+
+class TestReferenceObservations:
+    """``tracks/reference_observations``: per point, the observation whose
+    render the bitmap is, within the point's own track, ``-1`` for none;
+    present exactly with the patch frame."""
+
+    def test_a_new_frame_names_no_reference_and_a_sift_file_has_no_column(
+        self, embedded_patches_sfmr, seoul_bull_sfmr_only
+    ):
+        data = read_sfmr(embedded_patches_sfmr)
+        refs = data["reference_observations"]
+        assert refs.dtype == np.int32
+        assert refs.shape == (data["positions_xyzw"].shape[0],)
+        assert np.all(refs == -1)
+        assert read_sfmr(seoul_bull_sfmr_only)["reference_observations"] is None
+        assert (
+            SfmrReconstruction.load(seoul_bull_sfmr_only).reference_observations is None
+        )
+
+    def test_a_column_set_by_clone_round_trips(self, embedded_patches_sfmr, tmp_path):
+        recon = SfmrReconstruction.load(embedded_patches_sfmr)
+        counts = np.asarray(recon.observation_counts).astype(np.int64)
+        refs = (np.arange(len(counts)) % counts).astype(np.int32)
+        refs[::3] = -1
+        changed = recon.clone_with_changes(reference_observations=refs)
+        np.testing.assert_array_equal(changed.reference_observations, refs)
+        out = tmp_path / "refs.sfmr"
+        changed.save(out)
+        np.testing.assert_array_equal(read_sfmr(out)["reference_observations"], refs)
+        assert verify_sfmr(out)[0]
+        # Out of a point's track is refused.
+        bad = refs.copy()
+        bad[1] = counts[1]
+        with pytest.raises(ValueError, match="reference observation"):
+            recon.clone_with_changes(reference_observations=bad)
+
+    def test_replaced_tracks_move_each_reference_with_its_image(
+        self, embedded_patches_sfmr
+    ):
+        recon = SfmrReconstruction.load(embedded_patches_sfmr)
+        counts = np.asarray(recon.observation_counts).astype(np.int64)
+        refs = np.where(counts > 1, counts - 1, -1).astype(np.int32)
+        recon = recon.clone_with_changes(reference_observations=refs)
+        pts = np.asarray(recon.track_point_indexes)
+        imgs = np.asarray(recon.track_image_indexes)
+        kxy = np.asarray(recon.keypoints_xy)
+        # Drop each point's first observation.
+        offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        keep = np.ones(len(pts), dtype=bool)
+        keep[offsets[counts > 2]] = False
+        changed = recon.clone_with_changes(
+            track_image_indexes=np.ascontiguousarray(imgs[keep]),
+            track_feature_indexes=np.zeros(int(keep.sum()), dtype=np.uint32),
+            track_point_indexes=np.ascontiguousarray(pts[keep]),
+            keypoints_xy=np.ascontiguousarray(kxy[keep]),
+            observation_confidence=np.ascontiguousarray(
+                np.asarray(recon.observation_confidence)[keep]
+            ),
+        )
+        new_refs = np.asarray(changed.reference_observations)
+        new_counts = np.asarray(changed.observation_counts).astype(np.int64)
+        new_offsets = np.concatenate([[0], np.cumsum(new_counts)[:-1]])
+        new_imgs = np.asarray(changed.track_image_indexes)
+        for p in range(len(counts)):
+            if refs[p] < 0:
+                assert new_refs[p] == -1
+                continue
+            image = imgs[offsets[p] + refs[p]]
+            assert new_imgs[new_offsets[p] + new_refs[p]] == image
+        # A point filter keeps each survivor's reference.
+        fewer = changed.filter_points_by_mask(np.arange(len(counts)) % 2 == 0)
+        np.testing.assert_array_equal(fewer.reference_observations, new_refs[::2])
+        # A clone that changes the point count has no mapping from the old
+        # points to the new, and every point names none.
+        positions = np.asarray(changed.positions_xyzw)[: len(counts) - 1]
+        shorter = changed.clone_with_changes(
+            positions=np.ascontiguousarray(positions),
+            patches=None,
+        )
+        assert shorter.reference_observations is None
+
+    def test_a_dict_with_a_frame_and_no_column_writes_none(
+        self, embedded_patches_sfmr, tmp_path
+    ):
+        data = read_sfmr(embedded_patches_sfmr)
+        del data["reference_observations"]
+        out = tmp_path / "no_column.sfmr"
+        write_sfmr(out, data, skip_recompute_depth_stats=True)
+        assert np.all(read_sfmr(out)["reference_observations"] == -1)
+        assert read_sfmr_metadata(out)["version"] == 12
 
 
 class TestPatchColumnValidation:

@@ -158,6 +158,10 @@ struct DeferredChanges {
     point_constraints: Option<Option<Vec<u8>>>,
     constraint_distances: Option<Option<Vec<f64>>>,
     constraint_reference_images: Option<Option<Vec<u32>>>,
+    /// `reference_observations`, settled after the tracks: the outer `Option`
+    /// is "was the kwarg passed", the inner one "with an array, or with `None`
+    /// to drop the column".
+    reference_observations: Option<Option<Vec<i32>>>,
 }
 
 /// Apply one per-point keyword argument (positions, colors, errors, normals,
@@ -370,6 +374,14 @@ fn apply_point_field(
         "patch_bitmaps" => {
             // Deferred to after the loop so it always runs *after* 'patches'
             // (which clears any bitmaps), regardless of kwargs order.
+        }
+        "reference_observations" => {
+            deferred.reference_observations = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array1!(value, "reference_observations", i32)?;
+                Some(to_contiguous!(arr).into_owned())
+            });
         }
         _ => return Ok(false),
     }
@@ -658,8 +670,10 @@ fn apply_observation_field(
 /// 7. `rebuild_derived_fields`.
 /// 8. The inline keypoint column of a `sift_files` value whose tracks were
 ///    replaced, which reads image names and the rebuilt tracks.
-/// 9. The checks that every per-observation and per-point column matches its
-///    count.
+/// 9. The reference observations, which read the rebuilt tracks
+///    ([`settle_reference_observations`]).
+/// 10. The checks that every per-observation and per-point column matches its
+///     count.
 fn finalize(
     inner: &SfmrReconstruction,
     mut recon: SfmrReconstruction,
@@ -681,6 +695,7 @@ fn finalize(
         point_constraints,
         constraint_distances,
         constraint_reference_images,
+        reference_observations,
     } = deferred;
 
     apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
@@ -726,6 +741,14 @@ fn finalize(
     if replacing_tracks && !keypoints_given && !drop_keypoints {
         carry_sift_keypoints(inner, &mut recon);
     }
+
+    settle_reference_observations(
+        inner,
+        &mut recon,
+        old_point_count,
+        replacing_tracks,
+        reference_observations,
+    );
 
     // The track arrays and the observation-source columns can be supplied in the
     // same call (and are applied in separate passes), so guard against leaving a
@@ -819,6 +842,62 @@ fn apply_patch_bitmaps(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -
         }
     }
     Ok(())
+}
+
+/// Settle `recon`'s reference observations once its points and tracks are
+/// final, `given` the `reference_observations` keyword argument (outer `None`
+/// when it was not passed).
+///
+/// A value passed in is taken as it is (and checked with the other point
+/// columns); `None` drops the column. Otherwise the column follows the patch
+/// frame: a value with no frame carries none, and one with a frame carries one.
+/// The column `inner` carried comes across where the points are the same
+/// points: unchanged where the tracks are, and where the tracks were replaced,
+/// each point's reference moves to the observation of the same image in its
+/// new track, `-1` where there is none. Where the point count changed there is
+/// no mapping from the old points to the new, and every row is `-1`, as it is
+/// for a frame that is new.
+fn settle_reference_observations(
+    inner: &SfmrReconstruction,
+    recon: &mut SfmrReconstruction,
+    old_point_count: usize,
+    replacing_tracks: bool,
+    given: Option<Option<Vec<i32>>>,
+) {
+    use sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;
+
+    if let Some(given) = given {
+        recon.point_set.reference_observations = given;
+        return;
+    }
+    let point_count = recon.point_set.points.len();
+    if recon.point_set.patch_u_halfvec_xyz.is_none() {
+        recon.point_set.reference_observations = None;
+        return;
+    }
+    let carried = inner
+        .point_set
+        .reference_observations
+        .as_ref()
+        .filter(|_| point_count == old_point_count);
+    recon.point_set.reference_observations = Some(match carried {
+        None => vec![NO_REFERENCE_OBSERVATION; point_count],
+        Some(old) if !replacing_tracks => old.clone(),
+        Some(_) => (0..point_count)
+            .map(|p| {
+                let Some(row) = inner.point_set.reference_observation_row(p) else {
+                    return NO_REFERENCE_OBSERVATION;
+                };
+                let image = inner.point_set.tracks[row].image_index;
+                recon
+                    .point_set
+                    .observations_for_point(p)
+                    .iter()
+                    .position(|o| o.image_index == image)
+                    .map_or(NO_REFERENCE_OBSERVATION, |k| k as i32)
+            })
+            .collect(),
+    });
 }
 
 /// Replace the tracks from the three track arrays, which must all be passed,

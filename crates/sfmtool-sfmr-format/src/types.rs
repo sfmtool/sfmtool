@@ -514,6 +514,37 @@ pub(crate) fn validate_world_space_unit(unit: Option<&str>) -> Result<(), String
     }
 }
 
+/// Check `tracks/reference_observations` against the observation counts: one
+/// row per point, each `-1` or an index within the point's own track.
+///
+/// Read, write and verify all route through this, so a file the writer
+/// accepts is one the reader and the verifier accept.
+pub(crate) fn validate_reference_observations(
+    reference_observations: &[i32],
+    observation_counts: &[u32],
+) -> Result<(), String> {
+    if reference_observations.len() != observation_counts.len() {
+        return Err(format!(
+            "reference_observations len {} != point_count {}",
+            reference_observations.len(),
+            observation_counts.len()
+        ));
+    }
+    for (p, (&r, &count)) in reference_observations
+        .iter()
+        .zip(observation_counts)
+        .enumerate()
+    {
+        if r != NO_REFERENCE_OBSERVATION && (r < 0 || i64::from(r) >= i64::from(count)) {
+            return Err(format!(
+                "tracks/reference_observations row {p} = {r} is neither -1 nor an index \
+                 into the point's {count} observations"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Which of the optional pieces that the presence rules relate a file carries.
 ///
 /// The writer fills this from the columns it was handed, and the reader and
@@ -579,6 +610,13 @@ impl OptionalPresence {
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 12 added `tracks/reference_observations`, per point the index of the
+/// observation whose render the point's patch bitmap is, among the point's own
+/// observations, `-1` for none (see [`SfmrData::reference_observations`]). It
+/// is required in a file whose `points3d/metadata.json` has `has_uv_frames`
+/// set, and absent otherwise, so it has no flag of its own. A file below
+/// version 12 with patch frames reads with the column filled with `-1`.
+///
 /// Version 11 made the thumbnail column `images/thumbnails_y_x_rgb` optional,
 /// flagged by `images/metadata.json`'s `has_thumbnails` (see
 /// [`SfmrData::thumbnails_y_x_rgb`]). The flag defaults the other way from the
@@ -628,7 +666,17 @@ impl OptionalPresence {
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 11;
+pub const SFMR_FORMAT_VERSION: u32 = 12;
+
+/// The first `.sfmr` version that stores `tracks/reference_observations`.
+///
+/// Below it a file with patch frames carries no entry, and the reader fills
+/// the column with [`NO_REFERENCE_OBSERVATION`].
+pub const SFMR_REFERENCE_OBSERVATIONS_VERSION: u32 = 12;
+
+/// The value of a [`SfmrData::reference_observations`] row for a point whose
+/// patch bitmap is not the render of one of its observations.
+pub const NO_REFERENCE_OBSERVATION: i32 = -1;
 
 /// The first `.sfmr` version that stores its write timestamp in `written.json`
 /// rather than in `metadata.json`.
@@ -978,6 +1026,26 @@ pub struct SfmrData {
     pub point_indexes: Array1<u32>,
     /// `(P,)` number of observations per 3D point.
     pub observation_counts: Array1<u32>,
+    /// `(P,)` per point, the index of its **reference observation** among the
+    /// point's own observations, `0` to `observation_counts[i] - 1`: the
+    /// observation whose `R×R` render the point's patch bitmap is.
+    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has none: its bitmap
+    /// is not one observation's render (a fused mean from before version 12,
+    /// or the reference-view rule picked no view). A writer that drops the
+    /// bitmaps keeps the column, since it is required with the patch frame,
+    /// not with the bitmaps.
+    ///
+    /// The index counts from the start of the point's run in the tracks, which
+    /// are sorted by `(point_indexes, image_indexes)`, so removing other points
+    /// leaves it unchanged. A writer that removes or reorders a point's
+    /// observations moves the index with the reference observation, and writes
+    /// `-1` where it removes that observation.
+    ///
+    /// On disk this is `tracks/reference_observations` (version 12+). It is
+    /// `Some` exactly when the patch frame is present: required in a file
+    /// with `has_uv_frames`, absent otherwise. A file below version 12 with
+    /// patch frames reads with every row `-1`.
+    pub reference_observations: Option<Array1<i32>>,
 
     // Depth statistics
     pub depth_statistics: DepthStatistics,

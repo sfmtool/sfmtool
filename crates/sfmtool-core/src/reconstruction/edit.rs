@@ -238,6 +238,9 @@ impl SfmrReconstruction {
                     c
                 }),
                 observation_confidence: self.point_set.observation_confidence.clone(),
+                // The bitmaps are unchanged, so each is still the render of
+                // the observation it was.
+                reference_observations: self.point_set.reference_observations.clone(),
                 // A 3D similarity leaves the 2D image keypoints, feature
                 // indices, and image identity untouched, so the observation
                 // source passes through for both modes.
@@ -365,6 +368,7 @@ impl SfmrReconstruction {
             new_patch_bitmaps,
             new_normal_confidence,
             kept_point_constraints,
+            new_reference_observations,
         ) = if drop_orphaned_points {
             // Count surviving observations per point and build a keep mask.
             let mut per_point_count = vec![0u32; self.point_set.points.len()];
@@ -423,6 +427,10 @@ impl SfmrReconstruction {
                     .point_constraints
                     .as_ref()
                     .map(|c| c.select(&keep_idx)),
+                // A point whose reference observation was in a dropped image
+                // keeps its bitmap and loses its reference.
+                self.point_set
+                    .select_reference_observations(&keep_idx, &kept_obs),
             )
         } else {
             // Keep all points; recompute per-point counts from the filtered tracks.
@@ -439,6 +447,10 @@ impl SfmrReconstruction {
                 self.point_set.patch_bitmaps_y_x_rgba.clone(),
                 self.point_set.normal_confidence.clone(),
                 self.point_set.point_constraints.clone(),
+                self.point_set.select_reference_observations(
+                    &(0..self.point_set.points.len()).collect::<Vec<_>>(),
+                    &kept_obs,
+                ),
             )
         };
 
@@ -545,6 +557,7 @@ impl SfmrReconstruction {
                 normal_confidence: new_normal_confidence,
                 point_constraints: new_point_constraints,
                 observation_confidence: new_observation_confidence,
+                reference_observations: new_reference_observations,
                 observations: new_observations,
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,
@@ -700,6 +713,11 @@ impl SfmrReconstruction {
                 normal_confidence: new_normal_confidence,
                 point_constraints: new_point_constraints,
                 observation_confidence: new_observation_confidence,
+                // A surviving point keeps all its observations, so its index
+                // comes across unchanged.
+                reference_observations: self
+                    .point_set
+                    .select_reference_observations(&keep_idx, &kept),
                 observations: new_observations,
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,

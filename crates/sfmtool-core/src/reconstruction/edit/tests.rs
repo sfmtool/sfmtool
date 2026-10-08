@@ -302,6 +302,74 @@ fn se3_transform_without_a_scale_leaves_the_depth_statistics_alone() {
     }
 }
 
+/// `demo_with_patches` with reference observations: points 0..4 see images
+/// `(i, i + 1)`, and name their second, first, second and no observation.
+fn demo_with_references() -> SfmrReconstruction {
+    let mut recon = demo_with_patches();
+    recon.point_set.reference_observations = Some(vec![1, 0, 1, -1]);
+    recon
+}
+
+/// The image each point's reference observation is in, `None` for none.
+fn reference_images(recon: &SfmrReconstruction) -> Vec<Option<u32>> {
+    let set = &recon.point_set;
+    (0..set.point_count())
+        .map(|p| {
+            set.reference_observation_row(p)
+                .map(|row| set.tracks[row].image_index)
+        })
+        .collect()
+}
+
+#[test]
+fn a_point_filter_keeps_each_survivor_s_reference() {
+    let recon = demo_with_references();
+    let before = reference_images(&recon);
+    let out = recon.filter_points_by_mask(&[true, false, true, true]);
+    assert_eq!(out.point_set.reference_observations, Some(vec![1, 1, -1]));
+    assert_eq!(
+        reference_images(&out),
+        vec![before[0], before[2], before[3]]
+    );
+}
+
+#[test]
+fn an_image_subset_moves_each_reference_with_its_observation_or_drops_it() {
+    let recon = demo_with_references();
+    // Drop image 1, and reverse the rest, so every image is renumbered and
+    // point 1's observations change places.
+    let keep: Vec<u32> = (0..8u32).rev().filter(|&i| i != 1).collect();
+    let new_of = |old: u32| keep.iter().position(|&k| k == old).map(|n| n as u32);
+    let before = reference_images(&recon);
+    for drop_orphans in [false, true] {
+        let out = recon.subset_by_image_indices(&keep, drop_orphans).unwrap();
+        out.validate_point_columns().unwrap();
+        let after = reference_images(&out);
+        // Point 0's reference was in image 1, and point 1's too: both are
+        // gone. Points 2 and 3 keep theirs, renumbered.
+        let expected: Vec<Option<u32>> =
+            before.iter().map(|image| image.and_then(new_of)).collect();
+        assert_eq!(after, expected, "drop_orphans {drop_orphans}");
+    }
+}
+
+#[test]
+fn a_reordered_track_keeps_its_reference_through_a_save() {
+    let recon = demo_with_references();
+    let keep: Vec<u32> = (0..8u32).rev().collect();
+    let out = recon.subset_by_image_indices(&keep, true).unwrap();
+    let images_before = reference_images(&out);
+    let dir = std::env::temp_dir().join("sfmtool_core_reference_reorder");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("r.sfmr");
+    let mut data = out.to_sfmr_data();
+    sfmtool_sfmr_format::write_sfmr(&path, &mut data).unwrap();
+    let loaded =
+        SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
+    assert_eq!(reference_images(&loaded), images_before);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn subset_keeping_all_images_carries_the_patch_frame() {
     let recon = demo_with_patches();

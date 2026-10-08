@@ -372,7 +372,8 @@ impl SfmrReconstruction {
 
     /// Check that the optional per-point constraint columns are parallel to
     /// `points`, carry a constraint this format defines, and reference only images
-    /// this reconstruction holds. Returns a message describing the first
+    /// this reconstruction holds, and that each reference observation is `-1` or
+    /// within its point's track. Returns a message describing the first
     /// violation.
     ///
     /// The companion of [`Self::validate_observation_columns`] on the point
@@ -381,6 +382,24 @@ impl SfmrReconstruction {
     /// and a stale image reference is the failure a file-level check would only
     /// catch at write time.
     pub fn validate_point_columns(&self) -> Result<(), String> {
+        if let Some(references) = &self.point_set.reference_observations {
+            let counts = &self.point_set.observation_counts;
+            if references.len() != counts.len() {
+                return Err(format!(
+                    "reference_observations length ({}) must match point count ({})",
+                    references.len(),
+                    counts.len()
+                ));
+            }
+            for (p, (&r, &count)) in references.iter().zip(counts).enumerate() {
+                if r != -1 && !(r >= 0 && (r as u32) < count) {
+                    return Err(format!(
+                        "point {p} names reference observation {r}, which is neither -1 \
+                         nor one of its {count} observations"
+                    ));
+                }
+            }
+        }
         let Some(constraints) = &self.point_set.point_constraints else {
             return Ok(());
         };

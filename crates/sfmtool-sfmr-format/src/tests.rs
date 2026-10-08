@@ -151,6 +151,7 @@ fn make_test_data() -> SfmrData {
         observation_confidence: None,
         point_indexes,
         observation_counts,
+        reference_observations: None,
         depth_statistics: DepthStatistics {
             num_histogram_buckets: num_buckets as u32,
             images: vec![
@@ -283,6 +284,7 @@ fn make_embedded_test_data() -> SfmrData {
     let v: Vec<f32> = (0..p).flat_map(|_| [0.0f32, 0.5, 0.0]).collect();
     data.patch_u_halfvec_xyz = Some(Array2::from_shape_vec((p, 3), u).unwrap());
     data.patch_v_halfvec_xyz = Some(Array2::from_shape_vec((p, 3), v).unwrap());
+    data.reference_observations = Some(Array1::from_elem(p, NO_REFERENCE_OBSERVATION));
     data
 }
 
@@ -679,9 +681,11 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen at format version 11, which writes `has_thumbnails` into
-    // `images/metadata.json` and stamps the new version into `metadata.json`,
-    // both hashed. Before that it was frozen at b7ce9ece, where version 10
+    // Frozen at format version 12, which stamps the new version into
+    // `metadata.json`, hashed; this fixture has no patch frame and so no
+    // reference observations. Before that it was frozen at version 11, which
+    // writes `has_thumbnails` into `images/metadata.json`, and before that at
+    // b7ce9ece, where version 10
     // moved the depth statistics out of `images/` and into `derived/`, whose
     // digest is deliberately not folded in here.
     //
@@ -692,7 +696,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "0df964cf747475358ace0286bbfb482a"
+        "81e4230743699b80eef7f860fe01c020"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -1042,6 +1046,7 @@ fn test_empty_reconstruction() {
         observation_confidence: None,
         point_indexes: Array1::from_vec(vec![]),
         observation_counts: Array1::from_vec(vec![]),
+        reference_observations: None,
         depth_statistics: DepthStatistics {
             num_histogram_buckets: num_buckets as u32,
             images: vec![],
@@ -2204,6 +2209,188 @@ fn test_observation_confidence_reordered_in_lockstep_by_sort() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `make_test_data` with a patch frame, so it carries reference observations.
+fn make_framed_test_data(references: Vec<i32>) -> SfmrData {
+    let mut data = make_test_data();
+    data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
+    data.patch_v_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.25));
+    data.reference_observations = Some(Array1::from_vec(references));
+    data
+}
+
+#[test]
+fn test_reference_observations_follow_their_observation_through_the_sort() {
+    // Point 1's observations are handed in as images 2, 0, 1; its reference is
+    // the first of them, image 2, which the sort moves to the end of the run.
+    // Point 0's are images 1, 0, and its reference, image 0, moves to the front.
+    let mut d = make_framed_test_data(vec![1, 0, 0, 0, -1]);
+    let pts = [1u32, 0, 1, 0, 1, 2, 3, 4];
+    let imgs = [2u32, 1, 0, 0, 1, 2, 1, 0];
+    d.point_indexes = Array1::from_vec(pts.to_vec());
+    d.image_indexes = Array1::from_vec(imgs.to_vec());
+    d.feature_indexes = Some(Array1::from_vec(vec![0; 8]));
+    d.observation_counts = Array1::from_vec(vec![2, 3, 1, 1, 1]);
+
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_sort");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("u.sfmr");
+    write_sfmr(&path, &mut d).unwrap();
+    let loaded = read_sfmr(&path).unwrap();
+    assert_eq!(loaded.point_indexes.to_vec(), vec![0, 0, 1, 1, 1, 2, 3, 4]);
+    assert_eq!(loaded.image_indexes.to_vec(), vec![0, 1, 0, 1, 2, 2, 1, 0]);
+    assert_eq!(
+        loaded.reference_observations.unwrap().to_vec(),
+        vec![0, 2, 0, 0, -1]
+    );
+    let (valid, errors) = verify_sfmr(&path).unwrap();
+    assert!(valid, "{errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_reference_observations_presence_and_range_refused_on_write() {
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_refused");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("r.sfmr");
+
+    // Required with the patch frame.
+    let mut data = make_framed_test_data(vec![-1; 5]);
+    data.reference_observations = None;
+    let result = write_sfmr(&path, &mut data);
+    assert!(
+        matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("required with the patch frame")),
+        "{result:?}"
+    );
+
+    // Absent without it.
+    let mut data = make_test_data();
+    data.reference_observations = Some(Array1::from_elem(5, -1));
+    let result = write_sfmr(&path, &mut data);
+    assert!(
+        matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("requires the patch frame")),
+        "{result:?}"
+    );
+
+    // Point 0 has two observations, so 2 is past its track; -2 is not -1.
+    for bad in [vec![2, 0, 0, 0, 0], vec![-2, 0, 0, 0, 0]] {
+        let mut data = make_framed_test_data(bad);
+        let result = write_sfmr(&path, &mut data);
+        assert!(
+            matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("row 0")),
+            "{result:?}"
+        );
+    }
+    assert!(!path.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_reference_observations_out_of_range_refused_on_read_and_verify() {
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_read");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("valid.sfmr");
+    write_sfmr(&path, &mut make_framed_test_data(vec![1, 2, 0, -1, 0])).unwrap();
+    let edited = dir.join("edited.sfmr");
+    rewrite_entries(&path, &edited, |name, _| {
+        name.starts_with("tracks/reference_observations")
+            .then(|| bytemuck::cast_slice::<i32, u8>(&[1, 3, 0, -1, 0]).to_vec())
+    });
+    let Err(err) = read_sfmr(&edited) else {
+        panic!("a reference past its track was read");
+    };
+    assert!(
+        matches!(&err, SfmrError::InvalidFormat(m) if m.contains("row 1 = 3")),
+        "{err}"
+    );
+    let (valid, errors) = verify_sfmr(&edited).unwrap();
+    assert!(!valid);
+    assert!(errors.iter().any(|e| e.contains("row 1 = 3")), "{errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A version 11 file with patch frames, written by this build and then
+/// stripped of the entry version 12 added and stamped as version 11.
+fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::Path) {
+    use std::io::{Read, Write};
+
+    let current = dir.join("current.sfmr");
+    write_sfmr(&current, &mut make_framed_test_data(vec![1, 2, 0, -1, 0])).unwrap();
+    let file = std::fs::File::open(&current).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let out = std::fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(out);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        if name.starts_with("tracks/reference_observations") {
+            continue;
+        }
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        if name == "metadata.json.zst" {
+            let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
+            let mut json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+            json["version"] = serde_json::json!(11);
+            compressed = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
+        }
+        zip.start_file(name, stored).unwrap();
+        zip.write_all(&compressed).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+#[test]
+fn test_version_11_with_patch_frames_reads_every_reference_as_none() {
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_v11");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("v11.sfmr");
+    write_version_11_with_patch_frames(&old, &dir);
+
+    let mut loaded = read_sfmr(&old).unwrap();
+    assert_eq!(loaded.metadata.version, 11);
+    assert_eq!(
+        loaded.reference_observations.as_ref().unwrap().to_vec(),
+        vec![NO_REFERENCE_OBSERVATION; 5]
+    );
+
+    // Saving it writes version 12 with the column, and it reads back.
+    let saved = dir.join("v12.sfmr");
+    write_sfmr(&saved, &mut loaded).unwrap();
+    let reloaded = read_sfmr(&saved).unwrap();
+    assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
+    assert_eq!(
+        reloaded.reference_observations.unwrap().to_vec(),
+        vec![NO_REFERENCE_OBSERVATION; 5]
+    );
+    let (valid, errors) = verify_sfmr(&saved).unwrap();
+    assert!(valid, "{errors:?}");
+
+    // A version 11 file without patch frames gets no column.
+    let plain = dir.join("plain.sfmr");
+    write_sfmr(&plain, &mut make_test_data()).unwrap();
+    assert!(read_sfmr(&plain).unwrap().reference_observations.is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_reference_observations_are_hashed_in_the_tracks_section() {
+    let options = WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    let a = content_hash_of(&mut make_framed_test_data(vec![0, 0, 0, 0, 0]), &options).unwrap();
+    let b = content_hash_of(&mut make_framed_test_data(vec![1, 0, 0, 0, 0]), &options).unwrap();
+    assert_ne!(a.tracks_xxh128, b.tracks_xxh128);
+    assert_eq!(a.points3d_xxh128, b.points3d_xxh128);
+}
+
 #[test]
 fn test_depth_statistics_structure() {
     let mut data = make_test_data();
@@ -2456,6 +2643,9 @@ fn test_round_trip_with_patches_and_bitmaps() {
     data.patch_u_halfvec_xyz = Some(u_halfvec_xyz.clone());
     data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
     data.patch_bitmaps_y_x_rgba = Some(bitmaps.clone());
+    // Observation counts are 2, 3, 1, 1, 1.
+    let references = Array1::from_vec(vec![1, 2, 0, -1, 0]);
+    data.reference_observations = Some(references.clone());
 
     // Snapshot every points3d array the writer may touch so we can assert
     // the patch frame round-trips without disturbing its neighbours.
@@ -2477,6 +2667,7 @@ fn test_round_trip_with_patches_and_bitmaps() {
     assert_eq!(loaded.patch_u_halfvec_xyz.unwrap(), u_halfvec_xyz);
     assert_eq!(loaded.patch_v_halfvec_xyz.unwrap(), v_halfvec_xyz);
     assert_eq!(loaded.patch_bitmaps_y_x_rgba.unwrap(), bitmaps);
+    assert_eq!(loaded.reference_observations.unwrap(), references);
     // The rest of the points3d section round-trips unchanged alongside it.
     assert_eq!(loaded.positions_xyzw, positions_xyzw);
     assert_eq!(loaded.colors_rgb, colors_rgb);
@@ -2499,6 +2690,7 @@ fn test_round_trip_with_patches_no_bitmaps() {
     let v_halfvec_xyz = Array2::from_shape_fn((5, 3), |(i, j)| (i * 3 + j) as f32 * 0.05 - 0.5);
     data.patch_u_halfvec_xyz = Some(u_halfvec_xyz.clone());
     data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
+    data.reference_observations = Some(Array1::from_elem(5, NO_REFERENCE_OBSERVATION));
 
     let dir = std::env::temp_dir().join("sfmr_test_patches_no_bitmaps");
     std::fs::create_dir_all(&dir).unwrap();
@@ -2528,6 +2720,7 @@ fn test_patch_frame_without_normals_round_trips() {
     let v_halfvec_xyz = Array2::from_shape_fn((5, 3), |(i, j)| (i * 3 + j) as f32 * 0.05 - 0.5);
     data.patch_u_halfvec_xyz = Some(u_halfvec_xyz.clone());
     data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
+    data.reference_observations = Some(Array1::from_elem(5, NO_REFERENCE_OBSERVATION));
 
     let dir = std::env::temp_dir().join("sfmr_test_patch_frame_no_normals");
     std::fs::create_dir_all(&dir).unwrap();
@@ -2612,6 +2805,7 @@ fn test_patch_bitmaps_without_frame_refused_on_read_and_verify() {
     data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
     data.patch_v_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.25));
     data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
+    data.reference_observations = Some(Array1::from_elem(5, NO_REFERENCE_OBSERVATION));
     assert_points3d_flags_refused(
         "sfmr_test_read_bitmaps_no_frame",
         data,
@@ -2654,6 +2848,7 @@ fn test_verify_reports_every_broken_presence_rule() {
     data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
     data.patch_v_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.25));
     data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
+    data.reference_observations = Some(Array1::from_elem(5, NO_REFERENCE_OBSERVATION));
     let path = dir.join("valid.sfmr");
     let options = WriteOptions {
         skip_recompute_depth_stats: true,
@@ -2882,6 +3077,10 @@ fn entry_names_are_pinned() {
     );
     assert_eq!(e::points3d_metadata(), "points3d/metadata.json.zst");
     assert_eq!(e::tracks_metadata(), "tracks/metadata.json.zst");
+    assert_eq!(
+        e::tracks_reference_observations(5),
+        "tracks/reference_observations.5.int32.zst"
+    );
 
     // Rigs / frames.  sensor_count = 19, frame_count = 23, image_count = 11.
     assert_eq!(
@@ -3128,6 +3327,7 @@ fn data_with_every_optional_column() -> SfmrData {
         Some(Array4::<u8>::from_shape_fn((5, 2, 2, 4), |(p, y, x, c)| {
             ((p * 17 + y * 5 + x * 3 + c) % 256) as u8
         }));
+    data.reference_observations = Some(Array1::from_vec(vec![0, 1, 0, -1, 0]));
     with_point_constraints(&mut data);
     data
 }
@@ -3390,6 +3590,13 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
     let legacy = dir.join("legacy.sfmr");
 
     let mut data = data_with_every_optional_column();
+    // Without the patch frame, so without the reference observations a
+    // version-7 file cannot carry and whose bytes the stored tracks digest
+    // would otherwise include.
+    data.patch_u_halfvec_xyz = None;
+    data.patch_v_halfvec_xyz = None;
+    data.patch_bitmaps_y_x_rgba = None;
+    data.reference_observations = None;
     write_sfmr(&current, &mut data).unwrap();
 
     let stamp = "2025-12-21T14:32:15.123456+00:00";

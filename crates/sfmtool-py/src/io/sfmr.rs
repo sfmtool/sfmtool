@@ -78,9 +78,9 @@ where
 ///   point_constraints, constraint_distances, constraint_reference_images,
 ///   patch_u_halfvec_xyz, patch_v_halfvec_xyz, patch_bitmaps_y_x_rgba,
 ///   image_indexes, feature_indexes, keypoints_xy, observation_confidence,
-///   point_indexes, observation_counts, observed_depth_histogram_counts,
-///   thumbnails_y_x_rgb (numpy arrays; `thumbnails_y_x_rgb` is `None` for a
-///   file without thumbnails).
+///   point_indexes, observation_counts, reference_observations,
+///   observed_depth_histogram_counts, thumbnails_y_x_rgb (numpy arrays;
+///   `thumbnails_y_x_rgb` is `None` for a file without thumbnails).
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -91,7 +91,9 @@ where
 /// `points3d/constraint_reference_images`), the per-point patch frame
 /// (`(P, 3)` float32 `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` and the
 /// `(P, R, R, 4)` uint8 `patch_bitmaps_y_x_rgba`), the mode-dependent
-/// observation columns, and the `(M,)` uint8 `observation_confidence`.
+/// observation columns, the `(M,)` uint8 `observation_confidence`, and the
+/// `(P,)` int32 `reference_observations`, which is present exactly with the
+/// patch frame (`-1` throughout for a file below version 12).
 ///
 /// Everything `write_sfmr` stores is emitted here, so
 /// `write_sfmr(out, read_sfmr(path))` round-trips a file of either observation
@@ -220,6 +222,12 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         "observation_counts",
         data.observation_counts.into_pyarray(py),
     )?;
+    // Present exactly with the patch frame; `-1` throughout for a file below
+    // version 12 that has one.
+    match data.reference_observations {
+        Some(r) => dict.set_item("reference_observations", r.into_pyarray(py))?,
+        None => dict.set_item("reference_observations", py.None())?,
+    }
     dict.set_item(
         "observed_depth_histogram_counts",
         data.observed_depth_histogram_counts.into_pyarray(py),
@@ -416,6 +424,21 @@ pub(crate) fn parse_sfmr_data_from_dict(
         }
     }
 
+    // The reference observations, present exactly with the patch frame. A dict
+    // with a frame and no column (one built before version 12) states that no
+    // point names one, so every row is `-1`; the range checks are the format
+    // writer's.
+    let reference_observations =
+        optional_array::<i32, ndarray::Ix1>(data, "reference_observations", "a 1D int32 array")?
+            .or_else(|| {
+                patch_u_halfvec_xyz.as_ref().map(|_| {
+                    ndarray::Array1::from_elem(
+                        observation_counts.as_array().len(),
+                        sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION,
+                    )
+                })
+            });
+
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
 
@@ -472,6 +495,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
             .as_array()
             .as_standard_layout()
             .into_owned(),
+        reference_observations,
         depth_statistics,
         observed_depth_histogram_counts,
     })

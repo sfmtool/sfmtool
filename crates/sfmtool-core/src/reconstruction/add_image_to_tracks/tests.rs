@@ -626,3 +626,38 @@ fn pooled_or_track_accepts_what_either_bar_accepts() {
     assert_eq!(c3.refusal, None);
     assert_eq!(c3.bar, 0.7);
 }
+
+/// An observation added before a point's reference observation moves the
+/// index down one place, so it still names the same observation; one added
+/// after it leaves the index alone, and the bitmap is not re-rendered.
+#[test]
+fn an_added_observation_moves_the_reference_index_past_it() {
+    let mut recon = SfmrReconstruction::demo(4);
+    let m = recon.point_set.tracks.len();
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: Array2::<f32>::zeros((m, 2)),
+        image_file_hashes: vec![[0u8; 16]; recon.image_count()],
+    };
+    // Point 2 sees images 2 and 3; point 3 sees images 3 and 4.
+    recon.point_set.reference_observations = Some(vec![-1, -1, 1, 0]);
+    let image_of = |r: &SfmrReconstruction, p: usize| {
+        r.point_set
+            .reference_observation_row(p)
+            .map(|row| r.point_set.tracks[row].image_index)
+    };
+    // Image 0 lands before both observations of points 2 and 3.
+    let out = insert_observations(&recon, 0, &[(2, [1.0, 1.0], 0.9), (3, [1.0, 1.0], 0.9)]);
+    assert_eq!(
+        out.point_set.reference_observations,
+        Some(vec![-1, -1, 2, 1])
+    );
+    assert_eq!(image_of(&out, 2), Some(3));
+    assert_eq!(image_of(&out, 3), Some(3));
+    // Image 7 lands after them.
+    let out = insert_observations(&recon, 7, &[(2, [1.0, 1.0], 0.9)]);
+    assert_eq!(
+        out.point_set.reference_observations,
+        Some(vec![-1, -1, 1, 0])
+    );
+    out.validate_point_columns().unwrap();
+}

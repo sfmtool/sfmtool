@@ -321,6 +321,15 @@ pub(crate) fn tracks_observation_counts(point_count: impl std::fmt::Display) -> 
     format!("tracks/observation_counts.{point_count}.uint32.zst")
 }
 
+/// `tracks/reference_observations` — per point, the index of its reference
+/// observation within its own track, `-1` for none (v12+, present exactly
+/// with the patch frame).
+///
+/// Sized by `point_count`, like `observation_counts`.
+pub(crate) fn tracks_reference_observations(point_count: impl std::fmt::Display) -> String {
+    format!("tracks/reference_observations.{point_count}.int32.zst")
+}
+
 /// `tracks/points3d_indexes` (v1) or `tracks/point_indexes` (v2+).
 ///
 /// A pure rename, tracking the `points3d` → `point` vocabulary change.
