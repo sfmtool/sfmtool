@@ -321,13 +321,14 @@ def _cull_by_zncc_self_similarity_radius(
     is over ``max_zncc_self_similarity_radius``. See
     ``specs/core/patch/zncc-self-similarity-radius.md``.
 
-    The radius is read from each point's cross-view consensus ``bitmaps``
-    (scattered per source point) the overlap way, by the same pass rule the
+    The radius is read from each point's stored ``bitmaps`` (the reference
+    view's render, or the views' fused mean where the reference-view rule picks
+    none; scattered per source point) the overlap way, by the same pass rule the
     ``xform`` filter uses (``points_passing_zncc_self_similarity_radius``): at or
     below the bar passes, a ``NaN`` radius fails, and a point whose bitmap has
-    no sample carrying data (no consensus) has no reading and is kept. The radius
+    no sample carrying data (no bitmap) has no reading and is kept. The radius
     is a property of the point's own bitmap, so removing a point here has no
-    feedback on any survivor's consensus, and the cull is safe to run early.
+    feedback on any survivor's bitmap, and the cull is safe to run early.
     Returns ``(kept_localizations, n_culled)``.
     """
     if bitmaps is None or not localizations:
@@ -418,9 +419,11 @@ def embed_patches(
        ``max_shift_px``, low LOO ZNCC absolutely or relative to their peers).
        Each observed view seeds at its stored keypoint; a view step 2 added has no
        observation, so it seeds at the point's projection.
-       The final round's sub-pixel pass also fuses each point's **consensus
-       bitmap** at the final keypoints (points at infinity included — they render
-       through the same ``w``-aware path) and reports per-point validity.
+       The final round's sub-pixel pass also renders each point's **stored
+       bitmap** at the final keypoints: the tile of the reference view the
+       reference-view rule picks, or the views' fused mean where it picks none
+       (points at infinity included — they render through the same ``w``-aware
+       path), and reports per-point validity and the reference view's image.
     4. **Cull + compact**: drop points left below ``min_views`` **and** points the
        sub-pixel pass produced no valid bitmap for (the culled-point
        signal, uniform for finite and infinity points), then renumber the
@@ -514,7 +517,7 @@ def embed_patches(
             third off end-to-end time on large view sets — the round-2+ refine
             pass itself ~5x — at the cost of a different, not necessarily worse,
             normal on high-view points).
-        max_zncc_self_similarity_radius: Cull points whose round-1 consensus
+        max_zncc_self_similarity_radius: Cull points whose round-1 stored
             bitmap can slide over itself further than this, in **patch-grid px**,
             **early** — right after round 1's localize + sub-pixel refine, before
             the multi-round refinement. The reading is the ZNCC self-similarity
@@ -522,8 +525,8 @@ def embed_patches(
             their tiles (see ``specs/core/patch/zncc-self-similarity-radius.md``): under 1
             for a corner or a texture, 3 for a straight edge or a flat patch, which
             the cross-view agreement gate lets through. At or below the bar
-            passes; a point with no consensus is kept. Enabling it forces the
-            round-1 consensus render. The default is the member gates' ``2.5``;
+            passes; a point with no bitmap is kept. Enabling it forces the
+            round-1 bitmap render. The default is the member gates' ``2.5``;
             ``3`` or more turns nothing out, and ``0`` (or a non-positive value)
             disables the cull.
         localize_basis_views: When ``> 0``, cap the **discrete localizer's
@@ -585,8 +588,8 @@ def embed_patches(
 
     # 1. Refine each normal over the embedded recon, anchoring every view on its
     #    stored SIFT keypoint (use_stored_keypoints) instead of the reprojected
-    #    center. (Reference bitmaps are NOT rendered here — the final round's
-    #    sub-pixel pass fuses them at the final keypoints, step 3.5.)
+    #    center. (Stored bitmaps are NOT rendered here — the final round's
+    #    sub-pixel pass renders them at the final keypoints, step 3.5.)
     cloud = embedded.patches
     if cloud is None:
         raise ValueError("to_embedded_patches produced no patch frames to refine")
@@ -724,7 +727,7 @@ def embed_patches(
     # Early self-similarity cull: drop points whose round-1 bitmap
     # slides over itself further than the bar, before the multi-round refinement
     # that dominates cost. The reading is per point and depends on nothing else,
-    # so an early cull has no feedback on the survivors' consensus (unlike
+    # so an early cull has no feedback on the survivors' bitmaps (unlike
     # view-dropping). Removing a point from `localizations` propagates cleanly
     # through the compaction renumbering, so culled points are absent from every
     # later round and the output.
@@ -734,7 +737,7 @@ def embed_patches(
         )
         if log and n_culled:
             log(
-                f"  culled {n_culled} points whose consensus slides over itself "
+                f"  culled {n_culled} points whose bitmap slides over itself "
                 f"(ZNCC self-similarity radius > "
                 f"{max_zncc_self_similarity_radius:.2f} grid px)"
             )
@@ -768,7 +771,7 @@ def embed_patches(
         )
     for r in range(2, rounds + 1):
         # Intermediate recons carry no bitmaps — nothing reads them; the final
-        # bitmaps are fused by the last round's sub-pixel pass below.
+        # bitmaps are rendered by the last round's sub-pixel pass below.
         emb_r = compact_to_embedded_patches(
             work_recon, work_cloud, work_loc, hashes, min_views=1
         )

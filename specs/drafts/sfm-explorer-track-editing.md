@@ -828,9 +828,9 @@ specs list as non-goals is what this draft still proposes.
   takes ([`../gui/operation-progress.md`](../gui/operation-progress.md)), so an
   evaluation names its phases the same way whether the Background Task panel or
   a script is watching. `evaluate` and `set_stage` name the phases the batch
-  kernels carry -- `refine` and `localizability` at the cluster stage,
-  `localize`, `refine`, `fuse` and `localizability` at the track stage. The
-  steps that read no photograph take no `Progress`: each is decided by what the
+  kernels carry -- `refine` and `self-similarity` at the cluster stage,
+  `localize`, `refine`, `bitmap`, `self-similarity`, `reference view` and
+  `bitmap scores` at the track stage. The steps that read no photograph take no `Progress`: each is decided by what the
   reconstruction and the person already say, with no phase inside it worth a
   row.
 
@@ -871,7 +871,7 @@ track, added = add_observation(track, 7, (88.5, 210.0))     # the same patch, an
 track, _ = set_verdict(track, added["observation"], "in")
 track, report = evaluate(track, edited, images)             # the cluster kernel, over the seeds
 print(report["measured"], "of", track.observation_count, "register")
-track, staged = set_stage(track, edited, images, "track")   # triangulate, frame, localize, fuse
+track, staged = set_stage(track, edited, images, "track")   # triangulate, frame, localize, render the bitmap
 track, report = sweep_views(track, edited, images, keypoint_search=True)   # proposed here
 track, painted = apply_thresholds(track, min_zncc=0.9)  # proposes verdicts; pinned ones stay
 edited, report = commit(edited, track, node="bull")

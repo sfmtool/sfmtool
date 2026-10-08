@@ -735,7 +735,7 @@ bitmap"); where the rule picks none, the fused mean of the views, recording
 renders the whole cloud, parallel over points. It takes one view per image as
 an `Option`, leaving a `None` view out of every patch's view set, and a
 `Progress` that counts `patches` and can cancel it. It is bound as
-`PatchCloud.render_bitmaps(recon, images, resolution=24, sampler="per_view",
+`PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view",
 progress=None)`, which returns the `(P, R, R, 4)` array and the `(P,)` int32
 reference observations `clone_with_changes(patch_bitmaps=...,
 reference_observations=...)` takes. A bench fit renders one track the same way

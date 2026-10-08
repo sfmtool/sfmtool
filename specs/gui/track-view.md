@@ -1314,7 +1314,7 @@ hover view with the anisotropic sampler where one mip level for both axes would
 read the less compressed axis at least 1.5 times too coarsely
 (`PatchJacobian::sampler`, `tile::tile_sampler`), and with `bilinear_mip`
 otherwise, so a view is drawn with the sampler the bench's evaluation and the
-fuse render it with. Hovering a *Zoom* cell names the sampler and why the
+stored bitmap's render use. Hovering a *Zoom* cell names the sampler and why the
 choice picked it (`table::zoom_sampler_text`): under the rule, the loss against
 the rule's threshold, or that the view is compressed less than √2 along both
 axes; under a fixed choice, that the bench renders every view with that
@@ -2006,9 +2006,14 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   a click on *Img* reversing that and a second putting it back; a click on
   *Proj. err* ordering the rows largest error first and a second click smallest
   first; a click on *Keep* ordering them by how many bars they fail, most first,
-  and a second click fewest first; a first click on each heading but
-  *Reference* starting worst first where a bar judges the column and increasing
-  where none does, and a second click reversing; a row with no key sorting last
+  and a second click fewest first; a first click on each heading, *Reference*
+  and *Bitmap* among them, starting worst first where a bar judges the column
+  and increasing where none does, and a second click reversing; the *Bitmap*
+  cell marking the row the bitmap is the tile of `bitmap 100%`, printing the
+  plain score with the blur-matched one after an arrow where the bitmap was
+  blurred and `sharper` for a row sharper than it, and `-` at the cluster stage
+  and on an unscored row; after a fit, exactly one row drawn as the bitmap's,
+  the one the stored bitmap names, and every other row scored; a row with no key sorting last
   both ways, with ties in increasing order of image; every heading but *Crop*,
   *Patch* and *From* ordering the rows; the *Verdict* text of an `out` row
   counting the bars it fails, `out (2)`, and `out` alone for one that fails

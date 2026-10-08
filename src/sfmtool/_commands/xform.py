@@ -216,7 +216,7 @@ from ..xform._arg_parser import (
     "--filter-by-zncc-self-similarity-radius",
     multiple=True,
     help=(
-        "Remove points whose consensus patch bitmap can slide over itself further "
+        "Remove points whose stored patch bitmap can slide over itself further "
         "than this and still match itself, in patch-grid px from 0 to 3 (e.g., "
         "'2.5'): the ZNCC self-similarity radius, which reads under 1 for a "
         "corner or texture and 3 for an edge or a flat patch. 0 turns it off. "

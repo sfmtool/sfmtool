@@ -220,8 +220,11 @@ class AddPatchBitmapsTransform:
     Moves nothing: positions, normals, frames, keypoints and tracks come out
     exactly as they went in. Each point's bitmap is the tile of the
     observation the reference-view rule picks, and the reference observation
-    column records which (``PatchCloud.render_bitmaps``). A point with fewer
-    than two observations that render in frame gets a zero row.
+    column records which (``PatchCloud.render_bitmaps``); where the rule picks
+    none, the bitmap is the observations' fused mean and the column records
+    ``-1``. A point with fewer than two observations, or one where the rule
+    picks none and fewer than two observations render in frame for the mean,
+    gets a zero row.
     """
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).

@@ -216,7 +216,9 @@ abstraction.
   "Choosing the sampler per view"). **Each view's sampler is chosen once**, for
   the observation at its seed keypoint, and the refine tile, every core read and
   the fused mean use it: the core only slides in the patch's plane,
-  so its Jacobian, and the choice, hardly change as it moves.
+  so its Jacobian, and the choice, hardly change as it moves. The reference
+  tile the stored bitmap is taken from (`render_view_tile`) applies the same
+  rule on its own, to the Jacobian at the final keypoint.
 - **Rendering** reuses `WarpMap::from_patch` + `remap_bilinear` /
   `remap_bilinear_mip` / `remap_aniso_with_pyramid`. Gradients come from
   value+gradient variants of those functions (Design details), giving the

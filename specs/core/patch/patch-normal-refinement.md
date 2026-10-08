@@ -440,8 +440,9 @@ pub struct NormalRefineResult {
     /// the pixel). Populated when `NormalRefineParams::render_bitmap` is set;
     /// `None` otherwise, or when the patch was not refined.
     pub representative: Option<Vec<u8>>,
-    /// The view, as an index into the views the patch was refined over, whose
-    /// tile `representative` is; `None` for a fused mean or no bitmap.
+    /// The view, as an index into the caller's `views` (every input view, also
+    /// when `max_refine_views` refined over a subset), whose tile
+    /// `representative` is; `None` for a fused mean or no bitmap.
     pub reference: Option<usize>,
 }
 

@@ -8,7 +8,8 @@ views to refine against — the views that carry the most information about the
 normal, chosen by a greedy D-optimal rule — so refinement runs on a handful of
 views rather than dozens. It changes only which views the refinement compares;
 every observation stays in the reconstruction, and the stored patch bitmap is
-still the render of the reference view chosen from all of them.
+the render of the reference view chosen from all of them, not from the subset
+(`refine_patch_normal` keeps the full view list for that pick).
 
 `sfm embed-patches` uses it in its second and later refinement rounds, where the
 view set has been expanded by view selection

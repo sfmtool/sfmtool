@@ -3086,8 +3086,9 @@ unit-tested in `normal.rs` itself.
 - On the same track, each row's self-similarity readings (radius, middle,
   grid and ellipse) are those of its tile rendered directly: the patch
   anchored on the keypoint, the sampler rule's sampler, and
-  `zncc_self_similarity_parts` on the result. That guards the readings against
-  the render they now share with the reference view's.
+  `zncc_self_similarity_parts` on the result. The readings are taken on the
+  same render the reference view's are, and the check guards them against a
+  fault in that render.
 - Each row's `pair_zncc` is the median of its row of `member_zncc_matrix`,
   called directly over the `in` rows at the evaluation's resolution and
   sampler.

@@ -663,6 +663,8 @@ one at the cursor, and this block reports it.
                     "max_projection_error_px": 3.0,
                     "geometry_search_min_relative_zncc": 0.7 },
     "reference_observation": 0,      // the row the reference-view rule picked
+    "has_bitmap": true,              // the track has a stored bitmap
+    "bitmap_observation": 0,         // the row the bitmap is the tile of, or null
     "observations": [ { "observation": 0, "camera_image": 3,
                         "camera_image_name": "images/IMG_0042.jpg",
                         "provenance": { "kind": "origin" },
@@ -692,7 +694,12 @@ or `null` where nothing has measured the row -- computed with core's
 `verdicts_if_unpinned` over a copy of the track carrying those bars, the same
 computation the panel colours by. `reference_observation` is the row the
 reference-view rule picked, as `stage_data.reference_observation` reports it on
-the bench. For any other point the block is absent:
+the bench. `has_bitmap` says whether the track has a stored patch bitmap, which
+the rows' `bitmap_zncc` scores are read against, and `bitmap_observation` is
+the row the bitmap is the tile of, null for a bitmap that names none (a mean of
+the rows, or one stored before the reference was recorded) or where there is no
+bitmap, as `stage_data.has_bitmap` and `stage_data.bitmap_observation` report
+them on the bench. For any other point the block is absent:
 there is no call that evaluates an arbitrary point on request, since that is a
 separate operation with a cost. A `select_point` earlier in the same batch of
 calls moves the viewed point with it, since `get_point` asks for the viewed
@@ -3838,8 +3845,10 @@ alone is blurred to the row's sharpness where it is sharper along every
 direction by the ratio of 1.25, `bitmap_zncc` where it is not;
 `bitmap_blur_sigma`, that blur's width in grid px, `0` where read plain; and
 `sharper_than_bitmap`, true where the row's tile is sharper than the bitmap
-along every direction. The bitmap's own row reads `1` and carries no
-`sharper_than_bitmap`. No bar judges the scores. The
+along every direction. The bitmap's own row reads `1` for both scores, `0`
+for `bitmap_blur_sigma` and null for `sharper_than_bitmap`; every one of the
+four is null on a row of a track with no bitmap, and on a row whose score
+could not be read. No bar judges the scores. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a

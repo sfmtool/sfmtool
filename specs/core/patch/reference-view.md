@@ -342,7 +342,18 @@ into the point's own track, in `tracks/reference_observations`.
   The bitmap is then the fused mean of the views
   ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) § "The
   fused mean"), and the point names no reference observation (`-1`). A point
-  with fewer than two views gets no bitmap, as before.
+  with fewer than two views gets no bitmap.
+- **Where the rule's pick is not stored.** A pick the rule reaches only by its
+  last fallback, `without_any`, is one no view passed the coverage and clipping
+  tests for: every candidate's tile is cut by its photograph's border. Such a
+  tile can hold few samples, so the stored bitmap is the fused mean instead,
+  which fills every sample some view covers, and the point names no reference
+  (`ReferenceRender::stored_reference`). Where no fused mean renders either,
+  because no view has the patch in frame, the pick is stored after all, since
+  a part of the patch is better than none. On a solve of `dino_dog_toy`, 559
+  of 18,991 points (3%) take the fused mean by this rule. The evaluation's
+  pick, which Track View and the wire show, is the rule's and is not changed
+  by it.
 
 Every operation that renders the stored bitmap renders it this way:
 
@@ -353,10 +364,11 @@ Every operation that renders the stored bitmap renders it this way:
 | `sfm xform --refine-normals bitmaps=…` | normal refinement with `render_bitmap`, through the refined patch |
 | A bench fit, and `render_bitmap_in_place` | `render_patch_bitmap` over the `in` rows ([editable-track.md](../bench/editable-track.md)) |
 | The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_display_patch_bitmaps`; the references it picks are not written, since the column is not the file's |
+| SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; the bitmaps are the converted value's own, so the references are written with them (`to_embedded_patches` alone gives every point `-1`) |
 
 The templates the localizer, the sub-pixel refiner, congealing and normal
 refinement align views to are not changed by this: they read their own
-consensus of the views as before. Which template the localizer aligns to is a
+consensus of the views. Which template the localizer aligns to is a
 separate decision ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
 Part 5).
 
@@ -495,7 +507,7 @@ tile = patch.render_view_tile(camera, pose, photo, keypoint=(812.4, 377.9))
 print(tile["coverage"], tile["clipped_share"], tile["viewing_angle_deg"])
 ```
 
-`PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view")`
+`PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view", progress=None)`
 returns `(bitmaps, reference_observations)`: the `(P, R, R, 4)` bitmap column
 and the `(P,)` int32 reference observation of each point, which
 `clone_with_changes(patch_bitmaps=…, reference_observations=…)` takes.
@@ -522,8 +534,14 @@ fallback, and missing readings.
 [stored_bitmap/tests.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap/tests.rs)
 checks, on three synthetic views of a painted plane, that the stored bitmap is
 the tile of the view the rule picks (the sharp one), with alpha marking the
-samples on the photograph, and that where every view sees the patch from behind
-the bitmap is the fused mean and names no reference.
+samples on the photograph; that where every view sees the patch from behind
+the bitmap is the fused mean and names no reference; and that a pick reached
+only by the `without_any` fallback is not what `stored_reference` returns,
+with the pick stored after all where no fused mean renders.
+[display_bitmaps/tests.rs](../../../crates/sfmtool-core/src/patch/display_bitmaps/tests.rs)
+checks, on the seoul_bull ground truth, that the whole-cloud render names a
+reference within each point's own track, also when some images have no view
+(so the index is the observation's, not its place among the views to hand).
 [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
 evaluates a track of the seoul_bull ground truth and checks that the rule picks
 exactly one view, with coverage of at least 0.99 and under the angle limit, and
@@ -532,7 +550,9 @@ self-similarity readings are those of its tile rendered directly; that each
 row's pair ZNCC is the median of its row of `member_zncc_matrix` called
 directly; that rendering the bitmap where the track stands stores the tile of
 the row the evaluation picked and names it, and that a commit writes its place
-in the stored track. The Python tests are in
+in the stored track; and that a track from a file that keeps its reference
+column without bitmaps carries the stored reference, which an untouched commit
+writes back. The Python tests are in
 [test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 and
 [test_view_tile_rust_bindings.py](../../../tests/rust_bindings/patches/test_view_tile_rust_bindings.py).

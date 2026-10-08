@@ -394,8 +394,10 @@ is scored against the bitmap twice (`BitmapScorer`, `score_against_bitmap`):
   coherence's Gaussian disk window);
 - **blur-matched**: where the bitmap is the sharper of the pair by the ratio of
   1.25 (`bitmap_blur`: its semi-major axis shorter than the observation's
-  semi-minor axis, and that semi-minor axis at least 1.25 times it), the bitmap
-  alone is blurred to the observation's semi-minor axis, at most 2 grid px, and
+  semi-minor axis, and the target, that semi-minor axis capped at 2 grid px, at
+  least 1.25 times the bitmap's semi-major axis, which counts as at least
+  `MIN_SHARPER_LENGTH` (0.05 grid px) for this test), the bitmap alone is
+  blurred to the target and
   correlated with the observation's tile as rendered; elsewhere the plain score.
 
 **Only the bitmap is blurred.** The bitmap's blur assessment is read once per
@@ -649,7 +651,9 @@ as above, and `valid` is an optional `(k, R, R)` bool stack, `False` marking a
 sample without data; a bitmap sample whose alpha is 0 carries none. `reference`
 is the index of the tile the bitmap is, not computed. It returns a dict:
 `zncc` and `blur_matched_zncc` `(k,)` (NaN where a pair cannot be read, 1 for
-the reference), `blur_sigma` `(k,)` (the width the bitmap was blurred by, 0
+the reference: the Rust call returns `None` there so a caller can tell a score
+that was not computed from one that was, and a float array has no `None`, so
+the binding writes the value that row stands for), `blur_sigma` `(k,)` (the width the bitmap was blurred by, 0
 where it was not), `sharper_than_bitmap` `(k,)` bool and `bitmap_semi_axes`
 `(2,)`. It raises `ValueError` for a bitmap that is not square RGBA of 3 or
 more on a side, tiles of another side, a `reference` past the tiles, a `valid`
