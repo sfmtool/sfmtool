@@ -595,7 +595,9 @@ defaults do not exist in this mode: `view_sets` (`localize_keypoints`,
 `ValueError` names the missing argument), and `select_views` grows an optional
 `candidate_views` mapping (`point_index -> [image_index, ...]`, mirroring
 `view_sets`) that is required with a `CameraViews` and, with a reconstruction,
-overrides the track-derived candidate lists. The reconstruction-mode point-range
+overrides the track-derived lists. Despite its name it plays the track's role
+(the always-admitted views the reference is fused from), not the role of the
+candidates that `select_views` vets. The reconstruction-mode point-range
 validation (cloud `point_indexes` against `recon.points`) does not apply; image
 indexes in the supplied view lists are still validated against `N`.
 

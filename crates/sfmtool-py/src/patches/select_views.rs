@@ -66,6 +66,9 @@ impl PyPatchCloud {
     ///         first argument is a :class:`CameraViews` (there are no tracks);
     ///         with a reconstruction it *overrides* the track-derived list for the
     ///         points present in the map (points absent keep their track views).
+    ///         Despite the name, this is not the pool of candidates to vet: the
+    ///         listed views build the reference and are admitted unchecked, and the
+    ///         candidates are every other image that geometrically sees the surfel.
     ///     keypoint_anchor: Render the **track views** anchored at their stored
     ///         keypoints — the appearance that was actually matched — rather than at
     ///         the point's reprojection, both when fusing the reference and when
