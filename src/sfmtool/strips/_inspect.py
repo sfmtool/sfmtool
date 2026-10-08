@@ -95,7 +95,7 @@ def _prepare_from_sift(
     finite points' normals (rendering their patch bitmaps). Returns the prepared
     recon and the loaded workspace images (so the renderer can reuse them)."""
     from .._workspace_image import read_workspace_image
-    from ..xform._to_embedded_patches import ToEmbeddedPatchesTransform
+    from ..xform import ToEmbeddedPatchesTransform
 
     emb = ToEmbeddedPatchesTransform().apply(recon)
     images = [read_workspace_image(emb.workspace_dir, name) for name in emb.image_names]

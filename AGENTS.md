@@ -64,7 +64,7 @@ spelling its siblings use, which follows from what their `__init__.py` does:
   `sfmtool.<subpackage>.<module>` (`align/`, `analyze/`, `camera/`, `camrig/`,
   `colmap/`, `merge/`, `motion/`, `rig/`, `sift/`; `sift/__init__.py`
   re-exports the extension's `_sfmtool.sift`, not its own modules). No module
-  in it starts with `_`.
+  in it starts with `_`. `web_export/` has no module beside its `__init__.py`.
 - **The `sfmtool` package root** is a re-exporting package: `__init__.py` binds
   the public names through `_LAZY_NAMES`, so its own modules are `_`-named. The
   one exception is `cli.py`, the `sfm` entry point named in `pyproject.toml`.
@@ -75,9 +75,9 @@ spelling its siblings use, which follows from what their `__init__.py` does:
 Outside a re-exporting subpackage, import a name from the subpackage when its
 `__init__.py` re-exports it (`from ..visualization import
 render_heatmap_overlay`). Import from an `_`-named module only for a name the
-`__init__.py` does not re-export, or in a function-local import that exists to
-avoid loading the rest of the subpackage. Tests and `scripts/` may import from
-any module. When a new subpackage is created, make it re-exporting when callers
+`__init__.py` does not re-export. Importing an `_`-named module runs the
+package's `__init__.py` first, so it does not avoid loading the rest of the
+subpackage. Tests and `scripts/` may import from any module. When a new subpackage is created, make it re-exporting when callers
 outside it need only a few entry points, and module-path when callers each need
 a different module from it.
 
