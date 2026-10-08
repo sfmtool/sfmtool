@@ -11,6 +11,7 @@
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built;
 - the per-view measurements of Part 4 that the reference view needs are built and reported by the bench for every track it evaluates: each view's coverage, clipped share, viewing angle and tilt direction, its median ZNCC with the other views, and its agreement over each ninth of the tile with the cell deficit read from it. So is the reference-view rule of Part 5, which picks one view from those readings and says, for each other view, which test turned it away. Track View marks the pick and shows the readings, and the wire and the Python bindings carry them, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes. The rule reports a view; it does not change how the patch bitmap is computed (Part 5);
 - scoring at matched sharpness is **blur-matched ZNCC**: a tile sharper than the other along every direction blurred by a round Gaussian to the other's sharpness along its sharpest direction, read from the tiles rather than the footprint. Alignment runs against the unblurred template, and the blur-matched ZNCC is computed for the score (Part 6). The kernel is built, and so are its first two consumers: the reference view's agreement test and cell check read it by default, and member coherence can read it and by default does not ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)). The reference-view rule returns to plain readings, since blur matching changed its pick on 4 of 661 tracks and agreed with the hand picks no better; the scores of observations against the stored bitmap read it instead (Part 6);
+- the `.sfmr` format gains `tracks/reference_observations` in version 12: per point, an `int32` index of its reference observation within its track, `-1` for none, required whenever the file has patch frames. A loader fills it with `-1` for an older file with patch frames (Part 7);
 - every reading that picks the reference and scores the observations is taken on the renders at the reconstruction's patch resolution `R`, and on nothing outside them: no coarser grid, and no pixels of the photograph beyond the tile (Part 5).
 
 Not decided: the template the localizer aligns views to (a pyramid that refines against the sharpest tile is the direction; Part 5); the functional forms of the weights; whether the bench's ZNCC bars switch to blur-matched scores (Part 6); whether member coherence decides on the full matrix of pairs or on each member against the stored bitmap (Part 5); and whether the per-observation covariance reads the plain or the blur-matched ZNCC (Part 6). See [Open questions](#open-questions).
@@ -20,7 +21,7 @@ Amends:
 - [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md): the representative fuse
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the blur-matched score if they switch to it (an open question)
-- [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
+- [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`, and version 12's `tracks/reference_observations`, required with patch frames (Part 7)
 - [core/patch/reference-view.md](../core/patch/reference-view.md): the stored bitmap is the reference view's render, in place of the fused mean, and the rule's agreement test and cell check read plain ZNCC (Part 5)
 - [core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md): its consumers, the scores of observations against the stored bitmap in place of the reference-view rule (Part 6)
 
@@ -176,7 +177,7 @@ The built rule reads neither of two signals the measurements of Part 4 list. It 
 
 Blur matching is applied where it does change the result, to the scores of the observations against the stored bitmap (Part 6). `blur_matched_pairs` and `PairReadings` leave `patch::reference_view`; the pairing rule in `patch::pair_sharpness` stays for member coherence's option.
 
-**The stored bitmap is the reference view's render.** The point's patch bitmap is the reference view's `R×R` tile, rendered as the rule read it: through the point's patch re-anchored on the reference observation's keypoint, at the reconstruction's patch resolution `R`, with the sampler the rule in Part 3 picks for that view. It replaces the fused mean in `patch_bitmaps_y_x_rgba` and wherever the bitmap is stored.
+**The stored bitmap is the reference view's render.** The point's patch bitmap is the reference view's `R×R` tile, rendered as the rule read it: through the point's patch re-anchored on the reference observation's keypoint, at the reconstruction's patch resolution `R`, with the sampler the rule in Part 3 picks for that view. It replaces the fused mean in `patch_bitmaps_y_x_rgba` and wherever the bitmap is stored, and the file records which observation it is, in `tracks/reference_observations` (Part 7).
 - **Why not a mean.** The photographs differ in exposure and white balance. The ZNCC is blind to those differences, but a mean of the tiles is not. Without a model of each photograph's brightness and colour shift, a mean over differently exposed photographs mixes colours that never appeared together on the surface, and its detail is blurred by every view that does not line up exactly. A single view has neither problem.
 - **What a single view costs.** It keeps that view's noise, and any highlight or occluder the measurements missed. The bitmap also changes all at once when another view comes to rank higher.
 - **The bitmap's blur assessment.** The bitmap's blur assessment ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)), its semi-axes unblurred and after the two probe blurs, is read once per track, on the bitmap, with the reading its own ellipse came from. Every observation's score against the bitmap reads its width off that one assessment (Part 6). Stored beside the bitmap (Part 7), it lets a view added later, by Add Image to Tracks or a bench geometry search, be scored against the stored bitmap with no reading of the other views.
@@ -293,13 +294,24 @@ Optional columns, parallel to the other `tracks/*` arrays. Their names follow th
 
 The middle-square and per-cell readings are left out. They are cheap to recompute once a render exists, and nothing proposed here reads them without one.
 
-### The stored bitmap's reference and blur assessment
+### The reference observation (version 12)
 
-The stored bitmap is one observation's render (Part 5), so the file also records, per point, optional columns parallel to the other `points3d/*` arrays:
-- **Which observation it is**, as the index of that observation among the point's observations, so a reader can tell the reference's own observation, whose score against the bitmap is 1, and re-render the bitmap from it.
-- **The bitmap's blur assessment**: its self-similarity semi-axes `[major, minor]` in grid px, and the semi-axes after each of the two probe blurs, `(N, 3, 2)` `float32` in all, `NaN` where it was not read. With them a writer scores a view against the stored bitmap, blur-matched, without reading the bitmap again, as Add Image to Tracks does for an added view. The probe widths are recorded in `points3d/metadata.json`, since the assessment is comparable only with one read at the same widths.
+The stored bitmap is one observation's render (Part 5), so the file records, for every track, which observation that is. This is a format version bump, from 11 to 12.
 
-Their names are settled with the glossary when this part is built. Like the radii, the assessment describes the bitmap as rendered; a writer that re-renders the bitmap reads it again.
+| Entry | Shape, type | Meaning |
+|---|---|---|
+| `tracks/reference_observations.{N}.int32.zst` | `(N,)` `int32` | Per point, the index of its reference observation among the point's own observations, `0` to `observation_counts[i] − 1`; `-1` where the point has no reference |
+
+- **Required with patch frames.** A version 12 file whose `points3d/metadata.json` has `has_uv_frames: true` carries the entry; a file without patch frames does not. No new metadata flag is needed, since the patch-frame flag says whether it is present.
+- **Why an index within the track.** The track arrays are sorted by `(point_indexes, image_indexes)`, so a point's observations are one contiguous run and the index counts from the start of that run. Removing other points, which every point filter does, then leaves it unchanged; an index into all `M` observations would have to be renumbered by every such filter.
+- **`-1`, no reference.** The point's bitmap is not a reference view's render: the rule has not run on it, it found no candidate, or the bitmap is a fused mean from before version 12. A reader treats such a point as it treats points today.
+- **Keeping it true.** A writer that removes a point removes its row. A writer that removes or reorders a point's observations moves the index with the reference observation, and writes `-1` where it removes the reference observation itself. A writer that re-renders the bitmap from another observation writes that observation's index. A writer that moves geometry without re-rendering the bitmap keeps the index, as it keeps the bitmap.
+- **The hash.** The entry is part of `tracks_xxh128` when present, in its lexicographic slot, after `point_indexes`.
+- **Loading an older file.** A loader that reads a file below version 12 with patch frames creates the column and fills it with `-1`, so in memory every reconstruction with patch frames has one, and every later save writes it. A file below version 12 without patch frames gets no column.
+
+### The bitmap's blur assessment
+
+With the reference recorded, the file can also record the bitmap's blur assessment per point, an optional column parallel to the other `points3d/*` arrays: its self-similarity semi-axes `[major, minor]` in grid px, and the semi-axes after each of the two probe blurs, `(N, 3, 2)` `float32` in all, `NaN` where it was not read. With it a writer scores a view against the stored bitmap, blur-matched, without reading the bitmap again, as Add Image to Tracks does for an added view. The probe widths are recorded in `points3d/metadata.json`, since the assessment is comparable only with one read at the same widths. Its name is settled with the glossary when this part is built. Like the radii, the assessment describes the bitmap as rendered; a writer that re-renders the bitmap reads it again.
 
 ### When a stored radius stops describing the view
 
