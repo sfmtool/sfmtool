@@ -3,10 +3,12 @@
 A person looking at one photograph of a reconstruction can point at a pixel
 and ask what the other photographs agree is there, or near there. This
 operation answers with **nearby tracks**: 3D points close to the pixel in that
-photograph that several photographs see, each one ready to be put on the bench
-and worked on. The scene near a pixel can hold surfaces at very different
-distances, a tree in front of a building in front of the sky, so the answer is
-a set of hypotheses rather than one estimate. The tracks are grouped into
+photograph that several photographs see, each one ready to be put on the
+[bench](bench.md), the list of labelled items held beside a reconstruction to
+be judged and edited before they are committed as points. The scene near a
+pixel can hold surfaces at very different distances, a tree in front of a
+building in front of the sky, so the answer is a set of hypotheses rather than
+one estimate. The tracks are grouped into
 **depth layers**, ranges of distance along the pixel's ray that overlap, and
 each layer carries a rank, the evidence behind it, and a confidence that the
 pixel is on it. Each track gets a label that names the query, its layer's rank
@@ -25,7 +27,9 @@ of the track-at-pixel harness
 `find_anchors`) moved into core, and it scores the same there. The viewer
 calls it from Image Detail's *Find Nearby Tracks* and the wire's
 `find_nearby_tracks`, which put every usable track on the bench and commit the
-new ones as one version ([the viewer](../../gui/bench.md#find-nearby-tracks)).
+new ones as one version; the wire's `commit` option, `true` by default, leaves
+them uncommitted on the bench when `false`
+([the viewer](../../gui/bench.md#find-nearby-tracks)).
 
 ## Rust API
 
@@ -45,8 +49,8 @@ pub fn find_nearby_tracks(
     options: &NearbyTrackOptions,
     progress: &Progress<'_>,
 ) -> Result<NearbyTracks, NearbyTracksError>;
-// NoSuchImage | PixelOffImage | InputMismatch | RowMismatch
-// | NotAMatchingSource | Cancelled
+// Label (checked first) | NoSuchImage | PixelOffImage | InputMismatch
+// | RowMismatch | NotAMatchingSource | Cancelled
 
 pub struct NearbyTrackSources<'a> {
     pub clusters: Option<&'a MatchesClusters>,      // the clusters source
@@ -187,12 +191,14 @@ measures each one.
 after the sources when they leave the pixel's distance open: the usable
 candidates fall in no depth layer or in more than one, or none lies within a
 pixel of the pixel. The count of layers is the grouping alone, which reads no
-photograph. A pixel on the sky or a distant skyline is the case this is for:
-the sources find nearer points around it, often one layer of them, and none at
-the pixel itself. Each reading keeps the range the sweep gave it, the stretch
-between its neighbouring disparities; a reading the sweep's refit moved gets
-its sightings' range instead, like a matching source's candidate. `Always`
-and `Never` run it or not regardless.
+photograph: it is taken with `DepthLayerOptions::default()` and the evidence
+off, not with `options.layers`, whose fields all govern the reading and the
+ranking and none the grouping. A pixel on the sky or a distant skyline is the
+case this is for: the sources find nearer points around it, often one layer of
+them, and none at the pixel itself. Each reading keeps the range the sweep gave
+it, the stretch between its neighbouring disparities; a reading the sweep's
+refit moved gets its sightings' range instead, like a matching source's
+candidate. `Always` and `Never` run it or not regardless.
 
 **The layers.** Every track found, the sweep's readings after the sources',
 goes to [`depth_layers`](depth-layers.md) with its range and class, and gets
@@ -244,7 +250,10 @@ sweep's own check dropped no reading in either ground truth.
 A query's tracks share a **group label**, the queried image's stem and the
 pixel rounded to whole pixels, `<stem>@<x>,<y>`: the label a cluster seeded at
 the pixel gets ([`ClusterSeed::label`](editable-track.md)), so a person who
-knows one reads the other. A caller's `options.label` replaces it. Each usable
+knows one reads the other. A caller's `options.label` replaces it; one that is
+empty, all whitespace or holds a control character is refused
+(`NearbyTracksError::Label`, from [`check_label`](bench.md)) before anything
+else is checked. Each usable
 track's label is the group label, a space, its layer's rank, and a letter for
 its place in the layer, `a` first, `z` then `aa`; an existing point adds
 ` pt <index>`:
@@ -254,7 +263,10 @@ its place in the layer, `a` first, `z` then `aa`; an existing point adds
     frame_13@412,230 2a
 
 **The rank comes first** because it says which depth the photographs favour,
-so the labels sort best-supported first. When the layers are not ranked (the
+so the labels run best-supported first in `bench_order()`, which orders by
+rank and then by place in the layer. A plain string sort of the labels does
+not give that order once there are ten layers (`10a` before `2a`) or more than
+26 tracks in a layer (`aa` before `b`). When the layers are not ranked (the
 evidence is off), the layer's place, nearest first, stands in for the rank.
 
 **Within a layer the tracks run by their distance from the pixel, nearest
@@ -299,14 +311,16 @@ or `+`-joined, with `tracks` accepted for `points`; `stop`; `enough_count`;
 `"<section>.<field>"`, as `build_track_at_pixel` takes them: `points.`,
 `clusters.`, `guided.`, `constellation.`, `range.`, `far_field.`, `layers.`
 and `tracks.`. An unknown key is a `ValueError`, as is a query that names no
-place.
+place and a `label` the core refuses (empty, all whitespace, or holding a
+control character).
 
 The result is a dict. `tracks` holds the labelled tracks in label order, each
 with `label`, `source`, `found` (its index into `found`), `layer`, `rank`,
 `confidence`, `pixel`, `distance_px`, `range`, `n_views`, `point` and
 `track` (an `EditableTrack`, or `None` for an existing point or when building
-is off), and `error` when building failed. With `commit=True` every built
-track is committed with the bench's commit in label order, its row's `point`
+is off), and `error` when building failed. `rank` and `confidence` are `None`
+when the layers are not ranked (`layers.evidence` off). With `commit=True`
+every built track is committed with the bench's commit in label order, its row's `point`
 set to the new point, and the call returns `(EditedReconstruction, result)`; a
 track the commit refuses gets an `error` and the rest are committed.
 
@@ -348,7 +362,8 @@ binding's readings after them, and the depth-layers binding's layers and
 support; the labels, their order and the caller's label, and that a
 duplicate names a labelled track and is left out; that `commit=True`
 adds every built track as a point and leaves the given version alone; the
-skipped sources; and the options' refusals.
+skipped sources; and the refusals of the options and of a label that is
+all whitespace or holds a control character.
 
 **Parity with the harness.** Run from the harness with `finder_impl=rust` and
 `finder_impl=python`, over both ground truths (seoul_bull's 1277 queries and

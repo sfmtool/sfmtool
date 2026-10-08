@@ -57,7 +57,7 @@ def _find_nearest_within_tolerance(
 
 
 def _flow_to_color(flow_u: np.ndarray, flow_v: np.ndarray) -> np.ndarray:
-    """Convert optical flow to color using the Middlebury color wheel convention.
+    """Convert optical flow to color on an HSV hue wheel.
 
     Direction maps to hue, magnitude maps to saturation. Zero flow is white,
     strong flow is vivid color. Value is always full brightness, so small
@@ -171,9 +171,9 @@ def draw_flow_visualization(
     """Visualize optical flow between two images.
 
     Without a reconstruction (recon=None):
-        Draws flow-colored arrows from SIFT keypoint positions in image1
-        to their advected positions, overlaid on the target image (image2).
-        A side-by-side or separate output is produced.
+        Draws only the advection hits (image1 keypoints whose advected
+        position lands within tolerance of an image2 keypoint), each in its
+        own palette colour. A side-by-side or separate output is produced.
 
     With a reconstruction (recon provided):
         Compares flow advection against reconstruction correspondences:
@@ -427,9 +427,10 @@ def _draw_flow_only_mode(
 ) -> None:
     """Draw flow visualization without reconstruction comparison.
 
-    Shows flow color field on image1, and on image2 shows advected keypoints
-    with arrows from image1 keypoints to where they land. Keypoints that
-    land near an image2 keypoint are highlighted.
+    Draws only the hits: each hit's keypoint on image1, and on image2 its
+    advected position joined by a line to the image2 keypoint it landed
+    near, one palette colour per hit. The flow color field is saved as a
+    separate image.
     """
     h2, w2 = img2_bgr.shape[:2]
 
@@ -617,7 +618,7 @@ def _draw_comparison_mode(
 
 
 def _direction_color_bgr(u: float, v: float) -> tuple[int, int, int]:
-    """Get the Middlebury color for a unit flow direction, fully saturated."""
+    """Get the hue-wheel color for a unit flow direction, fully saturated."""
     angle = np.arctan2(v, u)
     hue = int((angle + np.pi) / (2 * np.pi) * 179)
     hsv = np.array([[[hue, 255, 255]]], dtype=np.uint8)
@@ -690,7 +691,7 @@ def _save_flow_color_image(
 ) -> None:
     """Save standalone flow color visualization as a separate image file.
 
-    Uses the Middlebury color wheel convention: direction maps to hue,
+    Uses an HSV hue wheel: direction maps to hue,
     magnitude maps to saturation, white means zero flow.
     """
     flow_color = _flow_to_color(flow_u, flow_v)

@@ -59,6 +59,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         self_similarity::zncc_self_similarity_parts_stack,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(blur_matched::assess_blur, m)?)?;
+    m.add_function(wrap_pyfunction!(blur_matched::blur_sigma_to_reach, m)?)?;
+    m.add_function(wrap_pyfunction!(blur_matched::blur_to_length, m)?)?;
     m.add_function(wrap_pyfunction!(blur_matched::blur_matched_zncc_matrix, m)?)?;
     // The default bar on the ZNCC self-similarity radius, shared by the member
     // gates, the bench and the batch culls on a point's consensus bitmap.

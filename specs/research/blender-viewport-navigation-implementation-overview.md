@@ -1,6 +1,6 @@
 # Blender Viewport Trackpad Navigation Implementation (Windows)
 
-This document details how Blender implements precision trackpad/touchpad navigation in the viewport on Windows.
+This note records how Blender reads precision-touchpad gestures on Windows through Microsoft's DirectManipulation API and turns them into viewport pan and zoom, as background for SfM Explorer's own touchpad handling in [windows-precision-touchpad.md](../gui/windows-precision-touchpad.md).
 
 ## Overview
 

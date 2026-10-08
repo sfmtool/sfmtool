@@ -5,7 +5,9 @@ observe in that image's photograph, adds the observations whose appearance
 agrees with the point's other observations, and installs the answer as the
 reconstruction's next **version**, which an undo steps back out of. Nothing else
 moves: no point, frame, bitmap or camera, and every index still means what it
-meant.
+meant, except that point edits still pending in the overlay are folded in
+first, closing up deleted points' slots
+([../document-model.md](../document-model.md) § "Two kinds of edit").
 
 It is the step that follows [Resect Image](resect-image.md). A resection gives
 an image a pose that agrees with the rest of the reconstruction; this gives it

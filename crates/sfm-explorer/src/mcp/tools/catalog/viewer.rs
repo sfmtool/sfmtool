@@ -254,7 +254,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           poses and bench, and return it to its own frame, as one version. The \
                           picture does not move: what changes is which side of the display the \
                           numbers live on, so a save_reconstruction afterwards carries the new \
-                          frame. A bulk edit that renumbers nothing, and undo puts both the data \
+                          frame. A bulk edit that renumbers nothing unless a point edit is \
+                          pending, in which case the deleted slots close up first, as \
+                          delete_point describes, and undo puts both the data \
                           and the transform back. Refused on a reconstruction whose transform is \
                           the identity.",
             kind: Write,
@@ -524,9 +526,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           it restores to and leaves it maximized, and what the section does not \
                           carry is preserved. The layout section replaces the whole arrangement \
                           — a panel it does not mention is closed, though every panel keeps its \
-                          own state — or is the string \"default\" for the stock seven-panel \
-                          grid. A document that does not validate is refused whole, naming what \
-                          was wrong and where, and nothing is applied.",
+                          own state — or is the string \"default\" for the default layout, \
+                          every panel open. A document that does not validate is refused whole, \
+                          naming what was wrong and where, and nothing is applied.",
             kind: Write,
             schema: object(
                 &[

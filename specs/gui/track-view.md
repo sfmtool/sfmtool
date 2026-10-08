@@ -46,12 +46,16 @@ The panel is [track_view/](../../crates/sfm-explorer/src/track_view/):
 [mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox,
 the empty state and the choice between them and the body,
 [recent.rs](../../crates/sfm-explorer/src/track_view/recent.rs) is the recent
-items strip, and
+items strip,
+[header_buttons.rs](../../crates/sfm-explorer/src/track_view/header_buttons.rs)
+holds the copy and go-to icon buttons the header draws beside a point ID in
+either mode, and
 [body/](../../crates/sfm-explorer/src/track_view/body/) is the one body that
 draws both modes: `mod.rs` the header, the toolbar and the boxes, `table.rs` the
 observation table, `tile.rs` the tile each row draws and its hover view,
 `crop.rs` the crop of the photograph beside the tile and its hover view,
-`surface_plot.rs` the self-similarity surface plot, and `patch.rs` the warp a
+`surface_plot.rs` the self-similarity surface plot, `reference.rs` the
+*Reference* column's cell, hover text and sort key, and `patch.rs` the warp a
 track-stage tile is rendered through and the picture of a track's own patch,
 which the header and the strip both draw. The
 viewed track is [bench/viewed.rs](../../crates/sfm-explorer/src/bench/viewed.rs).
@@ -96,6 +100,7 @@ pub struct TrackBodyResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub fit: bool,
+    pub(crate) normal: Option<NormalStep>,    // one of the three normal buttons, with its settings
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>, // Edited: a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
@@ -609,8 +614,8 @@ kept rows; and the angle and the two diagnostics are computed from the rays of
 the kept rows' cameras to the position, and left out where the track has no
 position yet. A cluster has no position and shows none of them.
 
-The metrics are [metrics/](../../crates/sfm-explorer/src/metrics), at the crate
-root, because the Image Detail overlay and `get_point` read the same numbers.
+The metrics are [metrics.rs](../../crates/sfm-explorer/src/metrics.rs), at the
+crate root, because the Image Detail overlay and `get_point` read the same numbers.
 The summary is computed once per key and cached on the body, since the
 diagnostics triangulate: for the viewed track per point and document serial,
 for a bench track per track `Arc` and version.
@@ -763,8 +768,11 @@ grid of pieces tiling the whole patch and takes the plane through all their
 centres. The two boxes after them say how both cut: *per axis*, from 2 to 8
 pieces along each axis (2 by default), which is a row of that many on each axis
 for *Finite Diff Normal* and that many by that many for *Grid Plane Normal*; and
-*overlap*, from 0% to 90% of a piece's side (0% by default). The labels say
-which: "3 pieces along each axis" for the rows, "3x3 pieces" for the grid. All
+*overlap*, from 0% to 90% of a piece's side (0% by default); they read
+`2 per axis` and `0% overlap`. The version each of the two pushes, and its
+Action Log row, names the cut it was made with: `Finite-difference normal of
+<label> (3 pieces along each axis, 25% overlap)` for the rows, `Grid-plane
+normal of <label> (3x3 pieces, 25% overlap)` for the grid. All
 three entries run on a worker like *Fit*, push one version, and grey
 with `normal_preconditions`' sentence at the cluster stage, at infinity, and
 with fewer than two `in` observations; the boxes grey with them. The boxes are
@@ -988,8 +996,8 @@ beside it is that patch warped square, so the eye reads from the raw pixels to
 the picture the numbers are read from. The two photometric columns come
 straight after the verdict, *ZNCC* and then *Self-similarity*, since they are
 the readings the verdict is most often decided by; the reprojection error, the
-shift, the patch's zoom, the status and, in Edited mode, the provenance follow
-them. The image's name is the last column, 220 points wide: hovering it or the
+shift, the patch's zoom, the *Reference* column, the status and, in Edited
+mode, the provenance follow them. The image's name is the last column, 220 points wide: hovering it or the
 *Img* cell shows the name whole, so the room in the middle of the table goes to
 the readings. The columns stand at the same offsets in both modes, and Viewed
 mode has no *From* column, since every row of a committed point came from the
@@ -1321,21 +1329,23 @@ bitmap.** A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a
 candidate has at least 99% of its tile on the photograph, at most 5% of the
 photograph under the tile clipped, a viewing angle of at most 65°, and no ninth
-where it agrees with the other rows more than 0.25 below the track's **typical
+where it agrees with the other rows more than 0.3 below the track's **typical
 agreement** there, the median over the `in` rows; of the candidates whose pair
 ZNCC, the median of its ZNCCs with the other `in` rows, is within 15 points of
 the best candidate's, the rule picks the one with the smallest self-similarity
-radius. Both agreements are **blur-matched** by default: before two rows'
-tiles are correlated the sharper is blurred to the other's sharpness, along
-each direction in which their self-similarity ellipses differ by more than a
-quarter ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
-so a sharp row is not counted as disagreeing for detail the blurrier rows lack.
-Under plain readings the cell bar is 0.3. When no row passes, the rule drops
-the 65° limit, then the check of the ninths, then coverage and clipping; a row that sees the patch at 90° or more,
-edge on or from behind, is never picked. The cell's first line is the pick,
-`reference`, drawn on a green fill, or the word for the first test that turned
-the row away: `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less`
-or `less sharp`. The hover of a `less sharp` row with no self-similarity radius
+radius. Both agreements are **blur-matched** by default: where one row's tile
+is sharper than the other's along every direction (the other's
+self-similarity semi-minor axis is at least a quarter longer than its
+semi-major axis), it is blurred by a round Gaussian until its semi-major axis
+reaches the other's semi-minor axis before the two are correlated
+([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)),
+so a sharp row is counted as disagreeing less for detail a blurrier row lacks.
+The cell bar is 0.3 on either reading. When no row passes, the rule drops the
+65° limit, then the check of the ninths, then coverage and clipping; a row
+that sees the patch at 90° or more, edge on or from behind, is never picked.
+The cell's first line is the pick, `reference`, drawn on a green fill, or the
+word for the first test that turned the row away: `partial`, `clipped`,
+`oblique`, `ninth differs`, `agrees less` or `less sharp`. The hover of a `less sharp` row with no self-similarity radius
 says the rule could not compare its sharpness, rather than naming a sharper
 row. The column says *ninth* for a cell of the ZNCC grid, since a *cell* in the
 table is one row's entry in one column. Its second line is the viewing angle, the angle
@@ -1690,8 +1700,12 @@ observation's row, replacing the selection as a plain click does
 layer", [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)). The 3D viewer
 draws the circle of the one selected row larger.
 
-Track View asks the node to look for its SIFT index whenever it draws, in either
-mode, so a session finds the index the last one built without anyone asking.
+Track View asks the node to look for its index files, the SIFT index and the
+cluster-patches file ([`index-files.md`](index-files.md)), whenever it draws, in
+either mode, and to re-derive their states when the node's image table, or the
+index the cluster patches are judged against, has moved. A session so finds the
+files the last one built without anyone asking, and a look that found nothing
+is remembered, so a node with neither file is not checked on every frame.
 
 #### A point with no patch frame
 
@@ -1982,8 +1996,17 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   each row's *Zoom*
   cell printing the zoom of its tile's Jacobian, and the same with no photograph
   decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
-  with no zoom last either way; the *Zoom* cell's two significant digits chosen
-  after rounding, with both numbers printed where they agree; the
+  with no zoom last either way; the rows starting in increasing order of image,
+  a click on *Img* reversing that and a second putting it back; a click on
+  *Proj. err* ordering the rows largest error first and a second click smallest
+  first; a click on *Keep* ordering them by how many bars they fail, most first,
+  and a second click fewest first; a first click on each heading but
+  *Reference* starting worst first where a bar judges the column and increasing
+  where none does, and a second click reversing; a row with no key sorting last
+  both ways, with ties in increasing order of image; every heading but *Crop*,
+  *Patch* and *From* ordering the rows; the *Verdict* text of an `out` row
+  counting the bars it fails, `out (2)`, and `out` alone for one that fails
+  none; the *Zoom* cell's two significant digits chosen after rounding, with both numbers printed where they agree; the
   *Self-similarity* hover's table of ellipses in grid px, image px and world
   space, each as major × minor axis and angle, with `+` on a lower bound and no
   angle on a circle, every world length scaled to the one
@@ -2022,8 +2045,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **Listing the bench in the panel.** The Scene tree's two Bench groups are the
   list, per node, with the stage each item is at; the recent items strip holds
   only the last few items focused.
-- **Deciding anything from a number.** The boxes propose and the person
-  decides.
+- **Acting on the track from a number beyond its verdicts.** The bars set the
+  verdict of every unpinned row (§ "The Keep switch is the verdict"), and a
+  pinned verdict stands against them; every other step on the track, a fit, a
+  normal, a stage change, a split, a search or a commit, is made only when the
+  person asks for it.
 - **A second tile beside the first**, the cluster template and each member warped
   onto it side by side, and **the remaining searches**, both proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).

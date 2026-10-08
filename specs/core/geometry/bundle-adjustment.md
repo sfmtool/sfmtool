@@ -109,7 +109,7 @@ pub struct BundleAdjustment {
     pub cameras: Vec<CameraIntrinsics>,  // n_cam, the cameras after the solve
     pub residual_norms: Vec<f64>,        // n_obs
     pub point_at_infinity: Vec<bool>,    // n_pt, the representation each ended with
-    pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under NO_CROSS
+    pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under NO_CROSS or on a degenerate exit
 }
 ```
 
@@ -163,7 +163,7 @@ branch on a null sink, and the solve runs exactly as it did before the parameter
 existed, which is asserted bit for bit
 ([../../gui/operation-progress.md](../../gui/operation-progress.md)).
 
-Per schedule round, mirroring the experiment scripts exactly:
+Per schedule round:
 
 1. **Retriangulate (rounds after the first).** Rebuild *every* point from
    *all* supplied observations at the current poses, through the point
@@ -181,10 +181,11 @@ Per schedule round, mirroring the experiment scripts exactly:
    accumulates its own observations in the order the caller listed them, and
    solved through [`reconstruction::triangulation::triangulate_batch`]. A track
    with fewer than 2 usable observations becomes `NaN`; a point with no
-   observations at all becomes `NaN` too (the callers refill from their full observation set —
-   the "refill after BA" rule of the bootstrap spec). Re-admission is the
-   point: observations a bad init lost re-enter once the refined cameras
-   explain them.
+   observations at all becomes `NaN` too. What happens to such a point is the
+   caller's choice: growth refills it from its full observation set after the
+   adjustment, and the reconstruction-level adjustment deletes it.
+   Re-admission is the point: observations a bad init lost re-enter once the
+   refined cameras explain them.
 2. **Trim.** Keep observations with residual norm `< trim_px`, an in-front
    measure over the round's in-front floor (below), and a finite point; then
    drop observations of points with fewer than `min_track` survivors. The
@@ -195,9 +196,13 @@ Per schedule round, mirroring the experiment scripts exactly:
    centre and the domain test is `ray_to_pixel`, whose failure is an invalid
    residual. A direction's measure is checked against zero (see "Points at
    infinity").
-   If fewer than `min_obs` observations survive, return degenerate: state
-   passes through, `residual_norms` all `+∞` (the fast bootstrap's
-   "wildly wrong focal" guard).
+   If fewer than `min_obs` observations survive, return degenerate:
+   `residual_norms` all `+∞`, `free_point_decision` `None`, and the poses,
+   points and cameras as they stand at that moment. When the first round exits
+   this way that is the caller's input; when a later round does, it is the poses
+   and lenses the last completed round settled on, with the points this round
+   re-triangulated from them. A wildly wrong focal is the usual cause, and a
+   caller recognises the exit by its all-`+∞` residuals.
 3. **Solve.** One robust sparse Levenberg–Marquardt solve (below) over the
    kept observations at the round's `loss_scale`.
 
@@ -591,7 +596,8 @@ the returned row is a direction, `False` where it is a position.
 `free_point_decision` is `BundleAdjustment::free_point_decision` as a dict with
 the `FreePointDecision` fields as keys (`sigma_px` or `None`,
 `observation_count`, `outlier_count`, `decided`, `converged`, `to_finite`,
-`to_direction`, `unscored`), and `None` with `free_points_cross=False`.
+`to_direction`, `unscored`), and `None` with `free_points_cross=False` or
+on a degenerate exit.
 
 A reconstruction read from a `.sfmr` carries its constraints as the
 `point_constraints` column, a `uint8` array in the canonical numbering (`0`
@@ -917,9 +923,11 @@ by the point-or-bearing test
 ([batch-triangulation-api.md](../reconstruction/batch-triangulation-api.md)
 § "Point or bearing") at the noise level the final round's residuals measure.
 `BundleAdjustment::free_point_decision` reports that decision; it is `None`
-with the crossing off. A free point that ends as a direction comes back as a
-unit row, as any direction does. Ranged and held points keep their own
-parametrisations and are not decided.
+with the crossing off, and when the solve exits degenerate (see "The staged
+loop"), since no final round was solved to measure a noise level on. A free
+point that ends as a direction comes back as a unit row, as any direction
+does. Ranged and held points keep their own parametrisations and are not
+decided.
 
 The crossing is the default, `FreePointPolicy::default()` being
 `FreePointPolicy::CROSS`, so every caller in the crate crosses unless it states
@@ -936,12 +944,13 @@ reconstruction should read: a caller that holds the representation it was
 handed is the one making a choice, and it says so.
 
 The kernel says what the decision did through its `progress`, after the
-rounds: `free points decided at 0.412 px: 3 to finite, 25 to directions`,
+rounds: `free points decided at noise 0.412 px: 3 to finite, 25 to directions`,
 with `, 2 not scored: too few kept observations` appended when some free
 points could not be scored and `; the final round stopped on its iteration
 budget` when it did not converge, or `free points not decided: the final round
 kept no observation of a finite point`. An empty schedule, which only measures,
-says nothing.
+says nothing. `sfm xform --bundle-adjust` prints its own line from the returned
+decision instead (`Free points decided at 0.412 px: …`, without `noise`).
 
 #### The parametrisation
 
@@ -1770,14 +1779,17 @@ validation, and outputs are unchanged.
 - Rigs. Every image keeps its own free pose; a rig-aware adjustment would solve
   one pose per frame plus camera-to-rig offsets, which is a different
   parameterization.
-- Releasing some cameras and not others. The release flags are requests to
-  every camera, decided per camera only by what its model admits.
 - Per-observation camera models: an observation's camera is its image's.
 - Optimizing distortion beyond the `k1` of `SIMPLE_RADIAL_FISHEYE` and the
   spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`, or the principal point;
   `opt_f`/`opt_k1`/`opt_bspline` cover each camera's focal and those two radial
   releases only.
-- Gauge fixing, covariance estimation, or constraint handling — callers
-  own the gauge (the bootstrap's evaluation aligns by similarity anyway).
-- Replacing the production solvers (`sfm solve` wraps COLMAP/GLOMAP); this
-  kernel serves the bootstrap experiments and whatever grows out of them.
+- Gauge fixing and covariance estimation. The kernel holds no pose fixed to
+  set the gauge and reports no uncertainty. A caller that wants a gauge states
+  it through the point constraints (held points, or ranged points, which fix
+  the scale; see "Point constraints") or aligns the result afterwards.
+- Replacing the production solvers (`sfm solve` wraps COLMAP/GLOMAP). The
+  kernel runs inside reconstruction growth and rotation initialization, and
+  through the reconstruction-level adjustment it backs the viewer's Bundle
+  Adjust command, the `bundle_adjust` MCP tool and `sfm xform --bundle-adjust`
+  on spline cameras.

@@ -18,6 +18,7 @@
 //! computed; the bench reports the rule's pick beside its other readings.
 
 mod agreement;
+mod pair_readings;
 mod tile;
 
 #[cfg(test)]
@@ -27,6 +28,9 @@ pub(crate) use agreement::finite_middle;
 pub use agreement::{
     blur_matched_agreement, cell_agreement, cell_agreement_from_pairs, pair_zncc_grid,
     BlurMatchedAgreement, CellAgreement,
+};
+pub use pair_readings::{
+    blur_matched_pairs, pair_zncc_readings, BlurMatchedPairs, PairReadings, MIN_WINDOWED_SAMPLES,
 };
 pub use tile::{clipped_share, render_view_tile, ViewTile};
 
@@ -74,6 +78,12 @@ pub const REFERENCE_FACING_LIMIT_DEG: f64 = 90.0;
 /// tile but not in one part of it: an occluder, a shadow edge, or parallax
 /// within the tile. Values from `0.2` to `0.4` gave the same agreement with the
 /// picks on the tuning half of the review cases; `0.3` is the middle.
+///
+/// The bar is the same on the blur-matched cell deficit. There, with the margin
+/// at `0.15`, `0.3` and `0.35` agreed best with the hand picks on the tuning
+/// half (18 of 39 exactly, 36 within the lenient bounds), and `0.25` and `0.4`
+/// on one track fewer within the lenient bounds. See
+/// `specs/core/patch/reference-view.md` § "Blur-matched agreement".
 pub const REFERENCE_MAX_CELL_DEFICIT: f64 = 0.3;
 
 /// The typical agreement a cell needs before the cell check judges it.
@@ -99,25 +109,16 @@ pub const REFERENCE_AGREEMENT_MARGIN: f64 = 0.15;
 /// [`REFERENCE_AGREEMENT_MARGIN`] for a rule whose agreement test reads the
 /// blur-matched pair ZNCC ([`ReferenceRuleInputs::agreement`]).
 ///
-/// Blur matching takes away most of the penalty a sharp view pays for the
+/// Blur matching takes away part of the penalty a sharp view pays for the
 /// detail the blurrier views lack, which is what the plain margin makes room
-/// for, so it allows a tighter margin. The tuning half of the hand picks did
-/// not prefer one: margins from `0.10` to `0.20` gave the same agreement, and
-/// `0.06` to `0.08` one exact pick fewer there and one more on the held-out
-/// half. `0.15` is the middle of the flat run. See
+/// for: it blurs only a tile sharper than its partner along every direction,
+/// and leaves most pairs plain. On the tuning half of the hand picks, with the
+/// cell bar at `0.3`, margins of `0.15` and `0.18` agreed best (18 of 39
+/// exactly, 36 within the lenient bounds), and `0.08` to `0.12` and `0.20` on
+/// one track fewer within the lenient bounds; on the held-out half `0.08`
+/// agreed on one more track, exactly and within the lenient bounds. See
 /// `specs/core/patch/reference-view.md` § "Blur-matched agreement".
 pub const REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN: f64 = 0.15;
-
-/// [`REFERENCE_MAX_CELL_DEFICIT`] for a rule whose cell check reads the
-/// blur-matched pair ZNCC grid ([`ReferenceRuleInputs::cells`]).
-///
-/// After blur matching, what is left of a ninth's disagreement is content,
-/// and a tighter bar catches an occluder without turning away a sharp view.
-/// On the tuning half of the hand picks, with the margin at `0.15`, `0.25`
-/// agreed with them within the lenient bounds on 36 of 39 tracks against 35
-/// for `0.3`, with the same 19 exact. See `specs/core/patch/reference-view.md`
-/// § "Blur-matched agreement".
-pub const REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT: f64 = 0.25;
 
 /// Which reading of the ZNCC between two views' tiles a test of the rule
 /// reads.
@@ -150,9 +151,8 @@ pub struct ReferenceRuleInputs {
     /// [`REFERENCE_AGREEMENT_MARGIN`] on the plain reading and
     /// [`REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN`] on the blur-matched one.
     pub agreement: PairZnccReading,
-    /// The pair ZNCC grid the cell check reads: the bar is
-    /// [`REFERENCE_MAX_CELL_DEFICIT`] on the plain reading and
-    /// [`REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT`] on the blur-matched one.
+    /// The pair ZNCC grid the cell check reads. The bar is
+    /// [`REFERENCE_MAX_CELL_DEFICIT`] on either reading.
     pub cells: PairZnccReading,
 }
 
@@ -171,12 +171,10 @@ impl ReferenceRuleInputs {
         }
     }
 
-    /// The cell check's largest cell deficit.
+    /// The cell check's largest cell deficit: [`REFERENCE_MAX_CELL_DEFICIT`],
+    /// on either reading.
     pub fn max_cell_deficit(self) -> f64 {
-        match self.cells {
-            PairZnccReading::Plain => REFERENCE_MAX_CELL_DEFICIT,
-            PairZnccReading::BlurMatched => REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT,
-        }
+        REFERENCE_MAX_CELL_DEFICIT
     }
 }
 
@@ -215,8 +213,7 @@ pub enum ReferenceTest {
     /// Viewing angle at most [`REFERENCE_MAX_VIEWING_ANGLE_DEG`], or, under a
     /// fallback that drops that limit, under [`REFERENCE_FACING_LIMIT_DEG`].
     Angle,
-    /// Cell deficit at most [`REFERENCE_MAX_CELL_DEFICIT`], or
-    /// [`REFERENCE_MAX_BLUR_MATCHED_CELL_DEFICIT`] on the blur-matched reading.
+    /// Cell deficit at most [`REFERENCE_MAX_CELL_DEFICIT`].
     Cells,
     /// Median pairwise ZNCC within [`REFERENCE_AGREEMENT_MARGIN`] of the best
     /// candidate's, or [`REFERENCE_BLUR_MATCHED_AGREEMENT_MARGIN`] on the

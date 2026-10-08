@@ -234,13 +234,11 @@ the fix.
   seed normal rather than getting a garbage one. v1 does **not** gate on the
   confidence value, so a low-confidence-but-improved normal is still written.
 
-**Confidence is report-only (decided).** The routine returns a per-point
-confidence, but the `.sfmr` has nowhere to store it, so for now it is summarized
-in the CLI output (e.g. a low-confidence count) and **not** otherwise acted on —
-no per-point gating and no format change. A later `keep_below_confidence=`
-threshold (keep the initial normal where confidence is low) or a per-point
-confidence field in the format can be added without disturbing this design if a
-need arises; neither is in scope here.
+**Confidence is report-only.** The routine returns a per-point confidence, and
+the `.sfmr` has no field to store it, so the CLI reports it only as the
+low-confidence count in its summary (when `confidence` is on) and does not
+otherwise act on it: there is no per-point gating, and the confidence is not
+written to the output.
 
 ## Write-back semantics
 
