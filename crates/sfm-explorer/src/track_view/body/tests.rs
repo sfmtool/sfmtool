@@ -449,7 +449,7 @@ fn the_reference_cell_shows_the_blur_matched_readings_the_rule_read() {
             pair_zncc: Some(0.834),
             blur_matched_pair_zncc: Some(0.912),
             cell_deficit: Some(0.12),
-            blur_matched_cell_deficit: Some(0.27),
+            blur_matched_cell_deficit: Some(0.34),
             pair_zncc_grid: Some([[0.9; 3]; 3]),
             blur_matched_pair_zncc_grid: Some([[0.95; 3]; 3]),
             reference_view: Some(ReferenceStanding {
@@ -475,7 +475,7 @@ fn the_reference_cell_shows_the_blur_matched_readings_the_rule_read() {
         "{hover}"
     );
     assert!(
-        hover.contains("Blur-matched cell deficit 0.27. The rule reads it."),
+        hover.contains("Blur-matched cell deficit 0.34. The rule reads it."),
         "{hover}"
     );
     assert!(
@@ -488,10 +488,10 @@ fn the_reference_cell_shows_the_blur_matched_readings_the_rule_read() {
         .hover
         .expect("a hover");
     assert!(
-        hover.contains("0.27 below the track's typical agreement"),
+        hover.contains("0.34 below the track's typical agreement"),
         "{hover}"
     );
-    assert!(hover.contains("over the 0.25 allowed"), "{hover}");
+    assert!(hover.contains("over the 0.3 allowed"), "{hover}");
     let hover = cell(&row(Some(ReferenceTest::Agreement)))
         .hover
         .expect("a hover");

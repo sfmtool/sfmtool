@@ -18,9 +18,9 @@ use crate::camera::sampler::render_tile;
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::{PhotographCache, WarpMap};
 use crate::geometry::RigidTransform;
-use crate::patch::blur_matched::{BlurMatchKernel, PairMatching};
 use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
+use crate::patch::pair_sharpness::PairMatching;
 use crate::patch::reference_view::{
     blur_matched_agreement, finite_middle, render_view_tile, PairZnccReading, ReferenceFallback,
     ReferenceRuleInputs, ReferenceTest, ViewTile, REFERENCE_MAX_VIEWING_ANGLE_DEG,
@@ -293,11 +293,10 @@ fn the_pair_zncc_is_the_median_of_member_coherence_s_row_called_directly() {
 }
 
 /// Options that take blur-matched readings and have both tests read them.
-fn blur_matched_options(matching: PairMatching, kernel: BlurMatchKernel) -> EvaluateOptions {
+fn blur_matched_options(matching: PairMatching) -> EvaluateOptions {
     EvaluateOptions {
         reference_view: ReferenceViewOptions {
             matching,
-            kernel,
             agreement: PairZnccReading::BlurMatched,
             cells: PairZnccReading::BlurMatched,
         },
@@ -314,92 +313,82 @@ fn blur_matched_readings_are_those_of_the_tiles_blur_matched_directly() {
     let views = truth.views();
     // Plain matching takes no blur-matched readings, whatever the tests are
     // set to read.
-    let none = blur_matched_options(PairMatching::Plain, BlurMatchKernel::Anisotropic);
+    let none = blur_matched_options(PairMatching::Plain);
     let (plain, _) = truth.evaluated_track_with(&none);
-    for kernel in [
-        BlurMatchKernel::Anisotropic,
-        BlurMatchKernel::IsotropicLadder,
-    ] {
-        let options = blur_matched_options(PairMatching::BlurMatched, kernel);
-        let (read, edited) = truth.evaluated_track_with(&options);
-        let resolution = options.patch_resolution(&edited.base) as usize;
-        let frame = read
-            .track()
-            .and_then(|t| t.placement.clone())
-            .expect("a track-stage frame");
-        let rows: Vec<usize> = (0..read.observations.len())
-            .filter(|&i| read.observations[i].verdict == Verdict::In)
-            .collect();
-        let tiles: Vec<ViewTile> = rows
-            .iter()
-            .map(|&i| {
-                render_view_tile(
-                    &frame,
-                    &views[read.observations[i].image as usize],
-                    Some(keypoint_of(&read, i)),
-                    resolution,
-                    options.localize.sampler,
-                    &Progress::none(),
-                )
-            })
-            .collect();
-        let ellipses: Vec<Option<[[f64; 2]; 2]>> = rows
-            .iter()
-            .map(|&i| {
-                read.observations[i]
-                    .track
-                    .as_ref()
-                    .and_then(|m| m.zncc_self_similarity_ellipse)
-                    .map(|e| e.grid_px.matrix)
-            })
-            .collect();
-        let refs: Vec<&ViewTile> = tiles.iter().collect();
-        let direct = blur_matched_agreement(
-            &refs,
-            &ellipses,
-            PairMatching::BlurMatched,
-            kernel,
-            PatchWindow::GaussianDisk { sigma: 0.6 },
-            &Progress::none(),
+    let options = blur_matched_options(PairMatching::BlurMatched);
+    let (read, edited) = truth.evaluated_track_with(&options);
+    let resolution = options.patch_resolution(&edited.base) as usize;
+    let frame = read
+        .track()
+        .and_then(|t| t.placement.clone())
+        .expect("a track-stage frame");
+    let rows: Vec<usize> = (0..read.observations.len())
+        .filter(|&i| read.observations[i].verdict == Verdict::In)
+        .collect();
+    let tiles: Vec<ViewTile> = rows
+        .iter()
+        .map(|&i| {
+            render_view_tile(
+                &frame,
+                &views[read.observations[i].image as usize],
+                Some(keypoint_of(&read, i)),
+                resolution,
+                options.localize.sampler,
+                &Progress::none(),
+            )
+        })
+        .collect();
+    let ellipses: Vec<Option<[[f64; 2]; 2]>> = rows
+        .iter()
+        .map(|&i| {
+            read.observations[i]
+                .track
+                .as_ref()
+                .and_then(|m| m.zncc_self_similarity_ellipse)
+                .map(|e| e.grid_px.matrix)
+        })
+        .collect();
+    let refs: Vec<&ViewTile> = tiles.iter().collect();
+    let direct = blur_matched_agreement(
+        &refs,
+        &ellipses,
+        PairMatching::BlurMatched,
+        PatchWindow::GaussianDisk { sigma: 0.6 },
+        &Progress::none(),
+    );
+    for (k, &i) in rows.iter().enumerate() {
+        let m = read.observations[i].track.as_ref().unwrap();
+        let p = plain.observations[i].track.as_ref().unwrap();
+        let finite = |v: f64| v.is_finite().then_some(v);
+        assert_eq!(
+            m.blur_matched_pair_zncc,
+            finite(direct.pair_zncc[k]),
+            "row {i}"
         );
-        assert!(
-            direct.pairs.pairs_blurred > 0,
-            "{kernel:?}: some pair differs"
+        assert_eq!(
+            format!("{:?}", m.blur_matched_pair_zncc_grid),
+            format!("{:?}", Some(direct.cells.pair_zncc_grid[k])),
+            "row {i}"
         );
-        for (k, &i) in rows.iter().enumerate() {
-            let m = read.observations[i].track.as_ref().unwrap();
-            let p = plain.observations[i].track.as_ref().unwrap();
-            let finite = |v: f64| v.is_finite().then_some(v);
-            assert_eq!(
-                m.blur_matched_pair_zncc,
-                finite(direct.pair_zncc[k]),
-                "row {i}"
-            );
-            assert_eq!(
-                format!("{:?}", m.blur_matched_pair_zncc_grid),
-                format!("{:?}", Some(direct.cells.pair_zncc_grid[k])),
-                "row {i}"
-            );
-            assert_eq!(m.blur_matched_cell_deficit, finite(direct.cells.deficit[k]));
-            // The plain readings are the same whether or not the blur-matched
-            // ones are taken.
-            assert_eq!(m.pair_zncc, p.pair_zncc, "row {i}");
-            assert_eq!(m.cell_deficit, p.cell_deficit, "row {i}");
-            let standing = m.reference_view.expect("an in row has a standing");
-            assert_eq!(
-                standing.inputs,
-                ReferenceRuleInputs {
-                    agreement: PairZnccReading::BlurMatched,
-                    cells: PairZnccReading::BlurMatched,
-                }
-            );
-            // Without blur-matched readings the rule reads the plain ones,
-            // whatever the options name.
-            assert_eq!(p.blur_matched_pair_zncc, None);
-            assert_eq!(p.blur_matched_pair_zncc_grid, None);
-            assert_eq!(p.blur_matched_cell_deficit, None);
-            assert_eq!(p.reference_view.unwrap().inputs, ReferenceRuleInputs::PLAIN);
-        }
+        assert_eq!(m.blur_matched_cell_deficit, finite(direct.cells.deficit[k]));
+        // The plain readings are the same whether or not the blur-matched
+        // ones are taken.
+        assert_eq!(m.pair_zncc, p.pair_zncc, "row {i}");
+        assert_eq!(m.cell_deficit, p.cell_deficit, "row {i}");
+        let standing = m.reference_view.expect("an in row has a standing");
+        assert_eq!(
+            standing.inputs,
+            ReferenceRuleInputs {
+                agreement: PairZnccReading::BlurMatched,
+                cells: PairZnccReading::BlurMatched,
+            }
+        );
+        // Without blur-matched readings the rule reads the plain ones,
+        // whatever the options name.
+        assert_eq!(p.blur_matched_pair_zncc, None);
+        assert_eq!(p.blur_matched_pair_zncc_grid, None);
+        assert_eq!(p.blur_matched_cell_deficit, None);
+        assert_eq!(p.reference_view.unwrap().inputs, ReferenceRuleInputs::PLAIN);
     }
 }
 
@@ -410,7 +399,6 @@ fn a_ratio_above_every_difference_reads_every_pair_plain() {
     let truth = GroundTruth::load();
     let (read, _) = truth.evaluated_track_with(&blur_matched_options(
         PairMatching::BlurMatchedAboveRatio(1e6),
-        BlurMatchKernel::Anisotropic,
     ));
     for (i, observation) in read.observations.iter().enumerate() {
         let m = observation.track.as_ref().unwrap();
@@ -428,10 +416,7 @@ fn a_ratio_above_every_difference_reads_every_pair_plain() {
 #[test]
 fn a_verdict_set_after_a_blur_matched_reading_keeps_the_rule_on_its_inputs() {
     let truth = GroundTruth::load();
-    let (read, _) = truth.evaluated_track_with(&blur_matched_options(
-        PairMatching::BlurMatched,
-        BlurMatchKernel::Anisotropic,
-    ));
+    let (read, _) = truth.evaluated_track_with(&blur_matched_options(PairMatching::BlurMatched));
     let picked = read
         .observations
         .iter()

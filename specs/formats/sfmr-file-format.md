@@ -143,26 +143,15 @@ world data:       X_colmap = Wᵀ · X_sfmr
 sensor / relative: R_colmap = S · R_sfmr · S         t_colmap = S · t_sfmr   (W cancels)
 ```
 
-**Invariants.** Two consequences that internal code relies on:
-
-- **Pixel-space epipolar geometry is unchanged.** Fundamental / essential /
-  homography matrices stored in `.matches` files and COLMAP databases relate
-  *pixels*, which do not move, so they cross the boundary verbatim. Only code
-  that *derives* `E`/`F` from stored poses plus `K` must first map the poses
-  back to the OpenCV optical frame — equivalently, conjugate by `S`, since
-  `E' = S · E · S` (`S` is a rotation, so `[S·t]× = S·[t]×·S`).
-- **Internal round trips need only `S`.** When a pipeline exports to
-  pycolmap/COLMAP and re-imports its own output within one operation (bundle
-  adjust, densify, merge PnP, DB-mediated solves), applying `S` on the camera
-  frames both ways and leaving the world frame untouched is self-consistent;
-  `W` is reserved for *external* import/export so those round trips stay
-  stable. World-space geometry that never touches a camera axis (camera
-  centres `C = −Rᵀ·t`, triangulation, least-squares alignment, kd-trees, patch
-  `u × v` normals) is invariant under `W` and needs no per-site change.
+**Pixel-space epipolar geometry is unchanged.** Fundamental / essential /
+homography matrices stored in `.matches` files and COLMAP databases relate
+*pixels*, which do not move, so they cross the boundary verbatim. Only code
+that *derives* `E`/`F` from stored poses plus `K` must first map the poses
+back to the OpenCV optical frame — equivalently, conjugate by `S`, since
+`E' = S · E · S` (`S` is a rotation, so `[S·t]× = S·[t]×·S`).
 
 > **Migration note.** This convention was formalized after the format was
-> already in use; files written by earlier sfmtool releases (format
-> versions ≤ 4) hold COLMAP-convention data. See
+> already in use; files of format versions ≤ 4 hold COLMAP-convention data. See
 > [Versioning and Migration](#versioning-and-migration).
 
 ## File Structure
@@ -856,13 +845,12 @@ Present exactly when `images/metadata.json`'s `has_thumbnails` is `true`:
 - **Format**: Row-major RGB data. For each image, 128 rows of 128 pixels, each pixel 3 bytes [R, G, B] in range [0, 255]
 - **Dimension order**: `(image_index, y, x, channel)` — y is the row (top-to-bottom), x is the column (left-to-right)
 - **Size**: Fixed 128×128 square, regardless of the source image aspect ratio. Source images are resized to fill the square (stretching if non-square). Consumers restore the correct aspect ratio at display time using the camera intrinsics width/height
-- **Resize method**: Area-averaging (OpenCV `INTER_AREA`), inherited from the
-  `.sift` these are copied from — all four producers (the colmap, opencv and
-  sfmtool extractors, and `sfm undistort`) use it. No producer uses bilinear
-  interpolation, so a reader that compares a row against its own resize must
-  use area averaging.
+- **Resize method**: Area averaging, each output pixel the coverage-weighted
+  mean of the source pixels under it. A conforming writer resizes by area
+  averaging, never by bilinear interpolation, so a reader that compares a row
+  against its own resize must use area averaging.
 - **Purpose**: In a file that carries the column, enables instant thumbnail display in viewers without requiring access to the workspace source images. A file that omits it has traded that convenience for size.
-- **Source**: In a file that carries the column, a producer that reads `.sift` files copies each image's `thumbnail_y_x_rgb.128.128.3.uint8.zst` during `.sfmr` creation, avoiding re-reading and re-downscaling the source images. A producer that builds the rows from the photographs decodes each one without applying its orientation tag and resizes it by the method above, which gives the same bytes the `.sift` holds.
+- **Source**: In a file that carries the column, a producer that reads `.sift` files copies each image's `thumbnail_y_x_rgb.128.128.3.uint8.zst` during `.sfmr` creation, avoiding re-reading and re-downscaling the source images. A producer that builds the rows from the photographs decodes each one without applying its orientation tag and resizes it by the method above; with the same resize implementation the `.sift` writer used, that gives the same bytes the `.sift` holds.
 
 What the column's presence asserts:
 
@@ -1140,11 +1128,8 @@ Per-point confidence in the stored normal.
 - **Optional** (version 5+): present only when `points3d/metadata.json`'s
   `has_normal_confidence` is `true`. An absent array means **no confidence
   information** — not "all confident". Files of versions 1–4 never carry it.
-- **Writer responsibility**: the array passes through the writer untouched;
-  a writer that synthesizes or replaces normals (e.g. the mean-viewing
-  fill-in for rows the input left zero) and also supplies this array is
-  responsible for keeping the two coherent. The built-in writer does not
-  invent confidence values for normals it fills in.
+- **Writer responsibility**: a writer that synthesizes or replaces normals
+  and also writes this array is responsible for keeping the two coherent.
 
 **Why it exists**: a placeholder normal is bit-indistinguishable from a fitted
 one in `normals_xyz`. Downstream passes that re-fit, filter, or render normals
@@ -1755,11 +1740,23 @@ describes. Other parts of this spec are implemented by:
 - The keypoint affine shape of an `embedded_patches` observation:
   `SfmrReconstruction::observation_affine_shape`
   ([source](../../crates/sfmtool-core/src/reconstruction/data/affine_shape.rs)).
+- Thumbnails: the colmap, opencv and sfmtool SIFT extractors and
+  `sfm undistort` all resize with OpenCV's `INTER_AREA`, and a `.sfmr` writer
+  that reads `.sift` files copies their rows. `sfm xform --add-thumbnails`
+  builds rows from the photographs through the extractors' own resize, so they
+  match the `.sift` rows byte for byte; `sfmtool-core`'s `resize_area` averages
+  the same way but does not match `INTER_AREA` bit for bit.
+- Normals and their confidence: `write_sfmr` fills each zero row of
+  `normals_xyz` from mean-viewing normals it recomputes from the geometry, and
+  passes `normal_confidence` through untouched. It never invents or adjusts a
+  confidence value, not even for a normal it fills in, so a caller that
+  supplies both keeps them coherent.
 - World orientation: `sfm xform --rotate` and `--align-to` refine it after a
   solve.
 - `world_space_unit`: `sfm xform --scale-by-measurements` scales a
-  reconstruction and sets the field. The five values are
-  `sfmtool_sfmr_format::WORLD_SPACE_UNITS`.
+  reconstruction and sets the field. The five units and their lengths in
+  metres are `sfmtool_sfmr_format::WORLD_SPACE_UNITS`, re-exported by
+  `sfmtool-core`, with `world_space_unit_in_metres` to look one up.
 - The presence rules between the optional per-point pieces and
   `feature_source`: `write_sfmr`, `read_sfmr` and `verify_sfmr` apply the one
   predicate in [`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)
@@ -1776,6 +1773,19 @@ are implemented once, in
 and bound for Python as `sfmtool._sfmtool.geometry`
 ([bindings](../../crates/sfmtool-py/src/geometry/convention.rs)), with wrappers in
 [`sfmtool.colmap.convention`](../../src/sfmtool/colmap/convention.py).
+
+Operations that export to pycolmap/COLMAP and re-import their own output within
+one call (bundle adjust, densify, merge PnP, DB-mediated solves) apply only `S`
+on the camera frames both ways and leave the world frame untouched, which is
+self-consistent; `W` is applied only on *external* import and export, so those
+round trips stay stable. World-space geometry that never touches a camera axis
+(camera centres `C = −Rᵀ·t`, triangulation, least-squares alignment, kd-trees,
+patch `u × v` normals) is invariant under `W` and needs no per-site change.
+
+The viewer accepts a pasted [Point ID](#point-id-portable-3d-point-references)
+in `Go ▸ Go to Point…` (Ctrl/Cmd+G) and selects that point, switching to the
+reconstruction the hash names when several are loaded
+([goto-point.md](../gui/goto-point.md)).
 
 ## Point ID: Portable 3D Point References
 
@@ -1803,11 +1813,6 @@ verify that all points come from the expected reconstruction and report a clear
 error if the `.sfmr` file has changed since the constraints were written. The
 double-click-selectable format makes it easy to pick out individual IDs when
 editing these files in a text editor or terminal.
-
-The round trip closes in the viewer: `Go ▸ Go to Point…` (Ctrl/Cmd+G) accepts a
-pasted ID and selects that point, switching to the reconstruction the hash names
-when several are loaded. See
-[goto-point.md](../gui/goto-point.md).
 
 ### Format
 
@@ -1919,10 +1924,15 @@ other value, and a reader and a verifier refuse a file that carries one.
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
 solve.
 
-The five units and their lengths in metres are
-[`WORLD_SPACE_UNITS`](../../crates/sfmtool-sfmr-format/src/types.rs) (with
-`world_space_unit_in_metres` to look one up), re-exported by `sfmtool-core`, so
-a Rust consumer converting between them reads the same table.
+The length of one unit in metres:
+
+| `world_space_unit` | Metres |
+|--------------------|--------|
+| `"mm"` | 0.001 |
+| `"cm"` | 0.01 |
+| `"m"` | 1 |
+| `"in"` | 0.0254 |
+| `"ft"` | 0.3048 |
 
 **Semantics:**
 

@@ -304,9 +304,9 @@ impl PyMatchesFile {
         serde_to_py(py, &self.cluster_patches()?.refine_options)
     }
 
-    /// The refinement patch half-width in pixels, normalized across the
-    /// `refine_options` key generations (`patch_size` full edge / 2, or the
-    /// legacy `radius` half-width as-is); None when neither is recorded.
+    /// The refinement patch half-width in pixels, read from whichever
+    /// `refine_options` key the file carries (`patch_size` full edge / 2, or
+    /// the legacy `radius` half-width as-is); None when neither is recorded.
     #[getter]
     fn refine_radius(&self) -> PyResult<Option<f64>> {
         Ok(self.cluster_patches()?.refine_radius())

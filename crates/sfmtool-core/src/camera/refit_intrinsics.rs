@@ -444,8 +444,8 @@ pub enum RefitError {
     /// monotonicity constraint, so it has no inverse: a failure of the
     /// constrained solve, not of the source.
     NotMonotone,
-    /// A fitted polynomial fisheye whose own trusted bound falls short of the
-    /// fit's largest angle.
+    /// A fitted polynomial fisheye, or a `SIMPLE_RADIAL_FISHEYE` that folds,
+    /// whose own trusted bound falls short of the fit's largest angle.
     TrustedBoundShort {
         /// The fitted camera's trusted bound, in degrees.
         trusted_deg: f64,
