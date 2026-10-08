@@ -736,8 +736,9 @@ same input are bit-identical under any thread schedule.
 **The status discriminants are a cross-crate invariant.** `MemberStatus` is
 its own enum, not `sfmtool_matches_format::ClusterMemberStatus`; the binding
 casts it to `u8` and writes it straight into the `cluster_patches/` section. The
-two enums must stay numerically identical, and a new status has to land in
-both, plus the format's validator, in one change. `CellStatus` and
+two enums must stay numerically identical, which a `const` assertion in
+`params.rs` checks at compile time, and a new status has to land in both, plus
+the format's validator, in one change. `CellStatus` and
 `ClusterCellStatus` share their discriminants the same way: `member_cell_data`
 converts one to the other, and a test checks that the codes agree.
 
@@ -902,18 +903,18 @@ The piecewise stage is `ClusterRefineParams::piecewise`, `None` by default (CLI
 `crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs`, and the module
 constants the table marks are in the same file. The defaults of
 `min_cell_zncc` and `min_cell_curvature` are `DEFAULT_MIN_CELL_ZNCC` and
-`DEFAULT_MIN_CELL_CURVATURE`, and both are provisional: they were chosen on the
-synthetic tests, and the fleet's distributions have no valley or knee to place
-them in, so they stay until an outcome measure, normal or shape error against a
-ground truth, is swept over them. `sfm cluster-patches --piecewise` runs the
+`DEFAULT_MIN_CELL_CURVATURE`. Both are set on the synthetic tests; the fleet's
+distributions of cell ZNCC and curvature have no valley or knee that would place
+them ([gate sweep](cluster-patch-refinement-measurements.md#gate-sweep)).
+`sfm cluster-patches --piecewise` runs the
 stage at these defaults and exposes none of them.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `move_shape` | `false` | Whether the fitted affine map may move the member's shape, by the loop of [The shape-moving loop](#the-shape-moving-loop-move_shape); off, the stage measures once at the cascade's shape |
 | `cell_shift_bound_px` | `2.0` | Search bound for a cell's shift from its affine placement, and the working patch's margin, template grid px |
-| `min_cell_zncc` | `0.8` | A cell below this ZNCC at its optimum is `refused_zncc` (provisional) |
-| `min_cell_curvature` | `0.02` | A cell whose ZNCC peak is flatter, in ZNCC per grid px², is `refused_curvature` (provisional) |
+| `min_cell_zncc` | `0.8` | A cell below this ZNCC at its optimum is `refused_zncc` |
+| `min_cell_curvature` | `0.02` | A cell whose ZNCC peak is flatter, in ZNCC per grid px², is `refused_curvature` |
 | `update_tolerance_px` | `0.05` | With `move_shape`: the loop stops when no cell centre moves by more, grid px |
 | `max_iterations` | `5` | With `move_shape`: render cap; without it the stage renders once |
 | `ACCEPT_ZNCC_TOLERANCE` | `1e-4` | With `move_shape`: how far the whole-member ZNCC may fall at an update (module constant) |
@@ -1069,13 +1070,11 @@ at least one member, and that statuses stay inside the enum; with
 - **No gate on consistency.** The residual is stored, never thresholded here.
 - **No piecewise refinement by default.** The stage runs only when
   `ClusterRefineParams::piecewise` is set (`sfm cluster-patches --piecewise`),
-  and then only measures: `move_shape` is off, and the loop behind it is kept
-  as an experiment switch.
-- **No consumer reads the cells.** The seed's writer does not derive frames or
-  normals from them, and no pipeline stage calls
-  [cell-plane-normals.md](cell-plane-normals.md)'s kernel. A precision gate on
-  that kernel's normal, and the seed's writer deriving its frames from the
-  cells behind it, are proposed in
+  and by default it measures without moving any shape (`move_shape` off).
+- **No consumer reads the cells.** No pipeline stage, the seed's writer
+  included, derives frames or normals from them or calls
+  [cell-plane-normals.md](cell-plane-normals.md)'s kernel; frames built from
+  the cells behind a precision gate are proposed in
   [cell-plane-normal-precision-gate.md](../../drafts/cell-plane-normal-precision-gate.md).
 - **No normal in the cluster-patches file.** The file is pose-free; a normal is
   derived by whoever holds poses.

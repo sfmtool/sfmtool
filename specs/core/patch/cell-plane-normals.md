@@ -73,7 +73,7 @@ pub fn cell_plane_normals(
 
 **Why `patch/`.** The kernel is a reading of the cluster-patches file's cell geometry: the grid split `[0, R/3, R − R/3, R]` and the map from a grid coordinate to a member's pixel. Both are defined in `patch/`, where `grid_bounds` is visible to the module without being widened. The binding is registered in the `analysis` submodule beside `estimate_adjacency_surfel_normals`, the other normal estimator a caller with poses chooses between.
 
-**Example.** The measurement script reads a `--piecewise` cluster file and a ground-truth `.sfmr` and calls
+**Example.** A caller holding a `--piecewise` cluster file opened as `mf` (a `MatchesFile`) and a posed reconstruction `gt`, with `image_camera`, `quaternions_wxyz` and `translations` laid out per image of the cluster file, calls
 
 ```python
 out = analysis.cell_plane_normals(
@@ -133,6 +133,6 @@ The kernel takes 3 ms on `SeoulBull`'s 4407 clusters and 10 ms on `KerryPark480`
 
 ## Non-goals
 
-- **No consumer reads the normal.** The seed's writer does not call the kernel, and nothing else in the pipeline does.
-- **No gate on the normal's precision.** The kernel does not return the precision its cell weights predict, and applies no bar to it or to a wider triangulation angle; the verdict says which axes the cells fix, not how well. A precision gate, and a consumer behind it, are proposed in [cell-plane-normal-precision-gate.md](../../drafts/cell-plane-normal-precision-gate.md).
+- **No consumer reads the normal.** No pipeline stage calls the kernel, the seed's writer included.
+- **No gate on the normal's precision.** The kernel returns no predicted precision for a normal and gates no normal on its precision; a gate and a consumer behind it are proposed in [cell-plane-normal-precision-gate.md](../../drafts/cell-plane-normal-precision-gate.md).
 - **No prior in place of a measured normal.** A cluster whose cells fix no axis gets `NaN`, never the viewing direction.

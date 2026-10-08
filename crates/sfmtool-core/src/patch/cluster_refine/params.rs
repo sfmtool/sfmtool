@@ -7,6 +7,7 @@
 //! [`ClusterRefineResult`].
 
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
+use sfmtool_matches_format::{ClusterMemberStatus, CLUSTER_REFERENCE_UNREFINABLE};
 
 use crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS;
 use crate::patch::normal_refine::PatchWindow;
@@ -15,9 +16,9 @@ use super::piecewise::{CellRefinement, PiecewiseParams};
 
 /// Per-member refinement status.
 ///
-/// Discriminants MUST match `sfmtool_matches_format::ClusterMemberStatus` — this crate
-/// does not depend on `sfmtool-matches-format`, so the PyO3 binding passes the `u8`
-/// array straight into the `cluster_patches/` section without translation.
+/// The discriminants are those of [`ClusterMemberStatus`], one for one (the
+/// `const` assertion after this enum checks it), so the PyO3 binding passes the
+/// `u8` array straight into the `cluster_patches/` section without translation.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MemberStatus {
@@ -43,10 +44,20 @@ pub enum MemberStatus {
     RejectedUnlocalizable = 6,
 }
 
+const _: () = {
+    use ClusterMemberStatus as F;
+    assert!(MemberStatus::Reference as u8 == F::Reference as u8);
+    assert!(MemberStatus::Kept as u8 == F::Kept as u8);
+    assert!(MemberStatus::RejectedLowZncc as u8 == F::RejectedLowZncc as u8);
+    assert!(MemberStatus::RejectedShift as u8 == F::RejectedShift as u8);
+    assert!(MemberStatus::DuplicateImage as u8 == F::DuplicateImage as u8);
+    assert!(MemberStatus::NotEvaluated as u8 == F::NotEvaluated as u8);
+    assert!(MemberStatus::RejectedUnlocalizable as u8 == F::RejectedUnlocalizable as u8);
+};
+
 /// Sentinel in [`ClusterRefineResult::reference_members`] for a cluster with
-/// no usable reference (mirrors
-/// `sfmtool_matches_format::CLUSTER_REFERENCE_UNREFINABLE`).
-pub const REFERENCE_UNREFINABLE: u32 = u32::MAX;
+/// no usable reference; the same value as [`CLUSTER_REFERENCE_UNREFINABLE`].
+pub const REFERENCE_UNREFINABLE: u32 = CLUSTER_REFERENCE_UNREFINABLE;
 
 /// Tunables for [`refine_cluster_patches`](super::refine_cluster_patches).
 #[derive(Clone, Debug)]
