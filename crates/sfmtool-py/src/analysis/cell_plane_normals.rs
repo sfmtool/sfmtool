@@ -42,7 +42,7 @@ const DETERMINACY_NAMES: [&str; 3] = ["none", "one_axis", "both_axes"];
 /// Tukey IRLS, each cell weighted by the inverse of its position's variance
 /// along the normal, from its rays and their intersection residual. The
 /// verdict counts the cells the robust fit gives any weight, by their spread
-/// within the fitted plane. See ``specs/drafts/cell-plane-normals.md``.
+/// within the fitted plane. See ``specs/core/patch/cell-plane-normals.md``.
 ///
 /// Args:
 ///     cluster_starts: ``(C + 1,)`` uint32 member-range boundaries.

@@ -14,7 +14,7 @@ Amends:
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md), [core/patch/fronto-parallel-patch-cache.md](../core/patch/fronto-parallel-patch-cache.md), [core/patch/patch-normal-refine-view-subset.md](../core/patch/patch-normal-refine-view-subset.md): retired when their callers move
 - [cli/reconstruction/embed-patches-command.md](../cli/reconstruction/embed-patches-command.md) and [cli/reconstruction/xform/refine-normals-command.md](../cli/reconstruction/xform/refine-normals-command.md): the normal step they run
 
-Related drafts: [surface-co-solve.md](surface-co-solve.md) § "Normal estimators" lists the family this estimator belongs to and should defer to this draft for the grid estimator. [sharper-patch-bitmap.md](sharper-patch-bitmap.md) supplies the per-view readings the weights use. [patch-footprint-selection.md](patch-footprint-selection.md) reads the same per-piece radii to choose the patch size. [cell-plane-normals.md](cell-plane-normals.md) fits the same plane and emits the same verdict from the cluster-patches file's stored cell displacements, with no rendering, and defines the `NormalDeterminacy` type this estimator would share.
+Related drafts: [surface-co-solve.md](surface-co-solve.md) § "Normal estimators" lists the family this estimator belongs to and should defer to this draft for the grid estimator. [sharper-patch-bitmap.md](sharper-patch-bitmap.md) supplies the per-view readings the weights use. [patch-footprint-selection.md](patch-footprint-selection.md) reads the same per-piece radii to choose the patch size. [cell-plane-normals.md](../core/patch/cell-plane-normals.md) fits the same plane and emits the same verdict from the cluster-patches file's stored cell displacements, with no rendering, and defines the `NormalDeterminacy` type this estimator would share.
 
 ## Purpose
 
@@ -32,7 +32,7 @@ The seed stage produces up to eight candidate reconstructions per capture and th
 
 ## Rust API
 
-The estimator will live beside the current grid estimator in [bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs), with the pose-free part of the piece fit shared with [cluster_refine](../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs) as [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md) proposes.
+The estimator will live beside the current grid estimator in [bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs), with the pose-free part of the piece fit shared with the piecewise refinement in [cluster_refine](../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs), specified in [cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#piecewise-refinement).
 
 ```rust
 /// How the pieces of a patch are gated and weighted before the plane fit.
@@ -128,7 +128,7 @@ A synthetic planar patch with uniform texture: all nine pieces fitted, normal wi
 
 Joint estimation of depth and normal. The estimator takes the depth as fitted and turns the patch about its centre; the joint solve is the subject of [surface-co-solve.md](surface-co-solve.md).
 
-Normals before poses exist. A normal is a 3D quantity and needs sighting rays. The pose-free precursor, per-piece 2D displacements, is [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md).
+Normals before poses exist. A normal is a 3D quantity and needs sighting rays. The pose-free precursor, per-cell 2D displacements, is the piecewise refinement of [cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#piecewise-refinement).
 
 ## Open questions
 

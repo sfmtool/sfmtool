@@ -23,7 +23,7 @@
 //! to the line closest to the mean viewing direction, and a normal with no
 //! fixed axis is `NaN`.
 //!
-//! See `specs/drafts/cell-plane-normals.md` for the design.
+//! See `specs/core/patch/cell-plane-normals.md` for the design.
 
 use nalgebra::{Matrix2, Matrix3, SymmetricEigen, Vector3};
 use rayon::prelude::*;

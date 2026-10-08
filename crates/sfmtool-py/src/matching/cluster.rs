@@ -413,7 +413,7 @@ pub fn clusters_to_pair_matches(
 ///         registered separately at the member's cascade shape, and a robust
 ///         affine map is fitted to their shifts (default False, which
 ///         carries no cells). See
-///         specs/drafts/cluster-patches-piecewise-refinement.md.
+///         specs/core/patch/cluster-patch-refinement.md.
 ///     move_shape: Piecewise setting: let the fitted map move the member's
 ///         shape and position, by a loop that applies it as an update while
 ///         the whole-member ZNCC does not fall (default False, which measures

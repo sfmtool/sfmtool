@@ -215,6 +215,18 @@ pick a name other than `ConstellationOptions`, which the bench's track-at-pixel
 member already holds. `TwoViewGeometryConfig` is not a settings struct: it keeps
 COLMAP's name for a pair's geometry type.
 
+## Cluster-patch refinement
+
+The words of the piecewise stage of `patch::cluster_refine`, the `.matches`
+per-cell entries, the cell plane normals and the specs that describe them
+([core/patch/cluster-patch-refinement.md](core/patch/cluster-patch-refinement.md)).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **piecewise refinement** | the optional stage after the affine cascade that registers each kept member's nine cells separately against the member's photograph at the cascade's shape and stores where each cell's content lies. `ClusterRefineParams::piecewise`, `PiecewiseParams`, flag `--piecewise` on `cluster-patches`, keyword `piecewise=` and key `piecewise` in `refine_options`. By default it measures and moves no shape; the loop that lets it move the shape is `move_shape` | `cell refinement`, `per-cell fit`, `piece-gated refinement` | *piecewise* is the name the flag, the type and the stored option already carry, and it says the patch is read part by part. It keeps *refinement* although its default only measures, because it is a stage of cluster-patch refinement and, with `move_shape`, refines the shape. *Piece-gated* names the rendering normal estimator of the drafts, a different consumer of the same idea |
+| **cell** (of a patch) | one part of the three-by-three split of a patch's `R × R` grid, rows and columns cut at `R/3` and `R − R/3`, `[row][col]` from the top-left: the split the ZNCC grid uses. Identifiers `member_cell_*`, `CellStatus`, `CellRefinement`, `cell_plane_normals`. A cell's **displacement** is where its content lies relative to where the member's stored shape places its centre, with no affine map removed (`member_cell_shift_px`) | `piece`, `ninth`, `tile`; `residual` for the displacement | *piece* is the bench's word for the finite-difference normal's parts, whose count is a parameter and whose neighbours overlap; a cell is always one of a fixed nine that tile the grid exactly. *Ninth* is the person-facing word for the same split in Track View, where *cell* already means a table entry. *Tile* is a rendered picture. The displacement is not a *residual*, because a residual would say an affine map had been removed, and the stored value deliberately keeps it |
+| **working patch** | the photograph resampled through one member's affine shape onto the template's grid plus a margin of `cell_shift_bound_px` on every side, made once per render; the only thing the cell search reads | `tile`, `template`, `bitmap` | the cascade's *tile* is a planar copy of a region of one pyramid level, grown to cover each evaluation, and Track View's tile is a rendered picture. The *template* is the reference member's samples the cells are cut from. A *bitmap* is a point's stored patch content. *Working* says it exists only for the stage's own search and is never stored |
+
 ## Words with a boundary
 
 

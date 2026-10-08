@@ -38,7 +38,9 @@ across views, and everything refined on top of it. Implemented in
 | Document | Description |
 |----------|-------------|
 | [cluster-patches.md](cluster-patches.md) | Promoting SIFT clusters to patch clusters. |
-| [cluster-patch-refinement.md](cluster-patch-refinement.md) | The refinement kernel: a windowed-ZNCC affine cascade from the reference member's patch onto every other member. |
+| [cluster-patch-refinement.md](cluster-patch-refinement.md) | The refinement kernel: a windowed-ZNCC affine cascade from the reference member's patch onto every other member, and the optional piecewise refinement that registers each kept member's nine cells separately at that shape and stores their displacements. |
+| [cluster-patch-refinement-measurements.md](cluster-patch-refinement-measurements.md) | Fleet and subset measurements of the piecewise refinement (agreement with the cascade, cell statuses and gate sweeps, cost, the seed on the two ground truths, with and without the shape-moving loop) and of the cell plane normals against the two checked-in ground truths. |
+| [cell-plane-normals.md](cell-plane-normals.md) | A cluster's patch normal from the stored cell displacements once poses exist: each cell's rays triangulated, a Tukey-weighted plane through the cells, and a verdict naming which of the normal's axes the cells fix. |
 | [cluster-warp-consistency.md](cluster-warp-consistency.md) | A reconstruction-free per-member consistency signal: the weak-perspective factorization residual. |
 | [member-coherence-validation.md](member-coherence-validation.md) | Pairwise track agreement and the max-support block that decides which members belong. |
 | [candidate-track-spawning.md](candidate-track-spawning.md) | Congealing new candidate tracks at offsets from an existing patch frame. |

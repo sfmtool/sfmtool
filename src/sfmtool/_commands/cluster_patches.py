@@ -94,7 +94,7 @@ from .._cli_utils import timed_command
         "shape, and store each cell's displacement, ZNCC and status in the "
         "output (format version 8 per-cell columns). The member's shape is "
         "left as the affine fit found it. See "
-        "specs/drafts/cluster-patches-piecewise-refinement.md."
+        "specs/core/patch/cluster-patch-refinement.md."
     ),
 )
 def cluster_patches(

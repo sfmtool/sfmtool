@@ -17,6 +17,16 @@ Doing this early pays twice: a later stage can read a member's image-space
 extent and refined position directly, and members that agree on a descriptor
 while disagreeing on appearance become visible without a reconstruction.
 
+An optional second stage, the **piecewise refinement**, follows the affine fit
+for every kept member. It cuts the patch into nine cells, registers each cell
+separately against the member's photograph at the shape the affine fit found,
+and stores where each cell's content lies relative to that shape. A normal
+needs camera poses and cannot be computed at this stage, but these per-cell
+displacements are the pose-free half of one: once poses exist,
+[cell-plane-normals.md](cell-plane-normals.md) turns them into a patch normal
+without rendering anything. The stage is off by default, and when it runs it
+leaves every other output of the refinement unchanged.
+
 This document specifies the kernel: `sfmtool-core`'s `patch::cluster_refine`,
 its PyO3 binding, and the numerics. The kernel is pure — no I/O, no `.sift`
 reads. The caller hands it decoded image pyramids, the SIFT geometry of every
@@ -29,6 +39,17 @@ normatively in
 [`sfm cluster-patches`](../../cli/image-feature/cluster-patches-command.md).
 
 ## Rust API
+
+The kernel lives in
+[cluster_refine](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs),
+with its parameters and result in
+[params.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/params.rs) and
+the piecewise stage in
+[piecewise.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs),
+and is bound as `sfmtool._sfmtool.matching.refine_cluster_patches` in
+[cluster.rs](../../../crates/sfmtool-py/src/matching/cluster.rs). The stored
+per-cell columns are `MemberCellData` and `ClusterCellStatus` in
+[cells.rs](../../../crates/sfmtool-matches-format/src/cells.rs).
 
 ```rust
 /// Per-member verdict. Discriminants match `sfmtool_matches_format::ClusterMemberStatus`.
@@ -63,6 +84,8 @@ pub struct ClusterRefineResult {
     pub member_zncc_middle: Vec<f32>,         // (M,), the same over the middle square
     pub member_zncc_grid: Vec<[[f32; 3]; 3]>, // (M,), the same over each ninth of the grid
     pub member_shift_px: Vec<f32>,            // (M,), NaN if not evaluated
+    pub cells: Vec<Option<CellRefinement>>,   // (M,), Some only for a kept member
+                                              // when `params.piecewise` is set
 }
 
 pub fn refine_cluster_patches(
@@ -156,6 +179,98 @@ if out.member_status[1] == MemberStatus::Kept {
     let position = [p[0], p[1]];
     let _ = (extent, position);
 }
+```
+
+### The piecewise stage
+
+`ClusterRefineParams::piecewise: Option<PiecewiseParams>` turns the stage on;
+`None`, the default, leaves `cells` all `None`.
+
+```rust
+pub struct PiecewiseParams {
+    pub move_shape: bool,          // let the fitted map move the shape (the loop)
+    pub cell_shift_bound_px: f32,  // shift search bound, and the render margin
+    pub min_cell_zncc: f32,        // a cell below this at its optimum is refused
+    pub min_cell_curvature: f32,   // a flatter ZNCC peak is refused
+    pub update_tolerance_px: f32,  // with `move_shape`: convergence, grid px
+    pub max_iterations: u8,        // with `move_shape`: render cap
+}
+
+/// How far the whole-member ZNCC may fall at an updated shape before the
+/// update is rejected (with `move_shape`).
+pub const ACCEPT_ZNCC_TOLERANCE: f64 = 1e-4;
+pub const DEFAULT_MIN_CELL_ZNCC: f32 = 0.8;
+pub const DEFAULT_MIN_CELL_CURVATURE: f32 = 0.02;
+
+/// Discriminants match `sfmtool_matches_format::ClusterCellStatus`.
+#[repr(u8)]
+pub enum CellStatus {
+    Fitted = 0,
+    RefusedCurvature = 1,
+    RefusedZncc = 2,
+    NotAttempted = 3,
+    RefusedBound = 4,
+    RefusedOutlier = 5,
+}
+
+#[repr(u8)]
+pub enum LoopStop { NotRun = 0, Converged = 1, Cap = 2, Rejected = 3, Oscillation = 4, Measured = 5 }
+
+/// One kept member's cells, `[row][col]` from the top-left cell.
+pub struct CellRefinement {
+    /// Displacement of each cell's centre from where the returned shape
+    /// places it, template grid px, with no fitted affine map removed.
+    pub shift_px: [[[f32; 2]; 3]; 3],
+    pub zncc: [[f32; 3]; 3],
+    pub status: [[CellStatus; 3]; 3],
+    pub iterations: u8,              // renders: 1 without `move_shape`
+    pub stop: LoopStop,              // `Measured` without `move_shape`
+    pub final_update_accepted: bool, // always false without `move_shape`
+}
+
+/// The cells as the format's four member-parallel columns: `NaN` / `NaN` /
+/// not attempted / `0` for a member without cells.
+pub fn member_cell_data(cells: &[Option<CellRefinement>]) -> MemberCellData;
+```
+
+**Why this shape.** The displacements are relative to the member's affine
+shape, not absolute, so a consumer that ignores them reads the file exactly as
+before. They are stored as measured, with no fitted affine map removed: the
+stored shape and the displacements together then say where each cell's content
+lies, and a consumer that wants only the part no affine map matches fits and
+removes the affine part itself, whereas one that wants the whole displacement
+could not recover what a stored residual had dropped. They are in template grid
+px, the unit every other refined quantity in the file uses. The status is per
+cell because the point of the stage is to know which cells to trust; one
+per-member flag would discard that. `cells` is one entry per member, `None` for
+a member that is not kept, so it indexes like every other per-member array and a
+consumer cannot pair a member with another member's cells. The shift bound and
+the render margin are one parameter because they must be equal: a search that
+can reach a shift the render did not cover reads outside the tile. `stop` and
+`final_update_accepted` are present in both modes, reading `Measured` and
+`false` without `move_shape`, so the result has one shape. `CellStatus` mirrors
+the format's enum for the same reason `MemberStatus` does: the binding writes
+the codes straight into the file, and a test checks the discriminants agree.
+
+**Example.**
+
+```rust
+use sfmtool_core::patch::cluster_refine::{
+    member_cell_data, refine_cluster_patches, CellStatus, ClusterRefineParams,
+    PiecewiseParams,
+};
+
+let params = ClusterRefineParams {
+    piecewise: Some(PiecewiseParams::default()), // measure, never move the shape
+    ..ClusterRefineParams::default()
+};
+let out = refine_cluster_patches(&pyramids, &features, &starts, &images, &feats, &params, None);
+if let Some(cells) = &out.cells[1] {
+    let middle = cells.shift_px[1][1];          // grid px from the stored shape
+    let trusted = cells.status[1][1] == CellStatus::Fitted;
+    let _ = (middle, trusted);
+}
+let columns = member_cell_data(&out.cells);     // what the `.matches` writer stores
 ```
 
 ## Theory
@@ -356,8 +471,9 @@ cascade never fitted (`NotEvaluated`, `RejectedUnlocalizable`, and a
 the refinement's values for the measured members and leaves the input's
 detections in place for the rest, so the file it writes has no holes (see
 [`matches-file-format.md`](../../formats/matches-file-format.md), Member
-geometry). Nothing about the geometry is stored in `cluster_patches/`, which
-carries the vetting evidence alone.
+geometry). Nothing about the member's geometry is stored in `cluster_patches/`, which
+carries the vetting evidence and, when the piecewise stage ran, the per-cell
+readings.
 
 ### After refinement
 
@@ -372,6 +488,241 @@ agreement test of
 [member-coherence-validation.md](member-coherence-validation.md) decides
 membership on the same kind of evidence with a reconstruction in hand.
 
+
+### Piecewise refinement
+
+The affine shape says how the surface around a feature appears in one view as a
+whole: its scale, orientation and skew. It cannot say that half the patch lies
+on a different surface, or how the surface's appearance varies across the patch.
+The piecewise refinement measures that. Its output is a 2D displacement for each
+of nine cells of each kept member, which once poses exist becomes a sighting ray
+per cell; the rays of one cell across the members meet at the cell's position in
+the world, and a plane through the nine positions is the patch normal
+([cell-plane-normals.md](cell-plane-normals.md)).
+
+#### The cells
+
+The cells are the three-by-three split of the template's `R × R` grid that the
+ZNCC grid uses: rows and columns cut at `R/3` and `R − R/3`, `[row][col]` from
+the top-left cell. A cell's centre is the mean of its grid positions
+(`grid_cell_centres`, shared with the normal refinement and with
+[cell-plane-normals.md](cell-plane-normals.md)). The template is the cluster's
+reference member, so the displacements are relative to that member's frame and
+the reference's own cells displace by zero by construction; only kept members
+are measured, since a member that is not kept has no trustworthy affine shape to
+start from.
+
+#### The measurement
+
+A member's cells are measured at the shape the affine cascade found for it. The
+stage reads the photograph once, and everything after that reads only a small
+tile.
+
+1. **Render.** The member's affine shape maps the template's grid into the
+   photograph, and the photograph is resampled along that map into a **working
+   patch**: the template's `R × R` grid plus a margin of `cell_shift_bound_px`
+   on every side (rounded up). This is the only step that reads the photograph.
+2. **Register the cells.** Each of the nine cells of the template is compared
+   with the working patch by windowed ZNCC at every whole shift within the
+   bound (rounded down). The margin guarantees that every shift of every cell,
+   edge cells included, reads pixels the render covered. At the best whole
+   shift a sub-pixel peak is fitted to the three-by-three neighbourhood of
+   ZNCC values, and the peak's curvature, the smaller eigenvalue of the negated
+   Hessian, says how sharply the cell is pinned.
+3. **Gate each cell.** A cell is refused as `refused_curvature` when the
+   reference is flat over it or its peak is flatter than `min_cell_curvature`:
+   a cell over flat or repeating texture registers anywhere, and its ZNCC may
+   still be high because a flat region correlates with a flat region at every
+   shift. It is refused as `refused_zncc` when its ZNCC at the optimum is below
+   `min_cell_zncc`, that is when it is over a different surface. It is refused
+   as `refused_bound` when its best whole shift lies on the search bound, since
+   no whole-pixel neighbour on that side was read and its optimum is at or past
+   the bound. A cell whose search could not read a sample it needs is
+   `not_attempted`.
+4. **Fit an affine map.** The surviving cells' centres and shifts are point
+   correspondences between the template and the working patch, and a robust
+   affine map is fitted through them (below). A cell the fit gives no weight is
+   stored as `refused_outlier`, with its shift; every other survivor is
+   `fitted`. The map decides which cells agree with each other. Without
+   `move_shape` it is not stored and does not move the shape.
+
+At `patch_size = 12` a cell is 4×4 template px: enough for a shift registration
+against a textured template, and not enough for a self-similarity ellipse, which
+is why the per-cell gate reads the peak's curvature rather than the
+[ZNCC self-similarity radius](zncc-self-similarity-radius.md). The search is a
+shift search only: the cascade has removed scale and rotation, and a cell that
+needs more than a shift is over a different surface and should be refused, not
+fitted.
+
+#### The robust affine fit
+
+A rule on the count and the spread of the surviving cells chooses the model: a
+full affine with five or more well-spread cells, a similarity with three or
+more otherwise, a pure shift below that, and no fit when none survive, in which
+case all nine cells are stored as `not_attempted`. "Otherwise" covers three or
+four cells, five or more that lie along one row or column and so pin only one
+axis of an affine, and five or more well-spread cells whose affine normal
+equations are singular: each falls back one step, to the similarity, before the
+shift.
+
+A cell can pass both of its own gates and still be wrong: a repeated texture can
+give it a sharp, high-scoring peak at the wrong shift, and a depth edge inside it
+can give it a peak that belongs to the other surface. Such a cell disagrees with
+the map the others agree on. The map is therefore fitted by iteratively
+reweighted least squares: a first fit weighted by each cell's curvature, then
+three rounds in which each cell's weight is its curvature times a Tukey biweight
+of its residual to the previous round's fit. The residuals are two-dimensional
+lengths, so the residual scale is the median residual length divided by
+`√(2 ln 2)`, about 0.849 times it: the per-axis standard deviation of isotropic
+Gaussian noise whose residual lengths have that median. The factor `1.4826`
+used for one-dimensional residuals would overstate it by a factor of 1.75. The
+scale is floored at 0.1 grid px, so that cells agreeing to a few hundredths of a
+pixel do not make a cell a tenth of a pixel off an outlier, and the biweight's
+cut-off is 4.685 scales. A cell at or past the cut-off has weight zero and is
+`refused_outlier`. The model choice reads the cells with a positive weight.
+
+#### What is stored, and what it carries
+
+The stored displacement of a cell is the displacement of its centre from where
+the member's stored shape places it, with no fitted affine map removed. Without
+`move_shape` that is the shift as measured, and the member's shape, position,
+whole-member ZNCC, its parts and its shift from the seed are the cascade's, bit
+for bit. The displacements carry three things:
+
+- **A first-order part.** The cascade found the affine shape that maximises one
+  windowed ZNCC over the whole patch; each cell's optimum is found separately on
+  far fewer samples, so the nine optima do not agree exactly with the
+  whole-patch optimum. The part of that disagreement one affine map can express
+  is in the displacements. On the fleet subset the fitted cells' displacements
+  have a median length of 0.16 to 0.35 grid px, most of it this part.
+- **The second-order term.** For a planar surface, the part of the cell shifts
+  no affine map matches is the second-order term of the homography, which is
+  what a normal needs.
+- **Parallax.** For a surface that is not one plane, the cells off the plane the
+  others agree on are displaced by their parallax, which is large and is what
+  refuses those cells.
+
+A consumer that wants only the second-order term fits an affine map to the
+displacements of the `fitted` cells and removes it. The file stores four
+member-parallel entries, `member_cell_shift_px`, `member_cell_zncc`,
+`member_cell_status` with its legend, and `member_cell_iterations`, specified in
+[matches-file-format.md](../../formats/matches-file-format.md#per-cell-entries-optional-version-8).
+They are optional entries of `.matches` version 8; version 9 adds
+`refused_outlier` to the statuses the legend may name. A member that is not kept
+carries `NaN` / `NaN` / `not_attempted` / `0`. Why the loop stopped and whether
+its last update was applied are in the result and the binding only.
+
+The cell shifts are measured on a tile that is itself an interpolation of the
+photograph. For a shift read as a sub-pixel ZNCC peak this is a small blur, not a
+bias.
+
+#### Why the shape is left to the cascade
+
+The cell fit's affine map is an update the cells agree on, and could move the
+shape. But the two objectives disagree: the cell fit asks for the map that best
+explains nine separate shifts, while the cascade found the one that maximises the
+whole-patch ZNCC, the score the member was kept on. Applied unconditionally, the
+cell fit's map moved 80% to 99.6% of kept members on the fleet and lowered every
+moved member's ZNCC. With the acceptance rule below it moves 0.2% to 1.4% of
+kept members, each to a higher ZNCC, and still changes the seed: on
+`KerryPark480` the 55 members it moves, 0.34% of the kept members, alone turn
+the seed's passing pick into a failing one. ZNCC cannot say whether those shapes
+are worse, so by default the stage measures and leaves every shape where the
+cascade put it.
+
+#### The shape-moving loop (`move_shape`)
+
+With `move_shape`, the fitted map is an update of the member's shape and the
+stage runs on two levels: the outer level renders, the inner level reads only
+the working patch.
+
+1. **Render** at the current shape, and **register the cells**, as in the
+   measurement.
+2. **Fit the update.** The robust affine map through the surviving cells, in
+   grid coordinates centred on the grid's middle (`c ↦ A·c + b`), composes into
+   the shape as `S' = S·A` and the position as `p' = p + S·(step·b)`.
+3. **Accept or reject.** The whole-member windowed ZNCC, the objective the
+   cascade maximised, is read at the updated shape. If it is lower than at the
+   current shape by more than `ACCEPT_ZNCC_TOLERANCE`, or lower than at the
+   starting shape at all, the update is rejected, the shape is not moved and the
+   loop stops (`Rejected`). The tolerance lets the loop cross a flat stretch
+   above the start; the floor at the start keeps it from accumulating over
+   several updates. A shape whose support leaves the frame cannot be read and
+   counts as the lowest score.
+4. **Loop.** The loop stops with the update applied if it moves no cell centre by
+   more than `update_tolerance_px` (`Converged`), or if it was the last of
+   `max_iterations` renders (`Cap`). It stops if the update's largest
+   cell-centre movement is not smaller than the previous update's
+   (`Oscillation`): the loop is alternating between shapes rather than
+   converging, and it keeps whichever of the shapes before and after the update
+   has the higher whole-member ZNCC, the shape after on a tie. Otherwise the
+   shape is updated and the loop renders again.
+
+This is the inverse-compositional alignment pattern with a piecewise
+translation model. On a synthetic plane, from a starting shape a few percent of
+scale and a few degrees off, it converges in two or three iterations. On
+captures, starting from the cascade's shape, it almost always stops at its first
+iteration, because its first update lowers the score the cascade maximised.
+
+**The stored displacement after the loop.** It keeps its definition, the
+displacement from where the returned shape places the cell. When the last update
+was applied, a shift `d` measured at cell centre `c` is carried into the
+returned shape's grid as `A⁻¹·(d − (A·c + b − c))`, so the update's affine part
+is gone from it because the shape absorbed it; subtracting the update's movement
+without the `A⁻¹` would leave an error of the size of `(A⁻¹ − I)` applied to the
+displacement. When the last update was rejected, or an oscillation kept the shape
+before it, the returned shape is the one the last render was made at, and the
+shift is stored as measured.
+
+**Revert.** After the loop moves a member, its whole-patch ZNCC, its parts and
+its shift from the seed are read again at the new shape, and the cascade's
+gates, `min_zncc` and `max_shift_px`, are applied to them. A member that fails
+either, whose new support leaves the frame, or whose re-read ZNCC is below the
+cascade's stored ZNCC (the loop's floor is its own reading of the starting
+shape, which can differ from the stored value in the last bits) keeps its
+cascade shape and readings, with all nine cells `not_attempted`. The same
+happens when any iteration fails: a failed render, no surviving cell, or a
+fitted map that reflects (`det A ≤ 0`) or is not finite. What earlier iterations
+fitted is discarded, because it was read at a shape that would not be the one
+returned. A rejected update is not a failure: the member keeps the shape the last
+render was made at, with that render's readings. The member's status is always
+the cascade's.
+
+#### What the fleet measurements decide
+
+The measurements are in
+[cluster-patch-refinement-measurements.md](cluster-patch-refinement-measurements.md).
+
+- **The loop without an acceptance rule**
+  ([fleet conclusions](cluster-patch-refinement-measurements.md#what-these-measurements-decide),
+  43 entries): it moved 80% to 99.6% of kept members, by a median of 0.16 to
+  0.71 grid px and up to 10, lowered every moved member's whole-member ZNCC, left
+  23.9% of members alternating at the cap, cost 1.6× the refinement's time, and
+  turned the seed's `KerryPark480` pick from pass to fail.
+- **The loop with the acceptance rule, the robust fit and the oscillation stop**
+  ([subset run](cluster-patch-refinement-measurements.md#subset-with-the-acceptance-rule-2026-10-08),
+  five entries): 98.5% to 99.8% of kept members stop at their first iteration,
+  under 1.5% move, each to a higher whole-member ZNCC, nothing reaches the cap
+  or oscillates, and the cost is 1.12× to 1.29×. `KerryPark480`'s pick still
+  fails, and moving only the 55 members the loop moved there reproduces the
+  failure.
+- **The measurement, the default**
+  ([subset run](cluster-patch-refinement-measurements.md#subset-with-the-shape-left-to-the-cascade-2026-10-08)):
+  every member output other than the cells is byte-for-byte the cascade-only
+  run's on all five entries, the CPU cost is 1.09× to 1.17×, and the seed on
+  `SeoulBull` and `KerryPark480` releases the same candidates as with the
+  cascade file, so `KerryPark480`'s pick passes again.
+- **The two-dimensional residual scale**
+  ([subset run](cluster-patch-refinement-measurements.md#subset-with-the-two-dimensional-residual-scale-2026-10-08)):
+  the robust fit refuses 2.6% to 3.4% of cells as outliers instead of 0.5% to
+  0.7% under the one-dimensional factor, and changes no other cell status, shift
+  or ZNCC.
+- **The cell gates.** Neither the cell ZNCC distribution nor the curvature's has
+  a valley or a knee to place a bar in
+  ([gate sweep](cluster-patch-refinement-measurements.md#gate-sweep)); `0.8`
+  refuses 6.8% of peaked cells, and `0.02` refuses 2% to 14% of cells depending
+  on the capture.
+
 ## Implementation notes
 
 **Determinism is a contract, not an accident.** Clusters refine in parallel with
@@ -382,11 +733,13 @@ member wins, the simplex reorder is a stable insertion sort, and the returned
 optimum is the first minimum (the numpy-argmin convention). Two runs over the
 same input are bit-identical under any thread schedule.
 
-**The status discriminants are a cross-crate invariant.** `sfmtool-core` does
-not depend on `sfmtool-matches-format`; the binding casts `MemberStatus` to `u8`
-and writes it straight into the `cluster_patches/` section. The two enums must
-stay numerically identical, and a new status has to land in both — plus the
-format's validator — in one change.
+**The status discriminants are a cross-crate invariant.** `MemberStatus` is
+its own enum, not `sfmtool_matches_format::ClusterMemberStatus`; the binding
+casts it to `u8` and writes it straight into the `cluster_patches/` section. The
+two enums must stay numerically identical, and a new status has to land in
+both, plus the format's validator, in one change. `CellStatus` and
+`ClusterCellStatus` share their discriminants the same way: `member_cell_data`
+converts one to the other, and a test checks that the codes agree.
 
 **The tile bound is the frame test.** Each evaluation samples through a
 per-(member, level) tile: a planar f32 copy of the touched region of that pyramid
@@ -482,6 +835,43 @@ runs over these files move little: at the resected pose its default rule recover
 80.4% → 80.6% of the known observations on seoul_bull and 71.5% → 70.7% on
 kerry_park, and the recovery at the ground-truth pose is unchanged.
 
+
+### Piecewise stage internals
+
+- **Determinism and precision.** Tile intensities are `f32`, matching the
+  cascade; the affine fit, a weighted least squares on at most nine points run
+  four times for the reweighting, is `f64`, and with `move_shape` it is composed
+  into the `f32` shape, where a near-identity matrix is multiplied repeatedly.
+  Per-member work is independent and parallel, with no randomness; a test checks
+  that one thread and four give the same cells. Without `move_shape`, every
+  member output other than the cells is bit-identical to a run without the
+  stage, which a kernel test checks.
+- **Without `move_shape` the stage never reads the whole-member ZNCC.** The loop
+  returns after its one render and fit, before the score is read, and the
+  caller sees an unmoved member and stores only its cells. That is what keeps
+  the cascade's outputs bit-identical, and why the stage costs one render and
+  nine searches per kept member and nothing more.
+- **The render is the only cache-missing step.** The working patch is rendered
+  once per member without `move_shape` and once per iteration with it, and
+  nothing in the cell search reads the photograph. A cell's search reads the
+  window's sum and sum of squares from summed-area tables of the working patch,
+  built once per render; the template side is mean-removed, so the cross term
+  needs no window mean and is the only pass over the window per shift.
+- **The update's acceptance reads the cascade's own evaluation**, the same
+  objective at the map the shape and position give, through the same
+  pyramid-level choice and tile; the loop reads it once at the starting shape
+  and once per iteration. A first version applied the tolerance per update, and
+  on the subset the stored ZNCC of members moved over several updates fell by up
+  to 0.0004; the floor at the starting shape is why it no longer can.
+- **The loop's displacements follow the second-order term less closely as it
+  grows.** On the synthetic plane with `h = [0.003, −0.002]` the loop converges
+  with its last update applied, and the largest error over the nine cells is
+  0.093 grid px (RMS 0.058) against true displacements up to 0.64: the robust
+  fit weights the corner cells, where the term is largest, below the others, so
+  the affine it leaves follows the middle cells. At twice that the second update
+  is rejected, and the corner cell farthest off the affine is refused as an
+  outlier.
+
 ## Parameters
 
 Defaults are `ClusterRefineParams::default()` in
@@ -507,6 +897,31 @@ template edge length while the kernel's `radius` is a half-width;
 | `MIN_ABS_DET` | `1e-9` | Floor on a usable SIFT shape's `det A` magnitude (`cluster_refine.rs`) |
 | `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`cluster_refine.rs`) |
 
+The piecewise stage is `ClusterRefineParams::piecewise`, `None` by default (CLI
+`--no-piecewise`). Its settings are `PiecewiseParams::default()` in
+`crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs`, and the module
+constants the table marks are in the same file. The defaults of
+`min_cell_zncc` and `min_cell_curvature` are `DEFAULT_MIN_CELL_ZNCC` and
+`DEFAULT_MIN_CELL_CURVATURE`, and both are provisional: they were chosen on the
+synthetic tests, and the fleet's distributions have no valley or knee to place
+them in, so they stay until an outcome measure, normal or shape error against a
+ground truth, is swept over them. `sfm cluster-patches --piecewise` runs the
+stage at these defaults and exposes none of them.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `move_shape` | `false` | Whether the fitted affine map may move the member's shape, by the loop of [The shape-moving loop](#the-shape-moving-loop-move_shape); off, the stage measures once at the cascade's shape |
+| `cell_shift_bound_px` | `2.0` | Search bound for a cell's shift from its affine placement, and the working patch's margin, template grid px |
+| `min_cell_zncc` | `0.8` | A cell below this ZNCC at its optimum is `refused_zncc` (provisional) |
+| `min_cell_curvature` | `0.02` | A cell whose ZNCC peak is flatter, in ZNCC per grid px², is `refused_curvature` (provisional) |
+| `update_tolerance_px` | `0.05` | With `move_shape`: the loop stops when no cell centre moves by more, grid px |
+| `max_iterations` | `5` | With `move_shape`: render cap; without it the stage renders once |
+| `ACCEPT_ZNCC_TOLERANCE` | `1e-4` | With `move_shape`: how far the whole-member ZNCC may fall at an update (module constant) |
+| `IRLS_ROUNDS` | `3` | Reweighting rounds after the curvature-weighted first fit (module constant) |
+| `TUKEY_CUTOFF` | `4.685` | Biweight cut-off, residual scales (module constant) |
+| `MEDIAN_LENGTH_TO_SIGMA` | `0.8493` | Median residual length to per-axis scale, `1/√(2 ln 2)` (module constant) |
+| `MIN_RESIDUAL_SCALE_PX` | `0.1` | Floor on the residual scale, grid px (module constant) |
+
 ## Python bindings
 
 `_sfmtool.matching.refine_cluster_patches`, in
@@ -521,7 +936,9 @@ refine_cluster_patches(
     window="gaussian_disk", window_sigma=None,
     min_zncc=0.85, max_shift_px=3.0,
     max_member_zncc_self_similarity_radius=2.5,
-    max_iters=120, progress=None,
+    max_iters=120, piecewise=False, move_shape=None,
+    cell_shift_bound_px=None, min_cell_zncc=None, min_cell_curvature=None,
+    update_tolerance_px=None, max_iterations=None, progress=None,
 ) -> dict
 ```
 
@@ -549,6 +966,17 @@ float64, `member_zncc` `(M,)` float32, `member_zncc_middle` `(M,)` float32,
 `member_shift_px` `(M,)` float32, and
 `member_consistency_residual` `(M,)` float32 — the warp-consistency signal,
 computed inside the same call.
+
+`piecewise=True` runs the piecewise stage; the six `PiecewiseParams` settings
+are keyword arguments under their field names, each `None` for the Rust default,
+and are ignored without `piecewise`. With it the dict also carries the four
+stored columns, `member_cell_shift_px` `(M, 3, 3, 2)` float32,
+`member_cell_zncc` `(M, 3, 3)` float32, `member_cell_status` `(M, 3, 3)` uint8
+and `member_cell_iterations` `(M,)` uint8; `piecewise_options`, a dict of the
+settings it ran with; and two readings the file does not store,
+`member_cell_loop_stop` `(M,)` uint8 (the `LoopStop` code, `5` for every kept
+member without `move_shape`) and `member_cell_update_accepted` `(M,)` bool.
+Without it those seven keys are `None`.
 
 ```python
 from sfmtool.matching import refine_cluster_patches
@@ -592,16 +1020,40 @@ test convenience: over the ~50 effective samples of the window the affine
 optimizer can chase an unrelated smooth texture to a spurious ZNCC above the
 permissive 0.85 gate, which then trips the shift gate instead.
 
+`cluster_refine/piecewise/tests.rs` covers the piecewise stage. **The
+measurement**, on a synthetic planar cluster seen from a tilted view with the
+starting shape perturbed by a known affine: one render, no whole-member ZNCC
+read, the shape and position left at the start, all nine cells fitted, and the
+stored displacements matching the perturbation within a fifth of a grid px.
+Inside `refine_cluster_patches`, every member output but the cells is
+bit-identical with the stage on and off, and the kept member reads one
+iteration and `Measured`. A cell off the affine the other eight agree on is
+`refused_outlier` with its shift stored. **The loop** recovers the perturbed
+affine in at most three iterations with all nine cells fitted, and its cells
+follow the homography's second-order term; with a third of the template over a
+second plane, the three cells over it are refused and the update follows the
+first plane. An update that lowers the whole-member ZNCC, or whose support
+leaves the frame, is rejected; alternating updates stop at the second iteration
+with the better shape; a refined shape that fails a cascade gate is reverted;
+a flat member keeps its cascade shape with nine cells not attempted. Further
+tests pin the model fallbacks (similarity for three or four survivors, for five
+in one row, and for a singular affine; a shift for one or two), the
+summed-area window sums against a direct pass, the Rayleigh scale factor, the
+shared cell centres, the shared status codes, `member_cell_data`, and equal
+cells on one thread and four.
+
 `consistency/tests.rs` covers the residual fit (oracle cameras fit exactly,
 absolute shapes reproduce the relative-warp residuals, a contaminated member
 scores highest, non-participants NaN, runs deterministic).
 `tests/rust_bindings/matching/test_cluster_patches_rust_bindings.py` pins the dict schema,
-dtypes, progress ticks and every `ValueError` path.
+dtypes, progress ticks and every `ValueError` path, and with `piecewise` the
+cell keys, the `move_shape` loop and the settings' pass-through.
 `tests/patch/test_cluster_patches.py` drives the command over the
 `isolated_seoul_bull_17_images` fixture through the real pipeline
 (`ws init` → `sift --extract` → `match --cluster` → `cluster-patches`) and
 asserts that the output verifies, that over half the multi-member clusters keep
-at least one member, and that statuses stay inside the enum.
+at least one member, and that statuses stay inside the enum; with
+`--piecewise` it checks that the cells are written.
 
 ## Non-goals
 
@@ -615,12 +1067,20 @@ at least one member, and that statuses stay inside the enum.
   geometric consistency it can offer is the reconstruction-free residual, not a
   reprojection test.
 - **No gate on consistency.** The residual is stored, never thresholded here.
-- **No piecewise fit by default.** Each member gets one affine shape for its
-  whole template; the parts of the template are not registered separately
-  unless `ClusterRefineParams::piecewise` is set (`sfm cluster-patches
-  --piecewise`). That stage, a per-cell displacement fit after the affine one
-  whose cells the `.matches` file stores from version 8, is specified in
-  [cluster-patches-piecewise-refinement.md](../../drafts/cluster-patches-piecewise-refinement.md).
+- **No piecewise refinement by default.** The stage runs only when
+  `ClusterRefineParams::piecewise` is set (`sfm cluster-patches --piecewise`),
+  and then only measures: `move_shape` is off, and the loop behind it is kept
+  as an experiment switch.
+- **No consumer reads the cells.** The seed's writer does not derive frames or
+  normals from them, and no pipeline stage calls
+  [cell-plane-normals.md](cell-plane-normals.md)'s kernel. A precision gate on
+  that kernel's normal, and the seed's writer deriving its frames from the
+  cells behind it, are proposed in
+  [cell-plane-normal-precision-gate.md](../../drafts/cell-plane-normal-precision-gate.md).
+- **No normal in the cluster-patches file.** The file is pose-free; a normal is
+  derived by whoever holds poses.
+- **No affine fit per cell.** A cell's search is a shift search; a cell that
+  needs more is over another surface and is refused.
 
 ## Open questions
 
@@ -635,6 +1095,9 @@ at least one member, and that statuses stay inside the enum.
   freely tunable, one knob moves another gate's strength. Re-expressing the bar
   in a resolution-independent unit (keypoint-frame or source px) would fix it,
   and would change the meaning of the current default.
+- **Shift only, or shift and scale, per cell.** A scale per cell would read the
+  perspective term's radial component, at the cost of a two-dimensional search
+  per cell. The cells are fitted as pure shifts.
 - **Reference-selection policy.** Largest SIFT scale is the shipped policy and a
   known weakness on rig captures, where the largest-scale member is often an
   untracked feature. The format is policy-agnostic; the alternatives (template

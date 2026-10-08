@@ -186,11 +186,15 @@ member is absent, where the absolute shapes and positions stay valid
 regardless). Top-level metadata gains `"has_cluster_patches": true`.
 
 A member carries one shape for its whole patch. A file written with
-`--piecewise` also holds, for each kept member, a displacement and a status
-for each of the nine cells of its patch (format version 8's per-cell entries,
-[matches-file-format.md](../../formats/matches-file-format.md)); the stage
-that measures them is specified in
-[cluster-patches-piecewise-refinement.md](../../drafts/cluster-patches-piecewise-refinement.md).
+`--piecewise` also holds, for each kept member, a displacement, a ZNCC and a
+status for each of the nine cells of its patch, the displacement measured from
+where the member's stored shape places the cell (format version 8's per-cell
+entries, [matches-file-format.md](../../formats/matches-file-format.md#per-cell-entries-optional-version-8)).
+The piecewise refinement that measures them is specified in
+[cluster-patch-refinement.md](cluster-patch-refinement.md#piecewise-refinement);
+once poses exist, [cell-plane-normals.md](cell-plane-normals.md) turns them into
+a patch normal. A file written without `--piecewise` holds no per-cell
+displacement.
 
 ## The operation
 

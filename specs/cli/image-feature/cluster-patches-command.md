@@ -64,7 +64,7 @@ photometrically yet cannot pin a 2D position; they read `3`, the largest
 radius. Its default, `2.5`, is the same bar as the keypoint localizer's member
 gate (`embed-patches --max-member-zncc-self-similarity-radius`).
 `--piecewise` runs the piecewise refinement of
-[cluster-patches-piecewise-refinement.md](../../drafts/cluster-patches-piecewise-refinement.md)
+[cluster-patch-refinement.md](../../core/patch/cluster-patch-refinement.md#piecewise-refinement)
 with its default parameters, which measure the cells and never move the
 member's shape (`move_shape` false), so every other output is the one the
 command writes without the flag. It is off by default: whether it becomes the

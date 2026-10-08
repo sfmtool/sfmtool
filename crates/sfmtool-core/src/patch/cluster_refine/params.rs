@@ -120,7 +120,7 @@ pub struct ClusterRefineParams {
     /// version 8 and later, through
     /// [`member_cell_data`](super::member_cell_data)). Whether it becomes the
     /// default is decided once a consumer reads the cells. See
-    /// `specs/drafts/cluster-patches-piecewise-refinement.md`.
+    /// `specs/core/patch/cluster-patch-refinement.md`.
     pub piecewise: Option<PiecewiseParams>,
 }
 

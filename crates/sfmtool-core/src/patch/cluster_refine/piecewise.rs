@@ -5,7 +5,7 @@
 //! registered separately against the member's photograph at the member's
 //! cascade shape, and a robust affine map is fitted to their shifts.
 //!
-//! See `specs/drafts/cluster-patches-piecewise-refinement.md`. The photograph
+//! See `specs/core/patch/cluster-patch-refinement.md`. The photograph
 //! is rendered through the member's affine shape into a working patch: the
 //! template's `R×R` grid plus a margin of
 //! [`PiecewiseParams::cell_shift_bound_px`] on every side. Each of the nine
