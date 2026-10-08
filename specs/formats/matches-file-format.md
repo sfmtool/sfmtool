@@ -175,7 +175,7 @@ always store the pairwise backbone.
 
 ```json
 {
-  "version": 8,
+  "version": 9,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -224,7 +224,7 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `8`; writers emit `8` (see
+- `version`: Format version number. `1` through `9`; writers emit `9` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches. The
   format does not restrict the string; these values have a defined meaning:
@@ -613,7 +613,7 @@ refinement measured and which members stand.
   ],
   "member_cell_status_names": [
     "fitted", "refused_curvature", "refused_zncc", "not_attempted",
-    "refused_bound"
+    "refused_bound", "refused_outlier"
   ],
   "refine_options": {
     "patch_size": 8.0,
@@ -638,7 +638,8 @@ refinement measured and which members stand.
   exactly when the section carries the
   [per-cell entries](#per-cell-entries-optional-version-8), and absent
   otherwise. A writer states the whole list in the canonical order; a reader
-  accepts any legend and normalises the column onto that order
+  accepts any legend and normalises the column onto that order. A version 8
+  file's legend never names `refused_outlier`, which version 9 added
 - `refine_options`: The refinement parameters used, present since the section
   was introduced in version 3. The patch extent appears
   under one of two keys: `patch_size` (the full
@@ -810,7 +811,8 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   the sampling grid. A displacement of `d` means the cell's content lies at
   `c + d` of the member's grid, where `c` is the cell's centre
 - `NaN` where no displacement was measured: a cell whose status is
-  `refused_curvature`, `refused_bound` or `not_attempted`
+  `refused_curvature`, `refused_bound` or `not_attempted`. A `fitted`,
+  `refused_zncc` or `refused_outlier` cell carries its displacement
 - The reference member's own cells would displace by zero by construction, so
   it is not attempted and carries none
 
@@ -852,13 +854,18 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   - `refused_bound` — the best displacement lies on the edge of the range
     searched, so the optimum is at or past it and no sub-pixel displacement
     can be read
+  - `refused_outlier` — (version 9+) the displacement was measured and the
+    cell passed the bars above, but it disagrees with the change of shape the
+    member's other fitted cells agree on by so much that the fit of that
+    change gave it no weight
 - **Canonical order**: a writer always states the whole legend in the order
   listed above, `0` fitted, `1` refused_curvature, `2` refused_zncc, `3`
-  not_attempted, `4` refused_bound. A reader accepts any legend, in any order
-  and naming any subset of the defined names, and normalises the column onto
-  the canonical order as it loads
+  not_attempted, `4` refused_bound, `5` refused_outlier. A reader accepts any
+  legend, in any order and naming any subset of the defined names, and
+  normalises the column onto the canonical order as it loads
 - **Constraint**: The legend is a non-empty list of names, names only cell
-  statuses this format defines, and names none twice
+  statuses this format defines, and names none twice. A version 8 file's
+  legend does not name `refused_outlier`
 - **Constraint**: Every value is below the legend's length
 
 ##### `cluster_patches/member_cell_iterations.{K}.uint8.zst`
@@ -1420,11 +1427,25 @@ the pairs that pass verification, their matches and the
 
 ## Versioning and Migration
 
-The format has eight released versions (`1` through `8`). The format is versioned
+The format has nine released versions (`1` through `9`). The format is versioned
 (`metadata.json` `version`) precisely so that changes like the ones below can upgrade
 on load instead of breaking old files. Writers always emit the current version;
 readers accept any version up to it, with one exception — a cluster-backbone
 file below version 6, which is refused.
+
+### Version 8 → Version 9
+
+| Change | Detail |
+|---|---|
+| `cluster_patches/metadata.json` `member_cell_status_names` | The legend may name a sixth cell status, `refused_outlier`, code `5` in the canonical order. A writer states the whole legend, so every version 9 file with per-cell entries names it. |
+
+Nothing that a version 8 file stores changes meaning or layout, and a version
+8 file reads unchanged. A version 8 file whose legend names `refused_outlier`
+is refused, since no version 8 writer wrote that name. The bump exists because
+a version 8 reader refuses a legend name it does not define: without it, a
+version 8 reader would meet `refused_outlier` in a file that claims a version
+it reads. Integrity verification follows the same rule. A re-written file is a
+new version 9 file, with new hashes.
 
 ### Version 7 → Version 8
 
@@ -1560,6 +1581,8 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
+- **Version 9**: The cell status `refused_outlier` — `member_cell_status_names`
+  may name it, and a writer always does. Version 8 files read unchanged.
 - **Version 8**: Per-cell entries — `cluster_patches/` may carry
   `member_cell_shift_px`, `member_cell_zncc`, `member_cell_status` and
   `member_cell_iterations`, present together with a `member_cell_status_names`

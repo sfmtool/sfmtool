@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The per-cell columns of `cluster_patches/` (format version 8).
+//! The per-cell columns of `cluster_patches/` (format version 8, with the
+//! `refused_outlier` status from version 9).
 
 use super::*;
 
@@ -28,7 +29,7 @@ fn make_cell_test_data() -> MatchesData {
         [
             ClusterCellStatus::Fitted,
             ClusterCellStatus::RefusedZncc,
-            ClusterCellStatus::Fitted,
+            ClusterCellStatus::RefusedOutlier,
         ],
         [
             ClusterCellStatus::RefusedBound,
@@ -41,7 +42,9 @@ fn make_cell_test_data() -> MatchesData {
             cells.status[[1, row, col]] = status as u8;
             let measured = matches!(
                 status,
-                ClusterCellStatus::Fitted | ClusterCellStatus::RefusedZncc
+                ClusterCellStatus::Fitted
+                    | ClusterCellStatus::RefusedZncc
+                    | ClusterCellStatus::RefusedOutlier
             );
             if measured {
                 cells.shift_px[[1, row, col, 0]] = 0.125 * row as f32 - 0.0625;
@@ -107,7 +110,10 @@ fn test_member_cells_round_trip() {
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "{errors:?}");
-    assert_eq!(read_matches_metadata(&path).unwrap().version, 8);
+    assert_eq!(
+        read_matches_metadata(&path).unwrap().version,
+        MATCHES_FORMAT_VERSION
+    );
     assert_eq!(
         stored_cell_status_names(&path),
         serde_json::json!([
@@ -115,7 +121,8 @@ fn test_member_cells_round_trip() {
             "refused_curvature",
             "refused_zncc",
             "not_attempted",
-            "refused_bound"
+            "refused_bound",
+            "refused_outlier"
         ])
     );
     let names: Vec<String> = load_archive_entries(&path)
@@ -197,6 +204,48 @@ fn test_version_7_file_reads_with_no_cells() {
 }
 
 #[test]
+fn test_version_8_file_reads_unchanged() {
+    // A version 8 file's legend cannot name refused_outlier: with the five
+    // statuses version 8 defined, it reads and verifies as before.
+    let mut expected = make_cell_test_data()
+        .cluster_patches
+        .unwrap()
+        .member_cells
+        .unwrap();
+    // The one refused_outlier cell becomes fitted, which version 8 knew.
+    expected.status[[1, 1, 2]] = ClusterCellStatus::Fitted as u8;
+    let dir = std::env::temp_dir().join("matches_test_member_cells_v8");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.matches");
+    let v8 = dir.join("v8.matches");
+    let mut data = make_cell_test_data();
+    data.cluster_patches.as_mut().unwrap().member_cells = Some(expected.clone());
+    write_matches(&current, &data, 3).unwrap();
+    rewrite_matches_version(&current, &v8, 8);
+    assert_eq!(
+        stored_cell_status_names(&v8),
+        serde_json::json!(ClusterCellStatus::NAMES[..5])
+    );
+
+    let (valid, errors) = verify_matches(&v8).unwrap();
+    assert!(valid, "{errors:?}");
+    let loaded = read_matches(&v8).unwrap();
+    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    assert_cells_eq(
+        loaded
+            .cluster_patches
+            .as_ref()
+            .unwrap()
+            .member_cells
+            .as_ref()
+            .unwrap(),
+        &expected,
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_member_cell_status_read_through_another_legend() {
     // The reader resolves each cell code through the file's legend and hands
     // back the canonical numbering; writing it back states the canonical
@@ -244,8 +293,8 @@ fn test_member_cell_status_read_through_another_legend() {
 #[test]
 fn test_member_cell_status_partial_legend() {
     // Like `member_status_names`, the cell legend may name any subset of the
-    // defined statuses: a file whose cells use four of them may state only
-    // those four, and its codes are read through that shorter legend.
+    // defined statuses: a file whose cells use five of them may state only
+    // those five, and its codes are read through that shorter legend.
     let mut expected = make_cell_test_data()
         .cluster_patches
         .unwrap()
@@ -257,6 +306,7 @@ fn test_member_cell_status_partial_legend() {
     let legend = [
         ClusterCellStatus::NotAttempted,
         ClusterCellStatus::Fitted,
+        ClusterCellStatus::RefusedOutlier,
         ClusterCellStatus::RefusedZncc,
         ClusterCellStatus::RefusedCurvature,
     ];
@@ -325,8 +375,8 @@ fn test_malformed_member_cells_rejected() {
         ),
         (
             "status_past_legend",
-            Box::new(|entries| mutate_entry(entries, STATUS, |bytes| bytes[9] = 5)),
-            "member_cell_status[1][0][0] is 5, past the 5 names its legend gives",
+            Box::new(|entries| mutate_entry(entries, STATUS, |bytes| bytes[9] = 6)),
+            "member_cell_status[1][0][0] is 6, past the 6 names its legend gives",
         ),
         (
             "unknown_legend_name",
@@ -374,6 +424,14 @@ fn test_malformed_member_cells_rejected() {
             }),
             "version 7 file carries cluster_patches/metadata.json member_cell_status_names \
              (introduced in version 8)",
+        ),
+        (
+            "version_8_names_refused_outlier",
+            Box::new(|entries| {
+                mutate_metadata(entries, |json| json["version"] = serde_json::json!(8))
+            }),
+            "version 8 file names refused_outlier in cluster_patches/metadata.json \
+             member_cell_status_names (introduced in version 9)",
         ),
     ];
     for (label, mutate, expected) in cases {

@@ -142,7 +142,7 @@ def test_matcher_output_states_the_detections(cluster_matches_file: Path):
     from sfmtool.fileio import read_matches, read_sift_partial
 
     data = read_matches(cluster_matches_file)
-    assert data["metadata"]["version"] == 8
+    assert data["metadata"]["version"] == 9
     positions = data["member_positions"]
     shapes = data["member_affine_shapes"]
     assert positions.dtype == np.float32 and shapes.dtype == np.float32
@@ -266,6 +266,7 @@ CELL_STATUS_NAMES = [
     "refused_zncc",
     "not_attempted",
     "refused_bound",
+    "refused_outlier",
 ]
 
 

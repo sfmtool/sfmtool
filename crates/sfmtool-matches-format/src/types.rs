@@ -70,6 +70,13 @@ pub use sfmtool_archive_io::WorkspaceMetadata;
 /// this version; [`crate::read_matches`] accepts any version up to it, except
 /// a cluster-backbone file below version 6, which it refuses.
 ///
+/// Version 9 adds the cell status `refused_outlier`
+/// ([`crate::ClusterCellStatus::RefusedOutlier`]) to the names the
+/// `member_cell_status_names` legend may state, so a version 9 writer, which
+/// states the whole legend, writes a file a version 8 reader refuses. A
+/// version 8 file reads unchanged; one whose legend names `refused_outlier`
+/// is refused, since no version 8 writer wrote that name.
+///
 /// Version 8 adds the piecewise refinement's per-cell columns to
 /// `cluster_patches/`: four optional entries, `member_cell_shift_px`,
 /// `member_cell_zncc`, `member_cell_status` and `member_cell_iterations`,
@@ -83,7 +90,7 @@ pub use sfmtool_archive_io::WorkspaceMetadata;
 /// [`ClusterMemberStatus::NAMES`]. What each earlier version changed, and how
 /// a reader treats a file of that version, is in
 /// `specs/formats/matches-file-format.md` § "Versioning and Migration".
-pub const MATCHES_FORMAT_VERSION: u32 = 8;
+pub const MATCHES_FORMAT_VERSION: u32 = 9;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.

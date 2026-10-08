@@ -19,6 +19,8 @@ STATUS_REJECTED_UNLOCALIZABLE = 6
 # sfmtool_matches_format::ClusterCellStatus discriminants.
 CELL_FITTED = 0
 CELL_NOT_ATTEMPTED = 3
+# sfmtool_core's LoopStop discriminants, as `member_cell_loop_stop` returns them.
+LOOP_NOT_RUN = 0
 
 
 def _texture(w: int, h: int) -> np.ndarray:
@@ -91,6 +93,8 @@ class TestRefineClusterPatches:
             "member_cell_zncc",
             "member_cell_status",
             "member_cell_iterations",
+            "member_cell_loop_stop",
+            "member_cell_update_accepted",
             "piecewise_options",
         }
         # Without piecewise=True the per-cell columns are absent.
@@ -99,6 +103,8 @@ class TestRefineClusterPatches:
             "member_cell_zncc",
             "member_cell_status",
             "member_cell_iterations",
+            "member_cell_loop_stop",
+            "member_cell_update_accepted",
             "piecewise_options",
         ):
             assert result[key] is None, key
@@ -160,7 +166,11 @@ class TestRefineClusterPatches:
         assert zncc.dtype == np.float32 and zncc.shape == (2, 3, 3)
         assert status.dtype == np.uint8 and status.shape == (2, 3, 3)
         assert iterations.dtype == np.uint8 and iterations.shape == (2,)
-        assert set(np.unique(status).tolist()) <= set(range(5))
+        assert set(np.unique(status).tolist()) <= set(range(6))
+        stop = result["member_cell_loop_stop"]
+        accepted = result["member_cell_update_accepted"]
+        assert stop.dtype == np.uint8 and stop.shape == (2,)
+        assert accepted.dtype == np.bool_ and accepted.shape == (2,)
         # The settings the run used: the Rust defaults.
         assert result["piecewise_options"] == {
             "cell_shift_bound_px": 2.0,
@@ -170,17 +180,19 @@ class TestRefineClusterPatches:
             "max_iterations": 5,
         }
 
-        # The reference is not kept: no readings.
+        # The reference is not kept: no readings, and its loop did not run.
         assert result["member_status"][0] == STATUS_REFERENCE
         assert (status[0] == CELL_NOT_ATTEMPTED).all()
         assert np.isnan(shift[0]).all() and np.isnan(zncc[0]).all()
         assert iterations[0] == 0
+        assert stop[0] == LOOP_NOT_RUN and not accepted[0]
 
         # The kept member is a pure translation: the stage runs on it, its
         # fitted cells sit where its affine shape places them, and it stays
         # kept with the shape the cascade found, to within the fit.
         assert result["member_status"][1] == STATUS_KEPT
         assert iterations[1] >= 1
+        assert stop[1] != LOOP_NOT_RUN
         fitted = status[1] == CELL_FITTED
         assert fitted.sum() >= 5
         np.testing.assert_allclose(shift[1][fitted], 0.0, atol=0.2)

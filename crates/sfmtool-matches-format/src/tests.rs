@@ -320,11 +320,11 @@ fn test_round_trip_no_tvg() {
     let data = make_test_data();
     let (dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
-    // Frozen from the writer at format version 8 (the version is in the
+    // Frozen from the writer at format version 9 (the version is in the
     // hashed top-level metadata, so a version bump moves this value).
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "571ce3985e3fe1ba09c442f9350fc861"
+        "6530c24ed1388269af47606b05ed9e2f"
     );
 
     // Verify metadata
@@ -1141,9 +1141,11 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
 /// for `version <= 2`, the version-4 `images/image_dims` entry for
 /// `version <= 3`, the version-6 `clusters/member_positions` /
 /// `clusters/member_affine_shapes` entries for `version <= 5` and the
-/// version-7 `member_status_names` legend for `version <= 6` and the version-8
+/// version-7 `member_status_names` legend for `version <= 6`, the version-8
 /// per-cell columns and their `member_cell_status_names` legend for
-/// `version <= 7`, matching what old writers produced), then recomputing the
+/// `version <= 7` and the version-9 `refused_outlier` name from that legend
+/// for `version <= 8`, matching what old writers produced; a cell stored as
+/// `refused_outlier` is left past the shortened legend), then recomputing the
 /// stored hashes so the result is an internally consistent file of that
 /// version — for authoring old- or future-version fixture bytes.
 fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
@@ -1165,6 +1167,16 @@ fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version
         entries.retain(|(n, _)| {
             !n.starts_with("clusters/member_positions.")
                 && !n.starts_with("clusters/member_affine_shapes.")
+        });
+    }
+    if version == 8 && entries.iter().any(|(n, _)| n == CP_METADATA) {
+        mutate_cp_metadata(&mut entries, |json| {
+            if let Some(names) = json
+                .get_mut("member_cell_status_names")
+                .and_then(|v| v.as_array_mut())
+            {
+                names.retain(|n| n != "refused_outlier");
+            }
         });
     }
     if version <= 7 {

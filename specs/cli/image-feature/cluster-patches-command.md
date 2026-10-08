@@ -150,8 +150,8 @@ are excluded before refinement, so their ZNCC / shift are NaN).
 With `--piecewise`, `member_cell_status` values, stated in the file's
 `member_cell_status_names` legend in this canonical order: `0 fitted`,
 `1 refused_curvature`, `2 refused_zncc`, `3 not_attempted`,
-`4 refused_bound`. Only `kept` members carry readings; every other member is
-`not_attempted` throughout.
+`4 refused_bound`, `5 refused_outlier`. Only `kept` members carry readings;
+every other member is `not_attempted` throughout.
 
 ## Usage Examples
 

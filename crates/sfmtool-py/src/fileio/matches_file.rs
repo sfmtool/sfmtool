@@ -344,7 +344,8 @@ impl PyMatchesFile {
 
     /// `(M, 3, 3)` uint8 cell statuses in the canonical numbering, whatever
     /// legend the file stated: 0 fitted, 1 refused_curvature, 2 refused_zncc,
-    /// 3 not_attempted, 4 refused_bound (`member_cell_status_names`).
+    /// 3 not_attempted, 4 refused_bound, 5 refused_outlier
+    /// (`member_cell_status_names`).
     ///
     /// None when the cluster_patches/ section carries no cells; raises
     /// `ValueError`, like the section's other getters, when the file has no

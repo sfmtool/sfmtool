@@ -18,7 +18,7 @@ use pyo3::types::PyDict;
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 use sfmtool_core::patch::cluster_refine::{
     member_cell_data, refine_cluster_patches as core_refine_cluster_patches,
-    warp_consistency_residuals, ClusterRefineParams, FeatureGeometry, PiecewiseParams,
+    warp_consistency_residuals, ClusterRefineParams, FeatureGeometry, LoopStop, PiecewiseParams,
 };
 
 use crate::patches::args::parse_patch_window;
@@ -457,10 +457,17 @@ pub fn clusters_to_pair_matches(
 ///     from where the member's affine shape places it, template grid px; NaN
 ///     where not measured), ``member_cell_zncc`` (M, 3, 3) float32,
 ///     ``member_cell_status`` (M, 3, 3) uint8 (0 fitted, 1 refused_curvature,
-///     2 refused_zncc, 3 not_attempted, 4 refused_bound) and
-///     ``member_cell_iterations`` (M,) uint8, and ``piecewise_options``, a
+///     2 refused_zncc, 3 not_attempted, 4 refused_bound, 5 refused_outlier)
+///     and ``member_cell_iterations`` (M,) uint8, and ``piecewise_options``, a
 ///     dict of the five piecewise settings the run used, keyed by their
-///     argument names. Without it those five keys are None.
+///     argument names. It also carries two per-member readings of the loop
+///     that the ``.matches`` file does not store:
+///     ``member_cell_loop_stop`` (M,) uint8, why the loop stopped (0 not run,
+///     1 converged, 2 reached the cap, 3 an update that would lower the
+///     whole-member ZNCC was rejected, 4 the update stopped shrinking), and
+///     ``member_cell_update_accepted`` (M,) bool, whether the last fitted
+///     update was applied to the returned shape. Without ``piecewise`` those
+///     seven keys are None.
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
@@ -649,6 +656,8 @@ pub fn refine_cluster_patches<'py>(
         "member_cell_zncc",
         "member_cell_status",
         "member_cell_iterations",
+        "member_cell_loop_stop",
+        "member_cell_update_accepted",
     ];
     if let Some(pp) = params.piecewise.as_ref() {
         // The settings as the decimal values they were written as (0.8, not
@@ -666,6 +675,18 @@ pub fn refine_cluster_patches<'py>(
         dict.set_item(cell_keys[1], cells.zncc.into_pyarray(py))?;
         dict.set_item(cell_keys[2], cells.status.into_pyarray(py))?;
         dict.set_item(cell_keys[3], cells.iterations.into_pyarray(py))?;
+        let stop: Vec<u8> = result
+            .cells
+            .iter()
+            .map(|c| c.map_or(LoopStop::NotRun, |c| c.stop) as u8)
+            .collect();
+        let accepted: Vec<bool> = result
+            .cells
+            .iter()
+            .map(|c| c.is_some_and(|c| c.final_update_accepted))
+            .collect();
+        dict.set_item(cell_keys[4], stop.into_pyarray(py))?;
+        dict.set_item(cell_keys[5], accepted.into_pyarray(py))?;
     } else {
         for key in cell_keys.into_iter().chain(["piecewise_options"]) {
             dict.set_item(key, py.None())?;

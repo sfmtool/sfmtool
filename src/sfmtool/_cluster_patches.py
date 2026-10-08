@@ -253,9 +253,11 @@ def _run_cluster_patches(
         # Cell status 0 is fitted in the canonical numbering the binding
         # returns.
         cells_fitted = int((result["member_cell_status"][statuses == 1] == 0).sum())
+        n_accepted = int(result["member_cell_update_accepted"][statuses == 1].sum())
         click.echo(
             f"Piecewise refinement: {cells_fitted} of {9 * n_kept} cells of kept "
-            "members fitted"
+            f"members fitted; the last shape update was applied to {n_accepted} "
+            f"of {n_kept} kept members"
         )
     click.echo(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "

@@ -1,6 +1,6 @@
 # Cluster Patches Piecewise Refinement Measurements
 
-This file records the fleet measurements behind the open decisions of [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md). That draft adds a stage that registers each kept member's nine cells against the cluster's template, refits the member's affine shape from the cell shifts, and stores the per-cell residuals in the `.matches` version 8 file. The measurements bear on three decisions: whether the stage runs by default (`sfm cluster-patches --piecewise`), and the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`). They also run the two fleet checks the draft's Testing section names: that the converged shapes agree with the cascade's within tolerance on members the cascade kept, and that the refinement's wall time does not rise. The last measurement runs the seed stage on the two checked-in ground truths with and without the stage, since the seed is the stage's consumer.
+This file records the fleet measurements behind the open decisions of [cluster-patches-piecewise-refinement.md](cluster-patches-piecewise-refinement.md). That draft adds a stage that registers each kept member's nine cells against the cluster's template, refits the member's affine shape from the cell shifts, and stores the per-cell residuals in the `.matches` version 8 file. The measurements bear on three decisions: whether the stage runs by default (`sfm cluster-patches --piecewise`), and the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`). They also run the two fleet checks the draft's Testing section names: that the converged shapes agree with the cascade's within tolerance on members the cascade kept, and that the refinement's wall time does not rise. The last measurement runs the seed stage on the two checked-in ground truths with and without the stage, since the seed is the stage's consumer. The last section repeats the comparison on five entries after the loop was changed to keep the cascade's ZNCC.
 
 ## Setup common to every measurement
 
@@ -525,3 +525,102 @@ The decision this informs is that the stage stays off by default (`--no-piecewis
 - **`min_cell_zncc`.** The provisional 0.8 refuses 6.8% of peaked cells. The distribution has one mode and no valley, so it gives no data-derived boundary. The value stays provisional until an outcome measure, normal or shape error against a ground truth, is swept over it.
 - **`min_cell_curvature`.** The curvature is not stored, so its distribution was read through reruns. That proxy is smooth, with no knee, and varies widely between captures (2% to 14% of cells refused at 0.02). The value stays provisional on the same terms. Storing the curvature would let the next measurement read it directly.
 - **Agreement with the cascade, and convergence.** The loop's actual agreement with the cascade is about 2 grid px at the 95th percentile. A quarter of the members stop at the cap, because their update alternates at a size above the 0.05 grid px tolerance. Both checks the draft's Testing section names, agreement within tolerance and no rise in wall time, fail at commit `f787be3b`.
+
+## Subset with the acceptance rule (2026-10-08)
+
+**Question.** The fleet run above found the loop moving the cascade's shapes off its ZNCC optimum, a quarter of members oscillating at the cap, a 1.6× cost, and the seed's `KerryPark480` pick failing. The loop was changed in three ways:
+
+- An update is applied only when the whole-member windowed ZNCC the cascade maximised does not fall below the current shape's by more than `1e-4`, and never below the starting shape's.
+- The update is fitted by IRLS with a Tukey biweight, and a cell given no weight is stored as `refused_outlier`.
+- The loop also stops when the update's largest cell-centre movement does not shrink.
+
+After these changes, do the shapes stay with the cascade? Does the whole-member ZNCC never fall? Does the cost come down, and does the seed's pick pass again?
+
+**Method.**
+
+- **Code.** Branch `bootstrap-core-migration` at `b1b98e12`, with the changes of the commit that adds this section (`.matches` version 9). The extension was rebuilt with `pixi run maturin develop --release`. Same machine as above, with no other workload running.
+- **Data.** Five entries of the fleet, each from the same clusters file as above: `SeoulBull`, `KerryPark480`, `fleetws` (the entry with the highest `refused_bound` share), `MurdoSmallAntiqueCat` and `DnDTabletop`.
+- **Runs.** The cascade and piecewise CLI runs exactly as under [Setup](#setup-common-to-every-measurement), one after the other, with `SFMTOOL_PROFILE=1`. The file does not store why the loop stopped or whether its last update was applied. A third run, through the binding with `piecewise=True`, read those as `member_cell_loop_stop` and `member_cell_update_accepted`. Its statuses and cells are identical to the CLI file's on every entry.
+- **Seed.** As under [Seed stage on the ground-truth entries](#seed-stage-on-the-ground-truth-entries), with the same environment, scoring and pass rule, on `SeoulBull` and `KerryPark480` with the new cascade and piecewise files.
+
+A first version of the rule applied the `1e-4` tolerance to each update separately. On the same subset, members that moved over several updates ended with a whole-member ZNCC up to 0.0004 below the cascade's; on `DnDTabletop`, 5,247 members fell by more than 1e-4. The rule was changed in two ways: every update is floored at the starting shape's ZNCC, and the re-read after the loop must be at least the cascade's stored value. The tables are from the second version.
+
+**Result: the stage now leaves almost every shape where the cascade put it.**
+
+- **Loop stops.** On each entry, 98.5% to 99.8% of kept members stop at their first iteration with the update rejected. Among members whose loop ran, the last fitted update is applied to between 0% (`SeoulBull`) and 0.6% (`DnDTabletop`). No member reaches the cap, and no loop stops for oscillation.
+- **Movement.** 0.2% to 1.4% of kept members move at all. These members either took one or more accepted updates before a later one was rejected, or converged. Their moves are not small: the median is 0.28 to 1.68 grid px, and the largest is 5.3.
+- **ZNCC.** The whole-member ZNCC never falls: its change is ≥ 0 on every kept member of every entry. Where a member moves, its ZNCC rises, by a median of 0.0004 to 0.021 and at most 0.13. A moved member has escaped a local optimum of the cascade's simplex.
+
+| entry | kept | moved % | dtotal grid p50/p95/max (moved) | stop at cap % | final update rejected % | dzncc min (all kept) | dzncc p5/p50/p95/max (moved) | kernel wall cascade/piecewise s | ratio | CPU ratio |
+|---|---|---|---|---|---|---|---|---|---|---|
+| SeoulBull | 2953 | 0.17 | 1.68/3.45/3.77 | 0.0 | 100.0 | 0.0000 | 0.0005/0.0208/0.0404/0.0408 | 0.2/0.2 | 1.12 | 1.12 |
+| KerryPark480 | 15986 | 0.34 | 0.28/2.05/3.32 | 0.0 | 99.9 | 0.0000 | 0.0000/0.0004/0.0253/0.0682 | 0.6/0.7 | 1.13 | 1.15 |
+| fleetws | 68722 | 0.64 | 0.62/2.19/4.37 | 0.0 | 99.8 | 0.0000 | 0.0000/0.0008/0.0245/0.0733 | 4.2/5.1 | 1.21 | 1.14 |
+| MurdoSmallAntiqueCat | 625198 | 1.44 | 1.00/2.29/5.32 | 0.0 | 99.5 | 0.0000 | 0.0001/0.0049/0.0404/0.1025 | 38.1/44.9 | 1.18 | 1.17 |
+| DnDTabletop | 1375116 | 1.42 | 0.44/1.96/4.51 | 0.0 | 99.4 | 0.0000 | 0.0000/0.0007/0.0267/0.1289 | 53.3/68.8 | 1.29 | 1.25 |
+
+Over all kept members, the median and the 95th percentile of the movement are 0.00 grid px on every entry. At `f787be3b`, the same entries moved 79.8% to 95.8% of kept members, by a median of 0.31 to 0.69 grid px, and 20% to 54% of members reached the cap.
+
+The next table gives why each member's loop stopped, as a share of kept members, and the share at each iteration count:
+
+| entry | not run | converged | cap | rejected | oscillation | iterations 1/2/3/4/5 % |
+|---|---|---|---|---|---|---|
+| SeoulBull | 3.7 | 0.0 | 0.0 | 96.3 | 0.0 | 99.8/0.1/0.1/0.0/0.0 |
+| KerryPark480 | 1.8 | 0.1 | 0.0 | 98.1 | 0.0 | 99.7/0.3/0.1/0.0/0.0 |
+| fleetws | 5.0 | 0.2 | 0.0 | 94.7 | 0.0 | 99.4/0.4/0.1/0.0/0.0 |
+| MurdoSmallAntiqueCat | 0.9 | 0.4 | 0.0 | 98.6 | 0.0 | 98.5/0.8/0.5/0.2/0.1 |
+| DnDTabletop | 0.2 | 0.6 | 0.0 | 99.2 | 0.0 | 98.6/0.9/0.4/0.1/0.0 |
+
+A member counted as "not run" is one whose first render left no cell to fit, so all nine of its cells are `not_attempted`.
+
+The next table gives the cell statuses, as a share of the cells of kept members, and the residual `|shift|` of fitted cells:
+
+| entry | fitted | refused_curvature | refused_zncc | not_attempted | refused_bound | refused_outlier | fitted res p50/p95 grid px |
+|---|---|---|---|---|---|---|---|
+| SeoulBull | 52.9 | 7.8 | 14.4 | 4.6 | 19.8 | 0.6 | 0.36/1.31 |
+| KerryPark480 | 63.9 | 4.4 | 14.7 | 2.0 | 14.4 | 0.6 | 0.28/1.13 |
+| fleetws | 44.1 | 11.3 | 10.2 | 5.1 | 28.7 | 0.6 | 0.33/1.35 |
+| MurdoSmallAntiqueCat | 75.5 | 3.9 | 9.7 | 1.4 | 8.8 | 0.7 | 0.20/0.98 |
+| DnDTabletop | 85.8 | 5.7 | 3.1 | 0.7 | 4.2 | 0.5 | 0.17/0.80 |
+
+The robust fit refuses 0.5% to 0.7% of cells as outliers. Because nearly every update is rejected, the cells are read at the cascade's shape, and their stored shifts are the residual to that shape. They still contain the first-order part that the rejected update would have removed. This is why the fitted residuals are larger than at `f787be3b`, where their median was 0.13 to 0.26. A consumer that wants only the second-order term must fit an affine to the nine shifts and remove it.
+
+**Cost.** The kernel wall ratio is 1.12× to 1.29×. The CPU ratio, which contention does not affect, is 1.12× to 1.25×. At `f787be3b` these entries ran at 1.34× to 1.78× wall and 1.43× to 1.67× CPU. Almost every member now costs one render, nine cell searches and two readings of the whole-member ZNCC.
+
+**Seed.** `SeoulBull` does not regress. With the piecewise file every hypothesis scores as it does with the cascade file, to the third decimal; the only difference is `h01`'s median rotation, 0.420° against 0.419°. The pick `h00` passes as before (0.995°, 0.15%, +4.57%).
+
+`KerryPark480` still fails. With the cascade file, `h00` passes (0.710°, 0.91%, −0.11%), as it did on 2026-10-07. With the piecewise file, `h00` poses 26 cameras and fails, with a median rotation of 1.071° and a median centre error of 10.4%. Five hypotheses pass with the cascade file and two with the piecewise file.
+
+| file (piecewise) | qualified | accepted | posed | rot med/max deg | centre med/max % | f err % (manifest / equiv) | pass |
+|---|---|---|---|---|---|---|---|
+| h00.sfmr | 1 | 1 | 26 | 1.071/4.83 | 10.37/39.32 | +0.52 / +0.60 | fail |
+| h01.sfmr | 1 | 1 | 14 | 0.781/2.31 | 0.76/4.20 | +0.07 / +0.09 | PASS |
+| h02.sfmr | 1 | 1 | 14 | 0.755/2.58 | 3.17/11.55 | +0.12 / +0.23 | PASS |
+| h03.sfmr | 1 | 1 | 14 | 2.115/177.28 | 13.66/47.06 | +1.02 / +0.95 | fail |
+| h04.sfmr | 1 | 0 | 13 | 2.450/178.93 | 18.01/50.04 | +1.69 / +1.69 | fail |
+| h05.sfmr | 1 | 0 | 14 | 0.700/2.06 | 10.80/27.58 | +1.68 / +1.68 | fail |
+| h06.sfmr | 1 | 0 | 14 | 14.605/116.86 | 21.28/34.60 | +1.54 / +1.54 | fail |
+| h07.sfmr | 1 | 1 | 11 | 1.356/3.09 | 14.83/40.74 | +1.47 / +1.12 | fail |
+
+The `-spline-refused` variants of `h04`, `h05` and `h06` also fail.
+
+The two files differ in three ways:
+
+- the shapes, positions, ZNCCs and shifts of 55 of 15,986 kept members (0.34%);
+- the per-cell columns;
+- the consistency residuals, which the joint factorization spreads over 24,765 members.
+
+To separate these effects, three variant files were built and the seed was run on each:
+
+- **File A:** the piecewise file, with the 55 members' four columns and every consistency residual set back to the cascade's, so that only the per-cell columns differ from the cascade file.
+- **File B:** the cascade file, with the piecewise file's consistency residuals.
+- **File C:** the cascade file, with the 55 members' shapes, positions, ZNCCs and shifts taken from the piecewise file.
+
+Files A and B reproduce every number of the cascade run, so neither the cells nor the consistency residuals affect the seed here. File C reproduces every number of the piecewise run. The 55 moved members alone turn the passing pick into a failing one, and each of them moved to a shape with a higher whole-member ZNCC.
+
+**What this decides.**
+
+- **The acceptance rule does what it was meant to do on the shapes.** The whole-member ZNCC never falls, the loop no longer oscillates or reaches the cap, and the cost falls to about 1.2×. The stage is now close to a no-op on shapes: it reads the cells at the cascade's shape and stores them with their residuals, and it moves under 1.5% of members. The stage's product is the residuals, which are what the normal estimator needs.
+- **The seed criterion still fails on `KerryPark480`.** The stage does not lower any score. The pick fails because it is sensitive to 0.34% of members moving to shapes that the cascade's own objective prefers. ZNCC alone cannot say whether those 55 shapes are actually worse. Two measurements could settle it: score the moved members' shapes against the `kerry_park` ground truth, or find which of them carry the seed's choice. Until then the stage stays off by default.
+- **A variant that never moves the shape would leave the seed exactly as the cascade does.** Such a variant only stores the cells read at the cascade's shape; file A is its output. It is the conservative choice if the stage is wanted only for its residuals.
+- **The loop's stop reason and acceptance are not stored.** Why the loop stopped and whether its last update was applied are available through the binding but not in the file. Storing them is a follow-up, if a consumer needs them.

@@ -6,14 +6,16 @@
 //! over a second surface, a flat member, the bounds of the cell search, the
 //! window sums against a direct pass, the update's fallback models, the revert
 //! to the cascade shape when a refined shape fails a gate or leaves the
-//! frame, and the stage as it runs inside `refine_cluster_patches`, on one
+//! frame, the rejection of an update that lowers the whole-member ZNCC, the
+//! early stop of an oscillating loop, the robust fit's refusal of an outlier
+//! cell, and the stage as it runs inside `refine_cluster_patches`, on one
 //! thread and on four.
 
 use super::super::kernels::{SupportTables, TemplateKernel};
 use super::super::{
-    build_template, inv2, mul2, read_member_at, refine_cluster_patches, refine_kept_member_cells,
-    ClusterRefineParams, ClusterRefineResult, FeatureGeometry, Mat2, MemberGeo, MemberOutcome,
-    MemberStatus,
+    build_template, inv2, member_zncc_at, mul2, read_member_at, refine_cluster_patches,
+    refine_kept_member_cells, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, Mat2,
+    MemberGeo, MemberOutcome, MemberStatus,
 };
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
@@ -130,8 +132,20 @@ impl Fixture {
 
     fn run(&self, member: &ImageU8, s: Mat2, p: [f64; 2]) -> MemberCells {
         let pyr = ImageU8Pyramid::build(member, 6);
+        self.run_scored(&pyr, s, p, self.score(&pyr))
+    }
+
+    /// [`Self::run`] on a built pyramid, with `score` in place of the
+    /// cascade's objective.
+    fn run_scored(
+        &self,
+        pyr: &ImageU8Pyramid,
+        s: Mat2,
+        p: [f64; 2],
+        score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
+    ) -> MemberCells {
         refine_member_cells(
-            &pyr,
+            pyr,
             &self.tmpl.src_channels,
             &self.templates,
             &self.layout,
@@ -140,7 +154,28 @@ impl Fixture {
             self.step,
             self.off,
             &self.pp(),
+            score,
         )
+    }
+
+    /// The cascade's objective on `pyr`: the whole-member windowed ZNCC at a
+    /// shape and position.
+    fn score<'a>(
+        &'a self,
+        pyr: &'a ImageU8Pyramid,
+    ) -> impl FnMut(&Mat2, [f64; 2]) -> Option<f64> + 'a {
+        move |s, p| {
+            member_zncc_at(
+                pyr,
+                p,
+                s,
+                &self.tmpl,
+                &self.tables,
+                self.params.resolution,
+                self.step,
+                self.off,
+            )
+        }
     }
 
     /// RMSE in member-image px between two maps `p + S·u` over the template
@@ -203,6 +238,8 @@ fn recovers_a_perturbed_affine_with_nine_fitted_cells() {
         "{} iterations",
         out.cells.iterations
     );
+    assert_eq!(out.cells.stop, LoopStop::Converged);
+    assert!(out.cells.final_update_accepted);
     for row in out.cells.status {
         for st in row {
             assert_eq!(st, CellStatus::Fitted, "{:?}", out.cells.status);
@@ -237,13 +274,27 @@ fn homography_residual_errors(h: [f64; 2]) -> (f64, f64, f64) {
         "{} iterations",
         out.cells.iterations
     );
+    let (worst, rms, largest) = truth_residual_errors(&fx, &out, h);
+    eprintln!(
+        "h = {h:?}: largest error {worst:.4}, RMS {rms:.4}, term {largest:.4} grid px; {:?} {} {}",
+        out.cells.stop, out.cells.iterations, out.cells.final_update_accepted
+    );
+    (worst, rms, largest)
+}
+
+/// How far `out`'s stored residuals are from where the plane with
+/// second-order coefficients `h` puts each cell's content relative to the
+/// returned shape's placement of the cell: `(largest error, RMS error,
+/// largest true residual)`, in grid px over the nine cells, each of which
+/// must be fitted.
+fn truth_residual_errors(fx: &Fixture, out: &MemberCells, h: [f64; 2]) -> (f64, f64, f64) {
     let s_inv = inv2(&out.shape);
     let (mut largest, mut worst, mut sq_err) = (0.0f64, 0.0f64, 0.0f64);
     for row in 0..3 {
         for col in 0..3 {
             assert_eq!(out.cells.status[row][col], CellStatus::Fitted);
-            // Where the true map sends the cell centre, in the converged
-            // map's grid coordinates.
+            // Where the true map sends the cell centre, in the returned
+            // shape's grid coordinates.
             let c = fx.layout.centres[row][col];
             let q = matvec(&A_REF, [fx.step * c[0], fx.step * c[1]]);
             let den = 1.0 + h[0] * q[0] + h[1] * q[1];
@@ -259,7 +310,6 @@ fn homography_residual_errors(h: [f64; 2]) -> (f64, f64, f64) {
         }
     }
     let rms = (sq_err / 9.0).sqrt();
-    eprintln!("h = {h:?}: largest error {worst:.4}, RMS {rms:.4}, term {largest:.4} grid px");
     (worst, rms, largest)
 }
 
@@ -327,9 +377,12 @@ fn cells_over_a_second_surface_are_refused() {
     assert_eq!(out.model, Some(UpdateModel::Affine));
     let after = fx.map_rmse((out.shape, out.position), truth);
     // The update extrapolates over the refused third, so the bound is looser
-    // than with nine cells.
+    // than with nine cells. The whole-member ZNCC also reads the second
+    // surface, so it does not peak exactly at the first plane's affine: the
+    // loop stops when an update toward the first plane would lower it,
+    // 0.104 px from the truth here.
     assert!(
-        after < 0.1,
+        after < 0.12,
         "recovered the first plane within {after:.4} px"
     );
 }
@@ -823,7 +876,7 @@ fn member_image_at(a: Mat2, centre: [f64; 2]) -> ImageU8 {
 }
 
 #[test]
-fn a_refined_shape_whose_support_leaves_the_frame_is_reverted() {
+fn an_update_whose_support_leaves_the_frame_is_not_applied() {
     let fx = fixture();
     let s_true = mul2(&a_true(), &A_REF);
     // Start a little smaller than the truth and to its right, so the start's
@@ -842,8 +895,9 @@ fn a_refined_shape_whose_support_leaves_the_frame_is_reverted() {
         )
         .is_some()
     };
-    // Move the keypoint toward the left edge until the loop, run on its own,
-    // carries the start's support, which is in the frame, out of it.
+    // Move the keypoint toward the left edge until the loop, scored by a
+    // ZNCC that ignores the frame, would carry the start's support, which is
+    // in the frame, out of it.
     let mut found = None;
     for k in 0..800 {
         let x = 40.0 - 0.05 * k as f64;
@@ -854,26 +908,30 @@ fn a_refined_shape_whose_support_leaves_the_frame_is_reverted() {
         if !in_frame(&pyr, &s0, p0) {
             continue;
         }
-        let loop_out = refine_member_cells(
-            &pyr,
-            &fx.tmpl.src_channels,
-            &fx.templates,
-            &fx.layout,
-            s0,
-            p0,
-            fx.step,
-            fx.off,
-            &fx.pp(),
-        );
-        if loop_out.updated && !in_frame(&pyr, &loop_out.shape, loop_out.position) {
-            found = Some((member, p0, loop_out));
+        let blind = fx.run_scored(&pyr, s0, p0, |_: &Mat2, _: [f64; 2]| Some(1.0));
+        if blind.updated && !in_frame(&pyr, &blind.shape, blind.position) {
+            found = Some((member, pyr, p0));
             break;
         }
     }
-    let (member, p0, loop_out) =
-        found.expect("a keypoint position where the loop leaves the frame");
+    let (member, pyr, p0) = found.expect("a keypoint position where the loop leaves the frame");
+    // With the real objective, which cannot read a shape whose support left
+    // the frame, that update is rejected and the shape stays in the frame.
+    let loop_out = fx.run_scored(&pyr, s0, p0, fx.score(&pyr));
+    assert_eq!(loop_out.cells.stop, LoopStop::Rejected);
+    assert!(!loop_out.cells.final_update_accepted);
+    assert!(in_frame(&pyr, &loop_out.shape, loop_out.position));
+    // The kept member keeps that shape and its readings.
     let out = fx.run_kept(&member, s0, p0, p0, &fx.params);
-    assert_reverted(&out, s0, p0, loop_out.cells.iterations);
+    let cells = out.cells.expect("cells are stored");
+    // Compared as text, since the cells carry NaN.
+    assert_eq!(format!("{cells:?}"), format!("{:?}", loop_out.cells));
+    let sh = [
+        [out.affine[0][0], out.affine[0][1]],
+        [out.affine[1][0], out.affine[1][1]],
+    ];
+    assert_eq!(sh, loop_out.shape);
+    assert_eq!([out.affine[0][2], out.affine[1][2]], loop_out.position);
 }
 
 /// The ZNCC of a cell against the working patch moved by `(dx, dy)`, by a
@@ -1016,6 +1074,7 @@ fn cell_statuses_share_the_matches_format_codes() {
         CellStatus::RefusedZncc,
         CellStatus::NotAttempted,
         CellStatus::RefusedBound,
+        CellStatus::RefusedOutlier,
     ];
     assert_eq!(all.len(), ClusterCellStatus::ALL.len());
     for status in all {
@@ -1056,5 +1115,167 @@ fn member_cell_data_fills_kept_rows_and_leaves_the_rest_not_attempted() {
             .index_axis(ndarray::Axis(0), m)
             .iter()
             .all(|z| z.is_nan()));
+    }
+}
+
+#[test]
+fn an_update_that_lowers_the_whole_member_zncc_is_rejected() {
+    let fx = fixture();
+    let member = member_image(a_true(), [0.0, 0.0], None);
+    let (s0, p0) = perturbed_start();
+    let pyr = ImageU8Pyramid::build(&member, 6);
+    // A score that is lower at every shape but the start, so the first
+    // update, which the cells fit toward the truth, lowers it.
+    let score = |s: &Mat2, p: [f64; 2]| Some(if *s == s0 && p == p0 { 0.99 } else { 0.5 });
+    let out = fx.run_scored(&pyr, s0, p0, score);
+    assert!(!out.updated);
+    assert_eq!(out.shape, s0);
+    assert_eq!(out.position, p0);
+    assert_eq!(out.cells.iterations, 1);
+    assert_eq!(out.cells.stop, LoopStop::Rejected);
+    assert!(!out.cells.final_update_accepted);
+    assert_eq!(out.cells.status, [[CellStatus::Fitted; 3]; 3]);
+    // The stored shifts are the residual to the returned shape, the start:
+    // they carry the start's whole first-order error, which the rejected
+    // update would have removed.
+    let (worst, rms, largest) = truth_residual_errors(&fx, &out, [0.0, 0.0]);
+    assert!(
+        largest > 0.5,
+        "the start is only {largest:.3} grid px off the truth"
+    );
+    // The cells are read at the perturbed start, where each cell is itself
+    // scaled and rotated against the template, so they follow the truth
+    // less closely than at a converged shape; a residual with the update's
+    // first-order term removed would be off by the whole `largest`.
+    assert!(
+        worst < 0.2 && rms < 0.1,
+        "a residual is {worst:.3} grid px off the truth (RMS {rms:.3})"
+    );
+}
+
+/// A pass whose every cell is fitted with weight `1` and the shift `b`, and
+/// whose update is the shift `b`.
+fn scripted_pass(b: [f64; 2]) -> Pass {
+    let reading = CellReading {
+        status: CellStatus::Fitted,
+        shift: b,
+        zncc: 0.95,
+        curvature: 0.1,
+    };
+    Pass {
+        readings: [[reading; 3]; 3],
+        update: Update {
+            a: [[1.0, 0.0], [0.0, 1.0]],
+            b,
+        },
+        model: UpdateModel::Shift,
+        weights: [[1.0; 3]; 3],
+    }
+}
+
+#[test]
+fn an_oscillating_loop_stops_early_with_the_better_shape() {
+    let layout = CellLayout::new(25, 2.0);
+    let pp = PiecewiseParams::default();
+    let step = 0.48;
+    let (s0, p0) = (A_REF, C);
+    // The updates alternate in sign and do not shrink: 0.3 grid px right,
+    // then 0.35 back.
+    let updates = [[0.3, 0.0], [-0.35, 0.0]];
+    let after_one = [p0[0] + A_REF[0][0] * step * 0.3, p0[1]];
+    let after_two = [p0[0] - A_REF[0][0] * step * 0.05, p0[1]];
+    // The ZNCC rises at the first update; at the second it rises again, or
+    // falls by less than the rejection tolerance.
+    for (second_zncc, keeps_second) in [(0.9205, true), (0.92 - 0.5e-4, false)] {
+        let mut k = 0;
+        let pass = |_: &Mat2, _: [f64; 2]| {
+            let pass = scripted_pass(updates[k % 2]);
+            k += 1;
+            Some(pass)
+        };
+        let mut scores = [0.90, 0.92, second_zncc].into_iter();
+        let score = |_: &Mat2, _: [f64; 2]| scores.next();
+        let out = run_loop(s0, p0, step, &layout, &pp, pass, score);
+        assert_eq!(out.cells.iterations, 2, "stopped before the cap of 5");
+        assert_eq!(out.cells.stop, LoopStop::Oscillation);
+        assert_eq!(out.cells.final_update_accepted, keeps_second);
+        assert!(out.updated);
+        assert_eq!(out.shape, s0);
+        let want = if keeps_second { after_two } else { after_one };
+        assert!(
+            (out.position[0] - want[0]).abs() < 1e-12 && (out.position[1] - want[1]).abs() < 1e-12,
+            "{:?} against {want:?}",
+            out.position
+        );
+        // The residual to the returned shape: none after the applied shift,
+        // the whole measured shift when it was not applied.
+        let want_shift = if keeps_second { 0.0 } else { -0.35 };
+        for sh in out.cells.shift_px.iter().flatten() {
+            assert!((f64::from(sh[0]) - want_shift).abs() < 1e-6, "{sh:?}");
+            assert!(sh[1].abs() < 1e-6, "{sh:?}");
+        }
+    }
+}
+
+#[test]
+fn an_outlier_cell_is_refused_and_the_fit_follows_the_inliers() {
+    let layout = CellLayout::new(25, 2.0);
+    let a = mul2(&[[1.01, 0.0], [0.0, 1.01]], &rot2(0.5));
+    let b = [0.1, -0.05];
+    let outlier = (0, 2);
+    let readings: [[CellReading; 3]; 3] = std::array::from_fn(|row| {
+        std::array::from_fn(|col| {
+            let c = layout.centres[row][col];
+            let ac = matvec(&a, c);
+            let mut shift = [ac[0] + b[0] - c[0], ac[1] + b[1] - c[1]];
+            if (row, col) == outlier {
+                shift[0] += 1.5;
+                shift[1] -= 1.0;
+            }
+            CellReading {
+                status: CellStatus::Fitted,
+                shift,
+                zncc: 0.95,
+                curvature: 0.05 + 0.02 * (row * 3 + col) as f64,
+            }
+        })
+    });
+    let pass = fit_pass(readings, &layout).expect("a fit");
+    for row in 0..3 {
+        for col in 0..3 {
+            let w = pass.weights[row][col];
+            if (row, col) == outlier {
+                assert_eq!(w, 0.0, "{:?}", pass.weights);
+            } else {
+                assert!(w > 0.0, "{:?}", pass.weights);
+            }
+        }
+    }
+    assert_eq!(pass.model, UpdateModel::Affine);
+    assert_update_near(&pass.update, a, b);
+
+    // Through the loop: the outlier is stored as refused_outlier with its
+    // shift, the inliers as fitted with no residual.
+    let pp = PiecewiseParams::default();
+    let out = run_loop(
+        A_REF,
+        C,
+        0.48,
+        &layout,
+        &pp,
+        |_: &Mat2, _: [f64; 2]| Some(pass),
+        |_: &Mat2, _: [f64; 2]| Some(0.9),
+    );
+    for row in 0..3 {
+        for col in 0..3 {
+            let (st, sh) = (out.cells.status[row][col], out.cells.shift_px[row][col]);
+            if (row, col) == outlier {
+                assert_eq!(st, CellStatus::RefusedOutlier);
+                assert!(sh[0].hypot(sh[1]) > 1.5, "{sh:?}");
+            } else {
+                assert_eq!(st, CellStatus::Fitted);
+                assert!(sh[0].hypot(sh[1]) < 1e-6, "{sh:?}");
+            }
+        }
     }
 }

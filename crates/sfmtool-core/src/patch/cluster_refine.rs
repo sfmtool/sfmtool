@@ -65,8 +65,8 @@ pub use params::{
     ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
-    member_cell_data, CellRefinement, CellStatus, PiecewiseParams, DEFAULT_MIN_CELL_CURVATURE,
-    DEFAULT_MIN_CELL_ZNCC,
+    member_cell_data, CellRefinement, CellStatus, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
+    DEFAULT_MIN_CELL_CURVATURE, DEFAULT_MIN_CELL_ZNCC,
 };
 
 /// A member's SIFT affine shape is usable when `|det A|` clears this floor.
@@ -1022,9 +1022,9 @@ fn refine_cluster(
 ///
 /// The member was kept on the cascade's readings, so the stage's shape must
 /// pass the same gates to replace it: the ZNCC read again at the new map must
-/// be at least [`ClusterRefineParams::min_zncc`], and the new position's
-/// shift from the seed at most [`ClusterRefineParams::max_shift_px`]. When
-/// either fails, or when the new map's support leaves the frame so nothing
+/// be at least [`ClusterRefineParams::min_zncc`] and at least the cascade's own
+/// stored ZNCC, and the new position's shift from the seed at most
+/// [`ClusterRefineParams::max_shift_px`]. When any fails, or when the new map's support leaves the frame so nothing
 /// can be read, the member keeps its cascade shape, position and readings,
 /// and every cell is stored as [`CellStatus::NotAttempted`] with the loop's
 /// iteration count.
@@ -1048,6 +1048,12 @@ fn refine_kept_member_cells(
         [member.affine[1][0], member.affine[1][1]],
     ];
     let p = [member.affine[0][2], member.affine[1][2]];
+    // The cascade's own objective, which an update must not lower.
+    let score = |shape: &Mat2, position: [f64; 2]| {
+        member_zncc_at(
+            pyramid, position, shape, tmpl, tables, resolution, step, off,
+        )
+    };
     let out = piecewise::refine_member_cells(
         pyramid,
         &tmpl.src_channels,
@@ -1058,6 +1064,7 @@ fn refine_kept_member_cells(
         step,
         off,
         pp,
+        score,
     );
     if !out.updated {
         member.cells = Some(out.cells);
@@ -1065,8 +1072,15 @@ fn refine_kept_member_cells(
     }
     let (sh, ps) = (out.shape, out.position);
     let shift = (ps[0] - seed_pos[0]).hypot(ps[1] - seed_pos[1]);
-    let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off)
-        .filter(|&(zncc, _)| zncc >= params.min_zncc && shift <= params.max_shift_px);
+    // The stored ZNCC must not fall below the cascade's: the loop's floor is
+    // its own reading of the starting shape, which can differ from the
+    // cascade's stored value in the last bits, so the stored value is the bar.
+    let cascade_zncc = member.zncc;
+    let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off).filter(
+        |&(zncc, _)| {
+            zncc >= params.min_zncc && zncc as f32 >= cascade_zncc && shift <= params.max_shift_px
+        },
+    );
     let Some((zncc, parts)) = reread else {
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
         return;
@@ -1100,6 +1114,29 @@ fn read_member_at(
     let tile = tiles.get_or_build(pyramid, level, bbox)?;
     let zncc = eval_zncc(&lmap, tile, tables, tmpl)?;
     Some((zncc, eval_zncc_parts(&lmap, tile, tables, tmpl)))
+}
+
+/// The whole-patch windowed ZNCC of a member at absolute position `p` and
+/// shape `s`, the objective the cascade maximises; `None` when the support
+/// leaves the frame.
+#[allow(clippy::too_many_arguments)]
+fn member_zncc_at(
+    pyramid: &ImageU8Pyramid,
+    p: [f64; 2],
+    s: &Mat2,
+    tmpl: &TemplateKernel,
+    tables: &SupportTables,
+    resolution: u32,
+    step: f64,
+    off: f64,
+) -> Option<f64> {
+    let map = warp_map(p, [0.0, 0.0], s, step, off);
+    let level = level_for_map(&map, pyramid.num_levels());
+    let lmap = map_at_level(&map, level);
+    let bbox = grid_bbox(&lmap, resolution);
+    let mut tiles = TileCache::default();
+    let tile = tiles.get_or_build(pyramid, level, bbox)?;
+    eval_zncc(&lmap, tile, tables, tmpl)
 }
 
 /// Refine every cluster into a patch cluster: per cluster, a reference member

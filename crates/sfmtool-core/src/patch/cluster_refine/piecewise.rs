@@ -12,11 +12,15 @@
 //! side. The inner level registers each of the nine cells of the reference's
 //! square against that working patch by ZNCC over whole-pixel shifts within the
 //! bound, reads a sub-pixel peak and its curvature, refuses flat and
-//! low-scoring cells, and fits a weighted least-squares update of the affine
-//! shape to the cells that remain. The loop renders again with the updated
-//! shape until the update moves no cell centre by more than
-//! [`PiecewiseParams::update_tolerance_px`], or until
-//! [`PiecewiseParams::max_iterations`].
+//! low-scoring cells, and fits an update of the affine shape to the cells that
+//! remain by iteratively reweighted least squares with a Tukey biweight, so a
+//! cell that disagrees with the others is refused as an outlier. An update is
+//! applied only when the cascade's own objective, the whole-member windowed
+//! ZNCC, does not fall at the updated shape (see [`ACCEPT_ZNCC_TOLERANCE`]).
+//! The loop renders again with the updated shape until the update moves no
+//! cell centre by more than [`PiecewiseParams::update_tolerance_px`], until an
+//! update is rejected, until the update's largest movement stops shrinking,
+//! or until [`PiecewiseParams::max_iterations`].
 //!
 //! The cells are the `[0, R/3, R - R/3, R]` split the ZNCC grid uses. Shifts
 //! and cell centres are in template grid px. A grid position `g` (column,
@@ -28,6 +32,7 @@
 use sfmtool_matches_format::{ClusterCellStatus, MemberCellData};
 
 use crate::camera::image::ImageU8Pyramid;
+use crate::numeric::median_in_place;
 use crate::patch::normal_refine::{grid_bounds, FLAT_NORM_SQ_EPS};
 
 use super::kernels::TemplateKernel;
@@ -35,6 +40,30 @@ use super::{inv2, mul2, sample_grid_window, GridEdge, Mat2};
 
 #[cfg(test)]
 mod tests;
+
+/// How far the whole-member windowed ZNCC may fall at an updated shape before
+/// the update is rejected, never below the ZNCC at the starting shape. The
+/// cascade maximised that ZNCC, so an update that lowers it moves the shape
+/// away from the cascade's optimum; the tolerance only lets the loop cross a
+/// flat stretch above the start, and cannot accumulate past it.
+pub const ACCEPT_ZNCC_TOLERANCE: f64 = 1e-4;
+
+/// Rounds of reweighting after the first, curvature-weighted fit of the
+/// update.
+const IRLS_ROUNDS: usize = 3;
+
+/// The Tukey biweight's cut-off, in units of the residual scale: a cell whose
+/// residual to the fitted update is this many scales or more gets weight `0`.
+/// `4.685` is the usual choice, which keeps 95% efficiency on Gaussian noise.
+const TUKEY_CUTOFF: f64 = 4.685;
+
+/// Converts the median absolute residual to a Gaussian standard deviation.
+const MAD_TO_SIGMA: f64 = 1.4826;
+
+/// The smallest residual scale the reweighting uses, grid px. Without it a
+/// fit through cells that agree to a few hundredths of a pixel would refuse a
+/// cell a tenth of a pixel off.
+const MIN_RESIDUAL_SCALE_PX: f64 = 0.1;
 
 /// Provisional default for [`PiecewiseParams::min_cell_zncc`].
 ///
@@ -122,6 +151,34 @@ pub enum CellStatus {
     /// on that side was read and no sub-pixel peak can be fitted: the cell's
     /// optimum is at or past the bound.
     RefusedBound = 4,
+    /// The cell passed its own gates, but its shift disagrees with the
+    /// affine update the other cells agree on by so much that the robust fit
+    /// gave it weight `0`. Its shift is measured and stored.
+    RefusedOutlier = 5,
+}
+
+/// Why the loop of one member stopped.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LoopStop {
+    /// The loop produced no reading: every cell is
+    /// [`CellStatus::NotAttempted`] and the member keeps its cascade shape.
+    NotRun = 0,
+    /// The last update moved no cell centre by more than
+    /// [`PiecewiseParams::update_tolerance_px`], and was applied.
+    Converged = 1,
+    /// The loop reached [`PiecewiseParams::max_iterations`] with every update
+    /// accepted; the last one was applied.
+    Cap = 2,
+    /// The last update would have lowered the whole-member ZNCC by more than
+    /// [`ACCEPT_ZNCC_TOLERANCE`], so it was not applied and the member keeps
+    /// the shape the last render was made at.
+    Rejected = 3,
+    /// The last update's largest cell-centre movement did not shrink from the
+    /// one before, so the loop was alternating rather than converging. The
+    /// member keeps whichever of the last two shapes has the higher
+    /// whole-member ZNCC.
+    Oscillation = 4,
 }
 
 /// Per-cell registration of one member against the template, as the residual
@@ -145,10 +202,14 @@ pub struct CellRefinement {
     pub zncc: [[f32; 3]; 3],
     /// Each cell's status at the last render.
     pub status: [[CellStatus; 3]; 3],
-    /// Renders the loop made before its update fell below
-    /// [`PiecewiseParams::update_tolerance_px`], or the cap
-    /// [`PiecewiseParams::max_iterations`].
+    /// Renders the loop made before it stopped (see [`Self::stop`]).
     pub iterations: u8,
+    /// Why the loop stopped.
+    pub stop: LoopStop,
+    /// Whether the last fitted update was applied to the returned shape.
+    /// `false` when it was rejected, when an oscillation kept the shape before
+    /// it, and when the loop did not run.
+    pub final_update_accepted: bool,
 }
 
 impl From<CellStatus> for ClusterCellStatus {
@@ -162,6 +223,7 @@ impl From<CellStatus> for ClusterCellStatus {
             CellStatus::RefusedZncc => ClusterCellStatus::RefusedZncc,
             CellStatus::NotAttempted => ClusterCellStatus::NotAttempted,
             CellStatus::RefusedBound => ClusterCellStatus::RefusedBound,
+            CellStatus::RefusedOutlier => ClusterCellStatus::RefusedOutlier,
         }
     }
 }
@@ -199,6 +261,8 @@ impl CellRefinement {
             zncc: [[f32::NAN; 3]; 3],
             status: [[CellStatus::NotAttempted; 3]; 3],
             iterations,
+            stop: LoopStop::NotRun,
+            final_update_accepted: false,
         }
     }
 }
@@ -767,10 +831,110 @@ fn fit_update(points: &[Correspondence], cell_side: f64) -> Option<(Update, Upda
     Some((Update { a, b }, model))
 }
 
+/// The robust update through the surviving cells: [`fit_update`] reweighted
+/// by a Tukey biweight on each cell's residual to the update fitted in the
+/// round before.
+///
+/// The first fit takes each cell's own weight (its peak's curvature). Each of
+/// the [`IRLS_ROUNDS`] that follow measures every cell's residual to the last
+/// fit, the distance from `c + d` to `A·c + b`, takes the residual scale as
+/// [`MAD_TO_SIGMA`] times the median residual, floored at
+/// [`MIN_RESIDUAL_SCALE_PX`], and multiplies the cell's own weight by the
+/// biweight `(1 − (r / (TUKEY_CUTOFF·scale))²)²`, which is `0` at and past the
+/// cut-off. The update is refitted to the cells with a positive weight, so the
+/// model [`fit_update`] chooses follows the count and spread of those.
+///
+/// Returns the last fit and each cell's last weight, parallel to `points`;
+/// `None` when a fit fails (see [`fit_update`]). The median residual is under
+/// the cut-off, so at least half of the cells keep a positive weight.
+fn fit_update_robust(
+    points: &[Correspondence],
+    cell_side: f64,
+) -> Option<(Update, UpdateModel, Vec<f64>)> {
+    let fit_with = |weights: &[f64]| {
+        let kept: Vec<Correspondence> = points
+            .iter()
+            .zip(weights)
+            .filter(|(_, &w)| w > 0.0)
+            .map(|(&(c, d, _), &w)| (c, d, w))
+            .collect();
+        fit_update(&kept, cell_side)
+    };
+    let prior: Vec<f64> = points.iter().map(|p| p.2).collect();
+    let mut weights = prior.clone();
+    let (mut update, mut model) = fit_with(&weights)?;
+    for _ in 0..IRLS_ROUNDS {
+        let residuals: Vec<f64> = points
+            .iter()
+            .map(|(c, d, _)| {
+                let m = update.moves(*c);
+                (d[0] - m[0]).hypot(d[1] - m[1])
+            })
+            .collect();
+        let median = median_in_place(&mut residuals.clone());
+        let scale = (MAD_TO_SIGMA * median).max(MIN_RESIDUAL_SCALE_PX);
+        let cut = TUKEY_CUTOFF * scale;
+        weights = prior
+            .iter()
+            .zip(&residuals)
+            .map(|(&w, &r)| {
+                if r < cut {
+                    let u = r / cut;
+                    w * (1.0 - u * u).powi(2)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        (update, model) = fit_with(&weights)?;
+    }
+    Some((update, model, weights))
+}
+
+/// One render's readings with the update fitted to them.
+#[derive(Clone, Copy, Debug)]
+struct Pass {
+    readings: [[CellReading; 3]; 3],
+    update: Update,
+    model: UpdateModel,
+    /// Each cell's weight in the update's last fit: `0` for a cell that was
+    /// not fitted, or that the robust fit refused.
+    weights: [[f64; 3]; 3],
+}
+
+/// Fit the update to one render's readings: the cells whose status is
+/// [`CellStatus::Fitted`] are the correspondences, each weighted by its
+/// peak's curvature, and [`fit_update_robust`] fits them. `None` when no cell
+/// survived or the fit failed.
+fn fit_pass(readings: [[CellReading; 3]; 3], layout: &CellLayout) -> Option<Pass> {
+    let fitted: Vec<(usize, usize)> = (0..9)
+        .map(|i| (i / 3, i % 3))
+        .filter(|&(r, c)| readings[r][c].status == CellStatus::Fitted)
+        .collect();
+    let points: Vec<Correspondence> = fitted
+        .iter()
+        .map(|&(r, c)| {
+            let rd = readings[r][c];
+            (layout.centres[r][c], rd.shift, rd.curvature)
+        })
+        .collect();
+    let (update, model, w) = fit_update_robust(&points, layout.cell_side)?;
+    let mut weights = [[0.0; 3]; 3];
+    for (&(r, c), w) in fitted.iter().zip(w) {
+        weights[r][c] = w;
+    }
+    Some(Pass {
+        readings,
+        update,
+        model,
+        weights,
+    })
+}
+
 /// The outcome of the piecewise refinement of one member.
 pub(super) struct MemberCells {
     /// The refined absolute shape and position; the cascade's when nothing
-    /// survived.
+    /// survived or every update was rejected.
     pub(super) shape: Mat2,
     pub(super) position: [f64; 2],
     pub(super) cells: CellRefinement,
@@ -781,25 +945,52 @@ pub(super) struct MemberCells {
     pub(super) model: Option<UpdateModel>,
 }
 
+/// The shape and position the update `c ↦ A·c + b` carries `(s, p)` to:
+/// `S' = S·A`, `p' = p + S·(step·b)`.
+fn compose(s: &Mat2, p: [f64; 2], update: &Update, step: f64) -> (Mat2, [f64; 2]) {
+    let sb = [update.b[0] * step, update.b[1] * step];
+    let p = [
+        p[0] + s[0][0] * sb[0] + s[0][1] * sb[1],
+        p[1] + s[1][0] * sb[0] + s[1][1] * sb[1],
+    ];
+    (mul2(s, &update.a), p)
+}
+
 /// Run the two-level loop for one kept member, starting from its cascade
 /// shape `s` and position `p`.
 ///
 /// Each iteration renders the working patch at the current shape, reads the
-/// nine cells, fits an update to the cells that survive and composes it into
-/// the shape. The loop stops when the update moves no cell centre by more
-/// than [`PiecewiseParams::update_tolerance_px`], or after
-/// [`PiecewiseParams::max_iterations`] renders. The returned cells are the
-/// readings of the last render, their shifts carried into the returned
-/// shape's grid (see [`CellRefinement::shift_px`]).
+/// nine cells and fits an update to the cells that survive (see
+/// [`fit_update_robust`]). `score` reads the whole-member windowed ZNCC the
+/// cascade maximised at a shape and position, `None` when the support leaves
+/// the frame. The loop stops at the first of:
 ///
-/// The result is all or nothing. When any iteration fails, the first or a
-/// later one, the member is returned at its cascade shape and position with
-/// every cell [`CellStatus::NotAttempted`], and what earlier iterations
-/// fitted is discarded. An iteration fails when the render fails, when no
-/// cell survives, or when the fitted update reflects or is not finite (see
-/// `fit_update`); the loop also returns the cascade shape when the composed
-/// shape is not finite. A partly converged shape is not kept, because its
-/// cells were read at a shape that is not the one returned.
+/// - the update lowers that ZNCC by more than [`ACCEPT_ZNCC_TOLERANCE`], or
+///   below its value at the starting shape ([`LoopStop::Rejected`]): the
+///   update is not applied;
+/// - the update moves no cell centre by more than
+///   [`PiecewiseParams::update_tolerance_px`] ([`LoopStop::Converged`]): it is
+///   applied;
+/// - the update's largest cell-centre movement is not smaller than the one
+///   before ([`LoopStop::Oscillation`]): of the shape before the update and
+///   the shape after it, the one with the higher ZNCC is kept;
+/// - [`PiecewiseParams::max_iterations`] renders ([`LoopStop::Cap`]): the last
+///   update is applied.
+///
+/// The returned cells are the readings of the last render. Their shifts are
+/// the residual to the returned shape: a shift measured at a render whose
+/// update was applied is carried into the updated shape's grid (see
+/// [`CellRefinement::shift_px`]); one measured at a render whose update was
+/// not applied is already relative to the returned shape and is stored as
+/// measured. A fitted cell the robust fit gave weight `0` is stored as
+/// [`CellStatus::RefusedOutlier`].
+///
+/// A failed iteration leaves the member at its cascade shape and position
+/// with every cell [`CellStatus::NotAttempted`], discarding what earlier
+/// iterations fitted. An iteration fails when the render fails, when no cell
+/// survives, when the fitted update reflects or is not finite (see
+/// `fit_update`), or when the updated shape is not finite. The loop does not
+/// run when `score` cannot read the starting shape.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn refine_member_cells(
     pyramid: &ImageU8Pyramid,
@@ -811,22 +1002,10 @@ pub(super) fn refine_member_cells(
     step: f64,
     off: f64,
     params: &PiecewiseParams,
+    score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
 ) -> MemberCells {
-    let unchanged = |iterations: u8| MemberCells {
-        shape: s,
-        position: p,
-        cells: CellRefinement::not_attempted(iterations),
-        updated: false,
-        model: None,
-    };
-    let (mut shape, mut position) = (s, p);
-    let mut iterations = 0u8;
-    let mut last = None;
-    while iterations < params.max_iterations {
-        iterations += 1;
-        let Some(patch) = WorkingPatch::render(pyramid, position, &shape, layout, step, off) else {
-            return unchanged(iterations);
-        };
+    let pass = |shape: &Mat2, position: [f64; 2]| {
+        let patch = WorkingPatch::render(pyramid, position, shape, layout, step, off)?;
         let readings: [[CellReading; 3]; 3] = std::array::from_fn(|row| {
             std::array::from_fn(|col| {
                 read_cell(
@@ -840,65 +1019,108 @@ pub(super) fn refine_member_cells(
                 )
             })
         });
-        let points: Vec<Correspondence> = (0..9)
-            .map(|i| (i / 3, i % 3))
-            .filter(|&(r, c)| readings[r][c].status == CellStatus::Fitted)
-            .map(|(r, c)| {
-                let rd = readings[r][c];
-                (layout.centres[r][c], rd.shift, rd.curvature)
-            })
-            .collect();
-        let Some((update, model)) = fit_update(&points, layout.cell_side) else {
-            // No cell survived, or the fit is degenerate: the member keeps
-            // its cascade shape.
+        fit_pass(readings, layout)
+    };
+    run_loop(s, p, step, layout, params, pass, score)
+}
+
+/// The loop of [`refine_member_cells`], with the render, the readings and the
+/// fit behind `pass`, which returns `None` when the iteration fails.
+fn run_loop(
+    s: Mat2,
+    p: [f64; 2],
+    step: f64,
+    layout: &CellLayout,
+    params: &PiecewiseParams,
+    mut pass: impl FnMut(&Mat2, [f64; 2]) -> Option<Pass>,
+    mut score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
+) -> MemberCells {
+    let unchanged = |iterations: u8| MemberCells {
+        shape: s,
+        position: p,
+        cells: CellRefinement::not_attempted(iterations),
+        updated: false,
+        model: None,
+    };
+    if params.max_iterations == 0 {
+        return unchanged(0);
+    }
+    let Some(start_zncc) = score(&s, p) else {
+        return unchanged(0);
+    };
+    let (mut shape, mut position, mut zncc) = (s, p, start_zncc);
+    let mut previous_move = f64::INFINITY;
+    let mut iterations = 0u8;
+    let (last, stop, apply) = loop {
+        iterations += 1;
+        let Some(last) = pass(&shape, position) else {
             return unchanged(iterations);
         };
-        // Compose `c ↦ A·c + b` into the shape: `S' = S·A`,
-        // `p' = p + S·(step·b)`.
-        let sb = [update.b[0] * step, update.b[1] * step];
-        position = [
-            position[0] + shape[0][0] * sb[0] + shape[0][1] * sb[1],
-            position[1] + shape[1][0] * sb[0] + shape[1][1] * sb[1],
-        ];
-        shape = mul2(&shape, &update.a);
+        let (next_shape, next_position) = compose(&shape, position, &last.update, step);
+        let finite = next_shape
+            .iter()
+            .flatten()
+            .chain(next_position.iter())
+            .all(|v| v.is_finite());
+        if !finite {
+            return unchanged(iterations);
+        }
         let largest_move = layout
             .centres
             .iter()
             .flatten()
             .map(|&c| {
-                let m = update.moves(c);
+                let m = last.update.moves(c);
                 m[0].hypot(m[1])
             })
             .fold(0.0f64, f64::max);
-        last = Some((readings, update, model));
-        if largest_move <= f64::from(params.update_tolerance_px) {
-            break;
+        let next_zncc = score(&next_shape, next_position).unwrap_or(f64::NEG_INFINITY);
+        // The floor: the current ZNCC less the tolerance, but never below
+        // the starting shape's, so the tolerance cannot accumulate over
+        // several applied updates.
+        let floor = (zncc - ACCEPT_ZNCC_TOLERANCE).max(start_zncc);
+        let (stop, apply) = if next_zncc < floor {
+            (LoopStop::Rejected, false)
+        } else if largest_move <= f64::from(params.update_tolerance_px) {
+            (LoopStop::Converged, true)
+        } else if largest_move >= previous_move {
+            (LoopStop::Oscillation, next_zncc >= zncc)
+        } else if iterations >= params.max_iterations {
+            (LoopStop::Cap, true)
+        } else {
+            (shape, position, zncc) = (next_shape, next_position, next_zncc);
+            previous_move = largest_move;
+            continue;
+        };
+        if apply {
+            (shape, position) = (next_shape, next_position);
         }
-    }
-    let Some((readings, update, model)) = last else {
-        return unchanged(iterations);
+        break (last, stop, apply);
     };
-    if !shape
-        .iter()
-        .flatten()
-        .chain(position.iter())
-        .all(|v| v.is_finite())
-    {
-        return unchanged(iterations);
-    }
     // The residual to the shape the loop returns. The last render read cell
-    // `c` at `c + d` of its grid; the returned shape's grid is the last
-    // render's under `c' ↦ A·c' + b`, so that point is `A⁻¹·(c + d − b)`
-    // there, and its offset from `c` is `A⁻¹·(d − moves(c))`.
-    let a_inv = inv2(&update.a);
+    // `c` at `c + d` of its grid. When its update was applied, the returned
+    // shape's grid is the last render's under `c' ↦ A·c' + b`, so that point
+    // is `A⁻¹·(c + d − b)` there, and its offset from `c` is
+    // `A⁻¹·(d − moves(c))`. When it was not, the returned shape is the one
+    // the last render was made at, and `d` is already the residual.
+    let a_inv = inv2(&last.update.a);
     let mut cells = CellRefinement::not_attempted(iterations);
-    for (row, line) in readings.iter().enumerate() {
+    cells.stop = stop;
+    cells.final_update_accepted = apply;
+    for (row, line) in last.readings.iter().enumerate() {
         for (col, rd) in line.iter().enumerate() {
-            cells.status[row][col] = rd.status;
+            cells.status[row][col] = match rd.status {
+                CellStatus::Fitted if last.weights[row][col] <= 0.0 => CellStatus::RefusedOutlier,
+                status => status,
+            };
             cells.zncc[row][col] = rd.zncc as f32;
             if rd.shift.iter().all(|v| v.is_finite()) {
-                let m = update.moves(layout.centres[row][col]);
-                let r = mul2v(&a_inv, [rd.shift[0] - m[0], rd.shift[1] - m[1]]);
+                let r = if apply {
+                    let m = last.update.moves(layout.centres[row][col]);
+                    mul2v(&a_inv, [rd.shift[0] - m[0], rd.shift[1] - m[1]])
+                } else {
+                    rd.shift
+                };
                 cells.shift_px[row][col] = [r[0] as f32, r[1] as f32];
             }
         }
@@ -907,8 +1129,8 @@ pub(super) fn refine_member_cells(
         shape,
         position,
         cells,
-        updated: true,
-        model: Some(model),
+        updated: shape != s || position != p,
+        model: Some(last.model),
     }
 }
 

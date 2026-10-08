@@ -8,7 +8,8 @@
 //! together or absent together: `member_cell_shift_px`, `member_cell_zncc`,
 //! `member_cell_status` and `member_cell_iterations`. The status column
 //! indexes the `member_cell_status_names` legend in the section's metadata,
-//! the same way `member_status` indexes `member_status_names`. See
+//! the same way `member_status` indexes `member_status_names`. Format version
+//! 9 adds the cell status `refused_outlier` to the legend. See
 //! `specs/formats/matches-file-format.md` § "Cluster Patches".
 
 use std::fmt;
@@ -24,6 +25,10 @@ use crate::types::{
 /// The first format version whose `cluster_patches/` section may carry the
 /// per-cell columns and their `member_cell_status_names` legend.
 pub(crate) const MEMBER_CELLS_VERSION: u32 = 8;
+
+/// The first format version whose `member_cell_status_names` legend may name
+/// [`ClusterCellStatus::RefusedOutlier`].
+pub(crate) const REFUSED_OUTLIER_VERSION: u32 = 9;
 
 /// The metadata key of the legend `member_cell_status` indexes.
 pub(crate) const MEMBER_CELL_STATUS_NAMES_KEY: &str = "member_cell_status_names";
@@ -59,27 +64,33 @@ pub enum ClusterCellStatus {
     /// Refused because its best shift lies on the search bound, so the
     /// optimum is at or past the bound.
     RefusedBound = 4,
+    /// Refused because its shift disagrees with the shape update the member's
+    /// other fitted cells agree on, so the robust fit of that update gave it
+    /// no weight. Its shift is measured and stored. Defined from version 9.
+    RefusedOutlier = 5,
 }
 
 impl ClusterCellStatus {
     /// Every cell status this format defines, in canonical order: a status's
     /// position here is its discriminant.
-    pub const ALL: [ClusterCellStatus; 5] = [
+    pub const ALL: [ClusterCellStatus; 6] = [
         Self::Fitted,
         Self::RefusedCurvature,
         Self::RefusedZncc,
         Self::NotAttempted,
         Self::RefusedBound,
+        Self::RefusedOutlier,
     ];
 
     /// The canonical `member_cell_status_names` legend, one name per entry of
     /// [`Self::ALL`].
-    pub const NAMES: [&'static str; 5] = [
+    pub const NAMES: [&'static str; 6] = [
         "fitted",
         "refused_curvature",
         "refused_zncc",
         "not_attempted",
         "refused_bound",
+        "refused_outlier",
     ];
 
     /// The canonical lowercase name the legend states.
@@ -274,9 +285,11 @@ pub(crate) fn not_kept_with_readings(
 /// [`ClusterCellStatus`] code each stored code stands for, or `None` when the
 /// file carries no per-cell columns.
 ///
-/// A file below [`MEMBER_CELLS_VERSION`] must not carry the legend. The legend
-/// rides inside `cluster_patches/metadata.json`, which is hashed into the
-/// section digest with the columns it describes.
+/// A file below [`MEMBER_CELLS_VERSION`] must not carry the legend, and a file
+/// below [`REFUSED_OUTLIER_VERSION`] must not name
+/// [`ClusterCellStatus::RefusedOutlier`] in it. The legend rides inside
+/// `cluster_patches/metadata.json`, which is hashed into the section digest
+/// with the columns it describes.
 pub(crate) fn read_member_cell_status_legend(
     cp_meta: &serde_json::Value,
     version: u32,
@@ -290,12 +303,19 @@ pub(crate) fn read_member_cell_status_legend(
              {MEMBER_CELL_STATUS_NAMES_KEY} (introduced in version {MEMBER_CELLS_VERSION})"
         ));
     }
-    parse_legend(
+    let legend = parse_legend(
         MEMBER_CELL_STATUS_NAMES_KEY,
         &names,
         &ClusterCellStatus::NAMES,
-    )
-    .map(Some)
+    )?;
+    let outlier = ClusterCellStatus::RefusedOutlier;
+    if version < REFUSED_OUTLIER_VERSION && legend.contains(&(outlier as u8)) {
+        return Err(format!(
+            "version {version} file names {outlier} in cluster_patches/metadata.json \
+             {MEMBER_CELL_STATUS_NAMES_KEY} (introduced in version {REFUSED_OUTLIER_VERSION})"
+        ));
+    }
+    Ok(Some(legend))
 }
 
 /// Rewrite stored `member_cell_status` codes in place onto the canonical
