@@ -193,6 +193,28 @@ command line and the wire.
 | **anisotropic threshold** (`a`) | the bar on `L` at which the rule moves a view, `anisotropic_threshold` in `SamplerChoice::PerView`, `DEFAULT_ANISOTROPIC_THRESHOLD` and `tool_options` | `aniso_ratio`, `switch level` | it is compared with `L`, the minor axis's loss, not with the ratio of the singular values, so a name with *ratio* in it would point at the wrong number |
 | **moved** (a view) | a view the sampler rule renders with `anisotropic`; one it leaves on `bilinear_mip` is **unmoved** | `upgraded`, `switched` | the word the draft and the measurements use for the views whose tile changes; *upgraded* would claim the change is always an improvement, which the ZNCC against the other views does not bear out everywhere |
 
+## Rust type names
+
+Suffixes of Rust struct names across the Cargo workspace. The bindings and
+Python keep their own names and are not covered here.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **`*Options`** | a struct the caller fills with its choices of how a function or algorithm runs, usually with an `impl Default`: RANSAC thresholds, iteration caps, seeds, gates, sizes, and nested settings structs. `HomographyOptions`, `BundleAdjustOptions`, `TrackAtPixelOptions`, `WriteOptions` | `*Params`, `*Config`, `*Settings` for the same thing | the tree had no boundary between the two suffixes. `HomographyOptions` and `RansacPhotometricParams` hold the same RANSAC knobs, `EvaluateOptions` nests `ClusterRefineParams`, and `ClusterTracksOptions` and `ClusterRefineParams` are both a cluster step's thresholds; the split followed the module a type was written in (`geometry/` and `bench/` chose *Options*, `patch/` and `spherical/` *Params*). *Options* wins because *parameters* already has a meaning here that a settings struct would collide with: a camera model's parameters, the values COLMAP and the `.sfmr` camera store. It is also the word the files already use when they record these settings, `tool_options` in an `.sfmr` and `refine_options` in a `.matches` file |
+| **`*Params`** | the values a model or kernel is evaluated with, computed for each call rather than chosen: a camera's `K`, `R` and `t` (`CameraParams`), a GPU uniform block that mirrors a WGSL `struct Params`, the per-keypoint window geometry SIFT's histogram fills share (`DescParams`, `HistParams`), the variational flow settings derived for each pyramid level (`VariationalParams`) | a settings struct | these have no meaningful default and nobody chooses them, which is the line between them and *Options* |
+
+*Direction of travel:* 24 settings structs in `sfmtool-core` still end in
+`Params` (among them `SiftParams`, `DisFlowParams`, `KdForestParams`,
+`ConstellationParams` and the `patch` module's `ClusterRefineParams`,
+`KeypointLocalizeParams`, `KeypointSubpixelParams`, `NormalRefineParams`,
+`MemberCoherenceParams`, `ViewSelectParams`, `SelfSimilarityParams`,
+`SpawnParams`), and two in `Config` (`GeometricFilterConfig`, `RelaxConfig`).
+New types follow the entry; renaming those is a planned clean break, recorded
+in `reports/2026-09-23-hygiene-audit.md`. Renaming `ConstellationParams` has to
+pick a name other than `ConstellationOptions`, which the bench's track-at-pixel
+member already holds. `TwoViewGeometryConfig` is not a settings struct: it keeps
+COLMAP's name for a pair's geometry type.
+
 ## Words with a boundary
 
 

@@ -29,7 +29,7 @@ It is crate-internal; callers turn it on through the `max_refine_views` field of
 `NormalRefineParams` in
 [params.rs](../../../crates/sfmtool-core/src/patch/normal_refine/params.rs),
 which `refine_patch_normal_impl` in
-[mod.rs](../../../crates/sfmtool-core/src/patch/normal_refine/mod.rs) reads. It
+[normal_refine.rs](../../../crates/sfmtool-core/src/patch/normal_refine.rs) reads. It
 is bound as `PatchCloud.refine_normals(max_refine_views=…)` in
 [refine_normals.rs](../../../crates/sfmtool-py/src/patches/refine_normals.rs)
 (default `0`), used by `embed_patches(max_refine_views=8)` in

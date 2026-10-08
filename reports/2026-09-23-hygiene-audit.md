@@ -149,6 +149,8 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Proposed fix: Decide the boundaries on semantic grounds and document them in `AGENTS.md` or the area index before renaming public types; converge only the cases that violate the chosen rule.
 - Effort: low to decide, medium to rename. Risk: medium for public types.
 
+> _Status (2026-10-08): **Partially done** — both rules are decided and recorded in `AGENTS.md` § "Rust module files and settings structs", with the naming ruling in `specs/GLOSSARY.md` § "Rust type names". Module files: `foo.rs` beside `foo/`, never a new `mod.rs` (about 190 modules already used that form against 47 `mod.rs`, and the mix at one depth was workspace-wide, not just in `patch/`); `patch/`'s three `mod.rs` children (`cluster_refine`, `normal_refine`, `self_similarity`) moved to `patch/<name>.rs`, so `patch/` is now uniform. Settings structs: no semantic boundary existed (`HomographyOptions` and `RansacPhotometricParams` hold the same RANSAC knobs; the suffix followed the module), so every caller-chosen settings struct is `*Options` and `*Params` is kept for per-call computed values (`CameraParams`, GPU uniform blocks, `VariationalParams`). Still open, as a follow-up: rename the 24 settings structs still ending in `Params` and `GeometricFilterConfig` / `RelaxConfig` to `*Options` (about 1,300 references across core, the bindings, the viewer and the specs, and `ConstellationParams` needs a name other than the bench's existing `ConstellationOptions`), and convert the remaining 44 `mod.rs` files; branch `hygiene-fix-1007-05-rust-module-param-rules`._
+
 ## Rust: formats and Python bindings
 
 **Rename the KDF options for the layer that owns them**

@@ -86,6 +86,27 @@ on a path into the extension from `tests/`, `scripts/` or `docs/`. See
   helper shared by several commands takes `_` (`_range_options.py`) so it is
   not mistaken for a command.
 
+### Rust module files and settings structs
+
+A module with submodules is a `foo.rs` file beside a `foo/` directory, not
+`foo/mod.rs`. Do not add a new `mod.rs`. About 190 modules in the workspace
+already use this form and 44 `mod.rs` files remain; convert one when you are
+restructuring that module anyway.
+
+A struct the caller fills with its choices of how a function or algorithm
+runs is named `*Options`, usually with an `impl Default`. That holds for RANSAC
+thresholds, iteration caps, seeds, gates, sizes and nested settings alike.
+`*Params` names the values a model or kernel is evaluated with, computed for
+each call rather than chosen: a camera's `K`, `R` and `t`
+(`CameraParams`), a GPU uniform block that mirrors a WGSL `struct Params`, the
+per-keypoint window geometry SIFT's histogram fills share, the variational
+flow settings derived for each pyramid level. `*Config` is not a
+settings suffix (`TwoViewGeometryConfig` keeps COLMAP's name for a pair's
+geometry type), and the viewer's `*DisplaySettings` are UI state, not function
+arguments. 26 public settings structs in `sfmtool-core` still carry
+`*Params` or `*Config`; new ones use `*Options`. See `specs/GLOSSARY.md` §
+"Rust type names".
+
 ### Opening a pull request
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before

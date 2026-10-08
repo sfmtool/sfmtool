@@ -504,8 +504,8 @@ template edge length while the kernel's `radius` is a half-width;
 | `intermediate_convergence` | `1e-4` | …and for the shift and similarity stages, which only seed the next |
 | `stall_iters` | `20` | Iterations without progress before a stage exits |
 | `stall_tol` | `1e-4` | Best-value improvement (ZNCC units) that counts as progress |
-| `MIN_ABS_DET` | `1e-9` | Floor on a usable SIFT shape's `det A` magnitude (`mod.rs`) |
-| `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`mod.rs`) |
+| `MIN_ABS_DET` | `1e-9` | Floor on a usable SIFT shape's `det A` magnitude (`cluster_refine.rs`) |
+| `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`cluster_refine.rs`) |
 
 ## Python bindings
 

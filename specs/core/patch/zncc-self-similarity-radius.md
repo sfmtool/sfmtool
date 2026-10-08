@@ -79,7 +79,7 @@ A region that grows can also shorten an axis, since area added near the centre l
 
 ## Rust API
 
-The operation lives in [self_similarity/](../../../crates/sfmtool-core/src/patch/self_similarity/) (`mod.rs` for the API, `kernels.rs` for the scalar and AVX2 kernels, `overlap.rs` for the overlap reading, `ellipse.rs` for the region's ellipse, its lower bounds and its other units, `tests.rs`), as `sfmtool_core::patch::self_similarity`. The bench reads it in [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the keypoint localizer's member gate in [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs) (`member_self_similarity_radius`), cluster-patch refinement's member gate in [cluster_refine/mod.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs) (`member_zncc_self_similarity_radius`), and it is bound as `sfmtool.patches.zncc_self_similarity_parts` and `zncc_self_similarity_parts_stack` in [patches/self_similarity.rs](../../../crates/sfmtool-py/src/patches/self_similarity.rs).
+The operation lives in [self_similarity.rs](../../../crates/sfmtool-core/src/patch/self_similarity.rs) (the API) and [self_similarity/](../../../crates/sfmtool-core/src/patch/self_similarity/) (`kernels.rs` for the scalar and AVX2 kernels, `overlap.rs` for the overlap reading, `ellipse.rs` for the region's ellipse, its lower bounds and its other units, `tests.rs`), as `sfmtool_core::patch::self_similarity`. The bench reads it in [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the keypoint localizer's member gate in [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs) (`member_self_similarity_radius`), cluster-patch refinement's member gate in [cluster_refine.rs](../../../crates/sfmtool-core/src/patch/cluster_refine.rs) (`member_zncc_self_similarity_radius`), and it is bound as `sfmtool.patches.zncc_self_similarity_parts` and `zncc_self_similarity_parts_stack` in [patches/self_similarity.rs](../../../crates/sfmtool-py/src/patches/self_similarity.rs).
 
 ```rust
 /// The template spread, in grey levels, under which a channel carries no
@@ -440,7 +440,7 @@ Both read the default `SelfSimilarityParams`. The measurements carry `zncc_self_
 | `noise` | `2.0` | n, the noise between two views, in grey levels. |
 | `FLAT_FLOOR` | `0.5` grey levels | A channel whose template spread `s` is under this has no texture; a template with no channel at or above it scores `max_radius`. |
 
-The three parameters' defaults are defined on `SelfSimilarityParams::default()`, and the flat floor is the constant `FLAT_FLOOR` in [self_similarity/mod.rs](../../../crates/sfmtool-core/src/patch/self_similarity/mod.rs).
+The three parameters' defaults are defined on `SelfSimilarityParams::default()`, and the flat floor is the constant `FLAT_FLOOR` in [self_similarity.rs](../../../crates/sfmtool-core/src/patch/self_similarity.rs).
 
 ## Python bindings
 
