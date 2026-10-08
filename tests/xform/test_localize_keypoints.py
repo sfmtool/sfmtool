@@ -28,27 +28,16 @@ from sfmtool.xform._arg_parser import (
 
 
 def test_parse_empty_runs_defaults():
-    """No params yields a transform on the binding defaults plus min_views=2."""
+    """No params yields a transform that forwards no options, so the binding
+    supplies every search default, plus the cull default ``min_views=2``."""
     t = parse_localize_keypoints_params("")
     assert isinstance(t, LocalizeKeypointsTransform)
     assert t.min_views == 2
-    assert t.max_iters == 5
-    assert t.search == 6.0
-    assert t.max_shift_px == 3.0
-    assert t.min_relative_zncc == 0.7
-    assert t.min_grazing_cos == 0.1
-    assert t.resolution == 24
-    assert t.window == "gaussian_disk"
-    assert t.window_sigma == 0.6
-    assert t.sampler == "per_view"
-    assert t.robust_iters == 3
-    assert t.convergence_px == 0.05
-    assert t.search_resolution_multiplier == 1.0
-    assert t.search_strategy == "plus_descent"
+    assert t.options == {}
 
 
 def test_parse_key_value_overrides():
-    """Each key=value token overrides the matching default with the right type."""
+    """Each key=value token is forwarded with the right type, and only those."""
     t = parse_localize_keypoints_params(
         "min_views=3,max_iters=2,search=8,max_shift_px=2.5,"
         "min_relative_zncc=0.5,min_grazing_cos=0.2,resolution=16,"
@@ -58,32 +47,67 @@ def test_parse_key_value_overrides():
     )
     assert t.min_views == 3
     assert isinstance(t.min_views, int)
-    assert t.max_iters == 2
-    assert t.search == 8.0
-    assert t.max_shift_px == 2.5
-    assert t.min_relative_zncc == 0.5
-    assert t.min_grazing_cos == 0.2
-    assert t.resolution == 16
-    assert isinstance(t.resolution, int)
-    assert t.window == "gaussian"
-    assert t.window_sigma == 0.8
-    assert t.sampler == "anisotropic"
-    assert t.robust_iters == 2
-    assert t.convergence_px == 0.1
-    assert t.search_resolution_multiplier == 2.0
-    assert t.search_strategy == "exhaustive"
+    assert t.options == {
+        "max_iters": 2,
+        "search": 8.0,
+        "max_shift_px": 2.5,
+        "min_relative_zncc": 0.5,
+        "min_grazing_cos": 0.2,
+        "resolution": 16,
+        "window": "gaussian",
+        "window_sigma": 0.8,
+        "sampler": "anisotropic",
+        "robust_iters": 2,
+        "convergence_px": 0.1,
+        "search_resolution_multiplier": 2.0,
+        "search_strategy": "exhaustive",
+    }
+    assert isinstance(t.options["resolution"], int)
+    assert isinstance(t.options["search"], float)
+
+
+def _binding_defaults() -> dict[str, object]:
+    import inspect
+
+    from sfmtool._sfmtool.patches import PatchCloud
+
+    params = inspect.signature(PatchCloud.localize_keypoints).parameters
+    return {name: p.default for name, p in params.items()}
+
+
+def test_keys_are_binding_keywords_and_spec_defaults_match():
+    """Every key but ``min_views`` is a ``PatchCloud.localize_keypoints``
+    keyword, and the spec's Default column is that keyword's binding default."""
+    import re
+    from pathlib import Path
+
+    from sfmtool.xform._arg_parser import _LOCALIZE_KEYPOINTS_KEYS
+
+    binding = _binding_defaults()
+    keys = set(_LOCALIZE_KEYPOINTS_KEYS) - {"min_views"}
+    assert keys <= set(binding)
+
+    spec = (
+        Path(__file__).parents[2]
+        / "specs/cli/reconstruction/xform/localize-keypoints-command.md"
+    ).read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^\| `(\w+)` +\| `([^`]+)` +\|", spec, re.MULTILINE))
+    assert set(rows) == set(_LOCALIZE_KEYPOINTS_KEYS)
+    assert rows.pop("min_views") == "2"
+    for key, text in rows.items():
+        assert _LOCALIZE_KEYPOINTS_KEYS[key](text) == binding[key], key
 
 
 def test_parse_tolerates_blank_segments():
     """Trailing/empty comma segments are ignored, not errors."""
     t = parse_localize_keypoints_params("max_iters=2,")
-    assert t.max_iters == 2
+    assert t.options == {"max_iters": 2}
 
 
 def test_parse_bilinear_mip_sampler():
     """The single-tap mip sampler round-trips through the parser."""
     t = parse_localize_keypoints_params("sampler=bilinear_mip")
-    assert t.sampler == "bilinear_mip"
+    assert t.options["sampler"] == "bilinear_mip"
 
 
 def test_parse_unknown_key_rejected():
@@ -168,11 +192,11 @@ def test_bare_flag_tokenization():
     transforms = parse_transform_args(["--localize-keypoints", "--bundle-adjust"])
     assert len(transforms) == 2
     assert isinstance(transforms[0], LocalizeKeypointsTransform)
-    assert transforms[0].search == 6.0
+    assert transforms[0].options == {}
 
     transforms = parse_transform_args(["--localize-keypoints=search=8,min_views=3"])
     assert len(transforms) == 1
-    assert transforms[0].search == 8.0
+    assert transforms[0].options == {"search": 8.0}
     assert transforms[0].min_views == 3
 
 
@@ -181,7 +205,12 @@ def test_constructor_description_mentions_key_settings():
     assert "Localize keypoints" in desc
     assert "search=8.0" in desc
     assert "min_views=3" in desc
-    assert "plus_descent" in desc
+    assert "search_strategy" not in desc
+
+
+def test_constructor_rejects_unknown_option():
+    with pytest.raises(TypeError, match="unexpected option 'bitmaps'"):
+        LocalizeKeypointsTransform(bitmaps=True)
 
 
 # ── Integration over a real reconstruction ──────────────────────────────────
@@ -368,11 +397,11 @@ def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace):
 
 
 def test_parse_basis_max_views():
-    """``basis_max_views`` parses as an int and defaults to the pipeline 8."""
-    assert parse_localize_keypoints_params("").basis_max_views == 8
+    """``basis_max_views`` parses as an int and is forwarded only when given."""
+    assert "basis_max_views" not in parse_localize_keypoints_params("").options
     t = parse_localize_keypoints_params("basis_max_views=6")
-    assert t.basis_max_views == 6
-    assert isinstance(t.basis_max_views, int)
+    assert t.options["basis_max_views"] == 6
+    assert isinstance(t.options["basis_max_views"], int)
     with pytest.raises(ValueError):
         parse_localize_keypoints_params("basis_max_views=-1")
 

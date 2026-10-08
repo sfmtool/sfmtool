@@ -5,9 +5,9 @@
 //!
 //! Composes per-image world-to-camera poses with the model-general
 //! [`CameraIntrinsics::ray_to_pixel`] projection (canonical camera frame: the
-//! camera looks along `−Z`, a point in front has `z < 0`). This is the forward
-//! reprojection model used by resection scoring, acceptance gates, and
-//! pose-only refinement — not an optimizer.
+//! camera looks along `−Z`, a point in front has `z < 0`). A measurement
+//! function, not an optimizer. Specified in
+//! `specs/core/geometry/reprojection-residuals.md`.
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use rayon::prelude::*;

@@ -9,6 +9,8 @@
 //! `f32` for general vectors — so the priority-queue lower bounds, the
 //! bounded-result cutoff, and the leaf scan all compose without lossy
 //! conversions. `sqrt` is taken only when a distance is reported to a caller.
+//!
+//! Specified in `specs/core/features/randomized-kdtree-forest.md`.
 
 use std::cmp::Ordering;
 

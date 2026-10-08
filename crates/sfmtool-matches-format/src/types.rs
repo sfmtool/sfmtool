@@ -65,71 +65,15 @@ pub use sfmtool_archive_io::WorkspaceContents;
 pub use sfmtool_archive_io::WorkspaceMetadata;
 
 /// Current `.matches` format version. [`crate::write_matches`] always writes
-/// this version; [`crate::read_matches`] accepts any version up to it.
+/// this version; [`crate::read_matches`] accepts any version up to it, except
+/// a cluster-backbone file below version 6, which it refuses.
 ///
 /// Version 7 gives `cluster_patches/member_status` a legend:
 /// `cluster_patches/metadata.json` carries `member_status_names`, and a stored
-/// code is an index into that list. The writer states the canonical legend
-/// ([`ClusterMemberStatus::NAMES`]), so the bytes of the column are unchanged;
-/// the reader accepts any legend and normalises the codes onto the canonical
-/// numbering. A version 6 file carries no legend and is read through the
-/// canonical one, which is the fixed numbering its writer used.
-///
-/// Version 6 gives the cluster backbone one place for its members' geometry:
-/// `clusters/` gains a mandatory `member_positions.{K}.2.float32` and
-/// `member_affine_shapes.{K}.2.2.float32` pair, and
-/// `cluster_patches/member_affines.{K}.2.3.float64` is **removed**. There is
-/// now exactly one keypoint position and one affine shape per member in a
-/// cluster file, and its **content is the file's stage**: a matcher output
-/// holds the detections, copied verbatim from the `.sift` rows
-/// `member_features` names; a `sfm cluster-patches` output holds the
-/// refinement, downcast to `f32` at the write boundary, for every member the
-/// cascade measured, and the untouched detection for every member it never
-/// fitted. Nothing is `NaN`:
-/// [`ClusterPatchData::member_status`] is the sole authority on what a row
-/// means and on exclusion, and the rejected-but-measured members keep their
-/// measurement so a consumer can re-gate without re-running.
-///
-/// `cluster_patches/` therefore holds the vetting evidence and nothing else —
-/// statuses, ZNCC, shift and the warp-consistency residual — while the
-/// geometry it produced is read through
-/// [`MatchesData::member_positions`] / [`MatchesData::member_affine_shapes`],
-/// the same accessors a bare backbone answers.
-///
-/// The `f32` storage is deliberate: the refinement's fit precision is on the
-/// order of 0.01 px, an `f32` position quantizes to 1.5e-5..6.1e-5 px on real
-/// captures, and the structure-free focal vote cannot distinguish the
-/// downcast from its own seed-to-seed spread. The kernel still computes in
-/// `f64`; only the write boundary rounds.
-///
-/// **A cluster-backbone file below version 6 is refused on read.** Its
-/// geometry lives only in the `.sift` files, which this crate does not open,
-/// so there is nothing to upgrade from: regenerate the backbone with
-/// `sfm match --cluster` (and re-run `sfm cluster-patches` if it was
-/// enriched). Pairwise files are untouched by the bump and keep their own
-/// version compatibility.
-///
-/// Version 5 gave `cluster_patches/member_affines` its absolute affine shape,
-/// and version 4 gave it the absolute keypoint position and added the
-/// mandatory `images/image_dims.{N}.2.uint32` array. Both of those affine
-/// semantics are now history — version 6 removed the member they described,
-/// and every cluster file below version 6 is refused. What survives for a
-/// **pairwise** file is `image_dims`: version ≤ 3 pairwise files load with
-/// [`MatchesData::image_dims`] as `None`.
-///
-/// Version 3 introduced the cluster backbone: a file stores exactly one of
-/// the `image_pairs/` or `clusters/` sections as its correspondence backbone,
-/// plus the optional `cluster_patches/` enrichment (requires `clusters/`).
-/// Version ≤ 2 files always store the pairwise backbone and never have
-/// clusters, so they load unchanged.
-///
-/// Version 2 made the canonical camera convention normative for the stored
-/// two-view relative poses (`cam2_from_cam1` with cameras looking down −Z,
-/// +Y up — see `specs/formats/matches-file-format.md` § "Coordinate
-/// Conventions"). The bump is purely semantic: no member was added, removed,
-/// or renamed. Version 1 files hold COLMAP-convention relative poses and are
-/// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
-/// pixel-space F/E/H matrices are identical in both versions.
+/// code is an index into that list, whose canonical form is
+/// [`ClusterMemberStatus::NAMES`]. What each earlier version changed, and how
+/// a reader treats a file of that version, is in
+/// `specs/formats/matches-file-format.md` § "Versioning and Migration".
 pub const MATCHES_FORMAT_VERSION: u32 = 7;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame

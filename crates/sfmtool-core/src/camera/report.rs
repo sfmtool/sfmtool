@@ -490,10 +490,14 @@ pub fn off_axis_angle_deg(cam: &CameraIntrinsics, u: f64, v: f64) -> f64 {
 ///   grounds that a high-order polynomial approaching its peak is not to be
 ///   trusted. Where the forward map peaks *before* that radius, the peak is
 ///   the bound instead: past a fold there is no inverse to have.
-/// - **Unbounded** — [`CameraModel::SimpleRadialFisheye`], deliberately: with
-///   one coefficient `θ_d = θ·(1 + k1·θ²)` there is nothing to distrust, and
-///   its ray conversion is excluded from the blend for that reason. The two
-///   spline models likewise, from the other direction: they hold `δ` constant
+/// - **Bounded at its fold only** — [`CameraModel::SimpleRadialFisheye`].
+///   With one coefficient `θ_d = θ·(1 + k1·θ²)` there is no high-order
+///   polynomial to distrust, and its ray conversion is excluded from the blend
+///   for that reason. But with `k1 < 0` the map peaks at `θ = 1/√(−3·k1)` and
+///   folds past it, so the bound is that peak ([`forward_fold_deg`]) where it
+///   falls inside the sweep, and `None` otherwise (any `k1 > 0`).
+/// - **Unbounded** — the two
+///   spline models, from the other direction: they hold `δ` constant
 ///   past their domain end so the radial map continues linearly, and they
 ///   enforce `1 + δ'> 0` as a construction invariant, so there is no peak to
 ///   approach at any angle. And the exact maps — the plain pinholes,
@@ -537,8 +541,10 @@ pub fn trustworthy_max_theta_deg(cam: &CameraIntrinsics) -> Option<f64> {
         | CameraModel::OpenCV { .. }
         | CameraModel::FullOpenCV { .. }
         | CameraModel::SfmtoolPinhole { .. }
-        | CameraModel::SfmtoolFisheye { .. }
-        | CameraModel::SimpleRadialFisheye { .. } => None,
+        | CameraModel::SfmtoolFisheye { .. } => None,
+
+        // No wide-angle blend to start, so the fold is the only bound.
+        CameraModel::SimpleRadialFisheye { .. } => forward_fold_deg(cam),
 
         CameraModel::OpenCVFisheye { .. }
         | CameraModel::RadialFisheye { .. }
@@ -616,8 +622,10 @@ fn polynomial_fisheye_limit(cam: &CameraIntrinsics) -> f64 {
 /// `OPENCV_FISHEYE` that is about 101.6°, well past its trusted bound of about
 /// 86°.
 ///
-/// Only the four bounded polynomial fisheye models can fold; every other model
-/// is `None`, as is a camera with no live distortion. The sweep is the one
+/// Only the four bounded polynomial fisheye models and
+/// [`CameraModel::SimpleRadialFisheye`] (with `k1 < 0`, at `θ = 1/√(−3·k1)`)
+/// can fold; every other model is `None`, as is a camera with no live
+/// distortion. The sweep is the one
 /// [`trustworthy_max_theta_deg`] runs, without the blend test, so the same
 /// caveat applies: a fold narrower than half a degree would be stepped over.
 pub fn forward_fold_deg(cam: &CameraIntrinsics) -> Option<f64> {
@@ -630,6 +638,7 @@ pub fn forward_fold_deg(cam: &CameraIntrinsics) -> Option<f64> {
             | CameraModel::RadialFisheye { .. }
             | CameraModel::ThinPrismFisheye { .. }
             | CameraModel::RadTanThinPrismFisheye { .. }
+            | CameraModel::SimpleRadialFisheye { .. }
     ) {
         return None;
     }
@@ -637,7 +646,9 @@ pub fn forward_fold_deg(cam: &CameraIntrinsics) -> Option<f64> {
     let steps = (TRUST_SCAN_MAX_DEG / TRUST_SCAN_STEP_DEG) as usize;
     let mut previous = 0.0_f64;
     let mut last_good = 0.0_f64;
-    for i in 1..=steps {
+    // Stop short of 180°: the ray there is the axis, which every model maps to
+    // the principal point, so the radius would read as a fold at the antipode.
+    for i in 1..steps {
         let theta = i as f64 * TRUST_SCAN_STEP_DEG;
         let r = radius(theta)?;
         if r <= previous {

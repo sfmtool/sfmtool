@@ -142,7 +142,7 @@ def _save_flow_images(
     stride_u: np.ndarray | None,
     stride_v: np.ndarray | None,
 ) -> None:
-    """Save flow color images (Middlebury convention) for a sample point."""
+    """Save flow color images (HSV hue wheel) for a sample point."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Local flow: from → from+1
