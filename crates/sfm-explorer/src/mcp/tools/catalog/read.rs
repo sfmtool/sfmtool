@@ -113,7 +113,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           null where unmeasured), reference_observation, the row the \
                           reference-view rule picked, has_bitmap, whether the point has a \
                           stored bitmap its rows are scored against, and bitmap_observation, \
-                          the row that bitmap is the tile of, or null. While evaluating, the measurements are the \
+                          the row that bitmap is the tile of (the reference in use, which can \
+                          differ from the rule's pick), or null. While evaluating, the measurements are the \
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
@@ -409,11 +410,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           without_angle drops only the 65 degree limit). \
                           These are null on an out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the row \
-                          the rule picked, or null. A fit stores that row's tile as the patch \
-                          bitmap: stage_data.bitmap_observation is the index of the row the \
-                          stored bitmap is the tile of, null for a bitmap that names none (a \
-                          mean of the rows, or one stored before the reference was recorded), \
-                          and has_bitmap says whether there is one. When there is one, every \
+                          the rule picked from the current readings, or null. A render stores \
+                          the tile of the track's reference observation where it has one \
+                          (read from the file, or kept through steps that leave its row in), \
+                          and the picked row's tile only where it has none, so the two can \
+                          differ: stage_data.bitmap_observation is the index of the row the \
+                          stored bitmap is the tile of, the reference in use, null for a \
+                          bitmap that names none (a mean of the rows, one stored before the \
+                          reference was recorded, or the render of an observation since \
+                          removed from the point), and has_bitmap says whether there is one. When there is one, every \
                           track-stage observation also carries bitmap_zncc, its \
                           windowed ZNCC with the stored bitmap over the samples both have; \
                           blur_matched_bitmap_zncc, the same after the bitmap alone is blurred \

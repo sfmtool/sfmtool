@@ -166,16 +166,20 @@ pub struct PointSet {
     /// observation's `R×R` render; without it, the column stays, and a later
     /// render renders the point from it
     /// ([`render_patch_cloud_bitmaps`](crate::patch::stored_bitmap::render_patch_cloud_bitmaps)).
-    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where no reference has been chosen:
-    /// a bitmap beside it is a fused mean, and a later render runs the
-    /// reference-view rule for the point. Persisted as
+    /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has no reference
+    /// observation in its track: a bitmap beside it is not the render of one
+    /// of its observations (a fused mean, or the render of an observation an
+    /// edit has since removed, which keeps the bitmap), and a later render
+    /// runs the reference-view rule for the point. Persisted as
     /// `tracks/reference_observations` (version 12+).
     ///
     /// With a column rendered for display ([`Self::patch_bitmaps_for_display`]),
     /// a point the file stored at `-1` holds the observation the display render
     /// picked, so the bench and Track View mark the row its display bitmap is
     /// the tile of; [`Self::display_only_references`] marks those rows, and a
-    /// save writes them as `-1` again ([`Self::saved_reference_observations`]).
+    /// save writes them as `-1` again ([`Self::saved_reference_observations`]),
+    /// except for a point a bench commit has written, which holds the
+    /// reference the bench held as its own.
     ///
     /// `Some` exactly when the patch frame is: a file below version 12 with
     /// patch frames loads with every row `-1`, and

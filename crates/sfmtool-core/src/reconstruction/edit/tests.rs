@@ -10,7 +10,7 @@ use super::*;
 use crate::geometry::RotQuaternion;
 use crate::Se3Transform;
 use nalgebra::{UnitQuaternion, Vector3 as V3};
-use ndarray::{Array2, Array4};
+use ndarray::{Array2, Array4, Axis};
 use sfmtool_sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
@@ -350,6 +350,18 @@ fn an_image_subset_moves_each_reference_with_its_observation_or_drops_it() {
         let expected: Vec<Option<u32>> =
             before.iter().map(|image| image.and_then(new_of)).collect();
         assert_eq!(after, expected, "drop_orphans {drop_orphans}");
+    }
+    // A point whose reference observation went keeps its bitmap, the render
+    // of an observation it no longer has, beside `-1`.
+    let out = recon.subset_by_image_indices(&keep, false).unwrap();
+    let refs = out.point_set.reference_observations.as_ref().unwrap();
+    let (old, new) = (
+        recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap(),
+        out.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap(),
+    );
+    for p in [0, 1] {
+        assert_eq!(refs[p], -1, "point {p}");
+        assert_eq!(new.index_axis(Axis(0), p), old.index_axis(Axis(0), p));
     }
 }
 

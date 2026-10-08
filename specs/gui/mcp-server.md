@@ -3838,18 +3838,25 @@ does not consider, and `stage_data` reports the row the rule picked as
 `reference_observation`, null where it picked none; a step that turns a row
 `out` clears its standing and has the rule pick again among the rows still
 `in`, so `reference_observation` never names an `out` row. No bar judges them.
-A fit stores the picked row's tile as the patch bitmap, except where the rule
-reached the pick only through its last fallback, when the bitmap is the fused
+`reference_observation` is the rule's pick from the current readings,
+reported as information. A render stores the tile of the track's reference
+where it is defined -- read from the file, or kept through steps that leave
+its row `in` -- and stores the picked row's tile only where the track has no
+reference, so `bitmap_observation`, the reference in use, can name another
+row than `reference_observation`. Where the rule sets the reference and
+reached its pick only through its last fallback, the bitmap is the fused
 mean of the `in` rows and `bitmap_observation` is null although
 `reference_observation` names a row
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 stored bitmap"): `stage_data.has_bitmap` says whether the track has a bitmap
 and `stage_data.bitmap_observation` names the row it is the tile of, null for
-a bitmap that names none (a mean of the rows, or one stored before the
-reference was recorded). A step that sights that row elsewhere drops the
-bitmap and keeps the reference, one that takes it off the track or turns it
-`out` drops both, and the live evaluation renders a new one, re-picking the
-reference, and scores every row against it. Every row of a track with a bitmap carries its score
+a bitmap that names none (a mean of the rows, one stored before the reference
+was recorded, or the render of an observation an edit has since removed from
+the point). A step that sights that row elsewhere drops the bitmap and keeps
+the reference, and the live evaluation renders a new one from the same row;
+one that takes it off the track or turns it `out` drops both, and the live
+evaluation renders a new one from the rule's pick. Either way it scores every
+row against the new bitmap. Every row of a track with a bitmap carries its score
 against it ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
 § "Scores against the stored bitmap"): `bitmap_zncc`, the windowed ZNCC of its
 tile with the bitmap; `blur_matched_bitmap_zncc`, the same after the bitmap

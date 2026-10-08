@@ -10,9 +10,9 @@ use std::sync::Arc;
 use ndarray::Array3;
 
 use crate::bench::{
-    commit, create_track, evaluate, evaluate_rendering_bitmap, render_bitmap_in_place,
-    score_bitmap, tilt_patch, Bench, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FitOptions, Verdict,
+    commit, create_track, evaluate, evaluate_rendering_bitmap, fit, render_bitmap_in_place,
+    score_bitmap, set_verdict, sight_observation, tilt_patch, Bench, CreateTrackOptions,
+    EditableTrack, EvaluateOptions, FitOptions, Verdict,
 };
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
@@ -746,4 +746,200 @@ fn assert_same_bitmap_and_scores(a: &EditableTrack, b: &EditableTrack) {
         assert_eq!(x.bitmap_blur_sigma, y.bitmap_blur_sigma, "row {i}");
         assert_eq!(x.sharper_than_bitmap, y.sharper_than_bitmap, "row {i}");
     }
+}
+
+// ---- A defined reference is rendered from ----------------------------------
+
+/// The row the last evaluation's reference-view rule picked.
+fn rule_pick(track: &EditableTrack) -> Option<usize> {
+    track.observations.iter().position(|o| {
+        o.track
+            .as_ref()
+            .and_then(|m| m.reference_view)
+            .is_some_and(|s| s.is_reference())
+    })
+}
+
+/// The ground truth with the long track's stored reference set to an `in` row
+/// the rule does not pick, that track put on the bench, the rule's pick and
+/// the stored reference.
+fn track_with_another_reference(
+    truth: &GroundTruth,
+) -> (EditableTrack, EditedReconstruction, usize, usize) {
+    let (read, _) = truth.evaluated_track();
+    let picked = rule_pick(&read).expect("the rule picks one");
+    // The best-covered other row, so a small step leaves it `in`.
+    let coverage = |i: usize| {
+        read.observations[i]
+            .track
+            .as_ref()
+            .and_then(|m| m.coverage)
+            .unwrap_or(0.0)
+    };
+    let other = (0..read.observations.len())
+        .filter(|&i| i != picked && read.observations[i].verdict == Verdict::In)
+        .max_by(|&a, &b| coverage(a).total_cmp(&coverage(b)))
+        .expect("another row is in");
+    let point = read.origin.as_ref().expect("put on from a point").point;
+    let mut recon = truth.recon.clone();
+    let mut references = recon
+        .point_set
+        .reference_observations
+        .clone()
+        .expect("the ground truth has patch frames");
+    references[point as usize] = other as i32;
+    recon.point_set.reference_observations = Some(references);
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        point,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = (**bench.track(&report.label).expect("just put on")).clone();
+    (track, edited, picked, other)
+}
+
+/// Check that `track`'s bitmap is the tile of `row` at its current keypoint,
+/// that the bitmap names it, and that the row scores 1 against it.
+fn assert_rendered_from(
+    track: &EditableTrack,
+    views: &[ProjectedImage<'_>],
+    edited: &EditedReconstruction,
+    row: usize,
+    step: &str,
+) {
+    let payload = track.track().expect("a track stage");
+    assert_eq!(payload.reference, Some(row), "{step}");
+    let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
+    let tile = bitmap_from_tile(&tile_of_row(track, views, row, resolution));
+    let stored: Vec<u8> = payload
+        .bitmap
+        .as_ref()
+        .unwrap_or_else(|| panic!("{step}: a bitmap"))
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(stored, tile, "{step}");
+    let m = track.observations[row].track.as_ref().unwrap();
+    assert_eq!(m.bitmap_zncc, Some(1.0), "{step}");
+}
+
+/// A track opened from a file whose reference is not the row the rule picks
+/// renders from the file's reference, and keeps rendering from it after a
+/// patch step, a sighting of another row, a sighting of the reference row
+/// itself and a fit; the evaluation still reports the rule's pick, and a
+/// commit saves the reference the bench holds. The render that reuses the
+/// evaluation's tiles gives what the three separate calls give.
+#[test]
+fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, picked, other) = track_with_another_reference(&truth);
+    assert_eq!(track.track().unwrap().reference, Some(other));
+    assert!(track.track().unwrap().bitmap.is_none());
+    let options = EvaluateOptions::default();
+    let fit_options = FitOptions::default();
+    let render = |t: &EditableTrack| {
+        evaluate_rendering_bitmap(
+            t,
+            &edited,
+            &views,
+            &options,
+            &fit_options,
+            &Progress::none(),
+        )
+        .expect("the track reads")
+        .0
+    };
+
+    // Opened from the file: the first render is from the file's reference,
+    // while the rule's pick is reported as information.
+    let first = render(&track);
+    assert_rendered_from(&first, &views, &edited, other, "opened");
+    assert_eq!(rule_pick(&first), Some(picked));
+
+    // A patch step drops the bitmap; the render keeps the reference, and the
+    // combined call matches the three separate calls.
+    let p = first.track().unwrap().placement.clone().unwrap();
+    let aim = (p.normal() + p.u_axis.normalize() * 0.05).normalize();
+    let (tilted, _) = tilt_patch(&first, &edited, aim).expect("a small turn");
+    assert!(tilted.track().unwrap().bitmap.is_none());
+    let after_tilt = render(&tilted);
+    assert_rendered_from(&after_tilt, &views, &edited, other, "tilted");
+    let (measured, _) = evaluate(&tilted, &edited, &views, &options, &Progress::none()).unwrap();
+    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit_options);
+    let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    assert_same_bitmap_and_scores(&after_tilt, &scored);
+
+    // Sighting another row keeps the bitmap and the reference.
+    let third = (0..after_tilt.observations.len())
+        .find(|&i| i != other && after_tilt.observations[i].verdict == Verdict::In)
+        .expect("a third row");
+    let [x, y] = keypoint_of(&after_tilt, third);
+    let (sighted, _) =
+        sight_observation(&after_tilt, &edited, third, [x + 0.5, y + 0.5]).expect("sighted");
+    let sighted = render(&sighted);
+    assert_eq!(sighted.track().unwrap().reference, Some(other));
+    assert!(sighted.track().unwrap().bitmap.is_some());
+
+    // Sighting the reference row itself drops the bitmap; the next render is
+    // from the same row at its new keypoint.
+    let [x, y] = keypoint_of(&sighted, other);
+    let (moved, _) =
+        sight_observation(&sighted, &edited, other, [x + 0.5, y - 0.5]).expect("sighted");
+    assert!(moved.track().unwrap().bitmap.is_none());
+    let moved = render(&moved);
+    assert_rendered_from(&moved, &views, &edited, other, "reference sighted");
+
+    // A fit renders from it too.
+    let (fitted, _) = fit(&moved, &edited, &views, &fit_options, &Progress::none()).expect("fits");
+    assert_rendered_from(&fitted, &views, &edited, other, "fitted");
+
+    // A commit saves the reference the bench holds.
+    let (committed, report) = commit(&edited, &fitted).expect("the track commits");
+    let view = committed.point(report.point).expect("the committed point");
+    let images: Vec<u32> = view.observations().iter().map(|o| o.image_index).collect();
+    let at = view.reference_observation().expect("the column is carried") as usize;
+    assert_eq!(images[at], fitted.observations[other].image);
+}
+
+/// Turning the reference row `out`, or deleting its image, leaves the track
+/// with no reference, and the next render sets one by the rule.
+#[test]
+fn the_rule_sets_the_reference_again_after_its_row_goes() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, _, other) = track_with_another_reference(&truth);
+    let options = EvaluateOptions::default();
+    let fit_options = FitOptions::default();
+    let render = |t: &EditableTrack| {
+        evaluate_rendering_bitmap(
+            t,
+            &edited,
+            &views,
+            &options,
+            &fit_options,
+            &Progress::none(),
+        )
+        .expect("the track reads")
+        .0
+    };
+    let first = render(&track);
+    assert_eq!(first.track().unwrap().reference, Some(other));
+
+    let (out, _) = set_verdict(&first, other, Verdict::Out).expect("a verdict");
+    assert_eq!(out.track().unwrap().reference, None);
+    let again = render(&out);
+    let pick = rule_pick(&again).expect("the rule picks one");
+    assert_ne!(pick, other);
+    assert_rendered_from(&again, &views, &edited, pick, "turned out");
+
+    let image = first.observations[other].image;
+    let (deleted, _) = first.delete_image(image).expect("the track sees it");
+    assert_eq!(deleted.track().unwrap().reference, None);
+    let again = render(&deleted);
+    let pick = rule_pick(&again).expect("the rule picks one");
+    assert_rendered_from(&again, &views, &edited, pick, "deleted");
 }

@@ -1403,12 +1403,15 @@ rules are checked on the flags alone.
 - **What it holds**: a point's bitmap is the render of its reference
   observation, which `tracks/reference_observations` names: its colour as
   rendered, alpha `255` on the samples on the photograph and `0` on the rest.
-  A point whose reference is `-1` holds a fused mean of its views, alpha their
-  agreement and coverage (every bitmap written before version 12, and a point
-  for which the reference-view rule picked no view or reached its pick only
-  through its last fallback, `without_any`; see
+  A point whose reference is `-1` has no reference observation in its track,
+  so its bitmap is not the render of one of its observations. It is a fused
+  mean of its views, alpha their agreement and coverage (every bitmap written
+  before version 12, and a point for which the reference-view rule picked no
+  view or reached its pick only through its last fallback, `without_any`; see
   [../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
-  stored bitmap", `ReferenceRender::stored_reference`).
+  stored bitmap", `ReferenceRender::stored_reference`), or the render of an
+  observation that a later edit removed from the point, which keeps the
+  bitmap (§ 9, "Keeping it true").
 
 ### 9. Tracks
 
@@ -1576,11 +1579,13 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   stored bitmap"). Where the file stores no bitmaps, a later render (`sfm
   xform --add-patch-bitmaps`, SfM Explorer's display bitmaps, `sfm
   web-export`) renders the point from this observation, so dropping the
-  bitmaps and adding them again gives the same bitmaps. `-1` where no
-  reference has been chosen: a stored bitmap is then a fused mean (from before
-  version 12, or where the reference-view rule picks no view or reaches its
-  pick only through its last fallback, `without_any`), and a later render
-  runs the reference-view rule for the point and records its pick.
+  bitmaps and adding them again gives the same bitmaps. `-1` where the point
+  has no reference observation in its track: a stored bitmap is then not the
+  render of one of its observations -- a fused mean (from before version 12,
+  or where the reference-view rule picks no view or reaches its pick only
+  through its last fallback, `without_any`), or the render of an observation
+  that has since been removed from the point -- and a later render runs the
+  reference-view rule for the point and records its pick.
 - **Presence**: required in a version 12 file whose `points3d/metadata.json`
   has `has_uv_frames: true`, and absent otherwise, so it needs no flag of its
   own. It is present with the patch frame, not with the bitmaps: a file
@@ -1594,8 +1599,10 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   writer that removes a point removes its row, so a point filter leaves every
   surviving point's index unchanged. A writer that removes or reorders a
   point's observations moves the index with the reference observation, and
-  writes `-1` where it removes the reference observation itself. A writer that
-  moves geometry (a bundle adjustment, a similarity, moved keypoints, a refit
+  writes `-1` where it removes the reference observation itself; it keeps the
+  point's bitmap, which is then the render of an observation the point no
+  longer has, until a later render replaces it from a reference the rule
+  picks. A writer that moves geometry (a bundle adjustment, a similarity, moved keypoints, a refit
   normal or a new patch frame) keeps the index: the bitmap rendered after it
   is rendered from the same observation. That includes a writer that zeroes a
   point's patch frame (`--convert-infinity` where a point's patch has no extent
@@ -1613,7 +1620,8 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   that is already `embedded_patches`. In memory,
   `SfmrReconstruction::to_sfmr_data` writes the column as the reconstruction
   holds it, except that a pick only SfM Explorer's display render made is
-  written as `-1` (`PointSet::saved_reference_observations`), and
+  written as `-1` (`PointSet::saved_reference_observations`) unless a bench
+  commit has made it the point's own, and
   `validate_point_columns` checks the range and refuses the column without
   patch frames. Python `clone_with_changes` keeps the old references unless
   new ones are passed, whether it keeps, replaces or drops the bitmaps or
@@ -2070,7 +2078,7 @@ introduced this way, and a writer that picked its version by content would make
 
 | Change | Detail |
 |---|---|
-| `tracks/reference_observations.{N}.int32.zst` | New column, **required with the patch frame** (`points3d/metadata.json` `has_uv_frames: true`) and absent otherwise: per point, the index within its own track of the observation its patch bitmap is, or is to be, rendered from, `-1` where none has been chosen. Folded into `tracks_xxh128` in its lexicographic slot, after `point_indexes`. No metadata key is added, since `has_uv_frames` says whether it is present. |
+| `tracks/reference_observations.{N}.int32.zst` | New column, **required with the patch frame** (`points3d/metadata.json` `has_uv_frames: true`) and absent otherwise: per point, the index within its own track of the observation its patch bitmap is, or is to be, rendered from, `-1` where the point has no reference observation in its track (its bitmap, if any, is then a fused mean or the render of an observation since removed). Folded into `tracks_xxh128` in its lexicographic slot, after `point_indexes`. No metadata key is added, since `has_uv_frames` says whether it is present. |
 | `points3d/patch_bitmaps_y_x_rgba` | Writers store a point's reference view's render, with alpha `255` on the samples on the photograph and `0` elsewhere, in place of a fused mean of the views ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The stored bitmap"). The entry's layout is unchanged. |
 
 Migration is mechanical. A version 11 file with patch frames reads with every

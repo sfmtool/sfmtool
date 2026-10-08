@@ -410,12 +410,15 @@ is always read on the tile the bench shows.
 
 **An observation sharper than the bitmap** is read plain, neither tile blurred,
 and flagged (`sharper_than_bitmap`): it is a candidate to replace the
-reference, which an operation that renders the bitmap decides by running the
-reference-view rule again, not a score.
+reference, not a score. No render replaces a defined reference: a render
+renders from it, and the rule picks only for a point with none. Replacing a
+defined reference with the rule's current pick is a separate operation, not
+built.
 
 **The reference's own score is 1** and is not computed: the bitmap is its tile.
-A bitmap that names no reference (a fused mean, or one stored before the
-reference was recorded) scores every observation.
+A bitmap that names no reference (a fused mean, one stored before the
+reference was recorded, or the render of an observation since removed from
+the point) scores every observation.
 
 **What reads the scores.** The bench writes both for every row it evaluates
 (`bitmap_zncc`, `blur_matched_bitmap_zncc`, `bitmap_blur_sigma`,

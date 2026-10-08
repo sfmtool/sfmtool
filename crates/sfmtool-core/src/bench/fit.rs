@@ -31,7 +31,8 @@ use crate::patch::keypoint_localize::{
 };
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints_reporting, KeypointSubpixelParams};
 use crate::patch::normal_refine::ProjectedImage;
-use crate::patch::stored_bitmap::render_patch_bitmap;
+use crate::patch::reference_view::render_view_tile;
+use crate::patch::stored_bitmap::{bitmap_from_tile, render_patch_bitmap};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -428,7 +429,9 @@ pub fn fit(
 /// slide of the patch onto the queried pixel, and renders with this before it
 /// returns, and the viewer's live evaluation renders with it after a patch
 /// step. The placement, the position, the verdicts and every keypoint come
-/// back as they were; what is written is the tile of the `in` sighting the
+/// back as they were; what is written is the tile of the track's reference
+/// observation ([`TrackPayload::reference`]) where it holds one that is `in`
+/// with a keypoint, and otherwise the tile of the `in` sighting the
 /// reference-view rule picks (or the mean of the `in` sightings' tiles where
 /// it picks none or reaches its pick only through its last fallback, see
 /// [`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
@@ -1176,13 +1179,17 @@ pub(super) fn triangulate_rays(
 /// Render the track's stored bitmap from the `in` observations at their final
 /// keypoints, and read the point's colour off its centre.
 ///
-/// The bitmap is [`render_patch_bitmap`]: the tile of the observation the
-/// reference-view rule picks among the `in` observations, or the fused mean
-/// where it picks none or reaches its pick only through its last fallback.
-/// Nothing moves: the keypoints are the ones the fit
-/// already settled. The grid is the reconstruction's own bitmap grid where it
-/// stores one, so what is rendered is a tile the column can hold. The second
-/// value is the row of the track whose tile the bitmap is.
+/// Where the track holds a defined reference observation
+/// ([`TrackPayload::reference`]) that is one of the `in` rows with a keypoint,
+/// the bitmap is that row's tile at its keypoint ([`render_view_tile`]), and
+/// the reference stays. Otherwise the reference is undefined and the bitmap is
+/// [`render_patch_bitmap`]: the tile of the observation the reference-view
+/// rule picks among the `in` observations, or the fused mean where it picks
+/// none or reaches its pick only through its last fallback. Nothing moves: the
+/// keypoints are the ones the fit already settled. The grid is the
+/// reconstruction's own bitmap grid where it stores one, so what is rendered
+/// is a tile the column can hold. The second value is the row of the track
+/// whose tile the bitmap is.
 fn render_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -1207,6 +1214,24 @@ fn render_bitmap(
     }
     if view_set.len() < 2 {
         return (None, None, None);
+    }
+    // A defined reference is rendered from; the rule sets one only where the
+    // track holds none.
+    let held = track
+        .track()
+        .and_then(|p| p.reference)
+        .and_then(|r| rows.iter().position(|&i| i == r));
+    if let Some(k) = held {
+        let tile = render_view_tile(
+            patch,
+            &images[view_set[k] as usize],
+            Some(keypoints[k]),
+            resolution,
+            options.refine.sampler,
+            progress,
+        );
+        let (bitmap, color) = column_bitmap(&bitmap_from_tile(&tile), resolution, channels);
+        return (Some(bitmap), Some(rows[k]), Some(color));
     }
     let params = KeypointSubpixelParams {
         resolution: resolution as u32,

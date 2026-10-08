@@ -1119,7 +1119,8 @@ pub struct SightReport {
 /// its turn, and every other sighting keeps its own. When the observation is
 /// the track's reference observation, the bitmap was rendered at its old
 /// keypoint, so it is dropped and the reference kept; the next evaluation
-/// renders another, re-picking the reference ([`TrackPayload::reference`]).
+/// renders another from the same reference at its new keypoint
+/// ([`TrackPayload::reference`]).
 ///
 /// **The observation is pinned either way**, at both stages: a sighting a
 /// person placed is a sighting they have ruled on, and

@@ -746,7 +746,13 @@ reference-view rule picks among its track, rendered at that observation's
 keypoint, and its entry records which observation it is
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
 bitmap"); where the rule picks none, or reaches its pick only through its last
-fallback, the fused mean of the views, recording `-1`.
+fallback, the fused mean of the views, recording `-1`. A `-1` beside a stored
+bitmap means the point has no reference observation in its track; the bitmap
+can then be the render of an observation a step removed from the point, since
+`--filter-by-image-range`, `--include-by-distribution` and the other steps
+that remove observations keep each point's bitmap and write `-1` where they
+remove its reference observation. Dropping and adding the bitmaps gives such
+a point the rule's pick.
 [`render_patch_cloud_bitmaps`](../../../../crates/sfmtool-core/src/patch/stored_bitmap.rs)
 renders the whole cloud, parallel over points. It takes one view per image as
 an `Option`, leaving a `None` view out of every patch's view set, and a
@@ -756,8 +762,9 @@ or gets a zero row (`Skip`). It is bound as
 `PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view",
 referenced_only=False, progress=None)`, which returns the `(P, R, R, 4)` array and the `(P,)` int32
 reference observations `clone_with_changes(patch_bitmaps=...,
-reference_observations=...)` takes. A bench fit renders one track the same way
-(`render_patch_bitmap`), and the viewer's open runs the whole-cloud form for a
+reference_observations=...)` takes. A bench render renders one track the same way:
+from its reference where the track holds one, and by the rule
+(`render_patch_bitmap`) where it does not. The viewer's open runs the whole-cloud form for a
 file whose bitmaps are absent.
 
 For a point at `-1`, its bitmap therefore equals what `--refine-keypoints`

@@ -367,8 +367,12 @@ into the point's own track, in `tracks/reference_observations`.
 names, per point, the observation its bitmap is, or is to be, rendered from,
 with or without stored bitmaps. Where a reconstruction stores a point's bitmap
 beside a reference `≥ 0`, the bitmap is that observation's tile as of the last
-render; `-1` means no reference has been chosen, and a stored bitmap beside it
-is a fused mean. Dropping the bitmaps keeps the column, and moving geometry
+render. `-1` means the point has no reference observation in its track, and
+a stored bitmap beside it is not the render of one of its observations: a
+fused mean, or the render of an observation that an edit has since removed
+from the point (an image subset or filter keeps the bitmap and writes `-1`).
+The next render picks a new reference by the rule. Dropping the bitmaps keeps
+the column, and moving geometry
 (keypoints, the frame, a bundle adjustment) keeps it too
 ([sfmr-file-format.md](../../formats/sfmr-file-format.md) § "9. Tracks").
 
@@ -390,11 +394,34 @@ reference again from that observation through the stored value, through
 [`_patch_compaction.py`](../../../src/sfmtool/_patch_compaction.py). That
 render reads the `f32` keypoints and frame the file stores rather than the
 refiner's `f64` working values, so dropping and adding the bitmaps gives the
-same bytes. The bench is where a reference is
-replaced: its renders run the rule over the `in` rows and set the bitmap and
-the reference together
+same bytes.
+
+**The bench renders from a defined reference too.** A track on the bench
+holds a reference observation (`TrackPayload::reference`), read from the
+point's stored reference when it is put on the bench. Every bench render --
+the live evaluation's after a patch step, a fit's, a normal step's -- renders
+from that reference where it is defined, an `in` row with a keypoint, and
+keeps it. The rule sets the reference only where it is undefined: the point
+stored `-1`, or a step deleted the reference row, split it off or turned it
+`out`, which drops the bitmap and the reference together. A pick only the
+viewer's display render made reaches the bench like a stored reference; it is
+the rule's pick on the file's track, so holding it is the same as the bench
+setting it from the rule. A commit writes the reference the bench holds, so
+committing a point adopts a display pick
 ([editable-track.md](../bench/editable-track.md) § "The stored bitmap's
 reference").
+
+**The rule's pick and the reference in use are two things.** Every
+evaluation still runs the rule over the `in` rows and reports each row's
+standing, and Track View's *Reference* column and the wire's
+`reference_observation` show the row it picks. That is information about the
+current readings. The reference in use is the row the bitmap is the render
+of: Track View's *Bitmap* column marks it, and the wire names it as
+`bitmap_observation`. The two differ where a defined reference is no longer
+the row the rule would pick. Replacing a defined reference with the rule's
+current pick is a separate operation, which is not built
+([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
+open questions).
 
 Every operation that renders the stored bitmap renders it this way:
 
@@ -403,7 +430,7 @@ Every operation that renders the stored bitmap renders it this way:
 | `sfm xform --add-patch-bitmaps` | `render_patch_cloud_bitmaps`, through `PatchCloud.render_bitmaps`: each point from its stored reference, the rule only for a point at `-1` |
 | `sfm embed-patches` and `sfm xform --refine-keypoints bitmaps=…` | the sub-pixel refiner with `render_bitmaps`, at the final keypoints; a point that stores a reference is then rendered from it (`render_from_references`) |
 | `sfm xform --refine-normals bitmaps=…` | normal refinement with `render_bitmap`, through the refined patch; a point that stores a reference is then rendered from it (`render_from_references`) |
-| A bench fit, and `render_bitmap_in_place` | `render_patch_bitmap` over the `in` rows ([editable-track.md](../bench/editable-track.md)) |
+| A bench fit, `render_bitmap_in_place` and `evaluate_rendering_bitmap` | the tile of the track's reference where it is defined; `render_patch_bitmap` over the `in` rows where it is not ([editable-track.md](../bench/editable-track.md)) |
 | The viewer's display patch bitmaps | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`: each point from the file's reference; a point at `-1` gets the render's pick, held in the value's references and marked `PointSet::display_only_references`, so Track View marks the row the display bitmap is the tile of, while a save writes neither the bitmaps nor those picks (it writes the file's `-1`) |
 | SfM Explorer's conversion to embedded patches | `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`; `to_embedded_patches` gives every point `-1`, so every point gets the rule's pick, and the bitmaps are the converted value's own, so the references are written with them |
 
@@ -594,9 +621,15 @@ the row the evaluation picked and names it, and that a commit writes its place
 in the stored track; that sighting the reference observation elsewhere, or
 a patch step, drops the bitmap and keeps the reference, that turning it `out`
 by hand or by the thresholds drops both, while the same step on another row
-keeps both; and that the bench reads a stored reference with or without a
+keeps both; that the bench reads a stored reference with or without a
 bitmap, that a display pick reaches the bench, is written as `-1` by a save
-and becomes the point's own on a commit. `display_bitmaps/tests.rs` checks
+and becomes the point's own on a commit; that a track opened from a file whose
+reference is not the rule's pick renders from the file's reference, and keeps
+rendering from it after a patch step, a sighting of another row or of the
+reference row and a fit, while the evaluation reports the rule's pick, that
+the render reusing the evaluation's tiles matches the separate calls there,
+and that a commit saves that reference; and that turning the reference row
+`out` or deleting its image lets the next render set the rule's pick. `display_bitmaps/tests.rs` checks
 that a render reads the stored references: storing the rule's picks and
 rendering again draws the same column, and storing other observations draws
 their tiles under those references.
@@ -611,7 +644,10 @@ The templates the localizer, the sub-pixel refiner, congealing and normal
 refinement align views to stay their own consensus of the views; which
 template the localizer aligns to is decided separately
 ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 5). Replacing a point's reference when a sharper observation is added or
-fitted is not done: an operation that renders the bitmap runs the rule again,
-and one that only adds an observation (Add Image to Tracks) keeps the bitmap
-and its reference.
+Part 5). Replacing a point's defined reference when a sharper observation is
+added or fitted is not done: a render renders from the defined reference, an
+operation that only adds an observation (Add Image to Tracks) keeps the bitmap
+and its reference, and the refiners keep a stored reference. Replacing a
+defined reference with the rule's current pick is a separate operation, not
+built ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
+open questions).

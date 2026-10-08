@@ -23,8 +23,8 @@ use sfmtool_core::patch::reference_view::{
 use crate::bench::live::Evaluation;
 
 /// The *Reference* heading's hover text.
-pub(super) const REFERENCE_TIP: &str = "Which row's tile a fit stores as the patch bitmap, by \
-    the reference-view rule, and the readings it decides on. The row it picks reads \
+pub(super) const REFERENCE_TIP: &str = "Which row's tile the reference-view rule would store \
+    as the patch bitmap, from the current readings, and the readings it decides on. The row it picks reads \
     reference, on a green cell.\n\n\
     A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
     under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
@@ -38,14 +38,16 @@ pub(super) const REFERENCE_TIP: &str = "Which row's tile a fit stores as the pat
     oblique, ninth differs, agrees less, or less sharp. The second is the viewing angle, \
     the angle between the patch's normal and the direction to the camera, and the pair \
     ZNCC the rule read. Hover a cell for every reading. An out row is not considered.\n\n\
-    A fit stores the picked row's tile as the patch bitmap, and the Bitmap column marks \
-    the row the stored bitmap is the tile of. Where the rule picked the row only after \
-    dropping the coverage and clipping tests, the fit stores the mean of the rows that are \
-    in instead, and the Bitmap column marks no row.";
+    A render keeps the track's reference where it has one, read from the file or kept \
+    through steps that leave its row in, and stores that row's tile; only a track with no \
+    reference stores the picked row's tile. The Bitmap column marks the row the stored \
+    bitmap is the tile of, which can differ from the pick here. Where the rule picked the \
+    row only after dropping the coverage and clipping tests, a render stores the mean of the \
+    rows that are in instead, and the Bitmap column marks no row.";
 
 /// The *Bitmap* heading's hover text.
 pub(super) const BITMAP_TIP: &str = "How each row's tile scores against the track's patch \
-    bitmap, which is the tile of the reference row, or, where the rule reached its pick only \
+    bitmap, which is the tile of the track's reference row, or, where the rule reached its pick only \
     through its last fallback, the mean of the in rows' tiles, the tile of no row.\n\n\
     The row the bitmap is the tile of reads bitmap; its score is 100% and is not computed. \
     Every other row reads its ZNCC with the bitmap, over the samples both have on the \
@@ -55,8 +57,8 @@ pub(super) const BITMAP_TIP: &str = "How each row's tile scores against the trac
     axis reaches the row's short axis (up to 2 grid px) and correlated again: the second line \
     gives that blur-matched score after an arrow. A row sharper than the bitmap is read \
     plain and its second line reads sharper: its tile could replace the reference.\n\n\
-    A bitmap stored before the reference was recorded, or a mean of the rows, names no row, \
-    and every row is scored.";
+    A bitmap stored before the reference was recorded, a mean of the rows, or the tile of an \
+    observation since removed from the point names no row, and every row is scored.";
 
 /// What one row's *Reference* cell draws.
 #[derive(Debug, Clone, PartialEq)]
@@ -158,8 +160,8 @@ pub(super) fn bitmap_cell(
         return BitmapCell {
             text: "bitmap\n100%".to_string(),
             hover: Some(
-                "The patch bitmap is this row's tile, rendered at its keypoint: its score is \
-                 100% and is not computed."
+                "The patch bitmap is this row's tile, rendered at its keypoint: this row is \
+                 the track's reference observation, and its score is 100% and is not computed."
                     .to_string(),
             ),
             is_bitmap: true,

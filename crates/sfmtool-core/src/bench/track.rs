@@ -676,11 +676,13 @@ pub struct TrackPayload {
     pub bitmap: Option<Array3<u8>>,
     /// The track's **reference observation**, as an index into the track's
     /// observations: the observation [`Self::bitmap`] is, or is to be,
-    /// rendered from. With a bitmap, the bitmap is that observation's render;
-    /// `None` beside a bitmap means the bitmap is not one observation's render
-    /// (a fused mean). Without a bitmap it is the reference the track carries
-    /// until the next render, read from the point's stored reference or kept
-    /// from a bitmap a step made stale.
+    /// rendered from. With a bitmap, the bitmap is that observation's render.
+    /// `None` means the track has no reference observation: a bitmap beside
+    /// it is not the render of an observation the track has (a fused mean, or
+    /// the render of an observation since removed from the point). Without a
+    /// bitmap it is the reference the track carries until the next render,
+    /// read from the point's stored reference or kept from a bitmap a step
+    /// made stale.
     ///
     /// It follows its observation through every step that reorders or removes
     /// other observations. A step that makes the bitmap stale while the
@@ -690,13 +692,18 @@ pub struct TrackPayload {
     /// removes the reference observation from the track, splits it off, or
     /// turns it `out` drops both (`drop_bitmap`).
     ///
-    /// **The bench re-picks on render.** Every render of a new bitmap on the
-    /// bench -- the live evaluation's, a fit's, a normal step's -- runs the
-    /// reference-view rule over the `in` rows and sets the bitmap and this
-    /// reference together, so the bench is where a point's reference is
-    /// replaced. A commit writes this reference as the point's reference
-    /// observation, beside the bitmap it is the render of where the
-    /// reconstruction stores bitmaps.
+    /// **A render keeps a defined reference.** Every render of a new bitmap
+    /// on the bench -- the live evaluation's, a fit's, a normal step's --
+    /// renders from this reference where it is defined (`Some`, naming an
+    /// `in` row with a keypoint). Only where it is `None` does the render run
+    /// the reference-view rule over the `in` rows and set the bitmap and this
+    /// reference together. So the rule's pick that an evaluation reports per
+    /// row (`TrackMeasurement::reference_view`) can differ from this
+    /// reference, which is the one in use. A reference read from a column
+    /// rendered for display is the rule's pick on the file's track, so holding
+    /// it is the bench having set it from the rule. A commit writes this
+    /// reference as the point's reference observation, beside the bitmap it
+    /// is the render of where the reconstruction stores bitmaps.
     pub reference: Option<usize>,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.

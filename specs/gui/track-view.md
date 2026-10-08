@@ -1325,8 +1325,10 @@ block report each row's `sampler` (`anisotropic` or `bilinear_mip`) and
 `sampler_minor_axis_loss`, both null where `patch_jacobian` is, and the loss
 null as well where it is not finite.
 
-**The *Reference* column says which row's tile is stored as the patch
-bitmap.** A track-stage evaluation runs the reference-view rule over the `in`
+**The *Reference* column says which row's tile the reference-view rule would
+store as the patch bitmap.** It is the rule's pick from the current
+readings; where the track holds a defined reference, a render keeps it and
+the *Bitmap* column marks it, so the two can differ. A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a
 candidate has at least 99% of its tile on the photograph, at most 5% of the
 photograph under the tile clipped, a viewing angle of at most 65°, and no ninth
@@ -1370,12 +1372,19 @@ which is read plain and could replace the reference
 ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
 § "Scores against the stored bitmap"). Hovering it (`reference::bitmap_cell`)
 gives both scores and the blur's width in grid px, or says why the pair was
-read plain. The row the column marks is the row the *Reference* column marks,
-since a fit picks the bitmap from the same readings, except where the bitmap is
-the fused mean of a last-fallback pick, when the column marks no row and
-scores every row. A step that sights the marked row elsewhere, takes it off the
-track or turns it `out` drops the bitmap, and the live evaluation renders and
-scores a new one, re-picking the reference
+read plain. The row the column marks is the track's reference observation,
+the reference in use: the row the bitmap is the render of. The *Reference*
+column marks the row the reference-view rule picks from the current
+readings, which is information. Where the rule set the reference the two are
+the same row, except where the bitmap is the fused mean of a last-fallback
+pick, when this column marks no row and scores every row. Where the track
+holds a defined reference -- read from the file, or kept through steps that
+leave its row `in` -- every render renders from it, so the two columns can
+mark different rows: the *Bitmap* column then shows which row the bitmap
+comes from. A step that sights the marked row elsewhere drops the bitmap and
+keeps the reference, and the live evaluation renders a new one from the same
+row; one that takes it off the track or turns it `out` drops both, and the
+live evaluation renders and scores a new one from the rule's pick
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 stored bitmap's reference"). On a file with patch frames but no stored
 bitmaps, the bitmap is the one SfM Explorer rendered for display when it

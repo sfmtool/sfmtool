@@ -1644,8 +1644,10 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "normal_confidence": payload.normal_confidence,
                 "placement": super::render::placement(payload.placement.as_ref()),
                 "has_bitmap": payload.bitmap.is_some(),
-                // The row whose tile the stored bitmap is, as an index into
-                // `observations`, or null for a bitmap that names none.
+                // The row whose tile the stored bitmap is -- the reference in
+                // use, which can differ from the rule's pick below -- as an
+                // index into `observations`, or null for a bitmap that names
+                // none.
                 "bitmap_observation": payload.bitmap.as_ref().and(payload.reference),
                 "patch_resolution": recon.map(crate::bench::patch_resolution),
                 // The row the reference-view rule picked at the last

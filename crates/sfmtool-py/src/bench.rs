@@ -579,8 +579,12 @@ impl PyEditableTrack {
     /// Which observation the track stage's stored bitmap is the tile of, as an
     /// index into :attr:`observations`, or ``None``: at the cluster stage, for
     /// a track with no bitmap, and for a bitmap that names no observation (a
-    /// mean of the views, or one stored before the reference observation was
-    /// recorded).
+    /// mean of the views, one stored before the reference observation was
+    /// recorded, or the render of an observation since removed from the
+    /// point). This is the track's reference observation, the one in use:
+    /// every render renders from it while it is defined, so it can differ
+    /// from the row the last evaluation's reference-view rule picked
+    /// (``reference_view["is_reference"]``).
     #[getter]
     fn bitmap_observation(&self) -> Option<usize> {
         let payload = self.inner.track()?;

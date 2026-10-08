@@ -163,6 +163,9 @@ def test_render_bitmaps_referenced_only_skips_points_at_minus_one(embedded):
 
 
 def test_a_filter_that_removes_the_reference_observation_writes_minus_one(embedded):
+    """A point whose reference image is removed keeps its bitmap, the render of
+    an observation it no longer has, and its reference becomes -1: no reference
+    observation in its track."""
     refs = np.asarray(embedded.reference_observations)
     counts = np.asarray(embedded.observation_counts).astype(np.int64)
     offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
@@ -179,6 +182,10 @@ def test_a_filter_that_removes_the_reference_observation_writes_minus_one(embedd
     lost = ref_image == dropped
     assert lost.any()
     assert (sub_refs[lost] == -1).all()
+    # The bitmap stays as it was: the old reference's render.
+    np.testing.assert_array_equal(
+        np.asarray(subset.patch_bitmaps)[lost], np.asarray(embedded.patch_bitmaps)[lost]
+    )
     # Every other reference still names the observation of the same image.
     sub_counts = np.asarray(subset.observation_counts).astype(np.int64)
     sub_offsets = np.concatenate([[0], np.cumsum(sub_counts)[:-1]])

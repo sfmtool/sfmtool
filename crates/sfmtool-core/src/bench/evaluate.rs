@@ -553,12 +553,13 @@ fn evaluate_keeping_tiles(
 /// three calls give in turn, but the render reuses what the evaluation already
 /// read where it can. When the evaluation's repaint left the `in` set as the
 /// rule read it, every `in` row carries a keypoint, and the evaluation's tiles
-/// are on the bitmap's grid with the render's sampler, the reference-view rule
-/// the render would run is the one the evaluation ran, over the same tiles:
-/// the bitmap is then the evaluation's tile of the row the rule picked, and
-/// the scores are read off the evaluation's tiles. Otherwise, and where the
-/// rule stores the fused mean, the render and the scoring run as their own
-/// calls.
+/// are on the bitmap's grid with the render's sampler, the tile the render
+/// would make is one the evaluation already made: the bitmap is then the
+/// evaluation's tile of the track's defined reference observation
+/// ([`TrackPayload::reference`]) where it holds one, and of the row the
+/// evaluation's reference-view rule picked where it does not, and the scores
+/// are read off the evaluation's tiles. Otherwise, and where the rule stores
+/// the fused mean, the render and the scoring run as their own calls.
 ///
 /// A track that has a bitmap, a cluster, and a track with no patch come back
 /// as [`evaluate`] returns them.
@@ -623,7 +624,13 @@ fn bitmap_from_reading(
     {
         return None;
     }
-    let row = kept.stored?;
+    // The render's row: the track's defined reference where it is one of
+    // those rows, and the rule's pick otherwise.
+    let held = read
+        .track()
+        .and_then(|p| p.reference)
+        .filter(|r| ins.contains(r));
+    let row = held.or(kept.stored)?;
     let tile = &kept.tiles.iter().find(|(i, _)| *i == row)?.1;
     let (bitmap, color) = super::fit::column_bitmap(&bitmap_from_tile(tile), resolution, channels);
     let mut next = read.clone();

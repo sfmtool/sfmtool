@@ -571,8 +571,9 @@ pub fn fit(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError>;
 
-// Render the stored bitmap (the reference-view rule's pick among the `in` rows,
-// named in `TrackPayload::reference`, or the fused mean naming none) and colour
+// Render the stored bitmap (the tile of `TrackPayload::reference` where it is
+// defined; otherwise the reference-view rule's pick among the `in` rows, named
+// in `TrackPayload::reference`, or the fused mean naming none) and colour
 // where the track-stage patch stands, and move nothing. A cluster, a track with
 // no placement, and one with fewer than two `in` sightings that carry a keypoint
 // come back unchanged. The rows' bitmap scores still read the old bitmap, so a
@@ -1492,8 +1493,10 @@ until the next evaluation.
 
 `TrackPayload::reference` names the track's **reference observation**: the
 row `TrackPayload::bitmap` is, or is to be, rendered from. With a bitmap, the
-bitmap is that row's render, and `None` beside a bitmap means the bitmap is a
-fused mean. Where the reference-view rule reaches its pick only through its
+bitmap is that row's render. `None` means the track has no reference
+observation, and a bitmap beside it is not the render of one of its rows: a
+fused mean, or, for a point read from a file, the render of an observation an
+edit has since removed from the point. Where the reference-view rule reaches its pick only through its
 last fallback, the bitmap is the fused mean and the reference is `None`, so
 the row marked as the reference view is then not the bitmap's row
 ([../patch/reference-view.md](../patch/reference-view.md) § "The stored
@@ -1522,20 +1525,47 @@ drops the bitmap and the reference together (`drop_bitmap`):
   run), both of which bring the reference view into line with the verdicts
   (`restate_reference_view`).
 
-A fused-mean bitmap (reference `None`) is not one row's render, so the steps
-of the second list keep it.
+A bitmap with reference `None` is not one row's render, so the steps of the
+second list keep it.
 
-**The bench re-picks on render.** Every render of a new bitmap on the bench
--- the viewer's live evaluation (`evaluate_rendering_bitmap`, which renders
-the bitmap again from the `in` rows with `render_bitmap_in_place` and scores
-every row against it with `score_bitmap`), a fit, and the normal steps -- runs
-the reference-view rule over the `in` rows and sets the bitmap and the
-reference together. A reference kept by a stale-making step is therefore
-replaced by the next render's pick, and the bench is where a point's
-reference is replaced. Everywhere else a render reads the stored reference
-rather than picking one
+**A render keeps a defined reference.** Every render of a new bitmap on the
+bench -- the viewer's live evaluation (`evaluate_rendering_bitmap`, which
+renders the bitmap again with `render_bitmap_in_place` and scores every row
+against it with `score_bitmap`), a fit, and the normal steps -- renders from
+the track's reference where it is defined: `Some`, naming an `in` row with a
+keypoint. The bitmap is then that row's tile at its current keypoint, through
+the current patch, and the reference stays. The reference-view rule sets the
+reference, with the bitmap, only where it is undefined: the point stored
+`-1`, or a step of the second list above took the reference row off the
+track or turned it `out`. So a reference kept by a stale-making step is
+rendered from again at the next render, and a track opened from a file keeps
+the file's reference through every step that leaves that row `in`. This is
+the rule every other render follows
 ([../patch/reference-view.md](../patch/reference-view.md) § "The stored
-bitmap").
+bitmap"). `evaluate_rendering_bitmap` takes the defined reference's tile from
+the evaluation's own tiles where it reuses them, so it gives what the separate
+calls give.
+
+A pick only the viewer's display render made (a point the file stores at
+`-1`) reaches the bench as the track's reference. It is the rule's pick on
+the file's track, so holding it is the same as the bench having set it from
+the rule; a commit saves it like any other reference the bench holds, which
+makes it the point's own, while a point that is not committed keeps saving
+`-1`.
+
+**The rule's pick and the reference in use.** Every evaluation still runs the
+rule over the `in` rows and writes each row's standing
+(`TrackMeasurement::reference_view`). That is what the rule would pick from
+the current readings, reported as information; it does not move a defined
+reference. The reference in use is `TrackPayload::reference`, the row the
+bitmap is the render of. The two differ where a defined reference is no
+longer the row the rule picks; Track View's *Reference* column and the wire's
+`reference_observation` show the rule's pick, and Track View's *Bitmap*
+column and the wire's `bitmap_observation` show the reference in use.
+Replacing a defined reference with the rule's current pick is a separate
+operation, not built
+([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
+open questions).
 
 A commit writes `TrackPayload::reference` as the point's reference
 observation, with or without a bitmap: with one, it is the row the bitmap is
@@ -2348,7 +2378,9 @@ has its ray. One the kernels placed further than `max_shift_px` from its seed
 keeps its pixel too, and says so (§ "The fit's walk is bounded by the person's
 bar").
 
-The bitmap is `render_patch_bitmap`
+Where the track holds a defined reference (§ "The stored bitmap's
+reference"), the bitmap is that row's tile at the keypoint the fit settled,
+and the reference stays. Otherwise the bitmap is `render_patch_bitmap`
 ([../patch/reference-view.md](../patch/reference-view.md) § "The stored
 bitmap"), run over the `in` views at the keypoints the fit settled: the tile of
 the `in` sighting the reference-view rule picks, rendered at its keypoint,
@@ -2358,9 +2390,11 @@ last fallback ([../patch/reference-view.md](../patch/reference-view.md) §
 "The stored bitmap", `ReferenceRender::stored_reference`). It moves nothing.
 Its grid is the reconstruction's own bitmap grid where it stores one, so what
 is rendered is a tile the column can hold and a commit can write. The
-evaluation the fit ends with reads its pick from the same readings, so the
-row Track View marks as the reference is the row the bitmap is the tile of,
-except where the bitmap is that fused mean and names no row.
+evaluation the fit ends with reads its pick from the same readings, so where
+the rule set the reference the row Track View marks as the reference is the
+row the bitmap is the tile of, except where the bitmap is that fused mean and
+names no row; where the fit rendered from a defined reference, the two can
+differ.
 
 **A fit ends by evaluating its result**, and that reading is where every
 per-observation number and every count in the `FitReport` comes from. `placed`
@@ -3195,13 +3229,22 @@ unit-tested in `normal.rs` itself.
 - Each row's `pair_zncc` is the median of its row of `member_zncc_matrix`,
   called directly over the `in` rows at the evaluation's resolution and
   sampler.
-- A track whose bitmap names no reference observation (a fused mean, or a
-  bitmap from before the reference was recorded) scores every row against that
+- A track whose bitmap names no reference observation (a fused mean, a
+  bitmap from before the reference was recorded, or the render of a row since
+  removed) scores every row against that
   bitmap, plain and blur-matched, as the scorer does when called directly.
 - Rendering the bitmap where the track stands (`render_bitmap_in_place`) stores
   the tile of the row the evaluation's reference-view rule picks and names that
   row; the next evaluation scores that row 1 without computing it, and a commit
   writes its place in the stored track.
+- A track opened from a file whose reference is an `in` row the rule does not
+  pick renders from that reference, and keeps rendering from it after a patch
+  step, a sighting of another row, a sighting of the reference row and a fit,
+  while each evaluation still reports the rule's pick;
+  `evaluate_rendering_bitmap` matches the separate calls there, and a commit
+  saves that reference.
+- Turning the reference row `out`, or deleting its image, leaves the track
+  with no reference, and the next render sets the rule's pick.
 
 ### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
 
