@@ -1202,6 +1202,40 @@ fn test_write_preserves_set_normals_and_fills_missing() {
 }
 
 #[test]
+fn a_near_zero_normal_is_filled_whether_or_not_the_write_skips_statistics() {
+    // A row within the missing-normal tolerance of zero is filled by every
+    // write, so skipping the statistics pass does not change which rows count
+    // as missing.
+    let dir = std::env::temp_dir().join("sfmr_test_near_zero_normal");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut filled = Vec::new();
+    for skip in [false, true] {
+        let mut data = make_test_data();
+        let set = data.normals_xyz.as_mut().unwrap();
+        set[[1, 0]] = 1e-4;
+        set[[1, 1]] = 0.0;
+        set[[1, 2]] = 0.0;
+        let path = dir.join(format!("skip_{skip}.sfmr"));
+        let options = WriteOptions {
+            skip_recompute_depth_stats: skip,
+            ..WriteOptions::default()
+        };
+        write_sfmr_with_options(&path, &mut data, &options).unwrap();
+        let normals = read_sfmr(&path).unwrap().normals_xyz.unwrap();
+        let n1 = normals.row(1).to_owned();
+        let norm = n1.dot(&n1).sqrt();
+        assert!(
+            (norm - 1.0).abs() < 0.01,
+            "skip={skip}: near-zero normal should be filled, got {n1:?}"
+        );
+        filled.push(n1);
+    }
+    assert_eq!(filled[0], filled[1]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_round_trip_without_normals() {
     // Normals are optional: `None` opts out entirely, so no normals are
     // written and the reloaded data carries `None`.
