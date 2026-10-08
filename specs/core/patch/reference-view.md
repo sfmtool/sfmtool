@@ -18,8 +18,10 @@ the other's sharpness along its sharpest direction, so a sharp view is counted
 as disagreeing less for detail a blurrier view lacks
 ([blur-matched-zncc.md](blur-matched-zncc.md)). The bench measures every
 track it evaluates this way and reports the pick. The stored bitmap is the
-fused mean of the views; computing it from the reference view is proposed in
-the draft below (see [Non-goals](#non-goals)).
+fused mean of the views; the draft below proposes storing the reference view's
+render in its place, and reading the rule's agreement and cells plain, with
+blur matching moved to the scores of the observations against the stored
+bitmap (see [Non-goals](#non-goals)).
 
 The design behind the measurements, and the case for computing the bitmap from
 the views that hold the most detail, is in
@@ -482,7 +484,9 @@ and
 ## Non-goals
 
 The rule reports a view. The stored patch bitmap and every template a kernel
-scores against are the fused mean of the views. Computing them from the
-reference view, or from a mean of a few of the best views, is proposed in
+scores against are the fused mean of the views. Storing the reference view's
+render as the bitmap, scoring every observation against it blur-matched, and
+reading the rule's own agreement and cells plain are proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 5.
+Parts 5 and 6; the template the localizer aligns views to is decided
+separately there.

@@ -37,7 +37,11 @@ Two consumers read it. The bench's reference-view rule reads blur-matched
 agreement by default ([reference-view.md](reference-view.md) § "Blur-matched
 agreement"); member-coherence validation can read it, and does not by default
 ([member-coherence-validation.md](member-coherence-validation.md) § "Blur
-matching"). The measurements behind both choices are below.
+matching"). The measurements behind both choices are below. Part 6 of
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+proposes a third consumer in place of the reference-view rule: every
+observation scored against the point's stored bitmap, the reference view's
+render, with only the bitmap assessed and blurred.
 
 ## Rust API
 

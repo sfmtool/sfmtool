@@ -1,7 +1,7 @@
 # Sharper Patch Bitmap
 
 **Status:** Draft. Decided:
-- the patch bitmap, stored and used as the template views are scored against, is computed from the views that hold the most detail, judged by each view's sharpness (its ZNCC self-similarity radius) and its resolution in the patch grid (its zoom), not by agreement with the mean alone. The leading candidate is to take the single best view's bitmap rather than averaging, because a mean over differently exposed photographs is unreliable without a model of their brightness and colour shifts. A weighted mean is kept for comparison (Part 5);
+- the stored patch bitmap is the `R×R` render of the single reference view the reference-view rule picks, not a mean of the views, because a mean over differently exposed photographs is unreliable without a model of their brightness and colour shifts. The bitmap's blur assessment is read once per track, and every observation is scored against the bitmap by blur-matched ZNCC, with only the bitmap ever blurred (Parts 5 and 6). Which template the localizer aligns views to is a separate decision (Part 5);
 - the angle between the view's ray and the patch normal is a third input, with its own two axes: the view foreshortens the patch by `cos θ` along the tilt direction and not across it. It is kept separate from the anisotropy of the Jacobian:
   - the Jacobian measures resolution, whether it is compressed by obliquity or by lens distortion;
   - the angle measures how sensitive the view is to errors in the patch model, and along which direction;
@@ -10,9 +10,10 @@
 - the self-similarity reading summarises its region by an ellipse, whose semi-major axis is the radius, in place of the contour's furthest point, the slide and the reach (Part 2). That step is built;
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built;
 - the per-view measurements of Part 4 that the reference view needs are built and reported by the bench for every track it evaluates: each view's coverage, clipped share, viewing angle and tilt direction, its median ZNCC with the other views, and its agreement over each ninth of the tile with the cell deficit read from it. So is the reference-view rule of Part 5, which picks one view from those readings and says, for each other view, which test turned it away. Track View marks the pick and shows the readings, and the wire and the Python bindings carry them, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes. The rule reports a view; it does not change how the patch bitmap is computed (Part 5);
-- scoring at matched sharpness is **blur-matched ZNCC**: a tile sharper than the other along every direction blurred by a round Gaussian to the other's sharpness along its sharpest direction, read from the tiles rather than the footprint. Alignment runs against the unblurred template, and the blur-matched ZNCC is computed for the score (Part 6). The kernel is built, and so are its first two consumers: the reference view's agreement test and cell check read it by default, and member coherence can read it and by default does not ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)).
+- scoring at matched sharpness is **blur-matched ZNCC**: a tile sharper than the other along every direction blurred by a round Gaussian to the other's sharpness along its sharpest direction, read from the tiles rather than the footprint. Alignment runs against the unblurred template, and the blur-matched ZNCC is computed for the score (Part 6). The kernel is built, and so are its first two consumers: the reference view's agreement test and cell check read it by default, and member coherence can read it and by default does not ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)). The reference-view rule returns to plain readings, since blur matching changed its pick on 4 of 661 tracks and agreed with the hand picks no better; the scores of observations against the stored bitmap read it instead (Part 6);
+- every reading that picks the reference and scores the observations is taken on the renders at the reconstruction's patch resolution `R`, and on nothing outside them: no coarser grid, and no pixels of the photograph beyond the tile (Part 5).
 
-Not decided: whether the patch bitmap is the reference view's tile, a mean of a few of the best views, or a weighted mean (an experiment is measuring the first two against each other); the functional forms of the weights; whether the bench's ZNCC bars switch to blur-matched scores; and when the fuse's IRLS residuals read them, which waits on the first (Part 6). See [Open questions](#open-questions).
+Not decided: the template the localizer aligns views to (a pyramid that refines against the sharpest tile is the direction; Part 5); the functional forms of the weights; whether the bench's ZNCC bars switch to blur-matched scores (Part 6); whether member coherence decides on the full matrix of pairs or on each member against the stored bitmap (Part 5); and whether the per-observation covariance reads the plain or the blur-matched ZNCC (Part 6). See [Open questions](#open-questions).
 
 Amends:
 - [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): the congealing consensus
@@ -20,7 +21,8 @@ Amends:
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the ZNCC bars (`min_zncc`, whole and middle), re-measured against the blur-matched score if they switch to it (an open question)
 - [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`
-- [core/patch/reference-view.md](../core/patch/reference-view.md): the stored bitmap computed from the reference view, or from a few of the best views, in place of the fused mean (Part 5)
+- [core/patch/reference-view.md](../core/patch/reference-view.md): the stored bitmap is the reference view's render, in place of the fused mean, and the rule's agreement test and cell check read plain ZNCC (Part 5)
+- [core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md): its consumers, the scores of observations against the stored bitmap in place of the reference-view rule (Part 6)
 
 ## Purpose
 
@@ -29,7 +31,7 @@ A point in a patch-based reconstruction carries a small square bitmap of the sur
 - some photographs are out of focus;
 - the views do not line up to the last fraction of a pixel.
 
-The sharpest views then correlate worst with it, because the detail they carry has nothing in the template to match. This draft proposes computing the bitmap from the views that hold the most detail and fit the patch best, whether as a weighted mean of them or by choosing a single reference view. Three per-view numbers judge them, each computed by the code already or in a few operations:
+The sharpest views then correlate worst with it, because the detail they carry has nothing in the template to match. This draft proposes taking the bitmap from the single view that holds the most detail and fits the patch best, the reference view. Three per-view numbers judge them, each computed by the code already or in a few operations:
 - how many photograph pixels each patch-grid pixel covers along each axis (the zoom);
 - how far the view's own tile can slide over itself and still match (the ZNCC self-similarity radius);
 - the angle between the view's ray and the patch normal.
@@ -163,36 +165,46 @@ So the weights read obliquity only from the angle, never from the Jacobian's ani
 
 ## Part 5: computing the patch bitmap
 
-**Built: the reference-view rule.** The rule that picks the single reference view is built and runs in every bench evaluation, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes: candidates with coverage of at least 0.99, a clipped share of at most 0.05, a viewing angle of at most 65° and no ninth of the tile more than 0.3 below the track's typical agreement there; of those within 0.15 of the best candidate's median pairwise ZNCC, the one with the smallest self-similarity radius; the 65° angle limit, the cell check and then coverage and clipping dropped in turn when no view passes, with a view at 90° or more, which sees the patch edge on or from behind, never a candidate. It was tuned against hand picks on 77 tracks. **Still open: how the bitmap is computed.** Nothing yet takes the bitmap from the pick. An experiment is measuring whether a single reference or a mean of a few of the best views makes the better template, and the fuse and the other consumers below keep the weighted consensus until it decides.
+**Built: the reference-view rule.** The rule that picks the single reference view is built and runs in every bench evaluation, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes: candidates with coverage of at least 0.99, a clipped share of at most 0.05, a viewing angle of at most 65° and no ninth of the tile more than 0.3 below the track's typical agreement there; of those within 0.15 of the best candidate's median pairwise ZNCC, the one with the smallest self-similarity radius; the 65° angle limit, the cell check and then coverage and clipping dropped in turn when no view passes, with a view at 90° or more, which sees the patch edge on or from behind, never a candidate. It was tuned against hand picks on 77 tracks.
 
-The built rule reads neither of two signals the leading candidate below lists. It reads no zoom: it judges sharpness by the self-similarity radius alone, measured on each view's own tile at the patch resolution. And it reads no brightness or colour: a gate on how typical a view's brightness and colour are of the track was tried during tuning and left out, because it turned away views the hand picks chose.
+The built rule reads neither of two signals the measurements of Part 4 list. It reads no zoom: it judges sharpness by the self-similarity radius alone, measured on each view's own tile at the patch resolution. And it reads no brightness or colour: a gate on how typical a view's brightness and colour are of the track was tried during tuning and left out, because it turned away views the hand picks chose.
 
-The pipeline computes the patch bitmap today as a weighted mean of the views, a consensus. The measurements in Part 4 rank the views by what they can contribute, which serves other ways to compute it as well.
+**The rule reads plain ZNCC.** Its agreement test and cell check read blur-matched ZNCC by default today. They go back to the plain readings, with the single cell bar of 0.3 and the margin of 0.15 they were tuned with:
+- blur matching picked the hand pick exactly on 28 of 77 tracks, as plain readings did, and within the lenient bounds on 71 against 70, and changed the pick from the plain rule's on 4 of 661 pool tracks;
+- it adds 0.13 ms to a track's evaluation;
+- the agreement test is a gate on whether a candidate agrees with the track, not a ranking of the candidates, so taking away a sharp view's penalty for detail the others lack rarely changes which view passes.
 
-**The leading candidate is a single reference view.** The bitmap is the tile of the one view the measurements rank best:
-- a short self-similarity radius, with a zoom near 1 and a view facing the patch;
-- full coverage, few clipped pixels, and brightness and colour typical of the track;
-- agreement with the other views, by the ZNCC between their bitmaps, so a view that disagrees with them is not chosen.
+Blur matching is applied where it does change the result, to the scores of the observations against the stored bitmap (Part 6). `blur_matched_pairs` and `PairReadings` leave `patch::reference_view`; the pairing rule in `patch::pair_sharpness` stays for member coherence's option.
 
-**Why not a mean.** The photographs differ in exposure and white balance. The ZNCC is blind to those differences, but a mean of the tiles is not. Without a model of each photograph's brightness and colour shift, a mean over differently exposed photographs mixes colours that never appeared together on the surface, and its detail is blurred by every view that does not line up exactly. A single view has neither problem.
+**The stored bitmap is the reference view's render.** The point's patch bitmap is the reference view's `R×R` tile, rendered as the rule read it: through the point's patch re-anchored on the reference observation's keypoint, at the reconstruction's patch resolution `R`, with the sampler the rule in Part 3 picks for that view. It replaces the fused mean in `patch_bitmaps_y_x_rgba` and wherever the bitmap is stored.
+- **Why not a mean.** The photographs differ in exposure and white balance. The ZNCC is blind to those differences, but a mean of the tiles is not. Without a model of each photograph's brightness and colour shift, a mean over differently exposed photographs mixes colours that never appeared together on the surface, and its detail is blurred by every view that does not line up exactly. A single view has neither problem.
+- **What a single view costs.** It keeps that view's noise, and any highlight or occluder the measurements missed. The bitmap also changes all at once when another view comes to rank higher.
+- **The bitmap's blur assessment.** The bitmap's blur assessment ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)), its semi-axes unblurred and after the two probe blurs, is read once per track, on the bitmap, with the reading its own ellipse came from. Every observation's score against the bitmap reads its width off that one assessment (Part 6). Stored beside the bitmap (Part 7), it lets a view added later, by Add Image to Tracks or a bench geometry search, be scored against the stored bitmap with no reading of the other views.
 
-**What a single view costs.** It keeps that view's noise, and any highlight or occluder the measurements missed. The bitmap also changes all at once when another view comes to rank higher.
+**Only the renders are read.** Choosing the reference, the bitmap, its blur assessment and the scores against it all read the views' `R×R` renders at the reconstruction's patch resolution, and nothing else: no grid coarser than `R`, and no pixels of the photograph outside the tile. What the rule picks is then the tile that is stored. (A coarser level in the localizer's search, below, places views; it picks and scores nothing.)
 
-**The alternatives** are kept for comparison in the evaluation (see [Evaluation](#evaluation)):
+**An observation sharper than the reference** is not blurred, and neither is the bitmap: the pair is read plain. Such a view is a candidate to replace the reference, which is a separate operation's job, not a score's.
+
+**The localization template is a separate decision.** An experiment on the ground truths found that a single sharp reference, as the template the localizer aligns views to, places them with a shared offset per track, which bundle adjustment can absorb, and that the registered mean of the best five views in the reference's frame placed them best. Blurring the template made placement no better (Part 6). The direction is a pyramid: localize on a coarser level first, then refine against the sharpest tile, never a blurred one. That is decided with the per-observation confidence that bundle adjustment weights observations by, and does not change the stored bitmap.
+
+**The alternatives** are kept for the consumers that align to a consensus (below), and for comparison in the evaluation (see [Evaluation](#evaluation)):
 - **a weighted mean** of the views, weighted by the measurements (below);
 - **a mean of the few best views**, between the two.
 
 ### Which pairs of views to correlate
 
-Choosing a reference, and checking a mean's members against each other, read the ZNCC between observation bitmaps. The full matrix of `k` views costs `k(k−1)/2` correlations: 300 for the 25-view track, about 5000 for a track of 100. Each is cheap at `R×R`, but the cost grows with the square of the track. Strategies that read fewer pairs:
+Choosing a reference, and checking a mean's members against each other, read the ZNCC between observation bitmaps. The full matrix of `k` views costs `k(k−1)/2` correlations: 300 for the 25-view track, about 5000 for a track of 100. Each is cheap at `R×R`, but the cost grows with the square of the track. Scoring the observations against the stored bitmap costs `k − 1` correlations, the reference's own score being 1 and not computed. Strategies that read fewer pairs for the choice:
 - **Candidates against all.** Rank the views by the Part 4 measurements, which cost one reading per view. Correlate only the top few candidates with every view, `m·k` pairs. The reference is the candidate that agrees best with the rest.
 - **Neighbours in viewing direction.** Views with similar rays and zoom should agree most. Correlating each view with its nearest few gives a sparse graph that still shows a group of views that disagrees with the rest.
-- **Coarse first.** Read all pairs on the coarse grid, which costs a fraction of the full one, and the full grid only for the pairs the decision turns on.
-- **Incremental.** A view added to a track (Add Image to Tracks, a bench geometry search) is correlated with the reference and the top candidates only.
+- **Incremental.** A view added to a track (Add Image to Tracks, a bench geometry search) is correlated with the stored bitmap, and with the top candidates only if it may replace the reference.
 
-Which strategy, and how many candidates, is measured against the full matrix on tracks small enough to compute it.
+Each reads the renders at the patch resolution `R`. Which strategy, and how many candidates, is measured against the full matrix on tracks small enough to compute it.
+
+**Member coherence** decides on the full matrix of its members' pairs, whose median does not depend on any one view. Deciding on each member against the stored bitmap instead would cost `k − 1` correlations, but every verdict would then depend on the reference, which the rule protects only by requiring it to agree with the track. It keeps the full matrix for now, and the two are compared later.
 
 ### The weighted mean
+
+The stored bitmap is the reference view's render, so the weighted mean below no longer computes it. It is kept for the consumers that align views to a consensus of the others, which the localization decision may keep or replace, and for comparison in the evaluation.
 
 Each view's weight in the mean becomes
 
@@ -211,8 +223,8 @@ The exponents `p`, `q` and `k` are measured (see [Evaluation](#evaluation)). `f`
 - The weights keep the existing guard against weight concentrating on one view (the effective view count `1/Σw²` normal refinement checks), so a track whose sharpest view is an outlier does not reduce to that one view.
 - Normal refinement's obliquity prior is `h`. Where normal refinement adopts these weights, `h` replaces its prior rather than being applied a second time.
 
-**Which consumers adopt it.** Each computes a patch bitmap, stored or used as a template, from the views:
-- **The representative fuse** (`fuse_patch_bitmap`, `PatchViewStack::fuse`). This is what is stored in `patch_bitmaps_y_x_rgba` and what the bench and the culls read. It adopts the new method first, because a sharper stored bitmap is useful on its own and changes no geometry.
+**Which consumers adopt it.** Each computes a template from the views:
+- **The representative fuse** (`fuse_patch_bitmap`, `PatchViewStack::fuse`) does not adopt it: what it stores in `patch_bitmaps_y_x_rgba`, which the bench and the culls read, becomes the reference view's render. It changes first, because a sharper stored bitmap is useful on its own and changes no geometry.
 - **The congealing consensus** (keypoint localization), each round's leave-one-out template. Under a single reference, the reference view itself is scored against the next best.
 - **The subpixel refiner's IRLS weights.**
 - **The add-image-to-tracks reference consensus.**
@@ -229,12 +241,15 @@ The exponents `p`, `q` and `k` are measured (see [Evaluation](#evaluation)). `f`
 **Alignment runs against the unblurred template.** Every kernel that places a view (the localizer, the subpixel refiner, congealing, Add Image to Tracks) aligns the view's tile to the template as rendered; a blur-matched ZNCC may be computed afterwards, for the score. On the two ground truths, blurring the reference view to each aligned view before aligning, by the footprint (`c` of `1/sqrt(12)` and `0.5`), by the closest self-similarity ellipse, isotropic or anisotropic, or by any of four blur-matched kernel designs, changed the mean localization error by −0.003 to +0.012 px on seoul_bull and made it worse by 0.01 to 0.05 px on kerry_park, under both the localizer's own search and a coarse-to-fine search. The design that maximised the ZNCC per view, raising it by 0.03, was the worst for position, by 0.03 to 0.05 px. A symmetric blur of the template is a symmetric blur of the correlation surface: it leaves the peak where it is on average and lowers its curvature, so the peak is placed less precisely. Blurring the fused mean changed nothing, since its ellipse is already as long as most views'.
 
 **Where it is read.** Each consumer has an option (plain, blur-matched, or blur-matched above a ratio), and its default was set from its measured cost and benefit:
-- **The reference view's agreement and cell check: on.** It adds 0.13 ms (2%) to a track's evaluation, and agrees with the hand picks on 28 of 77 tracks, as plain readings do ([core/patch/reference-view.md](../core/patch/reference-view.md) § "Blur-matched agreement").
+- **Each observation against the stored bitmap: on.** Every observation of a point is scored against the point's bitmap, the reference view's render, by blur-matched ZNCC. The bitmap's blur assessment is read once per track (Part 5), so only the bitmap is ever blurred, and only for an observation it is sharper than along every direction by the ratio of 1.25, to that observation's semi-minor axis, at most 2 grid px. An observation sharper than the bitmap is read plain, neither tile blurred: it is a candidate to replace the reference, which a separate operation decides. The reference's own score is 1, and is not computed. A track of `k` views costs one assessment, `k − 1` correlations, and a blur of the bitmap for each observation the ratio selects; over all pairs of views the ratio selects about one in twenty, and against the reference, which is chosen for its sharpness, it is measured when this is built. These scores are what membership and scoring read; alignment reads the unblurred bitmap, as above.
+- **The reference view's agreement and cell check: off.** They read it by default today, and go back to plain readings: blur matching added 0.13 ms (2%) to a track's evaluation, picked the hand pick exactly on 28 of 77 tracks as plain readings did, and changed the pick on 4 of 661 tracks ([core/patch/reference-view.md](../core/patch/reference-view.md) § "Blur-matched agreement"). The rule gates on agreement and ranks by the radius, so the plain penalty on a sharp view rarely changes which view passes (Part 5).
 - **Member coherence's decision: off.** It costs 1.18 times the plain run; the relative bar and exoneration already spare most blurred members, so it lowers the eviction of a member blurred by `σ` 2 only from 4.9% to 2.9%, and it moves real verdicts both ways on 0.4% of points ([core/patch/member-coherence-validation.md](../core/patch/member-coherence-validation.md) § "Blur matching").
 
-**Not read by the bench's ZNCC bars or the fuse's IRLS residuals.** A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is the localizer's leave-one-out ZNCC against the IRLS-fused consensus, scored inside the localizer's search; blur-matching it needs each row's leave-one-out template and its self-similarity ellipse, and the localizer returns neither. Whether the bars should switch at all is an open question: blur-matched, they would stop reacting to views that are out of focus (see below and [Open questions](#open-questions)). If they do switch, they are re-measured, and so are the localizer's `min_absolute_zncc` / `min_relative_zncc`. The fuse's IRLS residuals are recomputed against a mean that changes every iteration, so blur-matching them needs the mean's ellipse each time and changes the stored bitmap, which is Part 5's open question; they are left for when Part 5 decides how the bitmap is computed.
+**Not read by the bench's ZNCC bars or the fuse's IRLS residuals.** A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is the localizer's leave-one-out ZNCC against the IRLS-fused consensus, scored inside the localizer's search; blur-matching it needs each row's leave-one-out template and its self-similarity ellipse, and the localizer returns neither. Whether the bars should switch at all is an open question: blur-matched, they would stop reacting to views that are out of focus (see below and [Open questions](#open-questions)). If they do switch, they are re-measured, and so are the localizer's `min_absolute_zncc` / `min_relative_zncc`. With the stored bitmap a single view's render, the fuse no longer computes a mean for it, and its IRLS residuals no longer shape the stored bitmap; a consumer that keeps a weighted mean as its template (Part 5) blur-matches its residuals only if its own measurement says so.
 
-**What it does not correct, and is not meant to.** A view out of focus scores as well, blur-matched, as a sharp one of the same content. Its blur is still in its self-similarity radius, which the reference-view rule and the weights of Part 5 read, and in the plain ZNCC beside it; the bars that should see a focus miss read the plain value.
+**The per-observation covariance.** The confidence that bundle adjustment weights an observation by, `C = k(1 − ZNCC_peak) · J (E_v + E_T) Jᵀ`, was calibrated with the plain ZNCC at the localizer's peak. The ellipse terms `E_v` and `E_T` already carry each tile's blur, so the blur-matched score against the stored bitmap, which leaves out the mismatch the blur alone causes, may be the better reading of `1 − ZNCC`. If the covariance reads it, `k` is calibrated again.
+
+**What it does not correct, and is not meant to.** A view out of focus scores as well, blur-matched, as a sharp one of the same content. Its blur is still in its self-similarity radius, which the reference-view rule and the weights of Part 5 read, in the plain ZNCC beside it, and in the ellipse term of its covariance; the bars that should see a focus miss read the plain value.
 
 ## Part 7: storing the self-similarity radii in the `.sfmr` file
 
@@ -278,6 +293,14 @@ Optional columns, parallel to the other `tracks/*` arrays. Their names follow th
 
 The middle-square and per-cell readings are left out. They are cheap to recompute once a render exists, and nothing proposed here reads them without one.
 
+### The stored bitmap's reference and blur assessment
+
+The stored bitmap is one observation's render (Part 5), so the file also records, per point, optional columns parallel to the other `points3d/*` arrays:
+- **Which observation it is**, as the index of that observation among the point's observations, so a reader can tell the reference's own observation, whose score against the bitmap is 1, and re-render the bitmap from it.
+- **The bitmap's blur assessment**: its self-similarity semi-axes `[major, minor]` in grid px, and the semi-axes after each of the two probe blurs, `(N, 3, 2)` `float32` in all, `NaN` where it was not read. With them a writer scores a view against the stored bitmap, blur-matched, without reading the bitmap again, as Add Image to Tracks does for an added view. The probe widths are recorded in `points3d/metadata.json`, since the assessment is comparable only with one read at the same widths.
+
+Their names are settled with the glossary when this part is built. Like the radii, the assessment describes the bitmap as rendered; a writer that re-renders the bitmap reads it again.
+
 ### When a stored radius stops describing the view
 
 A radius describes one render: the point's patch (centre, normal, axes, half-extents), the observation's keypoint, the image's pose and intrinsics, and the photograph. These change often, and by small amounts. Bundle adjustment moves every pose, and Fit and normal refinement move keypoints and normals.
@@ -300,8 +323,9 @@ The bench can down-weight a view by hand, e.g. a photograph the user sees is out
 
 ### `observation_confidence`
 
-The format already has an optional per-observation column, `tracks/observation_confidence` (`uint8`). Its spec defines it as the observation's photometric sharpness relative to its track's consensus. The bench commit and Add Image to Tracks fill it with the observation's leave-one-out ZNCC against the consensus, which this draft shows is biased against sharp views (§ "The problem, measured"). Two changes keep the column's meaning and its contents in agreement:
+The format already has an optional per-observation column, `tracks/observation_confidence` (`uint8`). Its spec defines it as the observation's photometric sharpness relative to its track's consensus. The bench commit and Add Image to Tracks fill it with the observation's leave-one-out ZNCC against the consensus, which this draft shows is biased against sharp views (§ "The problem, measured"). Three changes keep the column's meaning and its contents in agreement:
 - writers fill it from the stored radius, quantizing `ρ_min / ρ_v`;
+- or from the observation's blur-matched score against the stored bitmap (Part 6), which no longer counts a sharp view's extra detail against it, and its spec is changed to say so;
 - or its spec is changed to say it is the leave-one-out ZNCC.
 
 Which one is part of this work. The radius columns do not depend on the choice.
@@ -316,7 +340,7 @@ Which one is part of this work. The radius columns do not depend on the choice.
   - the fisheye points should gain from the sampler rule and lose nothing to `h`;
   - the oblique points should gain from the sampler rule and be down-weighted by `h`.
 
-**Measures, for each configuration** (current; Part 5's weighted mean in the fuse only; Part 5's single reference in the fuse only; then with Part 6; then each further consumer):
+**Measures, for each configuration** (current; Part 5's single reference as the stored bitmap; then with Part 6's scores against it; Part 5's weighted mean in the fuse only, for comparison; then each further consumer):
 
 1. **Sharpness of the stored bitmap**: its own overlap-reading radius and its gradient energy, per point.
 2. **ZNCC of each view against the patch bitmap, by footprint and by sharpness.** The current pattern, sharp views below blurry ones at equal zoom, should go away.
@@ -328,10 +352,13 @@ Which one is part of this work. The radius columns do not depend on the choice.
 ## Open questions
 
 - **The staleness tolerances** a consumer applies to the stored angle and zoom (Part 7), and the keypoint distance past which a writer clears a stored radius.
-- **`observation_confidence`**: refill it from the radius as the quantized ratio `ρ_min / ρ_v`, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 7).
+- **`observation_confidence`**: refill it from the radius as the quantized ratio `ρ_min / ρ_v` or from the blur-matched score against the stored bitmap, or redefine it as the leave-one-out ZNCC its writers already put in it (Part 7).
 
 - **The bench's ZNCC bars** (Part 6): whether they switch to blur-matched scores, which would stop them reacting to views that are out of focus.
 - **Which pairs to correlate** (Part 5), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
+- **Member coherence on the stored bitmap** (Part 5): whether it keeps deciding on the full matrix of its members' pairs, or decides on each member's blur-matched score against the stored bitmap, which costs `k − 1` correlations but makes every verdict depend on the reference.
+- **The covariance's ZNCC** (Part 6): whether the per-observation covariance reads the plain ZNCC at the localizer's peak or the blur-matched score against the stored bitmap, with `k` calibrated again for the latter.
+- **Replacing the reference.** An observation sharper than the stored bitmap is read plain and is a candidate to replace the reference. Which operation re-runs the choice, and when (an added view, a Fit, a commit), is not decided.
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?
 - **Whether the sampler rule should also consider the view's weight.** A view with a small weight contributes little to the template, so rendering it with the anisotropic sampler may not pay. With the AVX2 kernel an anisotropic render costs 0.65 to 1.55 times what a `BilinearMip` one does, the most on views compressed 10 times or more along one axis, which take the most samples; on a CPU without AVX2 it costs 1.8 to 4 times as much. The question matters most on such views and on such CPUs.
