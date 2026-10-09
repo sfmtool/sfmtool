@@ -3,15 +3,15 @@
 ## Purpose
 
 Find the cameras in a finished reconstruction whose poses are wrong, and
-put them back — using only the 2D tracks, with no reference solve, image
-ordering, or motion model to check against. The ruler is a
-2D structure computed once from the cluster tracks — which images are
-near-duplicate viewpoints of which, measured by keypoint displacement —
-and the tests hold the current poses against it. Because the substrate
-never reads poses, it is computed before any reconstruction exists and
-stays valid through seeding, growth, and refinement; the same structure
-serves pair selection, neighbour initialization, and verification at
-every stage.
+repair them, using only the 2D tracks, with no reference solve, image
+ordering, or motion model to check against. The screens compare the
+current poses with the displacement neighborhood, a 2D structure computed
+once from the cluster tracks that records which images are near-duplicate
+viewpoints of which, measured by keypoint displacement. Because it is
+built without reading poses, it can be computed before any reconstruction
+exists and stays valid through seeding, growth, and refinement; the same
+structure serves pair selection, neighbour initialization, and
+verification at every stage.
 
 ## Interface
 
@@ -129,9 +129,7 @@ a pair's accumulator through a transient dense slot index over
 `DisplacementNeighborhood::from_clusters` refuses `num_images` above the
 dense bound the count matrix uses. Only realized pairs get an
 accumulator, and the index is dropped once the sparse adjacency is
-assembled. Each accumulator runs an `f64` sum per statistic — the
-magnitude and the two vector components — over the same member pairs, and
-one division by the same count finishes all three.
+assembled.
 
 Persistence is the substrate's own: `DisplacementNeighborhood::to_arrays`
 emits parallel per-pair arrays `(i, j, shared count, mean magnitude, mean
@@ -188,7 +186,7 @@ over its neighbours; flag at or above `rotation_threshold_deg`
 usable neighbours is not scored at all: the screen abstains, reporting
 `NaN` and no flag, rather than judging a camera on one measurement.
 
-Two properties are load-bearing. The comparison must be restricted to
+Screen B depends on two properties. The comparison must be restricted to
 low-displacement neighbours: at wider baselines the displacement carries
 parallax and a small-angle rotation model misattributes it (measured
 relative rotation via the homography stays valid only where parallax is
