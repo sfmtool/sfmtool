@@ -1835,7 +1835,7 @@ fn translate_target(args: &Args<'_>) -> Result<super::TranslateTarget, ToolError
                 .to_string(),
         )),
         _ => Err(args.error(
-            "needs either by, a displacement [u, v, n] on the patch's own axes in world units, \
+            "needs either by, a displacement [u, v, n] on the patch's own axes in scene units, \
              or a pixel with the photograph it is in, as observation or camera_image."
                 .to_string(),
         )),

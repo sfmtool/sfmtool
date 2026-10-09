@@ -3974,7 +3974,7 @@ them synonyms**: `translate` moves the centre, `resize` changes the half-length,
 
 `translate_bench_patch` moves the patch, and it takes exactly one of two ways to
 say where it goes: `by`, a displacement `[u, v, n]` on the patch's **own
-orthonormal axes** in world units, or a `pixel` with the photograph it is in,
+orthonormal axes** in scene units, or a `pixel` with the photograph it is in,
 which the centre of the square drawn there lands under. `resize_bench_patch`
 sizes it, again by one of two: a world `half_length` with an optional
 `moved_edge`, or an `edge` (`"+u"`, `"-u"`, `"+v"`, `"-v"`) and a `pixel` with
@@ -4009,7 +4009,7 @@ why the pair is two names rather than one with an optional observation.
 
 **The displacement's normal part and `tilt_bench_patch` name no pixel at
 all**, being the wire's half of the two handles no sighting carries. The
-`n` of a `by` moves the patch that many world units along its own outward
+`n` of a `by` moves the patch that many scene units along its own outward
 normal, positive toward the face the patch shows: a sighting says which ray the
 patch lies along and nothing about how far down it the surface is, and a mixed
 `by` that moves it across the plane and along the normal at once is allowed.

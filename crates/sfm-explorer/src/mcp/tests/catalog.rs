@@ -760,6 +760,15 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
     let mut names: Vec<&str> = Vec::new();
     for spec in tools::catalog() {
         names.push(spec.name);
+        // A length's unit is whatever the scene defines, so prose calls it
+        // scene units and never world units (specs/GLOSSARY.md, "world-space
+        // unit").
+        let text = format!("{} {}", spec.description, spec.schema).to_lowercase();
+        assert!(
+            !text.contains("world units") && !text.contains("world unit "),
+            "{}: says world units where the glossary's word is scene units",
+            spec.name
+        );
         let properties = spec.schema["properties"]
             .as_object()
             .cloned()

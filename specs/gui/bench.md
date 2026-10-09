@@ -55,7 +55,7 @@ pub(crate) enum PatchEdit {
     /// while Track View's Lock is ticked.
     TranslateToPixel { observation: usize, pixel: [f64; 2] },
     /// Move the track-stage patch by this displacement on its own orthonormal
-    /// axes `[u, v, n]`, in world units. Every sighting follows.
+    /// axes `[u, v, n]`, in scene units. Every sighting follows.
     Translate { by: [f64; 3] },
     /// Resize the track-stage patch to this world half-length, holding the far
     /// edge when `moved_edge` names one and the centre when it does not.
@@ -1594,7 +1594,7 @@ normal itself.
 
 `translate_bench_patch` and `resize_bench_patch` each take **exactly one of two
 ways** to say what they want. A translation takes `by`, a displacement
-`[u, v, n]` on the patch's own orthonormal axes in world units, or an
+`[u, v, n]` on the patch's own orthonormal axes in scene units, or an
 `pixel` with the photograph it is in, which its centre lands under. A resize
 takes a world `half_length` with an optional `moved_edge`, or an `edge` and a
 `pixel` with the photograph it is in. The pixel forms are the gestures, and they
@@ -1620,7 +1620,7 @@ the part it acts on cannot act on two different parts.
 
 **The normal part of a `by`, and `tilt_bench_patch`, name no pixel**, because
 no sighting can say what they say. The `n` of a displacement moves the patch
-that many world units along its own outward normal, positive toward the face
+that many scene units along its own outward normal, positive toward the face
 the patch shows: a sighting names the ray the patch lies along and not how far
 down it the surface is, so this is where a patch's depth is settled. A **mixed**
 `by` that moves the patch across its plane and along its normal at once is

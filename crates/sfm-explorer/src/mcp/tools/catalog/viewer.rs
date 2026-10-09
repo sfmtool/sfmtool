@@ -203,7 +203,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                     "maxItems": 4,
                                     "description": "The rotation, WXYZ. Normalised on arrival.",
                                 },
-                                "translation": vec3_schema("The translation, in world units."),
+                                "translation": vec3_schema("The translation, in scene units."),
                                 "scale": {
                                     "type": "number",
                                     "exclusiveMinimum": 0,

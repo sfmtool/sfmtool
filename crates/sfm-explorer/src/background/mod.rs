@@ -222,7 +222,7 @@ impl Operation {
         kind: Kind::Bench,
     };
 
-    /// One track-stage bench surfel projected and photometrically vetted in
+    /// One track-stage bench patch projected and photometrically vetted in
     /// every image of its node (`specs/core/bench/editable-track.md` section
     /// "Searching by geometry").
     ///

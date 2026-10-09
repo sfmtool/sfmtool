@@ -26,7 +26,7 @@ fn wheel_deltas(events: &[egui::Event]) -> Vec<egui::Vec2> {
 /// The bug this exists for: DirectManipulation takes the touchpad contacts
 /// for the whole window, so no wheel event ever reaches egui and every
 /// `ScrollArea` in the app — the scene graph, the camera intrinsics
-/// panel, the point track table — sat still under a two-finger scroll.
+/// panel, Track View — sat still under a two-finger scroll.
 #[test]
 fn a_pan_gesture_becomes_a_trackpad_scroll_event() {
     let events = gesture_scroll_events(

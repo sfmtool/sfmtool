@@ -33,7 +33,7 @@ pub enum GestureEvent {
 /// `DM_POINTERHITTEST`, in the `windows` submodule), so Windows never synthesises a
 /// `WM_MOUSEWHEEL` for a two-finger scroll and egui's own `egui::ScrollArea`s
 /// — the scene graph tree and its inner lists, the camera intrinsics panel,
-/// the point track table, the Action Log's list and the Background panel's
+/// Track View, the Action Log's list and the Background panel's
 /// phase table — receive nothing at all. Feeding the pan back in as a
 /// `Point`-unit `MouseWheel` event is what makes them scroll, and it is the
 /// only thing that does: a panel with no gesture handling of its own is

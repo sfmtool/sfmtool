@@ -69,7 +69,7 @@ pub(crate) enum PatchEdit {
         pixel: [f64; 2],
     },
     /// Move the track-stage patch by this displacement on its own orthonormal
-    /// axes `[u, v, n]`, in world units. Every sighting follows.
+    /// axes `[u, v, n]`, in scene units. Every sighting follows.
     ///
     /// The 3D viewport's centre-dot drag names a tangential displacement, and
     /// the normal-segment drag of either panel a normal one. The normal part is

@@ -432,6 +432,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Record the verdict-tool ruling in the glossary.
 - Effort: low. Risk: medium, because these are wire names.
 
+> _Status (2026-10-09): **Partially done** — "world units" is now "scene units" in the `translate_bench_patch` and `resize_bench_patch` descriptions and arguments, the `by` error text, `set_reconstruction_transform`'s `translation` argument, the doc comments at `mcp/mod.rs`, `mcp/bench.rs` and `bench/geometry.rs`, and the matching passages of `specs/gui/bench.md` and `specs/gui/mcp-server.md`; "bench surfel" is "bench patch" in `background/mod.rs`, and "the point track table" is "Track View" in `platform/`. `the_wire_vocabulary_holds_across_the_catalog` now refuses "world units" in any tool description or schema. Branch `hygiene-fix-1009-15-viewer-retired-words`. Needs decision: the wire renames `degrees` → `angle_deg` on `spin_bench_patch`/`spin_bench_shape` and `set_solo` → `solo_reconstruction`, the test refusing bare unit names (which waits on `degrees`), and the glossary ruling on `set_bench_track_verdict`._
+
 **Share the bench handle reach between the two views**
 - Location: `image_detail/bench_track.rs:102,110,575` and `viewer_3d/bench_track.rs:92,99,676`.
 - Problem: `HANDLE_HIT_RADIUS = 9.0`, `EDGE_HIT_WIDTH = 8.0`, the `nearest` closure and its doc are defined twice. The 3D copy's doc points at the other. `crate::bench` already holds the shared hit helpers.
