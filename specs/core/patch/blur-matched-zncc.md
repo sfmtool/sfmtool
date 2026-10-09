@@ -415,7 +415,7 @@ renders from it, and the rule picks only for a point with none. No operation rep
 Replacing it on the bench, by unpinning the reference row or with *Set as
 reference*, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 5, § "The reference on the bench".
+Part 8, "The reference on the bench".
 
 **The reference's own score is 1** and is not computed: the bitmap is its tile.
 A bitmap that names no reference (a fused mean, one stored before the

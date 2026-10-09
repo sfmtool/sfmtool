@@ -12,7 +12,7 @@
 - the per-view measurements of Part 4 that the reference view needs are built and reported by the bench for every track it evaluates: each view's coverage, clipped share, viewing angle and tilt direction, its median ZNCC with the other views, and its agreement over each ninth of the tile with the cell deficit read from it. So is the reference-view rule of Part 5, which picks one view from those readings and says, for each other view, which test turned it away. Track View marks the pick and shows the readings, and the wire and the Python bindings carry them, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes. The view it picks is the one whose render is stored as the patch bitmap (Part 5);
 - scoring at matched sharpness is **blur-matched ZNCC**: a tile sharper than the other along every direction blurred by a round Gaussian to the other's sharpness along its sharpest direction, read from the tiles rather than the footprint. Where one side is the stored bitmap, only the bitmap is ever blurred, and an observation sharper than the bitmap is read plain (Part 6). Alignment runs against the unblurred template, and the blur-matched ZNCC is computed for the score (Part 6). The kernel is built, and so are its consumers: the scores of observations against the stored bitmap read it, and member coherence can read it and by default does not ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)). The reference-view rule reads plain ZNCC, since blur matching changed its pick on 4 of 661 tracks and agreed with the hand picks no better (Part 6);
 - the `.sfmr` format gains `tracks/reference_observations` in version 12: per point, an `int32` index of its reference observation within its track, `-1` for none, required whenever the file has patch frames. A loader fills it with `-1` for an older file with patch frames (Part 7). That is built ([formats/sfmr-file-format.md](../formats/sfmr-file-format.md) § "Version 11 → Version 12");
-- on the bench, the reference is held by the pin of the row it is on, and the bitmap is the reference's render: a pinned reference row keeps the reference even where the rule would pick another row, unpinning it hands the reference to the rule's pick, and *Set as reference* on a row's context menu makes that row the reference and pins it. Track View shows one *Reference* column, green on the reference where it is the rule's pick and red on it where it is not, and no *Bitmap* column: the *ZNCC* column reads every row against the bitmap, plain and blur-matched, and the `min_zncc` bars judge the plain score (Parts 5 and 6). Not yet built;
+- on the bench, the reference is held by the pin of the row it is on, and the bitmap is the reference's render: a pinned reference row keeps the reference even where the rule would pick another row, unpinning it hands the reference to the rule's pick, and *Set as reference* on a row's context menu makes that row the reference and pins it. Track View shows one *Reference* column, green on the reference where it is the rule's pick and red on it where it is not, and no *Bitmap* column: the *ZNCC* column reads every row against the bitmap, plain and blur-matched, and the `min_zncc` bars judge the plain score (Part 8). Not yet built;
 - every reading that picks the reference and scores the observations is taken on the renders at the reconstruction's patch resolution `R`, and on nothing outside them: no coarser grid, and no pixels of the photograph beyond the tile (Part 5).
 
 Not decided: the template the localizer aligns views to (a pyramid that refines against the sharpest tile is the direction; Part 5); the functional forms of the weights; whether member coherence decides on the full matrix of pairs or on each member against the stored bitmap (Part 5); and whether the per-observation covariance reads the plain or the blur-matched ZNCC (Part 6). See [Open questions](#open-questions).
@@ -21,8 +21,8 @@ Amends:
 - [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): the congealing consensus
 - [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md): the representative fuse
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
-- [core/bench/editable-track.md](../core/bench/editable-track.md): the reference held by its row's pin, *Set as reference*, and the ZNCC bars (`min_zncc`, whole and middle) judging the plain score against the bitmap, re-measured (Parts 5 and 6)
-- [gui/track-view.md](../gui/track-view.md) and [gui/mcp-server.md](../gui/mcp-server.md): the *Reference* column's marks, no *Bitmap* column, the *ZNCC* column against the bitmap, and the wire's reference fields (Parts 5 and 6)
+- [core/bench/editable-track.md](../core/bench/editable-track.md): the reference held by its row's pin, *Set as reference*, and the ZNCC bars (`min_zncc`, whole and middle) judging the plain score against the bitmap, re-measured (Part 8)
+- [gui/track-view.md](../gui/track-view.md) and [gui/mcp-server.md](../gui/mcp-server.md): the *Reference* column's marks, no *Bitmap* column, the *ZNCC* column against the bitmap, and the wire's reference fields (Part 8)
 - [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`, and the bitmap's blur assessment in `points3d/` (Part 7)
 
 ## Purpose
@@ -184,29 +184,9 @@ Blur matching is applied where it does change the result, to the scores of the o
 
 **Only the renders are read.** Choosing the reference, the bitmap, its blur assessment and the scores against it all read the views' `R×R` renders at the reconstruction's patch resolution, and nothing else: no grid coarser than `R`, and no pixels of the photograph outside the tile. What the rule picks is then the tile that is stored. (A coarser level in the localizer's search, below, places views; it picks and scores nothing.)
 
-**An observation sharper than the reference** is not blurred, and neither is the bitmap: the pair is read plain. Such a view is a candidate to replace the reference, which a score does not do; on the bench the person does it, with *Set as reference* or by unpinning the reference row (§ "The reference on the bench").
+**An observation sharper than the reference** is not blurred, and neither is the bitmap: the pair is read plain. Such a view is a candidate to replace the reference, which a score does not do; on the bench the person does it, with *Set as reference* or by unpinning the reference row (Part 8).
 
 **The localization template is a separate decision.** An experiment on the ground truths found that a single sharp reference, as the template the localizer aligns views to, places them with a shared offset per track, which bundle adjustment can absorb, and that the registered mean of the best five views in the reference's frame placed them best. Blurring the template made placement no better (Part 6). The direction is a pyramid: localize on a coarser level first, then refine against the sharpest tile, never a blurred one. That is decided with the per-observation confidence that bundle adjustment weights observations by, and does not change the stored bitmap.
-
-### The reference on the bench
-
-On the bench, the reference is the observation the track's bitmap is rendered from, and only the rule or the person changes it. Which of the two decides is the pin of the row the reference is on:
-- **A pinned reference row keeps the reference.** While the row holding the reference is pinned, every render renders from it, whichever row the rule would pick. A track put on the bench from a point has every row pinned, so the point's stored reference stays until the person lets it go.
-- **An unpinned reference row hands it to the rule.** Unpinning the row holding the reference moves the reference to the rule's current pick: the bitmap is rendered from that row and every row is scored against it again. While the reference row is unpinned the reference follows the rule's pick at every evaluation, so the two can differ only on a pinned row. A track built on the bench, as by Track at Pixel or a cluster, starts with no pins, and its reference is the rule's pick.
-- **Set as reference.** A row's context menu in Track View offers *Set as reference*, on any row that is `in` and has a keypoint. It makes that row the reference, pins it, renders the bitmap from it and scores every row against the new bitmap. Pinning a row by itself does not make it the reference.
-- **Rows the reference cannot stay on.** Deleting, splitting off or turning out the row holding the reference leaves the track with none, and the next render takes the rule's pick, as today.
-- **A commit** saves the reference the track holds, as today.
-
-A display-only pick, one the viewer made to render a file's display bitmaps for a point the file stores no reference for, reaches the bench like a stored reference and is held the same way.
-
-**What Track View shows.** One *Reference* column marks the reference and the rule's view of it, and the *Bitmap* column is removed (the scores move to the *ZNCC* column, Part 6):
-- **The reference is the rule's pick:** the reference row's cell is green.
-- **It is not:** the reference row's cell is red, and the rule's pick is marked as the pick in its own cell, in a neutral colour. Unpinning the reference row, or *Set as reference* on the pick, accepts the pick.
-- **No reference:** a track whose bitmap is a fused mean, or which has no bitmap yet, marks only the rule's pick.
-
-The other rows keep the rule's notes on why it passed them over (less sharp, the viewing angle, agreement), read against the rule's pick as today.
-
-**On the wire and in the bindings.** `reference_observation` names the reference in use, the row the bitmap is rendered from (today's `bitmap_observation`), and a second field names the rule's pick; `bitmap_observation` is removed. The second field's name is settled with the glossary when this is built.
 
 **The alternatives** are kept for the consumers that align to a consensus (below), and for comparison in the evaluation (see [Evaluation](#evaluation)):
 - **a weighted mean** of the views, weighted by the measurements (below);
@@ -266,12 +246,7 @@ The exponents `p`, `q` and `k` are measured (see [Evaluation](#evaluation)). `f`
 - **The reference view's agreement and cell check: off.** They read plain readings, as they did before blur matching was tried there: blur matching added 0.13 ms (2%) to a track's evaluation, picked the hand pick exactly on 28 of 77 tracks as plain readings did, and changed the pick on 4 of 661 tracks ([core/patch/reference-view.md](../core/patch/reference-view.md) § "Why the agreement is read plain"). The rule gates on agreement and ranks by the radius, so the plain penalty on a sharp view rarely changes which view passes (Part 5).
 - **Member coherence's decision: off.** It costs 1.18 times the plain run; the relative bar and exoneration already spare most blurred members, so it lowers the eviction of a member blurred by `σ` 2 only from 4.9% to 2.9%, and it moves real verdicts both ways on 0.4% of points ([core/patch/member-coherence-validation.md](../core/patch/member-coherence-validation.md) § "Blur matching").
 
-**The bench's ZNCC column and bars read the bitmap.** A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is today the localizer's leave-one-out ZNCC against the IRLS-fused consensus of the other rows, scored inside the localizer's search. It becomes the row's score against the stored bitmap, the comparison every other score on the bench now makes:
-- **The column** shows the plain and the blur-matched score, as the *Bitmap* column does today (`50% → 53%`), and the *Bitmap* column is removed (Part 5). The reference row reads 100%.
-- **The bars judge the plain score.** It still falls for a view that is out of focus, which the bars are there to catch, where the blur-matched score would not. The bars' thresholds were set on the consensus score and are measured again on the plain score against the bitmap.
-- **The middle score and the 3×3 cells** are read against the bitmap too, so a row's ZNCC readings describe one comparison.
-- **Unchanged:** the localizer still aligns each view to its leave-one-out consensus template, and its own gates (`min_absolute_zncc` / `min_relative_zncc`) still read its own score. Only the number the bench shows and judges changes.
-- **A row with no bitmap to read against**, before the first render, shows no score, and the bars leave its verdict where it is.
+**The bench's ZNCC column and bars** read the stored bitmap, as Part 8 describes.
 
 **Not read by the fuse's IRLS residuals.** With the stored bitmap a single view's render, the fuse no longer computes a mean for it, and its IRLS residuals no longer shape the stored bitmap; a consumer that keeps a weighted mean as its template (Part 5) blur-matches its residuals only if its own measurement says so.
 
@@ -370,6 +345,39 @@ The format already has an optional per-observation column, `tracks/observation_c
 
 Which one is part of this work. The radius columns do not depend on the choice.
 
+## Part 8: the reference on the bench
+
+Parts 5 to 7 store one view's render as the point's bitmap, score every observation against it, and record in the file which observation it is. This part decides how the bench, where a person edits a track, holds that reference and replaces it, and what Track View shows of it. Not yet built.
+
+### Holding and replacing the reference
+
+On the bench, the reference is the observation the track's bitmap is rendered from, and only the rule or the person changes it. Which of the two decides is the pin of the row the reference is on:
+- **A pinned reference row keeps the reference.** While the row holding the reference is pinned, every render renders from it, whichever row the rule would pick. A track put on the bench from a point has every row pinned, so the point's stored reference stays until the person lets it go.
+- **An unpinned reference row hands it to the rule.** Unpinning the row holding the reference moves the reference to the rule's current pick: the bitmap is rendered from that row and every row is scored against it again. While the reference row is unpinned the reference follows the rule's pick at every evaluation, so the two can differ only on a pinned row. A track built on the bench, as by Track at Pixel or a cluster, starts with no pins, and its reference is the rule's pick.
+- **Set as reference.** A row's context menu in Track View offers *Set as reference*, on any row that is `in` and has a keypoint. It makes that row the reference, pins it, renders the bitmap from it and scores every row against the new bitmap. Pinning a row by itself does not make it the reference.
+- **Rows the reference cannot stay on.** Deleting, splitting off or turning out the row holding the reference leaves the track with none, and the next render takes the rule's pick, as today.
+- **A commit** saves the reference the track holds, as today.
+
+A display-only pick, one the viewer made to render a file's display bitmaps for a point the file stores no reference for, reaches the bench like a stored reference and is held the same way.
+
+**What Track View shows.** One *Reference* column marks the reference and the rule's view of it, and the *Bitmap* column is removed (the scores move to the *ZNCC* column, below):
+- **The reference is the rule's pick:** the reference row's cell is green.
+- **It is not:** the reference row's cell is red, and the rule's pick is marked as the pick in its own cell, in a neutral colour. Unpinning the reference row, or *Set as reference* on the pick, accepts the pick.
+- **No reference:** a track whose bitmap is a fused mean, or which has no bitmap yet, marks only the rule's pick.
+
+The other rows keep the rule's notes on why it passed them over (less sharp, the viewing angle, agreement), read against the rule's pick as today.
+
+**On the wire and in the bindings.** `reference_observation` names the reference in use, the row the bitmap is rendered from (today's `bitmap_observation`), and a second field names the rule's pick; `bitmap_observation` is removed. The second field's name is settled with the glossary when this is built.
+
+### The ZNCC column and bars read the bitmap
+
+A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is today the localizer's leave-one-out ZNCC against the IRLS-fused consensus of the other rows, scored inside the localizer's search. It becomes the row's score against the stored bitmap, the comparison every other score on the bench now makes:
+- **The column** shows the plain and the blur-matched score, as the *Bitmap* column does today (`50% → 53%`), and the *Bitmap* column is removed (above). The reference row reads 100%.
+- **The bars judge the plain score.** It still falls for a view that is out of focus, which the bars are there to catch, where the blur-matched score would not. The bars' thresholds were set on the consensus score and are measured again on the plain score against the bitmap.
+- **The middle score and the 3×3 cells** are read against the bitmap too, so a row's ZNCC readings describe one comparison.
+- **Unchanged:** the localizer still aligns each view to its leave-one-out consensus template, and its own gates (`min_absolute_zncc` / `min_relative_zncc`) still read its own score. Only the number the bench shows and judges changes.
+- **A row with no bitmap to read against**, before the first render, shows no score, and the bars leave its verdict where it is.
+
 ## Evaluation
 
 **Cases:**
@@ -396,7 +404,7 @@ Which one is part of this work. The radius columns do not depend on the choice.
 - **Which pairs to correlate** (Part 5), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
 - **Member coherence on the stored bitmap** (Part 5): whether it keeps deciding on the full matrix of its members' pairs, or decides on each member's blur-matched score against the stored bitmap, which costs `k − 1` correlations but makes every verdict depend on the reference.
 - **The covariance's ZNCC** (Part 6): whether the per-observation covariance reads the plain ZNCC at the localizer's peak or the blur-matched score against the stored bitmap, with `k` calibrated again for the latter.
-- **Replacing the reference off the bench.** On the bench the reference is replaced by unpinning its row or by *Set as reference* (Part 5, § "The reference on the bench"); neither is built yet. Off the bench no render replaces a defined reference, so the rule's pick an evaluation reports can differ from the reference in use; whether a command-line operation (an added view, a refit, `--add-patch-bitmaps`) should offer to replace it is not decided. The standing specs that say no operation replaces it yet are [reference-view.md](../core/patch/reference-view.md) § "The stored bitmap", [editable-track.md](../core/bench/editable-track.md) § "The stored bitmap's reference" and [blur-matched-zncc.md](../core/patch/blur-matched-zncc.md) § "Scores against the stored bitmap". The standing specs that say no operation does it yet are [reference-view.md](../core/patch/reference-view.md) § "The stored bitmap" and § "Non-goals", [editable-track.md](../core/bench/editable-track.md) § "The stored bitmap's reference" and [blur-matched-zncc.md](../core/patch/blur-matched-zncc.md) § "Scores against the stored bitmap".
+- **Replacing the reference off the bench.** On the bench the reference is replaced by unpinning its row or by *Set as reference* (Part 8); neither is built yet. Off the bench no render replaces a defined reference, so the rule's pick an evaluation reports can differ from the reference in use; whether a command-line operation (an added view, a refit, `--add-patch-bitmaps`) should offer to replace it is not decided. The standing specs that say no operation replaces it yet are [reference-view.md](../core/patch/reference-view.md) § "The stored bitmap", [editable-track.md](../core/bench/editable-track.md) § "The stored bitmap's reference" and [blur-matched-zncc.md](../core/patch/blur-matched-zncc.md) § "Scores against the stored bitmap". The standing specs that say no operation does it yet are [reference-view.md](../core/patch/reference-view.md) § "The stored bitmap" and § "Non-goals", [editable-track.md](../core/bench/editable-track.md) § "The stored bitmap's reference" and [blur-matched-zncc.md](../core/patch/blur-matched-zncc.md) § "Scores against the stored bitmap".
 - **The forms of `f` and `g`.** Whether power laws in `φ_min / φ_v` and `ρ_min / ρ_v` are enough, or whether a view should drop out entirely below some ratio.
 - **Per-axis weighting.** On a directional texture a view may be sharp across the grain and blurry along it. Weighting each axis of the template separately, per pixel in the Fourier sense or by a directional blur, is possible but much more machinery. Is the isotropic weight enough?
 - **Whether the sampler rule should also consider the view's weight.** A view with a small weight contributes little to the template, so rendering it with the anisotropic sampler may not pay. With the AVX2 kernel an anisotropic render costs 0.65 to 1.55 times what a `BilinearMip` one does, the most on views compressed 10 times or more along one axis, which take the most samples; on a CPU without AVX2 it costs 1.8 to 4 times as much. The question matters most on such views and on such CPUs.

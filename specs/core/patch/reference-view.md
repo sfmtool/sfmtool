@@ -423,7 +423,7 @@ the row the rule would pick. No operation replaces a defined reference with the 
 Replacing it on the bench, by unpinning the reference row or with *Set as
 reference*, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 5, § "The reference on the bench".
+Part 8, "The reference on the bench".
 
 Every operation that renders the stored bitmap renders it this way:
 

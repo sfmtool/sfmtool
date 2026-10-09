@@ -1566,7 +1566,7 @@ No operation replaces a defined reference with the rule's current pick.
 Replacing it on the bench, by unpinning the reference row or with *Set as
 reference*, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 5, § "The reference on the bench".
+Part 8, "The reference on the bench".
 
 A commit writes `TrackPayload::reference` as the point's reference
 observation, with or without a bitmap: with one, it is the row the bitmap is
