@@ -155,10 +155,7 @@ pub fn constellation_seeds(
         .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
     let camera = &cameras[image as usize];
     let search = SearchOptions {
-        constellation: ConstellationParams {
-            min_inliers: options.min_inliers,
-            ..ConstellationParams::DEFAULT
-        },
+        constellation: ConstellationParams::DEFAULT,
         radius_px: radius_for_feature_count(
             camera.width,
             camera.height,

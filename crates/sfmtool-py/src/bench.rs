@@ -2027,7 +2027,9 @@ fn search_descriptors(
             min_correspondences,
             one_hit_per_image,
             same_image_ratio,
-            min_inliers,
+            // Not read: the search writes its own `min_inliers` below into
+            // the params it runs the query with.
+            min_inliers: QUERY_DEFAULTS.min_inliers,
             max_scale,
             // The search's centre is the observation's own pixel, and the query
             // takes it from the radius it is given, so the default weighted

@@ -828,10 +828,7 @@ pub(super) fn constellation(
 
     // Constellation search, then lateral searches from the best finds.
     let search_options = |radius: f32| SearchOptions {
-        constellation: ConstellationParams {
-            min_inliers: opts.min_inliers,
-            ..ConstellationParams::DEFAULT
-        },
+        constellation: ConstellationParams::DEFAULT,
         radius_px: radius,
         min_inliers: opts.min_inliers,
     };

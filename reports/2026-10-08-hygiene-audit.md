@@ -314,6 +314,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Drop the override.
 - Effort: low. Risk: low.
 
+> _Status (2026-10-09): **Partially done** — dropped the dead override: `nearby/constellation.rs` and `track_at_pixel/members.rs` now pass `ConstellationParams::DEFAULT` and set the bar only on `SearchOptions::min_inliers`, and the `sfmtool-py` `search_descriptors` binding fills the unread field from the query defaults instead of its `min_inliers` argument (which still sets `SearchOptions::min_inliers`, so no public signature changed). The viewer at `sfm-explorer/src/bench.rs` already used `..SearchOptions::default()` and needed no change. Still open: the shared `DEFAULT_CONSTELLATION_FEATURES` constant and a `SearchOptions::sized_for` constructor. Branch `hygiene-fix-1009-10-constellation-min-inliers`._
+
 **Move the shared bench inputs out of `track_at_pixel`, and reuse its helpers**
 - Location:
   - `crates/sfmtool-core/src/bench/track_at_pixel/{neighbourhood,finish}.rs`, imported by 9 `nearby/` files.
