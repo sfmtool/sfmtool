@@ -301,7 +301,7 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
             };
             format!(
                 "{:?}",
-                localize_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&some_kps), &params)
+                localize_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&some_kps), None, &params)
             )
         };
         let refine = |sampler| {
@@ -312,7 +312,7 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
             };
             format!(
                 "{:?}",
-                refine_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&some_kps), &params)
+                refine_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&some_kps), None, &params)
             )
         };
         let members = |sampler| {

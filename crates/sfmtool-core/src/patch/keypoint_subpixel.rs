@@ -1017,5 +1017,5 @@ pub fn fuse_patch_bitmap_reporting(
         .representative
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

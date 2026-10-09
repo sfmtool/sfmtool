@@ -646,7 +646,14 @@ fn the_sub_pixel_refiner_stores_the_fused_mean_for_a_last_fallback_pick() {
         render_bitmaps: true,
         ..Default::default()
     };
-    let out = refine_patch_keypoints(&patch, &views, &images, Some(&anchors(&keypoints)), &params);
+    let out = refine_patch_keypoints(
+        &patch,
+        &views,
+        &images,
+        Some(&anchors(&keypoints)),
+        None,
+        &params,
+    );
     // The rule runs over the views the refiner kept, at their final keypoints.
     let render = render_reference(
         &patch,

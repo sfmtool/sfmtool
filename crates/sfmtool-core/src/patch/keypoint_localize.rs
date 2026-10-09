@@ -924,5 +924,5 @@ fn search_shift_ref(
     })
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

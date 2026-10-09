@@ -2602,7 +2602,7 @@ fn fit_directly(
     let views = scene.views();
     let options = FitOptions::default();
     let localized =
-        localize_patch_keypoints(frame, &views, view_set, Some(seeds), &options.localize);
+        localize_patch_keypoints(frame, &views, view_set, Some(seeds), None, &options.localize);
     let refined = refine_patch_keypoints(
         frame,
         &views,
@@ -2614,6 +2614,7 @@ fn fit_directly(
                 .map(|&k| Some(k))
                 .collect::<Vec<_>>(),
         ),
+        None,
         &options.refine,
     );
     (localized, refined)

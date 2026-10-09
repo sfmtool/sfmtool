@@ -193,7 +193,8 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
             resolution: R,
             ..KeypointSubpixelParams::default()
         };
-        refine_patch_cloud_keypoints(&cloud, &views, &view_sets, None, &params, progress).is_err()
+        refine_patch_cloud_keypoints(&cloud, &views, &view_sets, None, None, &params, progress)
+            .is_err()
     });
     check("member coherence", &|progress, done| {
         let params = MemberCoherenceParams {
