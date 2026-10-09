@@ -369,8 +369,8 @@ class TestTheEditableTrack:
         # evaluation searches and how far a fit may move a sighting.
         _, track = create_track(Bench(), edited, long_track_point)
         assert track.thresholds == {
-            "min_zncc": 0.7,
-            "min_zncc_middle": 0.7,
+            "min_zncc": 0.65,
+            "min_zncc_middle": 0.5,
             "max_shift_px": 6.0,
             "max_zncc_self_similarity_radius": 2.5,
             "max_projection_error_px": 3.0,

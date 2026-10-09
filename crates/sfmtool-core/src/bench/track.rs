@@ -841,7 +841,8 @@ pub struct Origin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
     /// The ZNCC an observation has to reach: the achieved template ZNCC at the
-    /// cluster stage, the leave-one-out ZNCC at the track stage.
+    /// cluster stage, the plain score against the stored bitmap
+    /// ([`TrackMeasurement::zncc`]) at the track stage.
     pub min_zncc: f64,
     /// The middle ZNCC an observation has to reach: [`ClusterMeasurement::zncc_middle`]
     /// at the cluster stage and [`TrackMeasurement::zncc_middle`] at the track
@@ -924,19 +925,24 @@ pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 /// The bench's default [`Thresholds::min_zncc`].
 ///
 /// Below the cluster refinement's own `min_zncc` (0.85), which stays the batch
-/// pass's bar. The bench judges both stages by the one bar, and the track
-/// stage's leave-one-out ZNCC, scored against a consensus the sighting is left
-/// out of, reads lower on a correct sighting than the refinement's score does
-/// after it has fitted a whole affine warp.
-pub const BENCH_MIN_ZNCC: f64 = 0.7;
+/// pass's bar. At the track stage it judges the plain score against the
+/// stored bitmap, one view's render, which reads lower on a correct sighting
+/// than a score against a consensus does. Measured on 465 tracks of eight
+/// reconstructions, with two wrong views planted in each, `0.65` (with a
+/// middle bar of `0.5`) keeps 93.4% of the members and turns out 94.9% of the
+/// planted views, where `0.7` and `0.7` on the leave-one-out ZNCC the bars
+/// judged before kept 90.9% and turned out 78.6%.
+pub const BENCH_MIN_ZNCC: f64 = 0.65;
 
 /// The bench's default [`Thresholds::min_zncc_middle`].
 ///
 /// No higher than [`BENCH_MIN_ZNCC`]: the middle reading covers a quarter of
-/// the samples, so on a correct sighting it scatters more and reads a little
-/// lower than the whole-patch one, and a middle bar above the whole bar would
-/// turn out correct sightings the whole bar keeps.
-pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
+/// the samples, so on a correct sighting it scatters more and reads lower
+/// than the whole-patch one (the members' 5th percentile against the bitmap
+/// was 0.52, against 0.66 for the whole), and a middle bar near the whole bar
+/// would turn out correct sightings the whole bar keeps. At `0.5` only 8 of
+/// 928 planted wrong views fail it alone.
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.5;
 
 /// The bench's default [`Thresholds::max_zncc_self_similarity_radius`], in
 /// patch-grid px.

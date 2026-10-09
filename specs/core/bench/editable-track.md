@@ -185,8 +185,8 @@ pub struct Thresholds {
 // projection error bar in source-image px.
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
-pub const BENCH_MIN_ZNCC: f64 = 0.7;
-pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
+pub const BENCH_MIN_ZNCC: f64 = 0.65;
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.5;
 pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
 
 // Putting one on the bench.
@@ -2772,11 +2772,30 @@ other five are the bench's own. `max_shift_px` is
 it is also the radius a reading searches and the bound on a fit's walk
 (§ "The fit's walk is bounded by the person's bar"). `min_zncc` is
 `BENCH_MIN_ZNCC`, below the cluster refinement's `0.85`, because the one bar
-judges both stages and the track stage's leave-one-out ZNCC, scored against a
-consensus the sighting is left out of, reads lower on a correct sighting than
-the refinement's score after it has fitted a whole affine warp; the batch pass
-keeps its `0.85`. `min_zncc_middle` is `BENCH_MIN_ZNCC_MIDDLE` (§ "The middle
-ZNCC"). `max_zncc_self_similarity_radius` is
+judges both stages and the track stage's score, read against one view's
+render, reads lower on a correct sighting than the refinement's score after it
+has fitted a whole affine warp; the batch pass keeps its `0.85`.
+`min_zncc_middle` is `BENCH_MIN_ZNCC_MIDDLE` (§ "The middle ZNCC").
+
+**How the ZNCC bars were measured.** When the bars moved from the
+leave-one-out ZNCC to the plain score against the bitmap they were measured
+again on 465 tracks of at least four observations, sampled at random from the
+two ground truths and six other reconstructions (kerry480, a badlands
+panorama, a mossy railing, a gallery sculpture, the dino toy and a Christmas
+tree), each with its bitmap rendered from the reference-view rule's pick. Two
+wrong views were planted in each track, in images other than the
+reference's: the keypoint of another point 15 to 60 px from the true one, and
+the true keypoint moved 8 to 30 px. The old bars, `0.7` and `0.7` on the
+leave-one-out reading, kept 90.9% of the 3,307 members (reference rows left
+out) and turned out 78.6% of the 928 planted views; the same bars on the plain
+score kept only 84.8% of the members. At `0.65` and `0.5` on the plain score
+the bars keep 93.4% and turn out 94.9%, more on every reconstruction; the
+leave-one-out reading recovered many displaced views at its correlation peak,
+which the score at the keypoint does not. The middle bar sits well below the
+whole one because the members' middle readings run lower in the tail (5th
+percentile 0.52, against 0.66 for the whole). Members of tracks whose views
+differ most read lowest against one view: the dino toy keeps 73% and the
+seoul_bull ground truth 85%. `max_zncc_self_similarity_radius` is
 `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, the keypoint localizer's default
 member bar, which the bench applies in its painting rather than in the kernel
 (§ "The ZNCC self-similarity radius"). `max_projection_error_px` is
@@ -2785,8 +2804,8 @@ earlier default carries that default until someone moves it.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `min_zncc` | `0.7` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. `BENCH_MIN_ZNCC`, not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
-| `min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
+| `min_zncc` | `0.65` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the plain score against the stored bitmap at the track stage. `BENCH_MIN_ZNCC`, not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
+| `min_zncc_middle` | `0.5` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
 | `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, to the point's projection, is judged by `max_projection_error_px`. |
 | `max_zncc_self_similarity_radius` | `2.5` | The largest ZNCC self-similarity radius an observation's own tile may have, in patch-grid px: `zncc_self_similarity_radius` of the cluster measurement at the cluster stage and of the track measurement at the track stage. `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The radius reads at most `3`, meaning "3 or more", so a bar of `3` or more turns nothing out; a row with no reading clears it and a `NaN` fails it (§ "The ZNCC self-similarity radius"). |
 | `max_projection_error_px` | `3.0` | The largest reprojection error an observation may have, in source-image px: `reprojection_error` where the track is triangulated and `projection_offset_px` before it is. Track stage only. It judges the point as much as the sighting: a mis-triangulated point fails it on every row, the observations that would move the point back among them. `BENCH_MAX_PROJECTION_ERROR_PX`; `0` turns it off, a row with no reading clears it and a `NaN` fails it. The track-at-pixel cascade builds its tracks with it off. |
