@@ -1,5 +1,9 @@
 # Keypoint localization — consensus-basis cap (basis congealing + tail registration)
 
+Removing the consensus, and with it this cap, is proposed in
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+Part 9.
+
 ## Motivation
 
 Keypoint localization refines one 3D point's image position in every view that

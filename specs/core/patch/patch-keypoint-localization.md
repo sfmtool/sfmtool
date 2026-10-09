@@ -11,7 +11,10 @@ refinement step of the [sift-based → patch-based reconstruction
 pipeline](sift-to-patch-reconstruction.md). The keypoints it produces are defined
 geometrically in [sfmr-file-format.md](../../formats/sfmr-file-format.md)
 ("Observation source"); this spec is one way to obtain them, not part of their
-definition.
+definition. Aligning every view to the point's reference render in place of the
+consensus, and removing congealing, is proposed in
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+Part 9.
 
 ## Problem
 

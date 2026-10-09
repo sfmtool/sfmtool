@@ -13,13 +13,15 @@
 - scoring at matched sharpness is **blur-matched ZNCC**: a tile sharper than the other along every direction blurred by a round Gaussian to the other's sharpness along its sharpest direction, read from the tiles rather than the footprint. Where one side is the stored bitmap, only the bitmap is ever blurred, and an observation sharper than the bitmap is read plain (Part 6). Alignment runs against the unblurred template, and the blur-matched ZNCC is computed for the score (Part 6). The kernel is built, and so are its consumers: the scores of observations against the stored bitmap read it, and member coherence can read it and by default does not ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)). The reference-view rule reads plain ZNCC, since blur matching changed its pick on 4 of 661 tracks and agreed with the hand picks no better (Part 6);
 - the `.sfmr` format gains `tracks/reference_observations` in version 12: per point, an `int32` index of its reference observation within its track, `-1` for none, required whenever the file has patch frames. A loader fills it with `-1` for an older file with patch frames (Part 7). That is built ([formats/sfmr-file-format.md](../formats/sfmr-file-format.md) § "Version 11 → Version 12");
 - on the bench, the reference is held by the pin of the row it is on, and the bitmap is the reference's render: a pinned reference row keeps the reference even where the rule would pick another row, unpinning it hands the reference to the rule's pick, and *Set as reference* on a row's context menu makes that row the reference and pins it. Track View shows one *Reference* column, green on the reference where it is the rule's pick and red on it where it is not, and no *Bitmap* column: the *ZNCC* column reads every row against the bitmap, plain and blur-matched, and the `min_zncc` bars judge the plain score (Part 8). That is built, with the bars measured again on the plain score against the bitmap ([core/bench/editable-track.md](../core/bench/editable-track.md) § "The stored bitmap's reference" and § "Parameters", [gui/track-view.md](../gui/track-view.md));
+- every kernel that places a view aligns it to the point's reference render, the stored bitmap, and to nothing else: leave-one-out congealing and its consensus template are removed. The reference observation's own keypoint is the anchor and is not moved by the alignment (Part 9). Not yet built;
 - every reading that picks the reference and scores the observations is taken on the renders at the reconstruction's patch resolution `R`, and on nothing outside them: no coarser grid, and no pixels of the photograph beyond the tile (Part 5).
 
-Not decided: the template the localizer aligns views to (a pyramid that refines against the sharpest tile is the direction; Part 5); the functional forms of the weights; whether member coherence decides on the full matrix of pairs or on each member against the stored bitmap (Part 5); and whether the per-observation covariance reads the plain or the blur-matched ZNCC (Part 6). See [Open questions](#open-questions).
+Not decided: whether the alignment searches a coarser level of the reference first, which Part 9's measurement decides; the functional forms of the weights; whether member coherence decides on the full matrix of pairs or on each member against the stored bitmap (Part 5); and whether the per-observation covariance reads the plain or the blur-matched ZNCC (Part 6). See [Open questions](#open-questions).
 
 Amends:
-- [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): the congealing consensus
-- [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md): the representative fuse
+- [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md): congealing replaced by alignment to the reference render, and [core/patch/keypoint-localization-consensus-basis.md](../core/patch/keypoint-localization-consensus-basis.md) removed with it (Part 9)
+- [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md): the representative fuse, and refinement against the reference render (Part 9)
+- [core/reconstruction/add-image-to-tracks.md](../core/reconstruction/add-image-to-tracks.md): a new view aligned to the stored bitmap (Part 9)
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the reference held by its row's pin, *Set as reference*, and the ZNCC bars (`min_zncc`, whole and middle) judging the plain score against the bitmap, re-measured (Part 8)
 - [gui/track-view.md](../gui/track-view.md) and [gui/mcp-server.md](../gui/mcp-server.md): the *Reference* column's marks, no *Bitmap* column, the *ZNCC* column against the bitmap, and the wire's reference fields (Part 8)
@@ -186,7 +188,7 @@ Blur matching is applied where it does change the result, to the scores of the o
 
 **An observation sharper than the reference** is not blurred, and neither is the bitmap: the pair is read plain. Such a view is a candidate to replace the reference, which a score does not do; on the bench the person does it, with *Set as reference* or by unpinning the reference row (Part 8).
 
-**The localization template is a separate decision.** An experiment on the ground truths found that a single sharp reference, as the template the localizer aligns views to, places them with a shared offset per track, which bundle adjustment can absorb, and that the registered mean of the best five views in the reference's frame placed them best. Blurring the template made placement no better (Part 6). The direction is a pyramid: localize on a coarser level first, then refine against the sharpest tile, never a blurred one. That is decided with the per-observation confidence that bundle adjustment weights observations by, and does not change the stored bitmap.
+**The localization template** is the reference render, as Part 9 decides. An experiment on the ground truths found that a single sharp reference, as the template the localizer aligns views to, places them with a shared offset per track, which bundle adjustment can absorb, and that the registered mean of the best five views in the reference's frame placed them best. Blurring the template made placement no better (Part 6). The direction is a pyramid: localize on a coarser level first, then refine against the sharpest tile, never a blurred one. Part 9 takes the reference render as the template; the coarser level is measured there.
 
 **The alternatives** are kept for the consumers that align to a consensus (below), and for comparison in the evaluation (see [Evaluation](#evaluation)):
 - **a weighted mean** of the views, weighted by the measurements (below);
@@ -379,6 +381,42 @@ A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is t
 - **Unchanged:** the localizer still aligns each view to its leave-one-out consensus template, and its own gates (`min_absolute_zncc` / `min_relative_zncc`) still read its own score. Only the number the bench shows and judges changes.
 - **A row with no bitmap to read against**, before the first render, shows no score, and the bars leave its verdict where it is.
 
+## Part 9: aligning every view to the reference
+
+Parts 5 to 8 make the reference render the point's stored bitmap and the tile every score on the bench reads against. The views are still placed by a different template: keypoint localization congeals them, aligning each view to the IRLS-fused consensus of all the others over several rounds, and the sub-pixel refiner and Add Image to Tracks align to consensus templates of their own. This part replaces those templates with the reference render. Not yet built.
+
+### The rule
+
+- **Every kernel that places a view aligns it to the reference render.** That is keypoint localization (the bench's Fit, `sfm embed-patches` and its refinement rounds, `sfm xform --refine-keypoints`, Track at Pixel), the sub-pixel refiner, and Add Image to Tracks, which aligns a new view to the stored bitmap it already has.
+- **The reference is not moved by the alignment.** Its keypoint is the anchor of the track: aligning it to its own render would return it where it is. Whatever offset the reference's keypoint carries is shared by every view aligned to it, so it moves the point rather than adding reprojection error, and the per-observation confidence carries its uncertainty.
+- **One pass, no rounds.** The template does not change while the views are aligned, so each view is aligned once. There is no consensus, no IRLS weighting, no consensus-basis cap and no tail registration.
+- **The template is never blurred.** Part 6 measured that a blurred template places views no closer and lowers the peak's curvature.
+- **Which reference.** The point's stored reference (Part 7), or on the bench the reference the track holds (Part 8). Where a point has none, the reference-view rule picks one from the views' renders at their starting keypoints, as every render does, and the bitmap is rendered from it before the views are aligned.
+- **When the reference changes** (*Set as reference*, unpinning its row, a writer that picks again), the views are aligned again to the new reference at the next localization; a score is not a reason to move them.
+
+### What goes with congealing
+
+- **The leave-one-out score.** `loo_zncc`, `loo_zncc_middle` and `loo_zncc_grid` are removed. The scores a view carries are its plain and blur-matched scores against the bitmap (Parts 6 and 8). Their consumers switch:
+  - Track at Pixel's median gates read the plain score against the bitmap, and are measured again;
+  - the localizer's own agreement gates (`min_absolute_zncc`, `min_relative_zncc`) read the plain score against the reference, and are measured again or removed in favour of the bench's bars;
+  - `observation_confidence` is filled from the score against the bitmap until the per-observation covariance replaces it;
+  - Track View's *Accept walk* hover reads the score against the bitmap.
+- **The consensus-basis cap** ([core/patch/keypoint-localization-consensus-basis.md](../core/patch/keypoint-localization-consensus-basis.md)) has nothing left to cap and is removed with its spec.
+- **Unchanged:** the grazing pre-filter and the member self-similarity gate, which judge a view on its own tile; normal refinement's weighted consensus, which chooses a normal rather than placing views and is left for its own measurement (see [Open questions](#open-questions)).
+
+### Coarse to fine
+
+Aligning to a sharp template narrows the correlation peak, so a view whose starting keypoint is far off may lock to a side peak. A pyramid answers that without blurring the template for the final placement: search on a coarser level of both the reference render and the view's render, then refine at the patch resolution against the reference itself. Whether the coarse level is needed is measured: it is built only if it lowers the error or the share of views that lock to a side peak.
+
+### How it is measured
+
+On the seoul_bull and kerry_park ground truths, against today's congealing:
+- **the error after re-triangulating each track** from its aligned keypoints, which leaves out the offset the reference shares with every view, and the raw per-view error against the ground-truth projection beside it;
+- **the share of views that lock to a side peak**, with and without the coarse level, from starting keypoints displaced by 0.5 to 3 px;
+- **the time** to localize a track, by track length.
+
+Part 4's experiment measured the raw per-view error and found the reference render 0.14 px (seoul_bull) and 0.06 px (kerry_park) behind the leave-one-out fuse on a lattice search, and 0.04 and 0.02 px behind with the real refiner from the stored keypoints. That measure counts the shared offset as error in every view, so it is an upper bound on the loss; the ground truths were also triangulated from the stored keypoints, which favours them.
+
 ## Evaluation
 
 **Cases:**
@@ -411,7 +449,7 @@ A row's `zncc`, which the bench's `min_zncc` bars (whole and middle) judge, is t
 - **Whether the sampler rule should also consider the view's weight.** A view with a small weight contributes little to the template, so rendering it with the anisotropic sampler may not pay. With the AVX2 kernel an anisotropic render costs 0.65 to 1.55 times what a `BilinearMip` one does, the most on views compressed 10 times or more along one axis, which take the most samples; on a CPU without AVX2 it costs 1.8 to 4 times as much. The question matters most on such views and on such CPUs.
 - **Directional angle terms.** The angle's sensitivity lies along the tilt direction (Part 4). Weighting the template along `t̂_v` by `|cos θ_v|^k` and fully across it is the directional form of `h`, and belongs with per-axis weighting.
 - **The patch resolution.** On the 25-view track most views are far below 1× zoom, so the 24-px grid discards detail the near views hold and the far views cannot. Choosing `R` per track from its footprints is a separate change. It interacts with this one, because a larger `R` widens the range of `φ`.
-- **Normal refinement.** Whether its objective should take these weights at all, or keep the agreement weights and only the blur-matched scoring.
+- **Normal refinement.** Whether its objective should take these weights at all, or keep the agreement weights and only the blur-matched scoring, and whether it should score the views against the reference render as Part 9 aligns them.
 
 ## Non-goals
 
