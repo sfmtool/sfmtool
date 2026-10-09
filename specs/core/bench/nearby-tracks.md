@@ -21,10 +21,12 @@ the [distance range](distance-range.md) of each candidate's sightings and its
 class, the [far-field sweep](far-field-sweep.md) of the pixel's own patch, and
 the [depth layers](depth-layers.md) that group and rank them. What this spec
 adds is the order they run in, when the sources stop, when the far-field
-sweep runs, and the tracks and labels the bench takes. It is the anchor finder
-of the track-at-pixel harness
+sweep runs, and the tracks and labels the bench takes. The track-at-pixel
+harness's anchor finder
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
-`find_anchors`) moved into core, and it scores the same there. The viewer
+`find_anchors`) calls it, and returns the same anchors and layers as the
+harness's own Python loop over the pieces
+([measurements](nearby-tracks-measurements.md#parity-with-the-harness)). The viewer
 calls it from Image Detail's *Find Nearby Tracks* and the wire's
 `find_nearby_tracks`, which put every usable track on the bench and commit the
 new ones as one version; the wire's `commit` option, `true` by default, leaves
@@ -213,12 +215,11 @@ it builds. This is the path the far-field sweep's refit and track-at-pixel
 build their tracks by (`seed_cluster_with`, `upgrade_sightings`). The track
 carries the bench's default thresholds. A track whose build fails carries the
 reason and the others are still returned. The builds are independent and run
-side by side. Building costs more than finding: on seoul_bull with the default
-stopping rule and one thread a query, finding takes about 20 ms a query in the
-full pass and 5 in the empty one, and building the tracks another 57 and 75;
-with sixteen threads for one query, as the viewer runs it, the building takes
-3 to 9 ms. A caller that only reads the layers, like the harness's scoring,
-turns it off.
+side by side. On one thread, building the tracks costs several times what
+finding them costs
+([measurements](nearby-tracks-measurements.md#cost-of-finding-and-building)),
+so a caller that only reads the layers, like the harness's scoring, turns it
+off.
 
 **Duplicates.** Two candidates can come out as one track: two far-field peaks
 refitted on the same images (the sweep drops those itself,
@@ -237,13 +238,12 @@ is not in `bench_order()` and the letters of the others close up; the report
 counts them in `duplicates`. With `tracks.build` off nothing is built, so
 nothing is compared and every usable track is labelled.
 
-Duplicates are common. In the harness with the tracks built and the default
-stopping rule, 9% of seoul_bull's queries and 8% of Kerry Park's have one,
-most of them a cluster repeating another cluster; with every source run, 62% and
-34%, most of them a cluster and a guided match on the same features. Two
-guided matches repeat each other when the queried image has two keypoints at
-one place, which SIFT gives a feature with two orientations. The far-field
-sweep's own check dropped no reading in either ground truth.
+Duplicates are common on both ground truths: with the default stopping rule
+most are a cluster repeating another cluster, and with every source run most
+are a cluster and a guided match on the same features
+([measurements](nearby-tracks-measurements.md#how-often-the-built-tracks-repeat)).
+Two guided matches repeat each other when the queried image has two keypoints
+at one place, which SIFT gives a feature with two orientations.
 
 ## The labels
 
@@ -365,19 +365,12 @@ adds every built track as a point and leaves the given version alone; the
 skipped sources; and the refusals of the options and of a label that is
 all whitespace or holds a control character.
 
-**Parity with the harness.** Run from the harness with `finder_impl=rust` and
-`finder_impl=python`, over both ground truths (seoul_bull's 1277 queries and
-Kerry Park's 3903), full and empty passes, with every source and with the
-default stopping rule, the two return the same anchors with the same sources,
-sightings, classes and support, the same layers with the same members, ranks,
-evidence, scores, keys and confidences, and identical summaries. The one
-difference is in the last bits of a candidate's distance along its pixel's
-ray, which the Python loop computes with its own camera and core with its
-own, and so of the range ends found from it: at most 3e-14 relative, too small
-to move a class, a layer or a reading. The two take the same time within the
-run-to-run noise, since the Python loop calls the same core pieces: with the
-default stopping rule, about 20 ms a query in seoul_bull's full pass and 80 in
-Kerry Park's.
+**Parity with the harness.** The harness run with `finder_impl=rust` and with
+`finder_impl=python` returns the same anchors, layers and summaries over both
+ground truths. A candidate's distance along its pixel's ray differs only in
+its last bits, because each side computes it with its own camera, and that
+difference moves no class, layer or reading
+([measurements](nearby-tracks-measurements.md#parity-with-the-harness)).
 
 ## Non-goals
 
