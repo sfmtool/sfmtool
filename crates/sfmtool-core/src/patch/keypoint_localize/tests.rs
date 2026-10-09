@@ -1941,7 +1941,7 @@ fn views_narrower_or_wider_than_the_reference_are_scored_not_panicked() {
 /// A textureless surface — flat sky or water. Every channel is flat, so the
 /// z-normalization finds no channel to score on and no template can be built;
 /// a member rendering this reads the largest ZNCC self-similarity radius (it
-/// pins no 2D position, and its ZNCC to anything is noise).
+/// fixes no 2D position, and its ZNCC to anything is noise).
 fn flat_texture(_x: f64, _y: f64) -> f64 {
     128.0
 }
@@ -2004,7 +2004,7 @@ fn views_with_no_template_stay_at_their_starts_and_face_the_shift_gate() {
 /// sub-pixel refiner, so its cheirality test decides which views either can
 /// reach. Under a ray-path model that test must be the camera's own domain: a
 /// `z >= 0` short-circuit ahead of `ray_to_pixel` makes the whole θ > 90°
-/// annulus of a >180° capture invisible to congealing.
+/// annulus of a >180° capture invisible to the localizer.
 #[test]
 fn project_unclipped_reaches_past_ninety_degrees_on_a_ray_path_model() {
     let equi = CameraIntrinsics {
@@ -2387,8 +2387,8 @@ fn a_fractional_shift_on_one_axis_does_not_show_up_on_the_other() {
                 .collect();
             for (res, strategy) in runs.iter().zip(STRATEGIES) {
                 assert_eq!(res.views, vec![0, 1, 2, 3], "{strategy:?}");
-                for k in 1..4 {
-                    let e = grid_error(res.keypoints[k], truth[k]);
+                for (k, (&kp, &want)) in res.keypoints.iter().zip(&truth).enumerate().skip(1) {
+                    let e = grid_error(kp, want);
                     assert!(
                         e[0].hypot(e[1]) < bound,
                         "{strategy:?}, shift {shift}: view {k} off by {e:?} grid px"
@@ -2718,4 +2718,83 @@ fn a_cancelled_progress_stops_the_localization() {
         &progress,
     );
     assert!(stopped.is_err());
+}
+
+#[test]
+fn a_reference_out_of_frame_leaves_every_view_at_its_start() {
+    // The reference's keypoint is far outside its frame, so its tile cannot be
+    // rendered there and there is no template. There is then no reference:
+    // every view is kept at its start with an unscored ZNCC, and still faces
+    // the shift gate, which drops the reference's own 5000 px start.
+    let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let mut seeds: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| {
+            let p = projection(&views, k);
+            Some([p[0] + 0.5, p[1] - 0.5])
+        })
+        .collect();
+    let p0 = projection(&views, 0);
+    seeds[0] = Some([p0[0] + 5000.0, p0[1]]);
+    for strategy in STRATEGIES {
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            &[0, 1, 2, 3],
+            Some(&seeds),
+            Some(0),
+            &with_strategy(strategy),
+        );
+        assert_eq!(res.reference, None, "{strategy:?}");
+        assert_eq!(res.views, vec![1, 2, 3], "{strategy:?}");
+        assert!(res.zncc.iter().all(|z| z.is_nan()), "{:?}", res.zncc);
+        for (k, kp) in res.keypoints.iter().enumerate() {
+            let err = dist(*kp, seeds[k + 1].unwrap());
+            assert!(err < 1e-6, "{strategy:?}: view {} moved {err} px", k + 1);
+        }
+    }
+}
+
+#[test]
+fn a_grazing_reference_is_turned_away_and_the_rule_picks() {
+    // View 3 is oblique; given as the reference under a strict grazing cutoff,
+    // it is pre-filtered, and the rule picks the reference among the others.
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [1.5, 0.0, 0.0],
+    ];
+    let scene = Scene::new(
+        &centers,
+        &[[0.0; 2]; 4],
+        &[texture as fn(f64, f64) -> f64; 4],
+    );
+    let views = scene.views();
+    let patch = plane_patch();
+    let strict = KeypointLocalizeParams {
+        min_grazing_cos: 0.95,
+        ..params()
+    };
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(3), &strict);
+    assert!(pos(&res, 3).is_none(), "{:?}", res.views);
+    let reference = res
+        .reference
+        .expect("the rule picks among the facing views");
+    assert_ne!(reference, 3);
+    assert_eq!(res.zncc[pos(&res, reference).unwrap()], 1.0);
+}
+
+#[test]
+fn a_reference_given_at_a_repeated_image_is_kept() {
+    // Image 1 is listed twice and the reference is given at its second slot,
+    // which deduplication drops. The reference is matched by image.
+    let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 1, 2], None, Some(2), &params());
+    assert_eq!(res.views, vec![0, 1, 2]);
+    assert_eq!(res.reference, Some(1));
+    assert_eq!(res.zncc[1], 1.0);
 }

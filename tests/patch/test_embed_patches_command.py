@@ -466,12 +466,17 @@ def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace
     first = first.clone_with_changes(reference_observations=refs)
     timg = np.asarray(first.track_image_indexes)
     kxy = np.asarray(first.keypoints_xy, dtype=np.float32)
+    # Points are matched across the two runs by position, so a position two
+    # points share (two tracks triangulated to one place) is left out.
+    positions = [tuple(p) for p in np.asarray(first.positions)]
+    shared = {p for p in positions if positions.count(p) > 1}
     ref_image = {
-        tuple(np.asarray(first.positions)[p]): (
+        positions[p]: (
             int(timg[offsets[p] + refs[p]]),
             kxy[offsets[p] + refs[p]],
         )
         for p in np.flatnonzero(moved)
+        if positions[p] not in shared
     }
 
     second = ep.embed_patches(first, images, resolution=12)

@@ -83,7 +83,7 @@ impl Default for AdjacencySurfelParams {
 /// Caller-synthesized neighbour positions, in CSR over the cloud.
 ///
 /// These are neighbours the adjacency graph does not have — typically helper
-/// patches congealed on purpose for points whose graph neighbourhood is
+/// patches localized on purpose for points whose graph neighbourhood is
 /// under-determined. They enter the fit exactly like graph neighbours.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExtraNeighbours {

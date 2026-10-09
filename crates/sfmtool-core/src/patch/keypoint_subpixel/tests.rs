@@ -978,7 +978,8 @@ fn render_bitmaps_off_by_default() {
 
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &params());
     assert!(res.representative.is_none());
-    assert_eq!(res.reference, None);
+    // The reference is reported all the same: it costs no render.
+    assert_eq!(res.reference, Some(0));
 }
 
 #[test]
@@ -1663,4 +1664,128 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
     if ok_got {
         assert_eq!(got, want, "fallback is the direct render bit-for-bit");
     }
+}
+
+// ── Which reference the refiner reports ─────────────────────────────────────
+
+#[test]
+fn the_reference_is_reported_without_rendering_bitmaps() {
+    // Callers that refine without bitmaps (`embed-patches` rounds before the
+    // last, `xform --refine-keypoints bitmaps=false`) still store which
+    // observation the keypoints were aligned to.
+    let offs = [[0.0, 0.0], [0.3, 0.0], [0.0, 0.25], [-0.2, 0.2]];
+    let scene = four_view_scene(offs);
+    let views = scene.views();
+    let patch = plane_patch();
+    let set = [0u32, 1, 2, 3];
+    let seeds: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| {
+            let (x, y) = project(&views[k], &patch.center, patch.w).unwrap();
+            Some([x, y])
+        })
+        .collect();
+    let bare = params();
+    assert!(!bare.render_bitmaps);
+    let with_bitmaps = KeypointSubpixelParams {
+        render_bitmaps: true,
+        ..params()
+    };
+    for reference in [None, Some(2)] {
+        let a = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), reference, &bare);
+        let b =
+            refine_patch_keypoints(&patch, &views, &set, Some(&seeds), reference, &with_bitmaps);
+        assert!(a.reference.is_some(), "{reference:?}");
+        assert_eq!(a.reference, b.reference, "{reference:?}");
+        assert_eq!(a.keypoints, b.keypoints, "{reference:?}");
+        assert!(a.representative.is_none());
+    }
+    let given = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(2), &bare);
+    assert_eq!(given.reference, Some(2));
+}
+
+#[test]
+fn a_reference_out_of_frame_is_no_reference() {
+    // The reference's keypoint is far outside its frame, so its core cannot
+    // be rendered there. As in the localizer, that is no reference: nothing
+    // is aligned, every view keeps its seed unscored, and the stored bitmap
+    // is the fused mean of the other views.
+    let scene = four_view_scene([[0.0; 2]; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let mut seeds: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| {
+            let (x, y) = project(&views[k], &patch.center, patch.w).unwrap();
+            Some([x + 0.4, y - 0.3])
+        })
+        .collect();
+    let far = [seeds[0].unwrap()[0] + 5000.0, seeds[0].unwrap()[1]];
+    seeds[0] = Some(far);
+    let p = KeypointSubpixelParams {
+        render_bitmaps: true,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(0), &p);
+    assert_eq!(res.views, vec![0, 1, 2, 3]);
+    assert_eq!(res.reference, None);
+    assert!(res.scores.iter().all(|s| s.is_nan()), "{:?}", res.scores);
+    for (k, (&kp, seed)) in res.keypoints.iter().zip(&seeds).enumerate().skip(1) {
+        let err = dist(kp, seed.unwrap());
+        assert!(
+            err < 1e-6,
+            "view {k} moved {err} px with nothing to align to"
+        );
+    }
+    assert!(res.representative.is_some(), "the fused mean of views 1-3");
+}
+
+#[test]
+fn the_rule_never_picks_a_grazing_view_but_a_given_one_is_kept() {
+    // View 3 is oblique to the plane. With a grazing cutoff above its cosine
+    // the rule does not pick it, as the localizer, which drops it, cannot; it
+    // is still refined. Given as the reference, it is used as given.
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [1.5, 0.0, 0.0],
+    ];
+    let scene = Scene::new(
+        &centers,
+        &[[0.0; 2]; 4],
+        &[texture as fn(f64, f64) -> f64; 4],
+    );
+    let views = scene.views();
+    let patch = plane_patch();
+    let strict = KeypointSubpixelParams {
+        min_grazing_cos: 0.95,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, None, &strict);
+    assert_eq!(
+        res.views,
+        vec![0, 1, 2, 3],
+        "the oblique view is still refined"
+    );
+    let reference = res
+        .reference
+        .expect("the rule picks among the facing views");
+    assert_ne!(res.views[reference], 3);
+    assert!(res.scores[3].is_finite());
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(3), &strict);
+    assert_eq!(res.reference, Some(3));
+    assert_eq!(res.scores[3], 1.0);
+}
+
+#[test]
+fn a_reference_given_at_a_repeated_image_is_kept() {
+    // Image 1 is listed twice and the reference is given at its second slot,
+    // which deduplication drops. The reference is matched by image, so image
+    // 1 is still the reference rather than the rule's pick.
+    let scene = four_view_scene([[0.0; 2]; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 1, 2], None, Some(2), &params());
+    assert_eq!(res.views, vec![0, 1, 2]);
+    assert_eq!(res.reference.map(|r| res.views[r]), Some(1));
+    assert_eq!(res.scores[1], 1.0);
 }

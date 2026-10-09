@@ -600,6 +600,7 @@ pub fn add_image_to_tracks(
         window: localize.window,
         sampler: localize.sampler,
         robust_iters: localize.robust_iters,
+        min_grazing_cos: localize.min_grazing_cos,
         ..options.refine.clone()
     };
 

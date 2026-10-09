@@ -1522,8 +1522,9 @@ replaces it as the confidence bundle adjustment weighs observations by.
   reader must not treat it as the bottom of the scale. A measured ZNCC `z` is
   stored as `round(255 · clamp(z, 0, 1))`, so measured values occupy
   `1..=255`, with `255` for the reference observation. The bench commit writes
-  `0` for a row it has no score for; Add Image to Tracks raises a measured `0`
-  to `1`. Consumers must treat the value monotonically (higher = agrees
+  `0` for a row it has no score for, and both it and Add Image to Tracks raise
+  a measured score that would round to `0` to `1`; the bench reads a `0` back
+  as a row with no score. Consumers must treat the value monotonically (higher = agrees
   better), never switch on exact codes.
 - **Constraint**: parallel to the other `tracks/*` arrays, so it follows the same
   lexicographic `(point_indexes[j], image_indexes[j])` order and is permuted in

@@ -58,6 +58,12 @@ impl PyPatchCloud {
     ///     convergence_px: Stop a view's solve once an accepted step is below this
     ///         many patch-grid px.
     ///     max_offset_px: Max total per-view drift from the seed, in patch-grid px.
+    ///     min_grazing_cos: The grazing pre-filter of the reference resolution,
+    ///         shared with :meth:`localize_keypoints`: with no reference given,
+    ///         the reference-view rule never picks a view whose ray is this
+    ///         near-parallel to the patch plane. A given reference is used as
+    ///         given. It moves no view in or out of the refinement. Pass the
+    ///         value the localizer ran with so both resolve the same reference.
     ///     point_indexes: If given, refine only the patches with these source point
     ///         indexes; ``None`` (default) refines every patch.
     ///     starting_keypoints: Optional explicit per-view seed overrides:
@@ -104,13 +110,16 @@ impl PyPatchCloud {
     /// Returns:
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
-    ///     scores (float64[K]), reference_image}`` over the views, in **input
+    ///     zncc (float64[K]), reference_image}`` over the views, in **input
     ///     order** (the view set is unchanged; a guard-failed view keeps its
-    ///     seed). ``scores`` is the final ECC score (channel-averaged windowed
-    ///     ZNCC) against the template: ``1.0`` for the reference observation,
-    ///     NaN for a view that could not be scored. ``reference_image`` is the
-    ///     image index of the reference observation the views were aligned to,
-    ///     or ``None`` where the template was the fused mean of the views. When
+    ///     seed). ``zncc`` is the final ECC score (channel-averaged windowed
+    ///     ZNCC) against the template, under the key :meth:`localize_keypoints`
+    ///     uses: ``1.0`` for the reference observation, NaN for a view that
+    ///     could not be scored. ``reference_image`` is the image index of the
+    ///     reference observation the views were aligned to, whether or not
+    ///     ``render_bitmaps`` is set, or ``None`` where the template was the
+    ///     fused mean of the views, or where the reference's core could not be
+    ///     rendered at its keypoint (then no view moves). When
     ///     ``render_bitmaps`` is true each dict also carries ``bitmap``: the
     ///     ``(R, R, 4)`` uint8 RGBA stored bitmap, the reference's tile (or the
     ///     fused mean), or ``None`` when fewer than two views survive, the
@@ -122,7 +131,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="per_view", robust_iters=3, max_gn_steps=10,
-        convergence_px=0.01, max_offset_px=2.0, point_indexes=None,
+        convergence_px=0.01, max_offset_px=2.0, min_grazing_cos=0.1, point_indexes=None,
         starting_keypoints=None, render_bitmaps=false, reference_images=None,
         progress=None
     ))]
@@ -141,6 +150,7 @@ impl PyPatchCloud {
         max_gn_steps: u32,
         convergence_px: f64,
         max_offset_px: f64,
+        min_grazing_cos: f64,
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
         render_bitmaps: bool,
@@ -182,6 +192,7 @@ impl PyPatchCloud {
             max_gn_steps,
             convergence_px,
             max_offset_px,
+            min_grazing_cos,
             render_bitmaps,
             ..Default::default()
         };
@@ -360,7 +371,7 @@ impl PyPatchCloud {
             d.set_item("views", res.views.clone().into_pyarray(py))?;
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
-            d.set_item("scores", res.scores.clone().into_pyarray(py))?;
+            d.set_item("zncc", res.scores.clone().into_pyarray(py))?;
             d.set_item("reference_image", res.reference.map(|r| res.views[r]))?;
             if render_bitmaps {
                 // `bitmap` is the point's stored bitmap at the final keypoints,

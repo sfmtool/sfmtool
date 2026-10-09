@@ -74,11 +74,22 @@ pub fn fuse_patch_bitmap(
 
 - **The reference is an argument**, as in the localizer: the caller knows the
   point's stored reference observation, or the reference a bench track holds,
-  and passes its position in `view_set`. `None` has the
-  [reference-view rule](reference-view.md) pick one from the renders at the
-  starting keypoints, the same resolution the localizer makes
-  (`keypoint_localize::resolve_reference`), so the two kernels align a point's
-  views to the same template.
+  and passes its position in `view_set`; it is matched by image, so a
+  reference given at the dropped slot of a repeated image still counts. `None`
+  has the [reference-view rule](reference-view.md) pick one from the renders at
+  the starting keypoints. Both kernels resolve the reference by one function
+  (`keypoint_localize::resolve_reference`), with the same grazing pre-filter
+  (`min_grazing_cos`): the rule never picks a view seen too near edge-on. A
+  given reference is used as given; the localizer, which drops grazing views
+  before it resolves, never reports a grazing one. Given the localizer's
+  reported reference, the refiner therefore aligns to the same observation's
+  render, and later `embed-patches` rounds keep a point's stored reference even
+  where a refined normal has tilted it toward edge-on. Where the localizer aligned to the fused mean (it
+  reported no reference), the refiner resolves again from the views and
+  keypoints it is handed, which are the localizer's kept views at their new
+  keypoints: the rule may then pick a view it would store, and that view's
+  render is the point's stored bitmap after the refinement, so it is what the
+  refiner aligns to.
 - **`refine_view_against_reference` refines one view and nothing else.** Adding
   an observation to an existing track
   ([add-image-to-tracks.md](../reconstruction/add-image-to-tracks.md)) has a
@@ -179,8 +190,12 @@ It is never blurred: a blurred template places views no closer and lowers the
 peak's curvature ([sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
 Part 6). Since `T` does not depend on the offsets, the views are independent of
 each other, and each is refined **once**. Where nothing renders to align to
-(fewer than two views project, or the reference's core is out of frame), every
-view keeps its seed, unscored.
+(fewer than two views project, the reference's core is out of frame or flat at
+its keypoint, or its keypoint does not map onto the patch plane), every view
+keeps its seed, unscored, and there is no reference: the localizer does the
+same, so a point whose reference cannot be rendered comes out of both kernels
+with `reference` `None`, and its stored bitmap, when rendered, is the fused
+mean.
 
 ## Algorithm: ECC (forward-additive Gauss–Newton)
 
@@ -221,6 +236,7 @@ re-anchored patch centre, as the localizer does
 | `max_offset_px` | 2 | the furthest a view may move from its seed, patch-grid px |
 | `line_search_shrink` | 0.5 | backtracking factor for a rejected step |
 | `line_search_max` | 8 | backtracking attempts before a step is abandoned |
+| `min_grazing_cos` | 0.1 | the reference resolution's grazing pre-filter, shared with the localizer; it moves no view in or out of the refinement |
 | `render_bitmaps` | `false` | also render the point's stored bitmap ("Outputs") |
 
 ## Sampling
@@ -306,13 +322,15 @@ adapted to fractional reads:
   starting keypoint, exactly, and a view whose solve the guard refused stays at
   its seed;
 - `offsets_px`: the keypoint's distance from the point's projection, source px;
-- `scores`: the final ECC score against the template: `1.0` for the reference,
-  `NaN` where the view could not be scored (fewer than two views, or no
-  template rendered);
+- `zncc` in the binding, `scores` in Rust: the final ECC score against the
+  template: `1.0` for the reference, `NaN` where the view could not be scored
+  (fewer than two views, or no template rendered);
 - `reference`: the reference observation the views were aligned to, as an index
   into `views`, or `None` where the template was the fused mean or there was
-  none. It is set only when `render_bitmaps` is on, since it names the view
-  `representative` is the tile of;
+  none. It is reported whether or not `render_bitmaps` is on, so a caller that
+  refines without bitmaps still stores which observation the keypoints were
+  aligned to; with `render_bitmaps` it names the view `representative` is the
+  tile of;
 - `representative`: with `render_bitmaps` (the binding's
   `refine_keypoints(render_bitmaps=True)`), the point's **stored bitmap**,
   `R·R·4` RGBA, as [reference-view.md](reference-view.md#the-stored-bitmap)

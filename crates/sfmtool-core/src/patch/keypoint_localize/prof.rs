@@ -76,7 +76,7 @@ pub static N_SEARCH: AtomicU64 = AtomicU64::new(0);
 pub static N_CELLS: AtomicU64 = AtomicU64::new(0);
 /// Views dropped by the member self-similarity gate
 /// ([`max_member_zncc_self_similarity_radius`](super::KeypointLocalizeParams::max_member_zncc_self_similarity_radius)),
-/// summed over points -- their own tile pins no 2D position.
+/// summed over points -- their own tile fixes no 2D position.
 pub static N_DROP_UNLOCALIZABLE: AtomicU64 = AtomicU64::new(0);
 /// Views dropped by [`max_shift_px`](super::KeypointLocalizeParams::max_shift_px).
 pub static N_DROP_SHIFT: AtomicU64 = AtomicU64::new(0);

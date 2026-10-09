@@ -14,12 +14,12 @@ use sfmtool_core::patch::spawn::{spawn_candidate_tracks as core_spawn, SpawnPara
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
 
-/// Congeal a new candidate track at an in-plane offset from each parent patch.
+/// Localize a new candidate track at an in-plane offset from each parent patch.
 ///
 /// Each request places a synthetic patch — the parent's frame translated to
 /// ``X_p + du * hu_p + dv * hv_p``, so the offsets speak the parent's own scale
 /// and stay in its plane — finds it photometrically in the given views, and
-/// triangulates what was found, exactly the way a real track is congealed and
+/// triangulates what was found, exactly the way a real track is localized and
 /// with the same acceptance gates. Callers choose the offsets and assemble the
 /// survivors; this turns ``(parent, offset)`` requests into vetted
 /// ``(position, views, keypoints)`` results, batch.

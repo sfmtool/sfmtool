@@ -116,13 +116,14 @@ use kernels::{
 struct ViewState {
     /// Image index into the caller's `views` slice.
     idx: u32,
-    /// Position of the view in the caller's `view_set`.
-    slot: usize,
     /// The view's starting keypoint as given, source px (`None` starts at the
     /// projection).
     keypoint: Option<[f64; 2]>,
     /// Seed offset `(au, av)` in patch-grid px (the keypoint at refine start).
     seed: [f64; 2],
+    /// Whether `seed` is where `keypoint` is: no keypoint was given, or it maps
+    /// onto the patch plane. When it does not, `seed` is the projection.
+    seed_is_keypoint: bool,
     /// Current offset `(au, av)` in patch-grid px.
     off: [f64; 2],
     /// The view's projection of the point `project_i(X_p)`, source px.
@@ -132,7 +133,7 @@ struct ViewState {
     /// The sampler every render of this view uses, chosen once by the rule for
     /// the observation at its seed keypoint
     /// ([`SamplerChoice::for_observation`](crate::camera::sampler::SamplerChoice::for_observation)),
-    /// so the GN steps, the consensus and the stored bitmap all read the view
+    /// so the GN steps, the template and the stored bitmap all read the view
     /// through one sampler.
     sampler: Sampler,
 }
@@ -248,10 +249,9 @@ fn refine_patch_keypoints_impl(
             continue;
         };
         let seed = starting_keypoints.and_then(|seeds| seeds[k]);
-        let off = match seed {
-            Some(kp) => seed_offset(patch, view, kp, wpp_u, wpp_v).unwrap_or([0.0, 0.0]),
-            None => [0.0, 0.0],
-        };
+        let unprojected = seed.map(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v));
+        let seed_is_keypoint = !matches!(unprojected, Some(None));
+        let off = unprojected.flatten().unwrap_or([0.0, 0.0]);
         let sampler = params.sampler.for_observation(
             patch,
             view.camera,
@@ -261,9 +261,9 @@ fn refine_patch_keypoints_impl(
         );
         states.push(ViewState {
             idx: i,
-            slot: k,
             keypoint: seed,
             seed: off,
+            seed_is_keypoint,
             off,
             proj: [proj.0, proj.1],
             score: f64::NAN,
@@ -311,14 +311,19 @@ fn refine_patch_keypoints_impl(
 
     // What the views are aligned to: the caller's reference, else the
     // reference-view rule's pick at the starting keypoints, else the fused
-    // mean. The fuse-only pass moves nothing, so it decides nothing here.
+    // mean, resolved by the function the localizer uses, with its grazing
+    // pre-filter. The fuse-only pass moves nothing, so it decides nothing here.
     let resolved = match bitmap {
         BitmapKind::FusedMean => ResolvedReference {
             anchor: None,
             fused: None,
         },
         BitmapKind::Reference => prof::REFERENCE.time(|| {
-            let given = reference.and_then(|k| states.iter().position(|st| st.slot == k));
+            // Matched by image, so a reference given at a repeated image's
+            // dropped slot is kept.
+            let given = reference
+                .and_then(|k| view_set.get(k))
+                .and_then(|&img| states.iter().position(|st| st.idx == img));
             let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
             let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
             resolve_reference(
@@ -327,6 +332,7 @@ fn refine_patch_keypoints_impl(
                 &set,
                 &seeds,
                 given,
+                params.min_grazing_cos,
                 resolution,
                 params.window,
                 params.sampler,
@@ -335,11 +341,13 @@ fn refine_patch_keypoints_impl(
             )
         }),
     };
-    let anchor = resolved.anchor;
+    let mut anchor = resolved.anchor;
 
     // The template `T`: the reference's core at its own keypoint, or the fused
-    // mean's, z-normalized with `√w` folded in. Never blurred.
+    // mean's, z-normalized with `√w` folded in. Never blurred. A reference
+    // whose keypoint does not map onto the patch plane has no core there.
     let template: Option<Vec<f32>> = match (anchor, &resolved.fused) {
+        (Some(a), _) if !states[a].seed_is_keypoint => None,
         (Some(a), _) => {
             let st = &states[a];
             core_value(
@@ -368,6 +376,13 @@ fn refine_patch_keypoints_impl(
         }
         (None, None) => None,
     };
+    // As in the localizer, a reference whose core cannot be rendered at its
+    // keypoint (out of frame, flat, or off the patch plane) is no reference:
+    // nothing is aligned, every view keeps its seed unscored, and the stored
+    // bitmap, when rendered, is the fused mean.
+    if template.is_none() {
+        anchor = None;
+    }
 
     // Move every view but the reference against `T`, once.
     if let Some(tmpl) = &template {
@@ -396,6 +411,10 @@ fn refine_patch_keypoints_impl(
     }
 
     let mut out = finalize(patch, views, &states, anchor, wpp_u, wpp_v);
+    // The reference is reported whether or not the bitmap is rendered: callers
+    // that refine without it still store which observation the keypoints were
+    // aligned to.
+    out.reference = anchor.filter(|_| bitmap == BitmapKind::Reference);
     if params.render_bitmaps {
         // The stored bitmap is the reference's tile at its keypoint, which the
         // refinement did not move; where there is no reference, the fused mean
@@ -412,7 +431,6 @@ fn refine_patch_keypoints_impl(
                     progress,
                 );
                 out.representative = Some(bitmap_from_tile(&tile));
-                out.reference = Some(a);
             }
             None => {
                 out.representative = render_representative(
@@ -447,11 +465,11 @@ fn bitmap_core(
 /// Fuse the point's representative RGBA texture at the **final** per-view
 /// keypoints (the [`KeypointSubpixelParams::render_bitmaps`] path). The views are
 /// re-rendered (support-only) at their final offsets to rebuild the final IRLS
-/// view weights — the sweep loop's weights predate the last moves — then the live
+/// view weights at the views' final positions — then the live
 /// views are rendered full-grid ([`PatchViewStack`]) at the finalize-identical
 /// keypoints and fused with those weights ([`AGREEMENT_SIGMA`]). Returns `None`
-/// when fewer than two views render in frame at their final offsets — no
-/// cross-view consensus exists, so the point has no valid representative (the
+/// when fewer than two views render in frame at their final offsets — there
+/// is nothing to fuse, so the point has no valid representative (the
 /// caller's culled-point signal). Infinity patches (`w = 0`) take the same path.
 #[allow(clippy::too_many_arguments)]
 fn render_representative(
@@ -706,8 +724,11 @@ fn finalize(
         let view = &views[st.idx as usize];
         let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
         let projected = project(view, &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
-        // The reference's keypoint is returned exactly as it was given.
-        let (kx, ky) = match (Some(si) == anchor, st.keypoint) {
+        // The reference's keypoint, and any view's that did not move (no
+        // template, or the guard kept its seed), is returned exactly as it was
+        // given rather than through a round trip onto the plane.
+        let unmoved = Some(si) == anchor || (st.off == st.seed && st.seed_is_keypoint);
+        let (kx, ky) = match (unmoved, st.keypoint) {
             (true, Some([x, y])) => (x, y),
             _ => projected,
         };
@@ -809,7 +830,7 @@ pub fn refine_view_against_reference(
     let seed = seed_offset(patch, target_view, target_keypoint, wpp_u, wpp_v)?;
     let mut state = ViewState {
         idx: target,
-        slot: 0,
+        seed_is_keypoint: true,
         keypoint: Some(target_keypoint),
         seed,
         off: seed,

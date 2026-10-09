@@ -404,12 +404,17 @@ def test_stored_reference_is_kept_through_localize_and_refine(seoul_bull_workspa
     recon = recon.clone_with_changes(reference_observations=refs)
     timg = np.asarray(recon.track_image_indexes)
     kxy = np.asarray(recon.keypoints_xy, dtype=np.float32)
+    # Points are matched across the transforms by position, so a position two
+    # points share (two tracks triangulated to one place) is left out.
+    positions = [tuple(p) for p in np.asarray(recon.positions)]
+    shared = {p for p in positions if positions.count(p) > 1}
     named = {
-        tuple(np.asarray(recon.positions)[p]): (
+        positions[p]: (
             int(timg[offsets[p] + refs[p]]),
             kxy[offsets[p] + refs[p]].copy(),
         )
         for p in np.flatnonzero(refs >= 0)
+        if positions[p] not in shared
     }
     assert named
 

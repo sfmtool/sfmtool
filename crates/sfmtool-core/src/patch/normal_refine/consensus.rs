@@ -268,9 +268,8 @@ pub(in crate::patch) fn irls_view_weights(
 /// and write them, normalized to `Σw = 1`, into `w`. Returns `true` when the
 /// re-weight is degenerate (`Σ` of the raw weights ≈ 0) — the caller should
 /// keep the previous weights and stop iterating. `sorted` / `wt` are reused
-/// scratch. Extracted from [`irls_view_weights`] so the keypoint localizer's
-/// Gram-space leave-one-out IRLS shares the exact reweight semantics.
-pub(in crate::patch) fn tukey_reweight_from_residuals(
+/// scratch. The reweight step of [`irls_view_weights`].
+fn tukey_reweight_from_residuals(
     resid: &[f64],
     view_priors: Option<&[f64]>,
     sorted: &mut Vec<f64>,

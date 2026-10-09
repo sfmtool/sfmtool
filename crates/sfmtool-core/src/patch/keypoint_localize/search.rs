@@ -141,7 +141,7 @@ pub(super) struct ShiftResult {
     pub(super) peak: f64,
 }
 
-/// Integer windowed-ZNCC translation search of view `v`'s cache against
+/// Integer windowed-ZNCC translation search of one view's context tile against
 /// `sc.tmpl`, refined to sub-pixel by a quadratic fit over the 3×3 neighbourhood
 /// of the integer peak (`subpixel_peak`). Returns a
 /// [`ShiftResult`] — the integer argmax shift `(ix, iy)`, its sub-pixel-refined

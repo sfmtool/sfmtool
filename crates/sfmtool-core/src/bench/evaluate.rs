@@ -109,10 +109,9 @@ pub struct EvaluateOptions {
     /// and a round run at another radius would be measuring a different square
     /// from the one the person put on the bench.
     pub cluster: ClusterRefineParams,
-    /// The track stage's localizer. Defaults to [`open_localizer`] with one
-    /// round: a reading registers nothing, so the congealing loop that would
-    /// walk every view towards a shared optimum is run once, over the
-    /// observations where they already sit.
+    /// The track stage's localizer. Defaults to [`open_localizer`]: it aligns
+    /// each observation once to the reference render, from where the
+    /// observations already sit.
     ///
     /// Its [`resolution`](KeypointLocalizeParams::resolution) applies only to
     /// a reconstruction that stores no patch bitmaps. Otherwise the track

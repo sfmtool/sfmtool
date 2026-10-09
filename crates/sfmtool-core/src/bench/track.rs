@@ -216,9 +216,9 @@ impl ClusterMeasurement {
 /// Why an observation carries no measurement at the track stage.
 ///
 /// An evaluation drops nothing: it turns off the localizer's own gates, so
-/// every observation it can read comes back with a number. What is left is the observation it cannot read at all, and this says
-/// which of those it was, in one short sentence, so a row without a ZNCC never
-/// reads as an unexplained refusal.
+/// every observation it can read comes back with a number. What is left is the observation it
+/// cannot read at all, and this says which of those it was, in one short sentence, so a row without
+/// a ZNCC never reads as an unexplained refusal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Unmeasured {
     /// Nothing says where the observation sits in its photograph: it carries

@@ -7,8 +7,8 @@
 //! render it: the reference observation's `R×R` render at its own keypoint, or,
 //! where the point has no reference observation and the reference-view rule
 //! picks none it would store, the fused mean of the views. Each other view is
-//! searched once against it. The reference observation is the anchor of the
-//! track and is not moved. See `specs/core/patch/patch-keypoint-localization.md`.
+//! searched once against it. The reference observation's keypoint is not
+//! moved. See `specs/core/patch/patch-keypoint-localization.md`.
 
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
@@ -26,9 +26,9 @@ use crate::patch::normal_refine::{
 use crate::patch::stored_bitmap::{render_reference, stored_view};
 use crate::progress::Progress;
 
-/// What a point's views are aligned to, decided from the views that survived
-/// the pre-filters: the position among them of the reference observation, or
-/// the fused mean that stands as the stored bitmap where there is none.
+/// What a point's views are aligned to: the position among them of the
+/// reference observation, or the fused mean that is the stored bitmap where
+/// there is none.
 pub(in crate::patch) struct ResolvedReference {
     /// The position of the reference observation among the views.
     pub(in crate::patch) anchor: Option<usize>,
@@ -37,17 +37,38 @@ pub(in crate::patch) struct ResolvedReference {
     pub(in crate::patch) fused: Option<Vec<u8>>,
 }
 
-/// Decide what the views are aligned to.
+/// Whether `view` sees `patch` at least `min_grazing_cos` away from edge-on:
+/// the absolute cosine between the viewing direction (camera to point, or the
+/// direction itself for a point at infinity, to which every ray is parallel)
+/// and the patch normal. The localizer drops a view that fails this, and the
+/// reference-view rule in [`resolve_reference`] never picks one.
+pub(in crate::patch) fn faces_view(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    min_grazing_cos: f64,
+) -> bool {
+    let d = if patch.w == 0.0 {
+        patch.center.coords
+    } else {
+        patch.center - view.cam_from_world.inverse_translation_origin()
+    };
+    let dn = d.norm();
+    dn > 1e-12 && (d.dot(&patch.normal()) / dn).abs() >= min_grazing_cos
+}
+
+/// Decide what the views are aligned to. The localizer and the sub-pixel
+/// refiner both call this, so given the same views and keypoints they align to
+/// the same reference render.
 ///
-/// `view_set` and `seeds` describe the views that survived the caller's
-/// pre-filters, parallel; `given` is the position among them of the caller's
-/// reference. With none, the reference-view rule reads the views' renders at
-/// their starting keypoints (a view with no seed rendered through the patch
-/// itself) and its pick is the reference, unless it picks none or reaches its
-/// pick only by its last fallback, where the stored bitmap is the fused mean of
-/// the views ([`stored_view`]) and that mean is the template. Where no fused
-/// mean renders, a last-fallback pick is the reference after all, as it is the
-/// stored bitmap then ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)).
+/// `view_set` and `seeds` are parallel; `given` is the position in them of the caller's reference,
+/// which is the reference. With none, only views that pass the grazing pre-filter ([`faces_view`]
+/// at `min_grazing_cos`) are candidates: the reference-view rule reads the facing views' renders at
+/// their starting keypoints (a view with no seed rendered through the patch itself) and its pick is
+/// the reference, unless it picks none or reaches its pick only by its last fallback, where the
+/// stored bitmap is the fused mean of the facing views ([`stored_view`]) and that mean is the
+/// template. Where no fused mean renders, a last-fallback pick is the reference after all, as it is
+/// the stored bitmap then
+/// ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)).
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch) fn resolve_reference(
     patch: &OrientedPatch,
@@ -55,23 +76,31 @@ pub(in crate::patch) fn resolve_reference(
     view_set: &[u32],
     seeds: &[Option<[f64; 2]>],
     given: Option<usize>,
+    min_grazing_cos: f64,
     resolution: u32,
     window: PatchWindow,
     sampler: SamplerChoice,
     robust_iters: u32,
     progress: &Progress<'_>,
 ) -> ResolvedReference {
-    if given.is_some() || view_set.len() < 2 {
+    let facing: Vec<usize> = (0..view_set.len())
+        .filter(|&k| faces_view(patch, &views[view_set[k] as usize], min_grazing_cos))
+        .collect();
+    if given.is_some() || facing.len() < 2 {
         return ResolvedReference {
-            anchor: given.or((view_set.len() == 1).then_some(0)),
+            anchor: given.or((facing.len() == 1).then(|| facing[0])),
             fused: None,
         };
     }
-    let render = render_reference(patch, views, view_set, seeds, resolution, sampler, progress);
+    let view_set: Vec<u32> = facing.iter().map(|&k| view_set[k]).collect();
+    let seeds: Vec<Option<[f64; 2]>> = facing.iter().map(|&k| seeds[k]).collect();
+    let render = render_reference(
+        patch, views, &view_set, &seeds, resolution, sampler, progress,
+    );
     let choice = &render.reading.choice;
     if let Some(anchor) = stored_view(choice) {
         return ResolvedReference {
-            anchor: Some(anchor),
+            anchor: Some(facing[anchor]),
             fused: None,
         };
     }
@@ -92,13 +121,13 @@ pub(in crate::patch) fn resolve_reference(
             robust_iters,
             ..Default::default()
         };
-        fuse_patch_bitmap_reporting(patch, views, view_set, &keypoints, &params, progress)
+        fuse_patch_bitmap_reporting(patch, views, &view_set, &keypoints, &params, progress)
     });
-    // Where no fused mean renders either, the rule's pick stands as the stored
-    // bitmap after all, and so as the reference.
+    // Where no fused mean renders either, the rule's pick is the stored bitmap
+    // after all, and so the reference.
     ResolvedReference {
         anchor: if fused.is_none() {
-            choice.reference
+            choice.reference.map(|pick| facing[pick])
         } else {
             None
         },
@@ -110,12 +139,13 @@ pub(in crate::patch) fn resolve_reference(
 struct AlignedView {
     /// Image index into the caller's `views`.
     idx: u32,
-    /// Position of the view in the caller's `view_set`.
-    slot: usize,
     /// The view's starting keypoint, as given (`None` starts at the projection).
     seed: Option<[f64; 2]>,
     /// The starting offset on the patch grid, `[u, v]` in grid px.
     start: [f64; 2],
+    /// Whether `start` is where `seed` is: no seed was given, or it maps onto
+    /// the patch plane. When it does not, `start` is the projection instead.
+    start_is_seed: bool,
     /// The point's projection into the view, source px.
     proj: [f64; 2],
     /// The sampler every render of the view uses.
@@ -210,36 +240,21 @@ pub(super) fn align_to_reference(
     // pre-filter and the projection, in the view set's order.
     let mut seen = std::collections::HashSet::new();
     let mut states: Vec<AlignedView> = Vec::new();
-    let normal = patch.normal();
     for (slot, &i) in view_set.iter().enumerate() {
         if !seen.insert(i) {
             continue;
         }
         let view = &views[i as usize];
-        // The viewing direction is camera→point: `center − cam_c` for a finite
-        // point, or the direction itself for a point at infinity (every ray to
-        // it is parallel, so it is fully frontal).
-        let d = if patch.w == 0.0 {
-            patch.center.coords
-        } else {
-            patch.center - view.cam_from_world.inverse_translation_origin()
-        };
-        let dn = d.norm();
-        let grazing_cos = if dn > 1e-12 {
-            (d.dot(&normal) / dn).abs()
-        } else {
-            0.0
-        };
-        if dn <= 1e-12 || grazing_cos < params.min_grazing_cos {
+        if !faces_view(patch, view, params.min_grazing_cos) {
             continue;
         }
         let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
         let seed = starting_keypoints.and_then(|seeds| seeds[slot]);
-        let start = seed
-            .and_then(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v))
-            .unwrap_or([0.0, 0.0]);
+        let unprojected = seed.map(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v));
+        let start_is_seed = !matches!(unprojected, Some(None));
+        let start = unprojected.flatten().unwrap_or([0.0, 0.0]);
         let sampler = params.sampler.for_observation(
             patch,
             view.camera,
@@ -249,9 +264,9 @@ pub(super) fn align_to_reference(
         );
         states.push(AlignedView {
             idx: i,
-            slot,
             seed,
             start,
+            start_is_seed,
             proj: [proj.0, proj.1],
             sampler,
             off: start,
@@ -262,8 +277,11 @@ pub(super) fn align_to_reference(
     }
 
     // The reference: the caller's, where it survived the pre-filter, else the
-    // rule's pick from the renders at the starting keypoints.
-    let given = reference.and_then(|k| states.iter().position(|st| st.slot == k));
+    // rule's pick from the renders at the starting keypoints. It is matched by
+    // image, so a reference given at a repeated image's dropped slot is kept.
+    let given = reference
+        .and_then(|k| view_set.get(k))
+        .and_then(|&img| states.iter().position(|st| st.idx == img));
     let resolved = prof::REFERENCE.time(|| {
         let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.seed).collect();
@@ -273,6 +291,7 @@ pub(super) fn align_to_reference(
             &set,
             &seeds,
             given,
+            params.min_grazing_cos,
             resolution,
             params.window,
             params.sampler,
@@ -283,8 +302,11 @@ pub(super) fn align_to_reference(
     progress.check_cancel()?;
     let anchor = resolved.anchor;
 
-    // The template, never blurred.
+    // The template, never blurred. The reference's tile is rendered at its
+    // keypoint; one whose keypoint does not map onto the patch plane has no
+    // tile there, and so no template.
     let template = match (anchor, &resolved.fused) {
+        (Some(a), _) if !states[a].start_is_seed => None,
         (Some(a), _) => {
             let st = &states[a];
             prof::count(&prof::N_RENDER, 1);
@@ -314,9 +336,10 @@ pub(super) fn align_to_reference(
     };
 
     let Some(template) = template else {
-        // Nothing to align to (the reference's tile leaves the frame or is
-        // flat, or no fused mean renders): every view stays at its start,
-        // unscored, and the keypoints mean what they meant before.
+        // Nothing to align to (the reference's tile leaves the frame, is flat
+        // or cannot be placed at its keypoint, or no fused mean renders): there
+        // is no reference, every view stays at its start, unscored, and the
+        // keypoints mean what they meant before.
         for st in &mut states {
             st.placed = true;
         }
@@ -361,7 +384,7 @@ pub(super) fn align_to_reference(
                 progress,
             )
         })?;
-        // Member self-similarity gate: a view whose own tile pins no 2D
+        // Member self-similarity gate: a view whose own tile fixes no 2D
         // position matches itself a few pixels away and correlates to noise
         // against anything, so it is refused before it is searched.
         if params.member_self_similarity_gate_is_on() {
@@ -466,8 +489,10 @@ fn finish(
     for st in states {
         let view = &views[st.idx as usize];
         let is_anchor = Some(st.idx) == anchor;
-        let keypoint = if is_anchor {
-            // The anchor's keypoint is returned exactly as it was given.
+        let keypoint = if is_anchor || (st.placed && st.off == st.start && st.start_is_seed) {
+            // The reference's keypoint, and any view's that did not move (there
+            // was nothing to align it to), is returned exactly as it was given
+            // rather than through a round trip onto the plane.
             Some(st.seed.unwrap_or(st.proj))
         } else if st.placed {
             let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);

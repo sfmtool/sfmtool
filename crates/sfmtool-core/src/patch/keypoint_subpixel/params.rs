@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tunables and result types for subpixel keypoint refinement, split out of the Gauss–Newton orchestration ([`super`]).
+//! Tunables and result types for subpixel keypoint refinement, split out of the Gauss–Newton
+//! orchestration ([`super`]).
 //!
 //! The render/window knobs on [`KeypointSubpixelParams`] mirror
 //! [`KeypointLocalizeParams`](crate::patch::keypoint_localize::KeypointLocalizeParams).
@@ -54,10 +55,19 @@ pub struct KeypointSubpixelParams {
     /// Maximum backtracking attempts before a GN step is abandoned (the seed/δ is
     /// kept for that step).
     pub line_search_max: u32,
+    /// The grazing pre-filter of the reference resolution the localizer shares:
+    /// with no reference given, the reference-view rule never picks a view
+    /// whose absolute cosine between viewing direction and patch normal is
+    /// below this. A given reference is used as given. It moves no view in or
+    /// out of the refinement. Set it to the localizer's
+    /// [`min_grazing_cos`](crate::patch::keypoint_localize::KeypointLocalizeParams::min_grazing_cos)
+    /// so the two resolve the same reference.
+    pub min_grazing_cos: f64,
     /// Also render each point's **stored bitmap** (see
     /// [`KeypointRefinement::representative`]): the reference observation's
-    /// `R×R` tile at its keypoint, which the refinement does not move, named in
-    /// [`KeypointRefinement::reference`] ([`crate::patch::stored_bitmap`]).
+    /// `R×R` tile at its keypoint, which the refinement does not move, the one
+    /// [`KeypointRefinement::reference`] names whether this is set or not
+    /// ([`crate::patch::stored_bitmap`]).
     /// Where the point has no reference observation and the reference-view
     /// rule picks none it would store
     /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
@@ -81,6 +91,7 @@ impl Default for KeypointSubpixelParams {
             max_offset_px: 2.0,
             line_search_shrink: 0.5,
             line_search_max: 8,
+            min_grazing_cos: 0.1,
             render_bitmaps: false,
         }
     }
@@ -118,7 +129,11 @@ pub struct KeypointRefinement {
     /// for finite and infinity points alike.
     pub representative: Option<Vec<u8>>,
     /// The reference observation the views were aligned to, as an index into
-    /// [`Self::views`]: the view whose tile [`Self::representative`] is. `None`
-    /// where the template was the fused mean, or there was none.
+    /// [`Self::views`], reported whether or not
+    /// [`KeypointSubpixelParams::render_bitmaps`] is set: the view whose tile
+    /// [`Self::representative`] is. `None` where the template was the fused
+    /// mean, or there was none (fewer than two views, or the reference's core
+    /// is out of frame at its keypoint or does not map onto the patch plane,
+    /// in which case no view moves).
     pub reference: Option<usize>,
 }

@@ -2072,6 +2072,49 @@ fn a_commit_writes_the_plain_score_against_the_bitmap_as_the_confidence() {
     // The stored track is in image order, and here row k sees image k.
     assert_eq!(confidence[reference], u8::MAX);
     assert_eq!(confidence[other], (0.6f64 * 255.0).round() as u8);
+
+    // A measured score that rounds to 0, or is negative, is still a
+    // measurement, so it is stored as 1: 0 is reserved for "unmeasured". A
+    // row with no score is stored as 0.
+    for (zncc, byte) in [
+        (Some(0.001), 1),
+        (Some(-0.4), 1),
+        (None, 0),
+        (Some(f64::NAN), 0),
+    ] {
+        let mut track = read.clone();
+        track.observations[other]
+            .track
+            .as_mut()
+            .expect("a slot")
+            .zncc = zncc;
+        let (next, report) = commit(&edited, &track).expect("two in, with a position");
+        let written = next.point(report.point).expect("just written");
+        let confidence = written.observation_confidence().expect("the column");
+        assert_eq!(confidence[other], byte, "{zncc:?}");
+    }
+}
+
+/// A `0` confidence byte is no measurement: putting the point on the bench
+/// carries no score for that row, rather than a measured `0`.
+#[test]
+fn a_zero_confidence_byte_is_carried_as_no_score() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let read = track_of(&bench, &label);
+    let mut track = read.clone();
+    track.observations[1].track.as_mut().expect("a slot").zncc = None;
+    let (next, report) = commit(&edited, &track).expect("two in, with a position");
+    let (bench, label) = bench_with_point(&next, report.point);
+    let carried = bench.track(&label).expect("just put on");
+    let zncc: Vec<Option<f64>> = carried
+        .observations
+        .iter()
+        .map(|o| o.track.as_ref().expect("a track slot").zncc)
+        .collect();
+    assert_eq!(zncc[1], None, "{zncc:?}");
+    assert!(zncc[0].is_some(), "{zncc:?}");
 }
 
 #[test]
@@ -2590,7 +2633,7 @@ fn the_committed_error_is_the_mean_of_the_measured_reprojections() {
 }
 
 #[test]
-fn the_committed_colour_is_the_consensus_bitmap_centre() {
+fn the_committed_colour_is_the_stored_bitmap_centre() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -3871,7 +3914,7 @@ fn the_preconditions_are_the_steps_own_refusals() {
     let (one_in, _) = set_verdict(&whole, 1, Verdict::Out).expect("a live row");
 
     // One sighting: neither the track-stage fit nor the upgrade to it has a
-    // consensus to register against. A *reading* of the same track is not
+    // second view to align to the reference. A *reading* of the same track is not
     // refused -- it reports the sighting -- which is the whole difference
     // between the two steps.
     assert_eq!(

@@ -147,11 +147,10 @@ impl std::error::Error for CreateTrackError {}
 /// `observation_confidence` read back out of its byte scale where the column
 /// exists, which is what a commit writes there, and everything else an
 /// evaluation would compute is left unmeasured. With no localizer reading
-/// (`seed_shift_px`) the bars judge no row until the first evaluation. The point's stored reference observation comes on as the
-/// track's reference, and with every row pinned it is held until a person
-/// unpins its row. So putting a track on the bench and doing
-/// nothing shows the numbers the reconstruction already holds, plus the verdict
-/// column.
+/// (`seed_shift_px`) the bars judge no row until the first evaluation. The point's stored reference
+/// observation comes on as the track's reference, and with every row pinned it is held until a
+/// person unpins its row. So putting a track on the bench and doing nothing shows the numbers the
+/// reconstruction already holds, plus the verdict column.
 ///
 /// A `sift_files` reconstruction is put on the bench like any other: inspecting
 /// a track is allowed everywhere, and it is [`commit`](super::commit::commit)
@@ -199,10 +198,13 @@ pub fn create_track(
                 // The stored column is the row's plain score against the
                 // stored bitmap in a byte scale; reading it back is carrying a
                 // measurement, not making one, and a commit of the untouched
-                // track writes the same byte again.
+                // track writes the same byte again. A `0` byte is no
+                // measurement, so the row carries none.
                 zncc: view
                     .observation_confidence()
-                    .map(|c| f64::from(c[k]) / f64::from(u8::MAX)),
+                    .map(|c| c[k])
+                    .filter(|&byte| byte != 0)
+                    .map(|byte| f64::from(byte) / f64::from(u8::MAX)),
                 ..TrackMeasurement::default()
             }),
         })

@@ -5,7 +5,7 @@
 reconstructions.
 
 Builds a patch cloud from a real reconstruction, selects each point's view set
-photometrically, then congeals the per-view keypoints over the real
+photometrically, then aligns the per-view keypoints to the reference render over the real
 ``.sift``-derived patches and source images — the multi-view rendering + shift
 search the Rust unit tests can't exercise without on-disk images. See
 ``specs/core/patch/patch-keypoint-localization.md``.
@@ -137,7 +137,7 @@ def test_localize_keypoints_nonconvex_fisheye_rig(kerry_park_workspace: Path):
 
 
 def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
-    """With no view_sets, each point congeals over its track; kept ⊆ track."""
+    """With no view_sets, each point is localized over its track; kept ⊆ track."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
@@ -177,7 +177,7 @@ def test_localize_keypoints_view_sets_override_is_honored(
     seoul_bull_workspace: Path,
 ):
     """A strict-subset override is actually applied — not silently replaced by the
-    track. We find a point whose view ``v`` survives congealing over its full track,
+    track. We find a point whose view ``v`` survives localization over its full track,
     then re-run that point with ``v`` removed from the override and assert ``v`` is
     gone (and a point left uncovered keeps falling back to its track)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -197,7 +197,7 @@ def test_localize_keypoints_view_sets_override_is_honored(
         resolution=12,
     )
     # Pick a point with >=3 track views where some kept view can be dropped while
-    # leaving >=2 — so the override stays above the two-view floor.
+    # leaving >=2 — so the override still leaves two views to align.
     target_pid, drop_view = None, None
     for r in base:
         pid = int(r["point_index"])
@@ -563,10 +563,11 @@ def test_reference_keypoint_is_not_moved(seoul_bull_workspace: Path):
         point_indexes=pids,
         resolution=12,
         render_bitmaps=True,
+        min_grazing_cos=0.0,
     )
     for name, results, score_key in [
         ("localize_keypoints", localized, "zncc"),
-        ("refine_keypoints", refined, "scores"),
+        ("refine_keypoints", refined, "zncc"),
     ]:
         assert {int(r["point_index"]) for r in results} == set(pids)
         moved_any = False

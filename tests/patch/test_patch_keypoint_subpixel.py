@@ -81,7 +81,7 @@ def test_refine_keypoints_array_contract_and_never_worse(
         views = np.asarray(r["views"], dtype=np.int64)
         kpts = np.asarray(r["keypoints"], dtype=np.float64)
         offs = np.asarray(r["offsets_px"], dtype=np.float64)
-        scores = np.asarray(r["scores"], dtype=np.float64)
+        scores = np.asarray(r["zncc"], dtype=np.float64)
 
         # Parallel arrays, no duplicates, indices in range.
         assert kpts.shape == (len(views), 2)
@@ -103,7 +103,7 @@ def test_refine_keypoints_array_contract_and_never_worse(
             assert np.allclose(np.linalg.norm(kpts[k] - proj), offs[k], atol=1e-6)
 
         # Never worse than the seed: every finite refined score is >= its seed score.
-        sscores = np.asarray(seed_by_pid[pid]["scores"], dtype=np.float64)
+        sscores = np.asarray(seed_by_pid[pid]["zncc"], dtype=np.float64)
         both_finite = np.isfinite(scores) & np.isfinite(sscores)
         assert np.all(scores[both_finite] >= sscores[both_finite] - 1e-6), (
             f"point {pid}: a refined score dropped below the seed"
@@ -162,7 +162,7 @@ def test_refine_keypoints_empty_view_set_yields_empty_arrays(
     assert np.asarray(res[0]["views"]).shape == (0,)
     assert np.asarray(res[0]["keypoints"]).shape == (0, 2)
     assert np.asarray(res[0]["offsets_px"]).shape == (0,)
-    assert np.asarray(res[0]["scores"]).shape == (0,)
+    assert np.asarray(res[0]["zncc"]).shape == (0,)
 
 
 def test_refine_keypoints_rejects_out_of_range_view_index(

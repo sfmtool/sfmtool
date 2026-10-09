@@ -43,7 +43,7 @@ pub(in crate::patch::keypoint_subpixel) fn znorm_core(
 }
 
 /// Channel-averaged windowed ZNCC of a z-normalized core against the unit-norm
-/// consensus template (both `[c * n + k]`): the ECC score `S(δ)`.
+/// template, the reference render (both `[c * n + k]`): the ECC score `S(δ)`.
 pub(in crate::patch::keypoint_subpixel) fn ecc_score(
     znorm: &[f32],
     tmpl: &[f32],

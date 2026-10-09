@@ -237,7 +237,7 @@ pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usi
 /// harmless — they only feed discarded grid cells). The per-pixel invalidity
 /// plane (`1.0` out of frame, else `0.0`) lives alongside in the same `istride`
 /// row layout for the SIMD validity pass; the `bool` `valid` map is kept too for
-/// the integer-tracked consensus core read.
+/// the integer-tracked core read (`extract_core`).
 struct ContextTile {
     /// Side length of the (square) tile, in patch-grid px.
     res: usize,
@@ -248,7 +248,7 @@ struct ContextTile {
     channels: usize,
     /// Per-channel mean over the cache (the value subtracted to produce
     /// [`planes`](Self::planes)). Used to recover original-scale values on the
-    /// consensus-core read (`extract_core`) and to fold back into the numerator
+    /// core read (`extract_core`) and to fold back into the numerator
     /// (`Ncross = Ncross' + mean · Σ kern`).
     means: Vec<f32>,
     /// Centered per-channel planes: `planes[c][row · istride + col] = I_c − means[c]`.
@@ -474,7 +474,7 @@ fn extract_core(
     for (k, &p) in support.pixels.iter().enumerate() {
         let (r, c) = (p / resolution, p % resolution);
         // The `valid` plane stays in the tight `tile_res`-stride layout (it's a
-        // per-pixel mask for the consensus core read, not part of the SIMD hot
+        // per-pixel mask for the core read, not part of the SIMD hot
         // loop); the centered planes live in the padded `istride` layout.
         if !tile.valid[(oy + r) * tile_res + (ox + c)] {
             return false;
@@ -496,8 +496,8 @@ fn extract_core(
 /// `floor` of `0.0` or below disables the gate exactly — a negative correlation
 /// is only refused when the caller asks for a positive floor.
 #[inline]
-fn below_absolute_floor(loo: f64, floor: f64) -> bool {
-    floor > 0.0 && loo.is_finite() && loo < floor
+fn below_absolute_floor(zncc: f64, floor: f64) -> bool {
+    floor > 0.0 && zncc.is_finite() && zncc < floor
 }
 
 /// One view's **own** core's ZNCC self-similarity radius, the number the
@@ -747,7 +747,9 @@ pub fn localize_patch_keypoints(
 /// #     views: &[ProjectedImage<'_>],
 /// #     view_set: &[u32],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
-/// // The first view of the set is the point's reference observation.
+/// // The first view of the set is the point's reference observation. It is
+/// // the reference reported unless the grazing pre-filter turns it away or its
+/// // tile cannot be rendered at its keypoint.
 /// let localized = try_localize_patch_keypoints(
 ///     patch,
 ///     views,
@@ -757,7 +759,10 @@ pub fn localize_patch_keypoints(
 ///     &KeypointLocalizeParams::default(),
 ///     &Progress::none(),
 /// )?;
-/// assert_eq!(localized.reference, Some(view_set[0]));
+/// if let Some(reference) = localized.reference {
+///     let k = localized.views.iter().position(|&v| v == reference).unwrap();
+///     assert_eq!(localized.zncc[k], 1.0);
+/// }
 /// # Ok(())
 /// # }
 /// ```

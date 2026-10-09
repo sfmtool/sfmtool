@@ -92,7 +92,9 @@ pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usi
 The kernel is bound as `PatchCloud.localize_keypoints` and called per point by
 the pipeline in [_embed_patches.py](../../../src/sfmtool/_embed_patches.py).
 
-**Example.** The first view of the set is the point's reference observation:
+**Example.** The first view of the set is the point's reference observation.
+It is the reference reported unless the grazing pre-filter turns it away or its
+tile cannot be rendered at its keypoint:
 
 ```rust
 let localized = try_localize_patch_keypoints(
@@ -104,7 +106,10 @@ let localized = try_localize_patch_keypoints(
     &KeypointLocalizeParams::default(),
     &Progress::none(),
 )?;
-assert_eq!(localized.reference, Some(view_set[0]));
+if let Some(reference) = localized.reference {
+    let k = localized.views.iter().position(|&v| v == reference).unwrap();
+    assert_eq!(localized.zncc[k], 1.0);
+}
 ```
 
 ## What the keypoint encodes
@@ -135,7 +140,9 @@ placed against the same pixels every score on the bench reads them against.
 **Which reference.**
 
 1. The caller's: the position in `view_set` of the point's stored reference
-   observation, or on the bench the reference the track holds.
+   observation, or on the bench the reference the track holds. It is matched
+   by image, so a reference given at the dropped slot of a repeated image still
+   counts.
 2. Where the caller passes none, or the one it passes is turned away by the
    grazing pre-filter, the reference-view rule picks one from the views' renders
    at their starting keypoints, as every render of the stored bitmap does.
@@ -143,14 +150,16 @@ placed against the same pixels every score on the bench reads them against.
    pick only through its last fallback), the template is the **fused mean** of
    the views at their starting keypoints (the IRLS-weighted mean of
    [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md#the-fused-mean)),
-   which is then the point's stored bitmap. No view is the anchor, and every
+   which is then the point's stored bitmap. No view is held fixed, and every
    view is searched. Where no fused mean renders either, the rule's
    last-fallback pick is the reference after all.
 
-A view set of one view is its own reference.
+A view set of one view is its own reference. The resolution is one function,
+`resolve_reference`, which the sub-pixel refiner calls too, with the same
+grazing pre-filter.
 
-**The reference is not moved.** Its keypoint is the anchor of the track:
-aligning it to its own render would return it where it is. Whatever error the
+**The reference is not moved.** Aligning it to its own render would return it
+where it is. Whatever error the
 reference's keypoint carries is shared by every view aligned to it, so it moves
 the triangulated point rather than adding reprojection error, and the
 per-observation confidence, not the alignment, is where its uncertainty belongs.
@@ -186,8 +195,12 @@ For one point with view set `G`:
    (zero for a view started at the projection). The sampler for every render of
    the view is chosen once, at that keypoint.
 3. **Resolve the reference** and render the template, as above. Where nothing
-   renders to align to (the reference's tile leaves the frame or is flat, or no
-   fused mean renders), every view stays at its start, unscored.
+   renders to align to (the reference's tile leaves the frame or is flat at its
+   keypoint, its keypoint does not map onto the patch plane, or no fused mean
+   renders), there is no reference: every view, the given reference included,
+   keeps its starting keypoint exactly as given, unscored, and still faces the
+   `max_shift_px` gate. The refiner does the
+   same, so both report no reference for such a point.
 4. **Per view other than the reference:**
    - render one **context tile**, the `R×R` core extended by `margin =
      ⌈search⌉` grid px on every side, centred on `start[v]`;
@@ -215,7 +228,10 @@ The search, the context tile and the kernels that make them cheap are in
 The quadratic step is an estimate; an accurate sub-pixel keypoint is the job of
 the continuous refiner
 ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)), which runs
-after this against the same reference render.
+after this. It resolves the reference by the same function, with the same
+grazing pre-filter, so given the reference this reports it aligns to the same
+observation's render; where this aligned to the fused mean, it resolves again
+from the kept views at their new keypoints.
 
 **Every render is from the source photograph.** The context tile is rendered
 once per view from the source image, and every candidate shift reads it at an
@@ -234,7 +250,7 @@ far a keypoint sits from the projection in grid px.
 units, measured from `X_p`. The keypoint is the image projection of that centre:
 
 ```
-center_v = X_p + off[v].s · û_p + off[v].t · v̂_p     # patch centre on the plane
+center_v = X_p + off[v].s · wpp_u · û_p − off[v].t · wpp_v · v̂_p   # patch centre on the plane
 keypoint_j = ray_to_pixel_i(R_i · center_v + t_i)
 ```
 
@@ -249,8 +265,10 @@ recovers `center_v`: the inverse of the format spec's reader relationship
 input order:
 
 - `views`: the kept image indices. The reference observation is always kept
-  when its render is the template. Every other view can be dropped, so the set can hold one view, or none, for the caller's `min_views`
-  cull to remove;
+  when its render is the template. Every other view can be dropped, so the set
+  can hold one view, or none, for the caller's `min_views` cull to remove.
+  Where there was nothing to align to, every view is kept at its start unless
+  the `max_shift_px` gate drops it;
 - `keypoints`: the localized keypoint per kept view, source px; the reference's
   is its starting keypoint, exactly;
 - `offsets_px`: the keypoint's distance from the point's projection, source px;
@@ -286,7 +304,7 @@ its number, which is what a *reading* of a track rather than a fit of one needs
 
 ## The member self-similarity gate
 
-A view whose own tile pins no 2D position (a flat sky or water crop, a lone
+A view whose own tile fixes no 2D position (a flat sky or water crop, a lone
 straight edge) matches itself a few pixels away, so its ZNCC against anything
 cannot place it. The member gate refuses such a view before it is searched.
 
@@ -459,7 +477,7 @@ What it decided:
 - **The "+"-descent is the default search.** From starting keypoints within
   1 px of the truth it places views closer than the exhaustive search, because
   a side peak of a repeated texture can score higher than the true peak, and
-  the descent climbs to the peak nearest the start, which is the evidence for
+  the descent stops at the peak nearest the start, which is the evidence for
   which peak is meant. From 2 to 3 px off the exhaustive search does better, so
   a caller whose starting keypoints may be that far off can choose
   `SearchStrategy::Exhaustive`.

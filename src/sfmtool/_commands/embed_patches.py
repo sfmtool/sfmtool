@@ -283,6 +283,13 @@ def embed_patches_command(
     input_path = check_sfmr_path(input_path, "Input path")
 
     if output_path is not None:
+        if output_path.isdigit():
+            # `--subpixel N` from before the flag became a switch: the count is
+            # read as the output path.
+            raise click.UsageError(
+                f"--subpixel no longer takes a count (got {output_path}); use "
+                "--subpixel or --no-subpixel, and --rounds for the number of rounds."
+            )
         output_path = check_sfmr_path(output_path, "Output path")
     else:
         output_path = auto_output_path(input_path, suffix="embedded")

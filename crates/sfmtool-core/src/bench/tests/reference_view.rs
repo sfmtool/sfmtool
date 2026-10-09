@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use ndarray::Array3;
 
+use crate::bench::evaluate::open_localizer;
 use crate::bench::{
     apply_thresholds, commit, create_track, evaluate, evaluate_rendering_bitmap, fit, pin_verdicts,
     render_bitmap_in_place, score_bitmap, set_reference, set_stage, set_verdict, sight_observation,
@@ -21,6 +22,7 @@ use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::{PhotographCache, WarpMap};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
+use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
 use crate::patch::keypoint_subpixel::{
     fuse_patch_bitmap, refine_patch_keypoints, KeypointSubpixelParams,
 };
@@ -670,6 +672,34 @@ fn the_sub_pixel_refiner_stores_the_fused_mean_for_a_last_fallback_pick() {
     );
     assert_eq!(out.reference, None);
     assert!(out.representative.is_some(), "the fused mean");
+}
+
+#[test]
+fn the_localizer_aligns_to_the_fused_mean_for_a_last_fallback_pick() {
+    // With no reference given and a rule that reaches its pick only by its
+    // last fallback, the template is the fused mean: no view is the
+    // reference, so none scores the 1.0 of a view against its own render, and
+    // every kept view is scored against the mean.
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let params = KeypointLocalizeParams {
+        resolution: 24,
+        ..open_localizer()
+    };
+    let out = localize_patch_keypoints(
+        &patch,
+        &views,
+        &images,
+        Some(&anchors(&keypoints)),
+        None,
+        &params,
+    );
+    assert_eq!(out.reference, None);
+    assert!(out.views.len() >= 2, "{:?}", out.views);
+    for (&v, &z) in out.views.iter().zip(&out.zncc) {
+        assert!(z.is_finite() && z < 1.0, "view {v} scores {z}");
+    }
 }
 
 #[test]

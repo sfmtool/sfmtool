@@ -101,8 +101,8 @@ pub struct ViewSearch {
     /// The point's projection into the view, source px.
     pub projection: [f64; 2],
     /// The keypoint at the correlation peak (the integer peak plus the
-    /// sub-pixel step of the 3×3 quadratic fit), source px. `None` when no shift of the window could
-    /// be scored in frame, or the shifted centre does not project.
+    /// sub-pixel step of the 3×3 quadratic fit), source px. `None` when no shift of the window
+    /// could be scored in frame, or the shifted centre does not project.
     pub keypoint: Option<[f64; 2]>,
     /// The ZNCC at the integer peak, against the template. `NaN` without a
     /// peak.
@@ -253,6 +253,7 @@ impl TrackReferences {
                     &kept_refs,
                     &seeds,
                     given,
+                    params.min_grazing_cos,
                     resolution,
                     params.window,
                     params.sampler,
@@ -351,7 +352,7 @@ impl TrackReferences {
     /// project into the view's frame.
     ///
     /// With `ascend_on_edge`, a window whose highest peak sits on its edge is
-    /// searched again by the "+"-descent from the start, which climbs to the
+    /// searched again by the "+"-descent from the start, which stops at the
     /// local maximum nearest the start. Where that maximum is inside the window
     /// it is the answer (and [`ViewSearch::ascended`] says so): a repeated
     /// texture can put a stronger correlation a pattern period away, and the

@@ -177,7 +177,7 @@ defaults). The scratch the descent uses (`pd_kerns`, `pd_tsums`,
 `pd_per_channel`, `pd_visited`) is reused across every view of a point, so it
 allocates nothing after the first view.
 
-**Why it is the default.** The descent climbs to the correlation peak nearest
+**Why it is the default.** The descent stops at the correlation peak nearest
 the starting keypoint, which is the evidence for which of several similar peaks
 is meant. On the seoul_bull and kerry_park ground truths it places views closer
 to the truth than the whole-grid search from starting keypoints within 1 px of

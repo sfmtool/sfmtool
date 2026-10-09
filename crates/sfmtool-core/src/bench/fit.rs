@@ -1097,7 +1097,10 @@ fn fit_round(
             localized
                 .reference
                 .and_then(|r| localized.views.iter().position(|&v| v == r)),
-            &options.refine,
+            &KeypointSubpixelParams {
+                min_grazing_cos: options.localize.min_grazing_cos,
+                ..options.refine.clone()
+            },
             &phase,
         );
         progress_note!(phase, "{} views", refined.views.len());

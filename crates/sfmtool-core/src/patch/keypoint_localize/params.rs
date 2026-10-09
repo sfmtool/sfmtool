@@ -22,7 +22,7 @@ pub enum SearchStrategy {
     /// which reuses the 4 cardinal neighbours already in the cache and scores
     /// the 4 diagonal ones.
     ///
-    /// **The default.** It climbs to the correlation peak nearest the starting
+    /// **The default.** It stops at the correlation peak nearest the starting
     /// keypoint, which is the evidence for which of several similar peaks is
     /// meant. On the seoul_bull and kerry_park ground truths it places views
     /// closer to the truth than [`Exhaustive`](Self::Exhaustive) from starting
@@ -97,7 +97,7 @@ pub struct KeypointLocalizeParams {
     /// at the patch resolution ([`SamplerChoice::for_observation`]), and every
     /// tile of the view, the wider context tile included, is rendered with it.
     pub sampler: SamplerChoice,
-    /// IRLS reweighting passes for the fused mean that stands as the template
+    /// IRLS reweighting passes for the fused mean that is the template
     /// where the reference-view rule picks no reference it would store.
     pub robust_iters: u32,
     /// How each view's shift grid is traversed; see [`SearchStrategy`].
@@ -155,10 +155,17 @@ impl Default for KeypointLocalizeParams {
 /// out-of-frame, unlocalizable, large-shift and low-agreement views are
 /// dropped).
 ///
-/// The reference observation is always kept when it renders, at the keypoint
-/// it was given. Every other view can be dropped, so the kept set can be a
-/// single view, or none where the reference itself could not be rendered,
-/// for the caller's `min_views` cull to remove.
+/// The reference observation is always kept when its tile renders, at the
+/// keypoint it was given. Every other view can be dropped, so the kept set can
+/// be a single view, for the caller's `min_views` cull to remove.
+///
+/// Where there is nothing to align to (the reference's tile leaves the frame,
+/// is flat or its keypoint does not map onto the patch plane, or there is no
+/// reference and no fused mean renders), [`reference`](Self::reference) is
+/// `None` and no view is searched: every view, the given reference included, is
+/// kept at its starting keypoint, exactly as given (the projection where it was
+/// given none or it does not map onto the patch plane), with a `NaN` ZNCC, and
+/// still faces the `max_shift_px` gate.
 #[derive(Debug, Clone, Default)]
 pub struct KeypointLocalization {
     /// The kept image indices (into the `views` slice), a subset of the input
@@ -179,6 +186,6 @@ pub struct KeypointLocalization {
     /// The image index of the reference observation the views were aligned
     /// to. `None` where there was none to align to: the reference-view rule
     /// picked no reference it would store, so the template was the fused mean
-    /// of the views, or nothing rendered to align to.
+    /// of the views, or nothing rendered to align to (see above).
     pub reference: Option<u32>,
 }

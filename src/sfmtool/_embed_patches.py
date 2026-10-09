@@ -441,10 +441,11 @@ def embed_patches(
        observation, or the views' fused mean where there is none (points at
        infinity included — they render through the same ``w``-aware path),
        and reports per-point validity and the reference's image, which the
-       output records as the point's reference observation. After the compaction, every point with a reference is rendered
-       again from that observation through the stored ``f32`` keypoints and
-       frame (:func:`~sfmtool._patch_compaction.render_from_references`), so
-       dropping and adding the bitmaps gives the same bytes.
+       output records as the point's reference observation. After the compaction, every
+       point with a reference is rendered again from that observation through the stored
+       ``f32`` keypoints and frame
+       (:func:`~sfmtool._patch_compaction.render_from_references`), so dropping and
+       adding the bitmaps gives the same bytes.
     4. **Cull + compact**: drop points left below ``min_views`` **and** points the
        sub-pixel pass produced no valid bitmap for (the culled-point
        signal, uniform for finite and infinity points), then renumber the
@@ -473,11 +474,11 @@ def embed_patches(
             reference render is finite and below this **absolute** floor.
             ``0`` disables it.
         max_member_zncc_self_similarity_radius: Localizer gate — drop a view
-            whose **own** rendered tile pins no 2D position: its ZNCC
+            whose **own** rendered tile fixes no 2D position: its ZNCC
             self-similarity radius is above this, in patch-grid px. A flat sky
             or water crop, or a lone straight edge, matches itself a few pixels
-            away, so it is refused before it is scored. The radius reads at most ``3``, so ``3`` or more
-            turns nothing out; ``0`` disables it. Default ``2.5``.
+            away, so it is refused before it is scored. The radius reads at most ``3``,
+            so ``3`` or more turns nothing out; ``0`` disables it. Default ``2.5``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
             (normal refinement, view selection, the discrete localizer, and the
@@ -552,6 +553,9 @@ def embed_patches(
     # Shares the xform surfaces' tuple so the two can't drift.
     if sampler not in _SAMPLERS:
         raise ValueError(f"sampler must be one of {_SAMPLERS}, got {sampler!r}")
+    # `subpixel` was a count of sub-pixel passes; it is now on or off.
+    if not isinstance(subpixel, bool):
+        raise ValueError(f"subpixel must be a bool, got {subpixel!r}")
 
     log = progress if callable(progress) else None
     half_extent = patch_size / 2.0
@@ -634,10 +638,10 @@ def embed_patches(
     #    align it to the point's reference render, dropping views that won't
     #    co-register. Runs once, in round 1. The reference is the observation
     #    an embedded_patches input stores for the point, where it is in the view
-    #    set, and otherwise the reference-view rule's pick. An observed view seeds at its stored keypoint — the position it
-    #    was matched at — and a view selection added seeds at the point's
-    #    projection (it observes nothing, so it has no keypoint), which is the
-    #    per-view `None` the binding takes.
+    #    set, and otherwise the reference-view rule's pick. An observed view seeds at
+    #    its stored keypoint — the position it was matched at — and a view selection
+    #    added seeds at the point's projection (it observes nothing, so it has no
+    #    keypoint), which is the per-view `None` the binding takes.
     localize_seeds: dict[int, list[list[float] | None]] | None = None
     if keypoint_anchor:
         stored = _stored_keypoints_by_image(embedded)

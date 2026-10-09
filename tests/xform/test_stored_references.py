@@ -143,13 +143,18 @@ def test_refine_keypoints_keeps_stored_references(embedded):
     assert (refs[stored < 0] >= 0).any(), "a point at -1 takes the refiner's pick"
     _assert_drop_then_add_reproduces(out)
 
-    # Without bitmaps the old ones, rendered at the old keypoints, go; the
-    # references stay for a later render.
+    # Without bitmaps the old ones, rendered at the old keypoints, go. The
+    # stored references stay, and a point at -1 takes the reference its views
+    # were aligned to, as with bitmaps, so a later render uses the reference
+    # the keypoints were refined against.
     bare = RefineKeypointsTransform(
         resolution=RESOLUTION, max_gn_steps=2, bitmaps=False
     ).apply(recon)
     assert bare.patch_bitmaps is None
-    np.testing.assert_array_equal(np.asarray(bare.reference_observations), stored)
+    bare_refs = np.asarray(bare.reference_observations)
+    np.testing.assert_array_equal(bare_refs[stored >= 0], stored[stored >= 0])
+    assert (bare_refs[stored < 0] >= 0).any(), "a point at -1 takes the refiner's pick"
+    np.testing.assert_array_equal(bare_refs, refs)
 
 
 def test_refine_normals_keeps_stored_references(embedded):
@@ -178,6 +183,36 @@ def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded, ro
     )
     _assert_references_follow_their_images(recon, stored, out, picks=True)
     _assert_drop_then_add_reproduces(out)
+
+
+def test_embed_patches_rounds_keep_the_references_without_bitmaps(
+    embedded, monkeypatch
+):
+    """With the self-similarity cull off, round 1's sub-pixel pass renders no
+    bitmaps. The references its views were aligned to are still recorded in
+    the intermediate compaction, so round 2 refines against the same ones."""
+    import sfmtool._embed_patches as ep
+
+    compacted: list[SfmrReconstruction] = []
+    real = ep.compact_to_embedded_patches
+
+    def spy(*args, **kwargs):
+        out = real(*args, **kwargs)
+        compacted.append(out)
+        return out
+
+    monkeypatch.setattr(ep, "compact_to_embedded_patches", spy)
+    embed_patches(
+        embedded,
+        load_workspace_images(embedded),
+        resolution=RESOLUTION,
+        rounds=2,
+        max_zncc_self_similarity_radius=0,
+    )
+    # The first compaction is round 2's input; the last is the final result.
+    assert len(compacted) >= 2
+    intermediate = np.asarray(compacted[0].reference_observations)
+    assert (intermediate >= 0).mean() > 0.9, (intermediate >= 0).mean()
 
 
 def test_localize_keypoints_remaps_stored_references(embedded):

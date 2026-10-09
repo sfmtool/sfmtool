@@ -261,7 +261,7 @@ class RefineKeypointsTransform:
         """
         offsets: list[np.ndarray] = []
         for d in result:
-            scores = np.asarray(d["scores"], dtype=np.float64)
+            scores = np.asarray(d["zncc"], dtype=np.float64)
             off = np.asarray(d["offsets_px"], dtype=np.float64)
             scored = np.isfinite(scores)
             offsets.append(off[scored])

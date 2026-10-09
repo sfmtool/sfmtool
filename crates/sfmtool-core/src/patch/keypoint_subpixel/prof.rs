@@ -41,8 +41,7 @@ pub static TOTAL: Phase = Phase::new("subpixel_total");
 /// that (point, view) pair then reads this tile.
 pub static TILE_PRERENDER: Phase = Phase::new("tile_prerender");
 /// Value-only tile reads (`RefineTile::read_core`): the seed score, every
-/// line-search candidate, the per-sweep re-render, the PerMove kept-offset
-/// refresh, and the representative's final-offset cores.
+/// line-search candidate, and the representative's final-offset cores.
 pub static VALUE_READ: Phase = Phase::new("value_read");
 /// Jacobian-plane tile reads for the GN normal equations
 /// (`RefineTile::read_jg`), one per Gauss–Newton step (the value core is

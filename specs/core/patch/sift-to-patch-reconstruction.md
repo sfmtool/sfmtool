@@ -186,7 +186,7 @@ thereafter (the per-round obliquity drop).
    stores one in `G`, or the one an earlier round recorded, and otherwise the
    [reference-view rule](reference-view.md)'s pick from the renders at the
    starting keypoints; its keypoint is not moved. The localizer drops views
-   that cannot be aligned (grazing, out-of-frame, a tile that pins no position,
+   that cannot be aligned (grazing, out-of-frame, a tile that fixes no position,
    large-shift `max_shift_px`, a ZNCC against the reference below
    `min_absolute_zncc` or below `min_relative_zncc` times the median of the
    other views) and returns the kept views with their keypoints and their ZNCC

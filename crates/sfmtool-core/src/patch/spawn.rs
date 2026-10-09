@@ -1,13 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Candidate track spawning: congeal a new track at an in-plane offset from an
+//! Candidate track spawning: localize a new track at an in-plane offset from an
 //! existing patched point.
 //!
 //! A **candidate** is a synthetic patch placed at `X_p + du·hu_p + dv·hv_p` —
 //! the parent's frame translated along its own half-extent vectors, so a request
 //! speaks the patch's own scale and stays in its plane. The candidate is then put
-//! through exactly the machinery a real track is congealed with: discrete
+//! through exactly the machinery a real track is localized with: discrete
 //! cross-view [localization](super::keypoint_localize), [sub-pixel
 //! refinement](super::keypoint_subpixel), triangulation of the refined keypoints'
 //! rays, and the same acceptance gates. What comes back is a vetted
@@ -103,7 +103,7 @@ pub struct SpawnedTracks {
     /// not [`SpawnStatus::Spawned`].
     pub positions: Vec<[f64; 3]>,
     /// Per candidate, the requested centre `X_c` — always filled, so a caller can
-    /// measure how far the congealed position moved from what it asked for.
+    /// measure how far the localized position moved from what it asked for.
     pub requested_centers: Vec<[f64; 3]>,
     /// Per candidate, the RMS reprojection error of [`positions`](Self::positions)
     /// against the refined keypoints. `NaN` for a candidate that died before the

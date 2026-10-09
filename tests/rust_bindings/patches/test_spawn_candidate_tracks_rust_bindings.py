@@ -421,7 +421,7 @@ class TestLocalizeStartingKeypoints:
     def test_seeds_recover_a_point_whose_cloud_position_is_displaced(self, scene):
         """The case the default seeding cannot reach: the cloud row's centre is
         wrong, but the caller's seeds point at the true image locations. Seeded,
-        localization stays on the evidence; unseeded, it congeals around the
+        localization stays on the evidence; unseeded, it is localized around the
         wrong projection instead."""
         truth = np.array([0.0, 0.0, PLANE_Z])
         displaced = truth + U_AXIS * (DISPLACE_GRID_PX * WPP)
