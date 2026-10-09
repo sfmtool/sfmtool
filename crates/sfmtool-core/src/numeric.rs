@@ -158,6 +158,13 @@ pub fn median(values: &[f64]) -> f64 {
 /// The empty-input rule is the median's: `NaN`, never an invented number. A
 /// slice sorted with [`f64::total_cmp`] carries its NaNs at the top, so a NaN
 /// quantile means NaN reached that rank of the population.
+///
+/// An infinite order statistic is returned as is rather than turned into NaN
+/// by `∞ − ∞`: the rank itself (`t = 0`) or two equal bracketing values give
+/// that value, and an infinite gap `b − a` interpolates from `a`, which gives
+/// `∞` for any `t > 0`. A residual of `∞` marks a point outside the camera's
+/// domain, and a trim bound at such a rank keeps every residual at or below it,
+/// as the copies this replaced did. Finite input is unaffected.
 pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
     let n = sorted.len();
     if n == 0 {
@@ -168,10 +175,14 @@ pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
     let high = (low + 1).min(n - 1);
     let t = position - low as f64;
     let (a, b) = (sorted[low], sorted[high]);
-    if t >= 0.5 {
-        b - (b - a) * (1.0 - t)
+    if t == 0.0 || a == b {
+        return a;
+    }
+    let gap = b - a;
+    if t >= 0.5 && gap.is_finite() {
+        b - gap * (1.0 - t)
     } else {
-        a + (b - a) * t
+        a + gap * t
     }
 }
 

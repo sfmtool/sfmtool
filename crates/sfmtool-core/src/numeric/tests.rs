@@ -217,6 +217,19 @@ fn an_empty_quantile_is_nan() {
 }
 
 #[test]
+fn an_infinite_order_statistic_is_not_turned_into_nan() {
+    let inf = f64::INFINITY;
+    // At the rank itself, and between two equal infinities.
+    assert_eq!(quantile_of_sorted(&[1.0, inf], 1.0), inf);
+    assert_eq!(quantile_of_sorted(&[1.0, inf, inf], 0.75), inf);
+    // An infinite gap, on both sides of the `t >= 0.5` split.
+    assert_eq!(quantile_of_sorted(&[1.0, inf], 0.25), inf);
+    assert_eq!(quantile_of_sorted(&[1.0, inf], 0.75), inf);
+    // A finite rank below an infinite neighbour.
+    assert_eq!(quantile_of_sorted(&[1.0, 2.0, inf], 0.5), 2.0);
+}
+
+#[test]
 fn a_nan_minority_stays_above_a_low_quantile() {
     // `total_cmp` sorts NaN to the top, so it reaches only the quantiles at
     // the rank it occupies.
