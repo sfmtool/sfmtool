@@ -330,5 +330,5 @@ duplicated.
 - **No contrast floor.** "Not enough signal" is inferred from the
   self-agreement threshold. Self-agreement does not separate a textureless
   patch (little signal, untrustworthy) from a track whose views genuinely
-  disagree (real signal, real disagreement); both fall below
-  `min_self_agreement` and are admitted verbatim.
+  disagree (real signal, real disagreement); either can fall below
+  `min_self_agreement`, and is then admitted verbatim.
