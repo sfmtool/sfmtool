@@ -145,6 +145,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Proposed fix: fix the docstring now. Cut the MCP handler docs to the argument mapping plus an intra-doc link to the core step. The catalog text stays, because it is what a wire user reads.
 - Effort: low. Risk: low.
 
+> _Status (2026-10-09): **Done** — the Python `translate_patch_to_pixel` docstring now says every keypoint is carried by the same displacement and keeps its in-plane offset, and that the report's `pixel` is where the dragged sighting now sits (it also said the centre's projection); the `translate_bench_patch` handler doc is cut to the argument mapping with links to `sfmtool_core::bench::translate_patch` and `translate_patch_to_pixel`. The `commit` / `commit_bench_track` wrapper ratios are not touched. Branch `hygiene-fix-1009-01-translate-patch-docstring`._
+
 ## Carried forward
 
 **Convert the remaining `mod.rs` files and rename the settings structs** (from "Record the module-file and parameter-bag naming rules", Partially done on 2026-10-08, #862)

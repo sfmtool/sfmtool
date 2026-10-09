@@ -1118,16 +1118,18 @@ fn set_reference(
 /// This moves the **patch**, not one sighting: a track-stage track has one
 /// patch and every observation is a view of it, so the centre moves in-plane,
 /// the half-vectors and the normal are kept, and every observation's keypoint
-/// becomes the projection of the new centre through its own camera. Nothing is
-/// pinned -- a translation says where the patch is, not whether a sighting
-/// belongs to it -- and the measurements and the bitmap go, because all of them
-/// were read at a place the patch has left. A sighting the moved centre no
-/// longer projects into is left with no keypoint and ``NoProjection`` as its
-/// reason.
+/// is carried along the plane by that same displacement, keeping its own
+/// in-plane offset from the centre. That offset is what each observation's
+/// tile is cut on, so resetting the keypoints to the centre's projection would
+/// scramble the correlation the next reading scores. Nothing is pinned -- a
+/// translation says where the patch is, not whether a sighting belongs to it --
+/// and the measurements and the bitmap go, because all of them were read at a
+/// place the patch has left. A sighting the moved centre no longer projects
+/// into is left with no keypoint and ``NoProjection`` as its reason.
 ///
 /// The pointer is read against the outline as drawn: the patch re-anchored on
-/// that observation's own sighting. :func:`sight_observation` is the step
-/// for **one** keypoint.
+/// that observation's own sighting, so that sighting lands under ``pixel``.
+/// :func:`sight_observation` is the step for **one** keypoint.
 ///
 /// A pixel off the photograph names no place on it, so it is brought to the
 /// nearest pixel of ``[0, width) x [0, height)`` before anything is moved; the
@@ -1136,7 +1138,7 @@ fn set_reference(
 /// comes back as it was.
 ///
 /// Returns ``(EditableTrack, report)`` carrying ``observation``, ``image``,
-/// ``pixel`` (where the centre now projects in it), ``center``, ``moved``,
+/// ``pixel`` (where that observation's sighting now sits), ``center``, ``moved``,
 /// ``placed``, ``changed``, ``clamped`` and ``clamped_from``.
 #[pyfunction]
 fn translate_patch_to_pixel(

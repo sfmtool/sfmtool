@@ -682,24 +682,10 @@ pub(super) fn add_bench_track_observation(
 /// `translate_bench_patch`: the patch moved, by a displacement on its own axes
 /// or to a pixel.
 ///
-/// **One tool for the two ways to say where it goes**, because they are one
-/// step: a track-stage track has one patch and every observation is a view of
-/// it, so both forms move the patch and not a sighting, and every keypoint is
-/// carried by the same displacement, keeping its own offset from the centre's
-/// projection.
-///
-/// `by` is `[u, v, n]` on the patch's own orthonormal axes, in scene units. Its
-/// tangential part slides the patch across its own plane, which a pixel can
-/// also say; its normal part is the one no sighting can, a keypoint naming the
-/// ray the patch lies along and not how far down it the surface is. A track at
-/// infinity refuses a `by` with a normal part and carries a tangential one.
-///
-/// The pixel form names the photograph the pixel is in, which is also the
-/// outline the pointer is read against, and lands that outline's centre under
-/// it: an `observation`, whose outline is the patch re-anchored on its keypoint,
-/// or a `camera_image`, whose outline is the patch as it stands. The second is
-/// the ghost outline's centre drag, and it reaches an image the track has no
-/// sighting in.
+/// `by` goes to [`sfmtool_core::bench::translate_patch`]. A `pixel` with its
+/// `observation` or `camera_image` goes to
+/// [`sfmtool_core::bench::translate_patch_to_pixel`] as a [`Viewpoint`], and
+/// the reply carries where the pointer's square landed.
 pub(super) fn translate_bench_patch(
     state: &mut AppState,
     label: &str,
