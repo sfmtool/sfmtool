@@ -4,7 +4,7 @@
 """Threshold and window constants for reconstruction discontinuity analysis.
 
 Shared by `recon_discontinuity.py` (which computes the signals),
-`recon_console.py` (which prints the console table) and `report.py` (which
+`_recon_console.py` (which prints the console table) and `report.py` (which
 serializes the results).
 
 Secondary discontinuity signals complement pose extrapolation — they catch
