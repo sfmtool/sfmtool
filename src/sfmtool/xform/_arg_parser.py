@@ -207,12 +207,9 @@ _REFINE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "window_sigma": float,
     "sampler": str,
     "robust_iters": int,
-    "max_outer_sweeps": int,
-    "outer_convergence_px": float,
     "max_gn_steps": int,
     "convergence_px": float,
     "max_offset_px": float,
-    "consensus_refresh": str,
 }
 
 
@@ -276,7 +273,6 @@ def parse_minimal_params(param: str) -> MinimalTransform:
 # afterward to regenerate them, since that op renders bitmaps by default.)
 _LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "min_views": int,
-    "max_iters": int,
     "search": float,
     "max_shift_px": float,
     "min_relative_zncc": float,
@@ -288,10 +284,7 @@ _LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "window_sigma": float,
     "sampler": str,
     "robust_iters": int,
-    "convergence_px": float,
-    "search_resolution_multiplier": float,
     "search_strategy": str,
-    "basis_max_views": int,
 }
 
 

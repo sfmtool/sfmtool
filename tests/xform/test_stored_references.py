@@ -181,17 +181,19 @@ def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded, ro
 
 
 def test_localize_keypoints_remaps_stored_references(embedded):
-    """The localizer rebuilds the tracks and drops the bitmaps; each point keeps
-    its reference where its track still holds that image, and -1 where the
-    localizer dropped it."""
+    """The localizer rebuilds the tracks and drops the bitmaps. It aligns each
+    point's views to its stored reference observation, which it keeps, so each
+    point keeps its reference where its track still holds that image; a point
+    that stored none, or whose reference the grazing pre-filter turned away,
+    records the reference-view rule's pick its views were aligned to."""
     stored = _other_references(embedded)
     recon = embedded.clone_with_changes(reference_observations=stored)
     out = LocalizeKeypointsTransform().apply(recon)
     assert out.patch_bitmaps is None
-    _, lost = _assert_references_follow_their_images(recon, stored, out, picks=False)
-    # The localizer drops some reference images on this fixture, so the -1
-    # branch is exercised.
-    assert lost > 0
+    kept, lost = _assert_references_follow_their_images(recon, stored, out, picks=True)
+    assert lost <= kept // 10, (kept, lost)
+    # The points that stored none now name the reference they were aligned to.
+    assert (np.asarray(out.reference_observations) >= 0).mean() > 0.9
 
 
 def test_bundle_adjust_keeps_stored_references(embedded):

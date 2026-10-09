@@ -106,6 +106,54 @@ def reference_observations_from_images(
     return out
 
 
+def stored_reference_images(recon: SfmrReconstruction) -> np.ndarray:
+    """The image of each point's stored reference observation.
+
+    Returns ``(P,)`` int64, one image index per point of ``recon``, ``-1``
+    where the point stores no reference observation (or ``recon`` stores none
+    at all).
+    """
+    out = np.full(recon.point_count, -1, dtype=np.int64)
+    if recon.reference_observations is None:
+        return out
+    stored = np.asarray(recon.reference_observations, dtype=np.int64)
+    counts = np.asarray(recon.observation_counts, dtype=np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]]).astype(np.int64)
+    named = np.flatnonzero(stored >= 0)
+    out[named] = np.asarray(recon.track_image_indexes, dtype=np.int64)[
+        offsets[named] + stored[named]
+    ]
+    return out
+
+
+def reference_images_by_point(recon: SfmrReconstruction) -> dict[int, int]:
+    """``point_index -> image_index`` of each point's stored reference
+    observation, for the points that store one: the ``reference_images``
+    argument of ``PatchCloud.localize_keypoints`` and
+    ``PatchCloud.refine_keypoints``, which align every view to that
+    observation's render and leave its keypoint where it is.
+    """
+    images = stored_reference_images(recon)
+    return {int(p): int(images[p]) for p in np.flatnonzero(images >= 0)}
+
+
+def stored_keypoints_by_point(
+    recon: SfmrReconstruction,
+) -> dict[int, list[list[float]]]:
+    """``point_index -> [[x, y], ...]``, each point's stored keypoints in the
+    order of its track: the ``starting_keypoints`` of a kernel run over each
+    point's track (``view_sets=None``) that starts every view where it was
+    observed. Points with no observation are left out.
+    """
+    kxy = np.asarray(recon.keypoints_xy, dtype=np.float64).reshape(-1, 2)
+    counts = np.asarray(recon.observation_counts, dtype=np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+    return {
+        int(p): kxy[offsets[p] : offsets[p + 1]].tolist()
+        for p in np.flatnonzero(counts > 0)
+    }
+
+
 def compact_to_embedded_patches(
     recon: SfmrReconstruction,
     cloud: PatchCloud,
@@ -130,9 +178,10 @@ def compact_to_embedded_patches(
         localizations: The per-point dicts returned by
             :meth:`PatchCloud.localize_keypoints` — each ``{point_index, views,
             keypoints, ...}`` with the kept image indices and refined keypoints.
-            With ``patch_bitmaps``, a dict's optional ``reference_image`` names
-            the image whose tile the point's bitmap is, and becomes the
-            reference observation of a point that has none (see below).
+            A dict's optional ``reference_image`` names the image of the
+            reference observation its views were aligned to, whose tile the
+            point's bitmap is, and becomes the reference observation of a point
+            that has none (see below).
         image_file_hashes: One 16-byte XXH128 per image (see
             :func:`image_file_hashes_from_images`), parallel to ``recon.image_names``.
         patch_bitmaps: Optional ``(point_count, R, R, 4)`` uint8 stored bitmaps
@@ -155,9 +204,8 @@ def compact_to_embedded_patches(
     be, rendered from, and moving keypoints or refining the frame does not
     change it. Where ``recon`` stores none for the point (``-1``), or the
     localizer dropped that image from its track, it is the observation of
-    the image the point's bitmap names (``reference_image``) where
-    ``patch_bitmaps`` is passed and the new track holds that image, and
-    ``-1`` otherwise. A point whose stored reference is kept has a bitmap that
+    the image its localization names (``reference_image``) where the new track
+    holds that image, and ``-1`` otherwise. A point whose stored reference is kept has a bitmap that
     is not necessarily that observation's render, so a caller passing ``patch_bitmaps``
     renders those points again (:func:`render_from_references`).
 
@@ -267,20 +315,12 @@ def compact_to_embedded_patches(
 
     # The image of each source point's stored reference observation, -1 where
     # it stores none.
-    stored_reference_images = np.full(recon.point_count, -1, dtype=np.int64)
-    if recon.reference_observations is not None:
-        stored = np.asarray(recon.reference_observations, dtype=np.int64)
-        counts = np.asarray(recon.observation_counts, dtype=np.int64)
-        offsets = np.concatenate([[0], np.cumsum(counts)[:-1]]).astype(np.int64)
-        named = np.flatnonzero(stored >= 0)
-        stored_reference_images[named] = np.asarray(
-            recon.track_image_indexes, dtype=np.int64
-        )[offsets[named] + stored[named]]
+    stored_references = stored_reference_images(recon)
 
     # Flat, point-then-image-sorted observations and parallel keypoints. Each
     # point's reference observation is the place in its sorted track of the
-    # image its stored reference observation was in, or, with bitmaps, of the
-    # image its bitmap is the tile of (``reference_image`` on its
+    # image its stored reference observation was in, or of the image of the
+    # reference its views were aligned to (``reference_image`` on its
     # localization); -1 where there is none.
     track_image_indexes: list[int] = []
     track_point_indexes: list[int] = []
@@ -291,9 +331,9 @@ def compact_to_embedded_patches(
         views = np.asarray(loc["views"], dtype=np.uint32)
         kpts = np.asarray(loc["keypoints"], dtype=np.float32).reshape(-1, 2)
         # The stored reference where its image is still in the track, else
-        # the image the bitmap names.
-        candidates = [int(stored_reference_images[old_id])]
-        if patch_bitmaps is not None and loc.get("reference_image") is not None:
+        # the one the views were aligned to.
+        candidates = [int(stored_references[old_id])]
+        if loc.get("reference_image") is not None:
             candidates.append(int(loc["reference_image"]))
         reference_image = next(
             (c for c in candidates if c >= 0 and bool(np.any(views == c))), None

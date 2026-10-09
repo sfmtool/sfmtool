@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch as mock_patch
 
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 import sfmtool._embed_patches as ep
@@ -229,11 +230,11 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
     assert captured.get("use_stored_keypoints") is True
 
 
-def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
+def test_embed_patches_cli_subpixel_and_rounds_forward(
     monkeypatch, seoul_bull_workspace, tmp_path
 ):
-    """End-to-end CLI plumbing for the two new opt-in knobs: the values
-    parsed from the command line reach `embed_patches`'s kwargs. Spying on
+    """End-to-end CLI plumbing for the round knobs: the values parsed from the
+    command line reach `embed_patches`'s kwargs. Spying on
     the function rather than running the full pipeline keeps this test cheap
     while covering the Click choice validation + kwarg threading."""
     captured: dict = {}
@@ -242,9 +243,6 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
     def spy(recon, images, **kwargs):
         captured["subpixel"] = kwargs.get("subpixel")
         captured["rounds"] = kwargs.get("rounds")
-        captured["search_resolution_multiplier"] = kwargs.get(
-            "search_resolution_multiplier"
-        )
         captured["obliquity_weight_power"] = kwargs.get("obliquity_weight_power")
         captured["fronto_prior_weight"] = kwargs.get("fronto_prior_weight")
         return real(recon, images, **{**kwargs, "resolution": 12})
@@ -256,12 +254,9 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
         "embed-patches",
         str(seoul_bull_workspace),
         str(out),
-        "--subpixel",
-        "2",
+        "--no-subpixel",
         "--rounds",
         "3",
-        "--search-resolution-multiplier",
-        "2.0",
         "--obliquity-weight-power",
         "2",
         "--fronto-prior-weight",
@@ -270,9 +265,8 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
-    assert captured["subpixel"] == 2
+    assert captured["subpixel"] is False
     assert captured["rounds"] == 3
-    assert captured["search_resolution_multiplier"] == 2.0
     assert captured["obliquity_weight_power"] == 2.0
     assert captured["fronto_prior_weight"] == 0.05
 
@@ -358,20 +352,32 @@ def test_embed_patches_cli_refine_max_views_forwards(
     assert "refine-max-views" in result.output.lower()
 
 
-def test_embed_patches_cli_rejects_bad_subpixel(seoul_bull_workspace, tmp_path):
-    """`--subpixel` is a non-negative integer; a non-integer (or negative) value
-    errors out before any work happens."""
+@pytest.mark.parametrize(
+    "removed",
+    [
+        ["--max-iters", "3"],
+        ["--search-resolution-multiplier", "2.0"],
+        ["--localize-basis-views", "4"],
+        ["--subpixel", "2"],
+    ],
+)
+def test_embed_patches_cli_rejects_removed_options(
+    seoul_bull_workspace, tmp_path, removed
+):
+    """The congealing options are gone: the localizer aligns every view to the
+    reference render in one pass, so there are no rounds, no supersampled
+    search and no consensus basis to set, and ``--subpixel`` is a flag that
+    takes no count. Each errors out before any work happens."""
     args = [
         "embed-patches",
         str(seoul_bull_workspace),
         str(tmp_path / "out.sfmr"),
-        "--subpixel",
-        "lk",  # no longer a valid value — it's an int now
+        *removed,
     ]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
-    assert "subpixel" in result.output.lower()
+    assert not (tmp_path / "out.sfmr").exists()
 
 
 def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
@@ -427,19 +433,11 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
     )
 
 
-def test_embed_patches_localize_basis_views_keeps_observations(
-    seoul_bull_workspace,
-):
-    """`localize_basis_views` caps only the localizer's consensus *membership*
-    (see specs/core/patch/keypoint-localization-consensus-basis.md): every admitted
-    view is still localized and reported, so a capped run must produce the same
-    output shape as the uncapped default. On this 17-image fixture most view
-    sets are at or under the cap and take the bit-identical uncapped path."""
+def _rgb_images(recon) -> list[np.ndarray]:
     import cv2
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
-    images = [
+    return [
         np.ascontiguousarray(
             cv2.cvtColor(
                 cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
@@ -448,60 +446,56 @@ def test_embed_patches_localize_basis_views_keeps_observations(
         for name in recon.image_names
     ]
 
-    baseline = ep.embed_patches(recon, images, resolution=12, localize_basis_views=0)
-    capped = ep.embed_patches(recon, images, resolution=12, localize_basis_views=4)
 
-    assert capped.feature_source == "embedded_patches"
-    assert abs(capped.point_count - baseline.point_count) <= max(
-        1, baseline.point_count // 20
-    ), f"points: capped {capped.point_count} vs baseline {baseline.point_count}"
-    assert abs(capped.observation_count - baseline.observation_count) <= max(
-        1, baseline.observation_count // 20
-    ), (
-        f"observations: capped {capped.observation_count} "
-        f"vs baseline {baseline.observation_count}"
-    )
+def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace):
+    """An ``embedded_patches`` input's stored reference observation is the one
+    every round aligns the point's views to: where its image is still in the
+    output track, the output names the same image as the reference, and its
+    keypoint has not moved."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _rgb_images(recon)
+    first = ep.embed_patches(recon, images, resolution=12)
 
+    # Point each reference at another observation of its point, so the test
+    # does not pass on the pick the first run already made.
+    counts = np.asarray(first.observation_counts, dtype=np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    refs = np.asarray(first.reference_observations, dtype=np.int32).copy()
+    moved = (refs >= 0) & (counts >= 3)
+    refs[moved] = (refs[moved] + 1) % counts[moved]
+    first = first.clone_with_changes(reference_observations=refs)
+    timg = np.asarray(first.track_image_indexes)
+    kxy = np.asarray(first.keypoints_xy, dtype=np.float32)
+    ref_image = {
+        tuple(np.asarray(first.positions)[p]): (
+            int(timg[offsets[p] + refs[p]]),
+            kxy[offsets[p] + refs[p]],
+        )
+        for p in np.flatnonzero(moved)
+    }
 
-def test_embed_patches_cli_localize_basis_views_forwards(
-    monkeypatch, seoul_bull_workspace, tmp_path
-):
-    """`--localize-basis-views` parses (IntRange >= 0) and reaches
-    `embed_patches` as the `localize_basis_views` kwarg."""
-    captured: dict = {}
-    real = ep.embed_patches
+    second = ep.embed_patches(first, images, resolution=12)
 
-    def spy(recon, images, **kwargs):
-        captured["localize_basis_views"] = kwargs.get("localize_basis_views")
-        return real(recon, images, **{**kwargs, "resolution": 12})
-
-    monkeypatch.setattr(ep, "embed_patches", spy)
-
-    out = tmp_path / "basis.sfmr"
-    args = [
-        "embed-patches",
-        str(seoul_bull_workspace),
-        str(out),
-        "--localize-basis-views",
-        "6",
-    ]
-    with mock_patch("sys.argv", ["sfm"] + args):
-        result = CliRunner().invoke(main, args)
-    assert result.exit_code == 0, result.output
-    assert captured["localize_basis_views"] == 6
-    assert out.exists()
-
-    args = [
-        "embed-patches",
-        str(seoul_bull_workspace),
-        str(tmp_path / "basis2.sfmr"),
-        "--localize-basis-views",
-        "-1",
-    ]
-    with mock_patch("sys.argv", ["sfm"] + args):
-        result = CliRunner().invoke(main, args)
-    assert result.exit_code != 0
-    assert "localize-basis-views" in result.output.lower()
+    counts2 = np.asarray(second.observation_counts, dtype=np.int64)
+    offsets2 = np.concatenate([[0], np.cumsum(counts2)[:-1]])
+    refs2 = np.asarray(second.reference_observations)
+    timg2 = np.asarray(second.track_image_indexes)
+    kxy2 = np.asarray(second.keypoints_xy, dtype=np.float32)
+    checked = 0
+    for p, pos in enumerate(np.asarray(second.positions)):
+        hit = ref_image.get(tuple(pos))
+        if hit is None:
+            continue
+        image, keypoint = hit
+        track = timg2[offsets2[p] : offsets2[p] + counts2[p]]
+        if image not in track.tolist():
+            continue
+        assert refs2[p] >= 0
+        row = offsets2[p] + refs2[p]
+        assert timg2[row] == image, f"point {p}: reference moved off image {image}"
+        assert np.array_equal(kxy2[row], keypoint), f"point {p}: reference moved"
+        checked += 1
+    assert 0 < len(ref_image) // 2 <= checked, (checked, len(ref_image))
 
 
 def test_embed_patches_cli_absolute_localizer_gates_forward(

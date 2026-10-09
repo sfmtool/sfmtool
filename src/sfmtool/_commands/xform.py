@@ -81,9 +81,10 @@ from ..xform._arg_parser import (
     multiple=True,
     help=(
         "Refine per-observation 2D keypoints to sub-pixel by photometric "
-        "cross-view alignment (never worse than the seed; the track structure "
-        "is unchanged). Optional comma-separated key=value params (e.g. "
-        "'max_outer_sweeps=2,sampler=anisotropic'). Renders and persists the "
+        "alignment of every view to the point's reference render (never worse "
+        "than the seed; the reference observation's keypoint and the track "
+        "structure are unchanged). Optional comma-separated key=value params "
+        "(e.g. 'max_gn_steps=20,sampler=anisotropic'). Renders and persists the "
         "per-point RGBA patch textures at the refined keypoints by default so "
         "the output is self-contained; pass 'bitmaps=false' to skip the render "
         "(e.g. on an intermediate stage). A point that stores a reference "
@@ -99,13 +100,16 @@ from ..xform._arg_parser import (
     flag_value="",
     multiple=True,
     help=(
-        "Localize per-observation 2D keypoints by discrete cross-view search "
-        "(congealing). Structural, not in-place: views that don't co-register "
+        "Localize per-observation 2D keypoints by a discrete search that aligns "
+        "every view to the point's reference render, from the stored keypoints; "
+        "the reference observation is the one the point stores, or the "
+        "reference-view rule's pick where it stores none, and its keypoint is "
+        "not moved. Structural, not in-place: views that don't co-register "
         "are dropped, points falling below min_views are culled, and the track "
         "structure is rebuilt from the survivors; stored patch bitmaps are "
         "dropped (re-run --refine-keypoints to regenerate them, since it "
-        "renders bitmaps by default), and each point keeps its reference "
-        "observation where its track still holds that image. "
+        "renders bitmaps by default), and each point records the reference "
+        "observation its views were aligned to. "
         "Optional comma-separated key=value params (e.g. "
         "'search=8,min_views=3'). Requires an embedded_patches reconstruction "
         "(convert first with --to-embedded-patches); reads the workspace "

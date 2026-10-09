@@ -265,7 +265,7 @@ class TestSpawnBehaviour:
         assert len(out["obs_view_indexes"]) == 4
 
     def test_discrete_only_still_spawns(self, scene):
-        out = _spawn(scene, [[2.0, 0.0]], subpixel_sweeps=0)
+        out = _spawn(scene, [[2.0, 0.0]], refine_subpixel=False)
         assert out["status"][0] == 0
         truth = _true_center(2.0, 0.0)
         assert np.linalg.norm(out["positions"][0] - truth) < 0.5 * HALF_EXTENT

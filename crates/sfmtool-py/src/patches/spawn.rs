@@ -44,7 +44,8 @@ use super::views::{resolve_pyramids, resolve_scene};
 ///     resolution: The R×R sampling grid every stage scores on.
 ///     search: Localizer search half-width, in patch-grid px.
 ///     max_shift_px: Localizer shift gate, in source-image px.
-///     subpixel_sweeps: Sub-pixel refinement outer sweeps; ``0`` skips
+///     refine_subpixel: Run the sub-pixel refinement against the reference the
+///         localizer aligned the views to; ``False`` skips
 ///         refinement and triangulates the discrete keypoints.
 ///     min_views: Surviving-view floor.
 ///     max_reproj_rms_px: Acceptance gate on the RMS reprojection error of the
@@ -74,7 +75,7 @@ use super::views::{resolve_pyramids, resolve_scene};
     resolution = 24,
     search = 6.0,
     max_shift_px = 8.0,
-    subpixel_sweeps = 1,
+    refine_subpixel = true,
     min_views = 3,
     max_reproj_rms_px = 2.0,
 ))]
@@ -90,7 +91,7 @@ pub fn spawn_candidate_tracks(
     resolution: u32,
     search: f64,
     max_shift_px: f64,
-    subpixel_sweeps: u32,
+    refine_subpixel: bool,
     min_views: u32,
     max_reproj_rms_px: f64,
 ) -> PyResult<Py<PyAny>> {
@@ -151,7 +152,7 @@ pub fn spawn_candidate_tracks(
         resolution,
         search,
         max_shift_px,
-        subpixel_sweeps,
+        refine_subpixel,
         min_views,
         max_reproj_rms_px,
     };

@@ -39,16 +39,14 @@ def test_parse_empty_runs_defaults():
 def test_parse_key_value_overrides():
     """Each key=value token is forwarded with the right type, and only those."""
     t = parse_localize_keypoints_params(
-        "min_views=3,max_iters=2,search=8,max_shift_px=2.5,"
+        "min_views=3,search=8,max_shift_px=2.5,"
         "min_relative_zncc=0.5,min_grazing_cos=0.2,resolution=16,"
         "window=gaussian,window_sigma=0.8,sampler=anisotropic,robust_iters=2,"
-        "convergence_px=0.1,search_resolution_multiplier=2.0,"
         "search_strategy=exhaustive"
     )
     assert t.min_views == 3
     assert isinstance(t.min_views, int)
     assert t.options == {
-        "max_iters": 2,
         "search": 8.0,
         "max_shift_px": 2.5,
         "min_relative_zncc": 0.5,
@@ -58,8 +56,6 @@ def test_parse_key_value_overrides():
         "window_sigma": 0.8,
         "sampler": "anisotropic",
         "robust_iters": 2,
-        "convergence_px": 0.1,
-        "search_resolution_multiplier": 2.0,
         "search_strategy": "exhaustive",
     }
     assert isinstance(t.options["resolution"], int)
@@ -100,8 +96,8 @@ def test_keys_are_binding_keywords_and_spec_defaults_match():
 
 def test_parse_tolerates_blank_segments():
     """Trailing/empty comma segments are ignored, not errors."""
-    t = parse_localize_keypoints_params("max_iters=2,")
-    assert t.options == {"max_iters": 2}
+    t = parse_localize_keypoints_params("search=4,")
+    assert t.options == {"search": 4.0}
 
 
 def test_parse_bilinear_mip_sampler():
@@ -159,7 +155,6 @@ def test_parse_duplicate_key_rejected():
     "param",
     [
         "min_views=0",
-        "max_iters=0",
         "search=0",
         "max_shift_px=0",
         "min_relative_zncc=1.5",
@@ -169,8 +164,6 @@ def test_parse_duplicate_key_rejected():
         "window_sigma=0",
         "sampler=bogus",
         "robust_iters=0",
-        "convergence_px=0",
-        "search_resolution_multiplier=0",
         "search_strategy=bogus",
     ],
 )
@@ -218,7 +211,7 @@ def test_constructor_rejects_unknown_option():
 
 def _modest_params(**overrides) -> LocalizeKeypointsTransform:
     """Cheap search params: correctness, not quality."""
-    kwargs = dict(resolution=12, max_iters=2)
+    kwargs = dict(resolution=12)
     kwargs.update(overrides)
     return LocalizeKeypointsTransform(**kwargs)
 
@@ -360,7 +353,7 @@ def test_cli_localize_keypoints(seoul_bull_workspace):
         str(output_sfmr),
         "--to-embedded-patches",
         "--localize-keypoints",
-        "resolution=12,max_iters=2",
+        "resolution=12",
     ]
     result = CliRunner().invoke(main, args)
 
@@ -396,35 +389,50 @@ def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace):
     assert not output_sfmr.exists()
 
 
-def test_parse_basis_max_views():
-    """``basis_max_views`` parses as an int and is forwarded only when given."""
-    assert "basis_max_views" not in parse_localize_keypoints_params("").options
-    t = parse_localize_keypoints_params("basis_max_views=6")
-    assert t.options["basis_max_views"] == 6
-    assert isinstance(t.options["basis_max_views"], int)
-    with pytest.raises(ValueError):
-        parse_localize_keypoints_params("basis_max_views=-1")
+def test_stored_reference_is_kept_through_localize_and_refine(seoul_bull_workspace):
+    """A point's stored reference observation is the one ``--localize-keypoints``
+    and then ``--refine-keypoints`` align its views to: both keep it, name the
+    same image as the reference, and leave its keypoint where it was."""
+    from sfmtool.xform import RefineKeypointsTransform
 
-
-def test_localize_keypoints_basis_cap_round_trips(seoul_bull_workspace):
-    """A capped run produces the same kind of output as the uncapped one: a
-    valid embedded_patches recon whose points/observations do not exceed the
-    input's. The cap changes only which views congeal — every observation is
-    still localized — so the counts stay in the uncapped run's neighbourhood."""
     recon = _embedded(seoul_bull_workspace)
+    counts = np.asarray(recon.observation_counts, dtype=np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    # Name an observation that is not the first, so the test does not pass on
+    # what the reference-view rule or a default would have chosen anyway.
+    refs = np.where(counts >= 3, counts // 2, -1).astype(np.int32)
+    recon = recon.clone_with_changes(reference_observations=refs)
+    timg = np.asarray(recon.track_image_indexes)
+    kxy = np.asarray(recon.keypoints_xy, dtype=np.float32)
+    named = {
+        tuple(np.asarray(recon.positions)[p]): (
+            int(timg[offsets[p] + refs[p]]),
+            kxy[offsets[p] + refs[p]].copy(),
+        )
+        for p in np.flatnonzero(refs >= 0)
+    }
+    assert named
 
-    out_uncapped = _modest_params().apply(recon)
-    out_capped = _modest_params(basis_max_views=4).apply(recon)
+    localized = _modest_params().apply(recon)
+    refined = RefineKeypointsTransform(resolution=12).apply(localized)
 
-    assert out_capped.feature_source == "embedded_patches"
-    assert out_capped.point_count <= recon.point_count
-    assert out_capped.observation_count <= recon.observation_count
-    assert (np.asarray(out_capped.observation_counts) >= 2).all()
-    # The seoul_bull tracks are small, so most points are at or under the cap
-    # and take the bit-identical uncapped path; the totals must stay close.
-    assert abs(out_capped.point_count - out_uncapped.point_count) <= max(
-        1, out_uncapped.point_count // 20
-    )
-    assert abs(out_capped.observation_count - out_uncapped.observation_count) <= max(
-        1, out_uncapped.observation_count // 20
-    )
+    for out in (localized, refined):
+        counts2 = np.asarray(out.observation_counts, dtype=np.int64)
+        offsets2 = np.concatenate([[0], np.cumsum(counts2)[:-1]])
+        refs2 = np.asarray(out.reference_observations)
+        timg2 = np.asarray(out.track_image_indexes)
+        kxy2 = np.asarray(out.keypoints_xy, dtype=np.float32)
+        checked = 0
+        for p, pos in enumerate(np.asarray(out.positions)):
+            hit = named.get(tuple(pos))
+            if hit is None:
+                continue
+            image, keypoint = hit
+            track = timg2[offsets2[p] : offsets2[p] + counts2[p]].tolist()
+            if image not in track:
+                continue
+            row = offsets2[p] + refs2[p]
+            assert refs2[p] >= 0 and timg2[row] == image, p
+            assert np.array_equal(kxy2[row], keypoint), p
+            checked += 1
+        assert 0 < len(named) // 2 <= checked, (checked, len(named))

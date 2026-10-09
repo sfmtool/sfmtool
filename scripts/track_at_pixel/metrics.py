@@ -4,8 +4,9 @@
 """Score a built track against the ground-truth track it was built in place of.
 
 Every number is computed from the two tracks and the cameras alone, so a
-candidate cannot influence how it is scored. Photometric numbers (the
-leave-one-out ZNCC and friends) are read off the tracks' own evaluations, and
+candidate cannot influence how it is scored. Photometric numbers (each
+``in`` row's ZNCC against the stored bitmap, the reference row left out, and
+friends) are read off the tracks' own evaluations, and
 the ground truth's are from the same ``evaluate`` run on the ground-truth point,
 so the two are one measurement taken of two tracks.
 """
@@ -51,6 +52,15 @@ def _in_rows(track) -> list[dict]:
     return [o for o in track.observations if o["verdict"] == "in"]
 
 
+def _scored_rows(track) -> list[dict]:
+    """The ``in`` rows whose score against the bitmap a median gate reads:
+    every one but the reference row, whose score is 1 by construction."""
+    ref = track.reference_observation
+    return [
+        o for i, o in enumerate(track.observations) if o["verdict"] == "in" and i != ref
+    ]
+
+
 def _track_numbers(rows: list[dict], key: str) -> np.ndarray:
     vals = [o.get("track", {}).get(key) for o in rows]
     return np.asarray([v for v in vals if v is not None], dtype=float)
@@ -80,13 +90,14 @@ def ground_truth_reading(dataset, point: int) -> dict:
 
     edited = EditedReconstruction(dataset.recon)
     _, track = B.create_track(B.Bench(), edited, int(point))
-    # A reading only: every row is pinned, so the verdicts stand, and the
-    # leave-one-out numbers read here need no bitmap rendered.
-    track, _ = B.evaluate(track, edited, dataset.pyramids, render_bitmap=False)
+    # A reading only: every row is pinned, so the verdicts stand. The scores
+    # read against the point's stored bitmap; one is rendered only where the
+    # point has none.
+    track, _ = B.evaluate(track, edited, dataset.pyramids)
     rows = _in_rows(track)
     return {
         "track": track,
-        **_stats("gt_zncc", _track_numbers(rows, "loo_zncc")),
+        **_stats("gt_zncc", _track_numbers(_scored_rows(track), "zncc")),
         **_stats(
             "gt_self_similarity",
             _track_numbers(rows, "zncc_self_similarity_radius"),
@@ -220,7 +231,7 @@ def score(
             gt_scales.append(s)
     m.update(_scale_stats("gt_texel_scale", gt_scales))
 
-    zncc = _track_numbers(rows, "loo_zncc")
+    zncc = _track_numbers(_scored_rows(track), "zncc")
     m.update(_stats("zncc", zncc))
     m.update(
         _stats("self_similarity", _track_numbers(rows, "zncc_self_similarity_radius"))

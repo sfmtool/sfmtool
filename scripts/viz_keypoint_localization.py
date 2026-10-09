@@ -1,14 +1,15 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Visualize ``PatchCloud.localize_keypoints`` (congealing) as before/after
-consensus patches.
+"""Visualize ``PatchCloud.localize_keypoints`` (alignment to the reference
+render) as before/after mean patches.
 
-For each sampled 3D point the production kernel selects a view set and congeals
-the per-view keypoints. This tool renders, per point, the consensus of the surfel
-**before** congealing (every kept view's patch rendered at the point's raw
-projection) next to the consensus **after** (each view's patch re-anchored to its
-refined keypoint). Sharper edges and a higher leave-one-out (LOO) ZNCC after mean
-the views co-register better — the whole point of the algorithm.
+For each sampled 3D point the production kernel selects a view set and aligns
+each view's keypoint to the point's reference render. This tool renders, per
+point, the mean of the surfel's views **before** the alignment (every kept
+view's patch rendered at the point's raw projection) next to the mean **after**
+(each view's patch re-anchored to its aligned keypoint). Sharper edges and a
+higher leave-one-out (LOO) ZNCC of the stack after mean the views co-register
+better — the whole point of the algorithm.
 
 Per row it reports the kept-view count, the median keypoint shift (source px), the
 mean LOO ZNCC before -> after, and the consensus sharpness ratio (gradient energy).
@@ -17,10 +18,11 @@ Rows prefer points whose keypoints actually moved, so the effect is visible.
 The before/after *geometry* faithfully reproduces the kernel (keypoints unprojected
 back onto the patch plane), but the metrics here are an **independent, deliberately
 simpler check**: a plain (unweighted) mean consensus and a square-Gaussian window,
-not the kernel's IRLS-weighted consensus over the inscribed-disk window. They show
-the registration direction honestly but should not be read as the kernel's own LOO.
-A row kept at exactly two views is the kernel's two-view floor — its LOO is high by
-construction (each view is the other's reference), so treat 2-view rows with care.
+not the kernel's score against the reference render over the inscribed-disk
+window. They show the registration direction honestly but should not be read as
+the kernel's own ``zncc``. A row kept at exactly two views has a LOO that is high
+by construction (each view is the other's template), so treat 2-view rows with
+care.
 
 This is a dev/inspection tool, not a test — the automated coverage lives in
 ``tests/patch/test_patch_keypoint_localization.py``. See
@@ -29,7 +31,7 @@ This is a dev/inspection tool, not a test — the automated coverage lives in
 Example::
 
     pixi run python scripts/viz_keypoint_localization.py \\
-        seoul_bull_ws/sfmr/*.sfmr kerry_park_ws/sfmr/*.sfmr --out-dir /tmp/congeal
+        seoul_bull_ws/sfmr/*.sfmr kerry_park_ws/sfmr/*.sfmr --out-dir /tmp/localize
 """
 
 from __future__ import annotations
@@ -235,7 +237,7 @@ def _compose(rows, args):
     canvas = new_canvas(width, total_h)
     draw_text(
         canvas,
-        f"keypoint localization (congealing): {args.label}  "
+        f"keypoint localization (aligned to the reference): {args.label}  "
         f"(sample={args.sample}, RES={args.resolution})",
         (8, 22),
         0.5,
@@ -243,7 +245,7 @@ def _compose(rows, args):
     )
     draw_text(
         canvas,
-        "consensus patch: before (raw projection) vs after (congealed)",
+        "mean patch: before (raw projection) vs after (aligned)",
         (8, 44),
         0.4,
         (200, 200, 200),

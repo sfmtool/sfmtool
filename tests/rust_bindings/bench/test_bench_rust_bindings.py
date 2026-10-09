@@ -570,7 +570,7 @@ class TestEvaluating:
             if entry["bitmap_blur_sigma"] == 0.0:
                 assert entry["blur_matched_zncc"] == entry["zncc"]
             assert isinstance(entry["sharper_than_bitmap"], bool)
-            assert "loo_zncc" in entry
+            assert "seed_shift_px" in entry
 
     def test_set_reference_pins_the_row_and_the_next_render_is_from_it(
         self, edited, images, long_track_point
@@ -609,17 +609,17 @@ class TestEvaluating:
         self, edited, images, long_track_point
     ):
         """With no bitmap to read against no row has a score, and each says
-        so; the leave-one-out reading is still taken."""
+        so; the localizer still reads the rows."""
         _, track = create_track(Bench(), edited, long_track_point)
         # Moving the patch drops the bitmap, which no longer shows it.
         moved, _ = translate_patch(track, edited, (0.0, 0.0, 0.05))
         read, _ = evaluate(moved, edited, images, render_bitmap=False)
         assert read.reference_observation is None
-        assert any("loo_zncc" in o["track"] for o in read.observations)
+        assert any("seed_shift_px" in o["track"] for o in read.observations)
         for o in read.observations:
             entry = o["track"]
             assert "zncc" not in entry
-            if "loo_zncc" in entry:
+            if "seed_shift_px" in entry:
                 assert entry["reason"] == "there is no bitmap to score it against"
         # The viewer's live evaluation, the default, renders one and scores
         # every row.
@@ -837,7 +837,7 @@ class TestEvaluating:
             entry = observation["track"]
             assert "zncc" in entry or "reason" in entry
             if "reason" in entry and "zncc" in entry:
-                assert "loo_zncc" not in entry
+                assert "seed_shift_px" not in entry
             if "reason" in entry:
                 assert entry["reason"]
         out_row = read.observation(1)["track"]

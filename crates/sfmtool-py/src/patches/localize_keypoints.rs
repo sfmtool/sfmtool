@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `PatchCloud.localize_keypoints`: discrete cross-view keypoint search.
+//! `PatchCloud.localize_keypoints`: discrete keypoint search against the
+//! reference render.
 
 use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
@@ -9,12 +10,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::patch::keypoint_localize::{
-    localize_patch_cloud_keypoints, BasisInputs, BasisPick, KeypointLocalizeParams,
+    localize_patch_cloud_keypoints, KeypointLocalizeParams,
     SearchStrategy as LocalizeSearchStrategy,
 };
 use sfmtool_core::patch::normal_refine::{view_indices_from_reconstruction, ProjectedImage};
 
-use super::args::{parse_patch_window, parse_sampler};
+use super::args::{parse_patch_window, parse_sampler, reference_positions};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
@@ -22,12 +23,14 @@ use sfmtool_core::progress::Progress;
 
 #[pymethods]
 impl PyPatchCloud {
-    /// Refine, per patch, the per-view 2D keypoints by group-wise translation
-    /// registration (**congealing**): each round renders every view's patch tile
-    /// at its accumulated in-plane offset (a single resample of the source),
-    /// builds the robust consensus, and searches each view's residual shift
-    /// against the **leave-one-out** consensus of the others, dropping views that
-    /// drift too far, leave the frame, or stop agreeing. See
+    /// Refine, per patch, the per-view 2D keypoints by aligning every view to
+    /// the point's **reference render**: the template is the reference
+    /// observation's ``R×R`` tile at its own starting keypoint, and each other
+    /// view is searched once around its starting keypoint for the shift whose
+    /// tile best matches it (an integer search, then a parabolic sub-pixel
+    /// step). The reference's keypoint is returned exactly as given. Views that
+    /// drift too far, leave the frame, do not pin a position or do not match
+    /// the reference are dropped. See
     /// ``specs/core/patch/patch-keypoint-localization.md``.
     ///
     /// Args:
@@ -43,45 +46,39 @@ impl PyPatchCloud {
     ///         view set to refine per point (typically the output of
     ///         :meth:`select_views`). Points absent from the map fall back to their
     ///         track; ``None`` (default) uses the track for every point.
-    ///     max_iters: Max congealing rounds (stops early at convergence).
-    ///     search: Max total per-view drift in patch-grid px (bounds runaway; also
-    ///         the context-tile margin).
+    ///     search: The reach of each view's search around its starting keypoint,
+    ///         in patch-grid px (also the context-tile margin).
     ///     max_shift_px: Drop a view whose refined keypoint sits more than this many
     ///         source-image px from the point's projection.
-    ///     min_relative_zncc: Drop a view whose leave-one-out ZNCC falls below this
-    ///         fraction of the views' median leave-one-out ZNCC. A *consensus*
-    ///         question: when every view fails it, the two best are kept anyway.
-    ///     min_absolute_zncc: Drop a view whose leave-one-out ZNCC is finite and
-    ///         below this **absolute** floor, however many views remain — the
-    ///         two-view floor never restores it. Refuses the pair a two-view point
-    ///         makes of two unrelated surfaces, which the relative bar cannot see
-    ///         (each view's leave-one-out template is the other view, so the bar
-    ///         reduces to a fraction of the very correlation it is testing).
-    ///         Default ``0.5``; ``0`` disables it exactly.
+    ///     min_relative_zncc: Drop a view whose ZNCC against the reference render
+    ///         falls below this fraction of the median over the point's other
+    ///         views (the reference left out). ``0`` disables it exactly.
+    ///     min_absolute_zncc: Drop a view whose ZNCC against the reference render
+    ///         is finite and below this **absolute** floor. Default ``0.5``;
+    ///         ``0`` disables it exactly.
     ///     max_member_zncc_self_similarity_radius: Drop a view whose **own**
     ///         rendered core tile does not pin a 2D position: its ZNCC
     ///         self-similarity radius, how far the core can slide over itself
     ///         and still match itself as well as a true match between two
     ///         views would (grid px of the search grid), is above this bar. A
     ///         flat sky tile or a lone straight edge matches itself a few
-    ///         pixels away, so it is refused before it is scored and is never
-    ///         restored by the two-view floor. A ``NaN`` radius fails. The
+    ///         pixels away, so it is refused before it is scored. Not applied
+    ///         to the reference observation. A ``NaN`` radius fails. The
     ///         radius reads at most ``3``, so a bar of ``3`` or more turns
     ///         nothing out, and ``0`` disables the gate exactly. Default
     ///         ``2.5`` (see ``specs/core/patch/patch-keypoint-localization.md``,
     ///         "The member gate's default").
     ///     min_grazing_cos: Grazing cutoff; drop a view whose ray is near-parallel
     ///         to the patch plane (``|d·n|`` below this).
-    ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
+    ///     resolution: The R×R patch grid the template and the ZNCC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
     ///     sampler: ``"per_view"`` (default: the sampler rule picks
     ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
     ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
     ///         ``"bilinear"`` or ``"anisotropic"``.
-    ///     robust_iters: IRLS passes for the robust consensus.
-    ///     convergence_px: Stop once a round's mean round-over-round change of
-    ///         the per-view refined positions is below this many patch-grid px.
+    ///     robust_iters: IRLS passes for the fused mean that is the template where
+    ///         the reference-view rule picks no reference it would store.
     ///     point_indexes: If given, localize only for the patches with these source
     ///         point ids; ``None`` (default) localizes for every patch.
     ///     starting_keypoints: Optional explicit per-view seeds:
@@ -104,69 +101,42 @@ impl PyPatchCloud {
     ///         view set that mixes observed views with expansion candidates: the
     ///         candidates have no observation, hence no keypoint, and take the
     ///         projection.
-    ///     search_resolution_multiplier: ``m`` for the discrete cross-view search;
-    ///         the search runs at resolution ``R_s = round(m·R)``. ``m = 1.0``
-    ///         (default) is the no-op; ``m > 1`` (the supersampled grid) resolves
-    ///         sub-pixel offsets directly at a cost that grows ~``m²``. See
-    ///         ``specs/core/patch/keypoint-localization-search-cache.md``.
-    ///     basis_max_views: Consensus-basis cap ``K`` — at most this many views
-    ///         congeal against each other; every remaining view registers **once**
-    ///         against the finished basis template. Default ``8``; ``0`` disables
-    ///         the cap (bit-identical to the uncapped path, as is any point with
-    ///         ``V <= K``). Every observation is still localized and reported; only
-    ///         the consensus membership shrinks. Pass ``view_scores`` for the
-    ///         validated ZNCC ranking — without them the basis pick falls back to
-    ///         grazing angle. See
-    ///         ``specs/core/patch/keypoint-localization-consensus-basis.md``.
-    ///     basis_force_track_views: Reserve basis seats for the point's track views
-    ///         (the leading ``track_view_counts`` entries of its view set) ahead of
-    ///         the expansion candidates. Default ``True``.
-    ///     basis_pick: How the ranked candidates fill the remaining basis seats —
-    ///         ``"top_score"`` (default) or ``"strided"``.
-    ///     view_scores: Optional mapping ``point_index -> [score, ...]`` parallel to
-    ///         that point's view set: each view's match to the point's starting
-    ///         appearance (``select_views``'s ``scores``), ranking the basis pick.
-    ///         NaN ranks a view below every scored one. Omitted points (and
-    ///         ``None``) fall back to ranking by grazing angle. Each entry must
-    ///         be parallel to that point's **full** view set, checked before
-    ///         ``point_indexes`` narrows the run — so one map from a whole-cloud
-    ///         ``select_views`` can drive chunked localize calls.
-    ///     track_view_counts: Optional mapping ``point_index -> t``: how many
-    ///         **leading** view-set entries are that point's track views
-    ///         (``select_views``'s ``track_view_count``). Omitted points have no
-    ///         reserved seats.
+    ///     search_strategy: ``"plus_descent"`` (default: climb from the starting
+    ///         keypoint to the nearest correlation peak) or ``"exhaustive"``
+    ///         (score every shift in the window and take the best).
+    ///     reference_images: Optional mapping ``point_index -> image_index`` naming
+    ///         each point's reference observation, the view whose render is the
+    ///         template and whose keypoint is not moved. A point absent from the
+    ///         map, mapped to ``None`` or ``-1``, or whose image is not in its view
+    ///         set, has the reference-view rule pick one from the renders at the
+    ///         starting keypoints. ``None`` (default) has the rule pick for every
+    ///         point.
+    ///     progress: Optional :class:`ProgressCounter`, bumped once per patch.
     ///
     /// Returns:
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
-    ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
-    ///     loo_zncc (float64[K]), loo_zncc_middle (float64[K]),
-    ///     loo_zncc_grid (float64[K, 3, 3]), is_basis (bool[K])}`` over the
-    ///     **kept** views. ``loo_zncc_middle`` is the same reading over only the
-    ///     middle square of the grid, half its width. ``loo_zncc_grid`` is the
-    ///     same reading over each cell of a three-by-three split of the grid with
-    ///     every pixel weighted equally, ``[k, row, col]`` from the top-left
-    ///     cell.
-    ///     ``loo_zncc`` is NaN for
-    ///     a view no round scored (a lone input view, or a view kept by the two-view
-    ///     floor before any consensus was built), so guard before reducing it.
-    ///     ``is_basis`` marks the consensus-basis members (all ``True`` unless
-    ///     ``basis_max_views`` capped that point's view set). ``K`` can be **below
-    ///     two**: the absolute gates (``max_shift_px``, ``min_absolute_zncc``,
-    ///     ``max_member_zncc_self_similarity_radius``) are not undone by the two-view
-    ///     floor, so a point whose members individually fail them is reported with
-    ///     one view or none for the caller's ``min_views`` cull to remove.
+    ///     keypoints (float64[K, 2]), offsets_px (float64[K]), zncc (float64[K]),
+    ///     reference_image}`` over the **kept** views. ``zncc`` is each view's
+    ///     plain ZNCC against the template at its integer peak: ``1.0`` for the
+    ///     reference observation, and NaN for a view that was not searched
+    ///     because there was no template, so guard before reducing it.
+    ///     ``reference_image`` is the image index of the reference observation
+    ///     the views were aligned to, or ``None`` where the rule picked none it
+    ///     would store (the template was the fused mean of the views) or nothing
+    ///     rendered. The reference is always kept when it renders; every other
+    ///     view can be dropped, so ``K`` can be below two for the caller's
+    ///     ``min_views`` cull to remove.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
-        recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
+        recon, images, *, view_sets=None, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=2.5,
         min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="per_view", robust_iters=3, convergence_px=0.05,
-        point_indexes=None, starting_keypoints=None, search_resolution_multiplier=1.0,
-        search_strategy="plus_descent", basis_max_views=8, basis_force_track_views=true,
-        basis_pick="top_score", view_scores=None, track_view_counts=None, progress=None
+        window_sigma=0.6, sampler="per_view", robust_iters=3,
+        point_indexes=None, starting_keypoints=None,
+        search_strategy="plus_descent", reference_images=None, progress=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(
@@ -175,7 +145,6 @@ impl PyPatchCloud {
         recon: &Bound<'py, PyAny>,
         images: &Bound<'py, PyAny>,
         view_sets: Option<std::collections::HashMap<u32, Vec<u32>>>,
-        max_iters: u32,
         search: f64,
         max_shift_px: f64,
         min_relative_zncc: f64,
@@ -187,16 +156,10 @@ impl PyPatchCloud {
         window_sigma: f64,
         sampler: &str,
         robust_iters: u32,
-        convergence_px: f64,
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<Option<[f64; 2]>>>>,
-        search_resolution_multiplier: f32,
         search_strategy: &str,
-        basis_max_views: u32,
-        basis_force_track_views: bool,
-        basis_pick: &str,
-        view_scores: Option<std::collections::HashMap<u32, Vec<f64>>>,
-        track_view_counts: Option<std::collections::HashMap<u32, u32>>,
+        reference_images: Option<std::collections::HashMap<u32, Option<i64>>>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard, n_images) = resolve_patch_scene(
@@ -210,11 +173,6 @@ impl PyPatchCloud {
 
         let window = parse_patch_window(window, window_sigma)?;
         let sampler = parse_sampler(sampler)?;
-        if !(search_resolution_multiplier.is_finite() && search_resolution_multiplier > 0.0) {
-            return Err(PyValueError::new_err(format!(
-                "search_resolution_multiplier must be > 0, got {search_resolution_multiplier}"
-            )));
-        }
         let search_strategy = match search_strategy {
             "exhaustive" => LocalizeSearchStrategy::Exhaustive,
             "plus_descent" => LocalizeSearchStrategy::PlusDescent,
@@ -224,17 +182,7 @@ impl PyPatchCloud {
                 )))
             }
         };
-        let basis_pick = match basis_pick {
-            "top_score" => BasisPick::TopScore,
-            "strided" => BasisPick::Strided,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown basis_pick: {other:?} (expected top_score|strided)"
-                )))
-            }
-        };
         let params = KeypointLocalizeParams {
-            max_iters,
             search,
             max_shift_px,
             min_relative_zncc,
@@ -245,12 +193,7 @@ impl PyPatchCloud {
             window,
             sampler,
             robust_iters,
-            convergence_px,
-            search_resolution_multiplier,
             search_strategy,
-            basis_max_views,
-            basis_force_track_views,
-            basis_pick,
         };
 
         let pyramid_set = resolve_pyramids(&posed, images)?;
@@ -290,38 +233,6 @@ impl PyPatchCloud {
                 }
             }
         }
-        // Per-patch consensus-basis evidence, parallel to `sets`. A point absent
-        // from `view_scores` gets an empty score list — which the kernel reads as
-        // "unscored", falling back to the grazing rank; a length mismatch against
-        // the point's view set is a caller bug, so reject it up front rather than
-        // silently ranking the tail last.
-        //
-        // Built BEFORE `point_indexes` clears the unselected sets: the natural
-        // "select_views once, then localize in chunks" caller passes the whole
-        // score map with a per-chunk `point_indexes`, and validating against
-        // already-cleared sets would reject it.
-        let scores_per_patch: Option<Vec<Vec<f64>>> = match &view_scores {
-            None => None,
-            Some(map) => {
-                let mut out = Vec::with_capacity(self.inner.len());
-                for (set, &pid) in sets.iter().zip(&self.inner.point_indexes) {
-                    match map.get(&pid) {
-                        Some(s) if s.len() != set.len() => {
-                            return Err(PyValueError::new_err(format!(
-                                "view_scores[{pid}] has {} entries but the point's view set \
-                                 has {} — they must be parallel",
-                                s.len(),
-                                set.len()
-                            )))
-                        }
-                        Some(s) => out.push(s.clone()),
-                        None => out.push(Vec::new()),
-                    }
-                }
-                Some(out)
-            }
-        };
-
         let selected_mask: Option<std::collections::HashSet<u32>> =
             point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
@@ -376,17 +287,8 @@ impl PyPatchCloud {
             }
         };
 
-        let counts_per_patch: Option<Vec<u32>> = track_view_counts.as_ref().map(|map| {
-            self.inner
-                .point_indexes
-                .iter()
-                .map(|pid| map.get(pid).copied().unwrap_or(0))
-                .collect()
-        });
-        let basis_inputs = BasisInputs {
-            view_scores: scores_per_patch.as_deref(),
-            track_view_counts: counts_per_patch.as_deref(),
-        };
+        let references =
+            reference_positions(reference_images.as_ref(), &self.inner.point_indexes, &sets);
 
         let progress_handle = progress.as_ref().map(|p| p.handle());
         let results = py.detach(|| {
@@ -395,7 +297,7 @@ impl PyPatchCloud {
                 &views,
                 &sets,
                 seeds_per_patch.as_deref(),
-                Some(&basis_inputs),
+                references.as_deref(),
                 &params,
                 progress_handle.as_deref(),
                 &Progress::none(),
@@ -421,23 +323,8 @@ impl PyPatchCloud {
             d.set_item("views", res.views.clone().into_pyarray(py))?;
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
-            d.set_item("loo_zncc", res.loo_zncc.clone().into_pyarray(py))?;
-            d.set_item(
-                "loo_zncc_middle",
-                res.loo_zncc_middle.clone().into_pyarray(py),
-            )?;
-            let grid = ndarray::Array3::from_shape_vec(
-                (res.loo_zncc_grid.len(), 3, 3),
-                res.loo_zncc_grid
-                    .iter()
-                    .flatten()
-                    .flatten()
-                    .copied()
-                    .collect(),
-            )
-            .expect("nine values per view");
-            d.set_item("loo_zncc_grid", grid.into_pyarray(py))?;
-            d.set_item("is_basis", res.is_basis.clone())?;
+            d.set_item("zncc", res.zncc.clone().into_pyarray(py))?;
+            d.set_item("reference_image", res.reference)?;
             out.push(d);
         }
         Ok(out)

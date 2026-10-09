@@ -400,7 +400,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
             "views": np.asarray(inf_views, dtype=np.uint32),
             "keypoints": np.asarray(inf_kpts, dtype=np.float64),
             "offsets_px": np.zeros(len(inf_views)),
-            "loo_zncc": np.full(len(inf_views), np.nan),
+            "zncc": np.full(len(inf_views), np.nan),
         }
     ]
     for p in [q for q in (0, 1, 2) if q != pi][:2]:
@@ -415,7 +415,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
                 "views": views.astype(np.uint32),
                 "keypoints": kpts,
                 "offsets_px": np.zeros(len(views)),
-                "loo_zncc": np.full(len(views), np.nan),
+                "zncc": np.full(len(views), np.nan),
             }
         )
     hashes = [b"\x00" * 16] * recon.image_count
@@ -423,7 +423,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
     # The sub-pixel refiner renders the stored bitmaps + validity — the pipeline
     # source for both (points at infinity go through the same path).
     locs, bitmaps, valid = _refine_subpixel(
-        cloud, recon, images, locs, sweeps=1, resolution=12, render_bitmaps=True
+        cloud, recon, images, locs, refine=True, resolution=12, render_bitmaps=True
     )
     assert valid is not None and bool(valid[pi]), (
         "the well-observed infinity point must produce a stored bitmap"

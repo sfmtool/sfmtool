@@ -133,9 +133,7 @@ pub struct ViewSelection {
     /// How many leading [`admitted`](Self::admitted) entries are the point's
     /// **track** views (the deduped track, always admitted first); the rest are
     /// the photometrically-vetted expansion candidates. Lets a consumer split
-    /// the view set by provenance without re-deriving the track — notably the
-    /// keypoint localizer's consensus-basis pick, which reserves seats for them
-    /// (`specs/core/patch/keypoint-localization-consensus-basis.md`).
+    /// the view set by provenance without re-deriving the track.
     pub track_view_count: usize,
 }
 

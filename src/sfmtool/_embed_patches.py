@@ -6,8 +6,8 @@
 :func:`embed_patches` runs the whole photometric pipeline (see
 [the pipeline spec](../../specs/core/patch/sift-to-patch-reconstruction.md)): it
 converts to the baseline embedded form, photometrically refines each point's
-patch normal, selects + vets the view set per point, congeals the keypoints
-(with sub-pixel refinement), then hands the results to
+patch normal, selects + vets the view set per point, aligns every view's
+keypoint to the point's reference render (with sub-pixel refinement), then hands the results to
 :func:`sfmtool._patch_compaction.compact_to_embedded_patches` — the write tail
 that culls under-supported points and renumbers the survivors into a valid
 ``embedded_patches`` :class:`SfmrReconstruction`. The ``sfm embed-patches`` CLI
@@ -23,7 +23,9 @@ import numpy as np
 
 from sfmtool._patch_compaction import (
     compact_to_embedded_patches,
+    reference_images_by_point,
     render_from_references,
+    stored_reference_images,
 )
 from sfmtool._pose_math import recon_camera_centers
 from sfmtool._progress import _poll_progress, _timed_step
@@ -42,7 +44,7 @@ def _refine_subpixel(
     images: list[np.ndarray] | ImagePyramidSet,
     localizations: list[dict[str, Any]],
     *,
-    sweeps: int,
+    refine: bool,
     resolution: int,
     sampler: str = "per_view",
     render_bitmaps: bool = False,
@@ -56,29 +58,29 @@ def _refine_subpixel(
     Per-point view sets and seeds are derived from the localizer's output so the
     refiner sees exactly the same membership the localizer chose; a point the
     localizer dropped (or never localized) keeps its localization dict unchanged.
-    ``sweeps`` is the LK/ECC Gauss–Newton ``max_outer_sweeps`` (>= 1), always with
-    the per-sweep consensus. ``sweeps == 0`` moves no keypoint (the input
+    Each point's ``reference_image`` is passed on, so the refiner aligns the
+    views to the same reference observation the localizer did and leaves its
+    keypoint where it is. ``refine=False`` moves no keypoint (the input
     localizations are returned as is); combined with ``render_bitmaps`` it still
     runs the refiner **render-only** (``max_gn_steps=0``, seeds kept) so the
     bitmaps/validity below are produced at the localizer's own keypoints.
 
     Returns:
-        ``(localizations, bitmaps, valid)``. With ``render_bitmaps=True``,
-        each localization dict also carries ``reference_image``, the image whose
-        tile its bitmap is (``None`` for a fused mean), and
-        ``bitmaps`` is a ``(point_count, R, R, 4)`` uint8 array of the stored
-        bitmaps (each the reference view's tile) at the FINAL per-view keypoints, scattered
-        per source-point index (zero rows where no valid bitmap), and ``valid``
-        the parallel bool mask — the culled-point signal
+        ``(localizations, bitmaps, valid)``. Each refined localization dict
+        carries ``reference_image``, the image of the reference observation the
+        refiner aligned its views to (``None`` where the template was a fused
+        mean). With ``render_bitmaps=True``, ``bitmaps`` is a
+        ``(point_count, R, R, 4)`` uint8 array of the stored bitmaps (each that
+        reference's tile) at the FINAL per-view keypoints, scattered per
+        source-point index (zero rows where no valid bitmap), and ``valid`` the
+        parallel bool mask — the culled-point signal
         :func:`compact_to_embedded_patches` drops on, uniform for finite and
         infinity points. With ``render_bitmaps=False`` both are ``None``.
     """
-    if sweeps < 1 and not render_bitmaps:
+    if not refine and not render_bitmaps:
         return localizations, None, None
-    kwargs: dict[str, Any] = dict(
-        max_outer_sweeps=max(sweeps, 1), consensus_refresh="per_sweep"
-    )
-    if sweeps < 1:
+    kwargs: dict[str, Any] = {}
+    if not refine:
         # Render-only: keep every seed (no GN step) but still render the
         # stored bitmaps + validity at those seeds.
         kwargs["max_gn_steps"] = 0
@@ -90,6 +92,7 @@ def _refine_subpixel(
     # of `view_sets[pid]`, in order — so the two MUST be built in the same loop).
     view_sets: dict[int, list[int]] = {}
     seeds: dict[int, list[list[float]]] = {}
+    references: dict[int, int] = {}
     for loc in localizations:
         pid = int(loc["point_index"])
         views = np.asarray(loc["views"], dtype=np.uint32).tolist()
@@ -98,6 +101,8 @@ def _refine_subpixel(
             continue
         view_sets[pid] = views
         seeds[pid] = [[float(p[0]), float(p[1])] for p in kpts]
+        if loc.get("reference_image") is not None:
+            references[pid] = int(loc["reference_image"])
 
     if not view_sets:
         # Nothing to refine (and nothing that could hold a bitmap).
@@ -109,6 +114,7 @@ def _refine_subpixel(
         view_sets=view_sets,
         starting_keypoints=seeds,
         point_indexes=list(view_sets.keys()),
+        reference_images=references,
         resolution=resolution,
         sampler=sampler,
         progress=progress,
@@ -131,20 +137,22 @@ def _refine_subpixel(
                 bitmaps[pid] = np.asarray(bm, dtype=np.uint8)
                 valid[pid] = True
 
-    # Each bitmap is the tile of one view, the one the reference-view rule
-    # picked; the localization dict carries its image (``None`` for a fused
-    # mean) so the compaction can record which observation it is.
+    # The refiner aligned each point's views to one reference observation,
+    # whose tile its bitmap is; the localization dict carries its image
+    # (``None`` for a fused mean) so the compaction can record which
+    # observation it is.
     reference_by_pid: dict[int, int | None] = {
         int(r["point_index"]): r.get("reference_image") for r in refined
     }
 
-    if sweeps < 1:
+    if not refine:
         # Render-only pass: the localizer's keypoints are used as is.
-        if render_bitmaps:
-            localizations = [
-                dict(loc, reference_image=reference_by_pid.get(int(loc["point_index"])))
-                for loc in localizations
-            ]
+        localizations = [
+            dict(loc, reference_image=reference_by_pid.get(int(loc["point_index"])))
+            if int(loc["point_index"]) in reference_by_pid
+            else loc
+            for loc in localizations
+        ]
         return localizations, bitmaps, valid
 
     # Splice the refined keypoints back into each point's localization dict.
@@ -175,17 +183,19 @@ def _refine_subpixel(
         ).reshape(-1, 2)
         new_loc = dict(loc)
         new_loc["keypoints"] = new_kpts
-        if render_bitmaps:
-            new_loc["reference_image"] = reference_by_pid.get(pid)
+        new_loc["reference_image"] = reference_by_pid.get(pid)
         out.append(new_loc)
     return out, bitmaps, valid
 
 
 def _localizations_from_recon(recon: SfmrReconstruction) -> list[dict[str, Any]]:
     """Rebuild the per-point localization dicts (``point_index``, ``views``,
-    ``keypoints``) from an ``embedded_patches`` recon's inline tracks — the seed a
-    later round's sub-pixel refinement starts from once the discrete localizer has
-    run (round 1 only). Membership is exactly the recon's current track set."""
+    ``keypoints``, ``reference_image``) from an ``embedded_patches`` recon's
+    inline tracks and stored reference observations — the seed a later round's
+    sub-pixel refinement starts from once the discrete localizer has run (round 1
+    only), aligned to the same reference. Membership is exactly the recon's
+    current track set."""
+    references = stored_reference_images(recon)
     pt = np.asarray(recon.track_point_indexes)
     im = np.asarray(recon.track_image_indexes, dtype=np.uint32)
     kxy = np.asarray(recon.keypoints_xy, dtype=np.float64).reshape(-1, 2)
@@ -199,6 +209,7 @@ def _localizations_from_recon(recon: SfmrReconstruction) -> list[dict[str, Any]]
             "point_index": pid,
             "views": np.asarray(d["views"], dtype=np.uint32),
             "keypoints": np.asarray(d["keypoints"], dtype=np.float64).reshape(-1, 2),
+            "reference_image": (int(references[pid]) if references[pid] >= 0 else None),
         }
         for pid, d in sorted(by_pid.items())
     ]
@@ -384,11 +395,9 @@ def embed_patches(
     patch_size: float = 11.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
-    max_iters: int = 5,
     search: float = 6.0,
     resolution: int = 24,
-    search_resolution_multiplier: float = 1.0,
-    subpixel: int = 1,
+    subpixel: bool = True,
     rounds: int = 2,
     max_obliquity_deg: float = 80.0,
     obliquity_weight_power: float = 2.0,
@@ -396,7 +405,6 @@ def embed_patches(
     max_refine_views: int = 8,
     max_zncc_self_similarity_radius: float = DEFAULT_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
     localize_search_strategy: str = "plus_descent",
-    localize_basis_views: int = 8,
     sampler: str = "per_view",
     progress: Any = None,
 ) -> SfmrReconstruction:
@@ -418,20 +426,22 @@ def embed_patches(
        geometrically see the surfel and clear ``min_relative_zncc`` against a
        track-seeded template — the track views again rendered at their stored
        keypoints, both when fusing that template and when scoring against it.
-    3. **Congeal** each view's keypoint to sub-pixel, dropping views that
+    3. **Align** each view's keypoint to the point's reference render, then
+       refine it to sub-pixel against the same reference, dropping views that
        won't co-register (grazing, out-of-frame, textureless in their own right,
-       ``max_shift_px``, low LOO ZNCC absolutely or relative to their peers).
-       Each observed view seeds at its stored keypoint; a view step 2 added has no
+       ``max_shift_px``, a low ZNCC against the reference absolutely or relative
+       to their peers). The reference observation is the one an
+       ``embedded_patches`` input stores for the point where it is in the view
+       set, and otherwise the reference-view rule's pick at the starting
+       keypoints; its keypoint is not moved, and later rounds keep it. Each
+       observed view seeds at its stored keypoint; a view step 2 added has no
        observation, so it seeds at the point's projection.
        The final round's sub-pixel pass also renders each point's **stored
-       bitmap** at the final keypoints: the tile of the reference view the
-       reference-view rule picks, or the views' fused mean where it picks none
-       or reaches its pick only through its last fallback (points at infinity
-       included — they render through the same ``w``-aware path), and reports
-       per-point validity and the reference view's image. An input that is
-       already ``embedded_patches`` and stores reference observations keeps
-       them for each point that still holds its reference observation's
-       image. After the compaction, every point with a reference is rendered
+       bitmap** at the final keypoints: the tile of that reference
+       observation, or the views' fused mean where there is none (points at
+       infinity included — they render through the same ``w``-aware path),
+       and reports per-point validity and the reference's image, which the
+       output records as the point's reference observation. After the compaction, every point with a reference is rendered
        again from that observation through the stored ``f32`` keypoints and
        frame (:func:`~sfmtool._patch_compaction.render_from_references`), so
        dropping and adding the bitmaps gives the same bytes.
@@ -457,21 +467,16 @@ def embed_patches(
             patches starve the refiners of texture (weaker normals, more
             self-similarity culls), larger ones trade observation yield away to
             the grazing cull for marginal gains.
-        min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
+        min_relative_zncc, max_shift_px, min_views, search: The pipeline
             knobs documented in ``specs/cli/reconstruction/embed-patches-command.md``.
-        min_absolute_zncc: Localizer gate — drop a view whose leave-one-out ZNCC is
-            finite and below this **absolute** floor, however many views remain.
-            Unlike ``min_relative_zncc`` (a consensus question, whose two-view floor
-            restores the two best when every view fails it) this verdict stands, so
-            it is what refuses a two-view point made of two unrelated surfaces —
-            there the relative bar is a fraction of the very pairwise correlation it
-            is testing and always passes. ``0`` disables it.
+        min_absolute_zncc: Localizer gate — drop a view whose ZNCC against the
+            reference render is finite and below this **absolute** floor.
+            ``0`` disables it.
         max_member_zncc_self_similarity_radius: Localizer gate — drop a view
             whose **own** rendered tile pins no 2D position: its ZNCC
             self-similarity radius is above this, in patch-grid px. A flat sky
             or water crop, or a lone straight edge, matches itself a few pixels
-            away, so it is refused before it is scored and never restored by
-            the two-view floor. The radius reads at most ``3``, so ``3`` or more
+            away, so it is refused before it is scored. The radius reads at most ``3``, so ``3`` or more
             turns nothing out; ``0`` disables it. Default ``2.5``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
@@ -480,16 +485,11 @@ def embed_patches(
             ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
             zoom), or one sampler for every view, ``"bilinear_mip"``,
             ``"bilinear"`` or ``"anisotropic"``.
-        search_resolution_multiplier: ``m`` for the discrete cross-view search in
-            :meth:`PatchCloud.localize_keypoints` (step 3). ``1.0`` (default) is the
-            no-op; ``> 1`` runs the supersampled grid (cost grows ~``m²``) — see
-            ``specs/core/patch/keypoint-localization-search-cache.md``.
-        subpixel: LK/ECC Gauss–Newton ``max_outer_sweeps`` for the photometric
-            sub-pixel keypoint refinement applied in each round (per-sweep
-            consensus). ``0`` disables the keypoint movement (the localizer's
-            keypoints are used as is; the final round still runs a render-only
-            pass to render the stored bitmaps + validity at those keypoints);
-            ``>= 1`` runs it with that many sweeps.
+        subpixel: Run the photometric sub-pixel keypoint refinement against
+            the reference render in each round (default). ``False`` moves no
+            keypoint after the localizer (the final round still runs a
+            render-only pass to render the stored bitmaps + validity at those
+            keypoints).
         rounds: Number of (normal-refinement, keypoint-refinement) rounds. Round 1
             runs the SIFT-anchored normal refine, the discrete localizer (the
             seed), then the sub-pixel keypoint refine. Each subsequent round
@@ -540,19 +540,6 @@ def embed_patches(
             round-1 bitmap render. The default is the member gates' ``2.5``;
             ``3`` or more turns nothing out, and ``0`` (or a non-positive value)
             disables the cull.
-        localize_basis_views: When ``> 0``, cap the **discrete localizer's
-            consensus basis** at this many views per point: that many congeal
-            against each other (ranked by the ``select_views`` ZNCC, with the
-            track views claiming seats first), and every remaining view registers
-            **once** against the finished basis template. See
-            ``specs/core/patch/keypoint-localization-consensus-basis.md``. Bounds the
-            `O(V²)` consensus terms on the expanded (``select_views``) view sets,
-            whose tail reaches hundreds of views on a long capture. Lossless for
-            membership in the sense the normal-refinement cap is: every
-            observation is still localized and reported — only the consensus
-            *membership* shrinks. The default is ``8`` (roughly halves embed
-            wall on expanded view sets); ``0`` congeals all views — the
-            cleanest error metrics, preferred for ground-truth cleanup.
         progress: Optional callable (e.g. ``click.echo``) that receives a per-round
             summary line reporting the mean normal change (deg) and mean keypoint
             shift (px); when given, those metrics are computed each round.
@@ -639,26 +626,15 @@ def embed_patches(
             keypoint_anchor=keypoint_anchor,
             progress=counter,
         )
-    # Keep the selection's per-view ZNCC and track-view split alongside the view
-    # sets: the localizer's consensus-basis pick ranks candidates by that score
-    # and reserves seats for the track views (see
-    # specs/core/patch/keypoint-localization-consensus-basis.md). select_views already
-    # computed both, so the only cost is marshalling them across — skipped
-    # entirely when the cap is off, which is the path that would never read them.
-    basis_ranked = localize_basis_views > 0
-    view_sets: dict[int, list[int]] = {}
-    view_scores: dict[int, list[float]] | None = {} if basis_ranked else None
-    track_view_counts: dict[int, int] | None = {} if basis_ranked else None
-    for s in selections:
-        pid = int(s["point_index"])
-        view_sets[pid] = np.asarray(s["admitted"]).tolist()
-        if basis_ranked:
-            view_scores[pid] = np.asarray(s["scores"], dtype=np.float64).tolist()
-            track_view_counts[pid] = int(s["track_view_count"])
+    view_sets: dict[int, list[int]] = {
+        int(s["point_index"]): np.asarray(s["admitted"]).tolist() for s in selections
+    }
 
     # 3. Discrete localizer (the seed): seed each view's starting keypoint and
-    #    congeal, dropping views that won't co-register in-loop. Runs once, in
-    #    round 1. An observed view seeds at its stored keypoint — the position it
+    #    align it to the point's reference render, dropping views that won't
+    #    co-register. Runs once, in round 1. The reference is the observation
+    #    an embedded_patches input stores for the point, where it is in the view
+    #    set, and otherwise the reference-view rule's pick. An observed view seeds at its stored keypoint — the position it
     #    was matched at — and a view selection added seeds at the point's
     #    projection (it observes nothing, so it has no keypoint), which is the
     #    per-view `None` the binding takes.
@@ -684,28 +660,25 @@ def embed_patches(
             pyramids,
             view_sets=view_sets,
             starting_keypoints=localize_seeds,
-            max_iters=max_iters,
+            reference_images=reference_images_by_point(embedded),
             search=search,
             max_shift_px=max_shift_px,
             min_relative_zncc=min_relative_zncc,
             min_absolute_zncc=min_absolute_zncc,
             max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
             resolution=resolution,
-            search_resolution_multiplier=search_resolution_multiplier,
             search_strategy=localize_search_strategy,
             sampler=sampler,
-            basis_max_views=localize_basis_views,
-            view_scores=view_scores,
-            track_view_counts=track_view_counts,
             progress=counter,
         )
 
     # 3.5. Sub-pixel keypoint refinement, seeded at the localizer's kept keypoints
-    #      (the localizer put each view in the basin; the LK refiner sharpens it).
-    #      The FINAL round's pass also renders each point's stored bitmap (its
-    #      reference view's tile) at the final keypoints and reports per-point
-    #      validity — the bitmaps and the culled-point drop signal the compaction
-    #      consumes (with subpixel=0 the pass is render-only: seeds kept, bitmaps
+    #      (the localizer put each view in the basin; the LK refiner sharpens it)
+    #      against the reference the localizer aligned them to. The FINAL
+    #      round's pass also renders each point's stored bitmap (that reference's
+    #      tile) at the final keypoints and reports per-point validity — the
+    #      bitmaps and the culled-point drop signal the compaction consumes
+    #      (with subpixel off the pass is render-only: seeds kept, bitmaps
     #      still rendered).
     seed_loc = localizations
     with (
@@ -722,7 +695,7 @@ def embed_patches(
             embedded,
             pyramids,
             localizations,
-            sweeps=subpixel,
+            refine=subpixel,
             resolution=resolution,
             sampler=sampler,
             render_bitmaps=rounds == 1 or cull_self_similar,
@@ -834,7 +807,7 @@ def embed_patches(
                 emb_r,
                 pyramids,
                 base_loc,
-                sweeps=subpixel,
+                refine=subpixel,
                 resolution=resolution,
                 sampler=sampler,
                 render_bitmaps=r == rounds,
@@ -855,8 +828,8 @@ def embed_patches(
     #    final sub-pixel pass produced no valid bitmap for (finite and
     #    infinity alike), and compact into the final embedded_patches recon. The
     #    stored bitmaps are the final-keypoint reference-view tiles from that pass.
-    #    An input that already stores reference observations keeps them, and
-    #    only a point at -1 takes the pass's pick. Every bitmap with a
+    #    Each point keeps the reference observation its views were aligned to
+    #    (recorded at every compaction, so later rounds kept it). Every bitmap with a
     #    reference is then rendered again from the compacted value's stored
     #    (f32) keypoints and frames, so dropping and adding the bitmaps later
     #    gives the same bytes.

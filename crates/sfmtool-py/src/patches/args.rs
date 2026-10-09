@@ -111,3 +111,27 @@ pub(super) fn parse_extent(
         ))),
     }
 }
+
+/// Each patch's reference observation as a position in its view set, from the
+/// caller's `reference_images` map (`point_index -> image index`). A point
+/// absent from the map, mapped to `None` or a negative index, or whose image
+/// is not in its view set, gets `None`: the kernel's reference-view rule picks
+/// one from the renders at the starting keypoints.
+pub(super) fn reference_positions(
+    reference_images: Option<&std::collections::HashMap<u32, Option<i64>>>,
+    point_indexes: &[u32],
+    sets: &[Vec<u32>],
+) -> Option<Vec<Option<usize>>> {
+    let map = reference_images?;
+    Some(
+        point_indexes
+            .iter()
+            .zip(sets)
+            .map(|(pid, set)| {
+                let image = map.get(pid).copied().flatten()?;
+                let image = u32::try_from(image).ok()?;
+                set.iter().position(|&v| v == image)
+            })
+            .collect(),
+    )
+}

@@ -84,6 +84,14 @@ def main():
                         continue
                     proj = c["projection"][k]
                     kp = c["keypoint"][k]
+                    # The references' scores a bar reads: the reference
+                    # observation's own, the template or its source, left out.
+                    reference = int(c["reference_observation"][k])
+                    bar_zncc = [
+                        z
+                        for j, z in enumerate(c["reference_zncc"][k])
+                        if j != reference
+                    ]
                     rec = {
                         "image": image,
                         "pose": pose,
@@ -105,9 +113,9 @@ def main():
                         "found_vs_gt_px": float(np.hypot(*(kp - known[p])))
                         if np.all(np.isfinite(kp))
                         else None,
-                        "ref_loo_min": min(c["reference_loo_zncc"][k], default=None),
-                        "ref_loo_median": float(np.median(c["reference_loo_zncc"][k]))
-                        if c["reference_loo_zncc"][k]
+                        "ref_zncc_min": min(bar_zncc, default=None),
+                        "ref_zncc_median": float(np.median(bar_zncc))
+                        if bar_zncc
                         else None,
                     }
                     out.write(json.dumps(rec) + "\n")

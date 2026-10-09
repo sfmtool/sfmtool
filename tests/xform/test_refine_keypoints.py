@@ -36,12 +36,9 @@ def test_parse_empty_runs_defaults():
     assert t.window_sigma == 0.6
     assert t.sampler == "per_view"
     assert t.robust_iters == 3
-    assert t.max_outer_sweeps == 1
-    assert t.outer_convergence_px == 0.005
     assert t.max_gn_steps == 10
     assert t.convergence_px == 0.01
     assert t.max_offset_px == 2.0
-    assert t.consensus_refresh == "per_sweep"
     assert t.bitmaps is True
 
 
@@ -49,9 +46,7 @@ def test_parse_key_value_overrides():
     """Each key=value token overrides the matching default with the right type."""
     t = parse_refine_keypoints_params(
         "resolution=16,window=gaussian,window_sigma=0.8,sampler=anisotropic,"
-        "robust_iters=2,max_outer_sweeps=3,outer_convergence_px=0.01,"
-        "max_gn_steps=5,convergence_px=0.02,max_offset_px=1.5,"
-        "consensus_refresh=per_move"
+        "robust_iters=2,max_gn_steps=5,convergence_px=0.02,max_offset_px=1.5"
     )
     assert t.resolution == 16
     assert isinstance(t.resolution, int)
@@ -59,12 +54,9 @@ def test_parse_key_value_overrides():
     assert t.window_sigma == 0.8
     assert t.sampler == "anisotropic"
     assert t.robust_iters == 2
-    assert t.max_outer_sweeps == 3
-    assert t.outer_convergence_px == 0.01
     assert t.max_gn_steps == 5
     assert t.convergence_px == 0.02
     assert t.max_offset_px == 1.5
-    assert t.consensus_refresh == "per_move"
 
 
 def test_parse_tolerates_blank_segments():
@@ -133,12 +125,9 @@ def test_parse_duplicate_key_rejected():
         "window_sigma=0",
         "sampler=bogus",
         "robust_iters=0",
-        "max_outer_sweeps=0",
-        "outer_convergence_px=0",
         "max_gn_steps=0",
         "convergence_px=0",
         "max_offset_px=0",
-        "consensus_refresh=bogus",
     ],
 )
 def test_parse_out_of_range_or_bad_enum_rejected(param):
@@ -162,11 +151,8 @@ def test_parse_bitmaps():
 
 
 def test_constructor_description_mentions_key_settings():
-    desc = RefineKeypointsTransform(
-        max_outer_sweeps=2, sampler="anisotropic", bitmaps=False
-    ).description()
+    desc = RefineKeypointsTransform(sampler="anisotropic", bitmaps=False).description()
     assert "Refine keypoints" in desc
-    assert "sweeps=2" in desc
     assert "anisotropic" in desc
     assert "bitmaps" not in desc
     assert "bitmaps" in RefineKeypointsTransform(bitmaps=True).description()
@@ -383,7 +369,7 @@ def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace):
     # bitmaps rendering on by default.
     assert len(captured) == 1
     t = captured[0]
-    assert (t.resolution, t.max_outer_sweeps, t.max_gn_steps) == (24, 1, 10)
+    assert (t.resolution, t.max_gn_steps) == (24, 10)
     assert t.bitmaps is True
 
     original = SfmrReconstruction.load(input_sfmr)

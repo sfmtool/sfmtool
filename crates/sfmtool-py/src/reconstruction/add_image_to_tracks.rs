@@ -16,6 +16,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use sfmtool_core::patch::keypoint_localize::TemplateKind;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::add_image_to_tracks::{
     add_image_to_tracks as core_add_image_to_tracks, AcceptRule, AddImageToTracksOptions,
@@ -59,6 +60,15 @@ fn xy_column<'py>(
     let n = flat.len() / 2;
     let array = ndarray::Array2::from_shape_vec((n, 2), flat).expect("two values per row");
     PyArray2::from_owned_array(py, array)
+}
+
+/// The snake-case name a candidate's template kind takes in Python.
+fn template_kind_name(kind: TemplateKind) -> &'static str {
+    match kind {
+        TemplateKind::StoredBitmap => "stored_bitmap",
+        TemplateKind::ReferenceObservation => "reference_observation",
+        TemplateKind::FusedMean => "fused_mean",
+    }
 }
 
 fn report_to_py<'py>(py: Python<'py>, r: &AddImageToTracksReport) -> PyResult<Bound<'py, PyDict>> {
@@ -116,8 +126,21 @@ fn report_to_py<'py>(py: Python<'py>, r: &AddImageToTracksReport) -> PyResult<Bo
         PyList::new(py, c.iter().map(|x| x.references.clone()))?,
     )?;
     cands.set_item(
-        "reference_loo_zncc",
-        PyList::new(py, c.iter().map(|x| x.reference_loo_zncc.clone()))?,
+        "template",
+        PyList::new(py, c.iter().map(|x| x.template.map(template_kind_name)))?,
+    )?;
+    cands.set_item(
+        "reference_observation",
+        PyArray1::from_vec(
+            py,
+            c.iter()
+                .map(|x| x.reference_observation.map_or(-1, |r| r as i64))
+                .collect(),
+        ),
+    )?;
+    cands.set_item(
+        "reference_zncc",
+        PyList::new(py, c.iter().map(|x| x.reference_zncc.clone()))?,
     )?;
     cands.set_item(
         "reference_pair_zncc",
@@ -141,10 +164,12 @@ impl PyEditedReconstruction {
     /// of the camera and inside the frame, not grazing, and (with
     /// ``require_facing``) with the camera on the same side of the patch plane
     /// as most of the cameras that observe it. The point's existing
-    /// observations are rendered on the patch grid at their keypoints and
-    /// combined into a robust consensus; the image is searched once against it
-    /// within ``search`` patch-grid pixels of the projection, refined to
-    /// sub-pixel (``subpixel``), and scored. The rule then judges the score
+    /// observations are rendered on the patch grid at their keypoints, and the
+    /// template is the bitmap the point would store: its reference
+    /// observation's render (or the stored bitmap, under ``"stored_bitmap"``).
+    /// The image is searched once against it within ``search`` patch-grid
+    /// pixels of the projection, refined to sub-pixel (``subpixel``), and
+    /// scored. The rule then judges the score
     /// (see ``specs/core/reconstruction/add-image-to-tracks.md``). Nothing but the added
     /// observations changes: no point, frame, bitmap or camera moves, and
     /// nothing is re-triangulated. A **bulk** edit, so the value that comes
@@ -162,8 +187,8 @@ impl PyEditedReconstruction {
     ///         from every candidate's references), ``"track_basis"`` (the
     ///         point's own references set the bar) or ``"fixed"``
     ///         (``min_zncc`` alone).
-    ///     basis: The statistic of the references' leave-one-out ZNCCs for the
-    ///         pooled bar, and for ``"track_basis"``: ``"median_minus_mad"``
+    ///     basis: The statistic of the references' ZNCCs against the template
+    ///         (the reference observation's own left out) for the pooled bar, and for ``"track_basis"``: ``"median_minus_mad"``
     ///         (default, with ``basis_k``, default 3), ``"min"`` or
     ///         ``"fraction_of_median"`` (with ``basis_fraction``).
     ///     track_basis, track_basis_k, track_basis_fraction: The track's own
@@ -179,7 +204,9 @@ impl PyEditedReconstruction {
     ///         scaled MADs of the photometrically accepted offsets, never below
     ///         ``position_floor_px``), ``"max_px"`` (``position_max_px``) or
     ///         ``"off"``.
-    ///     template: ``"rendered"`` or ``"stored_bitmap"``.
+    ///     template: ``"rendered"`` (default: the bitmap the point would store,
+    ///         rendered from its references at their keypoints) or
+    ///         ``"stored_bitmap"`` (the point's stored bitmap where it has one).
     ///     require_facing, subpixel, ascend_on_edge,
     ///         min_keypoint_separation_px: see the spec.
     ///     search: The search radius in patch-grid pixels.
@@ -202,8 +229,14 @@ impl PyEditedReconstruction {
     ///     (``(N, 2)``, ``NaN`` where absent), ``offset_px``,
     ///     ``zncc_self_similarity_radius``,
     ///     ``peak_zncc``, ``zncc``, ``judged``, ``bar``, and the lists
-    ///     ``references``, ``reference_loo_zncc``, ``reference_pair_zncc``
-    ///     (row-major ``n × n``) and ``pair_zncc``. Raises ``ValueError`` with
+    ///     ``references``, ``reference_zncc`` (each reference's plain ZNCC
+    ///     against the template, ``1.0`` for the reference observation where the
+    ///     template is its render), ``reference_pair_zncc`` (row-major ``n × n``)
+    ///     and ``pair_zncc``, with ``template`` (``"stored_bitmap"``,
+    ///     ``"reference_observation"``, ``"fused_mean"``, or ``None`` before the
+    ///     template was settled) and ``reference_observation`` (``int64``, the
+    ///     position in ``references`` of the point's reference observation, whose
+    ///     score no bar reads; ``-1`` for none). Raises ``ValueError`` with
     ///     the reason when the call is refused.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (

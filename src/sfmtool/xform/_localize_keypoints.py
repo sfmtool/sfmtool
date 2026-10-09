@@ -4,11 +4,14 @@
 """Cross-view keypoint localization (search) as an ``sfm xform`` operation.
 
 Unlike ``RefineKeypointsTransform`` (a pure in-place modifier), this op is
-**structural**: ``PatchCloud.localize_keypoints`` congeals each point's
-per-view keypoints by a discrete cross-view search and **drops views that
-won't co-register** (drift too far, leave the frame, graze the patch plane, pin
-no 2D position of their own, or stop agreeing with the leave-one-out
-consensus). After a ``min_views`` cull the
+**structural**: ``PatchCloud.localize_keypoints`` aligns each point's
+per-view keypoints to its reference render by a discrete search and **drops
+views that won't co-register** (drift too far, leave the frame, graze the patch
+plane, pin no 2D position of their own, or do not match the reference). Every
+view starts at its stored keypoint. The reference observation is the one the
+point stores, where its image is in the track, or else the reference-view
+rule's pick, and its keypoint is not moved; the output records it as the
+point's reference observation. After a ``min_views`` cull the
 survivors are renumbered and the reconstruction is rebuilt — ``keypoints_xy``
 and all three track arrays — via :func:`compact_to_embedded_patches`, the same
 helper the ``embed-patches`` pipeline uses. The output therefore has fewer
@@ -48,7 +51,6 @@ def _check(ok, message):
 # the range check run on a value the caller gives. A key the caller does not give
 # is not passed on, so the binding's own default applies.
 _OPTION_VALIDATORS = {
-    "max_iters": _check(lambda v: v >= 1, "max_iters must be >= 1, got {}"),
     "search": _check(lambda v: v > 0, "search must be positive, got {}"),
     "max_shift_px": _check(lambda v: v > 0, "max_shift_px must be positive, got {}"),
     "min_relative_zncc": _check(
@@ -72,17 +74,10 @@ _OPTION_VALIDATORS = {
         lambda v: v in _SAMPLERS, f"sampler must be one of {_SAMPLERS}, got {{!r}}"
     ),
     "robust_iters": _check(lambda v: v >= 1, "robust_iters must be >= 1, got {}"),
-    "convergence_px": _check(
-        lambda v: v > 0, "convergence_px must be positive, got {}"
-    ),
-    "search_resolution_multiplier": _check(
-        lambda v: v > 0, "search_resolution_multiplier must be positive, got {}"
-    ),
     "search_strategy": _check(
         lambda v: v in _SEARCH_STRATEGIES,
         f"search_strategy must be one of {_SEARCH_STRATEGIES}, got {{!r}}",
     ),
-    "basis_max_views": _check(lambda v: v >= 0, "basis_max_views must be >= 0, got {}"),
 }
 
 
@@ -100,7 +95,8 @@ class LocalizeKeypointsTransform:
     Requires an ``embedded_patches`` reconstruction (enforced by
     ``apply_transforms``): the localizer searches over the stored per-point
     patch frame (``recon.patches``), which only that source carries, seeding
-    each view at the point's own projection. Convert first with
+    each view at its stored keypoint and aligning it to the point's stored
+    reference observation where it has one. Convert first with
     ``--to-embedded-patches``.
 
     See ``specs/cli/reconstruction/xform/localize-keypoints-command.md`` for the
@@ -129,6 +125,8 @@ class LocalizeKeypointsTransform:
         from .._patch_compaction import (
             compact_to_embedded_patches,
             image_file_hashes_from_images,
+            reference_images_by_point,
+            stored_keypoints_by_point,
         )
 
         images = load_workspace_images(recon)
@@ -136,8 +134,9 @@ class LocalizeKeypointsTransform:
         # The reconstruction is embedded_patches (enforced by apply_transforms),
         # so the patch frame is already stored — read it back as the cloud rather
         # than rebuilding it. With view_sets=None the localizer runs over each
-        # point's full track, seeding each view at the point's own projection,
-        # and drops the views that won't co-register in-loop.
+        # point's full track, seeding each view at its stored keypoint, so the
+        # reference observation stays where it is, and drops the views that
+        # won't co-register.
         cloud = recon.patches
         if cloud is None:
             raise ValueError(
@@ -151,7 +150,12 @@ class LocalizeKeypointsTransform:
         )
 
         localizations = cloud.localize_keypoints(
-            recon, images, view_sets=None, **self.options
+            recon,
+            images,
+            view_sets=None,
+            starting_keypoints=stored_keypoints_by_point(recon),
+            reference_images=reference_images_by_point(recon),
+            **self.options,
         )
 
         # An embedded_patches recon already stores its per-image hashes; the
@@ -165,8 +169,9 @@ class LocalizeKeypointsTransform:
         # over positions/colors/errors, and re-derive normals from the frames.
         # Bitmaps are dropped (patch_bitmaps=None): the localizer renders none,
         # and any stored ones are stale after the keypoints move and views drop.
-        # Each point keeps its reference observation where the track still
-        # holds its image, so a later render renders from it.
+        # Each point records the reference observation its views were aligned
+        # to (its stored one where the track still holds that image), so a
+        # later render renders from it.
         out = compact_to_embedded_patches(
             recon,
             cloud,

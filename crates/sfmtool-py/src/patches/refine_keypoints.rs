@@ -9,10 +9,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
 
-use sfmtool_core::patch::keypoint_subpixel::{ConsensusRefresh, KeypointSubpixelParams};
+use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::{view_indices_from_reconstruction, ProjectedImage};
 
-use super::args::{parse_patch_window, parse_sampler};
+use super::args::{parse_patch_window, parse_sampler, reference_positions};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
@@ -21,13 +21,14 @@ use crate::ProgressCounter;
 impl PyPatchCloud {
     /// Refine, per patch, the per-view 2D keypoints to **sub-pixel** by a local
     /// continuous photometric solve: forward-additive ECC (Enhanced Correlation
-    /// Coefficient) Gauss–Newton against a single **frozen** robust cross-view
-    /// consensus (the cheapest spec variant). This is the high-accuracy reference
-    /// refiner — it does no grid search, changes no view membership, and is
-    /// **never worse than the seed** (a step is accepted only if it raises the ECC
-    /// score and stays in frame). Points at infinity (``w == 0``) are refined like
-    /// finite ones, not skipped. The seed must already be close (≲ 1 px) — putting
-    /// it in the basin is the caller's job (e.g. :meth:`localize_keypoints`). See
+    /// Coefficient) Gauss–Newton of each view against the point's **reference
+    /// render**, the reference observation's tile at its own starting keypoint,
+    /// in one pass. The reference's keypoint is returned unmoved. It does no grid
+    /// search, changes no view membership, and is **never worse than the seed**
+    /// (a step is accepted only if it raises the ECC score and stays in frame).
+    /// Points at infinity (``w == 0``) are refined like finite ones, not
+    /// skipped. The seed must already be close (≲ 1 px) — putting it in the
+    /// basin is the caller's job (e.g. :meth:`localize_keypoints`). See
     /// ``specs/core/patch/keypoint-subpixel-refinement.md``.
     ///
     /// Args:
@@ -43,7 +44,7 @@ impl PyPatchCloud {
     ///     view_sets: Optional mapping ``point_index -> [image_index, ...]`` giving the
     ///         view set to refine per point. Points absent fall back to their track;
     ///         ``None`` (default) uses the track for every point.
-    ///     resolution: The R×R patch grid the consensus / ECC are scored on.
+    ///     resolution: The R×R patch grid the template and the ECC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
     ///     sampler: ``"per_view"`` (default: the sampler rule picks
@@ -51,32 +52,9 @@ impl PyPatchCloud {
     ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
     ///         ``"bilinear"`` or ``"anisotropic"`` (value and gradient are rendered with the same
     ///         sampler).
-    ///     robust_iters: IRLS passes for the robust consensus.
-    ///     max_outer_sweeps: Max outer sweeps of the alternating loop (refresh
-    ///         consensus → move every view). ``1`` (default) is the
-    ///         single-pass-frozen variant — build the consensus once at the seed,
-    ///         hold it fixed. ``> 1`` enables per-sweep refresh: each subsequent
-    ///         sweep re-renders the views at their current offsets and rebuilds the
-    ///         consensus from those. Exits early once the mean per-view move of a
-    ///         sweep falls below ``outer_convergence_px``.
-    ///     outer_convergence_px: Stop the outer (consensus-refresh) loop once the
-    ///         mean per-view move across a sweep is below this many patch-grid px.
-    ///         Ignored when ``max_outer_sweeps == 1``.
-    ///     consensus_refresh: Within-sweep consensus refresh granularity.
-    ///         ``"per_sweep"`` (default) holds the consensus fixed for the
-    ///         duration of a sweep (current behavior). ``"per_move"`` is the
-    ///         spec's Gauss–Seidel incremental variant: after each view's GN
-    ///         solve, its z-normalized core delta-updates a running weighted
-    ///         sum, and the next view aligns to a freshly-incrementalized
-    ///         **shared** consensus ``normalize(S)``. (The spec's leave-one-out
-    ///         alternative was measured-and-rejected on real-track view counts
-    ///         — see the Rust ``ConsensusRefresh::PerMove`` doc.) IRLS weights
-    ///         are refreshed only at the per-sweep boundary either way.
-    ///         **Limitation:** at ``N = 2`` views ``per_move`` underestimates
-    ///         the relative offset by ~3% (the moved view's own contribution
-    ///         dominates the shared ``T``); ``N ≥ 3`` is recommended.
-    ///     max_gn_steps: Max forward-additive Gauss–Newton steps per view per outer
-    ///         sweep.
+    ///     robust_iters: IRLS passes for the fused mean that is the template (and
+    ///         the stored bitmap) where the point has no reference observation.
+    ///     max_gn_steps: Max forward-additive Gauss–Newton steps per view.
     ///     convergence_px: Stop a view's solve once an accepted step is below this
     ///         many patch-grid px.
     ///     max_offset_px: Max total per-view drift from the seed, in patch-grid px.
@@ -109,37 +87,44 @@ impl PyPatchCloud {
     ///         point to refine.
     ///     render_bitmaps: If true, also render each point's stored bitmap at
     ///         the **final** refined keypoints and return it per point (see
-    ///         ``bitmap`` below): the ``R×R`` tile of the view the
-    ///         reference-view rule picks, or the fused mean of the views where
-    ///         it picks none or reaches its pick only through its last
-    ///         fallback (``"without_any"``). Points at infinity take the same render path
-    ///         (they are refined, not skipped). Costs a tile render and a
-    ///         self-similarity reading per view, and member coherence's matrix,
-    ///         per point, so it is off by default.
+    ///         ``bitmap`` below): the ``R×R`` tile of the reference observation
+    ///         the views were aligned to, at its keypoint, or the fused mean of
+    ///         the views where there is none. Points at infinity take the same
+    ///         render path (they are refined, not skipped). Off by default.
+    ///     reference_images: Optional mapping ``point_index -> image_index`` naming
+    ///         each point's reference observation, the view whose render is the
+    ///         template and whose keypoint is not moved. A point absent from the
+    ///         map, mapped to ``None`` or ``-1``, or whose image is not in its view
+    ///         set, has the reference-view rule pick one from the renders at the
+    ///         starting keypoints, as :meth:`localize_keypoints` does. Pass the
+    ///         ``reference_image`` that :meth:`localize_keypoints` reported so
+    ///         both align to the same reference.
+    ///     progress: Optional :class:`ProgressCounter`, bumped once per patch.
     ///
     /// Returns:
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
-    ///     scores (float64[K])}`` over the views, in **input order** (the view set
-    ///     is unchanged; a guard-failed view keeps its seed). ``scores`` is the
-    ///     final ECC score (channel-averaged windowed ZNCC), NaN for a view with no
-    ///     consensus (fewer than two views). When ``render_bitmaps`` is true each
-    ///     dict also carries ``bitmap``: the ``(R, R, 4)`` uint8 RGBA stored
-    ///     bitmap rendered at the final keypoints, or ``None`` when the point
-    ///     produced **no valid cross-view consensus** (fewer than two views
-    ///     rendered at their final offsets) — the uniform culled-point signal,
-    ///     finite and infinity alike; and ``reference_image``: the image whose
-    ///     tile the bitmap is, or ``None`` for a fused mean or no bitmap.
+    ///     scores (float64[K]), reference_image}`` over the views, in **input
+    ///     order** (the view set is unchanged; a guard-failed view keeps its
+    ///     seed). ``scores`` is the final ECC score (channel-averaged windowed
+    ///     ZNCC) against the template: ``1.0`` for the reference observation,
+    ///     NaN for a view that could not be scored. ``reference_image`` is the
+    ///     image index of the reference observation the views were aligned to,
+    ///     or ``None`` where the template was the fused mean of the views. When
+    ///     ``render_bitmaps`` is true each dict also carries ``bitmap``: the
+    ///     ``(R, R, 4)`` uint8 RGBA stored bitmap, the reference's tile (or the
+    ///     fused mean), or ``None`` when fewer than two views survive, the
+    ///     uniform culled-point signal, finite and infinity alike.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="per_view", robust_iters=3, max_outer_sweeps=1,
-        outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
-        max_offset_px=2.0, consensus_refresh="per_sweep", point_indexes=None,
-        starting_keypoints=None, render_bitmaps=false, progress=None
+        window_sigma=0.6, sampler="per_view", robust_iters=3, max_gn_steps=10,
+        convergence_px=0.01, max_offset_px=2.0, point_indexes=None,
+        starting_keypoints=None, render_bitmaps=false, reference_images=None,
+        progress=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_keypoints<'py>(
@@ -153,15 +138,13 @@ impl PyPatchCloud {
         window_sigma: f64,
         sampler: &str,
         robust_iters: u32,
-        max_outer_sweeps: u32,
-        outer_convergence_px: f64,
         max_gn_steps: u32,
         convergence_px: f64,
         max_offset_px: f64,
-        consensus_refresh: &str,
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
         render_bitmaps: bool,
+        reference_images: Option<std::collections::HashMap<u32, Option<i64>>>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard, n_images) = resolve_patch_scene(
@@ -191,26 +174,14 @@ impl PyPatchCloud {
 
         let window = parse_patch_window(window, window_sigma)?;
         let sampler = parse_sampler(sampler)?;
-        let consensus_refresh = match consensus_refresh {
-            "per_sweep" => ConsensusRefresh::PerSweep,
-            "per_move" => ConsensusRefresh::PerMove,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown consensus_refresh: {other:?} (expected per_sweep|per_move)"
-                )))
-            }
-        };
         let params = KeypointSubpixelParams {
             resolution,
             window,
             sampler,
             robust_iters,
-            max_outer_sweeps,
-            outer_convergence_px,
             max_gn_steps,
             convergence_px,
             max_offset_px,
-            consensus_refresh,
             render_bitmaps,
             ..Default::default()
         };
@@ -253,6 +224,9 @@ impl PyPatchCloud {
                 }
             }
         }
+
+        let references =
+            reference_positions(reference_images.as_ref(), &self.inner.point_indexes, &sets);
 
         // Per-view seeds in source-image px, one per view in the (final) view
         // set, in order. Sourced in priority:
@@ -355,6 +329,7 @@ impl PyPatchCloud {
                         &views,
                         set,
                         per_view_seeds.as_deref(),
+                        references.as_ref().and_then(|r| r[i]),
                         &params,
                     );
                     // Bump the shared work counter per patch for a Python progress poller.
@@ -386,13 +361,12 @@ impl PyPatchCloud {
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
             d.set_item("scores", res.scores.clone().into_pyarray(py))?;
+            d.set_item("reference_image", res.reference.map(|r| res.views[r]))?;
             if render_bitmaps {
                 // `bitmap` is the point's stored bitmap at the final keypoints,
-                // the reference view's tile; `None` marks a point with no valid
-                // cross-view consensus (the culled-point signal `embed-patches`
-                // drops on). `reference_image` is the image whose tile it is,
-                // `None` for a fused mean.
-                d.set_item("reference_image", res.reference.map(|r| res.views[r]))?;
+                // the reference observation's tile; `None` marks a point with
+                // fewer than two views (the culled-point signal `embed-patches`
+                // drops on).
                 match &res.representative {
                     Some(rep) => {
                         let r = resolution.max(2) as usize;

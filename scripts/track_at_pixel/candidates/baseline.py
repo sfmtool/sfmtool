@@ -47,7 +47,7 @@ DEFAULTS = {
     "size_policy": "prior",
     "texel_scale_target": 1.0,  # image pixels per bitmap texel in that view
     "min_in_views": 3,
-    "min_zncc_median": 0.8,
+    "min_zncc_median": 0.7,
     "max_query_offset_px": 2.0,
     # "baseline" runs steps 8-9 below; "common" hands the track to
     # candidates.common.finish (anchoring, geometry search, the same gates).
@@ -98,10 +98,16 @@ def local_prior(ctx, image: int, pixel, opts: dict) -> dict:
 
 
 def _median_zncc(track) -> float:
+    """The median score against the stored bitmap over the ``in`` rows, the
+    reference row (1 by construction) left out, as Track at Pixel's median
+    gate reads it."""
+    ref = track.reference_observation
     z = [
-        o["track"]["loo_zncc"]
-        for o in track.observations
-        if o["verdict"] == "in" and o.get("track", {}).get("loo_zncc") is not None
+        o["track"]["zncc"]
+        for i, o in enumerate(track.observations)
+        if o["verdict"] == "in"
+        and i != ref
+        and o.get("track", {}).get("zncc") is not None
     ]
     return float(np.median(z)) if z else float("-inf")
 

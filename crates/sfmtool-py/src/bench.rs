@@ -369,17 +369,16 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             // and the width of that blur in grid px (0 when read plain).
             ("blur_matched_zncc", m.blur_matched_zncc),
             ("bitmap_blur_sigma", m.bitmap_blur_sigma),
-            // The localizer's leave-one-out score against the consensus of
-            // the other rows, at its correlation peak, and its middle.
-            ("loo_zncc", m.loo_zncc),
-            ("loo_zncc_middle", m.loo_zncc_middle),
+            // How far the localizer's correlation peak against the reference
+            // render sits from the row's keypoint; present exactly when the
+            // localizer read the row.
             ("seed_shift_px", m.seed_shift_px),
             ("projection_offset_px", m.projection_offset_px),
             ("reprojection_error", m.reprojection_error),
             ("ray_angle_deg", m.ray_angle_deg),
             // Present exactly when the last fit refused the walk and left this
             // sighting at its seed; the number is how far the peak sat, and
-            // `walked_zncc` what the localizer scored there.
+            // `walked_zncc` the tile there scored against the stored bitmap.
             ("walked_px", m.walked_px),
             ("walked_zncc", m.walked_zncc),
             ("walked_zncc_middle", m.walked_zncc_middle),
@@ -1716,8 +1715,8 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// with the bars stays as it is until the next step.
 ///
 /// Nothing is dropped. The kernels run with their per-view gates off and the
-/// consensus-basis cap lifted, because a gate is a decision and this makes
-/// none; an observation that cannot be read at all comes back with a ``reason``
+/// reference observation left where it is, because a gate is a decision and
+/// this makes none; an observation that cannot be read at all comes back with a ``reason``
 /// sentence instead of a blank row.
 ///
 /// At the **cluster stage** the seeds are an in-memory ``.matches`` cluster and
@@ -1727,10 +1726,10 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// seed, its own tile's ZNCC self-similarity
 /// radius, and the kernel's ``member_status``. No pose is read.
 ///
-/// At the **track stage** one round of the localizer scores every observation
-/// against the leave-one-out consensus of the others, at the pixel it already
-/// sits at: each gets that ZNCC (``loo_zncc``), ``seed_shift_px`` (how far the
-/// correlation peak sits from the observation itself), ``projection_offset_px``
+/// At the **track stage** the localizer aligns every observation to the
+/// track's reference render from the pixel it already sits at: each gets
+/// ``seed_shift_px`` (how far the correlation peak sits from the observation
+/// itself, ``0`` on the reference's own row), ``projection_offset_px``
 /// (how far the observation sits from the point's projection -- the number
 /// that says how far the *point* is off), the reprojection error, the ray
 /// angle, and its tile's ZNCC self-similarity radius. Each row's score

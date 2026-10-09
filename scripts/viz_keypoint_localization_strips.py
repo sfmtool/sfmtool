@@ -1,28 +1,28 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Visualize ``PatchCloud.localize_keypoints`` (congealing) as context-tile strips
-with the before/after reference patch.
+"""Visualize ``PatchCloud.localize_keypoints`` (alignment to the reference
+render) as context-tile strips with the before/after mean patch.
 
 For each point, a row of:
 
-- the **reference patch** consensus before vs after congealing (left) — the
-  (plain, unweighted) mean of the kept views' cores rendered at the raw projection
-  vs at the congealed keypoints. The "after" panel is sharper when the views
+- the **mean patch** before vs after the alignment (left) — the (plain,
+  unweighted) mean of the kept views' cores rendered at the raw projection vs
+  at the aligned keypoints. The "after" panel is sharper when the views
   co-register; the ``x..`` label is the gradient-energy sharpness ratio.
 - a strip of per-view **context tiles** (right). Each tile is the larger context
   the search slides within (the scored ``R×R`` core extended by ``±⌈search⌉`` px),
   with two boxes: **white** = core at the projection (``acc = 0``), **cyan** = core
-  at the congealed keypoint; their offset is the recovered in-plane shift.
+  at the aligned keypoint; their offset is the recovered in-plane shift.
 
 Tile borders: yellow (``trk`` track view), green (``add`` view-selection-added),
-red (``drop`` — dropped for out-of-frame / beyond ``max_shift_px`` / low
-leave-one-out ZNCC, projection box only). Kept tiles carry offset (source px) and
-leave-one-out ZNCC. Points are ordered by largest median shift.
+red (``drop`` — dropped for out-of-frame / beyond ``max_shift_px`` / low ZNCC
+against the reference render, projection box only). Kept tiles carry offset
+(source px) and their ZNCC against the reference render (``z1.00`` on the
+reference itself). Points are ordered by largest median shift.
 
-The before/after geometry faithfully reproduces the kernel, but the reference
+The before/after geometry faithfully reproduces the kernel, but the left
 panel's mean/sharpness is an independent simpler check, not the kernel's
-IRLS-weighted consensus. A row with ``k 2/..`` is the kernel's two-view floor
-(each view is the other's reference) — read its agreement with care.
+reference render. A row with ``k 2/..`` kept only two of its views.
 
 This mirrors the prototype context-tile + reference montage; it is a
 dev/inspection tool, not a test (coverage lives in
@@ -118,7 +118,7 @@ def _ctx_tile(ctx_img, disp, margin, res, border, top_label, acc=None, bot_label
     if acc is not None:
         _box(
             bgr, margin + acc[0], margin + acc[1], res, scale, CYAN
-        )  # core @ congealed
+        )  # core @ aligned
     cv2.rectangle(bgr, (0, 0), (disp - 1, disp - 1), border, 3)
     chip(bgr, top_label, (4, 14), border, 0.34)
     if bot_label is not None:
@@ -166,7 +166,7 @@ def gather(recon, cloud, images, args):
                 kept=kept,
                 kpts=np.asarray(r["keypoints"], dtype=np.float64),
                 offs=offs,
-                loo=np.asarray(r["loo_zncc"], dtype=np.float64),
+                zncc=np.asarray(r["zncc"], dtype=np.float64),
                 in_set=in_set,
                 shift=float(np.median(offs)) if len(offs) else 0.0,
             )
@@ -182,7 +182,7 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
     kept_set = set(meta["kept"])
     kept_kpt = {v: meta["kpts"][i] for i, v in enumerate(meta["kept"])}
     kept_off = {v: float(meta["offs"][i]) for i, v in enumerate(meta["kept"])}
-    kept_loo = {v: float(meta["loo"][i]) for i, v in enumerate(meta["kept"])}
+    kept_zncc = {v: float(meta["zncc"][i]) for i, v in enumerate(meta["kept"])}
 
     patch_obj = cloud[pid_to_patch[pid]]
     center = np.asarray(patch_obj.center, dtype=np.float64)
@@ -212,8 +212,8 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
             border = YELLOW if v in trk else GREEN
             kind = "trk" if v in trk else "add"
             bot = f"{kept_off[v]:.1f}px"
-            if np.isfinite(kept_loo[v]):
-                bot += f" z{kept_loo[v]:.2f}"
+            if np.isfinite(kept_zncc[v]):
+                bot += f" z{kept_zncc[v]:.2f}"
             tiles.append(
                 _ctx_tile(
                     ctx_tile, args.tile, margin, res, border, f"{kind}{v}", acc, bot
@@ -223,7 +223,7 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
             tiles.append(_ctx_tile(ctx_tile, args.tile, margin, res, RED, f"drop{v}"))
 
     # Reference consensus over the kept views: cores at the projection (before) vs
-    # at the congealed keypoints (after).
+    # at the aligned keypoints (after).
     for v in meta["kept"]:
         cam = cams[int(cam_idx[v])]
         before_cores.append(
@@ -271,7 +271,7 @@ def _compose(rows, args):
     draw_text(
         canvas,
         "left: reference patch before|after (x = sharpness ratio).  right: per-view "
-        "context tiles, white=core@projection cyan=core@congealed.",
+        "context tiles, white=core@projection cyan=core@aligned.",
         (8, 40),
         0.38,
         GREY,
@@ -280,10 +280,9 @@ def _compose(rows, args):
     y = 50
     for x in rows:
         draw_text(canvas, f"pt {x['pid']}", (8, y + 16), 0.44, (230, 230, 230))
-        floor = "  FLOOR" if x["nkept"] == 2 and x["nset"] > 2 else ""
         draw_text(
             canvas,
-            f"k {x['nkept']}/{x['nset']}{floor}",
+            f"k {x['nkept']}/{x['nset']}",
             (8, y + 34),
             0.4,
             (190, 190, 190),

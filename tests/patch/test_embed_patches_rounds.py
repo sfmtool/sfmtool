@@ -1,8 +1,8 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the ``embed_patches`` round structure: the default round/sweep counts,
-the sub-pixel LK sweep, and multi-round refinement. See
+"""Tests for the ``embed_patches`` round structure: the default round count,
+the sub-pixel LK pass, and multi-round refinement. See
 ``specs/core/patch/sift-to-patch-reconstruction.md``.
 """
 
@@ -18,14 +18,14 @@ from sfmtool.fileio import verify_sfmr
 from .conftest import load_images
 
 
-def test_embed_patches_default_is_two_rounds_one_sweep(
+def test_embed_patches_default_is_two_rounds_with_subpixel(
     seoul_bull_workspace: Path, tmp_path: Path
 ):
     """The default ``embed_patches`` call (no ``subpixel=`` / ``rounds=`` kwargs) is
-    bit-for-bit equivalent to passing ``subpixel=1, rounds=2``. Pins the default so
+    bit-for-bit equivalent to passing ``subpixel=True, rounds=2``. Pins the default so
     flipping it in code can't slip in silently.
 
-    Scope: this only pins the **default kwarg values** (one LK sweep, two rounds).
+    Scope: this only pins the **default kwarg values** (the LK pass on, two rounds).
     It does NOT pin the broader behavioral contract — defending that would need a
     baseline artifact compared against this build's output, which this test does
     not carry.
@@ -42,7 +42,7 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
     # test_embed_patches_command.py tests run at this same low resolution.
     default = embed_patches(recon, images, patch_size=10.0, resolution=12)
     explicit = embed_patches(
-        recon, images, patch_size=10.0, subpixel=1, rounds=2, resolution=12
+        recon, images, patch_size=10.0, subpixel=True, rounds=2, resolution=12
     )
 
     assert default.point_count == explicit.point_count
@@ -54,9 +54,9 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
 def test_embed_patches_subpixel_lk_round_trips(
     seoul_bull_workspace: Path, tmp_path: Path
 ):
-    """``embed_patches(subpixel=1)`` produces a valid ``embedded_patches``
+    """``embed_patches(subpixel=True)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
-    keypoints differ from the no-refinement baseline (``subpixel=0``) — the
+    keypoints differ from the no-refinement baseline (``subpixel=False``) — the
     refiner actually moved something (it ran end-to-end, not a no-op splice).
     """
     from sfmtool._embed_patches import embed_patches
@@ -72,10 +72,10 @@ def test_embed_patches_subpixel_lk_round_trips(
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertion is
     # a relative baseline-vs-refined comparison at a fixed grid, so it holds.
     baseline = embed_patches(
-        recon, images, patch_size=10.0, subpixel=0, rounds=1, resolution=12
+        recon, images, patch_size=10.0, subpixel=False, rounds=1, resolution=12
     )
     refined = embed_patches(
-        recon, images, patch_size=10.0, subpixel=1, rounds=1, resolution=12
+        recon, images, patch_size=10.0, subpixel=True, rounds=1, resolution=12
     )
 
     assert baseline.feature_source == refined.feature_source == "embedded_patches"
@@ -83,10 +83,11 @@ def test_embed_patches_subpixel_lk_round_trips(
     # The subpixel pass can move the point count in BOTH directions, so bound
     # the difference symmetrically rather than asserting a direction:
     #
-    # - Shrink: it drops views that won't co-register (`max_shift_px`, low LOO
-    #   ZNCC, grazing) and then culls points left below `min_views`.
+    # - Shrink: it drops views that won't co-register (`max_shift_px`, low
+    #   ZNCC against the reference, grazing) and then culls points left below
+    #   `min_views`.
     # - Grow: `_refine_subpixel` runs in both configurations (render-only at
-    #   `subpixel=0`), and the compaction's culled-point signal is the
+    #   `subpixel=False`), and the compaction's culled-point signal is the
     #   consensus validity at whatever keypoints the pass ends with — the
     #   seeds for the baseline, the LK-refined keypoints here. Refinement can
     #   flip a marginal consensus from invalid to valid, RESCUING a point the
@@ -119,7 +120,7 @@ def test_embed_patches_subpixel_lk_round_trips(
     # Measured 94-95% of observations move; 50% leaves ample headroom while
     # still failing a no-op (0%) or a near-no-op.
     assert moved > 0.5 * len(ref_buckets), (
-        f"subpixel=1 moved only {moved}/{len(ref_buckets)} keypoints "
+        f"subpixel=True moved only {moved}/{len(ref_buckets)} keypoints "
         "(wiring is a no-op?)"
     )
 
@@ -150,7 +151,7 @@ def test_embed_patches_multiple_rounds_round_trips(
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertions
     # are relative (three-rounds vs one-round monotonicity) at a fixed grid.
     one = embed_patches(
-        recon, images, patch_size=10.0, subpixel=1, rounds=1, resolution=12
+        recon, images, patch_size=10.0, subpixel=True, rounds=1, resolution=12
     )
 
     lines: list[str] = []
@@ -158,7 +159,7 @@ def test_embed_patches_multiple_rounds_round_trips(
         recon,
         images,
         patch_size=10.0,
-        subpixel=1,
+        subpixel=True,
         rounds=3,
         resolution=12,
         progress=lines.append,

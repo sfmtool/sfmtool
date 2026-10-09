@@ -57,7 +57,7 @@ FINISH_DEFAULTS = {
     "max_projection_offset_px": 1.5,
     "geometry_search": True,
     "min_in_views": 3,
-    "min_zncc_median": 0.8,
+    "min_zncc_median": 0.7,
     # Ray consensus before the cleaning (see ray_consensus).
     "ray_consensus": False,
     "ray_tolerance_px": 2.0,
@@ -69,10 +69,16 @@ FINISH_DEFAULTS = {
 
 
 def median_zncc(track) -> float:
+    """The median score against the stored bitmap over the ``in`` rows, the
+    reference row (1 by construction) left out, as Track at Pixel's median
+    gate reads it."""
+    ref = track.reference_observation
     z = [
-        o["track"]["loo_zncc"]
-        for o in track.observations
-        if o["verdict"] == "in" and o.get("track", {}).get("loo_zncc") is not None
+        o["track"]["zncc"]
+        for i, o in enumerate(track.observations)
+        if o["verdict"] == "in"
+        and i != ref
+        and o.get("track", {}).get("zncc") is not None
     ]
     return float(np.median(z)) if z else float("-inf")
 
@@ -374,7 +380,7 @@ def ray_consensus(ctx, track, q: int, pixel, opts: dict, diag: dict):
         if i == q or o["verdict"] != "in":
             continue
         tr = o.get("track", {})
-        kp, z = tr.get("keypoint"), tr.get("loo_zncc")
+        kp, z = tr.get("keypoint"), tr.get("zncc")
         if kp is None or z is None or z < opts["ray_min_zncc"]:
             continue
         # A keypoint the correlation peak has left is not a sighting yet.
