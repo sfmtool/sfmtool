@@ -249,8 +249,9 @@ increment), and rescore.
 A refit replaces the pose when it does not shrink the consensus: when it
 has more inliers, or the same number and a lower value of the cost
 Gauss-Newton minimizes, evaluated over the inliers it was fitted to.
-Otherwise the previous pose and its inlier set stand. Refitting repeats only while the inlier count strictly grows,
-bounded by a small fixed round limit, because a refit on an unchanged
+Otherwise the previous pose and its inlier set stand. Refitting repeats only
+while the inlier count strictly grows, bounded by a small fixed round limit,
+because a refit on an unchanged
 inlier set reproduces the same pose. The equal-count case is the common
 one on clean data, where the 3-point pose already has every true
 correspondence as an inlier; accepting the refit there is what makes the
@@ -290,9 +291,9 @@ fisheye models (`OPENCV_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`,
 difference of the projection only, keeping the pose block exact. Damping `λ` is
 adapted down on a cost improvement, up on a rejected step. The trimmed-L2
 choice is deliberate: a plain L2 fit over all correspondences is biased by gross
-outliers, whose large residuals dominate the sum, while a robust loss seeded from all-large residuals
-has near-zero gradient — trimmed L2 from a reasonable init avoids both failure
-modes.
+outliers, whose large residuals dominate the sum, while a robust loss seeded
+from all-large residuals has near-zero gradient — trimmed L2 from a reasonable
+init avoids both failure modes.
 
 After the trim rounds, a final refit runs on the observations with residual
 `< inlier_px` when at least six qualify, and the returned `inlier_fraction` is
