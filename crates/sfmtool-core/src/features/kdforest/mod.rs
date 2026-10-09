@@ -512,6 +512,6 @@ impl AtomicStats {
 /// A forest over `u8` descriptors (integer squared-L2), e.g. SIFT.
 pub type KdForestU8 = KdForest<u8>;
 /// A forest over `f32` vectors (floating squared-L2). Coordinates must be finite
-/// (`NaN`/infinity corrupt the distance ordering). Phase 2 will harden and
-/// benchmark this path; today it is exercised far less than the `u8` index.
+/// (`NaN`/infinity corrupt the distance ordering). It has no hand-written SIMD
+/// kernel and no benchmarks, and is exercised far less than the `u8` index.
 pub type KdForestF32 = KdForest<f32>;
