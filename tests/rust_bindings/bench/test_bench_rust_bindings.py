@@ -26,6 +26,7 @@ from sfmtool.bench import (
     pin_verdict,
     resize_patch,
     resize_patch_to_pixel,
+    set_reference,
     set_stage,
     set_verdict,
     shape_observation,
@@ -413,6 +414,7 @@ class TestEvaluating:
             # self-similarity over its middle and each ninth of it.
             if "zncc" in entry:
                 assert entry["zncc_grid"].shape == (3, 3)
+                assert "blur_matched_zncc" in entry
             if "zncc_self_similarity_radius" in entry:
                 assert 0.0 <= entry["zncc_self_similarity_radius"] <= 3.0
                 assert 0.0 <= entry["zncc_self_similarity_radius_middle"] <= 3.0
@@ -544,21 +546,81 @@ class TestEvaluating:
         the bitmap and names it; every other row carries its plain and
         blur-matched scores against that bitmap, and the bitmap's row reads 1."""
         _, track = create_track(Bench(), edited, long_track_point)
+        # Unpinned, the reference follows the rule's pick.
+        track, _ = unpin_verdict(track, "all")
         fitted, _ = fit(track, edited, images)
-        source = fitted.bitmap_observation
+        source = fitted.reference_observation
         assert source is not None
+        assert fitted.reference_view_observation == source
         rows = [o["track"] for o in fitted.observations]
         assert rows[source]["reference_view"]["is_reference"]
-        assert rows[source]["bitmap_zncc"] == 1.0
+        assert rows[source]["zncc"] == 1.0
+        assert rows[source]["zncc_middle"] == 1.0
+        np.testing.assert_array_equal(rows[source]["zncc_grid"], np.ones((3, 3)))
         assert "sharper_than_bitmap" not in rows[source]
         for i, entry in enumerate(rows):
-            if i == source or "bitmap_zncc" not in entry:
+            if i == source or "zncc" not in entry:
                 continue
-            assert -1.0 <= entry["bitmap_zncc"] < 1.0
+            assert -1.0 <= entry["zncc"] < 1.0
             assert entry["bitmap_blur_sigma"] >= 0.0
             if entry["bitmap_blur_sigma"] == 0.0:
-                assert entry["blur_matched_bitmap_zncc"] == entry["bitmap_zncc"]
+                assert entry["blur_matched_zncc"] == entry["zncc"]
             assert isinstance(entry["sharper_than_bitmap"], bool)
+            assert "loo_zncc" in entry
+
+    def test_set_reference_pins_the_row_and_the_next_render_is_from_it(
+        self, edited, images, long_track_point
+    ):
+        """Set as reference makes an ``in`` row the reference and pins it; the
+        next render renders the bitmap from it and scores every row against it,
+        while the rule's pick is still reported beside it."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        read, _ = evaluate(track, edited, images, render_bitmap=True)
+        pick = read.reference_view_observation
+        assert pick is not None
+        other = next(
+            i
+            for i, o in enumerate(read.observations)
+            if i != pick and i != read.reference_observation and o["verdict"] == "in"
+        )
+        read, _ = unpin_verdict(read, other)
+        assert not read.observation(other)["pinned"]
+        chosen, report = set_reference(read, other)
+        assert report["observation"] == other and report["changed"]
+        assert chosen.observation(other)["pinned"]
+        assert chosen.reference_observation is None, "the old bitmap is stale"
+        rendered, _ = evaluate(chosen, edited, images, render_bitmap=True)
+        assert rendered.reference_observation == other
+        assert rendered.reference_view_observation == pick
+        assert rendered.observation(other)["track"]["zncc"] == 1.0
+        _, again = set_reference(rendered, other)
+        assert not again["changed"]
+
+        # An `out` row cannot be the reference.
+        out, _ = set_verdict(rendered, other, "out")
+        with pytest.raises(ValueError, match="only an in observation"):
+            set_reference(out, other)
+
+    def test_an_evaluation_without_a_bitmap_scores_no_row(
+        self, edited, images, long_track_point
+    ):
+        """With no bitmap to read against no row has a score, and each says
+        so; the leave-one-out reading is still taken."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        # Moving the patch drops the bitmap, which no longer shows it.
+        moved, _ = translate_patch(track, edited, (0.0, 0.0, 0.05))
+        read, _ = evaluate(moved, edited, images)
+        assert read.reference_observation is None
+        assert any("loo_zncc" in o["track"] for o in read.observations)
+        for o in read.observations:
+            entry = o["track"]
+            assert "zncc" not in entry
+            if "loo_zncc" in entry:
+                assert entry["reason"] == "there is no bitmap to score it against"
+        # The viewer's live evaluation renders one and scores every row.
+        rendered, _ = evaluate(moved, edited, images, render_bitmap=True)
+        assert rendered.reference_observation is not None
+        assert any("zncc" in o["track"] for o in rendered.observations)
 
     def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
         self, edited, images, long_track_point
@@ -567,17 +629,18 @@ class TestEvaluating:
         follows that repaint does not repaint again."""
         _, track = create_track(Bench(), edited, long_track_point)
         track, _ = unpin_verdict(track, "all")
-        # Bars no reading clears, set while nothing is measured.
+        # Bars no reading clears, set while nothing is measured. The bars judge
+        # the scores against the bitmap, so the evaluation renders one.
         track, _ = apply_thresholds(track, min_zncc=1.1)
         assert track.verdict_counts == (track.observation_count, 0)
         assert not track.repainted
 
-        read, report = evaluate(track, edited, images)
+        read, report = evaluate(track, edited, images, render_bitmap=True)
         assert report["turned_out"] == report["measured"] > 0
         assert report["turned_in"] == 0
         assert read.repainted
 
-        again, report = evaluate(read, edited, images)
+        again, report = evaluate(read, edited, images, render_bitmap=True)
         assert (report["turned_in"], report["turned_out"]) == (0, 0)
         assert again.verdict_counts == read.verdict_counts
         assert not again.repainted

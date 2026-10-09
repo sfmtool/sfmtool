@@ -440,8 +440,9 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         if let Some(to) = m.walked_to {
             t.set_item("walked_to", PyArray1::from_vec(py, to.to_vec()))?;
         }
-        // Present exactly when there is no score, and the sentence is the one
-        // the panel shows in its Status cell.
+        // Present where the localizer could not read the row, or where there
+        // is no score against the bitmap; the sentence is the one the panel
+        // shows in its Status cell.
         if let Some(reason) = m.reason {
             t.set_item("reason", reason.to_string())?;
         }
