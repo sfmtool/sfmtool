@@ -1971,7 +1971,7 @@ texels, so their geometry is checked without reading pixels off the screen.
   selection rules". These tests establish the invariant of § "Transitions" for
   every gesture `AppState` decides rather than the panel: which selections keep
   the item focused and which unfocus it, with one `Stopped editing` row and no
-  version; that a focus, every put and a clear select what § "Why each
+  version; that a focus, every put, a clear and a discard select what § "Why each
   transition is the one it is" says they select, a focus of an item with no
   origin clearing the point and keeping a selected image of that node; that an item stays focused
   through the deletion of its origin, through a commit, which gives a duplicate
@@ -2001,8 +2001,9 @@ texels, so their geometry is checked without reading pixels off the screen.
   infinity mark,
   the line under the header in both forms, the crop's pixel and feature index
   for a row put on by index, the evaluation state, a point with no patch
-  placement (§ "A point with no patch placement"), and a row click and
-  double-click, which select and reveal with no row selection.
+  placement (§ "A point with no patch placement"), a row click, which selects
+  and reveals with no row selection, and a double-click, which asks for
+  camera view.
 - **Edited mode and the table**:
   [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs).
   These tests establish the rest of § "One body in two modes", section by
@@ -2060,9 +2061,10 @@ texels, so their geometry is checked without reading pixels off the screen.
     reference; and a row click and double-click reporting the image and the
     pixel.
   - § "The observation table": the order of the columns and the heading size;
-    one row per observation; the cells following the stage; the ZNCC cell's
-    `whole` and `mid` percent form and `-` for a missing middle; the Status
-    cell's sentences, including the walk with and without its ZNCC; the
+    one row per observation, in index order, a verdict set on a row staying
+    under that observation's index, pinned; the cells following the stage; the
+    ZNCC cell's `whole` and `mid` percent form and `-` for a missing middle; the
+    Status cell's sentences, including the walk with and without its ZNCC; the
     *Reference* cell's pick, its word for each test, the tests dropped, the
     angle and pair ZNCC on every row, its hover readings, and `-` at the
     cluster stage and for a refused evaluation; the column's two marks,
