@@ -1614,7 +1614,7 @@ impl AppState {
     /// rather than trying to put a missing point on the bench.
     pub(crate) fn selected_point_held_in(&self, id: ReconId) -> Option<usize> {
         let index = self.selected_point_in(id)?;
-        let node = self.scene.iter().find(|node| node.id == id)?;
+        let node = crate::scene::node_by_id(&self.scene, id)?;
         node.edited().point(index as u32).is_some().then_some(index)
     }
 
