@@ -85,6 +85,8 @@ The chosen rung is the smallest on the ladder where the radius gate passes on th
 
 The gate on the radius and the allowed coherence drop are read from the distribution over the capture at the coarse tier: the radius gate at a quantile of the whole-patch radii at the default size, the coherence drop at a quantile of the per-track drop between adjacent rungs. A capture of a smooth building and a capture of a gravel path have different distributions and should not share constants. The project's experience with fixed thresholds elsewhere is the reason.
 
+Measured against the hand-set half-extents of the two checked-in ground truths, quantile gates of this kind make the rule pick the human's size on 14% to 21% of points and a size within one rung of it on 48% to 66%, and the result depends on the radius quantile more than on anything else; the human's sizes are close to a fixed footprint in the reference photograph rather than a multiple of the detector scale, and the readings depend on the grid density they are read at. See [patch-footprint-selection-measurements.md](patch-footprint-selection-measurements.md).
+
 ### Footprint in reference-view pixels
 
 The patch's edge, projected into the reference view, covers some number of photograph pixels. A bitmap of `R` grid pixels over a footprint of fewer than `R` photograph pixels is interpolation, not data. The primitive reports the footprint so that the density tier can refuse to upgrade a track whose footprint is under its target `R`, and so that the sweep's own readings at a size are known to be honest.
@@ -120,6 +122,6 @@ Anisotropic patches. The patch stays square; a surface whose good extent differs
 
 ## Open questions
 
-- **The rungs.** Geometric spacing around the current default of twelve is the natural start; whether anything above 24 is ever chosen decides the top of the ladder.
+- **The rungs.** Geometric spacing around the current default of twelve is the natural start; whether anything above 24 is ever chosen decides the top of the ladder. The ground truths' hand-set sizes argue for rungs in reference-view photograph px rather than in multiples of the detector scale ([measurements](patch-footprint-selection-measurements.md#what-the-human-chose)).
 - **Re-check at the fine tier.** Upgrading to `R = 24` reveals texture the coarse tier could not see, which can only lower the radius. Whether that justifies a second sweep is a cost question.
 - **Changing size after embedding.** A track that later gains or loses views could want a different size. Fixing the size at embedding is simpler and is the proposal; a resize is a re-embed.
