@@ -240,7 +240,8 @@ fn check_releases(
 ///     ValueError: On a shape mismatch, an empty ``cameras`` or ``schedule``,
 ///         an index out of range in ``image_camera``, ``obs_image`` or
 ///         ``obs_point``, a malformed ``distance_from`` entry, a release some
-///         camera's model does not admit, ``opt_k1`` with ``opt_bspline``, or
+///         camera's model does not admit, ``opt_k1`` with ``opt_bspline``, a
+///         ``protected_loss_scale`` that is not positive and finite, or
 ///         a point constraint the kernel refuses (held and ranged together, a
 ///         non-positive distance, a finite distance with no origin, an origin
 ///         past the image set).
