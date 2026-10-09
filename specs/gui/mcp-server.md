@@ -5299,10 +5299,10 @@ Other candidates, in rough order of value:
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `--mcp PORT` | `8787` (`cli::DEFAULT_MCP_PORT`) | The loopback port to bind. `0` takes an ephemeral one, printed at startup. |
-| `list_camera_images` `limit` | `50` (`read::DEFAULT_LIMIT`) | Rows per page. |
+| `list_camera_images` `limit` | `50` (`read::DEFAULT_LIMIT`) | Rows per page. `0` is refused, as the schema's `"minimum": 1` says. |
 | `list_camera_images` `limit` cap | `500` (`read::MAX_LIMIT`) | The most one call will return, whatever it asked for. |
-| `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. The tool schema advertises `"minimum": 16`; the parser does not check it. |
-| `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. |
+| `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. Below `16` (`frame::MIN_MAX_DIMENSION`, the schema's `"minimum"`) is refused. |
+| `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. `0` is refused, as the schema's `"minimum": 1` says. |
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
 | Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_task`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
@@ -5313,7 +5313,6 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 | `set_viewer_3d_display` numbers | Each slider's range and decimals (`viewer_3d::display::Field::control`) | The only values accepted, the ends included; a value inside is rounded to the decimals the slider shows. The ranges are listed beside the document in § "`get_viewer_3d_display` / `set_viewer_3d_display`". |
-
 | `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
 | `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |

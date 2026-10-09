@@ -691,6 +691,39 @@ fn schema_driven_unknown_argument_errors_remain_compatible() {
     );
 }
 
+/// A whole number below its schema's `"minimum"` is refused at the parse, and
+/// the minimum itself is taken.
+#[test]
+fn integer_arguments_below_their_schema_minimum_are_refused() {
+    for (tool, key) in [
+        ("list_camera_images", "limit"),
+        ("get_action_log", "limit"),
+        ("screenshot", "max_dimension"),
+    ] {
+        let spec = tools::catalog()
+            .iter()
+            .find(|spec| spec.name == tool)
+            .expect("a tool in the catalog");
+        let minimum = spec.schema["properties"][key]["minimum"]
+            .as_u64()
+            .expect("the schema gives a minimum");
+        assert!(minimum >= 1, "{tool}.{key}");
+
+        let below = json!({ key: minimum - 1 });
+        let error = tools::parse(tool, below.as_object()).expect_err("below the minimum");
+        assert_eq!(
+            error.0,
+            format!(
+                "{tool} wants {key} to be {minimum} or more — got {}.",
+                minimum - 1
+            )
+        );
+
+        let at = json!({ key: minimum });
+        tools::parse(tool, at.as_object()).expect("the minimum itself");
+    }
+}
+
 #[test]
 fn every_tool_advertises_an_object_schema_and_a_description() {
     for spec in tools::catalog() {

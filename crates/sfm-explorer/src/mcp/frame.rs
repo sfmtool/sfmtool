@@ -607,6 +607,10 @@ fn unpad(
     out
 }
 
+/// The smallest `max_dimension` a `screenshot` takes. The tool schema
+/// advertises it as the `"minimum"` and the parser refuses anything smaller.
+pub(super) const MIN_MAX_DIMENSION: u32 = 16;
+
 /// Shrink if asked to, encode as a PNG, and wrap it with its caption.
 ///
 /// Shared by both readback paths: what a picture is a picture *of* differs, and

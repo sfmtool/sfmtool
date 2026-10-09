@@ -65,7 +65,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "max_dimension",
                         json!({
                             "type": "integer",
-                            "minimum": 16,
+                            "minimum": crate::mcp::frame::MIN_MAX_DIMENSION,
                             "description":
                                 "Scale the image down so neither side exceeds this many pixels. \
                                  Omit for the native size of whatever was photographed. \

@@ -100,7 +100,7 @@ pub(crate) fn parse(
             reconstruction_label: args.optional_string("reconstruction_label")?,
             offset: args.optional_usize("offset")?.unwrap_or(0),
             limit: args
-                .optional_usize("limit")?
+                .optional_usize_at_least("limit", 1)?
                 .unwrap_or(super::read::DEFAULT_LIMIT),
         },
         "get_camera_image" => Command::GetCameraImage {
@@ -117,7 +117,7 @@ pub(crate) fn parse(
         "get_action_log" => Command::GetActionLog {
             since_revision: args.optional_u64("since_revision")?.unwrap_or(0),
             limit: args
-                .optional_usize("limit")?
+                .optional_usize_at_least("limit", 1)?
                 .unwrap_or(super::read::ACTION_LOG_DEFAULT_LIMIT),
             actors: args.actors("actors")?,
             detail: args.optional_bool("detail")?.unwrap_or(false),
@@ -621,7 +621,10 @@ pub(crate) fn parse(
                 panel,
                 hud,
                 max_dimension: args
-                    .optional_usize("max_dimension")?
+                    .optional_usize_at_least(
+                        "max_dimension",
+                        super::frame::MIN_MAX_DIMENSION as usize,
+                    )?
                     .map(|d| d.min(u32::MAX as usize) as u32),
                 crop: args.crop("crop_px")?,
                 widgets,
@@ -1204,6 +1207,17 @@ impl Args<'_> {
                 .as_u64()
                 .map(|n| Some(n as usize))
                 .ok_or_else(|| self.wrong_type(key, "a whole number, zero or more", value)),
+        }
+    }
+
+    /// An optional whole number that the schema gives a `"minimum"`, refused
+    /// below it, so the parser accepts what the schema advertises and no less.
+    fn optional_usize_at_least(&self, key: &str, min: usize) -> Result<Option<usize>, ToolError> {
+        match self.optional_usize(key)? {
+            Some(n) if n < min => {
+                Err(self.error(format!("wants {key} to be {min} or more — got {n}.")))
+            }
+            other => Ok(other),
         }
     }
 
