@@ -240,7 +240,7 @@ fn parse_feature_size(args: &Args) -> Result<Option<FeatureSize>, ToolError> {
         args.error("wants feature_size_px to be an object with min and max, or null.")
     })?;
     let inner = Args::new("set_image_detail_display.feature_size_px", map);
-    inner.reject_unknown(&["min", "max"])?;
+    inner.reject_unknown_nested()?;
     let min = inner.required_f64("min")?;
     let max = inner.required_f64("max")?;
     for (name, bound) in [("min", min), ("max", max)] {
@@ -270,14 +270,7 @@ fn parse_intrinsics(args: &Args) -> Result<IntrinsicsChange, ToolError> {
         .as_object()
         .ok_or_else(|| args.error("wants intrinsics to be an object of the layer's controls."))?;
     let inner = Args::new("set_image_detail_display.intrinsics", map);
-    inner.reject_unknown(&[
-        "enabled",
-        "axes",
-        "rings",
-        "distortion",
-        "distortion_scale",
-        "grid_cols",
-    ])?;
+    inner.reject_unknown_nested()?;
     Ok(IntrinsicsChange {
         enabled: inner.optional_bool("enabled")?,
         axes: inner.optional_bool("axes")?,

@@ -209,6 +209,12 @@ pub(crate) struct WindowChange {
     pub(crate) focus: bool,
 }
 
+/// The keys the `window` section takes, in the layout file and in
+/// `set_window_layout`'s argument. The tool's schema advertises the same set,
+/// which a catalog test checks.
+pub(crate) const WINDOW_KEYS: [&str; 5] =
+    ["state", "outer_position", "inner_size", "monitor", "focus"];
+
 /// The bound a position is accepted within, either way: what `winit` takes.
 const POSITION_LIMIT: i64 = i32::MAX as i64;
 
@@ -230,11 +236,7 @@ impl WindowChange {
         let Some(object) = value.as_object() else {
             return Err(LayoutError::at(path, "must be an object or null"));
         };
-        known_keys(
-            object,
-            path,
-            &["state", "outer_position", "inner_size", "monitor", "focus"],
-        )?;
+        known_keys(object, path, &WINDOW_KEYS)?;
 
         let state = match object.get("state") {
             None | Some(Value::Null) => None,

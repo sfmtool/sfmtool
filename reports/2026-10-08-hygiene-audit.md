@@ -385,6 +385,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Share one `WINDOW_KEYS` constant.
 - Effort: low. Risk: low.
 
+> _Status (2026-10-09): **Done** — `reject_unknown_nested` reads an array field's `items` and treats a missing `required` as empty; `feature_size_px`, `intrinsics` and `bundle_adjust.cameras[]` now call it, and `reject_unknown` is private to `tools.rs`. `nested_argument_names_agree_with_the_catalog` walks the catalog and covers ten objects (it also picked up `set_view.bench_observation`, which the hand list had missed), and it fails on a closed object one level deeper. `window::WINDOW_KEYS` is used by the parser and by the schema test. No parser/schema mismatch was found; the refusal text for `intrinsics` and `cameras` now lists keys in the schema-derived order. Branch `hygiene-fix-1009-09-mcp-nested-keys`._
+
 **Put the shared WGSL declarations in one prelude and test the pick tags against Rust**
 - Location: `src/shaders/{points,patch,frustum,image_quad,distorted_quad}.wgsl`, against `scene_renderer/picking.rs:23-32` and `gpu_types.rs`.
 - Problem:

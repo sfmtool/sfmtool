@@ -1096,7 +1096,7 @@ impl Args<'_> {
     /// enforced by clients that enforce it. An ignored typo would leave the
     /// agent believing it asked for something it did not, and the whole reason
     /// this surface returns its resulting state is so that never happens.
-    pub(super) fn reject_unknown(&self, allowed: &[&str]) -> Result<(), ToolError> {
+    fn reject_unknown(&self, allowed: &[&str]) -> Result<(), ToolError> {
         let unknown: Vec<String> = self
             .map
             .keys()
@@ -1116,7 +1116,11 @@ impl Args<'_> {
 
     /// Use the advertised closed object for a nested argument. Optional fields
     /// precede the schema's required order, preserving the existing error text.
-    fn reject_unknown_nested(&self) -> Result<(), ToolError> {
+    ///
+    /// `self.tool` is the path `<tool>.<field>`. Where the field is an array,
+    /// as `bundle_adjust.cameras` is, the closed object is its `items`, and
+    /// these accessors are over one element of it.
+    pub(super) fn reject_unknown_nested(&self) -> Result<(), ToolError> {
         let (tool, field) = self
             .tool
             .split_once('.')
@@ -1125,13 +1129,17 @@ impl Args<'_> {
             .iter()
             .find(|spec| spec.name == tool)
             .expect("nested argument belongs to an advertised tool");
-        let schema = &spec.schema["properties"][field];
+        let mut schema = &spec.schema["properties"][field];
+        if schema.get("items").is_some() {
+            schema = &schema["items"];
+        }
         let properties = schema["properties"]
             .as_object()
             .expect("nested argument schema has object properties");
-        let required = schema["required"]
-            .as_array()
-            .expect("nested argument schema lists required properties");
+        let required = schema
+            .get("required")
+            .map(|required| required.as_array().expect("required is an array"))
+            .map_or(&[][..], Vec::as_slice);
         let mut allowed = properties
             .keys()
             .filter(|name| {
@@ -1455,11 +1463,7 @@ impl Args<'_> {
                     tool: "bundle_adjust.cameras",
                     map,
                 };
-                inner.reject_unknown(&[
-                    "camera_intrinsics_index",
-                    "release_focal",
-                    "release_distortion",
-                ])?;
+                inner.reject_unknown_nested()?;
                 Ok(super::CameraReleaseOverride {
                     camera_intrinsics_index: inner.required_usize("camera_intrinsics_index")?,
                     release_focal: inner.optional_bool("release_focal")?,

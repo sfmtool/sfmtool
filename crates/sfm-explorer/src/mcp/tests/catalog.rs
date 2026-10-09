@@ -549,45 +549,115 @@ fn every_advertised_tool_refuses_an_unknown_top_level_argument() {
     }
 }
 
-/// Exercise the nested objects parsed by `Args` using the valid catalog
-/// calls. The schema supplies the probe names; the parser must recognize each
-/// advertised name and reject a name absent from the schema.
+/// The closed objects nested in each tool's arguments, as `(tool, field,
+/// object schema, is_array)`: an argument whose schema is an object with
+/// `additionalProperties: false`, or an array of such objects.
+fn closed_nested_objects() -> Vec<(&'static str, String, Value, bool)> {
+    let closed = |schema: &Value| {
+        schema["additionalProperties"] == json!(false) && schema["properties"].is_object()
+    };
+    let mut found = Vec::new();
+    for spec in tools::catalog() {
+        let properties = spec.schema["properties"]
+            .as_object()
+            .expect("an object schema");
+        for (field, schema) in properties {
+            let (object, is_array) = match schema.get("items") {
+                Some(items) => (items, true),
+                None => (schema, false),
+            };
+            if closed(object) {
+                found.push((spec.name, field.clone(), object.clone(), is_array));
+            }
+        }
+    }
+    found
+}
+
+/// Exercise every closed object nested in a tool's arguments, found by
+/// walking the catalog. The schema supplies the probe names; the parser must
+/// recognize each advertised name and reject a name absent from the schema.
+///
+/// `set_window_layout` is left out: its document is read by the layout
+/// parser in the tool body, not by `tools::parse`, and
+/// `set_window_layout_advertises_the_document` ties its `window` keys to
+/// `crate::window::WINDOW_KEYS`.
 #[test]
 fn nested_argument_names_agree_with_the_catalog() {
+    // A valid call carrying the nested object, for each one the
+    // representative call does not carry already.
+    let bases = [
+        (
+            "set_view",
+            "look_through",
+            json!({ "look_through": { "camera_image": 0 } }),
+        ),
+        (
+            "set_view",
+            "bench_observation",
+            json!({ "bench_observation": { "observation": 0 } }),
+        ),
+        ("set_view", "move", json!({ "move": { "forward": 1.0 } })),
+        ("set_view", "turn", json!({ "turn": { "yaw_deg": 1.0 } })),
+        ("set_view", "orbit", json!({ "orbit": { "yaw_deg": 1.0 } })),
+        (
+            "set_image_detail_display",
+            "feature_size_px",
+            json!({ "feature_size_px": { "min": 1.0, "max": 2.0 } }),
+        ),
+        (
+            "set_image_detail_display",
+            "intrinsics",
+            json!({ "intrinsics": { "axes": true } }),
+        ),
+        (
+            "bundle_adjust",
+            "cameras",
+            json!({
+                "reconstruction_label": "alpha",
+                "cameras": [{ "camera_intrinsics_index": 0 }],
+            }),
+        ),
+    ];
     let calls = representative_tool_calls();
-    for (tool, field) in [
-        ("set_reconstruction_transform", "transform"),
-        ("move_camera_image", "world_from_camera"),
-        ("set_view", "look_through"),
-        ("set_view", "move"),
-        ("set_view", "turn"),
-        ("set_view", "orbit"),
-    ] {
-        let spec = tools::catalog()
+    let walked = closed_nested_objects();
+    let mut checked = 0;
+    for (tool, field, object, is_array) in walked {
+        if tool == "set_window_layout" {
+            continue;
+        }
+        let properties = object["properties"].as_object().expect("nested object");
+        for (name, schema) in properties {
+            let inner = schema.get("items").unwrap_or(schema);
+            assert!(
+                !(inner["additionalProperties"] == json!(false) && inner["properties"].is_object()),
+                "{tool}.{field}.{name} is a closed object a level deeper than this test walks"
+            );
+        }
+        let base = bases
             .iter()
-            .find(|spec| spec.name == tool)
-            .expect("advertised tool");
-        let schema = &spec.schema["properties"][field];
-        assert_eq!(schema["additionalProperties"], false, "{tool}.{field}");
-        let properties = schema["properties"].as_object().expect("nested object");
-        let base = if tool == "set_view" {
-            match field {
-                "look_through" => json!({ "look_through": { "camera_image": 0 } }),
-                "move" => json!({ "move": { "forward": 1.0 } }),
-                _ => json!({ field: { "yaw_deg": 1.0 } }),
+            .find(|(t, f, _)| *t == tool && *f == field)
+            .map(|(_, _, call)| call.clone())
+            .or_else(|| {
+                calls
+                    .iter()
+                    .find(|(name, call)| *name == tool && call.get(&field).is_some())
+                    .map(|(_, call)| call.clone())
+            })
+            .unwrap_or_else(|| panic!("{tool}.{field} needs a valid call to probe from"));
+        tools::parse(tool, base.as_object())
+            .unwrap_or_else(|error| panic!("{tool}.{field} base call: {error}"));
+        fn element<'a>(arguments: &'a mut Value, field: &str, is_array: bool) -> &'a mut Value {
+            if is_array {
+                &mut arguments[field][0]
+            } else {
+                &mut arguments[field]
             }
-        } else {
-            calls
-                .iter()
-                .find(|(name, _)| *name == tool)
-                .expect("representative call")
-                .1
-                .clone()
-        };
+        }
 
         for name in properties.keys() {
             let mut arguments = base.clone();
-            arguments[field][name] = json!("<probe>");
+            element(&mut arguments, &field, is_array)[name] = json!("<probe>");
             if let Err(error) = tools::parse(tool, arguments.as_object()) {
                 assert!(
                     !error.0.contains("has no argument"),
@@ -597,7 +667,7 @@ fn nested_argument_names_agree_with_the_catalog() {
         }
 
         let mut arguments = base;
-        arguments[field]["unknown_argument"] = json!(true);
+        element(&mut arguments, &field, is_array)["unknown_argument"] = json!(true);
         let error = tools::parse(tool, arguments.as_object()).expect_err("unknown nested key");
         assert!(
             error.0.starts_with(&format!(
@@ -605,7 +675,12 @@ fn nested_argument_names_agree_with_the_catalog() {
             )),
             "{tool}.{field}: {error}"
         );
+        checked += 1;
     }
+    assert!(
+        checked >= 10,
+        "the walk found only {checked} nested objects"
+    );
 }
 
 #[test]
@@ -1109,10 +1184,9 @@ fn set_window_layout_advertises_the_document() {
         .map(String::as_str)
         .collect();
     window_keys.sort_unstable();
-    assert_eq!(
-        window_keys,
-        ["focus", "inner_size", "monitor", "outer_position", "state"]
-    );
+    let mut parsed = crate::window::WINDOW_KEYS;
+    parsed.sort_unstable();
+    assert_eq!(window_keys, parsed);
 }
 
 /// Every description text in `value`, at any depth of a schema.

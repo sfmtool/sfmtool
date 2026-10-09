@@ -5106,10 +5106,14 @@ where a test hands no host over.
   input reply carries is a spelled-out wire name.
 - **Schema and parser cannot drift**: the cached catalog schema supplies the
   accepted top-level argument names to the parser, so a tool has one declaration
-  of that vocabulary. The parser also derives accepted names for its three
-  nested objects from their catalog schemas. A catalog-wide regression adds an
-  unknown key to every representative call and probes both directions of those
-  three nested schemas; the vocabulary rule is asserted the same way, including
+  of that vocabulary. The parser also derives the accepted names of every
+  closed object nested in an argument from its catalog schema, including the
+  elements of an array of objects such as `bundle_adjust`'s `cameras`. A
+  catalog-wide regression adds an unknown key to every representative call, and
+  a second walks the catalog for every closed nested object and probes both
+  directions of its schema. `set_window_layout`'s document is the exception: the
+  layout parser reads it, and its `window` keys are one constant that a test
+  compares with the schema. The vocabulary rule is asserted the same way, including
   that a panel argument is `panel_name` and never
   `panel`, and that `hud` — the one allowed initialism — is on `screenshot` and
   nowhere else, so a second one cannot arrive quietly.
