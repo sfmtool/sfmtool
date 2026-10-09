@@ -1,22 +1,18 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The per-view windowed-ZNCC translation search and the incremental
-//! leave-one-out robust consensus it registers against, split out of the
-//! congealing orchestration ([`super`]).
+//! The per-view windowed-ZNCC translation search, split out of the
+//! localization orchestration ([`super`]).
 //!
 //! [`search_shift`] scores the whole `±margin` shift grid by accumulation
 //! ([`SearchStrategy::Exhaustive`](super::SearchStrategy::Exhaustive));
-//! [`search_shift_plus_descent`] walks a steepest-descent path scoring one cell
+//! [`search_shift_plus_descent`] walks a steepest-ascent path scoring one cell
 //! at a time ([`SearchStrategy::PlusDescent`](super::SearchStrategy::PlusDescent)).
-//! Both correlate a view's per-view render-once cache ([`ContextTile`]) against a
-//! template built by [`loo_consensus_template`] from the shared per-round Gram
-//! matrix ([`build_loo_gram`]). The data-touching correlation kernels live in
-//! [`super::kernels`].
+//! Both correlate a view's context tile ([`ContextTile`]) against a fixed
+//! template, the point's reference render. The data-touching correlation
+//! kernels live in [`super::kernels`].
 
-use crate::patch::normal_refine::{
-    tukey_reweight_from_residuals, weighted_unit_template_skip_into, Support, FLAT_NORM_SQ_EPS,
-};
+use crate::patch::normal_refine::{Support, FLAT_NORM_SQ_EPS};
 
 use super::kernels::{
     accumulate_count, compute_channel_grids, count_invalid_at_cell, score_cell_one_channel,
@@ -125,163 +121,6 @@ impl SearchScratch {
         reserve_f64(&mut self.pd_visited)?;
         Ok(())
     }
-}
-
-/// Reused scratch for the **incremental leave-one-out consensus**: the
-/// per-round Gram matrix over the live views' z-normalized cores plus the
-/// per-holdout Gram-space IRLS buffers. Created once per
-/// [`localize_patch_keypoints`](super::localize_patch_keypoints) call, mirroring
-/// [`SearchScratch`].
-#[derive(Default)]
-pub(super) struct LooScratch {
-    /// Live-view Gram matrix `G[a·nv + b] = ⟨x_a, x_b⟩` (f64, stacked over the
-    /// kept channels), rebuilt once per round.
-    gram: Vec<f64>,
-    /// Per-holdout IRLS weights over the **full** live index range; the
-    /// held-out view's slot is pinned at `0` so `G·w` sums holdout members only.
-    /// Read after [`loo_consensus_template`] to carry the same consensus to
-    /// the whole square for the ZNCC grid.
-    pub(super) w: Vec<f64>,
-    /// `y = G·w` per live view (only holdout members are read).
-    y: Vec<f64>,
-    /// Per-holdout-member residuals `‖x_u − x̄‖`, compacted (skip the holdout).
-    resid: Vec<f64>,
-    /// Compacted holdout weights, parallel to [`resid`](Self::resid) — the
-    /// in/out slice for the shared Tukey reweight.
-    wh: Vec<f64>,
-    /// Median/MAD sort scratch for the reweight.
-    sorted: Vec<f64>,
-    /// Raw (pre-normalization) Tukey weights scratch for the reweight.
-    wt: Vec<f64>,
-}
-
-/// `Σ_k a[k]·b[k]` accumulated in `f64` over `f32` inputs, with 8 independent
-/// accumulators so the compiler can vectorize the (otherwise
-/// associativity-serialized) f64 adds. Feeds the per-round Gram matrix.
-fn dot_f64(a: &[f32], b: &[f32]) -> f64 {
-    const LANES: usize = 8;
-    let n = a.len().min(b.len());
-    let mut acc = [0f64; LANES];
-    let body = n / LANES * LANES;
-    let mut i = 0;
-    while i < body {
-        for (l, s) in acc.iter_mut().enumerate() {
-            *s += a[i + l] as f64 * b[i + l] as f64;
-        }
-        i += LANES;
-    }
-    let mut s: f64 = acc.iter().sum();
-    for k in body..n {
-        s += a[k] as f64 * b[k] as f64;
-    }
-    s
-}
-
-/// Build the symmetric live-view Gram matrix `G[a][b] = ⟨x_a, x_b⟩` into
-/// `loo.gram` (`nv × nv`, row-major), where `xs` holds `nv` contiguous rows of
-/// `cn` f32s. Computed **once per round** and shared by every holdout's IRLS.
-pub(super) fn build_loo_gram(xs: &[f32], nv: usize, cn: usize, loo: &mut LooScratch) {
-    loo.gram.resize(nv * nv, 0.0);
-    for a in 0..nv {
-        let xa = &xs[a * cn..][..cn];
-        loo.gram[a * nv + a] = dot_f64(xa, xa);
-        for b in (a + 1)..nv {
-            let d = dot_f64(xa, &xs[b * cn..][..cn]);
-            loo.gram[a * nv + b] = d;
-            loo.gram[b * nv + a] = d;
-        }
-    }
-}
-
-/// Build view `v`'s **leave-one-out robust consensus template** into `out`
-/// from the live stack `xs` (`nv` rows × `kept_ch · n`), using the per-round
-/// Gram matrix in `loo.gram` — the incremental replacement for the
-/// copy-the-holdout-stack + `irls_view_weights` + `weighted_unit_template_into`
-/// rebuild that ran per (view, round).
-///
-/// The IRLS recursion touches the pixel data only through inner products, so
-/// the whole per-holdout iteration runs in Gram space: with weights `w` (the
-/// holdout's slot pinned at 0), `x̄ = Σ w_u x_u` gives residuals
-/// `r_u² = G[u][u] − 2·(G·w)_u + wᵀ·G·w`, which feed the **exact** shared
-/// Tukey/MAD reweight ([`tukey_reweight_from_residuals`]). Only the final unit
-/// template is materialized in pixel space
-/// ([`weighted_unit_template_skip_into`], no holdout-stack copy).
-///
-/// Real-arithmetic semantics are identical to the compacted-stack path
-/// (uniform `1/(nv−1)` init, `robust_iters` reweights, degenerate-reweight
-/// early-out keeping the previous weights); float results differ only at
-/// accumulation-order level (f64 Gram algebra vs the f32 SAXPY/residual path),
-/// which the `incremental_loo_template_matches_reference` test bounds.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn loo_consensus_template(
-    xs: &[f32],
-    nv: usize,
-    v: usize,
-    kept_ch: usize,
-    n: usize,
-    robust_iters: u32,
-    loo: &mut LooScratch,
-    out: &mut Vec<f32>,
-) {
-    debug_assert!(nv >= 2 && v < nv);
-    debug_assert_eq!(loo.gram.len(), nv * nv);
-    loo.w.clear();
-    loo.w.resize(nv, 1.0 / (nv - 1) as f64);
-    loo.w[v] = 0.0;
-    for _ in 0..robust_iters {
-        // y = G·w and ‖x̄‖² = wᵀ·y over the holdout members (w[v] = 0 keeps the
-        // held-out view out of both).
-        loo.y.clear();
-        loo.y.resize(nv, 0.0);
-        let mut xbar_sq = 0.0;
-        for u in 0..nv {
-            if u == v {
-                continue;
-            }
-            let row = &loo.gram[u * nv..][..nv];
-            let mut acc = 0.0;
-            for (uu, &wu) in loo.w.iter().enumerate() {
-                acc += wu * row[uu];
-            }
-            loo.y[u] = acc;
-            xbar_sq += loo.w[u] * acc;
-        }
-        // Residuals ‖x_u − x̄‖ per holdout member (compacted). The algebraic r²
-        // can dip epsilon-negative for a view equal to the consensus; clamp.
-        loo.resid.clear();
-        for u in 0..nv {
-            if u == v {
-                continue;
-            }
-            let r2 = loo.gram[u * nv + u] - 2.0 * loo.y[u] + xbar_sq;
-            loo.resid.push(r2.max(0.0).sqrt());
-        }
-        // Shared Tukey/MAD reweight on the compacted weights, scattered back.
-        loo.wh.clear();
-        loo.wh.extend((0..nv).filter(|&u| u != v).map(|u| loo.w[u]));
-        let degenerate = {
-            let LooScratch {
-                resid,
-                sorted,
-                wt,
-                wh,
-                ..
-            } = loo;
-            tukey_reweight_from_residuals(resid, None, sorted, wt, wh)
-        };
-        if degenerate {
-            break; // keep the previous weights, as irls_view_weights does
-        }
-        let mut j = 0;
-        for u in 0..nv {
-            if u == v {
-                continue;
-            }
-            loo.w[u] = loo.wh[j];
-            j += 1;
-        }
-    }
-    weighted_unit_template_skip_into(xs, &loo.w, v, nv, kept_ch, n, out);
 }
 
 /// The result of a [`search_shift`] — the residual shift of one view relative to

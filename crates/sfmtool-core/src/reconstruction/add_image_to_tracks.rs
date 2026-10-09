@@ -16,7 +16,7 @@
 //! rendered where their keypoints put them and combined into a robust
 //! consensus ([`ReferenceConsensus`]), the image is searched once against it,
 //! optionally refined to sub-pixel against the same references
-//! ([`refine_view_against_references`]), and scored. See
+//! ([`refine_view_against_reference`]), and scored. See
 //! `specs/core/reconstruction/add-image-to-tracks.md` for the design, and
 //! `scripts/add_image_to_tracks/README.md` for the evaluation that chose the
 //! default rule.
@@ -37,7 +37,9 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
     project_unclipped, KeypointLocalizeParams, ReferenceConsensus,
 };
-use crate::patch::keypoint_subpixel::{refine_view_against_references, KeypointSubpixelParams};
+use crate::patch::keypoint_subpixel::{
+    refine_view_against_reference, KeypointSubpixelParams, ReferenceTemplate,
+};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
@@ -558,10 +560,7 @@ pub fn add_image_to_tracks(
         TemplateSource::StoredBitmap => recon.point_set.patch_bitmaps_y_x_rgba.as_deref(),
         TemplateSource::Rendered => None,
     };
-    let mut localize = KeypointLocalizeParams {
-        search_resolution_multiplier: 1.0,
-        ..options.localize.clone()
-    };
+    let mut localize = options.localize.clone();
     if let Some(b) = bitmaps {
         localize.resolution = b.shape()[1] as u32;
     }
@@ -887,20 +886,20 @@ impl Context<'_, '_> {
             return out;
         }
         if self.options.subpixel {
-            let refs_used: Vec<u32> = consensus.references.clone();
-            let kps_used: Vec<[f64; 2]> = refs_used
-                .iter()
-                .map(|&l| ref_keypoints[l as usize - 1])
-                .collect();
-            if let Some(refined) = refine_view_against_references(
-                &patch,
-                &local,
-                &refs_used,
-                &kps_used,
-                0,
-                keypoint,
-                self.refine,
-            ) {
+            let row = self.bitmaps.map(|b| b.index_axis(ndarray::Axis(0), pi));
+            let template = match row.as_ref().and_then(|r| r.as_slice()) {
+                Some(slice) => ReferenceTemplate::Bitmap(slice),
+                None => {
+                    let l = consensus.references[0];
+                    ReferenceTemplate::Observation {
+                        image: l,
+                        keypoint: ref_keypoints[l as usize - 1],
+                    }
+                }
+            };
+            if let Some((refined, _)) =
+                refine_view_against_reference(&patch, &local, template, 0, keypoint, self.refine)
+            {
                 keypoint = refined;
             }
         }

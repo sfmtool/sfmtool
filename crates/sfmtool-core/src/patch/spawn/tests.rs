@@ -299,12 +299,12 @@ fn unreachable_reprojection_gate_reports_high_reproj() {
 
 #[test]
 fn discrete_only_still_spawns() {
-    // `subpixel_sweeps = 0` skips refinement entirely; the discrete keypoints go
+    // `refine_subpixel = false` skips refinement entirely; the discrete keypoints go
     // straight to triangulation and still clear the gates.
     let scene = scene();
     let cloud = parent_cloud();
     let discrete = SpawnParams {
-        subpixel_sweeps: 0,
+        refine_subpixel: false,
         ..params()
     };
     let out = spawn_candidate_tracks(

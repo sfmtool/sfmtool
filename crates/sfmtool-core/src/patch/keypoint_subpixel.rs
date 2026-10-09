@@ -5,47 +5,25 @@
 //!
 //! See `specs/core/patch/keypoint-subpixel-refinement.md`. Given a keypoint that is
 //! **already close** to correct (the caller's precondition), this refines it to
-//! sub-pixel by a **local** continuous optimization of cross-view
-//! photoconsistency: per view, a 2-DOF in-plane translation offset `δ` solved by
-//! a few **forward-additive ECC (Enhanced Correlation Coefficient) Gauss–Newton**
-//! steps against the robust (IRLS) cross-view consensus `T`. It does no grid
-//! search; the only membership change is the projection gate (a view in which
-//! `project_i(X_p)` fails has no projection-anchored offset to report, so it is
-//! dropped). Each accepted step raises the ECC score against the current `T` and
-//! stays in frame — the never-worse-than-seed guarantee — see
-//! [`KeypointSubpixelParams::max_outer_sweeps`] for how this composes when `T` is
-//! refreshed across sweeps.
-//!
-//! The number of **outer sweeps** is a tunable
-//! ([`KeypointSubpixelParams::max_outer_sweeps`]): each sweep re-renders the
-//! views at their current offsets, rebuilds the robust (IRLS) consensus from
-//! those, and refines every view against it. With `max_outer_sweeps = 1` (the
-//! default) this is the spec's cheapest **single-pass frozen** variant — build
-//! `T` once at the seed, hold it fixed, move every view; with
-//! `max_outer_sweeps > 1` it is the spec's **per-sweep refresh** variant. Whether refreshing earns
-//! its keep at sub-pixel scale is a measurable question, not a settled one (the
-//! prototype observed `T` sharpening as views aligned), so this is a knob, not a
-//! constant.
-//!
-//! [`KeypointSubpixelParams::consensus_refresh`] additionally selects the
-//! within-sweep granularity: [`ConsensusRefresh::PerSweep`] (default — `T` is
-//! rebuilt only at sweep boundaries) or [`ConsensusRefresh::PerMove`] (the
-//! spec's Gauss–Seidel **incremental consensus**: after each view moves, its
-//! contribution to the running weighted sum `S = Σ_v w_v · ẑ_v` is
-//! delta-updated and `T = normalize(S)` is re-derived for the next view). The
-//! IRLS weights are refreshed at the lower per-sweep frequency (the spec's
-//! two-frequency design). The per-move path uses the **shared** consensus
-//! (not leave-one-out): measurement on real data (dino, mean view count 3–5)
-//! found LOO regressed mean ECC (0.82 vs 0.87 shared at 5 sweeps); see
-//! `RunningConsensus::write_shared_template` for the reasoning and the
-//! commit message that landed this for the per-sweep / per-move comparison
-//! numbers.
+//! sub-pixel by a **local** continuous optimization: per view, a 2-DOF in-plane
+//! translation offset `δ` solved by a few **forward-additive ECC (Enhanced
+//! Correlation Coefficient) Gauss–Newton** steps against the point's reference
+//! render `T`, the template the localizer aligns views to
+//! ([`keypoint_localize`](super::keypoint_localize)): the reference
+//! observation's render at its own keypoint, which is never blurred and never
+//! moved, or the fused mean of the views where the reference-view rule picks no
+//! reference it would store. It does no grid search; the only membership change
+//! is the projection gate (a view in which `project_i(X_p)` fails has no
+//! projection-anchored offset to report, so it is dropped). Each accepted step
+//! raises the ECC score against `T` and stays in frame, so no view ends worse
+//! than its seed. `T` does not change while the views move, so each view is
+//! refined once.
 //!
 //! Points at **infinity** (`w = 0`) are refined exactly like finite ones — the
 //! warp + projection already handle `w = 0`, so the same objective, sampling, and
 //! Jacobian apply. They are *not* skipped (the opposite of normal refinement).
 //!
-//! The render → z-normalize → robust-consensus machinery is shared with
+//! The render → z-normalize machinery is shared with
 //! [keypoint localization](super::keypoint_localize) (the typical producer of the
 //! seed) and [normal refinement](super::normal_refine); this module reuses those
 //! helpers rather than re-deriving the math, and adds only the continuous
@@ -71,8 +49,8 @@
 //!
 //! Per view the ECC criterion is `S(δ) = (1/C) Σ_c ⟨ẑ_c(δ), T_c⟩`, the
 //! channel-averaged windowed ZNCC of the view's z-normalized core `ẑ` against the
-//! consensus `T` (each `T_c` zero-(weighted-)mean, unit-norm, with `√w` folded in,
-//! exactly as the consensus is built for the discrete search). Maximizing `S` is
+//! template `T` (each `T_c` zero-(weighted-)mean, unit-norm, with `√w` folded in,
+//! exactly as the template is built for the discrete search). Maximizing `S` is
 //! equivalent to least-squares minimizing `½ Σ_c ‖ẑ_c − T_c‖²` (since `‖ẑ_c‖ =
 //! ‖T_c‖ = 1`), whose forward-additive Gauss–Newton step is `H δ = b` with
 //! `H = Σ_c Σ_k (∂ẑ_c[k]/∂δ)(∂ẑ_c[k]/∂δ)ᵀ` and `b = Σ_c Σ_k (∂ẑ_c[k]/∂δ) T_c[k]`
@@ -88,10 +66,12 @@
 
 use crate::camera::image::ImageF32WithGrad;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::keypoint_localize::{project, seed_offset, shifted_center};
+use crate::patch::keypoint_localize::{
+    project, resolve_reference, seed_offset, shifted_center, ResolvedReference,
+};
 use crate::patch::normal_refine::{
-    build_support, irls_view_weights, weighted_unit_template_into, ConsensusScratch,
-    PatchViewStack, ProjectedImage, Support, AGREEMENT_SIGMA,
+    build_support, irls_view_weights, ConsensusScratch, PatchViewStack, ProjectedImage, Support,
+    AGREEMENT_SIGMA,
 };
 use crate::progress::{Cancelled, Progress};
 use rayon::prelude::*;
@@ -102,12 +82,13 @@ mod kernels;
 mod params;
 
 // Public API, re-exported at the historical `keypoint_subpixel::` paths.
-pub use params::{ConsensusRefresh, KeypointRefinement, KeypointSubpixelParams};
+pub use params::{KeypointRefinement, KeypointSubpixelParams};
 
 // Rendering + scoring kernels consumed by the Gauss–Newton orchestration below.
 use crate::camera::sampler::render_phase;
 use crate::patch::normal_refine::{Sampler, ViewSamplers};
-use crate::patch::stored_bitmap::{bitmap_from_tile, render_reference};
+use crate::patch::reference_view::render_view_tile;
+use crate::patch::stored_bitmap::bitmap_from_tile;
 use crate::patch::PatchCounter;
 use kernels::{
     core_value, core_value_with_jg, ecc_score, solve_2x2, try_render_refine_tile, view_jacobian,
@@ -135,6 +116,11 @@ use kernels::{
 struct ViewState {
     /// Image index into the caller's `views` slice.
     idx: u32,
+    /// Position of the view in the caller's `view_set`.
+    slot: usize,
+    /// The view's starting keypoint as given, source px (`None` starts at the
+    /// projection).
+    keypoint: Option<[f64; 2]>,
     /// Seed offset `(au, av)` in patch-grid px (the keypoint at refine start).
     seed: [f64; 2],
     /// Current offset `(au, av)` in patch-grid px.
@@ -152,12 +138,16 @@ struct ViewState {
 }
 
 /// Refine the per-view keypoints of one oriented patch by forward-additive ECC
-/// Gauss–Newton against a single frozen cross-view consensus.
+/// Gauss–Newton against the point's reference render.
 ///
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
 /// index); `view_set` lists the views to refine. `starting_keypoints`, when given,
 /// is one seed per `view_set` entry (source-image px); `None` seeds every view at
-/// the point's own projection `project_i(X_p)`. Returns the views (input order,
+/// the point's own projection `project_i(X_p)`. `reference` is the position in
+/// `view_set` of the point's reference observation, whose render at its
+/// starting keypoint is the template and whose keypoint is returned unmoved;
+/// `None` has the reference-view rule pick one from the renders at the starting
+/// keypoints, as the localizer does. Returns the views (input order,
 /// deduplicated) with their refined keypoints. The only membership change is the
 /// projection gate (a view in which `project_i(X_p)` fails — behind the camera or
 /// out of frame — is dropped, as the offset has nothing to be measured from);
@@ -168,6 +158,7 @@ pub fn refine_patch_keypoints(
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    reference: Option<usize>,
     params: &KeypointSubpixelParams,
 ) -> KeypointRefinement {
     refine_patch_keypoints_reporting(
@@ -175,6 +166,7 @@ pub fn refine_patch_keypoints(
         views,
         view_set,
         starting_keypoints,
+        reference,
         params,
         &Progress::none(),
     )
@@ -189,6 +181,7 @@ pub fn refine_patch_keypoints_reporting(
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    reference: Option<usize>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
 ) -> KeypointRefinement {
@@ -198,6 +191,7 @@ pub fn refine_patch_keypoints_reporting(
             views,
             view_set,
             starting_keypoints,
+            reference,
             params,
             BitmapKind::Reference,
             progress,
@@ -208,9 +202,10 @@ pub fn refine_patch_keypoints_reporting(
 /// Which bitmap [`KeypointSubpixelParams::render_bitmaps`] renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BitmapKind {
-    /// The reference view's tile, the fused mean where the reference-view
-    /// rule picks none or reaches its pick only through its last fallback
-    /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)):
+    /// The reference observation's tile, the fused mean where there is none
+    /// (the reference-view rule picks none, or reaches its pick only through
+    /// its last fallback,
+    /// [`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)):
     /// the stored bitmap.
     Reference,
     /// The fused mean of the views ([`fuse_patch_bitmap`]).
@@ -225,6 +220,7 @@ fn refine_patch_keypoints_impl(
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    reference: Option<usize>,
     params: &KeypointSubpixelParams,
     bitmap: BitmapKind,
     progress: &Progress<'_>,
@@ -264,6 +260,8 @@ fn refine_patch_keypoints_impl(
         );
         states.push(ViewState {
             idx: i,
+            slot: k,
+            keypoint: seed,
             seed: off,
             off,
             proj: [proj.0, proj.1],
@@ -273,8 +271,8 @@ fn refine_patch_keypoints_impl(
     }
 
     if states.len() < 2 {
-        // No cross-view consensus to refine against: keep every seed.
-        return finalize(patch, views, &states, wpp_u, wpp_v);
+        // No second view to align: keep every seed.
+        return finalize(patch, views, &states, None, wpp_u, wpp_v);
     }
 
     // Channel count is the first view's image channels; the warp renders at that
@@ -282,9 +280,6 @@ fn refine_patch_keypoints_impl(
     let channels = views[states[0].idx as usize].pyramid.level(0).channels() as usize;
     let mut raw = vec![0f32; channels * n];
     let mut znorm = vec![0f32; channels * n];
-    let mut sc = ConsensusScratch::default();
-    let mut tmpl = Vec::new();
-    let mut xs: Vec<f32> = Vec::new();
     let mut scratch = GnScratch::new(channels * n);
 
     // Render-once context tiles, one per (point, view) pair, centred at each
@@ -313,37 +308,43 @@ fn refine_patch_keypoints_impl(
         })
         .collect();
 
-    // Outer sweeps: each sweep re-renders the views at their current offsets,
-    // rebuilds the robust consensus from them, and refines every view against it.
-    // With `max_outer_sweeps = 1` (default) only the seed-aligned cores ever build
-    // `T` (the single-pass-frozen variant). The sweep loop early-exits when the
-    // mean per-view move falls below `outer_convergence_px`; on sweeps after the
-    // first, a view whose core has left the frame at its current offset doesn't
-    // contribute to the rebuilt `T` (it stays out of `live`) but other views still
-    // refine against the `T` the in-frame ones build.
-    //
-    // Per-sweep refresh (the default) holds `T` fixed for the duration of a
-    // sweep — every view sees the same template. Per-move (the
-    // `ConsensusRefresh::PerMove` variant) maintains a [`RunningConsensus`]:
-    // after each view's GN solve, its (refined) z-normalized core delta-updates
-    // the running sum `S` so the next view aligns to a freshly-incrementalized
-    // `T`. IRLS weights stay fixed within a sweep either way — for PerMove
-    // that's the spec's two-frequency design (fixed weights → delta-update is
-    // exact); the per-sweep boundary rebuilds both.
-    let max_sweeps = params.max_outer_sweeps.max(1);
-    let mut live: Vec<usize> = Vec::new();
-    let mut running = RunningConsensus::default();
-    for _ in 0..max_sweeps {
-        prof::count(&prof::N_SWEEPS, 1);
-        // 1. Render every view's core at its current offset and z-normalize the
-        //    live ones into the per-sweep template-build buffer `xs`.
-        live.clear();
-        xs.clear();
-        for (si, st) in states.iter().enumerate() {
-            if core_value(
+    // What the views are aligned to: the caller's reference, else the
+    // reference-view rule's pick at the starting keypoints, else the fused
+    // mean. The fuse-only pass moves nothing, so it decides nothing here.
+    let resolved = match bitmap {
+        BitmapKind::FusedMean => ResolvedReference {
+            anchor: None,
+            fused: None,
+        },
+        BitmapKind::Reference => prof::REFERENCE.time(|| {
+            let given = reference.and_then(|k| states.iter().position(|st| st.slot == k));
+            let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
+            let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
+            resolve_reference(
+                patch,
+                views,
+                &set,
+                &seeds,
+                given,
+                resolution,
+                params.window,
+                params.sampler,
+                params.robust_iters,
+                progress,
+            )
+        }),
+    };
+    let anchor = resolved.anchor;
+
+    // The template `T`: the reference's core at its own keypoint, or the fused
+    // mean's, z-normalized with `√w` folded in. Never blurred.
+    let template: Option<Vec<f32>> = match (anchor, &resolved.fused) {
+        (Some(a), _) => {
+            let st = &states[a];
+            core_value(
                 patch,
                 &views[st.idx as usize],
-                tiles[si].as_ref(),
+                tiles[a].as_ref(),
                 st.off[0],
                 st.off[1],
                 wpp_u,
@@ -353,62 +354,36 @@ fn refine_patch_keypoints_impl(
                 &support,
                 channels,
                 &mut raw,
-            ) {
+            )
+            .then(|| {
                 znorm_core(&raw, &support, channels, &mut znorm);
-                live.push(si);
-                xs.extend_from_slice(&znorm);
-            }
+                znorm.clone()
+            })
         }
-        if live.len() < 2 {
-            // Lost cross-view consensus mid-sweep: keep current offsets.
-            break;
+        (None, Some(fused)) => {
+            bitmap_core(fused, resolution as usize, &support, channels, &mut raw);
+            znorm_core(&raw, &support, channels, &mut znorm);
+            Some(znorm.clone())
         }
+        (None, None) => None,
+    };
 
-        // 2. (Re)build the robust consensus from the current-offset cores: the
-        //    IRLS view weights, then the weighted unit-norm template. On sweep 0
-        //    this is the spec's frozen `T`; on later sweeps it is the per-sweep
-        //    refresh. Per-move additionally rebuilds the running sum `S` so it
-        //    can be delta-updated as views move within the sweep.
-        prof::CONSENSUS.time(|| {
-            irls_view_weights(
-                &xs,
-                live.len(),
-                channels,
-                n,
-                params.robust_iters,
-                None,
-                &mut sc,
-            );
-            weighted_unit_template_into(&xs, &sc.w, live.len(), channels, n, &mut tmpl);
-            if matches!(params.consensus_refresh, ConsensusRefresh::PerMove) {
-                running.rebuild(&xs, &sc.w, live.len(), channels, n);
+    // Move every view but the reference against `T`, once.
+    if let Some(tmpl) = &template {
+        if let Some(a) = anchor {
+            states[a].score = 1.0;
+        }
+        for si in 0..states.len() {
+            if Some(si) == anchor {
+                continue;
             }
-        });
-
-        // 3. Move every live view against the current consensus, tracking the
-        //    sweep's mean per-view move for the outer convergence check. For
-        //    PerSweep all views see the same `tmpl` (frozen for the sweep). For
-        //    PerMove each view sees the **shared** running consensus
-        //    `normalize(S)`, then its refined ẑ is folded back into `S` for the
-        //    next view. (The spec's leave-one-out alternative was measured-and-
-        //    rejected — see `RunningConsensus::write_shared_template`.)
-        let mut sweep_move_sum = 0.0;
-        for (slot, &si) in live.iter().enumerate() {
-            let before = states[si].off;
-            let view_tmpl: &[f32] = match params.consensus_refresh {
-                ConsensusRefresh::PerSweep => &tmpl,
-                ConsensusRefresh::PerMove => {
-                    prof::CONSENSUS_UPDATE.time(|| running.write_shared_template(&mut tmpl));
-                    &tmpl
-                }
-            };
             refine_one_view(
                 patch,
                 &views[states[si].idx as usize],
                 tiles[si].as_ref(),
                 &mut states[si],
                 &support,
-                view_tmpl,
+                tmpl,
                 channels,
                 resolution,
                 wpp_u,
@@ -416,73 +391,56 @@ fn refine_patch_keypoints_impl(
                 params,
                 &mut scratch,
             );
-            let after = states[si].off;
-            sweep_move_sum += (after[0] - before[0]).hypot(after[1] - before[1]);
-
-            // PerMove: fold the refined ẑ back into the running sum so the next
-            // view sees an updated consensus. `scratch.zbuf` reflects the kept δ
-            // — `refine_one_view` re-renders at the kept offset before returning
-            // (the GN loop's last `score_at` may have been a rejected line-search
-            // candidate, so the explicit re-render is what makes this safe).
-            // Skip when the seed core was OOF and the view was never scored.
-            if matches!(params.consensus_refresh, ConsensusRefresh::PerMove)
-                && states[si].score.is_finite()
-            {
-                prof::CONSENSUS_UPDATE.time(|| running.update_view(slot, &scratch.zbuf));
-            }
-        }
-        let mean_move = sweep_move_sum / live.len() as f64;
-
-        // Single-pass variant exits after one sweep regardless of convergence;
-        // multi-sweep exits as soon as a completed sweep stops moving views.
-        if max_sweeps == 1 || mean_move < params.outer_convergence_px {
-            break;
         }
     }
 
-    let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
+    let mut out = finalize(patch, views, &states, anchor, wpp_u, wpp_v);
     if params.render_bitmaps {
-        // The stored bitmap is the tile of the view the reference-view rule
-        // picks at the final keypoints; where it picks none, or picks one only
-        // by dropping the coverage and clipping tests (its last fallback), the
-        // fused mean, and the pick after all where no fused mean renders.
-        let (picked, stands) = match bitmap {
-            BitmapKind::Reference if out.views.len() >= 2 => {
-                let anchors: Vec<Option<[f64; 2]>> =
-                    out.keypoints.iter().map(|&kp| Some(kp)).collect();
-                let render = render_reference(
+        // The stored bitmap is the reference's tile at its keypoint, which the
+        // refinement did not move; where there is no reference, the fused mean
+        // of the views at their final keypoints.
+        match anchor.filter(|_| bitmap == BitmapKind::Reference) {
+            Some(a) => {
+                let st = &states[a];
+                let tile = render_view_tile(
                     patch,
-                    views,
-                    &out.views,
-                    &anchors,
-                    resolution,
+                    &views[st.idx as usize],
+                    Some(out.keypoints[a]),
+                    resolution as usize,
                     params.sampler,
                     progress,
                 );
-                let picked = render
-                    .reading
-                    .choice
-                    .reference
-                    .map(|r| (r, bitmap_from_tile(&render.tiles[r])));
-                (picked, render.stored_reference().is_some())
+                out.representative = Some(bitmap_from_tile(&tile));
+                out.reference = Some(a);
             }
-            _ => (None, false),
-        };
-        let picked = match picked {
-            Some(pick) if stands => Some(pick),
-            pick => {
+            None => {
                 out.representative = render_representative(
                     patch, views, &states, &tiles, &support, wpp_u, wpp_v, params, progress,
                 );
-                pick.filter(|_| out.representative.is_none())
             }
-        };
-        if let Some((r, rgba)) = picked {
-            out.representative = Some(rgba);
-            out.reference = Some(r);
         }
     }
     out
+}
+
+/// The raw core of an `R×R` RGBA `bitmap` over `support`, `channels` channels
+/// planar `[c · n + k]`: channel `c` reads the bitmap's colour channel `c`, the
+/// last of its three for a wider view, so an alpha (a confidence, not a
+/// colour) is never read.
+fn bitmap_core(
+    bitmap: &[u8],
+    resolution: usize,
+    support: &Support,
+    channels: usize,
+    out: &mut [f32],
+) {
+    debug_assert_eq!(bitmap.len(), resolution * resolution * 4);
+    let n = support.pixels.len();
+    for (k, &p) in support.pixels.iter().enumerate() {
+        for c in 0..channels {
+            out[c * n + k] = f32::from(bitmap[p * 4 + c.min(2)]);
+        }
+    }
 }
 
 /// Fuse the point's representative RGBA texture at the **final** per-view
@@ -584,118 +542,6 @@ fn render_representative(
         );
         stack.fuse(&weights, AGREEMENT_SIGMA)
     }))
-}
-
-/// The per-move (Gauss–Seidel) incremental consensus state — the running
-/// weighted sum `S = Σ_v w_v · ẑ_v` plus the per-view z-normalized cores `ẑ_v`
-/// the spec describes. At a sweep boundary `rebuild` resets both from the
-/// current `xs` stack and IRLS weights (the spec's two-frequency design: weights
-/// are held fixed within a sweep so the delta update is exact). Inside a sweep,
-/// after view `v` is refined, `update_view(v, ẑ_v')` does
-/// `S += w_v · (ẑ_v' − ẑ_v)` and stores the new `ẑ_v` — O(`channels · n`) per
-/// move, the same cost as the move's z-normalization and negligible next to the
-/// sampling/gradient render of a GN step. `write_shared_template(out)` realizes
-/// the **shared** consensus `normalize(S)`; the spec's leave-one-out alternative
-/// (`normalize(S − w_v · ẑ_v)`, the "free with running sum" bonus) was measured
-/// against shared T on real data and regressed — see `write_shared_template`'s
-/// doc for the numbers and reasoning.
-#[derive(Default)]
-struct RunningConsensus {
-    /// Per-view z-normalized cores `ẑ_v`, stacked `[(v*channels + c)*n + k]`.
-    xs: Vec<f32>,
-    /// IRLS view weights (per-sweep frequency), `[v]`. `Σw_v = 1`.
-    weights: Vec<f64>,
-    /// Running weighted sum `S` per (channel, pixel), `[c*n + k]`. f64 to keep
-    /// the subtract → renormalize path of a future LOO variant precise (and
-    /// harmless for the shared-T variant currently in use).
-    s_sum: Vec<f64>,
-    /// Number of views currently tracked.
-    views: usize,
-    channels: usize,
-    n: usize,
-}
-
-impl RunningConsensus {
-    /// Rebuild from the current z-normalized stack and per-sweep IRLS weights.
-    /// Called once per outer sweep (the spec's lower-frequency weight refresh).
-    fn rebuild(&mut self, xs: &[f32], weights: &[f64], views: usize, channels: usize, n: usize) {
-        self.xs.clear();
-        self.xs.extend_from_slice(&xs[..views * channels * n]);
-        self.weights.clear();
-        self.weights.extend_from_slice(&weights[..views]);
-        self.views = views;
-        self.channels = channels;
-        self.n = n;
-        self.s_sum.clear();
-        self.s_sum.resize(channels * n, 0.0);
-        for v in 0..views {
-            let wv = weights[v];
-            for c in 0..channels {
-                let row = &xs[(v * channels + c) * n..][..n];
-                let dst = &mut self.s_sum[c * n..][..n];
-                for (d, &s) in dst.iter_mut().zip(row) {
-                    *d += wv * s as f64;
-                }
-            }
-        }
-    }
-
-    /// Delta-update: `S += w_v · (ẑ_v_new − ẑ_v_old)`, then store the new
-    /// `ẑ_v`. The view's weight stays fixed (per-sweep refresh frequency).
-    fn update_view(&mut self, v: usize, z_new: &[f32]) {
-        debug_assert_eq!(z_new.len(), self.channels * self.n);
-        let wv = self.weights[v];
-        for c in 0..self.channels {
-            let old = &mut self.xs[(v * self.channels + c) * self.n..][..self.n];
-            let new = &z_new[c * self.n..][..self.n];
-            let s = &mut self.s_sum[c * self.n..][..self.n];
-            #[allow(clippy::manual_memcpy)] // the loop fuses delta + copy.
-            for k in 0..self.n {
-                let delta = new[k] as f64 - old[k] as f64;
-                s[k] += wv * delta;
-                old[k] = new[k];
-            }
-        }
-    }
-
-    /// Write the **shared** per-channel unit-norm template `normalize(S)` into
-    /// `out`. Resized in place. A channel whose norm collapses is written as
-    /// zeros (matches the [`znorm_core`] convention so the ECC dot product
-    /// against it is zero — no gradient pull from a degenerate channel).
-    ///
-    /// Note on shared vs LOO: the spec offers leave-one-out
-    /// (`normalize(S − w_v · ẑ_v)`) as the "free with the running sum" bonus,
-    /// avoiding the self-pollution where a view aligns to a `T` that includes
-    /// itself. We measured both on the `dino_dog_toy` reconstruction: LOO
-    /// consistently produced a lower mean ECC than shared T (mean 0.82 vs 0.87
-    /// at 5 sweeps) — at the small view counts of real tracks (3–5 views) LOO
-    /// drops effective averaging enough that the per-view template is noisier
-    /// than the shared one, and the within-sweep chain of LOO updates amplifies
-    /// the drift. The self-pollution turns out to be a damping term that helps,
-    /// not a bias worth removing at this scale. So per-move uses **shared T**;
-    /// LOO is recorded as the measured-and-rejected alternative.
-    fn write_shared_template(&self, out: &mut Vec<f32>) {
-        out.clear();
-        out.resize(self.channels * self.n, 0.0);
-        for c in 0..self.channels {
-            let s = &self.s_sum[c * self.n..][..self.n];
-            let dst = &mut out[c * self.n..][..self.n];
-            let mut norm_sq = 0.0f64;
-            for k in 0..self.n {
-                let val = s[k];
-                norm_sq += val * val;
-                dst[k] = val as f32;
-            }
-            if norm_sq > 1e-24 {
-                let inv = (1.0 / norm_sq.sqrt()) as f32;
-                for x in dst.iter_mut() {
-                    *x *= inv;
-                }
-            } else {
-                dst.fill(0.0);
-            }
-        }
-    }
 }
 
 /// Reused per-view scratch for [`refine_one_view`]: the value core `g`, the two
@@ -841,20 +687,6 @@ fn refine_one_view(
 
     st.off = cur;
     st.score = best_score;
-    // PerMove consumes `scratch.zbuf` as the kept-offset z-normalized core (to
-    // delta-update the running consensus). The GN loop's last `score_at` may
-    // have left `zbuf` at a rejected candidate (line-search exhausted); refresh
-    // it to the kept `cur` so the caller can use it unconditionally. PerSweep
-    // ignores `zbuf` so this is a small one-extra-render-per-view cost only on
-    // the path that needs the value.
-    if matches!(params.consensus_refresh, ConsensusRefresh::PerMove)
-        && core_value(
-            patch, view, tile, cur[0], cur[1], wpp_u, wpp_v, resolution, sampler, support,
-            channels, g,
-        )
-    {
-        znorm_core(g, support, channels, zbuf);
-    }
 }
 
 /// Build the result from the final view states: the refined keypoint
@@ -864,14 +696,20 @@ fn finalize(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     states: &[ViewState],
+    anchor: Option<usize>,
     wpp_u: f64,
     wpp_v: f64,
 ) -> KeypointRefinement {
     let mut out = KeypointRefinement::default();
-    for st in states {
+    for (si, st) in states.iter().enumerate() {
         let view = &views[st.idx as usize];
         let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
-        let (kx, ky) = project(view, &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
+        let projected = project(view, &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
+        // The reference's keypoint is returned exactly as it was given.
+        let (kx, ky) = match (Some(si) == anchor, st.keypoint) {
+            (true, Some([x, y])) => (x, y),
+            _ => projected,
+        };
         out.views.push(st.idx);
         out.keypoints.push([kx, ky]);
         out.offsets_px
@@ -881,40 +719,50 @@ fn finalize(
     out
 }
 
-/// Refine one view's keypoint against the frozen consensus of `references`,
-/// moving nothing else.
+/// What one view is refined against by [`refine_view_against_reference`]: the
+/// point's stored bitmap, or its reference observation rendered at its
+/// keypoint.
+#[derive(Debug, Clone, Copy)]
+pub enum ReferenceTemplate<'a> {
+    /// An `R×R` RGBA patch bitmap on the refinement's grid, row-major, as a
+    /// `.sfmr` stores it. Its alpha is not read.
+    Bitmap(&'a [u8]),
+    /// The reference observation: its image index and keypoint, source px.
+    Observation {
+        /// The reference observation's image index into `views`.
+        image: u32,
+        /// The reference observation's keypoint, source px.
+        keypoint: [f64; 2],
+    },
+}
+
+/// Refine one view's keypoint against the point's reference render, moving
+/// nothing else.
 ///
-/// The references are rendered at `reference_keypoints` (parallel to
-/// `references`, source px) and their robust consensus is built once, as the
-/// single-pass frozen variant builds it; `target` is then refined from
-/// `target_keypoint` by the same ECC Gauss-Newton solve every view gets there,
-/// with the never-worse guard, and its keypoint is returned. The target does
-/// not contribute to the consensus. This is the sub-pixel step of adding an
-/// observation to an existing track (`specs/core/reconstruction/add-image-to-tracks.md`),
-/// where the references are the track's settled observations.
+/// The template is `template`: the stored bitmap, or the reference
+/// observation's render at its keypoint. `target` is refined from
+/// `target_keypoint` by the same ECC Gauss-Newton solve every view gets in
+/// [`refine_patch_keypoints`], with the never-worse guard, and its keypoint is
+/// returned with its final ECC score against the template. This is the
+/// sub-pixel step of adding an observation to an existing track
+/// (`specs/core/reconstruction/add-image-to-tracks.md`).
 ///
-/// `None` when fewer than two references render in frame, the target does not
-/// project into its frame, the views do not share one channel count, or the
-/// target's core is out of frame at its seed.
+/// `None` when the template is not on the refinement's grid or its reference
+/// does not render in frame, the reference's channel count differs from the
+/// target's, the target does not project into its frame, or the target's core
+/// is out of frame at its seed.
 ///
 /// # Panics
 ///
-/// Panics if `reference_keypoints.len() != references.len()` or an index is
-/// out of range for `views`.
-pub fn refine_view_against_references(
+/// Panics if an image index is out of range for `views`.
+pub fn refine_view_against_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    references: &[u32],
-    reference_keypoints: &[[f64; 2]],
+    template: ReferenceTemplate<'_>,
     target: u32,
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
-) -> Option<[f64; 2]> {
-    assert_eq!(
-        references.len(),
-        reference_keypoints.len(),
-        "reference_keypoints must be parallel to references"
-    );
+) -> Option<([f64; 2], f64)> {
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
@@ -922,50 +770,46 @@ pub fn refine_view_against_references(
     let n = support.pixels.len();
     let target_view = &views[target as usize];
     let channels = target_view.pyramid.level(0).channels() as usize;
-    if references
-        .iter()
-        .any(|&i| views[i as usize].pyramid.level(0).channels() as usize != channels)
-    {
-        return None;
-    }
 
     let mut raw = vec![0f32; channels * n];
-    let mut znorm = vec![0f32; channels * n];
-    let mut xs: Vec<f32> = Vec::new();
-    let mut live = 0usize;
-    for (&i, &kp) in references.iter().zip(reference_keypoints) {
-        let view = &views[i as usize];
-        let Some(off) = seed_offset(patch, view, kp, wpp_u, wpp_v) else {
-            continue;
-        };
-        let sampler = params.sampler.for_observation(
-            patch,
-            view.camera,
-            view.cam_from_world,
-            Some(kp),
-            resolution,
-        );
-        if core_value(
-            patch, view, None, off[0], off[1], wpp_u, wpp_v, resolution, sampler, &support,
-            channels, &mut raw,
-        ) {
-            znorm_core(&raw, &support, channels, &mut znorm);
-            xs.extend_from_slice(&znorm);
-            live += 1;
+    let mut tmpl = vec![0f32; channels * n];
+    match template {
+        ReferenceTemplate::Bitmap(bitmap) => {
+            let r = resolution as usize;
+            if bitmap.len() != r * r * 4 {
+                return None;
+            }
+            bitmap_core(bitmap, r, &support, channels, &mut raw);
+        }
+        ReferenceTemplate::Observation { image, keypoint } => {
+            let view = &views[image as usize];
+            if view.pyramid.level(0).channels() as usize != channels {
+                return None;
+            }
+            let off = seed_offset(patch, view, keypoint, wpp_u, wpp_v)?;
+            let sampler = params.sampler.for_observation(
+                patch,
+                view.camera,
+                view.cam_from_world,
+                Some(keypoint),
+                resolution,
+            );
+            if !core_value(
+                patch, view, None, off[0], off[1], wpp_u, wpp_v, resolution, sampler, &support,
+                channels, &mut raw,
+            ) {
+                return None;
+            }
         }
     }
-    if live < 2 {
-        return None;
-    }
-    let mut sc = ConsensusScratch::default();
-    let mut tmpl = Vec::new();
-    irls_view_weights(&xs, live, channels, n, params.robust_iters, None, &mut sc);
-    weighted_unit_template_into(&xs, &sc.w, live, channels, n, &mut tmpl);
+    znorm_core(&raw, &support, channels, &mut tmpl);
 
     let proj = project(target_view, &patch.center, patch.w)?;
     let seed = seed_offset(patch, target_view, target_keypoint, wpp_u, wpp_v)?;
     let mut state = ViewState {
         idx: target,
+        slot: 0,
+        keypoint: Some(target_keypoint),
         seed,
         off: seed,
         proj: [proj.0, proj.1],
@@ -1009,14 +853,16 @@ pub fn refine_view_against_references(
         return None;
     }
     let center = shifted_center(patch, state.off[0], state.off[1], wpp_u, wpp_v);
-    project(target_view, &center, patch.w).map(|(x, y)| [x, y])
+    project(target_view, &center, patch.w).map(|(x, y)| ([x, y], state.score))
 }
 
 /// Batch [`refine_patch_keypoints`] over a [`PatchCloud`], parallel across patches
 /// (rayon). `view_sets[i]` lists, for patch `i`, the views to refine.
 /// `starting_keypoints`, when given, is parallel to `view_sets` (one seed per
-/// view); `None` seeds every view at the point's projection. Results are returned
-/// in cloud order.
+/// view); `None` seeds every view at the point's projection. `references`,
+/// when given, is parallel to the cloud: per patch, the position in its view set
+/// of its reference observation, or `None` to have the reference-view rule pick
+/// one. Results are returned in cloud order.
 ///
 /// Note: the PyO3 binding for `PatchCloud.refine_keypoints` does NOT call this
 /// wrapper — it inlines its own `par_iter` so it can build per-patch seed slices
@@ -1036,13 +882,14 @@ pub fn refine_view_against_references(
 ///
 /// # Panics
 ///
-/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` is given
-/// and not parallel), or an index is out of range.
+/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` or
+/// `references` is given and not parallel), or an index is out of range.
 pub fn refine_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
     view_sets: &[Vec<u32>],
     starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    references: Option<&[Option<usize>]>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
 ) -> Result<Vec<KeypointRefinement>, Cancelled> {
@@ -1056,6 +903,13 @@ pub fn refine_patch_cloud_keypoints(
             seeds.len(),
             cloud.len(),
             "starting_keypoints must be parallel to the cloud"
+        );
+    }
+    if let Some(refs) = references {
+        assert_eq!(
+            refs.len(),
+            cloud.len(),
+            "references must be parallel to the cloud"
         );
     }
     prof::reset();
@@ -1075,6 +929,7 @@ pub fn refine_patch_cloud_keypoints(
                 views,
                 &view_sets[i],
                 seeds,
+                references.and_then(|r| r[i]),
                 params,
                 progress,
             );
@@ -1100,9 +955,9 @@ pub fn refine_patch_cloud_keypoints(
 /// which falls back to this mean where the reference-view rule picks no view
 /// or reaches its pick only through its last fallback
 /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)).
-/// This is the sub-pixel kernel's fuse run with no Gauss-Newton step and a
-/// single sweep, so the keypoints come out where they went in and the pass
-/// only renders and blends. `keypoints` is parallel to `view_set`, in
+/// This is the sub-pixel kernel's fuse run with no Gauss-Newton step, so the
+/// keypoints come out where they went in and the pass only renders and
+/// blends. `keypoints` is parallel to `view_set`, in
 /// source-image pixels. Of `params`, `resolution`, `window`, `sampler` and
 /// `robust_iters` shape the render; the solve knobs are overridden.
 ///
@@ -1143,7 +998,6 @@ pub fn fuse_patch_bitmap_reporting(
     let params = KeypointSubpixelParams {
         // Nothing moves: the keypoints are settled, and this pass is the fuse.
         max_gn_steps: 0,
-        max_outer_sweeps: 1,
         render_bitmaps: true,
         ..params.clone()
     };
@@ -1154,6 +1008,7 @@ pub fn fuse_patch_bitmap_reporting(
                 views,
                 view_set,
                 Some(&seeds),
+                None,
                 &params,
                 BitmapKind::FusedMean,
                 progress,

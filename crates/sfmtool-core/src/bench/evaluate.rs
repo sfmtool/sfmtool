@@ -86,8 +86,6 @@ pub fn open_localizer() -> KeypointLocalizeParams {
         min_absolute_zncc: 0.0,
         min_relative_zncc: 0.0,
         max_shift_px: f64::MAX,
-        // Every view congeals; nothing registers against a finished template.
-        basis_max_views: 0,
         ..KeypointLocalizeParams::default()
     }
 }
@@ -159,10 +157,7 @@ impl Default for EvaluateOptions {
                 max_capped_cells: CELL_COUNT,
                 ..ClusterRefineParams::default()
             },
-            localize: KeypointLocalizeParams {
-                max_iters: 1,
-                ..open_localizer()
-            },
+            localize: open_localizer(),
             max_seed_offset_px: DEFAULT_MAX_SEED_OFFSET_PX,
             max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
         }
@@ -1780,8 +1775,15 @@ fn read_round(
             budget: options.max_cache_bytes,
         });
     }
-    let localized =
-        try_localize_patch_keypoints(frame, images, &view_set, Some(&seeds), &params, progress)?;
+    let localized = try_localize_patch_keypoints(
+        frame,
+        images,
+        &view_set,
+        Some(&seeds),
+        track_reference(track, round),
+        &params,
+        progress,
+    )?;
 
     for (slot, &image) in localized.views.iter().enumerate() {
         let (Some(&i), Some(&at)) = (of_image.get(&image), at_image.get(&image)) else {
@@ -1802,7 +1804,7 @@ fn read_round(
             Some(seed) => grid_distance(frame, view, seed, peak, &params),
             None => f64::NAN,
         };
-        let zncc = localized.loo_zncc[slot];
+        let zncc = localized.zncc[slot];
         if !zncc.is_finite() {
             // The kernel gave the view back without ever scoring it, which is
             // what it does when too few of the round's views could be read
@@ -1814,7 +1816,7 @@ fn read_round(
             i,
             Reading {
                 zncc,
-                zncc_middle: localized.loo_zncc_middle[slot],
+                zncc_middle: f64::NAN,
                 seed_shift_px: shift,
             },
         );
@@ -1825,6 +1827,13 @@ fn read_round(
         }
     }
     Ok(())
+}
+
+/// The position in `round` of the track's reference row, where the round holds
+/// it: the reference the localizer aligns the round's views to.
+pub(super) fn track_reference(track: &EditableTrack, round: &[usize]) -> Option<usize> {
+    let r = track.track()?.reference?;
+    round.iter().position(|&i| i == r)
 }
 
 /// What one round's per-view tiles cost together, in bytes.

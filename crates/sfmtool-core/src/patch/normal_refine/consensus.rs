@@ -357,53 +357,6 @@ pub(in crate::patch) fn weighted_unit_template_into(
     }
 }
 
-/// [`weighted_unit_template_into`] over a **leave-one-out** subset of the
-/// stack: sum every view row except `skip`, weighted by the full-stack-indexed
-/// `weights` (the skipped view's entry is ignored), then unit-normalize per
-/// channel. Iteration order matches copying the hold-out rows into a compacted
-/// stack and calling [`weighted_unit_template_into`] on it, so the result is
-/// identical — without materializing the hold-out copy.
-#[allow(clippy::too_many_arguments)]
-pub(in crate::patch) fn weighted_unit_template_skip_into(
-    xs: &[f32],
-    weights: &[f64],
-    skip: usize,
-    views: usize,
-    channels: usize,
-    n: usize,
-    out: &mut Vec<f32>,
-) {
-    out.clear();
-    out.resize(channels * n, 0.0);
-    for (v, &w) in weights.iter().enumerate().take(views) {
-        if v == skip {
-            continue;
-        }
-        let wv = w as f32;
-        for c in 0..channels {
-            let src = &xs[(v * channels + c) * n..][..n];
-            let dst = &mut out[c * n..][..n];
-            for (d, &s) in dst.iter_mut().zip(src) {
-                *d += wv * s;
-            }
-        }
-    }
-    for c in 0..channels {
-        let col = &mut out[c * n..][..n];
-        let norm = col
-            .iter()
-            .map(|&x| (x as f64) * (x as f64))
-            .sum::<f64>()
-            .sqrt();
-        if norm > 1e-12 {
-            let inv = (1.0 / norm) as f32;
-            for x in col.iter_mut() {
-                *x *= inv;
-            }
-        }
-    }
-}
-
 /// Consensus photoconsistency `Φ` over the normalized stack, per the
 /// objective. `None` when fewer than 2 views, or when the robust effective
 /// view count `1/Σwᵢ²` drops below [`MIN_EFFECTIVE_VIEWS`] (weights collapsed

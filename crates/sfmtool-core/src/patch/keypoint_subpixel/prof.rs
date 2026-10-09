@@ -56,17 +56,17 @@ pub static RENDER_VALUE: Phase = Phase::new("value_render");
 /// (`render_core_with_jg`) — the no-tile / out-of-coverage counterpart of
 /// [`GRAD_READ`].
 pub static RENDER_GRAD: Phase = Phase::new("gn_grad_render");
-/// z-normalization of a raw core (`znorm_core`), wherever it runs (sweep
-/// stack build, candidate scoring, PerMove refresh, representative).
+/// z-normalization of a raw core (`znorm_core`), wherever it runs (the
+/// template, candidate scoring, the representative).
 pub static ZNORM: Phase = Phase::new("znormalize");
-/// Per-sweep consensus (re)build: the IRLS view weights + weighted unit
-/// template (+ the PerMove running-sum rebuild), and the representative's
-/// final-weights IRLS.
+/// What the views are aligned to: nothing where the caller names the
+/// reference, else the reference-view rule over the renders at the starting
+/// keypoints, and the fused mean where the rule picks no reference it would
+/// store.
+pub static REFERENCE: Phase = Phase::new("reference");
+/// The fused mean's IRLS view weights, where the representative is the fused
+/// mean.
 pub static CONSENSUS: Phase = Phase::new("consensus_build");
-/// PerMove within-sweep consensus maintenance: the per-move delta update of
-/// the running sum and the shared-template realization. Zero under the default
-/// PerSweep refresh.
-pub static CONSENSUS_UPDATE: Phase = Phase::new("consensus_update");
 /// The analytic GN normal-equations build (`view_jacobian`: ∂ẑ/∂δ composition
 /// and the H/b accumulation; the 2×2 solve is a handful of flops and is left
 /// to overhead).
@@ -80,8 +80,6 @@ pub static ECC: Phase = Phase::new("ecc_score");
 pub static REPR_FUSE: Phase = Phase::new("repr_stack_fuse");
 
 // Event counters (no time attached).
-/// Outer sweeps executed (summed over points).
-pub static N_SWEEPS: AtomicU64 = AtomicU64::new(0);
 /// Gauss–Newton steps taken (one `render_core_with_jg` + solve each).
 pub static N_GN_STEPS: AtomicU64 = AtomicU64::new(0);
 /// Line-search candidate evaluations (value render + znorm + ECC each).
@@ -104,8 +102,8 @@ const PHASES: [&Phase; 12] = [
     &RENDER_VALUE,
     &RENDER_GRAD,
     &ZNORM,
+    &REFERENCE,
     &CONSENSUS,
-    &CONSENSUS_UPDATE,
     &JACOBIAN,
     &ECC,
     &REPR_FUSE,
@@ -116,7 +114,6 @@ pub fn reset() {
     reset_all(
         &PHASES,
         &[
-            &N_SWEEPS,
             &N_GN_STEPS,
             &N_LINE_SEARCH,
             &N_TILE_FALLBACK,
@@ -147,8 +144,8 @@ pub fn report(patches: usize, wall_secs: f64) {
             &RENDER_VALUE,
             &RENDER_GRAD,
             &ZNORM,
+            &REFERENCE,
             &CONSENSUS,
-            &CONSENSUS_UPDATE,
             &JACOBIAN,
             &ECC,
             &REPR_FUSE,
@@ -158,9 +155,8 @@ pub fn report(patches: usize, wall_secs: f64) {
         &PATCH_ROWS,
     );
     eprintln!(
-        "[sfmtool-profile]   sweeps {}  gn-steps {}  line-search-evals {}  tile-fallbacks {}  \
+        "[sfmtool-profile]   gn-steps {}  line-search-evals {}  tile-fallbacks {}  \
          tiles-skipped-coarse {}",
-        N_SWEEPS.load(Ordering::Relaxed),
         N_GN_STEPS.load(Ordering::Relaxed),
         N_LINE_SEARCH.load(Ordering::Relaxed),
         N_TILE_FALLBACK.load(Ordering::Relaxed),

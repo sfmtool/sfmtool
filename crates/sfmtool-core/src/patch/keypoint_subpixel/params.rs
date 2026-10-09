@@ -1,64 +1,22 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tunables, refresh-granularity config, and result types for subpixel keypoint
-//! refinement, split out of the Gauss–Newton orchestration ([`super`]).
+//! Tunables and result types for subpixel keypoint refinement, split out of the Gauss–Newton orchestration ([`super`]).
 //!
 //! The render/window knobs on [`KeypointSubpixelParams`] mirror
 //! [`KeypointLocalizeParams`](crate::patch::keypoint_localize::KeypointLocalizeParams).
 
 use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
 
-/// Within-sweep granularity of consensus refresh — the spec's "Consensus
-/// refresh granularity" axis. Across sweeps the consensus is always rebuilt
-/// from scratch (the [`KeypointSubpixelParams::max_outer_sweeps`] loop); this
-/// enum chooses what happens **inside** a sweep as views move.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ConsensusRefresh {
-    /// `T` is held fixed for the duration of a sweep. Every view refines
-    /// against the same consensus the sweep was built with; the next sweep
-    /// rebuilds `T` from the moved views. With `max_outer_sweeps = 1` this is
-    /// the spec's **single-pass frozen** variant; with `> 1` it is the
-    /// **per-sweep refresh** variant. The default — preserves existing
-    /// behavior.
-    #[default]
-    PerSweep,
-    /// The spec's **per-move (Gauss–Seidel) incremental** variant. The
-    /// consensus is maintained as a running weighted sum
-    /// `S = Σ_v w_v · ẑ_v` of the z-normalized view cores; when view `v` moves
-    /// from `δ` to `δ'`, `S += w_v · (ẑ_v' − ẑ_v)` and `T = normalize(S)`. The
-    /// next view's GN solve aligns to a consensus that already reflects the
-    /// previous view's move. The IRLS view weights are refreshed at the lower
-    /// **per-sweep** frequency (the spec's two-frequency design); within a
-    /// sweep the weights are held fixed so the delta update is exact.
-    ///
-    /// **Shared (not LOO) consensus.** The spec lists leave-one-out as the
-    /// "free with the running sum" bonus, avoiding the self-pollution where a
-    /// view aligns to a `T` that includes itself. Direct measurement on
-    /// `dino_dog_toy` (see `RunningConsensus::write_shared_template`) found
-    /// LOO regressed mean ECC (0.82 vs 0.87 for shared) at the small view
-    /// counts of real tracks: the chain of LOO updates amplifies drift more
-    /// than the self-pollution it removes. PerMove therefore uses shared `T`.
-    ///
-    /// **Limitation at `N = 2` views.** A direct consequence of the shared-`T`
-    /// choice is that with only two views one view's own contribution dominates
-    /// the consensus the other view aligns to. On the minimal 2-view planted-
-    /// offset fixture PerMove underestimates the relative offset by ~3%
-    /// (`per_move_two_views_known_underestimate_at_n2` pins the actual bias);
-    /// PerSweep at `N = 2` is unaffected. **`N ≥ 3` is recommended** when
-    /// opting into PerMove.
-    PerMove,
-}
-
 /// Tunables for [`refine_patch_keypoints`](super::refine_patch_keypoints).
 ///
 /// The render/window knobs mirror
 /// [`KeypointLocalizeParams`](crate::patch::keypoint_localize::KeypointLocalizeParams)
-/// so the consensus is built on the same conventions as the discrete search that
+/// so the template is built on the same conventions as the discrete search that
 /// typically seeds this refiner.
 #[derive(Debug, Clone)]
 pub struct KeypointSubpixelParams {
-    /// The `R×R` patch grid the consensus and per-view ECC are scored on.
+    /// The `R×R` patch grid the template and per-view ECC are scored on.
     pub resolution: u32,
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
@@ -78,28 +36,10 @@ pub struct KeypointSubpixelParams {
     /// with the same `frac` the value uses), so value and gradient stay
     /// LOD-consistent.
     pub sampler: SamplerChoice,
-    /// IRLS reweighting passes for the robust consensus.
+    /// IRLS reweighting passes for the fused mean, which is the template where
+    /// the point has no reference observation, and the stored bitmap there.
     pub robust_iters: u32,
-    /// Maximum **outer sweeps** of the alternating loop (refresh consensus → move
-    /// every view). `1` is the spec's single-pass-frozen variant (build `T` once at
-    /// the seed, hold it fixed) — the cheapest, and the default. `> 1` is the
-    /// per-sweep-refresh variant: each subsequent sweep re-renders the views at
-    /// their current offsets and rebuilds `T` from those. The outer loop early-exits
-    /// when the mean per-view move of a sweep falls below
-    /// [`outer_convergence_px`](Self::outer_convergence_px).
-    ///
-    /// The "never worse than the seed" guard is **per sweep**: within a sweep each
-    /// accepted step is non-decreasing in the ECC score against THAT sweep's `T`.
-    /// Across sweeps `T` changes, so the final score against the final `T` is not
-    /// bit-bounded below by the seed score against the seed `T`. With
-    /// `max_outer_sweeps = 1` (the default) the two coincide, so the guarantee is
-    /// the spec's strict form.
-    pub max_outer_sweeps: u32,
-    /// Stop the outer (consensus-refresh) loop once the mean per-view move across a
-    /// completed sweep falls below this many patch-grid px. Ignored when
-    /// `max_outer_sweeps == 1`.
-    pub outer_convergence_px: f64,
-    /// Maximum forward-additive Gauss–Newton steps per view per outer sweep.
+    /// Maximum forward-additive Gauss–Newton steps per view.
     pub max_gn_steps: u32,
     /// Stop a view's GN solve once the accepted step magnitude falls below this
     /// many patch-grid px.
@@ -114,35 +54,18 @@ pub struct KeypointSubpixelParams {
     /// Maximum backtracking attempts before a GN step is abandoned (the seed/δ is
     /// kept for that step).
     pub line_search_max: u32,
-    /// Within-sweep consensus refresh granularity (the spec's "Consensus refresh
-    /// granularity" choice). [`ConsensusRefresh::PerSweep`] (default) holds `T`
-    /// fixed for the sweep — preserves existing behavior. [`ConsensusRefresh::PerMove`]
-    /// is the spec's Gauss–Seidel incremental variant: after each view moves,
-    /// the consensus is delta-updated from the running weighted sum
-    /// `S = Σ_v w_v · ẑ_v` so the next view aligns to a `T` that already
-    /// reflects the previous move. IRLS weights are still refreshed only at the
-    /// per-sweep boundary (the spec's two-frequency design — fixed weights make
-    /// the delta exact). Per-move uses the **shared** consensus `normalize(S)`;
-    /// the spec's leave-one-out alternative was measured-and-rejected (regressed
-    /// mean ECC on real tracks — see [`ConsensusRefresh::PerMove`]).
-    /// **Limitation:** at `N = 2` views PerMove underestimates the relative
-    /// offset by ~3% (the moved view's own contribution dominates the shared
-    /// `T`); `N ≥ 3` is recommended.
-    pub consensus_refresh: ConsensusRefresh,
-    /// Also render each point's **stored bitmap** at the FINAL per-view
-    /// keypoints (see [`KeypointRefinement::representative`]): every view's
-    /// `R×R` tile is rendered at its final keypoint, the reference-view rule
-    /// is run over the tiles, and the picked view's tile is the bitmap
-    /// ([`crate::patch::stored_bitmap`]), named in
-    /// [`KeypointRefinement::reference`]. Where the rule picks no view, or
-    /// reaches its pick only through its last fallback
+    /// Also render each point's **stored bitmap** (see
+    /// [`KeypointRefinement::representative`]): the reference observation's
+    /// `R×R` tile at its keypoint, which the refinement does not move, named in
+    /// [`KeypointRefinement::reference`] ([`crate::patch::stored_bitmap`]).
+    /// Where the point has no reference observation and the reference-view
+    /// rule picks none it would store
     /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
-    /// the views are re-rendered at their final offsets, the final IRLS view
-    /// weights rebuilt from those cores, and the kept views rendered full-grid
-    /// and fused (weighted-mean RGB + agreement·coverage alpha). Points at
-    /// infinity go through the same path (`w = 0` rendering is first-class
-    /// here). Costs a tile render and a self-similarity reading per view and
-    /// member coherence's matrix per point, so it is off by default.
+    /// the views are re-rendered at their final offsets, IRLS view weights
+    /// built from those cores, and the views rendered full-grid and fused
+    /// (weighted-mean RGB + agreement·coverage alpha). Points at infinity go
+    /// through the same path (`w = 0` rendering is first-class here). Off by
+    /// default.
     pub render_bitmaps: bool,
 }
 
@@ -153,14 +76,11 @@ impl Default for KeypointSubpixelParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             sampler: SamplerChoice::per_view(),
             robust_iters: 3,
-            max_outer_sweeps: 1,
-            outer_convergence_px: 0.005,
             max_gn_steps: 10,
             convergence_px: 0.01,
             max_offset_px: 2.0,
             line_search_shrink: 0.5,
             line_search_max: 8,
-            consensus_refresh: ConsensusRefresh::PerSweep,
             render_bitmaps: false,
         }
     }
@@ -184,23 +104,21 @@ pub struct KeypointRefinement {
     /// `project_i(X_p)` in source-image pixels, parallel to [`views`](Self::views).
     pub offsets_px: Vec<f64>,
     /// Per view, the final ECC score (channel-averaged windowed ZNCC of the
-    /// refined core against the frozen consensus). `NaN` when the view could not be
-    /// scored (e.g. fewer than two views, so no consensus was built).
+    /// refined core against the template): `1.0` for the reference
+    /// observation, whose render the template is. `NaN` when the view could not
+    /// be scored (fewer than two views, or no template rendered).
     pub scores: Vec<f64>,
-    /// The point's stored bitmap (`R·R·4` RGBA, row-major), rendered at the
-    /// **final** per-view keypoints — only when
-    /// [`KeypointSubpixelParams::render_bitmaps`] is set: the tile of the view
-    /// [`Self::reference`] names, or the fused mean of the views where it
-    /// names none (the rule picks no view, or reaches its pick only through
-    /// its last fallback). `None` when fewer than two views survive the
-    /// projection gate, or when the rule picks no view and fewer than two
-    /// views render in frame at their final offsets for the fused mean — the
-    /// uniform "culled point" signal, for finite and infinity points alike. A
-    /// view the rule picks stands as the bitmap where no fused mean renders,
-    /// even where it is the only one that renders in frame.
+    /// The point's stored bitmap (`R·R·4` RGBA, row-major), only when
+    /// [`KeypointSubpixelParams::render_bitmaps`] is set: the tile of the
+    /// reference observation [`Self::reference`] names, at its keypoint, or the
+    /// fused mean of the views at their final keypoints where there is none.
+    /// `None` when fewer than two views survive the projection gate, or when
+    /// there is no reference and fewer than two views render in frame at their
+    /// final offsets for the fused mean -- the uniform "culled point" signal,
+    /// for finite and infinity points alike.
     pub representative: Option<Vec<u8>>,
-    /// The view, as an index into [`Self::views`], whose tile
-    /// [`Self::representative`] is; `None` where the bitmap is the fused mean,
-    /// or there is none.
+    /// The reference observation the views were aligned to, as an index into
+    /// [`Self::views`]: the view whose tile [`Self::representative`] is. `None`
+    /// where the template was the fused mean, or there was none.
     pub reference: Option<usize>,
 }

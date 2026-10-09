@@ -9,104 +9,71 @@
 
 use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
 
-/// How the per-(view, round) shift grid is traversed inside `search_shift`.
+/// How each view's shift grid is traversed when it is aligned to the template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchStrategy {
-    /// "+"-descent on the integer shift grid: starts at `(dy, dx) = (0, 0)`,
-    /// evaluates the 4 axis neighbors per step, moves to the best improver,
-    /// and stops when no neighbor beats the current cell. Each cell is scored
-    /// at most once via a per-cell ZNCC kernel (`score_cell_one_channel` —
-    /// AVX2-gather when available, scalar otherwise); the visited cache stores
-    /// `(n, s1, s2, ginv)` per cell. The final-cell separable parabolic
-    /// sub-pixel fit reuses the 4 cardinal-neighbor cells already in the cache
-    /// (each was evaluated to discover the STOP condition).
+    /// "+"-descent on the integer shift grid: starts at the view's starting
+    /// keypoint, evaluates the 4 axis neighbours per step, moves to the best
+    /// improver, and stops when no neighbour beats the current cell. Each cell
+    /// is scored at most once via a per-cell ZNCC kernel
+    /// (`score_cell_one_channel`, AVX2-gather when available, scalar
+    /// otherwise); the visited cache stores the combined ZNCC per cell. The
+    /// final-cell separable parabolic sub-pixel fit reuses the 4 cardinal
+    /// neighbours already in the cache.
     ///
-    /// **The default.** Late-round congealing typically leaves a view's
-    /// argmax at `(0, 0)`, so the descent stops after 5 cell scores; on the
-    /// dino dataset this drives per-`search_shift` cost from ~145 µs
-    /// ([`Exhaustive`](Self::Exhaustive)) to ~32 µs and total localize wall
-    /// down ~1.9× at comparable accuracy (median per-observation keypoint
-    /// shift vs `Exhaustive` is ~0.05 px, 91 % of observations within 1 px on
-    /// dino). The accuracy tail is the local-optima failure mode of any
-    /// descent on a multi-modal ZNCC landscape; pick
-    /// [`Exhaustive`](Self::Exhaustive) when the tail matters or for
-    /// bit-equivalent comparisons.
+    /// **The default.** It climbs to the correlation peak nearest the starting
+    /// keypoint, which is the evidence for which of several similar peaks is
+    /// meant. On the seoul_bull and kerry_park ground truths it places views
+    /// closer to the truth than [`Exhaustive`](Self::Exhaustive) from starting
+    /// keypoints within 1 px of it, and is the faster of the two; see
+    /// `specs/core/patch/patch-keypoint-localization.md`, "How the alignment
+    /// was measured".
     #[default]
     PlusDescent,
     /// Score every cell of the `(2·margin+1) × (2·margin+1)` shift grid via
     /// the hand-rolled SIMD SAXPY accumulator (`compute_channel_grids`), then
-    /// argmax + separable parabolic. The original whole-grid path; retained
-    /// as the global-argmax fallback (no local-optima risk) and as the
-    /// per-cell reference both equivalence tests and the per-cell ZNCC kernel
-    /// (`score_cell_one_channel`) check against.
+    /// argmax + separable parabolic. The global maximum over the window; it
+    /// recovers from a starting keypoint 2 to 3 px off better than the
+    /// descent, and loses to it nearer the truth, where a side peak of a
+    /// repeated texture can score higher than the true one.
     Exhaustive,
-}
-
-/// How the ranked candidate list fills the consensus basis's remaining seats.
-///
-/// See `specs/core/patch/keypoint-localization-consensus-basis.md`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BasisPick {
-    /// The `K` best-scoring views. **The default.**
-    #[default]
-    TopScore,
-    /// Every `ceil(m/K)`-th entry of the ranked list — trades per-view match
-    /// quality for coverage of the ranked spectrum when the top scores cluster
-    /// on near-duplicate frames.
-    Strided,
 }
 
 /// Tunables for [`localize_patch_keypoints`](super::localize_patch_keypoints).
 ///
 /// The render/window knobs mirror
 /// [`NormalRefineParams`](crate::patch::normal_refine::NormalRefineParams) so the
-/// consensus is built on the same conventions as refinement and selection.
+/// template is built on the same conventions as refinement and selection.
 #[derive(Debug, Clone)]
 pub struct KeypointLocalizeParams {
-    /// Maximum congealing rounds; the loop stops early once the mean per-view
-    /// position change of a round falls below
-    /// [`convergence_px`](Self::convergence_px).
-    pub max_iters: u32,
-    /// Max total per-view drift from the point's projection (patch-grid px). The
-    /// accumulated offset is clipped to `±search` each round, bounding runaway, and
-    /// the context tile is rendered this much larger than the scored core so the
-    /// shift search can slide without running off the edge. (The drift, the
-    /// `max_shift_px` gate, and the reported offset are all anchored at the
-    /// projection `project_i(X_p)`, i.e. `acc = 0`.)
+    /// The reach of each view's search around its starting keypoint, in
+    /// patch-grid px: the context tile is rendered this much larger than the
+    /// scored core on every side, and the shift is searched over `±search`.
     pub search: f64,
-    /// Drop a view whose refined keypoint sits more than this many *source-image*
-    /// pixels from the point's projection `project_i(X_p)` (an absolute distance,
-    /// not the per-round move).
+    /// Drop a view whose keypoint sits more than this many *source-image*
+    /// pixels from the point's projection `project_i(X_p)` (an absolute
+    /// distance, not the move from the starting keypoint). Never applied to the
+    /// reference observation, which is not moved.
     pub max_shift_px: f64,
-    /// Drop a view whose leave-one-out ZNCC falls below this fraction of the
-    /// views' *median* leave-one-out ZNCC (relative, so a uniformly low-texture
-    /// patch is not over-dropped).
-    ///
-    /// This is a **consensus** question, so the two-view floor can restore a view
-    /// that fails only this bar (see [`min_absolute_zncc`](Self::min_absolute_zncc)
-    /// for the gate it cannot restore). `0.0` (or a non-finite value) disables it
-    /// exactly, as the two absolute gates do, so a caller reading a point rather
-    /// than fitting it keeps even the anti-correlated view and its number.
-    pub min_relative_zncc: f64,
-    /// Drop a view whose leave-one-out ZNCC is finite and **below this absolute
-    /// floor**, however many views remain. The relative bar alone is decorative on
-    /// a two-view point — each view's leave-one-out template is simply the other
-    /// view, so both scores are the same pairwise correlation and the bar reduces
-    /// to `min_relative_zncc × itself` — and the two-view floor would restore the
-    /// pair anyway. This gate is never undone by that floor. `0.0` (or a
+    /// Drop a view whose ZNCC against the template falls below this fraction
+    /// of the median over the point's other views (the reference left out),
+    /// so a uniformly low-texture patch is not over-dropped. `0.0` (or a
     /// non-finite value) disables it exactly.
+    pub min_relative_zncc: f64,
+    /// Drop a view whose ZNCC against the template is finite and **below this
+    /// absolute floor**, however many views remain. `0.0` (or a non-finite
+    /// value) disables it exactly.
     pub min_absolute_zncc: f64,
     /// Drop a view whose **own** rendered core tile does not pin a 2D position:
     /// its [ZNCC self-similarity radius](crate::patch::self_similarity), how far
     /// the core can slide over itself and still match itself as well as a true
-    /// match between two views would, is above this bar, in grid px of the
-    /// grid the search runs on (patch-grid px at the default
-    /// [`search_resolution_multiplier`](Self::search_resolution_multiplier) of
-    /// `1`). A flat or edge-only member matches itself along the edge or
-    /// everywhere, so its ZNCC to anything cannot place it. Read once per view,
-    /// before any ZNCC, on the `R×R` core of the tile already rendered for that
-    /// view at its seed offset, the overlap way: no pixel of the tile around the
-    /// core enters it. Never undone by the two-view floor.
+    /// match between two views would, is above this bar, in patch-grid px. A
+    /// flat or edge-only view matches itself along the edge or everywhere, so
+    /// its ZNCC to anything cannot place it. Read once per view, before its
+    /// search, on the `R×R` core of the tile already rendered for that view at
+    /// its starting keypoint, the overlap way: no pixel of the tile around the
+    /// core enters it. Not applied to the reference observation, which is not
+    /// moved.
     ///
     /// A view passes when its radius is at or below the bar; a `NaN` radius
     /// fails. The radius reads at most the default
@@ -117,58 +84,23 @@ pub struct KeypointLocalizeParams {
     pub max_member_zncc_self_similarity_radius: f64,
     /// Grazing cutoff: drop a view whose viewing ray is near-parallel to the
     /// patch plane (`|d̂ · n̂|` below this), where the in-plane anchor is
-    /// ill-conditioned and the view would only contaminate the consensus.
+    /// ill-conditioned.
     pub min_grazing_cos: f64,
-    /// The `R×R` patch grid the consensus and per-view ZNCC are scored on.
+    /// The `R×R` patch grid the template and the per-view ZNCC are scored on.
     pub resolution: u32,
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
     /// Which sampler renders each view's tiles: the sampler rule by default
     /// ([`SamplerChoice::per_view`]). Under the rule each view's sampler is
-    /// chosen once, at its seed keypoint, from the patch re-anchored there at
-    /// the patch resolution ([`SamplerChoice::for_observation`]), and every
+    /// chosen once, at its starting keypoint, from the patch re-anchored there
+    /// at the patch resolution ([`SamplerChoice::for_observation`]), and every
     /// tile of the view, the wider context tile included, is rendered with it.
     pub sampler: SamplerChoice,
-    /// IRLS reweighting passes for the robust consensus.
+    /// IRLS reweighting passes for the fused mean that stands as the template
+    /// where the reference-view rule picks no reference it would store.
     pub robust_iters: u32,
-    /// Convergence threshold: stop once a round's mean **round-over-round
-    /// change** of the per-view refined positions (integer accumulator +
-    /// sub-pixel residual, this round vs the previous one) is below this many
-    /// patch-grid px.
-    pub convergence_px: f64,
-    /// Search-resolution multiplier `m` (default `1.0`, a no-op). The discrete
-    /// cross-view search is run at resolution `R_s = round(m·R)`: the per-view
-    /// cache, window support, and shift grid are all built at `R_s`, so one
-    /// integer step in the search grid is `1/m` patch-grid px. The found shift is
-    /// scaled by `1/m` back to patch-grid px before it moves the accumulator and
-    /// is reported. `m < 1` smooths the correlation surface for a speed fallback;
-    /// `m > 1` resolves sub-pixel offsets directly on a finer grid. See
-    /// `specs/core/patch/keypoint-localization-search-cache.md`.
-    pub search_resolution_multiplier: f32,
-    /// Per-(view, round) shift-grid traversal — see [`SearchStrategy`].
-    /// Defaults to [`SearchStrategy::PlusDescent`].
+    /// How each view's shift grid is traversed; see [`SearchStrategy`].
     pub search_strategy: SearchStrategy,
-    /// Consensus-basis cap `K`: at most this many views congeal against each
-    /// other; every remaining view registers **once** against the finished
-    /// basis consensus instead of joining it. The default is `8`; `0` disables
-    /// the cap — all views congeal, bit-identically to the uncapped path,
-    /// which is also what a point with `V ≤ K` views gets. Values below `2`
-    /// are raised to `2` (a leave-one-out consensus needs two members). Every
-    /// observation is still localized and reported; only the consensus
-    /// *membership* shrinks. Callers that supply no per-view ranking scores
-    /// get the grazing-angle basis pick — pass scores (the `select_views`
-    /// ZNCC) for the validated ranking.
-    /// See `specs/core/patch/keypoint-localization-consensus-basis.md`.
-    pub basis_max_views: u32,
-    /// Reserve basis seats for the point's track views ahead of the expansion
-    /// candidates (they are the point's provenance and carry its detection
-    /// keypoints). When the track alone exceeds `K` the track views are
-    /// themselves ranked by score and truncated at `K`. Only consulted when
-    /// [`basis_max_views`](Self::basis_max_views) caps the view set.
-    pub basis_force_track_views: bool,
-    /// How the ranked candidate list fills the basis's remaining seats — see
-    /// [`BasisPick`].
-    pub basis_pick: BasisPick,
 }
 
 /// The default [`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`]:
@@ -202,7 +134,6 @@ impl KeypointLocalizeParams {
 impl Default for KeypointLocalizeParams {
     fn default() -> Self {
         Self {
-            max_iters: 5,
             search: 6.0,
             max_shift_px: 3.0,
             min_relative_zncc: 0.7,
@@ -213,71 +144,40 @@ impl Default for KeypointLocalizeParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             sampler: SamplerChoice::per_view(),
             robust_iters: 3,
-            convergence_px: 0.05,
-            search_resolution_multiplier: 1.0,
             search_strategy: SearchStrategy::PlusDescent,
-            basis_max_views: 8,
-            basis_force_track_views: true,
-            basis_pick: BasisPick::TopScore,
         }
     }
 }
 
-/// The localized keypoints for one point — parallel arrays over the **kept**
-/// views (a subset of the input view set, in the input's order; grazing /
-/// out-of-frame / unlocalizable / large-shift / low-agreement views are dropped
-/// in-loop).
+/// The localized keypoints for one point -- parallel arrays over the **kept**
+/// views (a subset of the input view set, in the input's order; grazing,
+/// out-of-frame, unlocalizable, large-shift and low-agreement views are
+/// dropped).
 ///
-/// The kept set can be **shorter than two**: the absolute gates
-/// ([`min_absolute_zncc`](KeypointLocalizeParams::min_absolute_zncc),
-/// [`max_member_zncc_self_similarity_radius`](KeypointLocalizeParams::max_member_zncc_self_similarity_radius),
-/// [`max_shift_px`](KeypointLocalizeParams::max_shift_px)) are not undone by the
-/// two-view floor, so a point whose members individually fail them is reported
-/// with one view or none, for the caller's `min_views` cull to remove.
+/// The reference observation is always kept when it renders, at the keypoint
+/// it was given. Every other view can be dropped, so the kept set can be a
+/// single view, or none where the reference itself could not be rendered,
+/// for the caller's `min_views` cull to remove.
 #[derive(Debug, Clone, Default)]
 pub struct KeypointLocalization {
     /// The kept image indices (into the `views` slice), a subset of the input
     /// view set preserving its order.
     pub views: Vec<u32>,
-    /// The refined keypoint `project_i(X_p) + δ_j` per kept view, in source-image
-    /// pixels (`[x, y]`), parallel to [`views`](Self::views).
+    /// The keypoint per kept view, in source-image pixels (`[x, y]`), parallel
+    /// to [`views`](Self::views). The reference's is its starting keypoint.
     pub keypoints: Vec<[f64; 2]>,
     /// Per kept view, the keypoint's offset from the point's projection
-    /// `project_i(X_p)` in source-image pixels (`|δ_j|`), parallel to
+    /// `project_i(X_p)` in source-image pixels, parallel to
     /// [`views`](Self::views).
     pub offsets_px: Vec<f64>,
-    /// Per kept view, the leave-one-out ZNCC against the other views' consensus
-    /// from the last round that scored it (the integer-peak value of that round's
-    /// shift search), parallel to [`views`](Self::views). `NaN` for a view no round
-    /// ever scored — e.g. a lone input view, or a view kept by the early
-    /// "fewer than two views remain" exit before any consensus was built.
-    pub loo_zncc: Vec<f64>,
-    /// Per kept view, the middle ZNCC beside [`loo_zncc`](Self::loo_zncc): the
-    /// same samples at the same integer peak against the same template, read
-    /// over only the middle square of the grid, the rows and columns `R/4 ..
-    /// R - R/4`. Parallel to [`views`](Self::views). A whole-core reading that
-    /// the middle does not share is carried by the parts of the tile away from
-    /// the keypoint. `NaN` wherever `loo_zncc` is, and where the template's
-    /// middle carries no texture.
-    pub loo_zncc_middle: Vec<f64>,
-    /// Per kept view, the **ZNCC grid** beside [`loo_zncc`](Self::loo_zncc):
-    /// the same samples at the same integer peak against the same template,
-    /// read over each cell of a three-by-three split of the grid (rows and
-    /// columns cut at `R/3` and `R - R/3`) with every pixel weighted equally,
-    /// `grid[row][col]` from the top-left cell. Parallel to
-    /// [`views`](Self::views). Every cell is `NaN` wherever `loo_zncc` is, and
-    /// one cell is where the template carries no texture over it.
-    pub loo_zncc_grid: Vec<[[f64; 3]; 3]>,
-    /// Congealing rounds actually executed (`<= max_iters`; `0` when the input
-    /// had fewer than two views and the loop never ran). Diagnostic: lets tests
-    /// and callers observe the `convergence_px` early exit directly.
-    pub rounds: u32,
-    /// Per kept view, whether it was a **consensus-basis** member (it congealed
-    /// in the round loop) rather than a tail view registered once against the
-    /// finished basis template, parallel to [`views`](Self::views). Every entry
-    /// is `true` when [`basis_max_views`](KeypointLocalizeParams::basis_max_views)
-    /// does not cap the point's view set. Diagnostic: the tail's
-    /// [`loo_zncc`](Self::loo_zncc) distribution is how a smeared or
-    /// arc-biased basis template shows itself.
-    pub is_basis: Vec<bool>,
+    /// Per kept view, its plain ZNCC against the template at the search's
+    /// integer peak, parallel to [`views`](Self::views): `1.0` for the
+    /// reference observation, whose render the template is, and `NaN` for a
+    /// view that was not searched because there was no template.
+    pub zncc: Vec<f64>,
+    /// The image index of the reference observation the views were aligned
+    /// to. `None` where there was none to align to: the reference-view rule
+    /// picked no reference it would store, so the template was the fused mean
+    /// of the views, or nothing rendered to align to.
+    pub reference: Option<u32>,
 }

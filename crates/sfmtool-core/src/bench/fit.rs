@@ -1070,6 +1070,7 @@ fn fit_round(
             images,
             &view_set,
             Some(&seeds),
+            super::evaluate::track_reference(track, round),
             &options.localize,
             progress,
         )?;
@@ -1089,6 +1090,9 @@ fn fit_round(
                     .map(|&k| Some(k))
                     .collect::<Vec<_>>(),
             ),
+            localized
+                .reference
+                .and_then(|r| localized.views.iter().position(|&v| v == r)),
             &options.refine,
             &phase,
         );
@@ -1102,21 +1106,9 @@ fn fit_round(
         };
         let at = refined.views.iter().position(|&v| v == image);
         let keypoint = at.map_or(localized.keypoints[slot], |k| refined.keypoints[k]);
-        let zncc = localized
-            .loo_zncc
-            .get(slot)
-            .copied()
-            .filter(|z| z.is_finite());
-        let zncc_middle = localized
-            .loo_zncc_middle
-            .get(slot)
-            .copied()
-            .filter(|z| zncc.is_some() && z.is_finite());
-        let zncc_grid = localized
-            .loo_zncc_grid
-            .get(slot)
-            .copied()
-            .filter(|_| zncc.is_some());
+        let zncc = localized.zncc.get(slot).copied().filter(|z| z.is_finite());
+        let zncc_middle: Option<f64> = None;
+        let zncc_grid: Option<[[f64; 3]; 3]> = None;
         fits.insert(
             i,
             Fit {

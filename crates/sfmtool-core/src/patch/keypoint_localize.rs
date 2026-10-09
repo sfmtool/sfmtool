@@ -1,65 +1,58 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Patch-keypoint localization by group-wise translation registration
-//! (congealing).
+//! Patch-keypoint localization: every view of a point aligned to its
+//! reference render, in one pass.
 //!
 //! See `specs/core/patch/patch-keypoint-localization.md` and
-//! `specs/core/patch/keypoint-localization-search-cache.md`. Given one 3D point with
-//! its oriented patch, a view set `G`, and a starting keypoint per view,
-//! [`localize_patch_keypoints`] refines each keypoint to sub-pixel and reports
-//! which views it kept. The patch frame is fixed during localization, so each
-//! view's source is resampled into an expanded, frame-oriented **cache exactly
-//! once** (sized to cover the whole search drift); since an integer in-plane
-//! shift is an integer cache-index shift, reading the cache at an integer offset
-//! is bit-identical to re-warping the patch there. Each round then reads every
-//! view's core from its cache at the view's current **integer** offset (no
-//! render), builds the robust (IRLS) consensus, and searches each view's residual
-//! in-plane shift against the **leave-one-out** consensus of the *others* (so a
-//! view is never aligned to a template its own pixels polluted). The integer
-//! argmax moves the cache-read accumulator while the parabolic sub-pixel residual
-//! rides alongside (it gates convergence and seeds the final keypoint but never
-//! moves the read position — keeping every read exact). Views that pin no 2D
-//! position of their own, drift too far, leave the frame, or stop agreeing are
-//! dropped in-loop, so the survivors register against a cleaner template. The
-//! per-view gates split into **photometric** verdicts (member self-similarity,
-//! the absolute leave-one-out floor), which nothing undoes and which can leave a
-//! point with fewer than two views for the caller's `min_views` cull, and the
-//! **positional** (`max_shift_px`) and **relative** agreement gates, whose
-//! two-best fallback keeps a point alive when the whole set disagrees equally or
-//! the geometry it was projected from is wrong.
+//! `specs/core/patch/keypoint-localization-search-cache.md`. Given one 3D point
+//! with its oriented patch, a view set, and a starting keypoint per view,
+//! [`localize_patch_keypoints`] moves each view's keypoint to where its tile best
+//! matches the point's reference render, and reports which views it kept.
 //!
-//! The render → z-normalize → robust-consensus machinery is the same as
+//! The template is the point's stored bitmap as the starting keypoints render
+//! it: the `R×R` render of the reference observation at its own keypoint, never
+//! blurred. The reference is the caller's (the point's stored reference, or the
+//! reference a bench track holds), or where there is none the reference-view
+//! rule picks one from the views' renders at their starting keypoints. Where
+//! the rule picks none it would store, the template is the fused mean of the
+//! views, which is then the point's stored bitmap. The reference observation is
+//! the anchor of the track: its keypoint is returned as given. Every other view
+//! has one context tile rendered around its starting keypoint, its own tile is
+//! read by the member self-similarity gate, and the tile is searched once for
+//! the shift whose ZNCC against the template is highest, refined to sub-pixel
+//! by a parabola. Views that pin no 2D position of their own, move too far from
+//! the point's projection, leave the frame, or match the template too poorly
+//! are dropped. Nothing is iterated: the template does not change while the
+//! views are aligned.
+//!
+//! The render and z-normalization machinery is the same as
 //! [normal refinement](super::normal_refine) and
-//! [view selection](super::view_selection); the new kernel here is the per-view
-//! windowed-ZNCC translation search against the leave-one-out consensus.
+//! [view selection](super::view_selection); the kernel here is the per-view
+//! windowed-ZNCC translation search against a fixed template.
 
 pub mod prof;
 
-mod basis;
+mod align;
 mod kernels;
 mod params;
 mod reference;
 mod search;
-mod tail;
+mod seed;
 
 use crate::camera::sampler::{render_phase, render_tile};
 use crate::camera::WarpMap;
-use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::normal_refine::{
-    build_support, znormalize_into_kept, PartZncc, Parts, ProjectedImage, Sampler, Support,
-    FLAT_NORM_SQ_EPS,
-};
+#[cfg(test)]
+use crate::patch::normal_refine::FLAT_NORM_SQ_EPS;
+use crate::patch::normal_refine::{ProjectedImage, Sampler, Support};
 use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
-// Only the reference scorer (`znorm_core`, test-only) needs the moment helper;
-// the reference LOO-template test also needs the window enum.
+// Only the reference scorer (`znorm_core`, test-only) needs the moment helper.
 #[cfg(test)]
 use crate::patch::normal_refine::{
-    irls_view_weights, weighted_moments_pub, weighted_unit_template_into, ConsensusScratch,
-    PatchWindow,
+    build_support, weighted_moments_pub, znormalize_into_kept, PatchWindow,
 };
 use crate::reconstruction::SfmrReconstruction;
 use nalgebra::Point3;
@@ -67,22 +60,19 @@ use rayon::prelude::*;
 
 // Public API, re-exported at the historical `keypoint_localize::` paths.
 pub use params::{
-    BasisPick, KeypointLocalization, KeypointLocalizeParams, SearchStrategy,
+    KeypointLocalization, KeypointLocalizeParams, SearchStrategy,
     DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
 };
 pub use reference::{ReferenceConsensus, ViewScore, ViewSearch};
-pub use tail::keypoint_grid_offset;
+pub use seed::keypoint_grid_offset;
 
-pub(super) use tail::seed_offset;
-use tail::{finalize, register_tail, TailGeometry};
+pub(super) use align::{resolve_reference, ResolvedReference};
+pub(super) use seed::seed_offset;
 
-use basis::select_basis;
-
-// Search machinery consumed by the congealing orchestration below.
-use search::{
-    build_loo_gram, loo_consensus_template, search_shift, search_shift_plus_descent, LooScratch,
-    SearchScratch, ShiftResult,
-};
+// Search machinery, re-exported into this module's namespace for the sibling
+// test module's `use super::*`.
+#[cfg(test)]
+use search::{search_shift, SearchScratch, ShiftResult};
 
 // Correlation kernels re-exported into this module's namespace only for the
 // sibling test module's `use super::*`; production callers reach them through
@@ -181,16 +171,16 @@ fn try_false_bools(len: usize) -> Result<Vec<bool>, LocalizeError> {
 /// `channels` channels.
 ///
 /// Every buffer sized by the search radius, counted once: the rendered context
-/// tile the round loop reads from (its centered planes, its invalidity plane
-/// and its validity map), and the warp map and remapped image the render builds
-/// on the way to it. The side of that tile is `R_s + 4 · margin`, so the answer
+/// tile the search reads from (its centered planes, its invalidity plane and
+/// its validity map), and the warp map and remapped image the render builds on
+/// the way to it. The side of that tile is `R + 2 · margin`, so the answer
 /// grows as the **square** of the search radius, which is what makes a widened
 /// window worth budgeting for before it is attempted rather than after.
 ///
 /// The shift grids of the search scratch are not here: there is one set of them
 /// per call rather than one per view, and they are an order smaller than the
-/// tiles they slide over. A caller budgeting a whole round multiplies this by
-/// its view count.
+/// tiles they slide over. The views are searched one after another, so one
+/// tile is held at a time.
 ///
 /// # Example
 ///
@@ -201,10 +191,9 @@ fn try_false_bools(len: usize) -> Result<Vec<bool>, LocalizeError> {
 /// assert!(view_cache_bytes(&params, 3) < 1 << 20);
 /// ```
 pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usize {
-    let m = (params.search_resolution_multiplier as f64).max(1e-3);
-    let resolution = ((m * params.resolution.max(2) as f64).round() as u32).max(2);
-    let margin = (params.search * m).ceil().max(1.0) as i64;
-    let side = (resolution as usize).saturating_add(4 * margin.max(0) as usize);
+    let resolution = params.resolution.max(2);
+    let margin = params.search.ceil().max(1.0) as i64;
+    let side = (resolution as usize).saturating_add(2 * margin.max(0) as usize);
     let pixels = side.saturating_mul(side);
     let istride = cache_istride(side);
     let f32_size = std::mem::size_of::<f32>();
@@ -630,147 +619,6 @@ fn template_zncc(core: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
     s / channels as f64
 }
 
-/// `tile`'s whole `R×R` core at window offset `(oy, ox)`, over the channels
-/// `keep_mask` keeps (the first `kept` of them), planar `[kc · R² + p]`.
-///
-/// Each channel is mean-removed and divided by the norm of the view's own
-/// core over `support`, under the window weights: the normalization the view
-/// carries into a consensus, extended to the pixels of the square the support
-/// leaves out. A channel flat over the support is all zero, as it is in the
-/// consensus. A pixel out of frame is `NaN`. `None` when a support pixel is
-/// out of frame, where [`extract_core`] refuses too.
-#[allow(clippy::too_many_arguments)]
-fn square_core(
-    tile: &ContextTile,
-    support: &Support,
-    resolution: usize,
-    oy: usize,
-    ox: usize,
-    keep_mask: &[bool],
-    kept: usize,
-) -> Option<Vec<f32>> {
-    let square = resolution * resolution;
-    let mut out = vec![0f32; kept * square];
-    let kept_channels = keep_mask
-        .iter()
-        .enumerate()
-        .filter(|&(_, &keep)| keep)
-        .map(|(c, _)| c)
-        .take(kept);
-    for (kc, c) in kept_channels.enumerate() {
-        let at = |p: usize| {
-            let (row, col) = (p / resolution, p % resolution);
-            let valid = tile.valid[(oy + row) * tile.res + (ox + col)];
-            let value = tile.planes[c][(oy + row) * tile.istride + (ox + col)] + tile.means[c];
-            (valid, f64::from(value))
-        };
-        let (mut s1, mut s2) = (0.0, 0.0);
-        for (&p, &w) in support.pixels.iter().zip(&support.weights) {
-            let (valid, v) = at(p);
-            if !valid {
-                return None;
-            }
-            s1 += w * v;
-            s2 += w * v * v;
-        }
-        let mean = s1 / support.total_weight;
-        let norm_sq = s2 - s1 * mean;
-        let dst = &mut out[kc * square..][..square];
-        for (p, d) in dst.iter_mut().enumerate() {
-            let (valid, v) = at(p);
-            *d = if !valid {
-                f32::NAN
-            } else if norm_sq < FLAT_NORM_SQ_EPS {
-                0.0
-            } else {
-                ((v - mean) / norm_sq.sqrt()) as f32
-            };
-        }
-    }
-    Some(out)
-}
-
-/// The consensus of `cores` over the whole square: each [`square_core`]
-/// weighted by the view's consensus weight in `weights`, summed. A view of
-/// weight `0`, the held-out one among them, takes no part, so its out-of-frame
-/// pixels do not reach the sum.
-///
-/// The consensus template over the support is the same weighted sum of the
-/// same views' cores, normalized the same way and with `√w` folded in, so over
-/// the support this is an affine image of that template, and past it the same
-/// sum carried on to the rest of the square.
-fn square_consensus(cores: &[Vec<f32>], weights: &[f64]) -> Vec<f32> {
-    let len = cores.first().map_or(0, Vec::len);
-    let mut out = vec![0f32; len];
-    for (core, &w) in cores.iter().zip(weights) {
-        if w <= 0.0 {
-            continue;
-        }
-        for (o, &v) in out.iter_mut().zip(core) {
-            *o += (w as f32) * v;
-        }
-    }
-    out
-}
-
-/// The ZNCC of `tile`'s core at window offset `(oy, ox)` against the unit
-/// template `tmpl`, over parts of the grid: its middle square and the nine
-/// cells of the ZNCC grid.
-///
-/// The whole-core ZNCC a search reports at its integer peak is read from the
-/// same cached samples, so these are that reading narrowed to each of `parts`,
-/// with no second render. `tmpl` is compacted over the channels `keep_mask`
-/// keeps, with `√w` folded in; dividing the fold back out leaves each channel
-/// an affine image of the consensus, which is all a ZNCC needs of it. `kept`
-/// is how many of its rows take part. The grid is read over the whole square
-/// rather than the support, against `square_template`, the same consensus
-/// carried to the whole square ([`square_consensus`]), `kept` rows of `R²`.
-/// Every reading is `NaN` when the core leaves the frame, and a single one is
-/// where the template is flat over its part or a pixel of it is out of frame.
-#[allow(clippy::too_many_arguments)]
-fn part_zncc(
-    tile: &ContextTile,
-    support: &Support,
-    parts: &Parts,
-    resolution: usize,
-    oy: usize,
-    ox: usize,
-    keep_mask: &[bool],
-    kept: usize,
-    tmpl: &[f32],
-    square_template: &[f32],
-) -> PartZncc {
-    let n = support.pixels.len();
-    let mut raw = vec![0f32; tile.channels * n];
-    if !extract_core(tile, support, resolution, oy, ox, &mut raw) {
-        return PartZncc::NAN;
-    }
-    let Some(square_sample) = square_core(tile, support, resolution, oy, ox, keep_mask, kept)
-    else {
-        return PartZncc::NAN;
-    };
-    let mut sample = vec![0f32; kept * n];
-    let mut reference = vec![0f32; kept * n];
-    let kept_channels = keep_mask
-        .iter()
-        .enumerate()
-        .filter(|&(_, &keep)| keep)
-        .map(|(c, _)| c)
-        .take(kept);
-    for (kc, c) in kept_channels.enumerate() {
-        sample[kc * n..][..n].copy_from_slice(&raw[c * n..][..n]);
-        for (k, &sw) in support.sqrt_weights.iter().enumerate() {
-            reference[kc * n + k] = tmpl[kc * n + k] / sw;
-        }
-    }
-    parts.read(
-        (&sample, &reference),
-        (&square_sample, &square_template[..kept * parts.square]),
-        kept,
-        &support.weights,
-    )
-}
-
 /// Sub-sample peak offset in `[-1, 1]` from a 3-point parabola (scores at `-1`,
 /// `0`, `+1` around an integer maximum).
 fn parabolic(mid: f64, left: f64, right: f64) -> f64 {
@@ -781,130 +629,22 @@ fn parabolic(mid: f64, left: f64, right: f64) -> f64 {
     (0.5 * (left - right) / denom).clamp(-1.0, 1.0)
 }
 
-/// One view's mutable congealing state.
-///
-/// The accumulated in-plane offset is split into an **integer** read accumulator
-/// `iacc` and a **sub-pixel residual** (both in `R_s`-grid steps, where `R_s` is
-/// the search resolution): `iacc` is the only thing that indexes the per-view
-/// cache, so every cache read stays exact (an integer cache-index shift is a
-/// bit-exact re-warp); the parabolic residual rides alongside for convergence
-/// detection and the final reported keypoint but is **never folded back into the
-/// read position**. The patch-grid in-plane offset is `(iacc + residual) / m` —
-/// see [`shifted_center`] / [`finalize`] and
-/// `specs/core/patch/keypoint-localization-search-cache.md`.
-struct ViewState {
-    /// Image index into the caller's `views` slice.
-    idx: u32,
-    /// Position in the deduped/filtered candidate list — the input view-set
-    /// order the result contract reports in. Basis and tail members are merged
-    /// back on this key after phase B.
-    order: u32,
-    /// Whether this view congealed as a consensus-basis member (rather than
-    /// being registered once against the finished basis template in phase B).
-    /// Always `true` when the cap is off.
-    is_basis: bool,
-    /// Integer read accumulator `(iau, iav)` in `R_s`-grid steps: the cache index
-    /// (relative to the cache centre) the core and search candidates are read at.
-    iacc: [i64; 2],
-    /// The latest parabolic sub-pixel residual `(ru, rv)` in `R_s`-grid steps from
-    /// the last round that scored this view; used for convergence and the final
-    /// keypoint only, never for cache reads.
-    residual: [f64; 2],
-    /// The view's projection of the point `project_i(X_p)`, source-image px — the
-    /// anchor the keypoint and its `max_shift_px` gate are measured from.
-    proj: [f64; 2],
-    /// The latest leave-one-out ZNCC (peak from the round's search); `NaN` until
-    /// a round scores it.
-    loo: f64,
-    /// The same reading over parts of the core: the samples [`Self::loo`] was
-    /// scored on, at the same integer peak and against the same template, read
-    /// over the grid's middle square and over each cell of the ZNCC grid (see
-    /// [`part_zncc`]). `NaN` wherever `loo` is, and where the template is flat
-    /// over a part.
-    loo_parts: PartZncc,
-    /// The sampler every render of this view uses: the rule applied to the
-    /// observation at its seed keypoint, at the patch resolution
-    /// ([`SamplerChoice::for_observation`](crate::camera::sampler::SamplerChoice::for_observation)).
-    sampler: Sampler,
-}
-
-impl ViewState {
-    /// The total in-plane offset `(au, av)` in **`R_s`-grid steps**: the integer
-    /// read accumulator plus the sub-pixel residual. This is the unit
-    /// [`shifted_center`] expects when paired with the `R_s`-resolution
-    /// world-per-grid-px (`wpp`), so the `1/m` scaling back to patch-grid px is
-    /// absorbed into `wpp` rather than applied here.
-    fn offset_steps(&self) -> [f64; 2] {
-        [
-            self.iacc[0] as f64 + self.residual[0],
-            self.iacc[1] as f64 + self.residual[1],
-        ]
-    }
-}
-
-/// Drop the `(state, cache)` pairs for which `keep` returns `false`, keeping the
-/// two vectors parallel. `keep` is evaluated once per state in order; the cache at
-/// the same index is dropped with it. Cold path (runs only on view drops).
-fn retain_states_and_caches(
-    states: &mut Vec<ViewState>,
-    caches: &mut Vec<ContextTile>,
-    mut keep: impl FnMut(&ViewState) -> bool,
-) {
-    debug_assert_eq!(states.len(), caches.len());
-    let mask: Vec<bool> = states.iter().map(&mut keep).collect();
-    let mut i = 0;
-    states.retain(|_| {
-        let k = mask[i];
-        i += 1;
-        k
-    });
-    let mut i = 0;
-    caches.retain(|_| {
-        let k = mask[i];
-        i += 1;
-        k
-    });
-}
-
-/// Per-point ranking evidence for the consensus-basis pick.
-///
-/// Only consulted when [`KeypointLocalizeParams::basis_max_views`] caps the
-/// point's view set; the default (all fields empty) leaves the uncapped path
-/// untouched. See `specs/core/patch/keypoint-localization-consensus-basis.md`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BasisEvidence<'a> {
-    /// Per-view score to the point's starting appearance, parallel to the
-    /// `view_set` (higher is a better match; `NaN` = unscored, which ranks
-    /// below every scored view). `sfm embed-patches` passes the `select_views`
-    /// per-admitted-view ZNCC through here. `None` — and, equivalently, an
-    /// **empty** slice, which is how a batch caller says "no scores for *this*
-    /// point" — falls back to ranking by grazing angle (`|d̂·n̂|`, most frontal
-    /// first).
-    pub view_scores: Option<&'a [f64]>,
-    /// The number of **leading** `view_set` entries that are the point's track
-    /// views — the `select_views` output contract, whose `admitted` lists the
-    /// track views first. `0` means no track membership is known, which makes
-    /// [`KeypointLocalizeParams::basis_force_track_views`] a no-op.
-    pub track_view_count: usize,
-}
-
-/// Localize the keypoints of one oriented patch over a view set by congealing.
+/// Localize the keypoints of one oriented patch over a view set by aligning
+/// every view to the point's reference render.
 ///
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
-/// index); `view_set` lists the views to refine (the output of
-/// [view selection](super::view_selection)). `starting_keypoints`, when given, is
-/// one **optional** seed per `view_set` entry (source-image px), parallel to it:
-/// `Some([x, y])` seeds that view by unprojecting the keypoint onto the patch
-/// plane, `None` seeds it at the point's own projection `project_i(X_p)` — and so
-/// does `None` for the whole slice. A view set that mixes observed views (which
-/// have a stored keypoint) with expansion candidates (which do not) is therefore
-/// seeded per view rather than all-or-nothing. Returns the kept views and their
-/// refined keypoints; see [`KeypointLocalization`] and
+/// index); `view_set` lists the views to localize (the output of
+/// [view selection](super::view_selection), or a track). `starting_keypoints`,
+/// when given, is one **optional** seed per `view_set` entry (source-image px),
+/// parallel to it: `Some([x, y])` starts that view there, `None` starts it at
+/// the point's own projection `project_i(X_p)`, and so does `None` for the
+/// whole slice. `reference` is the position in `view_set` of the point's
+/// reference observation, whose render at its starting keypoint is the template
+/// and whose keypoint is not moved; `None`, or a reference the grazing
+/// pre-filter turns away, has the reference-view rule pick one from the renders
+/// at the starting keypoints. Returns the kept views, their keypoints and their
+/// scores against the template; see [`KeypointLocalization`] and
 /// `specs/core/patch/patch-keypoint-localization.md`.
-///
-/// Equivalent to [`localize_patch_keypoints_with_basis`] with no basis
-/// evidence — which is what the uncapped path (the default
-/// `basis_max_views = 0`) needs.
 ///
 /// # Panics
 ///
@@ -917,16 +657,19 @@ pub fn localize_patch_keypoints(
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    reference: Option<usize>,
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization {
-    localize_patch_keypoints_with_basis(
+    try_localize_patch_keypoints(
         patch,
         views,
         view_set,
         starting_keypoints,
-        BasisEvidence::default(),
+        reference,
         params,
+        &Progress::none(),
     )
+    .expect("the localizer's buffers fit and no cancellation is possible without a Progress")
 }
 
 /// [`localize_patch_keypoints`] as a fallible call: the same localization, with
@@ -937,9 +680,9 @@ pub fn localize_patch_keypoints(
 /// caller that takes that radius from a person can ask for a tile no machine
 /// can hold; an allocation the global allocator refuses **aborts the process**,
 /// and this is the entry point that hands back
-/// [`LocalizeError::OutOfMemory`] instead. `progress` is polled between rounds
-/// and between views, so a caller that can be cancelled gets
-/// [`LocalizeError::Cancelled`] rather than running the whole schedule out.
+/// [`LocalizeError::OutOfMemory`] instead. `progress` is polled between views,
+/// so a caller that can be cancelled gets [`LocalizeError::Cancelled`] rather
+/// than running the whole set out.
 ///
 /// # Example
 ///
@@ -955,15 +698,17 @@ pub fn localize_patch_keypoints(
 /// #     views: &[ProjectedImage<'_>],
 /// #     view_set: &[u32],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
+/// // The first view of the set is the point's reference observation.
 /// let localized = try_localize_patch_keypoints(
 ///     patch,
 ///     views,
 ///     view_set,
 ///     None,
+///     Some(0),
 ///     &KeypointLocalizeParams::default(),
 ///     &Progress::none(),
 /// )?;
-/// # let _ = localized;
+/// assert_eq!(localized.reference, Some(view_set[0]));
 /// # Ok(())
 /// # }
 /// ```
@@ -972,634 +717,38 @@ pub fn try_localize_patch_keypoints(
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    reference: Option<usize>,
     params: &KeypointLocalizeParams,
     progress: &Progress<'_>,
 ) -> Result<KeypointLocalization, LocalizeError> {
-    try_localize_patch_keypoints_with_basis(
-        patch,
-        views,
-        view_set,
-        starting_keypoints,
-        BasisEvidence::default(),
-        params,
-        progress,
-    )
-}
-
-/// [`localize_patch_keypoints`] with the caller's per-view ranking evidence for
-/// the **consensus-basis cap** (`specs/core/patch/keypoint-localization-consensus-basis.md`).
-///
-/// With [`KeypointLocalizeParams::basis_max_views`] at `0` — or a
-/// view set no larger than the cap (the default `8`) — this is bit-identical to
-/// [`localize_patch_keypoints`] and `evidence` is unread. Otherwise `K` views
-/// are picked as the consensus basis and congeal exactly as before, and every
-/// remaining view registers once against the finished basis template.
-///
-/// # Panics
-///
-/// Panics if a search buffer cannot be allocated; see
-/// [`try_localize_patch_keypoints_with_basis`], which reports it.
-pub fn localize_patch_keypoints_with_basis(
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
-    evidence: BasisEvidence<'_>,
-    params: &KeypointLocalizeParams,
-) -> KeypointLocalization {
-    try_localize_patch_keypoints_with_basis(
-        patch,
-        views,
-        view_set,
-        starting_keypoints,
-        evidence,
-        params,
-        &Progress::none(),
-    )
-    .expect("the localizer's buffers fit and no cancellation is possible without a Progress")
-}
-
-/// [`localize_patch_keypoints_with_basis`] as a fallible call: the same
-/// localization, with an allocation it could not make and a cancellation
-/// reported through [`LocalizeError`] rather than raised.
-#[allow(clippy::too_many_arguments)]
-pub fn try_localize_patch_keypoints_with_basis(
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
-    evidence: BasisEvidence<'_>,
-    params: &KeypointLocalizeParams,
-    progress: &Progress<'_>,
-) -> Result<KeypointLocalization, LocalizeError> {
-    // Search resolution `R_s = round(m·R)`: the cache, support, and shift grid all
-    // build at `R_s`. An integer step in this grid is `1/m` patch-grid px, so the
-    // found shift is scaled by `inv_m = 1/m` back to patch-grid px (`m = 1` — the
-    // default — is a no-op). See `specs/core/patch/keypoint-localization-search-cache.md`.
-    let m = (params.search_resolution_multiplier as f64).max(1e-3);
-    let base_res = params.resolution.max(2);
-    let resolution = ((m * base_res as f64).round() as u32).max(2);
-    // In-round search radius, in `R_s`-grid steps (`search` is patch-grid px, an
-    // `R_s` step is `1/m` patch-grid px). At `m = 1` this is the old `margin`.
-    let margin = (params.search * m).ceil().max(1.0) as i64;
-    // The accumulated integer drift is clipped to `±search_steps`; `search_steps =
-    // margin` keeps the larger `R_s + 4·margin` cache exactly covering every round.
-    let search_steps = margin;
-    // Render-once cache size: `R_s + 4·search`, the unconditionally-correct option
-    // (covers a window centre at `iacc + d` with `|iacc| ≤ search`, `|d| ≤ margin`).
-    let context_res = resolution + 4 * margin as u32;
-    // Cache index of the `R×R` core at zero offset (`iacc = 0`).
-    let cache_c0 = (2 * margin) as usize;
-    let r = resolution as usize;
-
-    let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
-    let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
-
-    // Window support over the R_s×R_s core.
-    let support = build_support(params.window, resolution);
-    // The support positions the middle ZNCC and the ZNCC grid are read over.
-    let parts = Parts::new(&support, resolution);
-
-    // Dedup the view set order-preserving (a point can carry two observations in
-    // one image; refining it twice double-weights that view in the consensus).
-    let mut seen = std::collections::HashSet::new();
-    let mut states: Vec<ViewState> = Vec::new();
-    // Parallel to `states`, consumed only by the consensus-basis pick: each
-    // candidate's rank score (the caller's, else the grazing cosine computed
-    // just below for free) and whether it is one of the point's track views.
-    // Only built when the cap can bite, so the (default) uncapped path stays
-    // allocation-free.
-    let ranking = params.basis_max_views > 0;
-    let mut cand_scores: Vec<f64> = Vec::new();
-    let mut cand_is_track: Vec<bool> = Vec::new();
-    // An empty caller slice means "this point is unscored" — the batch entry
-    // point has no per-point `Option`, so it says so with an empty list.
-    let view_scores = evidence.view_scores.filter(|s| !s.is_empty());
-    let normal = patch.normal();
-    for (k, &i) in view_set.iter().enumerate() {
-        if !seen.insert(i) {
-            continue;
-        }
-        let view = &views[i as usize];
-        // Grazing pre-filter: drop a view whose ray is near-parallel to the plane.
-        // The viewing direction is camera→point: `center − cam_c` for a finite
-        // point, or the direction `d` itself for a point at infinity (every ray to
-        // it is parallel to `d`, so it is always fully frontal — cos = 1).
-        let d = if patch.w == 0.0 {
-            patch.center.coords
-        } else {
-            patch.center - view.cam_from_world.inverse_translation_origin()
-        };
-        let dn = d.norm();
-        let grazing_cos = if dn > 1e-12 {
-            (d.dot(&normal) / dn).abs()
-        } else {
-            0.0
-        };
-        if dn <= 1e-12 || grazing_cos < params.min_grazing_cos {
-            continue;
-        }
-        // The point's own projection (the keypoint anchor). A view that can't
-        // project the point in-frame can't be refined; skip it.
-        let Some(proj) = project(view, &patch.center, patch.w) else {
-            continue;
-        };
-        // Seed offset (in `R_s`-grid steps, since `wpp` is at `R_s`): unproject the
-        // starting keypoint onto the plane, else zero. A view with no seed of its
-        // own (`None` — the expansion candidate that has no observation to take a
-        // keypoint from) falls back to that same zero, i.e. to its projection, so
-        // an all-`None` table is bit-identical to passing no seeds at all. Split
-        // into the integer read accumulator (clipped to the cache's drift bound)
-        // and a sub-pixel residual — the residual keeps a lone-view seed exact
-        // through `finalize` while the congealing read position stays integer.
-        let seed = starting_keypoints.and_then(|seeds| seeds[k]);
-        let off = seed
-            .and_then(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v))
-            .unwrap_or([0.0, 0.0]);
-        let sampler =
-            params
-                .sampler
-                .for_observation(patch, view.camera, view.cam_from_world, seed, base_res);
-        // `off = [u, v]` (u-axis, v-axis components, in `R_s`-grid steps). Split each
-        // axis into the clamped integer read accumulator and a pure sub-pixel
-        // residual — the residual keeps a lone-view seed exact through `finalize`; a
-        // seed beyond `±search` is clamped on the integer part, as the round drift is.
-        let iu = (off[0].round() as i64).clamp(-search_steps, search_steps);
-        let iv = (off[1].round() as i64).clamp(-search_steps, search_steps);
-        if ranking {
-            cand_scores.push(match view_scores {
-                // A caller score shorter than the view set leaves the tail
-                // unscored, which ranks it last rather than panicking.
-                Some(s) => s.get(k).copied().unwrap_or(f64::NAN),
-                None => grazing_cos,
-            });
-            cand_is_track.push(k < evidence.track_view_count);
-        }
-        states.push(ViewState {
-            idx: i,
-            order: states.len() as u32,
-            is_basis: true,
-            iacc: [iu, iv],
-            residual: [off[0] - off[0].round(), off[1] - off[1].round()],
-            proj: [proj.0, proj.1],
-            loo: f64::NAN,
-            loo_parts: PartZncc::NAN,
-            sampler,
-        });
-    }
-
-    if states.len() < 2 {
-        return Ok(finalize(patch, views, &states, wpp_u, wpp_v));
-    }
-
-    // Consensus-basis pick: hold every view past the cap out of the congealing
-    // loop; phase B registers them once against the finished basis template.
-    // `K < 2` is raised to 2 — a leave-one-out consensus needs two members.
-    let mut tail: Vec<ViewState> = Vec::new();
-    let k_cap = params.basis_max_views as usize;
-    if k_cap > 0 && states.len() > k_cap {
-        let mask = prof::BASIS_PICK.time(|| {
-            select_basis(
-                &cand_scores,
-                &cand_is_track,
-                k_cap.max(2),
-                params.basis_force_track_views,
-                params.basis_pick,
-            )
-        });
-        let mut kept = Vec::with_capacity(k_cap.max(2));
-        for (i, mut st) in std::mem::take(&mut states).into_iter().enumerate() {
-            if mask[i] {
-                kept.push(st);
-            } else {
-                st.is_basis = false;
-                tail.push(st);
-            }
-        }
-        states = kept;
-    }
-    prof::count(&prof::N_BASIS, states.len() as u64);
-    prof::count(&prof::N_TAIL, tail.len() as u64);
-
-    // Render each view's expanded cache **once** (frame-oriented at the seed,
-    // `acc = 0`), sized `R_s + 4·margin` to cover the full search drift. Every
-    // round reads its core and scores its shift grid from this cache at the view's
-    // current integer offset `iacc` — no per-round render. `caches` stays parallel
-    // to `states`; the view-dropping retain below filters both together.
-    //
-    // The cancel flag is polled **per view**: the render is the expensive half
-    // of a wide search, and a caller that has asked to stop should not wait out
-    // a dozen of them.
-    let mut caches: Vec<ContextTile> = Vec::with_capacity(states.len());
-    prof::count(&prof::N_RENDER, states.len() as u64);
-    prof::RENDER.time(|| -> Result<(), LocalizeError> {
-        for st in &states {
-            progress.check_cancel()?;
-            caches.push(render_context(
-                patch,
-                &views[st.idx as usize],
-                0.0,
-                0.0,
-                wpp_u,
-                wpp_v,
-                resolution,
-                context_res,
-                st.sampler,
-                progress,
-            )?);
-        }
-        Ok(())
-    })?;
-
-    // Member self-similarity gate. A view whose own tile pins no 2D position — a
-    // flat sky/water crop, a lone straight edge — matches itself a few pixels
-    // away and correlates to noise against anything, so it is refused *before*
-    // it can join a consensus or be scored against one. Read once, on the tile
-    // at the view's seed offset: the property is the member's appearance, not
-    // the round's, and dropping it up front keeps it out of every round's
-    // template. Nothing below restores it — the two-view floor is a consensus
-    // remedy and this is not a consensus question.
-    if params.member_self_similarity_gate_is_on() {
-        let mut scratch: Vec<f32> = Vec::new();
-        let mut member_ok: Vec<bool> = Vec::with_capacity(states.len());
-        for (si, st) in states.iter().enumerate() {
-            let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
-            let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
-            let radius = member_self_similarity_radius(&caches[si], r, oy, ox, &mut scratch);
-            member_ok.push(params.admits_member_zncc_self_similarity_radius(radius));
-        }
-        prof::count(
-            &prof::N_DROP_UNLOCALIZABLE,
-            member_ok.iter().filter(|&&ok| !ok).count() as u64,
-        );
-        let mut i = 0;
-        retain_states_and_caches(&mut states, &mut caches, |_| {
-            let keep = member_ok[i];
-            i += 1;
-            keep
-        });
-    }
-
-    let mut loo = LooScratch::default();
-    let mut search = SearchScratch::default();
-    // The shift grids, reserved once and fallibly: they are `(2 · margin + 1)²`
-    // per grid and the round loop resizes into them, so reserving the capacity
-    // here means every later `resize` sits inside it and cannot be the
-    // allocation that aborts.
-    search.try_reserve_grids((2 * margin + 1) as usize)?;
-    let mut rounds_run = 0u32;
-    for _round in 0..params.max_iters.max(1) {
-        progress.check_cancel()?;
-        prof::count(&prof::N_ROUNDS, 1);
-        rounds_run += 1;
-        // View count entering this round: convergence below requires the view
-        // set to have survived the round unchanged (see step 6).
-        let n_entering = states.len();
-        // 1. Read every view's R_s×R_s core from its cache at the integer offset
-        //    `iacc` (no render — exact). A view whose core has left the frame (any
-        //    support pixel invalid) is dropped for this round.
-        let mut live: Vec<usize> = Vec::with_capacity(states.len());
-        let mut base_raw = Vec::new();
-        for (si, st) in states.iter().enumerate() {
-            let cache = &caches[si];
-            let mut raw = vec![0f32; cache.channels * support.pixels.len()];
-            // `iacc[0]` is the u-axis (column/x) accumulator, `iacc[1]` the v-axis
-            // (row/y) — matching the search grid's `(dx, dy)` and `shifted_center`.
-            let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
-            let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
-            if extract_core(cache, &support, r, oy, ox, &mut raw) {
-                live.push(si);
-                base_raw.push(raw);
-            }
-        }
-        if live.len() < 2 {
-            // Too few views still see the patch to congeal; keep the in-frame ones
-            // (with their current offsets) and finalize.
-            let live_set: std::collections::HashSet<u32> =
-                live.iter().map(|&si| states[si].idx).collect();
-            retain_states_and_caches(&mut states, &mut caches, |st| live_set.contains(&st.idx));
-            break;
-        }
-
-        // 2. z-normalize the live cores into a shared compacted channel space.
-        let channels0 = live.iter().map(|&si| caches[si].channels).min().unwrap();
-        let n = support.pixels.len();
-        let mut flat = vec![0f32; live.len() * channels0 * n];
-        for (vk, raw) in base_raw.iter().enumerate() {
-            flat[vk * channels0 * n..][..channels0 * n].copy_from_slice(&raw[..channels0 * n]);
-        }
-        let mut xs = Vec::new();
-        let znorm = prof::ZNORM.time(|| {
-            znormalize_into_kept(
-                &flat,
-                live.len(),
-                channels0,
-                n,
-                &support.weights,
-                support.total_weight,
-                &support.sqrt_weights,
-                &mut xs,
-            )
-        });
-        let Some((kept_ch, keep_mask)) = znorm else {
-            break; // no textured channel — leave the seeds in place
-        };
-
-        // 3-4. Per live view: search its residual shift against the leave-one-out
-        //      consensus of the others, then accumulate (clipped to ±search).
-        //
-        // The LOO consensus is built **incrementally**: one shared per-round
-        // accumulation — the Gram matrix over the live views' z-normalized
-        // cores — replaces the per-(view, round) holdout-stack copy + IRLS
-        // rebuild; each view's template then needs only a Gram-space IRLS
-        // (O(V²) scalars per iteration) plus one pixel-space materialization.
-        // See `loo_consensus_template`.
-        let nv = live.len();
-        prof::TEMPLATE_GRAM.time(|| build_loo_gram(&xs, nv, kept_ch * n, &mut loo));
-        // Each live view's core over the whole square, for the ZNCC grid. The
-        // support's pixels were read above, so none is out of frame.
-        let squares: Vec<Vec<f32>> = live
-            .iter()
-            .map(|&si| {
-                let st = &states[si];
-                let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
-                let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
-                square_core(&caches[si], &support, r, oy, ox, &keep_mask, kept_ch)
-                    .expect("the support was read at this offset")
-            })
-            .collect();
-        let mut shifts: Vec<Option<ShiftResult>> = vec![None; nv];
-        let mut part_readings: Vec<PartZncc> = vec![PartZncc::NAN; nv];
-        for (v, &si) in live.iter().enumerate() {
-            // Build the other views' robust consensus template (the
-            // leave-one-out reference for view v) from the shared Gram.
-            prof::TEMPLATE.time(|| {
-                loo_consensus_template(
-                    &xs,
-                    nv,
-                    v,
-                    kept_ch,
-                    n,
-                    params.robust_iters,
-                    &mut loo,
-                    &mut search.tmpl,
-                );
-            });
-            prof::count(&prof::N_SEARCH, 1);
-            // Score the shift grid in view `si`'s cache around its current integer
-            // base offset `cache_c0 + iacc`. The returned shift is in `R_s`-grid
-            // steps relative to that base.
-            let st = &states[si];
-            let base_x = (cache_c0 as i64 + st.iacc[0]) as usize;
-            let base_y = (cache_c0 as i64 + st.iacc[1]) as usize;
-            shifts[v] = prof::SEARCH.time(|| match params.search_strategy {
-                SearchStrategy::Exhaustive => search_shift(
-                    &caches[si],
-                    &mut search,
-                    &support,
-                    &keep_mask,
-                    kept_ch,
-                    r,
-                    margin,
-                    base_y,
-                    base_x,
-                ),
-                SearchStrategy::PlusDescent => search_shift_plus_descent(
-                    &caches[si],
-                    &mut search,
-                    &support,
-                    &keep_mask,
-                    kept_ch,
-                    r,
-                    margin,
-                    base_y,
-                    base_x,
-                ),
-            });
-            // The same reading over parts of the core: the peak's samples
-            // against the same template, while `search.tmpl` still holds it.
-            // The grid's template is the same consensus over the whole
-            // square, under the weights `loo` still holds for view `v`.
-            if let Some(sh) = shifts[v] {
-                let square_template = square_consensus(&squares, &loo.w);
-                part_readings[v] = part_zncc(
-                    &caches[si],
-                    &support,
-                    &parts,
-                    r,
-                    (base_y as i64 + sh.iy) as usize,
-                    (base_x as i64 + sh.ix) as usize,
-                    &keep_mask,
-                    kept_ch,
-                    &search.tmpl,
-                    &square_template,
-                );
-            }
-        }
-
-        // Accumulate onto the (still full) `states`. The integer argmax moves the
-        // read accumulator `iacc` (clipped to the cache drift bound); the sub-pixel
-        // parabolic residual is stored separately and never fed back into the read
-        // position — keeping every cache read exact.
-        //
-        // The convergence metric is the round-over-round CHANGE of each live
-        // view's refined position (`iacc + residual` before vs after this round's
-        // update). The raw search output `|sh.dx, sh.dy|` is NOT that change: it
-        // bundles the freshly recomputed parabolic residual — which never moves
-        // the read position — so its magnitude has a ~0.1–0.5-step floor even
-        // once the argmax stops moving, and summing it kept `mean_shift` above
-        // `convergence_px` forever (every point ran all `max_iters` rounds).
-        let mut shift_sum = 0.0;
-        for (v, &si) in live.iter().enumerate() {
-            let st = &mut states[si];
-            match shifts[v] {
-                Some(sh) => {
-                    let prev = st.offset_steps();
-                    st.iacc[0] = (st.iacc[0] + sh.ix).clamp(-search_steps, search_steps);
-                    st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-search_steps, search_steps);
-                    st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
-                    st.loo = sh.peak;
-                    st.loo_parts = part_readings[v];
-                    let now = st.offset_steps();
-                    shift_sum += (now[0] - prev[0]).hypot(now[1] - prev[1]);
-                }
-                // No scorable window this round: leave `iacc`/`residual` in place and
-                // mark the LOO unknown (matches the pre-cache None handling). The
-                // position did not move, so it contributes 0 to the round's shift.
-                None => {
-                    st.loo = f64::NAN;
-                    st.loo_parts = PartZncc::NAN;
-                }
-            }
-        }
-
-        // 5. Drop failing views (out-of-frame already removed above): keypoint too
-        //    far from the projection, leave-one-out ZNCC below the **absolute**
-        //    floor, or below the relative bar.
-        //
-        //    The two gates differ in what can undo them. The relative bar asks a
-        //    consensus question ("does this view agree as well as its peers?"),
-        //    and its answer is meaningless once every view fails it — so the
-        //    two-view floor restores the two best when only that bar, or the
-        //    positional `max_shift_px` gate (a verdict on the pose the view was
-        //    projected from, not on its pixels), dropped them. `min_absolute_zncc`
-        //    and the member self-similarity gate are photometric per-view
-        //    verdicts, so a view they reject is out for good; that is what makes
-        //    them bite on a two-view point, where the relative bar reduces to
-        //    `min_relative_zncc ×` the same pairwise correlation it is testing.
-        let mut live_loo: Vec<f64> = live
-            .iter()
-            .map(|&si| states[si].loo)
-            .filter(|z| z.is_finite())
-            .collect();
-        let med = median_in_place(&mut live_loo);
-        // `min_relative_zncc <= 0` (or non-finite) disables the relative bar
-        // exactly, the way `min_absolute_zncc` and
-        // `max_member_zncc_self_similarity_radius` do. Without that, `0.0` would still bar a view whose
-        // leave-one-out ZNCC is *negative*, which is the one case a caller that
-        // asked for no gate most wants reported: a reading of a track shows the
-        // anti-correlated sighting with its number instead of deleting it.
-        let bar = if med.is_finite() && params.min_relative_zncc > 0.0 {
-            params.min_relative_zncc * med
-        } else {
-            f64::NEG_INFINITY
-        };
-        let live_idx: std::collections::HashSet<u32> =
-            live.iter().map(|&si| states[si].idx).collect();
-        // Keep only live views (drops out-of-frame from this round) that also pass
-        // the shift / agreement gates; guarantee at least the top-two by ZNCC
-        // among the views the absolute gates left standing.
-        let mut kept: Vec<usize> = Vec::new();
-        let mut fallback: Vec<(f64, usize)> = Vec::new();
-        for (si, st) in states.iter().enumerate() {
-            if !live_idx.contains(&st.idx) {
-                continue;
-            }
-            let off = st.offset_steps();
-            let center = shifted_center(patch, off[0], off[1], wpp_u, wpp_v);
-            let shift_px = match project(&views[st.idx as usize], &center, patch.w) {
-                Some((x, y)) => (x - st.proj[0]).hypot(y - st.proj[1]),
-                None => f64::INFINITY, // keypoint left the frame
-            };
-            // `shift_px <= max_shift_px` already rejects the out-of-frame INFINITY.
-            // The absolute floor reads "finite and below": a view no round scored
-            // (`NaN`) has no verdict to fail, exactly as for the relative bar.
-            let below_floor = below_absolute_floor(st.loo, params.min_absolute_zncc);
-            if below_floor {
-                prof::count(&prof::N_DROP_ABS_ZNCC, 1);
-            }
-            if shift_px <= params.max_shift_px
-                && !below_floor
-                && st.loo.is_finite()
-                && st.loo >= bar
-            {
-                kept.push(si);
-            }
-            // Only a view the photometric gates cleared is eligible for the floor.
-            // A keypoint far from the projection is a geometry contradiction, not
-            // a photometric verdict, so the floor may still restore it: a track
-            // whose members agree with each other survives a wrong pose and keeps
-            // reporting the disagreement through its residual.
-            if !below_floor {
-                let rank = if st.loo.is_finite() { st.loo } else { -1.0 };
-                fallback.push((rank, si));
-            }
-        }
-        if kept.len() < 2 {
-            // Honor the leave-one-out floor: retain the two best-agreeing views.
-            fallback.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            kept = fallback.iter().take(2).map(|&(_, si)| si).collect();
-            kept.sort_unstable();
-        }
-        let keep_set: std::collections::HashSet<usize> = kept.into_iter().collect();
-        let mut idx = 0;
-        retain_states_and_caches(&mut states, &mut caches, |_| {
-            let keep = keep_set.contains(&idx);
-            idx += 1;
-            keep
-        });
-
-        // 6. Converge. `shift_sum` is in `R_s`-grid steps; one step is `1/m`
-        //    patch-grid px, so scale before comparing to `convergence_px`.
-        //    Positional stability alone is not enough: a view dropped THIS round
-        //    (step 5, or gone out-of-frame in step 1) changes the consensus the
-        //    survivors registered against, so they get at least one more round to
-        //    re-equilibrate against the survivor-only template before the
-        //    stationarity test can fire. The `< 2` floor exit stays unconditional
-        //    (no leave-one-out consensus exists to re-register against).
-        let mean_shift = shift_sum / (live.len() as f64 * m);
-        if states.len() < 2 || (states.len() == n_entering && mean_shift < params.convergence_px) {
-            break;
-        }
-    }
-
-    // Phase B — register the tail. One final all-basis consensus template (no
-    // holdout: a tail view never contributed to it, so leave-one-out is
-    // unnecessary by construction), then one shift search per tail view against
-    // it. See `specs/core/patch/keypoint-localization-consensus-basis.md`.
-    if !tail.is_empty() {
-        prof::TAIL_REGISTER.time(|| -> Result<(), LocalizeError> {
-            register_tail(
-                patch,
-                views,
-                &states,
-                &caches,
-                &mut tail,
-                &support,
-                &mut search,
-                TailGeometry {
-                    resolution,
-                    margin,
-                    search_steps,
-                    cache_c0,
-                    wpp_u,
-                    wpp_v,
-                },
-                params,
-                progress,
-            )?;
-            states.append(&mut tail);
-            // Restore the input view-set order the result contract reports in
-            // (basis and tail were each already ascending in `order`).
-            states.sort_by_key(|st| st.order);
-            Ok(())
-        })?;
-    }
-
-    let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
-    out.rounds = rounds_run;
-    Ok(out)
-}
-
-/// Per-patch ranking evidence for the consensus-basis pick, parallel to the
-/// cloud's patches — the batch form of [`BasisEvidence`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BasisInputs<'a> {
-    /// Per patch, the per-view scores parallel to that patch's view set. An
-    /// **empty** entry means that patch is unscored — its basis pick falls back
-    /// to the grazing rank, exactly as if no scores had been supplied at all.
-    pub view_scores: Option<&'a [Vec<f64>]>,
-    /// Per patch, how many leading view-set entries are track views.
-    pub track_view_counts: Option<&'a [u32]>,
+    prof::TOTAL.time(|| {
+        align::align_to_reference(
+            patch,
+            views,
+            view_set,
+            starting_keypoints,
+            reference,
+            params,
+            progress,
+        )
+    })
 }
 
 /// Batch [`localize_patch_keypoints`] over a [`PatchCloud`], parallel across
-/// patches (rayon). `view_sets[i]` lists, for patch `i`, the views to refine
-/// (typically the output of view selection). `starting_keypoints`, when given, is
-/// parallel to `view_sets` in both dimensions (one **optional** seed per view);
-/// `None` seeds every view at the point's projection, and so does an **empty**
-/// per-patch entry — the batch form has no per-patch `Option`, so it says "this
-/// patch is unseeded" with an empty list, exactly as [`BasisInputs::view_scores`]
-/// says "unscored" — and so does a `None` for one view inside a seeded patch's
-/// list. `basis`, when
-/// given, carries the per-patch ranking
-/// evidence the [consensus-basis cap](KeypointLocalizeParams::basis_max_views)
-/// consumes (unread when the cap is off). Results are returned in cloud order.
+/// patches (rayon). `view_sets[i]` lists, for patch `i`, the views to localize.
+/// `starting_keypoints`, when given, is parallel to `view_sets` in both
+/// dimensions (one **optional** seed per view); `None` seeds every view at the
+/// point's projection, and so does an **empty** per-patch entry -- the batch
+/// form has no per-patch `Option`, so it says "this patch is unseeded" with an
+/// empty list -- and so does a `None` for one view inside a seeded patch's list.
+/// `references`, when given, is parallel to the cloud: per patch, the position
+/// in its view set of its reference observation, or `None` to have the
+/// reference-view rule pick one. Results are returned in cloud order.
 ///
 /// `done`, when given, is bumped once per patch, for a caller polling progress
 /// from another thread. `progress` receives a `patches` count about every
 /// hundredth of the way through, is polled for cancellation before each patch
-/// and between a patch's rounds, and, when detailed, times the renders of each
+/// and between a patch's views, and, when detailed, times the renders of each
 /// sampler in its own detail phase.
 ///
 /// # Errors
@@ -1609,8 +758,8 @@ pub struct BasisInputs<'a> {
 ///
 /// # Panics
 ///
-/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` / the
-/// `basis` arrays are given and not parallel), if an index is out of range, or
+/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` /
+/// `references` are given and not parallel), if an index is out of range, or
 /// if a search buffer cannot be allocated.
 #[allow(clippy::too_many_arguments)]
 pub fn localize_patch_cloud_keypoints(
@@ -1618,7 +767,7 @@ pub fn localize_patch_cloud_keypoints(
     views: &[ProjectedImage<'_>],
     view_sets: &[Vec<u32>],
     starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
-    basis: Option<&BasisInputs<'_>>,
+    references: Option<&[Option<usize>]>,
     params: &KeypointLocalizeParams,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
@@ -1635,21 +784,12 @@ pub fn localize_patch_cloud_keypoints(
             "starting_keypoints must be parallel to the cloud"
         );
     }
-    if let Some(b) = basis {
-        if let Some(s) = b.view_scores {
-            assert_eq!(
-                s.len(),
-                cloud.len(),
-                "view_scores must be parallel to the cloud"
-            );
-        }
-        if let Some(t) = b.track_view_counts {
-            assert_eq!(
-                t.len(),
-                cloud.len(),
-                "track_view_counts must be parallel to the cloud"
-            );
-        }
+    if let Some(refs) = references {
+        assert_eq!(
+            refs.len(),
+            cloud.len(),
+            "references must be parallel to the cloud"
+        );
     }
     if prof::enabled() {
         prof::reset();
@@ -1667,23 +807,16 @@ pub fn localize_patch_cloud_keypoints(
             let seeds = starting_keypoints
                 .map(|s| s[i].as_slice())
                 .filter(|s| !s.is_empty());
-            let evidence = BasisEvidence {
-                view_scores: basis.and_then(|b| b.view_scores).map(|s| s[i].as_slice()),
-                track_view_count: basis
-                    .and_then(|b| b.track_view_counts)
-                    .map_or(0, |t| t[i] as usize),
-            };
-            let out = prof::TOTAL.time(|| {
-                try_localize_patch_keypoints_with_basis(
-                    patch,
-                    views,
-                    &view_sets[i],
-                    seeds,
-                    evidence,
-                    params,
-                    progress,
-                )
-            });
+            let reference = references.and_then(|r| r[i]);
+            let out = try_localize_patch_keypoints(
+                patch,
+                views,
+                &view_sets[i],
+                seeds,
+                reference,
+                params,
+                progress,
+            );
             let out = match out {
                 Ok(out) => out,
                 // A cancellation mid-patch: the check below returns it.
