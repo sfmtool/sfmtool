@@ -3409,11 +3409,26 @@ track's rays are a microsecond of arithmetic whatever the reconstruction's size.
 It is delete-and-re-add, so a point whose geometry changes takes a new index
 while every other index stays good, and the `report` the reply carries is the
 edit's own Action Log sentence. That sentence is the core operation's status for
-the point: the verdict the observations supported -- `finite`, `at infinity`,
-`behind a camera that sees it`, `too thin to place` -- then how many
-observations the cheirality prune left out where it left any out, then
-`unchanged` where the answer is the geometry the point had, and last `now point
-N` where the point was rewritten and took index `N`:
+the point: first the verdict the observations supported, one of
+
+- `finite`
+- `finite, on the observations that agree`
+- `at infinity`
+- `at its held distance`
+- `too thin to place, so at infinity`
+- `no depth in its rays at the noise level, so at infinity`
+- `behind a camera that sees it, so at infinity`
+- `past the reprojection bar, so at infinity`
+- `too few observations to place, so left where it was`
+
+then how many observations the cheirality prune left out where it left any out,
+then `unchanged` where the answer is the geometry the point had, and last `now
+point N` where the point was rewritten and took index `N`. The verdict's words
+are `PointVerdict::label` in
+[`points.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/points.rs)
+and the rest is `RetriangulateOutcome`'s `Display` in
+[`retriangulate.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs),
+so the Action Log and the wire say the same words:
 
 ```text
 Retriangulated point 1207 in seoul_bull: finite, now point 5310 (v3 → v4)
@@ -3933,9 +3948,13 @@ spellings, which an agent can act on more readily than a `oneOf` mismatch.
 shared geometry there and what is turned or sized is one sighting's
 parallelogram: `resize_bench_shape` and `spin_bench_shape` take an
 `observation` and do that image's pixel arithmetic, and
-`shape_bench_observation` states the whole 2x2 `shape` outright. Each of the
-five refuses the other stage and names the tool that belongs to it, which is
-why the pair is two names rather than one with an optional observation.
+`shape_bench_observation` states the whole 2x2 `shape` outright. Each of
+`resize_bench_patch`, `spin_bench_patch`, `resize_bench_shape` and
+`spin_bench_shape` refuses the other stage and names the tool that belongs to
+it, which is why each pair is two names rather than one with an optional
+observation. `shape_bench_observation` has no track-stage counterpart, so it
+names none: the step itself refuses a track-stage track, in the words *"Cannot
+edit that patch: that is a cluster-stage step and this track is a track"*.
 
 **The displacement's normal part and `tilt_bench_patch` name no pixel at
 all**, being the wire's half of the two handles no sighting carries. The

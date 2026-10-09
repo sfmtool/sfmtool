@@ -301,15 +301,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           or a fit; delete_camera_image is the one call that renumbers them, \
                           since it renumbers the images they are in. Both the cluster and the track block carry \
                           zncc_middle beside zncc: the same samples correlated over only the \
-                          middle square of the patch, half its width (the middle 12 x 12 of a \
-                          24 x 24 grid). A high zncc with a low zncc_middle is an agreement \
+                          middle square of the patch, half its width (rows and columns R/4 to \
+                          R - R/4 of the patch grid, R being its size, given below). A high zncc with a low zncc_middle is an agreement \
                           carried by the parts of the patch away from the pixel, such as a \
                           background behind a small near object, the far side of a depth edge, \
                           or a texture that repeats along the epipolar line. zncc_middle is null \
                           where zncc is, where the middle is flat, and on a track read back \
                           from a committed point before it is evaluated. Both blocks also carry \
                           zncc_grid: the same samples correlated over each cell of a three by \
-                          three split of the patch (8 x 8 cells of a 24 x 24 grid), every pixel \
+                          three split of the patch (cut at R/3 and R - R/3), every pixel \
                           weighted equally, as three rows of three from the top-left, in the \
                           layout the patch tile is drawn in. It says where in the patch an \
                           agreement or a disagreement is; a cell is null where the patch is flat \

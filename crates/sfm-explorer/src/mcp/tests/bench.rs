@@ -1202,8 +1202,9 @@ fn the_shape_tools_size_a_cluster_sighting_and_refuse_a_track_stage_track() {
     assert_eq!(shape_of(&state), asked);
     assert_eq!(version_count(&state), before + 2);
 
-    // Both belong to the cluster stage, and both say which tool a track-stage
-    // track wants instead.
+    // Both belong to the cluster stage and refuse a track-stage track. The
+    // resize names the tool that track wants instead; the shape has no
+    // track-stage counterpart, so its refusal names the stage.
     let refused = refused_call(
         &mut state,
         &mut viewer,
