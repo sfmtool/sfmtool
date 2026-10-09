@@ -419,10 +419,11 @@ standing, and Track View's *Reference* column and the wire's
 current readings. The reference in use is the row the bitmap is the render
 of: Track View's *Bitmap* column marks it, and the wire names it as
 `bitmap_observation`. The two differ where a defined reference is no longer
-the row the rule would pick. No operation replaces a defined reference with
-the rule's current pick; see
+the row the rule would pick. No operation replaces a defined reference with the rule's current pick.
+Replacing it on the bench, by unpinning the reference row or with *Set as
+reference*, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-§ "Open questions", "Replacing the reference".
+Part 5, § "The reference on the bench".
 
 Every operation that renders the stored bitmap renders it this way:
 

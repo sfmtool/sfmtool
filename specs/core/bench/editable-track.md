@@ -1562,9 +1562,11 @@ bitmap is the render of. The two differ where a defined reference is no
 longer the row the rule picks; Track View's *Reference* column and the wire's
 `reference_observation` show the rule's pick, and Track View's *Bitmap*
 column and the wire's `bitmap_observation` show the reference in use.
-No operation replaces a defined reference with the rule's current pick; see
+No operation replaces a defined reference with the rule's current pick.
+Replacing it on the bench, by unpinning the reference row or with *Set as
+reference*, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-§ "Open questions", "Replacing the reference".
+Part 5, § "The reference on the bench".
 
 A commit writes `TrackPayload::reference` as the point's reference
 observation, with or without a bitmap: with one, it is the row the bitmap is

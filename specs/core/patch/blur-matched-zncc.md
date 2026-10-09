@@ -411,10 +411,11 @@ is always read on the tile the bench shows.
 **An observation sharper than the bitmap** is read plain, neither tile blurred,
 and flagged (`sharper_than_bitmap`): it is a candidate to replace the
 reference, not a score. No render replaces a defined reference: a render
-renders from it, and the rule picks only for a point with none. No operation
-replaces a defined reference with the rule's current pick; see
+renders from it, and the rule picks only for a point with none. No operation replaces a defined reference with the rule's current pick.
+Replacing it on the bench, by unpinning the reference row or with *Set as
+reference*, is proposed in
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-§ "Open questions", "Replacing the reference".
+Part 5, § "The reference on the bench".
 
 **The reference's own score is 1** and is not computed: the bitmap is its tile.
 A bitmap that names no reference (a fused mean, one stored before the
