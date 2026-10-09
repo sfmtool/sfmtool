@@ -18,8 +18,9 @@ pub enum SearchStrategy {
     /// is scored at most once via a per-cell ZNCC kernel
     /// (`score_cell_one_channel`, AVX2-gather when available, scalar
     /// otherwise); the visited cache stores the combined ZNCC per cell. The
-    /// final-cell separable parabolic sub-pixel fit reuses the 4 cardinal
-    /// neighbours already in the cache.
+    /// final cell's sub-pixel fit is a quadratic over its 3×3 neighbourhood,
+    /// which reuses the 4 cardinal neighbours already in the cache and scores
+    /// the 4 diagonal ones.
     ///
     /// **The default.** It climbs to the correlation peak nearest the starting
     /// keypoint, which is the evidence for which of several similar peaks is
@@ -32,7 +33,7 @@ pub enum SearchStrategy {
     PlusDescent,
     /// Score every cell of the `(2·margin+1) × (2·margin+1)` shift grid via
     /// the hand-rolled SIMD SAXPY accumulator (`compute_channel_grids`), then
-    /// argmax + separable parabolic. The global maximum over the window; it
+    /// argmax + the same 3×3 quadratic sub-pixel fit. The global maximum over the window; it
     /// recovers from a starting keypoint 2 to 3 px off better than the
     /// descent, and loses to it nearer the truth, where a side peak of a
     /// repeated texture can score higher than the true one.

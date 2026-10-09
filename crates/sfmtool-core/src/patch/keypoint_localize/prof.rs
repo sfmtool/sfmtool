@@ -57,7 +57,7 @@ pub static SEARCH_ACC: Phase = Phase::new("search_acc");
 /// (denominator + numerator-fold) and the cross-channel sum into the combined
 /// grid. Captures the non-vectorized "after the inner loop" cost.
 pub static SEARCH_COMBINE: Phase = Phase::new("search_combine");
-/// Sub-phase of [`SEARCH`]: the argmax pass + separable parabolic sub-pixel fit
+/// Sub-phase of [`SEARCH`]: the argmax pass + 3×3 quadratic sub-pixel fit
 /// on the combined grid.
 pub static SEARCH_ARGMAX: Phase = Phase::new("search_argmax");
 

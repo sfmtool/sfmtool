@@ -16,12 +16,13 @@
 //! reference a bench track holds), or where there is none the reference-view
 //! rule picks one from the views' renders at their starting keypoints. Where
 //! the rule picks none it would store, the template is the fused mean of the
-//! views, which is then the point's stored bitmap. The reference observation is
-//! the anchor of the track: its keypoint is returned as given. Every other view
+//! views, which is then the point's stored bitmap. The reference observation's
+//! keypoint is returned as given. Every other view
 //! has one context tile rendered around its starting keypoint, its own tile is
 //! read by the member self-similarity gate, and the tile is searched once for
 //! the shift whose ZNCC against the template is highest, refined to sub-pixel
-//! by a parabola. Views that pin no 2D position of their own, move too far from
+//! by a quadratic fit over the 3×3 neighbourhood of the integer peak. Views
+//! whose tile does not fix a 2D position of its own, move too far from
 //! the point's projection, leave the frame, or match the template too poorly
 //! are dropped. Nothing is iterated: the template does not change while the
 //! views are aligned.
@@ -624,6 +625,59 @@ fn parabolic(mid: f64, left: f64, right: f64) -> f64 {
     (0.5 * (left - right) / denom).clamp(-1.0, 1.0)
 }
 
+/// Sub-pixel offset `(sy, sx)` of a score surface's peak from its integer
+/// maximum `(py, px)`, each in `[-1, 1]`.
+///
+/// `peak` is the score at `(py, px)` and `nb(dy, dx)` the score at another
+/// cell, `None` where that cell was not scored. With all eight neighbours
+/// scored, the offset is the vertex `−H⁻¹g` of the quadratic through the 3×3
+/// neighbourhood, with the gradient `g` and Hessian `H` from central
+/// differences. The cross term `H_xy = (f(1,1) − f(1,−1) − f(−1,1) + f(−1,−1))/4`
+/// keeps a shift along one axis from showing up on the other on a diagonal
+/// texture, which a separate parabola per axis does not. When a neighbour is
+/// missing, or `H` is not negative definite (the surface is not a peak to
+/// second order), the offset falls back to a 3-point parabola on each axis, and
+/// an axis with a missing neighbour stays at the integer cell.
+fn subpixel_peak(peak: f64, py: i64, px: i64, nb: impl Fn(i64, i64) -> Option<f64>) -> (f64, f64) {
+    let up = nb(py - 1, px);
+    let down = nb(py + 1, px);
+    let left = nb(py, px - 1);
+    let right = nb(py, px + 1);
+    if let (Some(u), Some(d), Some(l), Some(r)) = (up, down, left, right) {
+        let diag = (
+            nb(py - 1, px - 1),
+            nb(py - 1, px + 1),
+            nb(py + 1, px - 1),
+            nb(py + 1, px + 1),
+        );
+        if let (Some(mm), Some(mp), Some(pm), Some(pp)) = diag {
+            let gy = 0.5 * (d - u);
+            let gx = 0.5 * (r - l);
+            let hyy = u - 2.0 * peak + d;
+            let hxx = l - 2.0 * peak + r;
+            let hxy = 0.25 * (pp - pm - mp + mm);
+            let det = hyy * hxx - hxy * hxy;
+            // Negative definite: both diagonal terms negative and `det > 0`.
+            if hyy < 0.0 && hxx < 0.0 && det > 1e-12 {
+                let sy = -(hxx * gy - hxy * gx) / det;
+                let sx = -(hyy * gx - hxy * gy) / det;
+                if sy.is_finite() && sx.is_finite() {
+                    return (sy.clamp(-1.0, 1.0), sx.clamp(-1.0, 1.0));
+                }
+            }
+        }
+    }
+    let sy = match (up, down) {
+        (Some(l), Some(r)) => parabolic(peak, l, r),
+        _ => 0.0,
+    };
+    let sx = match (left, right) {
+        (Some(l), Some(r)) => parabolic(peak, l, r),
+        _ => 0.0,
+    };
+    (sy, sx)
+}
+
 /// Localize the keypoints of one oriented patch over a view set by aligning
 /// every view to the point's reference render.
 ///
@@ -902,14 +956,7 @@ fn search_shift_ref(
             None
         }
     };
-    let sy = match (nb(py - 1, px), nb(py + 1, px)) {
-        (Some(l), Some(r)) => parabolic(peak, l, r),
-        _ => 0.0,
-    };
-    let sx = match (nb(py, px - 1), nb(py, px + 1)) {
-        (Some(l), Some(r)) => parabolic(peak, l, r),
-        _ => 0.0,
-    };
+    let (sy, sx) = subpixel_peak(peak, py, px, nb);
     Some(ShiftResult {
         dx: px as f64 + sx,
         dy: py as f64 + sy,

@@ -101,7 +101,7 @@ pub struct ViewSearch {
     /// The point's projection into the view, source px.
     pub projection: [f64; 2],
     /// The keypoint at the correlation peak (the integer peak plus the
-    /// parabolic sub-step), source px. `None` when no shift of the window could
+    /// sub-pixel step of the 3×3 quadratic fit), source px. `None` when no shift of the window could
     /// be scored in frame, or the shifted centre does not project.
     pub keypoint: Option<[f64; 2]>,
     /// The ZNCC at the integer peak, against the template. `NaN` without a

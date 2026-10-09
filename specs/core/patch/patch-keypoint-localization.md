@@ -196,8 +196,10 @@ For one point with view set `G`:
    - **search** the integer shift over `±margin` that maximizes the windowed
      ZNCC of the view's core against the template, by `search_strategy`
      (`PlusDescent` by default, a local "+"-descent from the zero shift;
-     `Exhaustive` scores every cell), then refine it to sub-pixel by a
-     separable parabola through the peak and its axis neighbours. The view's
+     `Exhaustive` scores every cell), then refine it to sub-pixel by the
+     vertex of a quadratic fitted to the 3×3 cells around the peak (see
+     [Sub-pixel step](keypoint-localization-search-cache.md#sub-pixel-hand-off)).
+     The view's
      final offset is `start[v]` plus that shift, and its score is the ZNCC at
      the integer peak. A view no shift could be scored for (its core out of
      frame at every shift) is dropped.
@@ -210,7 +212,7 @@ For one point with view set `G`:
 
 The search, the context tile and the kernels that make them cheap are in
 [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md).
-The parabolic step is an estimate; an accurate sub-pixel keypoint is the job of
+The quadratic step is an estimate; an accurate sub-pixel keypoint is the job of
 the continuous refiner
 ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)), which runs
 after this against the same reference render.

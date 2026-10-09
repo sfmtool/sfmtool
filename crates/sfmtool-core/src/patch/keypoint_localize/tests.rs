@@ -2195,14 +2195,15 @@ fn the_reference_is_not_moved_and_the_others_follow_it() {
     // by about `d` too.
     //
     // A whole grid px of displacement is recovered to a few hundredths of a
-    // source px. A fractional one is recovered to within about a quarter of a
-    // grid px (2.6 source px here): the parabola through the integer peak and
-    // its neighbours is biased toward the integer shift on this texture, and
-    // removing that is the sub-pixel refiner's job.
+    // source px. A fractional one is recovered to about 0.2 source px (under a
+    // tenth of a grid px, which is 2.6 source px here): the quadratic through
+    // the integer peak's 3×3 neighbourhood is not the exact shape of the
+    // correlation peak, and removing that last error is the sub-pixel
+    // refiner's job.
     let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
     let views = scene.views();
     let patch = plane_patch();
-    for (d, tolerance) in [([src_per_grid(), 0.0], 0.05), ([1.5, -1.0], 0.7)] {
+    for (d, tolerance) in [([src_per_grid(), 0.0], 0.05), ([1.5, -1.0], 0.3)] {
         let p0 = projection(&views, 0);
         let start = [p0[0] + d[0], p0[1] + d[1]];
         let seeds = [Some(start), None, None, None];
@@ -2244,8 +2245,8 @@ fn planted_offsets_are_recovered_relative_to_the_reference() {
     // Views 1-3 see the texture translated by known sub-grid offsets, and each
     // starts 1-2 px away from where it truly sees the reference's content. The
     // search recovers each view's offset relative to the reference to
-    // sub-pixel accuracy (within about a quarter of a grid px, the parabola's
-    // bias; see `the_reference_is_not_moved_and_the_others_follow_it`).
+    // sub-pixel accuracy (within about a tenth of a grid px, the error of the
+    // 3×3 quadratic fit; see `the_reference_is_not_moved_and_the_others_follow_it`).
     let offs = [[0.0, 0.0], [0.6, 0.0], [0.0, -0.7], [0.4, 0.5]];
     let scene = four_view_scene(offs, [texture; 4]);
     let views = scene.views();
@@ -2273,13 +2274,134 @@ fn planted_offsets_are_recovered_relative_to_the_reference() {
         for k in 1..4 {
             let err = dist(res.keypoints[k], truth[k]);
             assert!(
-                err < 0.7,
+                err < 0.35,
                 "{strategy:?}: view {k} off its planted offset by {err:.3} px \
                  ({:?} vs {:?}, started {:?} px away)",
                 res.keypoints[k],
                 truth[k],
                 displacement[k]
             );
+        }
+    }
+}
+
+/// A texture whose structure runs along the diagonals, with a different
+/// frequency along each, so its correlation surface has a strong `xy` term.
+fn diagonal_texture(x: f64, y: f64) -> f64 {
+    127.5 + 60.0 * ((x + y) * 9.0).sin() + 35.0 * ((x - y) * 5.0 + 0.5).cos()
+}
+
+#[test]
+fn the_sub_pixel_fit_finds_the_vertex_of_a_tilted_quadratic() {
+    // f(y, x) = −a·(y − y0)² − b·(x − x0)² − c·(y − y0)(x − x0): a peak whose
+    // axes are tilted, so the separable parabola through the integer cell is
+    // off on both axes. The 3×3 fit is exact on a quadratic.
+    let (a, b, c) = (0.3, 0.2, 0.25);
+    let (y0, x0) = (0.3, -0.4);
+    let f = |y: f64, x: f64| {
+        1.0 - a * (y - y0).powi(2) - b * (x - x0).powi(2) - c * (y - y0) * (x - x0)
+    };
+    let nb = |y: i64, x: i64| Some(f(y as f64, x as f64));
+    let (sy, sx) = subpixel_peak(f(0.0, 0.0), 0, 0, nb);
+    assert!(
+        (sy - y0).abs() < 1e-12 && (sx - x0).abs() < 1e-12,
+        "({sy}, {sx})"
+    );
+    // The separable parabola's answer, for contrast, is off on both axes.
+    let sep_y = parabolic(f(0.0, 0.0), f(-1.0, 0.0), f(1.0, 0.0));
+    let sep_x = parabolic(f(0.0, 0.0), f(0.0, -1.0), f(0.0, 1.0));
+    assert!(
+        (sep_y - y0).abs() > 0.1 && (sep_x - x0).abs() > 0.1,
+        "({sep_y}, {sep_x})"
+    );
+
+    // Without a diagonal neighbour there is no cross term, so the fit falls
+    // back to the separable parabola.
+    let no_diag = |y: i64, x: i64| (y == 0 || x == 0).then(|| f(y as f64, x as f64));
+    assert_eq!(subpixel_peak(f(0.0, 0.0), 0, 0, no_diag), (sep_y, sep_x));
+
+    // A saddle (Hessian not negative definite) falls back the same way.
+    let saddle = |y: f64, x: f64| 1.0 - 0.3 * y * y - 0.2 * x * x - 0.6 * y * x;
+    let (sy, sx) = subpixel_peak(saddle(0.0, 0.0), 0, 0, |y, x| {
+        Some(saddle(y as f64, x as f64))
+    });
+    let want_y = parabolic(saddle(0.0, 0.0), saddle(-1.0, 0.0), saddle(1.0, 0.0));
+    let want_x = parabolic(saddle(0.0, 0.0), saddle(0.0, -1.0), saddle(0.0, 1.0));
+    assert_eq!((sy, sx), (want_y, want_x));
+
+    // A vertex past the neighbourhood is clamped to one cell.
+    let far = |y: f64, x: f64| 1.0 - 0.05 * (y - 3.0).powi(2) - 0.05 * x * x - 0.01 * y * x;
+    let (sy, _) = subpixel_peak(far(0.0, 0.0), 0, 0, |y, x| Some(far(y as f64, x as f64)));
+    assert_eq!(sy, 1.0);
+
+    // A missing cardinal neighbour leaves its axis at the integer cell.
+    let no_up = |y: i64, x: i64| (y != -1).then(|| f(y as f64, x as f64));
+    let (sy, sx) = subpixel_peak(f(0.0, 0.0), 0, 0, no_up);
+    assert_eq!((sy, sx), (0.0, sep_x));
+}
+
+/// Per-axis error, in patch-grid px, of a keypoint against `truth`.
+fn grid_error(got: [f64; 2], truth: [f64; 2]) -> [f64; 2] {
+    [
+        (got[0] - truth[0]) / src_per_grid(),
+        (got[1] - truth[1]) / src_per_grid(),
+    ]
+}
+
+#[test]
+fn a_fractional_shift_on_one_axis_does_not_show_up_on_the_other() {
+    // Views 1 and 2 see the texture translated by a fractional shift along x
+    // alone, view 3 along y alone. On a texture with diagonal structure, a
+    // separate parabola per axis through the integer peak puts part of that
+    // shift on the other axis and misses part of it on its own: measured with
+    // that fit, the error reached 0.40 grid px on `diagonal_texture` and 0.12
+    // on `texture`. The 3×3 quadratic fit's cross term removes the part that
+    // comes from the other axis; what remains (under 0.08 grid px) is the
+    // quadratic not being the exact shape of the peak. Both strategies share
+    // the fit, so both are checked, and they agree with each other.
+    for (tex, bound) in [
+        (diagonal_texture as fn(f64, f64) -> f64, 0.1),
+        (texture as fn(f64, f64) -> f64, 0.06),
+    ] {
+        for shift in [0.25, 0.5, 0.6, 0.75] {
+            let offs = [[0.0, 0.0], [shift, 0.0], [-shift, 0.0], [0.0, shift]];
+            let scene = four_view_scene(offs, [tex; 4]);
+            let views = scene.views();
+            let patch = plane_patch();
+            let truth: Vec<[f64; 2]> = (0..4).map(|k| true_keypoint(&views, k, offs[k])).collect();
+            // Every view starts at the projection, so the fractional shift is
+            // what the sub-pixel fit has to recover.
+            let seeds = [None; 4];
+            let runs: Vec<KeypointLocalization> = STRATEGIES
+                .iter()
+                .map(|&strategy| {
+                    localize_patch_keypoints(
+                        &patch,
+                        &views,
+                        &[0, 1, 2, 3],
+                        Some(&seeds),
+                        Some(0),
+                        &with_strategy(strategy),
+                    )
+                })
+                .collect();
+            for (res, strategy) in runs.iter().zip(STRATEGIES) {
+                assert_eq!(res.views, vec![0, 1, 2, 3], "{strategy:?}");
+                for k in 1..4 {
+                    let e = grid_error(res.keypoints[k], truth[k]);
+                    assert!(
+                        e[0].hypot(e[1]) < bound,
+                        "{strategy:?}, shift {shift}: view {k} off by {e:?} grid px"
+                    );
+                }
+            }
+            for k in 1..4 {
+                let gap = dist(runs[0].keypoints[k], runs[1].keypoints[k]);
+                assert!(
+                    gap < 1e-3,
+                    "shift {shift}: the strategies differ by {gap} px at view {k}"
+                );
+            }
         }
     }
 }
@@ -2347,7 +2469,7 @@ fn a_changed_reference_realigns_the_views_to_its_render() {
     //
     // The first localization starts every view where it truly sees A's
     // content, and `e` is a whole grid px, so every shift the search makes is
-    // a whole number of grid px and is recovered without the parabola's bias
+    // a whole number of grid px and is recovered without the sub-pixel fit's error
     // on fractional shifts. The shift gate is opened: it is not the subject.
     let offs = [[0.0, 0.0], [0.8, 0.0], [0.0, 0.0], [0.0, 0.6]];
     let scene = four_view_scene(offs, [texture; 4]);

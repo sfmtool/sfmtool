@@ -12,8 +12,8 @@ local descent. The algorithm they serve is specified in
 follows the [fronto-parallel patch cache](fronto-parallel-patch-cache.md):
 render once, score many.
 
-Its scope is the **integer** search: landing each keypoint in the right integer
-cell, with a parabolic estimate of the sub-pixel step. Getting from there to an
+Its scope is the **integer** search: putting each keypoint in the right integer
+cell, with a quadratic estimate of the sub-pixel step. Getting from there to an
 accurate sub-pixel keypoint is a separate algorithm,
 [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), which takes
 this one's output as its seed.
@@ -124,7 +124,7 @@ with about 12 YMM registers live. The three maps share each load; padding the
 13-cell row to 16 lanes wastes about 19% of them. The combine step (per row,
 after the `k` loop) is scalar over `span` cells per channel, which is small.
 A separate single-accumulator pass over the invalidity plane, with the same
-structure, marks unscorable shifts. The argmax and the separable parabolic
+structure, marks unscorable shifts. The argmax and the 3×3 quadratic
 sub-pixel fit follow.
 
 ### Why centering enables f32
@@ -160,9 +160,10 @@ view's starting keypoint, score the 4 axis neighbours, move to the best one that
 improves on the current cell, and stop when none does. Each cell is scored at
 most once; the visited cache is a dense `Vec<f64>` of the grid's size, with
 `NaN` for unvisited, `−∞` for visited and unscorable, and the ZNCC otherwise.
-The final parabolic fit reuses the 4 neighbours already scored to find that the
-walk had stopped. A walk visits `5 + 3 · walk_steps` cells: the start and its 4
-neighbours, then 3 new cells per step. Neighbours past `±margin` or with any
+The final sub-pixel fit reuses the 4 neighbours already scored to find that the
+walk had stopped, and scores the 4 diagonal cells around the final cell for the
+fit's cross term. A walk visits `9 + 3 · walk_steps` cells: the start and its 4
+neighbours, 3 new cells per step, and the 4 diagonals. Neighbours past `±margin` or with any
 out-of-frame support pixel are skipped.
 
 **Per-cell scoring (`score_cell_one_channel`).** The AVX2 kernel processes 8
@@ -189,9 +190,25 @@ better. The measurements are in
 
 ## Sub-pixel hand-off
 
-The search's parabolic step is the localizer's sub-pixel estimate: the view's
-final offset is its starting offset plus the integer peak plus that step. The
-tile is never read at a fractional position. An accurate sub-pixel offset is a
+The search's sub-pixel step is the vertex `−H⁻¹g` of the quadratic through the
+3×3 cells around the integer peak, with the gradient `g` and Hessian `H` from
+central differences, including the cross term
+`H_xy = (f(1,1) − f(1,−1) − f(−1,1) + f(−1,−1)) / 4`. The view's final offset is
+its starting offset plus the integer peak plus that step. The tile is never read
+at a fractional position.
+
+The cross term is why the fit is two-dimensional. On a texture with diagonal
+structure the correlation peak's axes are tilted, and a separate parabola per
+axis through the integer peak finds the maximum of that row and column, not of
+the surface: part of a shift along x shows up on y, by an amount that grows with
+the fractional shift and flips sign when the integer peak rounds the other way.
+In the unit test `a_fractional_shift_on_one_axis_does_not_show_up_on_the_other`
+the per-axis parabola was off by up to 0.40 grid px on a diagonal texture and
+0.12 on the test scene's default texture; the 3×3 fit is off by under 0.08 and
+0.05. When a diagonal cell could not be scored, or `H` is not negative definite
+(the 3×3 cells do not describe a peak), the step falls back to a parabola per
+axis, and an axis with an unscored neighbour stays at the integer cell. Each
+axis of the step is clamped to one cell. An accurate sub-pixel offset is a
 separate, continuous photometric (ECC) solve that optimizes the same template
 match with gradients, seeded by the localizer's keypoints:
 [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md). Keeping it
@@ -260,11 +277,11 @@ pattern instead.
   side `R + 2·margin` around the starting keypoint covers every shift the search
   tries, exactly.
 - **Centered `f32`.** Removes the variance cancellation that would otherwise
-  rule out `f32`, which unlocks the 8-lane width with no loss of accuracy.
+  rule out `f32`, which allows the 8-lane width with no loss of accuracy.
 - **Register-blocked on the grid row.** Keeps the whole-grid kernel's hot loop
   in register FMAs with the tile streamed once.
 - **Integer-only reads; sub-pixel is a separate algorithm.** Integer reads keep
-  every tile access exact; the parabolic estimate is the localizer's sub-pixel
+  every tile access exact; the quadratic estimate is the localizer's sub-pixel
   step, and accuracy is owned by the continuous solve. There is no
   supersampled search grid: it would enlarge the most expensive step for a
   sub-pixel result the continuous solve gives better.

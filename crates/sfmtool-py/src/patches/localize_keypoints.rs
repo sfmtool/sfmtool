@@ -27,8 +27,9 @@ impl PyPatchCloud {
     /// the point's **reference render**: the template is the reference
     /// observation's ``R×R`` tile at its own starting keypoint, and each other
     /// view is searched once around its starting keypoint for the shift whose
-    /// tile best matches it (an integer search, then a parabolic sub-pixel
-    /// step). The reference's keypoint is returned exactly as given. Views that
+    /// tile best matches it (an integer search, then a sub-pixel step from a
+    /// quadratic fit over the 3×3 cells around the peak). The reference's keypoint
+    /// is returned exactly as given. Views that
     /// drift too far, leave the frame, do not pin a position or do not match
     /// the reference are dropped. See
     /// ``specs/core/patch/patch-keypoint-localization.md``.

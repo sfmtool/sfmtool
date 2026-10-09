@@ -17,7 +17,7 @@ use crate::patch::normal_refine::{Support, FLAT_NORM_SQ_EPS};
 use super::kernels::{
     accumulate_count, compute_channel_grids, count_invalid_at_cell, score_cell_one_channel,
 };
-use super::{parabolic, prof, ContextTile, LocalizeError};
+use super::{prof, subpixel_peak, ContextTile, LocalizeError};
 
 /// Reused per-call scratch for [`search_shift`], created once per
 /// [`localize_patch_keypoints`](super::localize_patch_keypoints) and shared
@@ -128,7 +128,7 @@ impl SearchScratch {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ShiftResult {
     /// Sub-pixel-refined shift in the grid's x (column) axis: integer argmax plus
-    /// the separable parabolic residual.
+    /// the residual of the 3×3 quadratic fit (`subpixel_peak`).
     pub(super) dx: f64,
     /// Sub-pixel-refined shift in the grid's y (row) axis.
     pub(super) dy: f64,
@@ -142,7 +142,8 @@ pub(super) struct ShiftResult {
 }
 
 /// Integer windowed-ZNCC translation search of view `v`'s cache against
-/// `sc.tmpl`, refined to sub-pixel by a separable parabolic fit. Returns a
+/// `sc.tmpl`, refined to sub-pixel by a quadratic fit over the 3×3 neighbourhood
+/// of the integer peak (`subpixel_peak`). Returns a
 /// [`ShiftResult`] — the integer argmax shift `(ix, iy)`, its sub-pixel-refined
 /// counterpart `(dx, dy)`, and the ZNCC `peak` at the integer peak — or `None` if
 /// no in-frame window position could be scored. The `(dy, dx) = (0, 0)` shift
@@ -263,7 +264,8 @@ pub(super) fn search_shift(
     }
 
     // Average over channels, find the integer argmax, and refine sub-pixel by a
-    // separable parabolic fit. Out-of-frame shifts score −∞ (never chosen).
+    // quadratic fit over its 3×3 neighbourhood. Out-of-frame shifts score −∞
+    // (never chosen).
     prof::SEARCH_ARGMAX.time(|| {
         let chf = channels as f64;
         let at = |dy: i64, dx: i64| -> usize {
@@ -297,14 +299,7 @@ pub(super) fn search_shift(
                 None
             }
         };
-        let sy = match (nb(py - 1, px), nb(py + 1, px)) {
-            (Some(l), Some(r)) => parabolic(peak, l, r),
-            _ => 0.0,
-        };
-        let sx = match (nb(py, px - 1), nb(py, px + 1)) {
-            (Some(l), Some(r)) => parabolic(peak, l, r),
-            _ => 0.0,
-        };
+        let (sy, sx) = subpixel_peak(peak, py, px, nb);
         Some(ShiftResult {
             dx: px as f64 + sx,
             dy: py as f64 + sy,
@@ -320,9 +315,10 @@ pub(super) fn search_shift(
 /// current integer base offset), evaluates the 4 axis neighbors per step, moves
 /// to the best improver, and stops when no neighbor beats the current cell. Each
 /// cell is scored at most once via [`score_cell_one_channel`]; the visited cache
-/// stores the combined ZNCC per cell. The final separable parabolic sub-pixel fit
-/// reuses the 4 cardinal neighbors already in the cache (each was evaluated to
-/// discover the STOP condition).
+/// stores the combined ZNCC per cell. The final sub-pixel fit is a quadratic
+/// over the 3×3 neighbourhood of the final cell: it reuses the 4 cardinal
+/// neighbors already in the cache (each was evaluated to discover the STOP
+/// condition) and scores the 4 diagonal ones.
 ///
 /// Same `ShiftResult` contract as `search_shift` — the integer argmax `(ix, iy)`
 /// drives the read accumulator, `(dx, dy)` carry the sub-pixel residual, and
@@ -330,8 +326,9 @@ pub(super) fn search_shift(
 /// margin`; neighbors past the bound or with any out-of-frame support pixel
 /// score `None` (skipped, never chosen).
 ///
-/// Cells visited per call: `5 + 3 · walk_steps` (1 seed + 4 neighbors per step,
-/// with 1 cache hit per move). On dino the average is ~6 cells per call — vs
+/// Cells visited per call: `9 + 3 · walk_steps` (1 seed + 4 neighbors per step,
+/// with 1 cache hit per move, + 4 diagonals for the fit). Before the diagonals
+/// were added, the average on dino was ~6 cells per call — vs
 /// the 169 cells of the default ±6 grid `search_shift` processes — at ~32 µs
 /// per call (the per-cell `vgatherdps` kernel) vs ~145 µs (the SAXPY). The
 /// crossover with `search_shift`'s whole-grid SIMD is around 50–80 cells
@@ -343,7 +340,7 @@ pub(super) fn search_shift(
 /// **Profile attribution** (`SFMTOOL_PROFILE=1`): the descent reports per-cell
 /// `SEARCH_ACC` (invalidity-count + per-channel scoring), per-cell
 /// `SEARCH_COMBINE` (mean / ZNCC fold + cross-channel sum), and per-call
-/// `SEARCH_ARGMAX` (the final parabolic). The `N_CELLS` event counter bumps
+/// `SEARCH_ARGMAX` (the final sub-pixel fit). The `N_CELLS` event counter bumps
 /// once per cell scored (visited-cache hits and oob/oof/disk skips do not
 /// count), so `N_CELLS / N_SEARCH` is the average cells-per-call directly out
 /// of the profile output. `N_CELLS` is `0` under `Exhaustive` — its whole-
@@ -543,12 +540,19 @@ pub(super) fn search_shift_plus_descent(
         }
     }
 
-    // SEARCH_ARGMAX: separable parabolic sub-pixel refinement from the 4
-    // cardinal-neighbor cells — all already in the visited cache (each was
-    // evaluated by the STOP-check loop above). A neighbor that scored `None`
-    // (out-of-grid / out-of-disk / out-of-frame) drops its axis to the
-    // integer offset. Matches `search_shift`'s SEARCH_ARGMAX wrap, which
-    // similarly times the argmax + parabolic.
+    // The 2-D sub-pixel fit needs the four diagonal cells around the final
+    // cell too; the 4 cardinal ones are already in the visited cache (each was
+    // evaluated by the STOP-check loop above). Scoring them here costs 4 cells
+    // per call, and without them the fit has no cross term.
+    for (dy_step, dx_step) in [(-1, -1), (-1, 1), (1, -1), (1, 1)] {
+        let _ = score_cell!(current.0 + dy_step, current.1 + dx_step);
+    }
+
+    // SEARCH_ARGMAX: 2-D quadratic sub-pixel refinement over the 3×3
+    // neighbourhood (see `subpixel_peak`). A neighbor that scored `None`
+    // (out-of-grid / out-of-disk / out-of-frame) drops to the separable fit,
+    // or to the integer offset on its axis. Matches `search_shift`'s
+    // SEARCH_ARGMAX wrap, which similarly times the argmax + sub-pixel fit.
     prof::SEARCH_ARGMAX.time(|| {
         let py = current.0;
         let px = current.1;
@@ -563,14 +567,7 @@ pub(super) fn search_shift_plus_descent(
                 None
             }
         };
-        let sy = match (nb(py - 1, px), nb(py + 1, px)) {
-            (Some(l), Some(r)) => parabolic(current_phi, l, r),
-            _ => 0.0,
-        };
-        let sx = match (nb(py, px - 1), nb(py, px + 1)) {
-            (Some(l), Some(r)) => parabolic(current_phi, l, r),
-            _ => 0.0,
-        };
+        let (sy, sx) = subpixel_peak(current_phi, py, px, nb);
         Some(ShiftResult {
             dx: px as f64 + sx,
             dy: py as f64 + sy,
