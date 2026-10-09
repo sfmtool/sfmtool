@@ -36,11 +36,9 @@ from .._cli_utils import timed_command
     default=12.0,
     show_default=True,
     help=(
-        "Template size — the full patch edge length (in keypoint-frame units), "
-        "halved to the kernel's template half-width and passed to "
-        "refine_cluster_patches. The default sits at SIFT's ~12x descriptor "
-        "window; the larger template vets members against more of the texture "
-        "the detector deemed characteristic."
+        "Full edge length of the template each member is compared over, in "
+        "keypoint-frame units. A larger template compares members over more "
+        "of the texture around the feature."
     ),
 )
 @click.option(

@@ -94,10 +94,9 @@ from .._cli_utils import timed_command
     default=11.0,
     show_default=True,
     help=(
-        "Surfel size — the full patch edge length (in feature-size multiples), "
-        "halved to the library half-extent and passed to to_embedded_patches. "
-        "The default sits at SIFT's ~12x descriptor window; smaller patches "
-        "starve the normal/keypoint refiners of texture."
+        "Full edge length of each point's patch, in multiples of the SIFT "
+        "feature size. A smaller patch gives the normal and keypoint "
+        "refinement less texture to compare."
     ),
 )
 @click.option(
@@ -186,16 +185,11 @@ from .._cli_utils import timed_command
     default=8,
     show_default=True,
     help=(
-        "Cap the round-2+ normal-refinement basis at the N most "
-        "normal-informative views per point (a D-optimal geometric pick: "
-        "least-oblique anchor plus azimuthally-complementary oblique views). "
-        "0 uses all views (disables the cap). Only the refinement basis shrinks "
-        "— all observations stay in the output, and each stored bitmap is "
-        "still the tile of the point's reference observation, or, for a point "
-        "with none, of the view the reference-view rule picks from the full "
-        "view set. The default (8) cuts roughly a "
-        "third off end-to-end time on large view sets (the round-2+ refine pass "
-        "itself drops ~5x). See specs/core/patch/patch-normal-refine-view-subset.md."
+        "In rounds 2 and later, refine each point's normal against at most N "
+        "of its views, the ones that constrain the normal most. 0 uses all "
+        "views. Every observation stays in the output; only the views the "
+        "normal is refined against are limited. See "
+        "specs/core/patch/patch-normal-refine-view-subset.md."
     ),
 )
 @click.option(
@@ -223,14 +217,12 @@ from .._cli_utils import timed_command
     default="plus_descent",
     show_default=True,
     help=(
-        "Per-(view, round) shift-grid traversal inside the keypoint localizer's "
-        "search_shift. 'plus_descent' (default) is steepest-descent on the 4 "
-        "axis neighbors, scoring ~6 cells per call via an AVX2 single-position "
-        "vgather kernel; ~1.9× faster end-to-end on dino at comparable accuracy "
-        "(median per-observation keypoint shift vs exhaustive ~0.05 px, 91 % "
-        "within 1 px). 'exhaustive' scores the full (2·margin+1)² grid via the "
-        "SIMD SAXPY accumulator — the global-argmax fallback, no local-optima "
-        "risk. See specs/core/patch/keypoint-localization-search-cache.md."
+        "How the keypoint localizer searches the grid of candidate shifts for "
+        "each view. 'plus_descent' moves to the best of the four axis "
+        "neighbors until none scores higher, so it can stop at a local best. "
+        "'exhaustive' scores every shift in the grid; it is slower and always "
+        "finds the best shift. See "
+        "specs/core/patch/keypoint-localization-search-cache.md."
     ),
 )
 @click.option(
@@ -257,17 +249,17 @@ from .._cli_utils import timed_command
     default="per_view",
     show_default=True,
     help=(
-        "Pyramid sampler for every photometric kernel in the pipeline (normal "
+        "How every step that renders a patch from an image (normal "
         "refinement, view selection, keypoint localization, sub-pixel "
-        "refinement, the stored bitmap's render). 'per_view' applies the sampler "
-        "rule to each view: "
-        "'anisotropic' where 'bilinear_mip' would read the view's less "
-        "compressed axis too coarsely, 'bilinear_mip' otherwise. The other "
-        "three render every view with one sampler. 'bilinear_mip' taps the mip level nearest the warp's "
-        "compression, bounding aliasing on cross-scale views at ~bilinear "
-        "cost; 'anisotropic' also resolves oblique footprints, at 0.65-1.55x "
-        "the cost of 'bilinear_mip' with the AVX2 kernel and 1.8-4x it without; "
-        "'bilinear' taps the full-resolution level only."
+        "refinement and the stored bitmap) samples the image pyramid. "
+        "'per_view' chooses for each view: 'anisotropic' where 'bilinear_mip' "
+        "would read the view's less compressed axis too coarsely, "
+        "'bilinear_mip' otherwise. The other three use one sampler for every "
+        "view: 'bilinear' reads the full-resolution level only; "
+        "'bilinear_mip' reads the pyramid level nearest the view's "
+        "compression, which limits aliasing on views at a different scale; "
+        "'anisotropic' also samples obliquely seen patches correctly and is "
+        "slower. See specs/core/camera/image-warping.md."
     ),
 )
 def embed_patches_command(

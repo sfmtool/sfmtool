@@ -593,6 +593,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Proposed fix: say what each option does, point to the spec, and move the figures into the specs.
 - Effort: low. Risk: low.
 
+> _Status (2026-10-09): **Done** — rewrote the help of `embed-patches` `--localize-search-strategy`, `--sampler`, `--patch-size` and `--refine-max-views` and of `cluster-patches` `--patch-size` to say what the option does, dropping kernel names, function names and benchmark figures; the command specs already held them, and the `--refine-max-views` timing in `embed-patches-command.md` now matches the measured 29–37 % in `patch-normal-refine-view-subset.md`, branch `hygiene-fix-1009-12-patch-command-help`._
+
 **Extract the per-image step from `undistort_reconstruction_images`**
 - Location: `src/sfmtool/_undistort_images.py`, 613 lines. The function runs from line 213 to 613, and its loop (318–480) is marked "Step 1" to "Step 6".
 - Problem: one function does all of this:
