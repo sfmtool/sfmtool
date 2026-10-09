@@ -65,7 +65,9 @@ this way, where a flat root surface would hold the binding
 (`commit`, `split`, `fit`) would read as something else beside the rest. The
 public modules are bound on the root on first use through `_LAZY_SUBPACKAGES`,
 so `import sfmtool` followed by `sfmtool.io.read_sfmr(…)` works and `import
-sfmtool` still loads nothing but the extension. `sfmtool.write_sift` on the
+sfmtool` still loads nothing but the extension. Since each binding's `__module__`
+is its public module, a class with a `__reduce__`, such as `CameraIntrinsics`,
+pickles and unpickles through that path. `sfmtool.write_sift` on the
 root is the Python function in `sfmtool.sift.file`, which checks its arguments
 and then calls `sfmtool.io.write_sift`.
 
