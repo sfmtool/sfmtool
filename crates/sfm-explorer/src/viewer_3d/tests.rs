@@ -1209,7 +1209,7 @@ fn an_edge_dragged_lands_under_the_release_point_with_the_far_edge_held() {
     let sentence = labels.last().expect("a version");
     assert!(
         sentence.starts_with(&format!("Resized {} to a half-length of", staged.label)),
-        "the version's label does not name the resize in world units: {sentence}",
+        "the version's label does not name the resize in scene units: {sentence}",
     );
 
     // Redraw and read the square back off the figure: the dragged edge is under
