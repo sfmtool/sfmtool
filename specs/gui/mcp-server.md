@@ -1211,6 +1211,9 @@ otherwise.
   ask.
 - **`bench_observation` does**, because a sighting *is* a place in a particular
   photograph; so walking a track's observations takes one argument per step.
+  A `camera_image` given beside it still wins, as the paragraph above says: the
+  view centres the sighting's pixel in the photograph `camera_image` names,
+  which is how an agent asks where that pixel lies in another image.
   Where it sits is `bench::observation_site`'s, the same rule the panel's own
   bench mark, the Track View row click and `get_bench_track`'s `pixel` share
   ([bench.md](bench.md)).
@@ -4685,7 +4688,11 @@ one-camera reconstruction cannot tell the camera-image and camera-intrinsics
 selections apart and every coupling rule looks like a no-op against it. A
 `FakeWindow` implements `WindowHost` over the three flags a real window keeps
 apart, records what it was asked in the order it was asked, and clamps a size
-to a minimum the way `with_min_inner_size` does; the fixture seeds
+to a minimum of its own. The clamp stands in for any platform that does not
+honour a requested size, so the read-back has something to differ from the
+request about; it is not a model of `with_min_inner_size`, which a programmatic
+resize on Windows goes past (§ "`set_window_layout`"
+above, and `window_min_size` in `ui_basic`). The fixture seeds
 `AppState::window` from one, so the window block has something to report even
 where a test hands no host over.
 

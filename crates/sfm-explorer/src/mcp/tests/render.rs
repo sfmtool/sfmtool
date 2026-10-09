@@ -687,6 +687,30 @@ fn a_bench_observation_target_selects_its_own_camera_image() {
         "the target did not select its own photograph"
     );
 
+    // A camera_image beside it wins: the sighting's pixel is looked at in the
+    // photograph the call named.
+    let elsewhere = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "bench_observation": 1,
+            "track": item,
+        }),
+    );
+    assert_eq!(
+        elsewhere["image_detail_view"]["camera_image"],
+        json!(0),
+        "{elsewhere}"
+    );
+    assert_eq!(
+        state.selected_image.map(|image| image.index()),
+        Some(0),
+        "the named camera image was not selected"
+    );
+
     let past_the_end = refused_call(
         &mut state,
         &mut viewer,

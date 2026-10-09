@@ -913,7 +913,11 @@ fn the_input_tools_parse_what_they_advertise() {
     );
     assert!(refuse("click", json!({ "widget": "XYZ" }))
         .0
-        .contains("16 hex digits"));
+        .contains("16 lowercase hex digits"));
+    // The schema's pattern is lowercase only, and so is the parser.
+    assert!(refuse("click", json!({ "widget": "003233F928812D8A" }))
+        .0
+        .contains("16 lowercase hex digits"));
     assert!(refuse("type_text", json!({ "text": "" }))
         .0
         .contains("nothing to type"));

@@ -1716,20 +1716,24 @@ fn pointer_target(args: &Args<'_>) -> Result<PointerTarget, ToolError> {
 }
 
 impl Args<'_> {
-    /// A widget id as a listing spells it: 16 hex digits, as the value of the
-    /// egui id it names.
+    /// A widget id as a listing spells it: 16 lowercase hex digits, as the
+    /// value of the egui id it names. Uppercase is refused, as the schema's
+    /// pattern refuses it, so the parser and the schema accept the same ids.
     fn widget(&self, key: &str) -> Result<Option<u64>, ToolError> {
         let Some(text) = self.optional_string(key)? else {
             return Ok(None);
         };
-        let hex = text.len() == 16 && text.chars().all(|c| c.is_ascii_hexdigit());
+        let hex = text.len() == 16
+            && text
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
         hex.then(|| u64::from_str_radix(&text, 16).ok())
             .flatten()
             .map(Some)
             .ok_or_else(|| {
                 self.error(format!(
-                    "wants {key} to be a widget id as get_widgets reports one: 16 hex digits, \
-                     like \"003233f928812d8a\"."
+                    "wants {key} to be a widget id as get_widgets reports one: 16 lowercase \
+                     hex digits, like \"003233f928812d8a\"."
                 ))
             })
     }

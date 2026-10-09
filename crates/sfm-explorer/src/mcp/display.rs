@@ -354,8 +354,10 @@ pub(super) fn get_view(state: &AppState) -> JsonReply {
 /// the caller reads the applied view -- including a zoom the panel's range
 /// clamped -- rather than the numbers it sent.
 ///
-/// **The call selects the photograph it is about.** A `bench_observation` and a
-/// `point` name their own, a `camera_image` argument names one outright, and
+/// **The call selects the photograph it is about.** A `camera_image` argument
+/// names one outright, and wins over the one a `bench_observation` names; with
+/// no `camera_image`, a `bench_observation` names its own, and every other
+/// target, `point` included, uses the selected one.
 /// [`AppState::look_at_in_image`] selects whichever it is as the row click in
 /// Track View does. So the only thing left to refuse is a call that names no
 /// photograph with none selected.
