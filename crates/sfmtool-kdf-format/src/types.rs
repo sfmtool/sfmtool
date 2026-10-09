@@ -68,6 +68,12 @@ impl From<sfmtool_archive_io::ArchiveIoError> for KdfError {
     }
 }
 
+impl From<sfmtool_archive_io::HashParseError> for KdfError {
+    fn from(value: sfmtool_archive_io::HashParseError) -> Self {
+        Self::InvalidFormat(format!("hash is {value}"))
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
     impl Sealed for u8 {}

@@ -490,6 +490,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Proposed fix: add `parse_hash` and `hash_bytes` to `archive-io` with a round-trip test, and use them everywhere.
 - Effort: low. Risk: low; the length check gets stricter.
 
+> _Status (2026-10-09): **Done** — `sfmtool-archive-io` gains `parse_hash`, `parse_hash_bytes` (named so it is not read as "hash these bytes") and `HashParseError`, accepting exactly 32 lowercase hex digits, which is what every Rust and Python writer produces and every verifier compares against. The kdf-format `hash_string`/`parse_hash`/`parse_hash_bytes`, the core `decode_xxh128_hex` and the explorer `decode_xxh128` are deleted in favour of them, `KdfError` maps the shared error, and `spatial/kdf.rs` uses `helpers::py_to_u128_bytes`. The spec `specs/formats/archive-io-crate.md` documents the parser, branch `hygiene-fix-1009-04-shared-hash-parser`._
+
 **Make the format binding signatures match, and decide the sweep bindings' future**
 - Location: Python `spatial.write_kdf`, `verify_*`, `kdf-format/src/types.rs:130`, `crates/sfmtool-py/src/matching/sweep.rs` (404 lines), and `translation_averaging.rs:442-446`.
 - Problem:

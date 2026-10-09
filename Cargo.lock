@@ -4859,6 +4859,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "sfmtool-archive-io",
  "sfmtool-core",
  "sfmtool-matches-format",
  "sfmtool-sfmr-format",

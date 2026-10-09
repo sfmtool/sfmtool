@@ -39,7 +39,7 @@ use sfmtool_matches_format::{
 use crate::action_log::{Actor, Kind};
 use crate::index_files::{unsaved_refusal, IndexFileState, Stopped};
 use crate::scene::{ReconId, SceneNode};
-use crate::sift_index::{decode_xxh128, image_fingerprint, SiftIndex};
+use crate::sift_index::{image_fingerprint, SiftIndex};
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -616,8 +616,12 @@ fn image_facts(plan: &ClusterPlan, progress: &Progress<'_>) -> Result<Vec<ImageF
                     ImageFacts {
                         features: metadata.feature_count,
                         dims: [metadata.image_width, metadata.image_height],
-                        feature_tool: decode_xxh128(&hashes.feature_tool_xxh128).unwrap_or([0; 16]),
-                        content: decode_xxh128(&hashes.content_xxh128).unwrap_or([0; 16]),
+                        feature_tool: sfmtool_archive_io::parse_hash_bytes(
+                            &hashes.feature_tool_xxh128,
+                        )
+                        .unwrap_or([0; 16]),
+                        content: sfmtool_archive_io::parse_hash_bytes(&hashes.content_xxh128)
+                            .unwrap_or([0; 16]),
                     }
                 }
             };

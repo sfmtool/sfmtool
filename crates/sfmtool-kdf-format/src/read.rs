@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rayon::prelude::*;
+use sfmtool_archive_io::{format_hash, parse_hash};
 use xxhash_rust::xxh3::{xxh3_128, Xxh3};
 use zip::ZipArchive;
 
@@ -298,7 +299,7 @@ impl<S: KdfScalar> KdfFile<S> {
             read_bounded_json_raw(&mut archive, &entries, "content_hash.json.zst", remaining)?;
         let hashes: ContentHash = serde_json::from_slice(&hash_raw)?;
         let largest_item = validate_metadata::<S>(&metadata, &hashes, &options)?;
-        if hash_string(xxh3_128(&metadata_raw)) != hashes.metadata_xxh128 {
+        if format_hash(xxh3_128(&metadata_raw)) != hashes.metadata_xxh128 {
             return Err(KdfError::Integrity("metadata hash mismatch".into()));
         }
         let image_count = if metadata.feature_source == "sift_files" {
@@ -347,7 +348,7 @@ impl<S: KdfScalar> KdfFile<S> {
             bytes,
             options.max_compressed_bytes,
         )?;
-        if hash_string(xxh3_128(&raw)) != hashes.storage_rows_xxh128 {
+        if format_hash(xxh3_128(&raw)) != hashes.storage_rows_xxh128 {
             return Err(KdfError::Integrity("storage-row hash mismatch".into()));
         }
         let storage_rows: Vec<u32> = bytes_to_pod(&name, &raw, metadata.feature_count as usize)?;
@@ -833,7 +834,7 @@ impl<S: KdfScalar> KdfFile<S> {
         h.update(&meta_raw);
         h.update(&names_raw);
         h.update(&s_raw);
-        if hash_string(h.digest128()) != self.hashes.images_xxh128.as_deref().expect("validated") {
+        if format_hash(h.digest128()) != self.hashes.images_xxh128.as_deref().expect("validated") {
             return Err(KdfError::Integrity("images section hash mismatch".into()));
         }
         let table = KdfImageTable {
@@ -900,7 +901,7 @@ impl<S: KdfScalar> KdfFile<S> {
             &self.hashes.trees_xxh128,
             self.tree_chunk_digests()?,
         )?);
-        if hash_string(sections.finish()) != self.hashes.content_xxh128 {
+        if format_hash(sections.finish()) != self.hashes.content_xxh128 {
             return Err(KdfError::Integrity("whole-file hash mismatch".into()));
         }
         Ok(())
@@ -913,7 +914,7 @@ impl<S: KdfScalar> KdfFile<S> {
             section.push(digest);
         }
         let digest = section.finish();
-        if hash_string(digest) != stored {
+        if format_hash(digest) != stored {
             return Err(KdfError::Integrity(format!("{what} hash mismatch")));
         }
         Ok(digest)
@@ -1382,7 +1383,7 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
     // that disagrees with itself is caught here, before a byte of payload is
     // read. What it does not say is whether either matches the data; that is
     // `verify_content`'s question.
-    if hash_string(compose_content_hash(h)?) != h.content_xxh128 {
+    if format_hash(compose_content_hash(h)?) != h.content_xxh128 {
         return Err(KdfError::Integrity(
             "whole-file digest composition mismatch".into(),
         ));
@@ -1658,21 +1659,6 @@ fn validate_permutation(rows: &[u32], n: usize, what: &str) -> Result<(), KdfErr
         }
     }
     Ok(())
-}
-fn hash_string(v: u128) -> String {
-    format!("{v:032x}")
-}
-fn parse_hash(s: &str) -> Result<u128, KdfError> {
-    if s.len() != 32
-        || !s
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(KdfError::InvalidFormat(
-            "hash is not 32-character lowercase hexadecimal".into(),
-        ));
-    }
-    u128::from_str_radix(s, 16).map_err(|_| KdfError::InvalidFormat("invalid hash".into()))
 }
 
 #[cfg(test)]

@@ -207,6 +207,54 @@ fn format_hash_is_zero_padded_lowercase_hex() {
 }
 
 #[test]
+fn parse_hash_inverts_format_hash() {
+    for digest in [
+        0,
+        1,
+        0xabcdef,
+        0x0011_2233_4455_6677_8899_aabb_ccdd_eeff,
+        u128::MAX,
+    ] {
+        assert_eq!(parse_hash(&format_hash(digest)), Ok(digest));
+    }
+}
+
+#[test]
+fn parse_hash_bytes_puts_the_first_hex_pair_first() {
+    let bytes = parse_hash_bytes("00112233445566778899aabbccddeeff").unwrap();
+    let expected: [u8; 16] = std::array::from_fn(|i| (i as u8) * 0x11);
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        parse_hash_bytes(&format_hash(0xabcdef)).unwrap(),
+        0xabcdef_u128.to_be_bytes()
+    );
+}
+
+#[test]
+fn parse_hash_rejects_anything_but_32_lowercase_hex_digits() {
+    let rejected = [
+        String::new(),
+        "ab".to_string(),
+        "0".repeat(31),
+        "0".repeat(33),
+        // Uppercase: no writer produces it, and every verifier compares the
+        // lowercase spelling.
+        "ABCDEF0123456789ABCDEF0123456789".to_string(),
+        format!("{}A", "0".repeat(31)),
+        // `u128::from_str_radix` alone would accept a leading `+`.
+        format!("+{}", "0".repeat(31)),
+        format!("{}g", "0".repeat(31)),
+        format!("{} ", "0".repeat(31)),
+        // 32 bytes, but 31 characters.
+        format!("{}\u{e9}", "0".repeat(30)),
+    ];
+    for hex in &rejected {
+        assert_eq!(parse_hash(hex), Err(HashParseError), "{hex:?}");
+        assert_eq!(parse_hash_bytes(hex), Err(HashParseError), "{hex:?}");
+    }
+}
+
+#[test]
 fn uint128_array_rejects_a_wrong_hash_count() {
     let flat: Vec<u8> = (0u8..3).flat_map(|i| [i; 16]).collect();
     let mut archive =

@@ -38,6 +38,7 @@ use sfmtool_core::progress::Progress;
 
 use super::constellation_query::{DEFAULTS, DEFAULT_REFIT, DEFAULT_REFIT_SIGMA};
 use super::kdforest::extract_u8_2d;
+use crate::helpers::py_to_u128_bytes;
 
 /// Map a format error onto the closest Python exception.
 ///
@@ -84,28 +85,12 @@ fn parse_sources(sources: &Bound<'_, PyAny>) -> PyResult<KdfSiftSources> {
             pyo3::exceptions::PyKeyError::new_err(format!("sources is missing {key:?}"))
         })
     }
-    fn hashes(value: Bound<'_, PyAny>, what: &str) -> PyResult<Vec<[u8; 16]>> {
-        let raw: Vec<Vec<u8>> = value.extract().map_err(|_| {
-            pyo3::exceptions::PyTypeError::new_err(format!("{what} must be a sequence of bytes"))
-        })?;
-        raw.into_iter()
-            .map(|v| {
-                <[u8; 16]>::try_from(v.as_slice()).map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "{what} entries must be exactly 16 bytes, got {}",
-                        v.len()
-                    ))
-                })
-            })
-            .collect()
-    }
-
     let workspace = need(sources, "workspace")?;
     let contents = need(&workspace, "contents")?;
 
     let image_names: Vec<String> = need(sources, "image_names")?.extract()?;
-    let feature_tool_hashes = hashes(need(sources, "feature_tool_hashes")?, "feature_tool_hashes")?;
-    let sift_content_hashes = hashes(need(sources, "sift_content_hashes")?, "sift_content_hashes")?;
+    let feature_tool_hashes = py_to_u128_bytes(&need(sources, "feature_tool_hashes")?)?;
+    let sift_content_hashes = py_to_u128_bytes(&need(sources, "sift_content_hashes")?)?;
 
     // Origins arrive as two parallel uint32 columns, the same shape they are
     // stored in and the shape `resolve_origins` hands back, so a round trip

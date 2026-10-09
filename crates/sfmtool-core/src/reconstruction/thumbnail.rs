@@ -20,8 +20,8 @@
 
 use ndarray::Array3;
 
-use super::embed::decode_xxh128_hex;
 use crate::{SfmrReconstruction, THUMBNAIL_SIZE};
+use sfmtool_archive_io::parse_hash_bytes;
 
 /// One output sample's source taps along one axis: `(source index, weight)`,
 /// the weights summing to one.
@@ -160,9 +160,9 @@ pub fn verified_sift_thumbnail(recon: &SfmrReconstruction, index: usize) -> Opti
     let (metadata, content_hash, thumbnail) =
         sfmtool_sift_format::read_sift_thumbnail(&path).ok()?;
     let belongs = if let Some(hashes) = recon.image_file_hashes() {
-        decode_xxh128_hex(&metadata.image_file_xxh128) == Some(*hashes.get(index)?)
+        parse_hash_bytes(&metadata.image_file_xxh128).ok() == Some(*hashes.get(index)?)
     } else if let Some(hashes) = recon.sift_content_hashes() {
-        decode_xxh128_hex(&content_hash.content_xxh128) == Some(*hashes.get(index)?)
+        parse_hash_bytes(&content_hash.content_xxh128).ok() == Some(*hashes.get(index)?)
     } else {
         false
     };
@@ -311,7 +311,7 @@ mod tests {
         let stored = |name: &str| {
             let path = dir.path().join(format!("{name}.sift"));
             let (_, _, hash) = sfmtool_sift_format::read_sift_metadata(&path).unwrap();
-            decode_xxh128_hex(&hash.content_xxh128).unwrap()
+            parse_hash_bytes(&hash.content_xxh128).unwrap()
         };
         let first = stored(&names[0]);
         if let crate::ObservationSource::SiftFiles {
@@ -331,7 +331,7 @@ mod tests {
         let mut embedded = recon.clone();
         let n = embedded.image_table.images.len();
         let mut hashes = vec![[0u8; 16]; n];
-        hashes[1] = decode_xxh128_hex(image_hash).unwrap();
+        hashes[1] = parse_hash_bytes(image_hash).unwrap();
         embedded.point_set.observations = crate::ObservationSource::EmbeddedPatches {
             keypoints_xy: ndarray::Array2::zeros((embedded.point_set.tracks.len(), 2)),
             image_file_hashes: hashes,

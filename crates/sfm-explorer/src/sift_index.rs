@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use rayon::prelude::*;
+use sfmtool_archive_io::parse_hash_bytes;
 use sfmtool_core::features::kdforest::{
     FeatureGeometry, FeatureOrigin, KdForestParams, KdForestU8, KdfError, KdfOpenOptions,
     KdfSiftSources, KdfWorkspaceContents, KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestU8,
@@ -691,8 +692,8 @@ fn read_features(
             // against the `.sift` on disk, so an index built here and never
             // touched since reads as current.
             Ok(Some(Identities {
-                feature_tool: decode_xxh128(&data.content_hash.feature_tool_xxh128),
-                content: decode_xxh128(&data.content_hash.content_xxh128),
+                feature_tool: parse_hash_bytes(&data.content_hash.feature_tool_xxh128).ok(),
+                content: parse_hash_bytes(&data.content_hash.content_xxh128).ok(),
             }))
         })
         .collect();
@@ -875,7 +876,7 @@ fn staleness(forest: &LazyKdForestU8, recon: &SfmrReconstruction, path: &Path) -
             continue;
         }
         let hash = match sfmtool_sift_format::read_sift_metadata(&sift) {
-            Ok((_, _, hashes)) => decode_xxh128(&hashes.content_xxh128),
+            Ok((_, _, hashes)) => parse_hash_bytes(&hashes.content_xxh128).ok(),
             Err(e) => {
                 return Some(format!("Cannot read {}: {e}", sift.display()));
             }
@@ -901,16 +902,4 @@ fn staleness(forest: &LazyKdForestU8, recon: &SfmrReconstruction, path: &Path) -
         }
     }
     None
-}
-
-/// A 32-character XXH128 hex digest as the 16 bytes a `.kdf` image table holds.
-///
-/// The first two hex digits are the first stored byte, which is the convention
-/// every archive format here writes its hashes in. `None` for anything that is
-/// not exactly 32 hex characters.
-pub(crate) fn decode_xxh128(digest: &str) -> Option<[u8; 16]> {
-    (digest.len() == 32)
-        .then(|| u128::from_str_radix(digest, 16).ok())
-        .flatten()
-        .map(u128::to_be_bytes)
 }

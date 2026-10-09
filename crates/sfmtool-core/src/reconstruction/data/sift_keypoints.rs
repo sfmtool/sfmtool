@@ -16,8 +16,8 @@ use ndarray::Array2;
 use crate::progress::Progress;
 use crate::ObservationSource;
 
-use super::super::embed::decode_xxh128_hex;
 use super::SfmrReconstruction;
+use sfmtool_archive_io::parse_hash_bytes;
 
 /// What [`SfmrReconstruction::fill_keypoints_from_sift`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +111,7 @@ impl SfmrReconstruction {
                 return unavailable("no such file".to_string());
             }
             let stored = match sfmtool_sift_format::read_sift_metadata(&path) {
-                Ok((_, _, content_hash)) => decode_xxh128_hex(&content_hash.content_xxh128),
+                Ok((_, _, content_hash)) => parse_hash_bytes(&content_hash.content_xxh128).ok(),
                 Err(e) => return unavailable(e.to_string()),
             };
             if stored != Some(sift_content_hashes[image]) {

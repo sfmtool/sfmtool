@@ -560,5 +560,36 @@ pub fn format_hash(digest: u128) -> String {
     format!("{:032x}", digest)
 }
 
+/// A string that [`parse_hash`] or [`parse_hash_bytes`] rejected because it is
+/// not exactly 32 lowercase hexadecimal digits.
+///
+/// It carries no detail of its own; each caller maps it into its own error type
+/// and names the field it was reading.
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
+#[error("not a 32-character lowercase hexadecimal XXH128 digest")]
+pub struct HashParseError;
+
+/// Parse a digest written by [`format_hash`] back into its integer.
+///
+/// Accepts exactly 32 characters from `0-9a-f`, the form every writer produces
+/// and every verifier compares against. Uppercase digits, a sign, and any other
+/// length are rejected.
+pub fn parse_hash(hex: &str) -> Result<u128, HashParseError> {
+    if hex.len() != 32 || !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(HashParseError);
+    }
+    u128::from_str_radix(hex, 16).map_err(|_| HashParseError)
+}
+
+/// Parse a digest written by [`format_hash`] into the 16 bytes a digest column
+/// stores.
+///
+/// Byte `i` is the hex pair at `[2i, 2i + 2)`, which is the integer's
+/// big-endian byte order and the byte string Python's `bytes.fromhex` returns.
+/// Accepts the same strings as [`parse_hash`].
+pub fn parse_hash_bytes(hex: &str) -> Result<[u8; 16], HashParseError> {
+    parse_hash(hex).map(u128::to_be_bytes)
+}
+
 #[cfg(test)]
 mod tests;

@@ -52,7 +52,7 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
         std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
         sfmtool_sift_format::write_sift(&path, &data, 3).unwrap();
         let (_, _, stored) = sfmtool_sift_format::read_sift_metadata(&path).unwrap();
-        hashes.push(decode_xxh128_hex(&stored.content_xxh128).unwrap());
+        hashes.push(parse_hash_bytes(&stored.content_xxh128).unwrap());
     }
     if let ObservationSource::SiftFiles {
         sift_content_hashes,

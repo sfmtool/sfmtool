@@ -8,7 +8,7 @@
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
-use sfmtool_archive_io::format_hash;
+use sfmtool_archive_io::{format_hash, parse_hash};
 use sfmtool_progress::Progress;
 use xxhash_rust::xxh3::{xxh3_128, Xxh3};
 use zip::write::SimpleFileOptions;
@@ -181,10 +181,6 @@ fn hash_pair(first: &[u8], second: &[u8]) -> u128 {
     hash.digest128()
 }
 
-fn parse_hash(value: &str) -> u128 {
-    u128::from_str_radix(value, 16).unwrap()
-}
-
 /// The format's one folding rule: sixteen big-endian bytes per item, in order.
 fn fold(items: &[u128]) -> u128 {
     let mut composition = Vec::with_capacity(items.len() * 16);
@@ -305,7 +301,7 @@ fn refresh_hashes(entries: &mut StoredEntries) {
             Some(&hashes.trees_xxh128),
         ])
         .flatten()
-        .map(|value| parse_hash(value))
+        .map(|value| parse_hash(value).unwrap())
         .collect();
     hashes.content_xxh128 = format_hash(fold(&sections));
     replace_decoded(

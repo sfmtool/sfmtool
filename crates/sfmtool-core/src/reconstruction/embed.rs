@@ -186,15 +186,13 @@ impl SfmrReconstruction {
                     path: path.clone(),
                     source: e.to_string(),
                 })?;
-            let hash = decode_xxh128_hex(&meta.image_file_xxh128).ok_or_else(|| {
-                ReconstructionError::SiftRead {
-                    path: path.clone(),
-                    source: format!(
-                        "invalid image_file_xxh128 {:?} (expected 32 hex chars)",
-                        meta.image_file_xxh128
-                    ),
-                }
-            })?;
+            let hash =
+                sfmtool_archive_io::parse_hash_bytes(&meta.image_file_xxh128).map_err(|e| {
+                    ReconstructionError::SiftRead {
+                        path: path.clone(),
+                        source: format!("image_file_xxh128 {:?} is {e}", meta.image_file_xxh128),
+                    }
+                })?;
             positions_per_image.push(positions);
             image_file_hashes.push(hash);
             reading.count(i as u64 + 1, Some(n_images as u64), "image");
@@ -266,19 +264,4 @@ impl SfmrReconstruction {
         assembling.set_fraction(1.0);
         Ok(out)
     }
-}
-
-/// Decode a 32-character lowercase/uppercase hex string (an XXH128 digest, as
-/// `.sift` records `image_file_xxh128`) into 16 bytes, byte `i` from hex pair
-/// `[2i, 2i+2)` — the same `bytes.fromhex` convention the format's image hashes
-/// use. `None` if the string is not exactly 32 hex characters.
-pub(crate) fn decode_xxh128_hex(s: &str) -> Option<[u8; 16]> {
-    if s.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 16];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
-    }
-    Some(out)
 }

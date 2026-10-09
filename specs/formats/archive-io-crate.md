@@ -21,10 +21,13 @@ five format crates
 [sfmtool-sfmr-format](../../crates/sfmtool-sfmr-format/),
 [sfmtool-camrig-format](../../crates/sfmtool-camrig-format/),
 [sfmtool-kdf-format](../../crates/sfmtool-kdf-format/)) build their readers,
-writers and verifiers on them. The one other user is `sfmtool-core`, whose
-in-memory reconstruction hash in
+writers and verifiers on them. Two other crates use only the hashing functions.
+`sfmtool-core`'s in-memory reconstruction hash in
 [reconstruction/edited.rs](../../crates/sfmtool-core/src/reconstruction/edited.rs)
-calls `format_hash` so it spells a digest the way the files do. There are no
+calls `format_hash` so it spells a digest the way the files do, and both
+`sfmtool-core` and `sfm-explorer` call `parse_hash_bytes` to compare a `.sift`
+file's recorded digests with the 16-byte digest columns of a `.sfmr` or `.kdf`
+file. There are no
 Python bindings: Python reaches these bytes through each format's own binding.
 
 The zstd level is passed in by each format's writer: `write_sift`,
@@ -101,7 +104,21 @@ pub fn write_atomically<T, E: From<std::io::Error>, F: FnOnce(&mut File) -> Resu
 
 // Hashing
 pub fn format_hash(digest: u128) -> String;                   // 32-char lowercase hex
+pub fn parse_hash(hex: &str) -> Result<u128, HashParseError>; // inverse of format_hash
+pub fn parse_hash_bytes(hex: &str) -> Result<[u8; 16], HashParseError>;
+                                                              // byte i = hex pair [2i, 2i+2)
+pub struct HashParseError;                                    // not 32 lowercase hex digits
 ```
+
+**Hash strings are parsed strictly.** `parse_hash` accepts exactly 32
+characters from `0-9a-f` and nothing else: no uppercase, no sign, no other
+length. Every writer (`format_hash` in Rust, `hexdigest()` in Python) produces
+lowercase, and every verifier compares the stored string with `format_hash`'s
+spelling, so a looser parser would only accept strings that no file holds and
+that verification would reject anyway. `parse_hash_bytes` returns the digest's
+16 bytes most significant first, the order a digest column stores and the byte
+string Python's `bytes.fromhex` gives for the same text. `HashParseError` carries
+no detail; each caller maps it into its own error type and names the field.
 
 **Why this shape.** The surface is entry-at-a-time rather than a
 "Container" object with an entry table — even `DecodedEntries`, which holds a
@@ -275,7 +292,9 @@ the library paths all go through `zstd_compress`.
 [sfmtool-archive-io/src/tests.rs](../../crates/sfmtool-archive-io/src/tests.rs)
 covers the primitives in isolation: JSON and binary round trips (including the
 empty array), the element-count rejections for `read_binary_array` and
-`read_uint128_array`, `format_hash`'s zero-padded lowercase output, and the three
+`read_uint128_array`, `format_hash`'s zero-padded lowercase output, `parse_hash`
+as its inverse together with the strings it rejects (wrong length, uppercase, a
+leading `+`, non-hex characters), `parse_hash_bytes`'s byte order, and the three
 failure modes a corrupt file produces — a missing entry is a `Zip` error, a
 non-zstd payload an `InvalidFormat` error naming the entry, and a well-formed
 entry whose payload is not JSON a `Json` error. One test pins that

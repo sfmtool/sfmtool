@@ -73,6 +73,7 @@ mcp = [
 ]
 
 [dependencies]
+sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 sfmtool-core = { path = "../sfmtool-core" }
 sfmtool-sift-format = { path = "../sfmtool-sift-format" }
 sfmtool-matches-format = { path = "../sfmtool-matches-format" }

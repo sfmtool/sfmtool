@@ -133,7 +133,7 @@ fn profile_corpus_misses() {
         // Hashed here only to keep the cost in the "hash+copy" column: a block
         // read does not hash, and the digest it would produce is folded into a
         // section digest the whole-file verify recomputes.
-        std::hint::black_box(hash_string(xxh3_128(&raw)));
+        std::hint::black_box(format_hash(xxh3_128(&raw)));
         std::hint::black_box(bytes_to_pod::<u8>("profile", &raw, declared).unwrap());
         totals[2] += start.elapsed();
     }
@@ -182,7 +182,7 @@ fn profile_corpus_misses() {
                                     .unwrap()
                                     .0
                             };
-                            std::hint::black_box(hash_string(xxh3_128(&raw)));
+                            std::hint::black_box(format_hash(xxh3_128(&raw)));
                             std::hint::black_box(
                                 bytes_to_pod::<u8>("profile", &raw, declared).unwrap(),
                             );
