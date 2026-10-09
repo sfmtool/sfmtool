@@ -135,3 +135,94 @@ The contact sheet (`gt-sizes/contact_sheet.png` in the session scratch directory
 | Cluster / human, p5 / p95 | 0.34 / 3.17 | 0.50 / 3.88 |
 
 **Decision.** On seoul_bull the fleet's cluster patches have, in the median, the human's footprint. On kerry_park they are 1.8 times larger in the median, and larger on three quarters of the matched clusters. On both, half of the clusters are more than about 1.5 times away from the human's size in one direction or the other. The spread, more than the median, is what a fixed multiple of the detector scale cannot remove. This agrees with [What the human chose](#what-the-human-chose): the human sized by footprint, and the detector's scale varies independently of it.
+
+## A rule for the hand-set sizes (2026-10-09)
+
+**Question.** Is there a rule, stated in readings the pipeline can compute, that reproduces the half-extents the maintainer chose by eye? Two hypotheses shaped the search. First, distinguishing texture can exist at any scale, so a footprint is good when some scale band within it carries localisable structure that the views agree on; the readings are therefore taken over a grid of footprint × scale band, with the band axis a box pyramid of the native-density tile. Second, both ends of the band axis matter: a coarse band over a large footprint can find structure such as windows on siding, and the native band can find fine texture such as sand.
+
+**Data.**
+
+- **Code and machine.** Commit `3d3f6ab6` (branch `bootstrap-core-migration`), with the extension built by `pixi run -e test maturin develop --release`. Windows 11, Intel Core i9-14900HX, 63.7 GB RAM.
+- **Points.** The same 263 seoul_bull and 380 kerry_park points, reference views and human half-extents (reference-view px) as in [Setup](#setup-2026-10-09).
+- **Footprint ladder.** Half-extents of 3, 4, 5, 6, 8, 10, 12, 14, 17, 20, 25, 30 and 40 reference px. The patch is scaled about its stored placement, anchored at the stored keypoint, and rendered at native density, `R = 2·h` (at least 6, at most 80), so one sample covers one reference photograph px.
+- **Band axis.** A box pyramid of each tile, halving while the next level has at least 10 samples across, up to four levels (for example 80, 40, 20, 10 at `h = 40`; level 0 only below `h = 10`). A coarse sample has data when all four of its children do.
+- **Readings at each (footprint, level).** `zncc_self_similarity_parts` (`max_radius = 3`, default tolerances): whole, middle and nine cell radii in level samples, and converted to reference px. Member coherence: every view of the track is rendered the same way and box-reduced to the same level, and the pairwise ZNCC is taken on the support common to all views, per channel and averaged over channels; the readings are the median off-diagonal ZNCC, the share of views whose median ZNCC to the others is above 0.8, and the reference view's median. This is a reimplementation, not `validate_member_coherence`, because the kernel's coarse tables stop at a factor of 4. At `h = 10` it correlates with the kernel's median at 0.94 (seoul_bull) and 0.92 (kerry_park), and the median absolute difference is 0.02 and 0.03. Also read: mean squared gradient, mean squared Laplacian and grey standard deviation of the tile.
+- **Per-point readings.** Depth; viewing angle of the reference; number of views; zoom range (largest over smallest footprint across views); `σ` of the nearest SIFT keypoint when within 2 px; SIFT keypoints within 8 and 16 px; mean squared gradient, squared Laplacian and grey variance of the photograph in disks of 4, 8, 16 and 32 px; distance to the nearest Canny edge (thresholds 100, 200); distance to the nearest and second-nearest other ground-truth point in the reference image, and counts within 10, 20 and 40 px and within 1× and 2× the human half-extent; and the texture class of [Readings at two densities](#readings-at-two-densities).
+- **Scripts and outputs.** `features.py`, `analyze.py`, `rule2.py` and `residuals.py` in the session scratch directory `size-rule/`, run with `pixi run -e dev python`; the table is `size-rule/feature_table.npz`. Nothing here is checked in. scikit-learn is not in the `dev` environment, so the tree and the linear models are written in numpy.
+- **Scores.** A rule's prediction is compared with the human half-extent in reference px by three numbers, written `w1.25 / w1.5 / m`: the share of points within a factor of 1.25, the share within a factor of 1.5, and the median `|log(rule / human)|`. "Cross" means fitted on one capture and scored on the other. Rules that pick a ladder rung lose little to the ladder's spacing: choosing the nearest rung to each human size scores `m = 0.05`, with 99% to 100% of points within a factor of 1.25.
+
+### Noise floor
+
+Two points count as on the same surface when their normals are within 20°, each centre is within `0.25·d + 0.1·(h₁ + h₂)` of the other's plane (`d` their distance, `h` the world half-extents), and they are within 3 footprint edges, `d ≤ 3·(h₁ + h₂)`. The comparison is of world half-extents, which at that range is the same as comparing px.
+
+| | seoul_bull | kerry_park |
+|---|---|---|
+| Same-surface pairs | 832 | 2076 |
+| Median \|log ratio\| of the pair's sizes | 0.18 | 0.076 |
+| RMS log ratio | 0.45 | 0.31 |
+| Per-point spread implied by the RMS, `σ = RMS/√2` | 0.32 | 0.22 |
+| Best possible score at that spread, `w1.25 / w1.5 / m` | 51% / 80% / 0.22 | 69% / 94% / 0.15 |
+| Nearest same-surface neighbour's size as the prediction (n) | 73% / 89% / 0.008 (224) | 84% / 92% / 0.006 (306) |
+| Standard deviation of log size, all points | 0.46 | 0.47 |
+| ... scale-free class | 0.40 (n 150) | 0.35 (n 208) |
+| ... flat-then-structured class | 0.31 (n 98) | 0.40 (n 128) |
+
+The human is very consistent over a surface: a point's nearest same-surface neighbour has nearly the same size as it on most points, with a median difference under 1%. The disagreements that remain are large, often a factor of 2, which is why the RMS is far larger than the median. Read as Gaussian noise, the RMS gives the floor in the fifth row: no rule should be expected to do better than about `m = 0.22` on seoul_bull and `m = 0.15` on kerry_park. Grouping points by texture class removes little of the spread. The class is also defined on the human ladder, so it is not independent of the target.
+
+### The rule families
+
+Each family's parameters are chosen by grid search for the lowest `m` on the training capture. "fb" is the size used when a first-passing rule finds no rung.
+
+| Family | Fitted on seoul_bull: parameters | in-sample | cross, on kerry_park | Fitted on kerry_park: parameters | in-sample | cross, on seoul_bull |
+|---|---|---|---|---|---|---|
+| (a) Constant px | 11.5 px | 37% / 61% / 0.280 | **42% / 66% / 0.276** | 12.0 px | 42% / 66% / 0.263 | **37% / 59% / 0.314** |
+| (b) First footprint where a level passes the radius gate and the coherence bar | levels ≥ 2 ref px per sample; whole, middle and 5 cells ≤ 2.0 samples; no coherence bar; fb 10 px | 41% / 63% / 0.305 | 36% / 59% / 0.333 | levels of 12 to 40 samples; radius ≤ 0.1 of `h`; coherence ≥ 0.85; fb 10 px (47% to 72% of points fall back) | 39% / 64% / 0.300 | 35% / 56% / 0.364 |
+| (b′) as (b), fallback on ≤ 10% of points | as (b) | 41% / 63% / 0.305 | 36% / 59% / 0.333 | levels ≥ 2 ref px per sample; radius ≤ 0.3 of `h`; 5 cells; coherence ≥ 0.6 | 40% / 61% / 0.320 | 41% / 62% / 0.319 |
+| (c) First footprint where coherence stops rising by more than `d` | coarsest level; `d` = 0.05; from 8 px | 39% / 67% / 0.281 | 35% / 62% / 0.320 | coarsest level; `d` = 0; from 8 px | 45% / 68% / 0.260 | 36% / 62% / 0.320 |
+| (d) Footprint maximising coherence × localisability | best-level coherence × `exp(−0.4·radius)` | 32% / 54% / 0.373 | 27% / 50% / 0.403 | the same with 0.1 | 28% / 51% / 0.394 | 26% / 46% / 0.432 |
+| (e) First footprint where tile contrast or gradient energy exceeds T | native-level grey std ≥ 20.4 | 26% / 44% / 0.465 | 11% / 28% / 0.735 | the same, ≥ 22.3 | 15% / 30% / 0.709 | 20% / 40% / 0.486 |
+| (f) k × the smallest footprint where a cell count passes | native level; 1 cell ≤ 2.0 samples; k 2.97 | 43% / 62% / 0.276 | 35% / 60% / 0.312 | native level; 1 cell ≤ 1.5; k 2.97 | 39% / 64% / 0.276 | 41% / 61% / 0.291 |
+| (g) Geometry: depth | `h ∝ depth^−0.09` | 41% / 65% / 0.294 | 41% / 69% / 0.281 | `h ∝ depth^−0.27` | 49% / 76% / 0.228 | 41% / 64% / 0.282 |
+| (g) depth, zoom range, angle, views, reference zoom | log-linear | 48% / 66% / 0.251 | 17% / 31% / 0.657 | log-linear | 47% / 77% / 0.235 | 36% / 60% / 0.310 |
+| (h) Tree, depth 2, on 52 per-point readings | nearest GT point distance, then photograph variance in 32 px | 51% / 79% / 0.207 | 32% / 62% / 0.331 | native gradient energy at `h = 5`, then depth | 55% / 81% / 0.199 | 36% / 58% / 0.372 |
+| (h) Ridge on all 52 readings | | 69% / 91% / 0.157 | 14% / 28% / 0.610 | | 64% / 91% / 0.181 | 36% / 68% / 0.296 |
+| (i) Log-linear in the top 3 readings | grey variance in 32 px, footprint of greatest native and of greatest any-level coherence | 48% / 76% / 0.233 | 40% / 67% / 0.271 | the same | 43% / 77% / 0.260 | 47% / 71% / 0.245 |
+| (i′) Rounded: `h = K · s₃₂^(−1/2) · h_coh^(1/4)` | `K` = 32.7 | 50% / 72% / 0.223 | **41% / 74% / 0.273** | `K` = 35.3 | 42% / 75% / 0.259 | **47% / 73% / 0.249** |
+| Noise floor (above) | | | 69% / 94% / 0.15 | | | 51% / 80% / 0.22 |
+
+Fitting on both captures with five-fold cross-validation, which mixes the captures, the depth-3 tree scores 48% / 75% / 0.233 and the ridge 56% / 84% / 0.201. That is as far as these readings can go when the training data includes points from the same capture. Across captures, the learned models do worse than the constant, and they do not choose the same features on the two captures.
+
+**Which scale band.** For family (b), restricted to rules that pick a rung for at least 90% of points and scored with one parameter set on both captures:
+
+| Levels that may pass | seoul_bull | kerry_park |
+|---|---|---|
+| Native (level 0) only | 34% / 51% / 0.377 | 27% / 46% / 0.441 |
+| Coarsest only | 32% / 51% / 0.394 | 25% / 46% / 0.467 |
+| Any level | 31% / 51% / 0.392 | 28% / 50% / 0.405 |
+| Levels of ≥ 2 ref px per sample | 41% / 63% / 0.313 | 38% / 59% / 0.322 |
+| Levels of 20 to 80 samples | 40% / 65% / 0.326 | 37% / 62% / 0.326 |
+
+Letting any band pass makes the rule pick small footprints, because a 3 to 6 px footprint at native density already passes on most textured points. The band rules come nearest the human when the fine bands are excluded, and then they only match the constant. Native-only and coarsest-only do no better than any band. The coherence bar does not help: the best rule in (b) without it scores the same, and coherence alone scores 40% / 65% / 0.331 and 37% / 62% / 0.326.
+
+**Univariate correlations with log human size.** The readings with the same sign and the largest magnitude on both captures are contrast near the point, and the footprint of greatest coherence. Contrast near the point is the grey std of the native tile at `h = 20` (−0.55 / −0.49) or the variance of the photograph in a 32 px disk (−0.56 / −0.49). The footprint of greatest coherence is +0.39 / +0.43 at the native level and +0.50 / +0.36 at any level. The distance to the nearest other ground-truth point is +0.54 / +0.31, and depth is weaker. The first footprint to pass any radius gate, the detector `σ`, the distance to an edge and the viewing angle all correlate weakly.
+
+### The best rule
+
+**Rule (i′), in words:** make the half-extent about 34 px divided by the square root of the photograph's grey standard deviation (0 to 255) within 32 px of the point, and multiplied by the fourth root of the footprint, in px, at which the views agree best at native density. That gives about 10 px on an average surface, smaller on high-contrast texture and larger where the views keep agreeing better as the patch grows. Cross-capture it scores 41% / 74% / 0.273 on kerry_park and 47% / 73% / 0.249 on seoul_bull, against the constant's 42% / 66% / 0.276 and 37% / 59% / 0.314. A paired bootstrap over points (2000 resamples) gives the gain in `m` as 0.066 (95% interval 0.009 to 0.113) on seoul_bull and 0.002 (−0.044 to 0.046) on kerry_park. The gain in the share within ×1.5 is 14 points (7 to 21) and 8 points (1 to 14).
+
+**What it fails on.** Its predictions span less than the human's: the slope of log prediction on log human size is 0.37 and 0.46, and the correlation is 0.61 and 0.62. By the human's size band, with signed `log(rule / human)` medians on seoul_bull / kerry_park:
+
+| Human half-extent | n | Median signed log ratio | Rule too large by > 1.5× | Rule too small by > 1.5× |
+|---|---|---|---|---|
+| < 6 px | 31 / 62 | +0.53 / +0.35 | 71% / 42% | 0% / 0% |
+| 6–9 px | 71 / 71 | +0.24 / −0.00 | 21% / 7% | 0% / 1% |
+| 9–13 px | 88 / 126 | +0.06 / −0.14 | 7% / 8% | 1% / 12% |
+| 13–18 px | 46 / 103 | −0.29 / −0.28 | 0% / 1% | 33% / 29% |
+| ≥ 18 px | 27 / 18 | −0.40 / −0.45 | 0% / 0% | 41% / 61% |
+
+By texture class, it is too small on scale-free points (median −0.11 / −0.13) and too large on flat-then-structured points (+0.22 / +0.10). On the flat-then-structured points the constant is worse (+0.47 / +0.37), and that class is where most of the gain comes from. The contact sheet of the 24 largest residuals (`size-rule/worst_residuals.png` in the session scratch directory, not checked in) shows the photograph around each point with the human's square in green and the rule's in red, and the native tile at each size. It shows two kinds of failure:
+
+- **Too small.** These are close-range ground: lawn, gravel and pale paving at 2 to 4 m on kerry_park, and the grey rock behind the sculpture. The human chose 15 to 30 px there. The texture is fine and of moderate contrast, and the views agree at every footprint, so no reading says to grow. The recycling bin and the rainbow sign are also here.
+- **Too large.** These are small features the human sized tightly: one stripe crossing on the bull's painted coils at 11 m, a distant building or treeline at 30 to 70 m, and small dark blobs in grass. The human chose 2 to 6 px there. The rule cannot go that small, because the surrounding 32 px has middling contrast.
+
+**Decision.** No rule beats the constant-pixel baseline by more than the noise floor. On kerry_park, no family beats the constant's `m` across captures by more than the bootstrap spread. On seoul_bull, the best rule closes about two thirds of the gap between the constant (0.314) and the floor (0.22). That gain of 0.066 is a third of the floor, and its interval reaches down to 0.01. The rules built from the draft's own readings and the two hypotheses do no better than the constant: first passing the radius and coherence gates over the footprint × band grid, the coherence plateau, coherence × localisability, and the cell-count extent. Those built on any band, or on the native band alone, do worse. What the human's sizes follow is mostly not in these readings. A point's size is nearly the same as its same-surface neighbour's, so the human sized by surface, not point by point. The one consistent per-point trend is that the human made patches smaller where the local contrast is high and larger where it is low, which is the opposite of what a localisability gate does. A footprint rule for the pipeline cannot be validated against these sizes beyond "about 10 px, a little smaller on high-contrast texture". The question is better asked of the outcome the size is for, such as the normal error or the keypoint residual on a fixed observation set, as the draft's Testing section already says.
