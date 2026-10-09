@@ -2,7 +2,7 @@
 
 This file records the fleet measurements behind the piecewise refinement of [cluster-patch-refinement.md](cluster-patch-refinement.md#piecewise-refinement), and the ground-truth measurements behind [cell-plane-normals.md](cell-plane-normals.md). The piecewise refinement registers each kept member's nine cells against the cluster's template, starting at the member's cascade shape, fits a robust affine map to the cell shifts to find the cells that disagree with the others, and stores the shifts with a status per cell in the `.matches` file. By default it also applies the fitted map as an update of the shape, by a loop that keeps the cascade's ZNCC from falling (`PiecewiseParams::move_shape`, on by default); with `move_shape` off it is a measurement only and leaves the member's shape as the cascade found it. The measurements bear on whether the stage runs by default (`sfm cluster-patches --piecewise`), and on the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`).
 
-The first five sections were measured at commit `f787be3b` on 43 fleet entries, when the stage was a loop that applied every fitted update to the shape: agreement with the cascade's shapes, the cell statistics, the wall time, and the seed stage on the two checked-in ground truths. The later sections repeat parts of that on five entries: after the loop was given an acceptance rule that keeps the cascade's ZNCC, after the default was changed to the measurement with the loop behind `move_shape`, and after the robust fit's residual scale was changed to the factor for two-dimensional residuals. The next two sections measure the cell plane normals against the two checked-in ground truths. The two after them record a blind human review of the loop's moved shapes against the cascade's, which reversed the earlier decision to leave the shape to the cascade, and repeat the subset with the loop as the default. The last measures two gates that read each member's own patch again at its refined shape, against the ground truths of four of the five entries. While these measurements were taken the stage was specified in a draft proposal, since folded into the spec; "the draft" in the sections below means that proposal.
+The first five sections were measured at commit `f787be3b` on 43 fleet entries, when the stage was a loop that applied every fitted update to the shape: agreement with the cascade's shapes, the cell statistics, the wall time, and the seed stage on the two checked-in ground truths. The later sections repeat parts of that on five entries: after the loop was given an acceptance rule that keeps the cascade's ZNCC, after the default was changed to the measurement with the loop behind `move_shape`, and after the robust fit's residual scale was changed to the factor for two-dimensional residuals. The next two sections measure the cell plane normals against the two checked-in ground truths. The two after them record a blind human review of the loop's moved shapes against the cascade's, which reversed the earlier decision to leave the shape to the cascade, and repeat the subset with the loop as the default. The next measures two gates that read each member's own patch again at its refined shape, against the ground truths of four of the five entries, and the last repeats the cell plane normals on files written at the current defaults. While these measurements were taken the stage was specified in a draft proposal, since folded into the spec; "the draft" in the sections below means that proposal.
 
 ## Setup of the fleet run (f787be3b)
 
@@ -1085,3 +1085,80 @@ Both picks pass. On `SeoulBull` the pick's focal error falls from 4.6% to 0.9%, 
 - **Both gates are on by default**, the whole grid's at the shared bar and the cells' at `8`. Each refuses at most 2.1% of the members the ground truth calls right, and the members they refuse are wrong several times as often as the kept ones.
 - **The cell gate adds little at its bar.** Its refusals are almost all the whole grid's too, and the bar review case c39 would need refuses more right members than wrong on every judged entry.
 - **Spurious members whose patch pins a position remain.** A wrong correspondence on distinctive texture, on the epipolar line or off it, passes both gates; refusing it needs a reading across the cluster's members, not of one member's patch.
+
+## Cell plane normals at the current defaults (2026-10-09)
+
+**Question.** The [cell plane normals after the audit](#cell-plane-normals-after-the-audit-2026-10-08) were measured on files written with `move_shape` off and before the [gates at the refined shape](#gates-at-the-refined-shape-2026-10-09). At the current defaults the loop moves a few members' shapes, and the two gates refuse some kept members. Do the verdicts and the errors against the ground truths change, and which of the two changes moves them?
+
+**Data.**
+
+- **Code.** Branch `bootstrap-core-migration` at `5de03f60`, the extension rebuilt with `pixi run maturin develop --release`. No code changes.
+- **Machine.** Windows 11, Intel Core (family 6 model 183), 32 threads.
+- **Cluster files.** Three per entry, from the same `SeoulBull` and `KerryPark480` cluster files: *old*, the `--piecewise` files of the [first cell plane normal section](#cell-plane-normals-against-the-ground-truths-2026-10-08) (`move_shape` off, no refined-shape gates); *defaults*, `sfm cluster-patches --patch-size 12 --piecewise` at the current defaults (`move_shape` on, both gates on); and *gates off*, the same with `--no-regate-at-refined-shape --max-capped-cells 9`. *Old* to *gates off* is the effect of the moved shapes alone, and *gates off* to *defaults* that of the gates alone. Every file has the same clusters, members and references.
+- **Poses, truth, matching, variants and errors.** As in the [section after the audit](#cell-plane-normals-after-the-audit-2026-10-08), with its script; run on *old* it reproduces that section's tables to the last digit. The matched counts are unchanged, since the reference members do not move: 27 clusters on 23 ground-truth points and 164 on 116 for `SeoulBull`, 80 on 43 and 323 on 161 for `KerryPark480`.
+
+**Members.**
+
+| entry | kept, old | kept, defaults | moved (shape or position) | move refused, cells not attempted | refused by the gates | moved, and refused by a gate at the defaults |
+|---|---|---|---|---|---|---|
+| SeoulBull | 2953 | 2820 | 6 | 0 | 133 | 1 |
+| KerryPark480 | 15986 | 15609 | 60 | 2 | 377 | 4 |
+
+A member is *moved* when its shape or position in *gates off* differs from *old*. A move the loop refuses for its ZNCC or shift keeps the cascade's shape and stores every cell `not_attempted`, so those two members lose their cells. The five moved members a gate refuses at the defaults fail it at their cascade shape, since a moved shape that fails a gate is reverted rather than refused. The gates leave every member they keep with the shape, position and cells it has in *gates off*.
+
+**Verdicts at the defaults**, as a share of the clusters with a reference (3934 and 11865), with the section after the audit's in brackets:
+
+| entry | both axes % | one axis % | none % | none: no kept member % | none: kept member, < 3 cells triangulated % | of which ≥ 1 narrow-baseline cell / too few rays only % |
+|---|---|---|---|---|---|---|
+| SeoulBull | 29.7 (29.7) | 5.0 (5.2) | 65.3 (65.1) | 50.4 (48.5) | 14.9 (16.6) | 8.7 / 6.2 (8.9 / 7.7) |
+| KerryPark480 | 17.4 (17.5) | 7.7 (7.8) | 74.9 (74.7) | 27.1 (25.3) | 47.8 (49.4) | 40.4 / 7.4 (40.5 / 8.9) |
+
+No cluster with three or more triangulated cells is without a verdict, as before. Of the clusters with at least one kept member (49.6% and 72.9% of the clusters with a reference, against 51.5% and 74.7%), 59.9% and 23.9% get both axes and 10.1% and 10.6% one axis. *Shapes only* gives 29.6% and 17.5% both axes. The in-plane cells' residual is unchanged, a median 0.17 px and 0.13 px, p90 0.42 and 4.0 px.
+
+**Both-axes clusters at the defaults**, median / p90 error in degrees, as in the section after the audit:
+
+| entry @ tolerance | all: n | cells | view_dir | paired: n (GT points) | cells | shapes only | view_dir |
+|---|---|---|---|---|---|---|---|
+| SeoulBull @ 1 px | 14 | 20.0 / 28.7 | 28.3 / 43.7 | 14 (13) | 20.0 / 28.7 | 13.2 / 28.0 | 28.3 / 43.7 |
+| SeoulBull @ 3 px | 88 | 19.0 / 58.6 | 29.1 / 49.4 | 87 (64) | 19.1 / 58.8 | 20.1 / 49.7 | 29.8 / 49.6 |
+| KerryPark480 @ 1 px | 19 | 49.5 / 74.4 | 25.7 / 41.3 | 17 (14) | 48.6 / 69.4 | 36.0 / 65.7 | 25.7 / 44.5 |
+| KerryPark480 @ 3 px | 89 | 20.3 / 61.3 | 30.1 / 58.9 | 86 (62) | 19.2 / 59.8 | 15.6 / 58.8 | 30.2 / 59.4 |
+
+**One-axis clusters at the defaults**, error of the fixed component, median / p90:
+
+| entry @ tolerance | n | cells | view_dir |
+|---|---|---|---|
+| SeoulBull @ 1 px | 2 | 21.6 / 26.8 | 38.8 / 44.6 |
+| SeoulBull @ 3 px | 14 | 29.7 / 65.1 | 22.3 / 45.7 |
+| KerryPark480 @ 1 px | 15 | 36.2 / 73.2 | 29.3 / 59.1 |
+| KerryPark480 @ 3 px | 39 | 22.2 / 72.2 | 35.1 / 65.8 |
+
+On *gates off*, every *cells* and *view_dir* figure of these three tables equals the section after the audit's, and the verdict shares differ by at most 0.1 point. Only *shapes only* moves, since a moved member's shape is where that variant places its cells: on the paired `SeoulBull` sets from 13.6° to 13.2° at 1 px and from 21.0° to 20.5° at 3 px.
+
+**Per cluster.** Each cluster with a reference is compared with itself across two files: whether its verdict changes, and the angle between the two normals where both files call it both-axes (median / p90 / max, degrees). *Mover clusters* have a member that moved or whose move was refused; *refusal clusters* have a member a gate refuses. Verdicts are written 0 for none, 1 for one axis, 2 for both axes.
+
+| entry | comparison | clusters | verdict changed | changes | both axes in both: n | angle between normals |
+|---|---|---|---|---|---|---|
+| SeoulBull | old to gates off, mover clusters | 6 | 0 | | 3 | 7.15 / 40.7 / 49.1 |
+| SeoulBull | old to gates off, other clusters | 3928 | 0 | | 1167 | 0 / 0 / 0 |
+| SeoulBull | gates off to defaults, refusal clusters | 115 | 11 | 2→0: 4; 2→1: 1; 1→0: 2; 1→2: 4 | 12 | 3.05 / 23.9 / 29.4 |
+| SeoulBull | gates off to defaults, other clusters | 3819 | 0 | | 1153 | 0 / 0 / 0 |
+| KerryPark480 | old to gates off, mover clusters | 62 | 2 | 2→0: 1; 2→1: 1 | 17 | 1.27 / 12.2 / 14.6 |
+| KerryPark480 | old to gates off, other clusters | 11803 | 0 | | 2056 | 0 / 0 / 0 |
+| KerryPark480 | gates off to defaults, refusal clusters | 340 | 27 | 2→0: 11; 2→1: 2; 1→0: 11; 1→2: 2; 0→2: 1 | 12 | 0.61 / 10.8 / 20.7 |
+| KerryPark480 | gates off to defaults, other clusters | 11525 | 0 | | 2048 | 0 / 0 / 0 |
+
+Old to defaults is the two steps together: the clusters with neither a mover nor a refusal (3814 and 11467) have the same verdict and the same normal, bit for bit. On one-axis clusters the moved shapes change the normal by 0.06° (`SeoulBull`, 1 cluster) and by a median of 0.08° (`KerryPark480`, 9 clusters, at most 10.6°). `KerryPark480`'s 2→0 among the mover clusters is a cluster whose refused move took away its member's cells.
+
+Few of the changed clusters are matched to a ground-truth point. At 3 px one mover cluster is matched, on `SeoulBull`: its normal turns 5.2°, and its error goes from 3.4° to 3.5°. The gates take the both-axes verdict from four matched clusters, whose errors were 63.5° (`SeoulBull`, now one axis), 39.1°, 56.6° and 15.1° (`KerryPark480`, now none; the first two are also matched at 1 px), and turn one more `SeoulBull` cluster's normal by 7.3°, its error from 9.9° to 3.0°.
+
+**Result.**
+
+- **The moved shapes do not change the cell normals' accuracy.** They touch 6 and 62 clusters. On `SeoulBull` the three both-axes ones turn by up to 49°, on `KerryPark480` the 17 by a median of 1.3°, and only one of them is matched. Every *cells* and *view_dir* figure against the truths is unchanged.
+- **The gates' refusals move the figures by a few tenths of a degree.** They change the verdict of 11 and 27 clusters, most of them to none, and leave 1.9 and 1.8 points of the clusters with a reference with no kept member. The both-axes verdicts they remove among the matched clusters had large errors, so the 3 px both-axes median falls by 0.1° and 0.3° and the `SeoulBull` p90 by 1.5°. That is four clusters, too few to read as a gain.
+- **The comparison with the shapes and the viewing direction stands.** On the paired 3 px sets *cells* is 1.0° better than *shapes only* on `SeoulBull` (19.1° against 20.1°) and 3.6° worse on `KerryPark480` (19.2° against 15.6°). On the `KerryPark480` 1 px set, now 17 clusters, the viewing direction is still ahead (25.7° against 48.6°).
+
+**What this decides.**
+
+- **The cell plane normal figures hold at the current defaults.** [cell-plane-normals.md](cell-plane-normals.md#what-the-measurements-show) quotes this section's numbers. The question of the [precision gate draft](../../drafts/cell-plane-normal-precision-gate.md#open-questions) whether the moved shapes change the normals is answered: on these ground truths they do not, measurably.
+- Nothing else changes. The displacements against the shapes, and the gate on the normal's precision, stay open for the reasons in the sections above.
