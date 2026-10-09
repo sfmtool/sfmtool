@@ -223,6 +223,39 @@ noted):
 | A fine photometric depth search around the chosen depth | moved 113 correct tracks off the truth |
 | The neighbours' plane as a depth prior in the vote | 1063 to 1103 |
 
+## The median gate on the score against the bitmap
+
+Recorded 2026-10-09, when the leave-one-out ZNCC was removed and the finish's
+median gate (`finish.min_zncc_median`) came to read each `in` row's plain ZNCC
+against the stored bitmap, the reference row left out, at a default of 0.7.
+`core_cascade`, full pass, every query of the checked-in ground truths, swept
+with `--opt core_options={"finish.min_zncc_median": x}`. A track is correct
+here when it passes the good bar's position and precision tests; the bar's
+own ZNCC test is left out, since it reads the same score.
+
+| gate | seoul built | correct | wrong | precision | Kerry Park built | correct | wrong | precision |
+|---|---|---|---|---|---|---|---|---|
+| off | 1180 (92.4%) | 991 | 189 | 0.840 | 3196 (84.8%) | 2587 | 609 | 0.809 |
+| 0.6 | 1117 (87.5%) | 970 | 147 | 0.868 | 3062 (81.3%) | 2550 | 512 | 0.833 |
+| 0.65 | 1095 (85.7%) | 957 | 138 | 0.874 | 3040 (80.7%) | 2538 | 502 | 0.835 |
+| **0.7** | **1065 (83.4%)** | **937** | **128** | **0.880** | **2983 (79.2%)** | **2495** | **488** | **0.836** |
+| 0.75 | 1015 (79.5%) | 901 | 114 | 0.888 | 2873 (76.3%) | 2396 | 477 | 0.834 |
+| 0.8 | 915 (71.7%) | 818 | 97 | 0.894 | 2676 (71.0%) | 2231 | 445 | 0.834 |
+
+Of 1277 seoul_bull and 3767 Kerry Park queries. The median position error of
+the built tracks falls only from 0.15 to 0.13 ground-truth half-extents across
+the sweep. With the gate off, the median score of correct tracks is 0.86
+(seoul_bull) and 0.89 (Kerry Park), and of tracks at the wrong position 0.75
+and 0.86: the gate mostly removes tracks with a low score of either kind. On
+Kerry Park precision stops rising at 0.65, and on seoul_bull each 0.05 buys
+half a point of precision for 1 to 3 points of correct tracks. 0.7 is kept.
+0.6 would return 2.6 (seoul_bull) and 1.5 (Kerry Park) points more correct
+tracks per query at a precision 1.2 and 0.3 points lower.
+
+The empty pass builds no track on this date: with no reconstructed point, the
+point-or-bearing test has no observation to measure the reprojection noise
+from, and every member is refused at the upgrade.
+
 ## Normals, gates and fallbacks on two ground truths
 
 The second ground truth is a Kerry Park candidate, `tk113`: 48 fisheye images
@@ -306,7 +339,8 @@ position, and none of those tried below is.
 
 **The gates are a trade.** Two views and a ZNCC of 0.7 return many more good
 tracks, and more wrong ones: precision falls by 3 to 8 points. With the
-finish's own gates (three views, 0.8) everywhere (`--opt min_in_views=3
+finish's gates of that date (three views, 0.8 on the leave-one-out score)
+everywhere (`--opt min_in_views=3
 --opt min_zncc_median=0.8 --opt core_options={}`, and the fallbacks' gates to
 match), `renormal` scores a mean `S` of 0.500 rather than 0.539, with
 precision near the cascade's: 0.89 and 0.89 on seoul_bull, 0.84 and 0.77 on
@@ -898,7 +932,8 @@ all of these hold:
 - the point is within one ground-truth half-extent of the ground-truth point
   (0.5 degrees for a bearing);
 - `view_precision` is at least 0.75;
-- the median leave-one-out ZNCC is at least 0.7.
+- the median ZNCC against the stored bitmap, over the `in` views other than
+  the reference, is at least 0.7.
 
 `view_precision` is the fraction of `in` views whose keypoint lies within 3 px
 of where the ground-truth point projects in that image. Unlike
@@ -930,8 +965,11 @@ still charges one on another piece of surface, or an `in` view with no keypoint.
   - `view_precision`, described above.
   - `kp_err_median_px` / `kp_err_max_px`: keypoint error in the shared images.
 - **Photometry**
-  - `zncc_median` / `_min`: leave-one-out ZNCC, set against the same
-    `evaluate` reading of the GT point (`gt_zncc_*`, `zncc_median_delta`).
+  - `zncc_median` / `_min`: the ZNCC against the stored bitmap over the `in`
+    views other than the reference, set against the same `evaluate` reading
+    of the GT point (`gt_zncc_*`, `zncc_median_delta`). Results above dated
+    before 2026-10-09 read the leave-one-out ZNCC against the consensus of the
+    other views, which the localizer no longer computes.
   - `self_similarity_*` (the ZNCC self-similarity radius) and `reproj_median`.
 - **Cost**
   - `seconds` per query.
@@ -952,8 +990,8 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Fitting it (localize, refine, re-triangulate, re-fuse) | `bench.fit` |
 | Moving between cluster and track stage | `bench.set_stage` |
 | Hand moves | `bench.tilt_patch`, `translate_patch`, `translate_patch_to_pixel`, `resize_patch`, `spin_patch`, `sight_observation` |
-| Congealing a subset of views | `PatchCloud.localize_keypoints(view_sets=…, basis_max_views=…)` |
-| Sub-pixel refinement against the consensus | `PatchCloud.refine_keypoints` |
+| Aligning a subset of views to the reference render | `PatchCloud.localize_keypoints(view_sets=…, reference_images=…)` |
+| Sub-pixel refinement against the reference render | `PatchCloud.refine_keypoints(reference_images=…)` |
 | Normal refinement | `PatchCloud.refine_normals` |
 | Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |
 | ZNCC self-similarity radius | `sfmtool.patches.zncc_self_similarity_parts` (one bitmap), `zncc_self_similarity_parts_stack` (a stack) |

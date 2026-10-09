@@ -12,7 +12,8 @@ changes only how the measured candidates are judged. Both are keyword sets for
 from __future__ import annotations
 
 MEASUREMENTS = {
-    # The default: rendered consensus, sub-pixel step, self-similarity gate on.
+    # The default: the bitmap the point would store (its reference
+    # observation's render), sub-pixel step, self-similarity gate on.
     "default": {},
     "no_self_similarity_gate": {"max_zncc_self_similarity_radius": 0.0},
     # The self-similarity gate's bar, swept to choose its default.
@@ -37,7 +38,8 @@ STRATEGIES = {
     "fixed_0.7": {"rule": "fixed", "min_zncc": 0.7},
     "fixed_0.8": {"rule": "fixed", "min_zncc": 0.8},
     "fixed_0.9": {"rule": "fixed", "min_zncc": 0.9},
-    # (a) the leave-one-out basis for three or more references, the pairwise
+    # (a) the references' scores against the template (the reference
+    # observation's own left out) for three or more references, the pairwise
     # rule for two.
     "track_min/pair_mean": {**_TRACK, "basis": "min", "pair_statistic": "mean"},
     "track_min/pair_min": {**_TRACK, "basis": "min", "pair_statistic": "min"},
@@ -198,4 +200,14 @@ STRATEGIES = {
         "pair_factor": 0.9,
         "ascend_on_edge": True,
     },
+    # The default's bars one at a time, measured again once the references
+    # were scored against the reference render rather than leave-one-out.
+    "default_pooled_k2": {"basis_k": 2.0},
+    "default_pooled_k4": {"basis_k": 4.0},
+    "default_track0.85": {"track_basis_fraction": 0.85},
+    "default_track0.95": {"track_basis_fraction": 0.95},
+    "default_pair0.8": {"pair_factor": 0.8},
+    "default_pair1.0": {"pair_factor": 1.0},
+    "default_floor0.4": {"min_zncc": 0.4},
+    "default_floor0.6": {"min_zncc": 0.6},
 }

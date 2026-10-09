@@ -243,3 +243,50 @@ default. The ascent recovers a few `peak_at_edge` sightings on kerry_park and
 none on seoul_bull, and adds a bad extra observation, so it stays an option,
 off. The `too_far` class is left alone: loosening the positional bound (a 2 px
 floor, above) recovers some of it and lets in as many far keypoints.
+
+## The bars once the new view is aligned to the reference render
+
+Recorded 2026-10-09. The operation now aligns the new view to the bitmap the
+point would store, its reference observation's render, and the references
+are scored against that render rather than leave-one-out against the
+consensus of the others; the bars read those scores with the reference
+observation's own left out. The default rule is unchanged: the pooled bar
+(median − 3 scaled MADs) or the track's own bar (0.9 × median), the pair rule
+at 0.9, the floor at 0.5, the image-MAD positional gate. Resected pose,
+default measurement, against the same rule run on the build before the change
+(the README's earlier tables predate the self-similarity gate, which refuses
+112 seoul_bull observations either way):
+
+| rule | seoul recall | err med / p90 px | >2 px | extra | x bad | x worse | kerry recall | err med / p90 px | >2 px | extra | x bad | x worse |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| default, before the change | 82.8% | 0.061 / 0.215 | 16 | 115 | 0 | 1 | 79.2% | 0.060 / 0.346 | 13 | 1107 | 0 | 8 |
+| **default** | **81.9%** | **0.102 / 0.377** | **14** | **140** | **0** | **1** | **79.6%** | **0.094 / 0.468** | **28** | **1330** | **5** | **25** |
+| pooled bar k = 2 | 80.0% | 0.101 / 0.351 | 13 | 106 | 0 | 0 | 77.7% | 0.091 / 0.457 | 25 | 1142 | 2 | 14 |
+| pooled bar k = 4 | 82.1% | 0.102 / 0.376 | 13 | 154 | 0 | 3 | 80.7% | 0.096 / 0.472 | 29 | 1508 | 8 | 40 |
+| track bar 0.85 × median | 81.9% | 0.102 / 0.377 | 14 | 140 | 0 | 1 | 79.8% | 0.094 / 0.468 | 28 | 1343 | 5 | 26 |
+| track bar 0.95 × median | 81.9% | 0.102 / 0.377 | 14 | 140 | 0 | 1 | 79.2% | 0.094 / 0.466 | 28 | 1326 | 5 | 26 |
+| pair rule 0.8 | 81.9% | 0.102 / 0.377 | 14 | 140 | 0 | 1 | 79.7% | 0.094 / 0.470 | 28 | 1341 | 5 | 26 |
+| pair rule 1.0 | 81.9% | 0.102 / 0.377 | 14 | 140 | 0 | 1 | 79.6% | 0.094 / 0.468 | 27 | 1322 | 5 | 26 |
+| floor 0.4 | 81.9% | 0.102 / 0.377 | 14 | 140 | 0 | 1 | 79.7% | 0.094 / 0.468 | 28 | 1330 | 5 | 25 |
+| floor 0.6 | 79.4% | 0.099 / 0.350 | 12 | 123 | 0 | 0 | 79.4% | 0.094 / 0.468 | 28 | 1313 | 5 | 27 |
+
+- **Recall is unchanged** to within a point on both captures.
+- **The rejoined keypoints sit further from the originals**, 0.10 px at the
+  median rather than 0.06. The ground truth's keypoints were placed by
+  congealing, and a view aligned to one reference carries whatever offset the
+  reference's own keypoint has. The new observations of rejoined tracks
+  retriangulate at about the same residual: 0.26 and 0.24 px at the median,
+  against 0.25 and 0.22 before.
+- **The pooled bar is lower.** The references score lower and spread wider
+  against one sharp render than against the consensus of the others, so
+  median − 3 MADs falls from about 0.68 to 0.55 on seoul_bull and the 0.5
+  floor binds more often. On kerry_park this lets in about 20% more extra
+  tracks, 5 of them over 2 px and 25 worsening their track's largest residual
+  by more than 1 px, against 0 and 8 before. `k = 2` brings those back to 2
+  and 14 for 2 points of recall on each capture.
+- **The track bar and the pair rule change almost nothing** between 0.8 and
+  1.0: what the pooled bar refuses, the track's own bar mostly refuses too.
+
+The defaults are kept. Whether to tighten the pooled bar to `k = 2` to win
+back kerry_park's precision is a trade of recall for a handful of bad extra
+observations among 1330, which the data does not settle.
