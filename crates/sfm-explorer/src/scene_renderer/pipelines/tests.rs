@@ -197,3 +197,40 @@ fn the_gbuffer_pipelines_match_the_textures_sizing_allocates() {
         "a pass-1 pipeline disagrees with the G-buffer `sizing` allocates: {error:?}"
     );
 }
+
+/// The value of `const <name>: u32 = <hex>u;` in a WGSL source.
+fn wgsl_u32_const(source: &str, name: &str) -> u32 {
+    let prefix = format!("const {name}: u32 = ");
+    let line = source
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("common.wgsl declares no `{name}: u32`"));
+    let literal = line
+        .strip_suffix(';')
+        .and_then(|l| l.strip_suffix('u'))
+        .unwrap_or_else(|| panic!("`{name}` is not written as a `u` literal: {line}"));
+    let hex = literal
+        .strip_prefix("0x")
+        .unwrap_or_else(|| panic!("`{name}` is not written in hex: {literal}"));
+    u32::from_str_radix(hex, 16).expect("hex literal")
+}
+
+#[test]
+fn the_wgsl_pick_tags_match_the_rust_ones() {
+    // The scene shaders write these tags into the pick buffer and `picking.rs`
+    // decodes them, so the two sides must agree bit for bit. They are written
+    // once on each side, in `common.wgsl` and `picking.rs`.
+    use super::super::picking::{PICK_TAG_FRUSTUM, PICK_TAG_NONE, PICK_TAG_POINT};
+    let common = include_str!("../../shaders/common.wgsl");
+    for (name, rust_value) in [
+        ("PICK_TAG_NONE", PICK_TAG_NONE),
+        ("PICK_TAG_FRUSTUM", PICK_TAG_FRUSTUM),
+        ("PICK_TAG_POINT", PICK_TAG_POINT),
+    ] {
+        assert_eq!(
+            wgsl_u32_const(common, name),
+            rust_value,
+            "{name} differs between common.wgsl and picking.rs"
+        );
+    }
+}

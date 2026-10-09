@@ -26,6 +26,9 @@ struct Uniforms {
     _pad2: f32,
 }
 
+// The pipeline prepends common.wgsl, which declares ReconUniforms, the
+// PICK_TAG_* pick ID tags and INF_DEPTH.
+
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var depth_tex: texture_depth_2d;
 
@@ -35,12 +38,6 @@ const BEHIND_OPACITY: f32 = 0.45;
 // The floor it fades to and never below: a handle that cannot be seen cannot
 // be grabbed.
 const FLOOR_OPACITY: f32 = 0.15;
-
-// Tiny positive NDC depth, so a direction sits just in front of the reversed-Z
-// far plane (cleared to 0.0): it reads as behind every finite thing and in
-// front of the empty background, which is what a direction is. The same
-// constant points.wgsl and patch.wgsl pin their infinity geometry at.
-const INF_DEPTH: f32 = 1e-6;
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,

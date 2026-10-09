@@ -3,7 +3,10 @@
 
 use super::super::gpu_types::*;
 
-const SHADER: &str = include_str!("../../shaders/distorted_quad.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../../shaders/common.wgsl"),
+    include_str!("../../shaders/distorted_quad.wgsl")
+);
 
 pub(in crate::scene_renderer) fn create(
     device: &wgpu::Device,

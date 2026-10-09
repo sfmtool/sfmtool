@@ -18,35 +18,13 @@ struct Uniforms {
     camera_pos: vec3<f32>, // world-space camera position (front-face culling)
 }
 
-// Per-reconstruction block: which node this draw belongs to.
-struct ReconUniforms {
-    model: mat4x4<f32>,
-    point_size: f32,
-    point_pick_base: u32,
-    image_pick_base: u32,
-    pickable: u32,
-    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
-    tint_color: vec4<f32>,
-    // Read only by points.wgsl; declared here so every shader's view of the
-    // shared per-recon buffer stays identical.
-    show_infinity: f32,
-}
+// The pipeline prepends common.wgsl, which declares ReconUniforms, the
+// PICK_TAG_* pick ID tags and INF_DEPTH.
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var patch_texture: texture_2d_array<f32>;
 @group(0) @binding(2) var patch_sampler: sampler;
 @group(0) @binding(3) var<uniform> recon: ReconUniforms;
-
-// Pick ID tag for 3D point entities (bits 31..30). A patch and its point are
-// the same entity, so patches ride the existing point pick path.
-const PICK_TAG_POINT: u32 = 0x80000000u;
-// Pick ID for "nothing" — what a non-pickable node emits.
-const PICK_TAG_NONE: u32 = 0u;
-
-// Tiny positive NDC depth so an infinity patch sits just in front of the
-// reversed-Z far plane (cleared to 0.0, compared with Greater): it passes the
-// depth test against the cleared background but loses to all finite geometry.
-const INF_DEPTH: f32 = 1e-6;
 
 struct VertexInput {
     @location(0) quad_pos: vec2<f32>,     // patch coordinate (s, t) in [-1, 1]

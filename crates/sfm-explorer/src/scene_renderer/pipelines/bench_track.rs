@@ -3,7 +3,10 @@
 
 use super::super::gpu_types::*;
 
-const SHADER: &str = include_str!("../../shaders/bench_track.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../../shaders/common.wgsl"),
+    include_str!("../../shaders/bench_track.wgsl")
+);
 
 /// Resources created by the bench track pipelines.
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {

@@ -394,6 +394,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Proposed fix: add a `shaders/common.wgsl` prelude, included with `concat!(include_str!…)`, and a test that parses its `PICK_TAG_*` literals against `picking::PICK_TAG_*`.
 - Effort: low. Risk: low.
 
+> _Status (2026-10-09): **Done** — `shaders/common.wgsl` now declares `ReconUniforms`, `PICK_TAG_NONE`/`FRUSTUM`/`POINT` and `INF_DEPTH` once; the points, patch, frustum, image-quad, distorted-quad and bench-track pipelines prepend it with `concat!(include_str!…)`, and `the_wgsl_pick_tags_match_the_rust_ones` in `pipelines/tests.rs` parses its tag literals against `picking::PICK_TAG_*`. The stale 8-bit pick encoding in `specs/gui/camera-views.md` was corrected, branch `hygiene-fix-1009-08-wgsl-pick-tags`._
+
 **Move photograph decoding and the history cursor out of `state/edits.rs`**
 - Location: `crates/sfm-explorer/src/state/edits.rs`, 2,127 lines (was 1,843).
 - Problem:

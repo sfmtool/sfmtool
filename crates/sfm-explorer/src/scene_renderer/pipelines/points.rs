@@ -4,7 +4,10 @@
 use super::super::gpu_types::*;
 use wgpu::util::DeviceExt;
 
-const SHADER: &str = include_str!("../../shaders/points.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../../shaders/common.wgsl"),
+    include_str!("../../shaders/points.wgsl")
+);
 
 /// Resources created by the point splat pipeline.
 ///

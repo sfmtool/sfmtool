@@ -3,7 +3,10 @@
 
 use super::super::gpu_types::*;
 
-const SHADER: &str = include_str!("../../shaders/image_quad.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../../shaders/common.wgsl"),
+    include_str!("../../shaders/image_quad.wgsl")
+);
 
 /// Resources created by the image quad pipeline.
 pub(in crate::scene_renderer) struct ImageQuadPipelineResources {

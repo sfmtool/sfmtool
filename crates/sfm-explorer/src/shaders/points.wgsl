@@ -19,20 +19,8 @@ struct Uniforms {
     infinity_point_px: f32,
 }
 
-// Per-reconstruction block: which node this draw belongs to.
-struct ReconUniforms {
-    model: mat4x4<f32>,
-    point_size: f32,
-    point_pick_base: u32,
-    image_pick_base: u32,
-    pickable: u32,
-    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
-    tint_color: vec4<f32>,
-    // Effective "points at infinity" visibility for this node: the global HUD
-    // toggle AND the node's own ∞ mini-toggle. Only this shader reads it, but
-    // every shader declares the block identically — they share one buffer.
-    show_infinity: f32,
-}
+// The pipeline prepends common.wgsl, which declares ReconUniforms, the
+// PICK_TAG_* pick ID tags and INF_DEPTH.
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<uniform> recon: ReconUniforms;
@@ -44,11 +32,6 @@ struct ReconUniforms {
 fn tinted(color: vec3<f32>) -> vec3<f32> {
     return mix(color, recon.tint_color.rgb, recon.tint_color.a);
 }
-
-// Pick ID tag for point entities (bits 31..30).
-const PICK_TAG_POINT: u32 = 0x80000000u;
-// Pick ID for "nothing" — what a non-pickable node emits.
-const PICK_TAG_NONE: u32 = 0u;
 
 struct VertexInput {
     @builtin(instance_index) instance_index: u32,
@@ -73,11 +56,6 @@ struct VertexOutput {
     // draws it in the hover tint.
     @location(4) @interpolate(flat) highlighted: u32,
 }
-
-// Tiny positive NDC depth so an infinity splat sits just in front of the
-// reversed-Z far plane (cleared to 0.0, compared with Greater): it passes the
-// depth test against the cleared background but loses to all finite geometry.
-const INF_DEPTH: f32 = 1e-6;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {

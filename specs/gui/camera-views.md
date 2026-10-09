@@ -287,15 +287,19 @@ details.
 The pick buffer stores a single `u32` per pixel:
 
 ```
-Bits 31..24:  entity type tag (8 bits → 256 types)
-Bits 23..0:   entity index   (24 bits → 16M entities per type)
+Bits 31..30:  entity type tag (2 bits; tag 3 is reserved)
+Bits 29..0:   global entity index (recon pick base + local index)
 ```
 
 | Tag | Constant | Entity type | Index meaning |
 |-----|----------|-------------|---------------|
-| `0x00` | `PICK_TAG_NONE` | None (background) | — |
-| `0x01` | `PICK_TAG_FRUSTUM` | Frustum / camera | Image index into `recon.images` |
-| `0x02` | `PICK_TAG_POINT` | 3D point | Point3D index into `recon.points` |
+| `0` | `PICK_TAG_NONE` | None (background) | — |
+| `1` | `PICK_TAG_FRUSTUM` | Frustum / camera | Global image index |
+| `2` | `PICK_TAG_POINT` | 3D point | Global point index |
+
+[scene-graph.md § Picking](scene-graph.md#picking) describes the global index
+spaces and how they decode back to a reconstruction, and where the tag values
+are defined on the Rust and WGSL sides.
 
 ### Unified hover + click readback
 
@@ -1088,7 +1092,7 @@ struct Uniforms {
 @group(0) @binding(1) var thumbnail_texture: texture_2d_array<f32>;
 @group(0) @binding(2) var thumbnail_sampler: sampler;
 
-const PICK_TAG_FRUSTUM: u32 = 0x01000000u;
+// PICK_TAG_FRUSTUM is declared in common.wgsl, which the pipeline prepends.
 
 struct VertexInput {
     @location(0) position: vec3<f32>,

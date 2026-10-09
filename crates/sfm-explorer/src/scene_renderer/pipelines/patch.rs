@@ -3,7 +3,10 @@
 
 use super::super::gpu_types::*;
 
-const SHADER: &str = include_str!("../../shaders/patch.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../../shaders/common.wgsl"),
+    include_str!("../../shaders/patch.wgsl")
+);
 
 /// Resources created by the patch surfel pipeline.
 ///

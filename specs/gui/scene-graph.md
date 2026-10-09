@@ -766,7 +766,12 @@ the four scene pipelines need a per-recon bind group regardless (frustum
 colors, thumbnail atlas, patch atlas), so the bundle owns bind groups either
 way; a dynamic-offset buffer would have added a second mechanism, plus
 256-byte alignment padding, for nothing. The block is appended as an extra
-binding on each pipeline's existing group 0.
+binding on each pipeline's existing group 0. The WGSL `struct ReconUniforms` is
+declared once, in
+[`shaders/common.wgsl`](../../crates/sfm-explorer/src/shaders/common.wgsl),
+which the scene pipelines prepend to their shader source; each shader declares
+only its own `var<uniform> recon` binding, since the binding index differs
+between pipelines.
 
 The atlas-grid uniform blocks move into the bundle for the same reason:
 `ImageQuadUniforms` and `PatchUniforms` carry per-recon grid dimensions, so
@@ -868,6 +873,14 @@ bits 29..0   global index: recon pick base + local index    (2^30 ≈ 1.07B)
 - The two index spaces are allocated independently, so exceeding 2^30 in
   either is possible in principle; it is logged rather than clamped, being
   three orders of magnitude past the design point.
+- The tag values are defined twice: as `PICK_TAG_*` in
+  [`scene_renderer/picking.rs`](../../crates/sfm-explorer/src/scene_renderer/picking.rs),
+  which decodes them, and in
+  [`shaders/common.wgsl`](../../crates/sfm-explorer/src/shaders/common.wgsl),
+  which the pipelines prepend to every scene shader that writes a pick ID.
+  `the_wgsl_pick_tags_match_the_rust_ones` in
+  [`scene_renderer/pipelines/tests.rs`](../../crates/sfm-explorer/src/scene_renderer/pipelines/tests.rs)
+  parses the WGSL values and fails if they differ from the Rust ones.
 - `pick_id == 0` remains "nothing"; tag 1 with base 0, local 0 encodes as
   `1 << 30`, so there is no collision with the none value.
 - **Non-interactive nodes** (`interactive` off): the per-recon `pickable`

@@ -20,28 +20,12 @@ struct FrustumUniforms {
     _pad2: f32,
 }
 
-// Per-reconstruction block: which node this draw belongs to.
-struct ReconUniforms {
-    model: mat4x4<f32>,
-    point_size: f32,
-    point_pick_base: u32,
-    image_pick_base: u32,
-    pickable: u32,
-    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
-    tint_color: vec4<f32>,
-    // Read only by points.wgsl; declared here so every shader's view of the
-    // shared per-recon buffer stays identical.
-    show_infinity: f32,
-}
+// The pipeline prepends common.wgsl, which declares ReconUniforms, the
+// PICK_TAG_* pick ID tags and INF_DEPTH.
 
 @group(0) @binding(0) var<uniform> uniforms: FrustumUniforms;
 @group(0) @binding(1) var<storage, read> frustum_colors: array<u32>;
 @group(0) @binding(2) var<uniform> recon: ReconUniforms;
-
-// Pick ID tag for frustum entities (bits 31..30).
-const PICK_TAG_FRUSTUM: u32 = 0x40000000u;
-// Pick ID for "nothing" — what a non-pickable node emits.
-const PICK_TAG_NONE: u32 = 0u;
 
 struct VertexInput {
     // Per-vertex: x in {-1, 1} selects endpoint A/B, y in {-1, 1} selects side
