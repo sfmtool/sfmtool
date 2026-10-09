@@ -310,7 +310,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           not already observe, as one version of its reconstruction. For each \
                           such point the patch is projected into the image; where it is in \
                           frame, not grazing and facing the camera, the image is searched for \
-                          it against the consensus of the point's existing observations, and \
+                          it against the point's stored bitmap or its reference observation's \
+                          render, and \
                           the sighting is added when its ZNCC reaches the image's pooled bar or \
                           the point's own track's bar and its keypoint lies within the image's \
                           positional bound of the projection. Nothing else moves: no point, \
