@@ -359,8 +359,8 @@ What is measured, per stage:
 
 | Stage | Over the `in` observations | Per candidate |
 |---|---|---|
-| Cluster | reference selection, template, per-observation warp, ZNCC, shift, tile σ_pos, status | the same, scored against the `in` observations' reference |
-| Track | triangulation, frame, localized keypoints, LOO ZNCC, reprojection error, ray angle, tile σ_pos, coherence matrix, consensus bitmap | ZNCC against the consensus at the projection (cheap), or after a keypoint search (the localizer, one observation against the consensus) |
+| Cluster | reference selection, template, per-observation warp, ZNCC, shift, the tile's ZNCC self-similarity radius, status | the same, scored against the `in` observations' reference |
+| Track | triangulation, frame, localized keypoints, LOO ZNCC, reprojection error, ray angle, the tile's ZNCC self-similarity radius, coherence matrix, consensus bitmap | ZNCC against the consensus at the projection (cheap), or after a keypoint search (the localizer, one observation against the consensus) |
 
 **Keypoint search is a switch.** At the track stage a candidate can be scored
 where the surfel projects, which is view selection's affine candidate score and
@@ -638,7 +638,7 @@ so a reader who knows that panel reads this one, then what the bench adds:
 | Thumbnail, Image, Name | as view mode | as view mode |
 | ZNCC | against the reference | leave-one-out against the consensus |
 | Seed sh., Proj. off | from the seed, px | the peak's move from the sighting, and the sighting's distance from the projection |
-| σ_pos | the observation's own tile | the same |
+| Self-similarity | the ZNCC self-similarity radius of the observation's own tile | the same |
 | Error, Angle | absent | as view mode |
 | Status | the `member_status` word | `localized`, the reading's reason sentence, or `not evaluated` |
 | From | provenance | provenance |
