@@ -11,8 +11,9 @@ minimal-sample estimator succeeds whenever *some* all-inlier 3-point
 sample can be drawn, which keeps registration viable down to inlier
 fractions of a few percent. The RANSAC success probability per draw is
 `w³` for inlier fraction `w`, so the required trials grow as
-`log(1 − p) / log(1 − w³)` — tractable at `w = 0.05` where any
-full-set fit is hopeless.
+`log(1 − p) / log(1 − w³)` — about 55,000 trials at `w = 0.05` and
+`p = 0.999`, an inlier fraction at which a fit over the whole set does not
+converge to the true pose.
 
 Consumers in the tree:
 
@@ -59,14 +60,16 @@ pycolmap's `estimate_and_refine_absolute_pose`
   than 90° from any observable bearing). Callers thinking in pixels
   convert as `max_angular_error = atan(px / f)`.
 
-## The minimal solver
+## Rust API
 
-The solver and estimator live in
-[absolute_pose.rs](../../../crates/sfmtool-core/src/geometry/absolute_pose.rs),
-bound as `sfmtool.geometry.p3p_solve` and `estimate_absolute_pose`;
-the pixel-reprojection refiner is
+The minimal solver and the estimator live in
+[absolute_pose.rs](../../../crates/sfmtool-core/src/geometry/absolute_pose.rs)
+(module `sfmtool_core::geometry::absolute_pose`), bound as
+`sfmtool.geometry.p3p_solve` and `sfmtool.geometry.estimate_absolute_pose`;
+the pixel-reprojection refiner is in
 [pose_refine.rs](../../../crates/sfmtool-core/src/geometry/pose_refine.rs),
-bound as `refine_absolute_pose`.
+re-exported as `sfmtool_core::geometry::refine_absolute_pose` and bound as
+`sfmtool.geometry.refine_absolute_pose`.
 
 ```rust
 /// Up to four world-to-camera poses from three correspondences.
@@ -74,48 +77,7 @@ pub fn p3p_solve(
     bearings: &[Vector3<f64>; 3],
     points: &[Point3<f64>; 3],
 ) -> Vec<(UnitQuaternion<f64>, Vector3<f64>)>;
-```
 
-The three unknown depths `λ_i` (distances from the camera center along
-each bearing) satisfy one law-of-cosines constraint per pair:
-
-```
-λ_i² + λ_j² − 2 λ_i λ_j (b_i · b_j) = ‖X_i − X_j‖²    for (0,1), (0,2), (1,2)
-```
-
-Solve this system with the **Lambda Twist** method (Persson & Nordberg,
-ECCV 2018): the two-quadric intersection is parameterized so the depths
-follow from the roots of a cubic and the eigendecomposition of a 3×3
-symmetric matrix, avoiding the numerically fragile quartic of the
-classical (Grunert 1841) formulation. Up to four real solutions survive
-the positivity constraint `λ_i > 0`. For each, the camera-frame points
-`λ_i b_i` and the world points `X_i` are related by a rigid motion;
-recover `(R, t)` with an exact three-point rigid alignment — a Kabsch
-alignment of the two triples, the paper's direct rotation recovery being
-an equally acceptable route to the same contract: clean inputs reproduce
-the generating pose to floating-point accuracy.
-
-Degenerate inputs return an empty result rather than poses: collinear
-`X_i` (alignment is rank-deficient), coincident or antipodal bearings,
-and non-finite values. Collinearity is read off the **second** singular
-value of the Kabsch cross-covariance rather than the third, because three
-points are always coplanar: the third singular value is ~0 for every
-triple — that free plane-normal direction is fixed by the determinant
-correction `R = V · diag(1, 1, det(V·Uᵀ)) · Uᵀ` that keeps `R` proper — so
-only the collapse of the *second* distinguishes a collinear triple from a
-usable one. The test is relative: reject when `σ₁ < KABSCH_RANK_EPS · σ₀`,
-with `KABSCH_RANK_EPS = 1e-9` in `absolute_pose.rs`.
-
-The solver is a pure function: one allocation for the result, no
-randomness, bit-stable across runs. That result is a plain `Vec` reserved
-once for four poses rather than a fixed-capacity vector, because the
-workspace carries no `arrayvec` dependency and uses fixed-capacity vectors
-nowhere else; at most four poses are ever pushed, so the reservation never
-grows.
-
-## The robust estimator
-
-```rust
 pub struct AbsolutePoseOptions {
     /// Inlier bound on the bearing/prediction angle, radians.
     pub max_angular_error: f64,
@@ -153,12 +115,122 @@ pub fn estimate_absolute_pose(
     points: &[Point3<f64>],
     options: &AbsolutePoseOptions,
 ) -> Option<AbsolutePoseEstimate>;
+
+pub struct PoseRefinement {
+    pub rotation: UnitQuaternion<f64>,   // world-to-camera, canonical
+    pub translation: Vector3<f64>,
+    pub inlier_fraction: f64,            // within inlier_px, over all inputs
+}
+
+pub fn refine_absolute_pose(
+    cam: &CameraIntrinsics,
+    uv: &[[f64; 2]],                     // observed pixels, one per point
+    points: &[[f64; 3]],                 // world points (canonical frame)
+    init_rotation: &UnitQuaternion<f64>,
+    init_translation: &Vector3<f64>,
+    trim_rounds: usize,
+    keep_fraction: f64,
+    inlier_px: f64,
+) -> PoseRefinement;
 ```
 
-Per trial: draw three distinct indices with the seeded SplitMix64
-sampler, skip degenerate samples (the solver's empty result), score every
+**Why the estimator takes bearings and the refiner takes pixels.** The
+solver and the estimator work on rays: the P3P equations below are stated in
+bearings, and the inlier test is an angle between two rays. Taking bearings
+keeps both free of any camera model. The caller converts each pixel once with
+`CameraIntrinsics::pixel_to_ray`, which handles every supported model,
+including fisheye rays more than 90° off the optical axis, and one angular
+threshold then applies to all of them. The refiner minimizes pixel
+reprojection error, the quantity the callers' inlier gates are measured in
+(`resect_one` and `repair_poses` both count inliers within a pixel bound), and
+that needs the camera's projection and its Jacobian, so it takes the camera
+and the pixels themselves.
+
+**Why the refiner is a separate call.** Not every caller starts from a
+RANSAC estimate. `repair_poses` refines from a pose built from an image's
+registered neighbours, and `resect_one` refines from each of its initial
+poses when the estimator finds no large enough consensus; both call
+`refine_absolute_pose` without `estimate_absolute_pose`. The estimator returns
+a per-input inlier mask so a caller that does run both can pass only the
+consensus to the refiner.
+
+`estimate_absolute_pose` returns `None` rather than an error when no
+consensus reaches `min_inliers`, because an image with too few correct matches
+is an expected outcome for a caller registering many images, not a fault.
+
+A typical call, following `resect_one`: convert the pixels to bearings,
+estimate with a 4 px threshold converted to an angle, then refine on the
+consensus.
+
+```rust
+use nalgebra::{Point3, Vector3};
+use sfmtool_core::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions};
+use sfmtool_core::geometry::refine_absolute_pose;
+
+// cam: &CameraIntrinsics, uv: &[[f64; 2]] observed pixels,
+// world: &[[f64; 3]] the matching world points.
+let bearings: Vec<Vector3<f64>> = uv
+    .iter()
+    .map(|p| Vector3::from(cam.pixel_to_ray(p[0], p[1])))
+    .collect();
+let points: Vec<Point3<f64>> = world.iter().map(|x| Point3::from(*x)).collect();
+let (fx, fy) = cam.focal_lengths();
+let options = AbsolutePoseOptions {
+    max_angular_error: (4.0 / (0.5 * (fx + fy))).atan(),
+    ..Default::default()
+};
+if let Some(est) = estimate_absolute_pose(&bearings, &points, &options) {
+    let rows: Vec<usize> = (0..uv.len()).filter(|&k| est.inliers[k]).collect();
+    let uv_c: Vec<[f64; 2]> = rows.iter().map(|&k| uv[k]).collect();
+    let world_c: Vec<[f64; 3]> = rows.iter().map(|&k| world[k]).collect();
+    let refined = refine_absolute_pose(
+        cam, &uv_c, &world_c, &est.rotation, &est.translation, 5, 0.6, 3.0,
+    );
+    // refined.rotation, refined.translation: the world-to-camera pose.
+}
+```
+
+## The minimal solver
+
+The three unknown depths `λ_i` (distances from the camera center along
+each bearing) satisfy one law-of-cosines constraint per pair:
+
+```
+λ_i² + λ_j² − 2 λ_i λ_j (b_i · b_j) = ‖X_i − X_j‖²    for (0,1), (0,2), (1,2)
+```
+
+`p3p_solve` solves this system with the **Lambda Twist** method (Persson &
+Nordberg, ECCV 2018): the two-quadric intersection is parameterized so the
+depths follow from the roots of a cubic and the eigendecomposition of a 3×3
+symmetric matrix, avoiding the numerically fragile quartic of the
+classical (Grunert 1841) formulation. Up to four real solutions survive
+the positivity constraint `λ_i > 0`. For each, the camera-frame points
+`λ_i b_i` and the world points `X_i` are related by a rigid motion, and
+`p3p_solve` recovers `(R, t)` by a Kabsch alignment of the two triples
+rather than by the paper's direct rotation recovery. The alignment is exact
+for three points, so clean inputs reproduce the generating pose to
+floating-point accuracy.
+
+Degenerate inputs return an empty result rather than poses: collinear
+`X_i` (alignment is rank-deficient), coincident or antipodal bearings,
+and non-finite values. Collinearity is read off the **second** singular
+value of the Kabsch cross-covariance rather than the third, because three
+points are always coplanar: the third singular value is ~0 for every
+triple — that free plane-normal direction is fixed by the determinant
+correction `R = V · diag(1, 1, det(V·Uᵀ)) · Uᵀ` that keeps `R` proper — so
+only the collapse of the *second* distinguishes a collinear triple from a
+usable one. The test is relative: reject when `σ₁ < KABSCH_RANK_EPS · σ₀`,
+with `KABSCH_RANK_EPS = 1e-9` in `absolute_pose.rs`.
+
+The solver is a pure function with no randomness, so its output is the
+same on every run.
+
+## The robust estimator
+
+Each trial draws three distinct indices with the seeded SplitMix64
+sampler, skips a degenerate sample (the solver's empty result), scores every
 candidate pose against all `N` correspondences with the angular test, and
-keep the candidate with the most inliers. Scoring accumulates in input
+keeps the candidate with the most inliers. Scoring accumulates in input
 order — combined with the seeded sampler this makes the whole estimator
 deterministic.
 
@@ -189,36 +261,18 @@ accuracy gap to a full robust refinement at negligible cost.
 
 **Termination.** After each trial with best inlier count `n_best`, the
 required trial count is `log(1 − confidence) / log(1 − (n_best/N)³)`;
-stop when the completed trials reach it, or at `max_iterations`.
-Return `None` when the best consensus is below `min_inliers`.
+the estimator stops when the completed trials reach it, or at
+`max_iterations`. It returns `None` when the best consensus is below
+`min_inliers`.
 
 ## Pose refinement
 
 The estimator scores and refits against **angular** residuals over bearings,
 which is what keeps it model-agnostic and robust at tiny inlier fractions. A
 caller that holds full pixel observations — for example after an estimate has
-grown an image's inlier set — can polish the pose against **pixel**
+grown an image's inlier set — can then refine the pose against **pixel**
 reprojection error over its six degrees of freedom with
 `refine_absolute_pose`.
-
-```rust
-pub struct PoseRefinement {
-    pub rotation: UnitQuaternion<f64>,   // world-to-camera, canonical
-    pub translation: Vector3<f64>,
-    pub inlier_fraction: f64,            // within inlier_px, over all inputs
-}
-
-pub fn refine_absolute_pose(
-    cam: &CameraIntrinsics,
-    uv: &[[f64; 2]],                     // observed pixels, one per point
-    points: &[[f64; 3]],                 // world points (canonical frame)
-    init_rotation: &UnitQuaternion<f64>,
-    init_translation: &Vector3<f64>,
-    trim_rounds: usize,
-    keep_fraction: f64,
-    inlier_px: f64,
-) -> PoseRefinement;
-```
 
 Refinement is **trimmed least-squares**, not a robust loss: from the initial
 pose, each of `trim_rounds` rounds computes every observation's residual norm,
@@ -235,8 +289,8 @@ fisheye models (`OPENCV_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`,
 `RAD_TAN_THIN_PRISM_FISHEYE`) and `EQUIRECTANGULAR`, fall back to a central
 difference of the projection only, keeping the pose block exact. Damping `λ` is
 adapted down on a cost improvement, up on a rejected step. The trimmed-L2
-choice is deliberate: a plain L2 fit over all correspondences is dragged by the
-leverage of gross outliers, while a robust loss seeded from all-large residuals
+choice is deliberate: a plain L2 fit over all correspondences is biased by gross
+outliers, whose large residuals dominate the sum, while a robust loss seeded from all-large residuals
 has near-zero gradient — trimmed L2 from a reasonable init avoids both failure
 modes.
 
@@ -323,13 +377,15 @@ refine_absolute_pose(
   `inlier_fraction`; the trim rounds reject planted outliers a plain L2 fit
   would follow.
 
-## Non-goals (v1)
+## Non-goals
 
-- Large-`N` linear solvers (EPnP) and covariance/uncertainty output.
-- Multi-view bundle adjustment — `refine_absolute_pose` polishes a single
-  camera's pose against fixed 3D points; joint refinement over many cameras
-  and structure belongs to a caller's bundle adjustment.
-- Gravity- or focal-estimating variants (P2P+gravity, P4Pf).
+- The module has no large-`N` linear solver (EPnP), and it reports no
+  covariance or other uncertainty for a pose.
+- It does no multi-view bundle adjustment: `refine_absolute_pose` refines a
+  single camera's pose against fixed 3D points, and joint refinement over many
+  cameras and the structure belongs to a caller's bundle adjustment.
+- It has no variant that uses a known gravity direction or estimates the
+  focal length (P2P+gravity, P4Pf).
 
 ## References
 
