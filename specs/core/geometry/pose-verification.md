@@ -256,8 +256,7 @@ a caller can do that without re-running either screen.
 
 ## Testing requirements
 
-- Substrate: construction cost linear in observations under the span
-  cap; `nearest`/`farthest` and both per-pair means exact against a dense
+- Substrate: `nearest`/`farthest` and both per-pair means exact against a dense
   reference on a small scene; mask honored; serialization round-trips,
   including a reversed-orientation reload and a magnitude-only one; the
   vector's orientation pinned on a scene whose two clusters list the same
