@@ -432,7 +432,7 @@ same pair over the middle square and each ninth, plain) and
 `blur_matched_zncc`, with `bitmap_blur_sigma` and `sharper_than_bitmap`
 ([editable-track.md](../bench/editable-track.md)), and Track View shows them
 in its *ZNCC* column, plain and blur-matched. The bench's `min_zncc` bars,
-whole and middle, judge the **plain** score: it still falls for a view that is
+whole and middle, judge the **plain** score: it falls for a view that is
 out of focus, which the bars are there to catch, where the blur-matched score
 would not. Member coherence decides on its own matrix, and the
 per-observation covariance's `1 − ZNCC` is the localizer's peak; whether
@@ -766,7 +766,7 @@ row reads 1. The Python tests are in
 - **The bench's ZNCC bars blur-matched.** The bars judge each row's plain
   score against the stored bitmap; blur-matched, they would stop reacting to
   views that are out of focus. The localizer's leave-one-out ZNCC, which
-  places each row and which the bars judged before, is not blur-matched
+  places each row and which Track at Pixel's median gates read, is not blur-matched
   either: it would need each row's leave-one-out template and its
   self-similarity reading, which the localizer builds per round and does not
   return, and the localizer is also the alignment, which stays unblurred.

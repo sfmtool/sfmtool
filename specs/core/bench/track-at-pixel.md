@@ -35,7 +35,9 @@ chosen in the leave-one-track-out harness in
 [`scripts/track_at_pixel/`](../../../scripts/track_at_pixel/README.md), where
 this cascade first ran as a Python composition of the bench bindings
 ([`candidates/cascade.py`](../../../scripts/track_at_pixel/candidates/cascade.py)); the Rust operation is a port of it and scores the
-same there. What is still open about the operation, and the other candidates,
+same there. The Python candidates read a track with `evaluate(...,
+render_bitmap=True)`, as the Rust operation does, and take their medians of
+`loo_zncc`. What is still open about the operation, and the other candidates,
 is in [the draft](../../drafts/track-at-pixel.md).
 
 ## Rust API
@@ -142,19 +144,28 @@ Observation 0 is the queried sighting, `in` and pinned, with its keypoint within
 `max_query_offset_px` of the pixel. The track has no origin, so a commit of it
 creates a point. It **carries its patch bitmap and colour**, rendered where it
 stands: the finish's last step slides the patch onto the pixel, and a patch step
-drops the bitmap rendered over the square as it stood, so the operation renders
-once more before it returns. The render is the one a fit ends with
-(`render_bitmap_in_place`): the tile of the `in` sighting the reference-view
-rule picks, at its keypoint, or the fused mean of the `in` sightings where the
-rule picks none or reaches its pick only through its last fallback
-([../patch/reference-view.md](../patch/reference-view.md) § "The stored
-bitmap"), on the reconstruction's own bitmap grid where it
-stores one, and the colour is read off the tile's centre. Every row is then
-scored against the new bitmap (`score_bitmap`), so the rows' bitmap scores are
-the new bitmap's; the render moves nothing, so the position, the placement,
-the keypoints, the verdicts and every other reported number are what they were
-before it. A reconstruction that stores a bitmap per
-point can therefore take the track in a commit as it is returned.
+drops the bitmap rendered over the square as it stood, so every reading after
+a move renders the bitmap again where the patch stands. The render is the one
+a fit ends with: the tile of the held reference or of the `in` sighting the
+reference-view rule picks, at its keypoint, or the fused mean of the `in`
+sightings where the rule picks none or reaches its pick only through its last
+fallback ([../patch/reference-view.md](../patch/reference-view.md) § "The
+stored bitmap"), on the reconstruction's own bitmap grid where it stores one,
+and the colour is read off the tile's centre. Every row is then scored against
+the new bitmap, so the rows' bitmap scores are the new bitmap's. A
+reconstruction that stores a bitmap per point can therefore take the track in
+a commit as it is returned.
+
+**Which reading each judgement takes.** Every reading after the patch is
+anchored or moved is `evaluate_rendering_bitmap`, so the bars, which the
+thresholds' verdicts in every step below come from, judge each row's score
+against a bitmap rendered where the patch then stands
+([editable-track.md](editable-track.md) § "The reference view"). The median
+ZNCC that scores a candidate, keeps or drops a refit or a tilt, and is judged
+by the gate is the median of the `in` rows' leave-one-out ZNCC (`loo_zncc`),
+because the cascade's gates were tuned on that reading; the tracks do carry a
+bitmap. The `Final` record's middle median is likewise the median of
+`loo_zncc_middle`.
 
 ```rust
 use sfmtool_core::bench::{
@@ -184,7 +195,7 @@ candidate's `(image, pixel)` sightings become a one-sighting cluster with every
 sighting added and set `in` by hand, the cluster is upgraded to the track stage
 (which triangulates the sightings and runs the track-stage fit), the track is
 given an [anchored fit](#anchoring) and the thresholds' verdicts, and it is
-scored as its `in` count times its median ZNCC, floored at zero. The best score
+scored as its `in` count times its median leave-one-out ZNCC, floored at zero. The best score
 is finished.
 
 **Clusters** (stage `clusters`). The clusters with a member in the queried image
@@ -253,26 +264,29 @@ stay consistent with one another, but the track is no longer at the pixel.
 Anchoring slides the patch back across its own plane until its centre in the
 queried photograph is the pixel (`translate_patch_to_pixel`), which carries every
 sighting by the same in-plane displacement, and reads the track there
-(`evaluate`). An **anchored fit** is an anchor followed by `anchor_refits` rounds
-of fit-then-anchor. A round is kept when the median ZNCC does not fall, and
+(`evaluate_rendering_bitmap`). An **anchored fit** is an anchor followed by `anchor_refits` rounds
+of fit-then-anchor. A round is kept when the median leave-one-out ZNCC does not fall, and
 always when an `in` sighting has no keypoint, since the fit gives it one. The
 first round is also kept always after growth, whose new sightings sit at the
 patch centre's projection until a fit localizes them.
 
 ### Steps
 
-1. **Anchor.** An anchored fit and the thresholds' verdicts. A refusal here is
-   the member's refusal at stage `anchor`.
+1. **Anchor.** An anchored fit and the thresholds' verdicts, the bars judging
+   the scores against the bitmap rendered where the patch stands after the
+   anchor. A refusal here is the member's refusal at stage `anchor`.
 2. **Neighbours' normal.** The observations within `normal_prior_radius_px` of
    the pixel whose depth is within 15% of the track's give, over the nearest
    `normal_prior_k`, a distance-weighted mean normal. The patch is tilted toward
    it (flipped to face the queried camera), refit with an anchored fit and
-   thresholded, and the tilt is kept unless the median ZNCC falls by more than
-   `normal_prior_tolerance`.
+   thresholded against the scores of a bitmap rendered at the tilted patch,
+   and the tilt is kept unless the median leave-one-out ZNCC falls by more
+   than `normal_prior_tolerance`.
 3. **Growth.** With two or more `in` views, the geometry search from the queried
    sighting adds the photographs the patch projects into and reads well in. When
-   it adds any, the track is read, thresholded and given an anchored fit whose
-   first round is always kept.
+   it adds any, the track is read (with a bitmap rendered where the patch
+   stands, whose scores the bars judge), thresholded and given an anchored fit
+   whose first round is always kept.
 4. **Cleaning.** Up to `clean_rounds` times: every `in` view other than the
    query whose correlation peak sits more than `clean_max_shift_px` from its
    keypoint, or whose keypoint sits more than `clean_max_projection_px` from the
@@ -280,18 +294,17 @@ patch centre's projection until a fit localizes them.
    fit.
 5. **Gates** (stage `gate`), in this order: the queried sighting is `in`; its
    keypoint is within `max_query_offset_px` of the pixel; at least
-   `min_in_views` views are `in`; their median ZNCC is at least
-   `min_zncc_median`; and no `in` view's keypoint sits more than
-   `max_projection_offset_px` from the point's projection. The `Final` record
-   carries the median ZNCC the gate judged and, beside it, the median middle
-   ZNCC over the same views (`zncc_middle_median`,
-   [`editable-track.md`](editable-track.md) § "The middle ZNCC"), which no gate
-   reads.
-6. **Bitmap.** The track that passed is given its patch bitmap and colour
-   where it stands, by the render a fit ends with, which moves nothing, and
-   every row is scored against that bitmap. The last
-   anchor dropped the bitmap the fits before it had rendered, because it slid
-   the patch off the square that bitmap was rendered over.
+   `min_in_views` views are `in`; their median leave-one-out ZNCC
+   (`loo_zncc`) is at least `min_zncc_median`; and no `in` view's keypoint
+   sits more than `max_projection_offset_px` from the point's projection. The
+   `Final` record carries the median the gate judged and, beside it, the median
+   leave-one-out middle ZNCC over the same views (`zncc_middle_median`, of
+   `loo_zncc_middle`, [`editable-track.md`](editable-track.md) § "The middle
+   ZNCC"), which no gate reads.
+6. **Bitmap.** The track that passed already carries the bitmap its last
+   reading rendered where the patch stands, with every row scored against it.
+   Only where it ends with no bitmap is it given one here, by the render a fit
+   ends with, which moves nothing, with every row scored against it.
 
 ## Parameters
 

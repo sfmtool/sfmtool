@@ -660,6 +660,7 @@ looking at is the one at the cursor, and this block reports it.
     "reason": null,                  // the sentence of a refusal or failure
     "running": false,
     "thresholds": { "min_zncc": 0.8, "min_zncc_middle": 0.7,
+                    "cluster_min_zncc": 0.7, "cluster_min_zncc_middle": 0.7,
                     "max_shift_px": 6.0,
                     "max_zncc_self_similarity_radius": 2.5,
                     "max_projection_error_px": 3.0,
@@ -3574,10 +3575,18 @@ is dropped unless the row was the reference already, and the live evaluation
 that follows renders it from the row and scores every row against it, so
 `stage_data.reference_observation` names the row once `evaluation.state` reads
 `current`. The reply carries `observation` and `was`, the reference the track
-held before or null. It is refused at the cluster stage, for an `out` row and
-for a row with no keypoint; a call on the reference the track holds on a pinned
-row has no effect. Unpinning the reference's row with `set_bench_track_verdict`
-hands the reference back to the reference-view rule's pick at the next render.
+held before or null. `was` is the track's reference whether or not its bitmap
+has been rendered, so it can name a row that `get_bench_track` showed as
+`reference_observation: null` while a render was pending (after a step that
+dropped the bitmap and kept the reference). It is refused at the cluster
+stage, for an `out` row and for a row with no keypoint; a call on the
+reference the track holds on a pinned row has no effect. Unpinning the
+reference's row with `set_bench_track_verdict` hands the reference back to the
+reference-view rule's pick at the next render; where the rule picks another
+row, the unpin drops the bitmap and the rows' scores, its report ends `waiting
+for the bitmap to be rendered from <image>`, and the bars judge nothing until
+the live evaluation renders the new bitmap, which logs `Evaluated <label>: the
+bars turned N in and M out` where its repaint moves verdicts.
 
 **A step that had no effect answers successfully, with `changed: false`.**
 Setting the verdict an observation already has, unpinning rows none of which is
@@ -3878,9 +3887,14 @@ stored bitmap"). Which row it is follows the pin of the row that holds it
 ([bench.md](bench.md) § "The reference"). While that row is pinned every render
 renders from it, whichever row the rule picks, so `reference_observation` and
 `reference_view_observation` can differ; a track put on the bench from a point
-has every row pinned, so the point's stored reference stays until it is let go.
-Unpinning the row hands the reference to the rule's pick at the next render,
-and while it stays unpinned the reference follows the pick at every
+has every row pinned, so the point's stored reference stays until the person
+unpins its row. Unpinning the row hands the reference to the rule's pick at
+the next render. Where the rule picks another row, the unpin drops the bitmap
+and clears every row's score against it, so until the live evaluation renders
+the new bitmap `has_bitmap` is false, `reference_observation` is null and the
+bars have judged nothing; the evaluation then renders from the pick, scores
+the rows and judges them, and its Action Log row says what the bars moved.
+While the row stays unpinned the reference follows the pick at every
 evaluation. `set_bench_track_reference` makes a row the reference and pins it.
 A step that sights the reference's row elsewhere drops the bitmap and keeps the
 reference, and the live evaluation renders a new one from the same row; one
@@ -3908,10 +3922,12 @@ the consensus of the other rows at the correlation peak `seed_shift_px` is
 measured to, with `loo_zncc_middle` beside it; no bar judges them, and a commit
 writes `loo_zncc` as the observation's confidence. Where the localizer could
 not read the row they are null and `reason` names its refusal, whether or not
-the row has a score. The
-`thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
-`min_zncc_middle`, which is `0.5` on a new track, beside `min_zncc`'s `0.65`, and
-off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a
+the row has a score, and the bars leave its verdict where it is. The
+`thresholds` block and `apply_bench_track_thresholds` carry the matching bars,
+eight in all: at the track stage `min_zncc`, `0.60` on a new track, and
+`min_zncc_middle`, `0` (off) on a new track; at the cluster stage
+`cluster_min_zncc` and `cluster_min_zncc_middle`, `0.7` each, which judge the
+achieved template ZNCC and its middle; a middle bar is off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a
 new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
 further is painted `out`, a row with no reading clears it, and at `3`, the
 largest radius read, it turns nothing out. `max_projection_error_px`, in

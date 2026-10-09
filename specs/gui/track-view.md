@@ -679,7 +679,9 @@ member registers onto, once an evaluation has cut one. With neither -- a point
 that stores no patch, a track with no bitmap rendered yet, or a cluster with no template --
 the slot is an empty frame of the same size, so the controls beside it do not
 move when a step fills it. Its hover text says which it is, or what would fill
-it. The bitmap is converted by `patch::stored_patch_image`: one channel repeated
+it; for a track-stage bitmap, that it is the render of the reference
+observation, the row the *Reference* column marks, or the mean of the views
+where there is none. The bitmap is converted by `patch::stored_patch_image`: one channel repeated
 across RGB, three as RGB, and a fourth, the confidence, dropped for an opaque
 alpha, and an all-zero bitmap, which is how a point with no stored patch is
 written, is not drawn. The upload is kept against the track's `Arc` and dropped
@@ -819,15 +821,17 @@ cannot say which of two tracks it belongs to.
 
 #### The thresholds
 
-Six boxes, one per bar of `Thresholds`, so no bar is one only the wire can
-move. Five of them judge the table's readings, and they stand in **a threshold
+Six boxes, so no bar of `Thresholds` is one only the wire can move. The two
+ZNCC boxes edit the bars of the stage the track is in (`Thresholds::zncc_bars`): `min_zncc` and `min_zncc_middle` at
+the track stage, `cluster_min_zncc` and `cluster_min_zncc_middle` at the
+cluster stage, which judges another score. Five of them judge the table's readings, and they stand in **a threshold
 row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
 Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Reference  Status  ...  Name
-Thresholds              [65]% whole         [2.5] px whole      [3.0] px   [6.0] px
-                        [50]% mid
+Thresholds              [60]% whole         [2.5] px whole      [3.0] px   [6.0] px
+                        [0]% mid
 ```
 
 The row is drawn above the scroll area with the headings, so a bar stays beside
@@ -835,10 +839,12 @@ the heading of what it judges however far the table is scrolled, and the
 columns no bar judges leave room for the word *Thresholds* at its left. The
 minimum ZNCC and minimum middle ZNCC boxes stack in the *ZNCC* column, whole
 over mid, as its cell stacks the two readings. They read and take percent in
-whole steps, as that column reads, so they show 65 and 50 on a new track while
-the track and the wire hold 0.65 and 0.5; a typed value may end in `%`. Both
-judge the plain score against the stored bitmap. A middle bar of 0 turns it
-off, and a row with no middle reading clears it.
+whole steps, as that column reads, so on a new track they show 60 and 0 at
+the track stage while the track and the wire hold 0.60 and 0, and 70 and 70
+at the cluster stage; a typed value may end in `%`. At the track stage both
+judge the plain score against the stored bitmap, and at the cluster stage the
+achieved template ZNCC. A middle bar of 0 turns it off, and a row with no
+middle reading clears it.
 The self-similarity box, `px whole`, is the largest self-similarity radius, in
 patch-grid px, 2.5 on a new track, and takes `0` to `3` to one decimal. It
 judges the whole tile's radius, the upper reading in the *Self-similarity*
@@ -1014,7 +1020,9 @@ what a kept observation is used for, when the thresholds set the switch, what a
 click on the switch, on the pin and on the heading's own pin does, and what the
 cell's colour means, and the *Verdict* heading's says what the column shows,
 that nothing here changes a verdict of the point, and that ticking *Edit* is the
-way to work on it.
+way to work on it. The *ZNCC* heading's says that at the track stage the
+number is the row's tile against the stored patch bitmap, read plain, which
+the bars judge, and that a value after `⏵` is the same pair read blur-matched.
 
 **The *Keep* heading carries a pin**, in Edited mode, over the rows' pin column, and it
 toggles. While any row of the focused item is pinned, clicking it unpins every
@@ -1062,8 +1070,8 @@ that is not there prints a bare `-`, with no unit.
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
-| Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too and a red one where it does not; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row the test that turned it away, `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less` or `less sharp`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the reason and every reading |
-| Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the leave-one-out one the fit scored at the walked peak (left out where it scored none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
+| Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row the test that turned it away, `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less` or `less sharp`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the reason and every reading |
+| Status | the kernel's `member_status` | `walked 19 grid px (leave-one-out ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the leave-one-out one the fit scored at the walked peak (left out where it scored none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
 
@@ -1337,6 +1345,9 @@ reference"). The marks (`reference::ReferenceRows`, `ReferenceMark`):
 
 - **The reference is the rule's pick:** its cell reads `reference` on a green
   fill.
+- **The rule picks no row:** the reference's cell reads `reference` with no
+  fill (`ReferenceMark::ReferenceWithoutPick`), since there is no pick to
+  accept in its place.
 - **It is not:** the reference's cell reads `reference` on a red fill, and the
   pick's own cell reads `pick` on a grey fill. Unpinning the reference's row,
   or *Set as reference* on the pick, makes the pick the reference, and the
