@@ -189,7 +189,7 @@ impl PyEditedReconstruction {
     ///         (``min_zncc`` alone).
     ///     basis: The statistic of the references' ZNCCs against the template
     ///         (the reference observation's own left out) for the pooled bar, and for ``"track_basis"``: ``"median_minus_mad"``
-    ///         (default, with ``basis_k``, default 3), ``"min"`` or
+    ///         (default, with ``basis_k``, default 2), ``"min"`` or
     ///         ``"fraction_of_median"`` (with ``basis_fraction``).
     ///     track_basis, track_basis_k, track_basis_fraction: The track's own
     ///         statistic under ``"pooled_or_track"`` (default
@@ -245,7 +245,7 @@ impl PyEditedReconstruction {
         *,
         rule = "pooled_or_track",
         basis = "median_minus_mad",
-        basis_k = 3.0,
+        basis_k = 2.0,
         basis_fraction = 0.9,
         track_basis = "fraction_of_median",
         track_basis_k = 3.0,

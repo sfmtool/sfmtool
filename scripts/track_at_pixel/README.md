@@ -225,32 +225,45 @@ noted):
 
 ## The median gate on the score against the bitmap
 
-Recorded 2026-10-09, when the leave-one-out ZNCC was removed and the finish's
-median gate (`finish.min_zncc_median`) came to read each `in` row's plain ZNCC
-against the stored bitmap, the reference row left out, at a default of 0.7.
+Recorded 2026-10-09, after keypoint localization came to align every view to
+the point's reference render and its sub-pixel step became a 2-D quadratic
+fit over the 3×3 neighbourhood of the correlation peak. The finish's median
+gate (`finish.min_zncc_median`) reads each `in` row's plain ZNCC against the
+stored bitmap, the reference row left out; its default is 0.7.
 `core_cascade`, full pass, every query of the checked-in ground truths, swept
-with `--opt core_options={"finish.min_zncc_median": x}`. A track is correct
-here when it passes the good bar's position and precision tests; the bar's
-own ZNCC test is left out, since it reads the same score.
+with `--opt core_options={"finish.min_zncc_median": x}`; the gate is off at
+x = -1, the lowest a ZNCC can be. A track is correct here when it passes the
+good bar's position and precision tests; the bar's own ZNCC test is left
+out, since it reads the same score.
 
 | gate | seoul built | correct | wrong | precision | Kerry Park built | correct | wrong | precision |
 |---|---|---|---|---|---|---|---|---|
-| off | 1180 (92.4%) | 991 | 189 | 0.840 | 3196 (84.8%) | 2587 | 609 | 0.809 |
-| 0.6 | 1117 (87.5%) | 970 | 147 | 0.868 | 3062 (81.3%) | 2550 | 512 | 0.833 |
-| 0.65 | 1095 (85.7%) | 957 | 138 | 0.874 | 3040 (80.7%) | 2538 | 502 | 0.835 |
-| **0.7** | **1065 (83.4%)** | **937** | **128** | **0.880** | **2983 (79.2%)** | **2495** | **488** | **0.836** |
-| 0.75 | 1015 (79.5%) | 901 | 114 | 0.888 | 2873 (76.3%) | 2396 | 477 | 0.834 |
-| 0.8 | 915 (71.7%) | 818 | 97 | 0.894 | 2676 (71.0%) | 2231 | 445 | 0.834 |
+| off | 1171 (91.7%) | 979 | 192 | 0.836 | 3197 (84.9%) | 2584 | 613 | 0.808 |
+| 0.6 | 1115 (87.3%) | 964 | 151 | 0.865 | 3067 (81.4%) | 2550 | 517 | 0.831 |
+| 0.65 | 1092 (85.5%) | 949 | 143 | 0.869 | 3046 (80.9%) | 2539 | 507 | 0.834 |
+| **0.7** | **1064 (83.3%)** | **928** | **136** | **0.872** | **2992 (79.4%)** | **2503** | **489** | **0.837** |
+| 0.75 | 1015 (79.5%) | 894 | 121 | 0.881 | 2876 (76.3%) | 2401 | 475 | 0.835 |
+| 0.8 | 909 (71.2%) | 811 | 98 | 0.892 | 2670 (70.9%) | 2230 | 440 | 0.835 |
 
 Of 1277 seoul_bull and 3767 Kerry Park queries. The median position error of
-the built tracks falls only from 0.15 to 0.13 ground-truth half-extents across
-the sweep. With the gate off, the median score of correct tracks is 0.86
-(seoul_bull) and 0.89 (Kerry Park), and of tracks at the wrong position 0.75
-and 0.86: the gate mostly removes tracks with a low score of either kind. On
-Kerry Park precision stops rising at 0.65, and on seoul_bull each 0.05 buys
-half a point of precision for 1 to 3 points of correct tracks. 0.7 is kept.
-0.6 would return 2.6 (seoul_bull) and 1.5 (Kerry Park) points more correct
-tracks per query at a precision 1.2 and 0.3 points lower.
+the built tracks falls from 0.16 to 0.13 ground-truth half-extents across the
+sweep on seoul_bull, and from 0.13 to 0.12 on Kerry Park. With the gate off,
+the median score of correct tracks is 0.86 (seoul_bull) and 0.89 (Kerry
+Park), and of tracks at the wrong position 0.76 and 0.85: on seoul_bull the
+gate removes more wrong tracks than correct ones, and on Kerry Park the two
+kinds score too close together for the gate to tell them apart well.
+
+Precision is not flat on seoul_bull: it rises with every step, from 0.865 at
+0.6 to 0.892 at 0.8, while each step removes more correct tracks than the one
+before (15, 21, 34 and 83). On Kerry Park precision rises from 0.831 at 0.6 to
+0.837 at 0.7 and is flat from 0.65 to 0.8, within 0.3 points, while the
+correct tracks keep falling (from 2539 to 2230). The data does not single out
+one value: 0.7 is where Kerry Park's precision is highest, by under half a
+point, and 0.7 is the value chosen, as a judgement call. Against it, 0.6 would
+return 2.8 (seoul_bull) and 1.2 (Kerry Park) points more correct tracks per
+query at a precision 0.7 and 0.6 points lower; 0.75 would return 2.7 and 2.7
+points fewer correct tracks per query, for 0.9 points more precision on
+seoul_bull and 0.2 points less on Kerry Park.
 
 The empty pass builds no track on this date: with no reconstructed point, the
 point-or-bearing test has no observation to measure the reprojection noise
@@ -998,6 +1011,6 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Adjacency-surfel normals | `analysis.estimate_adjacency_surfel_normals` |
 | Cluster refinement | `matching.refine_cluster_patches` |
 
-Two kernels are not bound yet: registering one bitmap directly against another,
-and congealing a bare stack of bitmaps. The `PatchCloud` kernels reach both
-indirectly, through a one-patch cloud built with `from_halfvec_arrays`.
+One kernel is not bound yet: registering one bitmap directly against another.
+The `PatchCloud` kernels reach it indirectly, through a one-patch cloud built
+with `from_halfvec_arrays`.

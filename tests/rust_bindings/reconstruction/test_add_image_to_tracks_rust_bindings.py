@@ -161,6 +161,19 @@ def test_every_rule_and_gate_is_accepted(without_image, pyramids):
         }
 
 
+def test_the_default_pooled_bar_is_two_scaled_deviations(without_image, pyramids):
+    """The default pooled bar is the median minus two scaled MADs: the same
+    bar as ``basis_k=2`` and, where the references spread at all, higher than
+    ``basis_k=3``."""
+    edited = EditedReconstruction(without_image[0])
+    _, default = edited.add_image_to_tracks(IMAGE, pyramids)
+    _, two = edited.add_image_to_tracks(IMAGE, pyramids, basis_k=2.0)
+    _, three = edited.add_image_to_tracks(IMAGE, pyramids, basis_k=3.0)
+    assert default["pooled_bar"] is not None
+    assert default["pooled_bar"] == two["pooled_bar"]
+    assert default["pooled_bar"] >= three["pooled_bar"]
+
+
 def test_the_self_similarity_gate_refuses_what_is_over_its_bar(without_image, pyramids):
     """Every searched candidate reports its core's ZNCC self-similarity radius,
     and a bar refuses as ``unlocalizable`` exactly the candidates over it: the

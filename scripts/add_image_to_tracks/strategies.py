@@ -202,7 +202,9 @@ STRATEGIES = {
     },
     # The default's bars one at a time, measured again once the references
     # were scored against the reference render rather than leave-one-out.
+    # The default pooled bar is k = 2; k = 3 was the default before 2026-10-09.
     "default_pooled_k2": {"basis_k": 2.0},
+    "default_pooled_k3": {"basis_k": 3.0},
     "default_pooled_k4": {"basis_k": 4.0},
     "default_track0.85": {"track_basis_fraction": 0.85},
     "default_track0.95": {"track_basis_fraction": 0.95},

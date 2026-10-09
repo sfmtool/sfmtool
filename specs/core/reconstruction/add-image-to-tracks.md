@@ -222,7 +222,7 @@ as it was, since nothing moved the point.
   own track's bar (`TrackBasis` with `track` and `pair`).
 
 **Why the default is what it is.** The default is `PooledOrTrack` with the
-pooled bar at the median minus three scaled deviations, the track's at 0.9 of
+pooled bar at the median minus two scaled deviations, the track's at 0.9 of
 its references' median (the pair rule at 0.9 of the mean for two), a floor of
 0.5, and the `ImageMad` positional gate. Every bar is read off the call's own
 data, so it follows the capture's texture and the pose's error rather than a
@@ -240,29 +240,38 @@ render
 ([`scripts/add_image_to_tracks/README.md`](../../../scripts/add_image_to_tracks/README.md)
 § "The bars once the new view is aligned to the reference render"). One image's
 observations are removed and the image is added back at its resected pose.
-"Extra" counts the tracks it joins that it was not in, "bad" those of them whose
-new observation's residual exceeds 2 px once the point is retriangulated with
-it, and "worse" those whose largest residual over all observations grew by more
-than 1 px:
+"Err" is the rejoined keypoints' distance from the ground truth's, at the
+median and the 90th percentile, and ">2 px" counts rejoined keypoints more
+than 2 px from it. "Extra" counts the tracks the image joins that it was not
+in, "bad" those of them whose new observation's residual exceeds 2 px once the
+point is retriangulated with it, and "worse" those whose largest residual over
+all observations grew by more than 1 px. Measured 2026-10-09, after the
+localizer's sub-pixel step became a 3×3 quadratic fit:
 
-| Rule | seoul_bull recall | kerry_park recall | kerry_park extra | bad | worse |
-|---|---|---|---|---|---|
-| Default, before the change | 82.8% | 79.2% | 1107 | 0 | 8 |
-| **Default** | **81.9%** | **79.6%** | **1330** | **5** | **25** |
-| Pooled bar `k = 2` | 80.0% | 77.7% | 1142 | 2 | 14 |
-| Pooled bar `k = 4` | 82.1% | 80.7% | 1508 | 8 | 40 |
+| Rule | seoul_bull recall | err med / p90 px | >2 px | extra | bad | worse | kerry_park recall | err med / p90 px | >2 px | extra | bad | worse |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Leave-one-out bars, `k = 3` (before 2026-10-09) | 82.8% | 0.061 / 0.215 | 16 | 115 | 0 | 1 | 79.2% | 0.060 / 0.346 | 13 | 1107 | 0 | 8 |
+| **Default, pooled bar `k = 2`** | **79.8%** | **0.099 / 0.341** | **13** | **106** | **0** | **0** | **77.8%** | **0.089 / 0.464** | **25** | **1143** | **1** | **13** |
+| Pooled bar `k = 3` | 81.5% | 0.101 / 0.364 | 13 | 139 | 0 | 1 | 79.7% | 0.092 / 0.472 | 28 | 1327 | 6 | 28 |
+| Pooled bar `k = 4` | 81.9% | 0.101 / 0.371 | 15 | 152 | 0 | 2 | 80.9% | 0.094 / 0.474 | 28 | 1519 | 9 | 42 |
 
-Recall is unchanged to within a point. The references score lower and spread
-wider against one sharp render than they did against the consensus of the
-others, so the pooled bar (median − 3 scaled MADs) falls from about 0.68 to 0.55
-on seoul_bull and the `0.5` floor applies more often; on kerry_park that admits
-about 20% more extra tracks. The rejoined keypoints sit 0.10 px from the
-ground truth's at the median rather than 0.06, since a view aligned to one
-reference shares whatever offset that reference's keypoint has, and they
-retriangulate at about the same residual. The track bar and the pair rule
-change almost nothing between 0.8 and 1.0. The defaults are kept; whether to
-tighten the pooled bar to `k = 2`, giving up 2 points of recall on each capture
-for kerry_park's precision, is not decided.
+The references score lower and spread wider against one sharp render than they
+did against the consensus of the others, so the pooled bar at `k = 3` falls
+from about 0.68 to 0.55 on seoul_bull and the `0.5` floor applies more often.
+At `k = 3` the image joins about 20% more extra tracks on kerry_park than with
+the leave-one-out bars, 6 of them bad and 28 worse against 0 and 8, and its
+rejoined keypoints are further from the ground truth's: 0.09 to 0.10 px at the
+median against 0.06, and 0.36 to 0.47 px at the 90th percentile against 0.22
+to 0.35, with 28 against 13 over 2 px on kerry_park. A view aligned to one
+reference shares whatever offset that reference's keypoint has, and the ground
+truth's keypoints were placed by congealing. The pooled bar is therefore at
+`k = 2`, a maintainer's decision: against `k = 3` it gives up 1.7 points of
+recall on seoul_bull and 1.9 on kerry_park, and on kerry_park joins 1143 extra
+tracks rather than 1327, 1 of them bad and 13 worse rather than 6 and 28. The
+seoul_bull runs on this date prepared a fresh cache, so their cluster tracks
+can differ slightly from the run before 2026-10-09. The track bar and the pair
+rule change recall by under 1.2 points between 0.85 and 0.95, and 0.8 and 1.0;
+the full table is in the README.
 
 ## Positional gate
 
@@ -280,7 +289,7 @@ keyword defaults.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `rule` | `PooledOrTrack { pooled: MedianMinusMad { k: 3.0 }, track: FractionOfMedian { fraction: 0.9 }, pair: { Mean, 0.9 } }` | The photometric rule |
+| `rule` | `PooledOrTrack { pooled: MedianMinusMad { k: 2.0 }, track: FractionOfMedian { fraction: 0.9 }, pair: { Mean, 0.9 } }` | The photometric rule |
 | `min_zncc` | `0.5` | ZNCC floor under every rule |
 | `position_gate` | `ImageMad { k: 3.0, floor_px: 1.0 }` | Positional bound |
 | `template` | `Rendered` | Search template |

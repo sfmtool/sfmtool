@@ -219,7 +219,7 @@ pub struct AddImageToTracksOptions {
 
 /// The defaults are the rule and gate the leave-one-image-out evaluation chose
 /// (see the spec, "Why the default is what it is"): a candidate passes when it
-/// reaches either the image's pooled bar (the median minus three scaled
+/// reaches either the image's pooled bar (the median minus two scaled
 /// deviations of every candidate's references' ZNCCs against the template) or its own
 /// track's bar (0.9 of its references' median, or the pair rule at 0.9 for two
 /// references); and its keypoint must lie within the median plus three scaled
@@ -229,7 +229,7 @@ impl Default for AddImageToTracksOptions {
     fn default() -> Self {
         Self {
             rule: AcceptRule::PooledOrTrack {
-                pooled: BasisStatistic::MedianMinusMad { k: 3.0 },
+                pooled: BasisStatistic::MedianMinusMad { k: 2.0 },
                 track: BasisStatistic::FractionOfMedian { fraction: 0.9 },
                 pair: PairRule {
                     statistic: PairStatistic::Mean,

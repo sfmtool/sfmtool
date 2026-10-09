@@ -920,3 +920,16 @@ fn an_added_observation_moves_the_reference_index_past_it() {
     );
     out.validate_point_columns().unwrap();
 }
+
+#[test]
+fn the_default_pooled_bar_is_the_median_minus_two_scaled_deviations() {
+    // Measured on the reference render, the bar at three deviations let
+    // through more bad extra observations on kerry_park than at two; see the
+    // spec's "How the bars were measured on the reference render".
+    match AddImageToTracksOptions::default().rule {
+        AcceptRule::PooledOrTrack { pooled, .. } => {
+            assert_eq!(pooled, BasisStatistic::MedianMinusMad { k: 2.0 });
+        }
+        other => panic!("the default rule is PooledOrTrack, got {other:?}"),
+    }
+}

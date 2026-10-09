@@ -366,32 +366,33 @@ The median gate reads the plain score against the bitmap since the
 leave-one-out ZNCC was removed (2026-10-09); before that it read the
 leave-one-out ZNCC at a default of `0.8`. It was measured again in the harness
 ([`scripts/track_at_pixel/README.md`](../../../scripts/track_at_pixel/README.md)
-§ "The median gate on the score against the bitmap"): `core_cascade`, a full
-pass over every query of the seoul_bull (1277 queries) and Kerry Park (3767)
-ground truths, sweeping `finish.min_zncc_median`. A track is correct here when
-it passes the harness's good bar on position and view precision; the bar's own
-ZNCC test is left out, since it reads the same score.
+§ "The median gate on the score against the bitmap", which has the commands),
+after the localizer's sub-pixel step became a 3×3 quadratic fit: `core_cascade`,
+a full pass over every query of the seoul_bull (1277 queries) and Kerry Park
+(3767) ground truths, sweeping `finish.min_zncc_median` (off is `-1`). A track
+is correct here when it passes the harness's good bar on position and view
+precision; the bar's own ZNCC test is left out, since it reads the same score.
 
 | gate | seoul_bull built | correct | wrong | precision | Kerry Park built | correct | wrong | precision |
 |---|---|---|---|---|---|---|---|---|
-| off | 1180 (92.4%) | 991 | 189 | 0.840 | 3196 (84.8%) | 2587 | 609 | 0.809 |
-| 0.6 | 1117 (87.5%) | 970 | 147 | 0.868 | 3062 (81.3%) | 2550 | 512 | 0.833 |
-| 0.65 | 1095 (85.7%) | 957 | 138 | 0.874 | 3040 (80.7%) | 2538 | 502 | 0.835 |
-| **0.7** | **1065 (83.4%)** | **937** | **128** | **0.880** | **2983 (79.2%)** | **2495** | **488** | **0.836** |
-| 0.75 | 1015 (79.5%) | 901 | 114 | 0.888 | 2873 (76.3%) | 2396 | 477 | 0.834 |
-| 0.8 | 915 (71.7%) | 818 | 97 | 0.894 | 2676 (71.0%) | 2231 | 445 | 0.834 |
+| off | 1171 (91.7%) | 979 | 192 | 0.836 | 3197 (84.9%) | 2584 | 613 | 0.808 |
+| 0.6 | 1115 (87.3%) | 964 | 151 | 0.865 | 3067 (81.4%) | 2550 | 517 | 0.831 |
+| 0.65 | 1092 (85.5%) | 949 | 143 | 0.869 | 3046 (80.9%) | 2539 | 507 | 0.834 |
+| **0.7** | **1064 (83.3%)** | **928** | **136** | **0.872** | **2992 (79.4%)** | **2503** | **489** | **0.837** |
+| 0.75 | 1015 (79.5%) | 894 | 121 | 0.881 | 2876 (76.3%) | 2401 | 475 | 0.835 |
+| 0.8 | 909 (71.2%) | 811 | 98 | 0.892 | 2670 (70.9%) | 2230 | 440 | 0.835 |
 
 With the gate off, the median score of correct tracks is 0.86 (seoul_bull) and
-0.89 (Kerry Park), and of tracks at the wrong position 0.75 and 0.86, so the
+0.89 (Kerry Park), and of tracks at the wrong position 0.76 and 0.85, so the
 gate mostly removes tracks with a low score of either kind. On Kerry Park
-precision stops rising at `0.65`; on seoul_bull each step of `0.05` buys half a
-point of precision for 1 to 3 points of correct tracks. `0.7` is the default.
-`0.6` would return 2.6 (seoul_bull) and 1.5 (Kerry Park) points more correct
-tracks per query at a precision 1.2 and 0.3 points lower. After a fit, `0.7`
-refuses about as many ground-truth tracks (5.1% of 450 from seoul_bull,
-kerry_park and a dino_dog_toy reconstruction) as `0.8` did on the leave-one-out
-score (5.8%), and passes 0.7% of the same tracks with every keypoint moved 15
-to 30 px off.
+precision is flat from `0.65` to `0.8`, within 0.3 points, while each step
+removes correct tracks. On seoul_bull precision rises at every step, by 0.3 to
+1.1 points per `0.05`, and each step removes 1.2 to 6.5 points of the queries'
+correct tracks. The data does not single out one value: `0.7` was chosen as a
+middle point, a judgement rather than a measured optimum. Against `0.7`, `0.6`
+returns 2.8 (seoul_bull) and 1.2 (Kerry Park) points more correct tracks per
+query at a precision 0.7 and 0.6 points lower, and `0.75` returns 2.7 and 2.7
+points fewer at a precision 0.9 points higher and 0.2 lower.
 
 ## Implementation notes
 
