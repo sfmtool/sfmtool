@@ -752,16 +752,10 @@ pub(crate) fn is_posed(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64
 /// model it is not exact for to a fixed-focal solve;
 /// [`bundle_adjust`] refuses instead, and a caller offering the release as a
 /// choice asks this first so it can grey the choice rather than take it and
-/// refuse.
+/// refuse. The answer depends on the model alone, and is
+/// [`CameraModel::focal_is_releasable`].
 pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool {
-    matches!(
-        camera.model,
-        CameraModel::SimplePinhole { .. }
-            | CameraModel::EquidistantFisheye { .. }
-            | CameraModel::SimpleRadialFisheye { .. }
-            | CameraModel::SfmtoolFisheye { .. }
-            | CameraModel::SfmtoolPinhole { .. }
-    )
+    camera.model.focal_is_releasable()
 }
 
 /// Whether this camera has lens distortion the adjustment can release: a

@@ -1835,3 +1835,30 @@ fn only_the_spline_models_are_flagged_beta() {
     assert_eq!(notes[0], notes[1], "the two beta notes have drifted apart");
     assert!(notes[0].starts_with("Beta:"));
 }
+
+/// Which models release the focal is pinned for every registered model, and
+/// `with_focal` moves the focal on exactly those.
+#[test]
+fn focal_is_releasable_is_pinned_for_every_model() {
+    const RELEASABLE: &[&str] = &[
+        "SIMPLE_PINHOLE",
+        "EQUIDISTANT_FISHEYE",
+        "SIMPLE_RADIAL_FISHEYE",
+        "SFMTOOL_FISHEYE",
+        "SFMTOOL_PINHOLE",
+    ];
+    for cam in all_cameras() {
+        let name = cam.model_name();
+        let expected = RELEASABLE.contains(&name);
+        assert_eq!(cam.model.focal_is_releasable(), expected, "{name}");
+
+        let moved = cam.with_focal(cam.focal_lengths().0 * 1.5);
+        if expected {
+            let (fx, fy) = moved.focal_lengths();
+            assert_relative_eq!(fx, cam.focal_lengths().0 * 1.5);
+            assert_relative_eq!(fy, fx);
+        } else {
+            assert_eq!(moved, cam, "{name}");
+        }
+    }
+}

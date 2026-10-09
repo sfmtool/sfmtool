@@ -106,21 +106,10 @@ fn check_releases(
     }
     for (j, camera) in cameras.iter().enumerate() {
         let model = camera.model_name();
-        // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only where the
-        // focal multiplies an `f`-independent distorted coordinate: the two
-        // single-focal distortion-free models, the one-coefficient fisheye
-        // whose `k1` rides on the ray's own `θ`, and the two spline models whose
-        // dimensionless radial spline rides on the ray's own radial coordinate
-        // the same way.
-        let releasable = matches!(
-            camera.model,
-            CameraModel::SimplePinhole { .. }
-                | CameraModel::EquidistantFisheye { .. }
-                | CameraModel::SimpleRadialFisheye { .. }
-                | CameraModel::SfmtoolFisheye { .. }
-                | CameraModel::SfmtoolPinhole { .. }
-        );
-        if opt_f && !releasable {
+        // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only on the
+        // models `CameraModel::focal_is_releasable` admits; the message below
+        // names the same five.
+        if opt_f && !camera.model.focal_is_releasable() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "opt_f requires every camera to be SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, \
                  SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or SFMTOOL_PINHOLE; camera {j} \

@@ -170,7 +170,12 @@ column is not exact for, and `DistortionNotReleasable` for a distortion release
 on a model with no distortion the kernel can free.
 [`focal_is_releasable`] and [`distortion_is_releasable`] are public and per
 camera for the same reason, so a caller offering the releases as choices can
-grey each choice on its own camera instead of taking it and refusing.
+grey each choice on its own camera instead of taking it and refusing. The focal
+answer depends on the model alone, so `focal_is_releasable` delegates to
+`CameraModel::focal_is_releasable`, the one list of the five models
+(`SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`,
+`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) that the kernel's focal gate, the Python
+binding's `opt_f` check and `CameraIntrinsics::with_focal` also read.
 
 **The distortion is released only with the focal, per camera.** The kernel has
 two distortion releases, each exact on its own models: `opt_k1` frees `k1` on

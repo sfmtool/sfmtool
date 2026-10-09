@@ -1754,35 +1754,11 @@ impl<'a> Lens<'a> {
     /// on this camera alone, and a model a release is not exact for keeps that
     /// parameter fixed, whatever the other cameras of the solve do.
     fn new(base: &'a CameraIntrinsics, opt_f: bool, opt_k1: bool, opt_bspline: bool) -> Self {
-        // Which models release the focal is a property of this
-        // implementation's focal column, not of the camera: the analytic
-        // `∂(u, v)/∂f = (u − cx)/f` is exact exactly when the focal is a pure
-        // multiplier of a distorted coordinate that does not itself read `f` —
-        // `u = f·x_d + cx` with `x_d = rx/(−rz)` (SIMPLE_PINHOLE),
-        // `x_d = θ·ûx`, `θ = atan2(ρ, rz)` (EQUIDISTANT_FISHEYE), or
-        // `x_d = θ·(1 + k1·θ²)·ûx` with the same ray-derived `θ`
-        // (SIMPLE_RADIAL_FISHEYE — the distortion rides on `θ`, not on
-        // `r/f`). Every other model fails that test, via a second focal `fy`
-        // this kernel has no slot for or via coefficients applied to a
-        // normalized coordinate whose relation to the pixel is `f`-dependent
-        // (the multi-coefficient fisheye family: `x_d = θ·g(θ²)·û` with `θ`
-        // recovered from `r/f`), and degrades to a fixed focal (the binding
-        // rejects it loudly first). The two sfmtool spline models pass the
-        // test the same way SIMPLE_RADIAL_FISHEYE does: their radial spline is
-        // dimensionless and rides on the ray-derived radial coordinate
-        // (`x_d = (θ + δ(θ))·ûx` for SFMTOOL_FISHEYE, `x_d = (ρ + δ(ρ))·ûx`
-        // with `ρ = ρ_xy/rz` for SFMTOOL_PINHOLE), so `f` never appears inside
-        // the distorted coordinate and `(u − cx)/f` stays exact.
-        // `CameraIntrinsics::with_focal` mirrors this gate.
-        let opt_f = opt_f
-            && matches!(
-                base.model,
-                CameraModel::SimplePinhole { .. }
-                    | CameraModel::EquidistantFisheye { .. }
-                    | CameraModel::SimpleRadialFisheye { .. }
-                    | CameraModel::SfmtoolFisheye { .. }
-                    | CameraModel::SfmtoolPinhole { .. }
-            );
+        // The analytic focal column `∂(u, v)/∂f = (u − cx)/f` is exact only
+        // on the models `CameraModel::focal_is_releasable` admits (its doc
+        // says why). Every other model degrades to a fixed focal here; the
+        // binding rejects it loudly first.
+        let opt_f = opt_f && base.model.focal_is_releasable();
         // The curvature rung exists on exactly one model:
         // `SIMPLE_RADIAL_FISHEYE` is the only one whose single radial
         // coefficient acts on the ray's own `θ`, which is what makes
