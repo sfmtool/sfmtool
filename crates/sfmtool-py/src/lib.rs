@@ -11,30 +11,25 @@
 //! `_sfmtool.io`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
 //! `_sfmtool.patches`, `_sfmtool.bench`, `_sfmtool.matching`,
 //! `_sfmtool.analysis`, `_sfmtool.flow`, `_sfmtool.spatial`,
-//! `_sfmtool.spherical`); each
-//! submodule's `__name__` reads as the public `sfmtool.<name>` so binding
-//! objects report the public location in tracebacks, IPython, and Sphinx.
+//! `_sfmtool.spherical`). The extension is internal to the Python package:
+//! each submodule's public home is the Python module `sfmtool.<name>`, which
+//! re-exports it (`sfmtool/sift/__init__.py` for `sift`). Each submodule's
+//! `__name__` reads as that public name, so binding objects report the public
+//! location in tracebacks, IPython and Sphinx.
 //! The only root-level registrations are `build_profile` (build
 //! introspection of this extension), `ProgressCounter` (cross-cutting
 //! progress instrumentation shared by patch and matching kernels),
 //! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
 //! extractors resize to) and `run_explorer` (the viewer, which `sfm explorer`
-//! calls from `sfmtool/_commands/explorer.py`). The first three
-//! are re-exported explicitly by `sfmtool/__init__.py`; `run_explorer` is not.
-//! `sfmtool/__init__.py` additionally
-//! re-exports each submodule wholesale (`from sfmtool._sfmtool.<sub> import
-//! *`), so the flat `sfmtool.*` surface still exists — it is now assembled on
-//! the Python side from named submodules rather than registered flat here.
-//! `bench` is the one submodule deliberately left out of that assembly: its
-//! steps are named for what they do to a track (`add_observation`, `commit`,
-//! `split`), which are words the flat surface already spends on other things,
-//! so it is imported as `sfmtool._sfmtool.bench` and read as `bench.commit(…)`.
+//! calls from `sfmtool/_commands/explorer.py`). The first three are
+//! re-exported by `sfmtool/__init__.py`; `run_explorer` is not. The package
+//! root re-exports no other binding.
 //!
 //! # Example
 //!
 //! ```python
-//! from sfmtool._sfmtool.io import read_sfmr, write_sfmr, verify_sfmr
-//! from sfmtool._sfmtool.io import read_sift, write_sift, verify_sift
+//! from sfmtool.io import read_sfmr, write_sfmr, verify_sfmr
+//! from sfmtool.io import read_sift, write_sift, verify_sift
 //!
 //! data = read_sfmr("reconstruction.sfmr")
 //! valid, errors = verify_sfmr("reconstruction.sfmr")
