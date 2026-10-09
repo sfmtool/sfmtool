@@ -11,6 +11,7 @@
 //! its exact ray-space entry point and 2×3 Jacobian, which the
 //! `SFMTOOL_FISHEYE` spline models use as their base.
 
+use super::radial_ray::{radial_ray_jacobian, NormalizedRayJacobian};
 use super::{blend_fisheye_ray, equidistant_to_ray};
 use crate::camera::distortion::{UNDISTORT_EPS, UNDISTORT_MAX_ITER};
 
@@ -360,16 +361,6 @@ pub(in crate::camera::distortion) fn distort_ray_equidistant(
 // Distortion-free equidistant fisheye (`θ = r/f`)
 // ---------------------------------------------------------------------------
 
-/// Angular width, relative to the ray norm, of the on-axis band where the
-/// 2D direction `(rx, ry)/r_xy` is numerically meaningless and the Jacobian
-/// is evaluated from its axis limit instead.
-pub(in crate::camera::distortion) const EQUIDISTANT_AXIS_EPS: f64 = 1e-12;
-
-/// Distorted normalized coordinate `(x_d, y_d)` paired with the 2×3
-/// `∂(x_d, y_d)/∂(rx, ry, rz)`, row-major — the pre-intrinsics half of a
-/// [`PixelJacobian`](crate::camera::distortion::PixelJacobian), in the optical frame.
-pub(in crate::camera::distortion) type NormalizedRayJacobian = ((f64, f64), [[f64; 3]; 2]);
-
 /// Forward equidistant map in tangent-plane coordinates: `(x, y)` with
 /// `r = tan θ` in, `(θ·x/r, θ·y/r)` out.
 ///
@@ -428,42 +419,13 @@ pub(in crate::camera::distortion) fn distort_ray_equidistant_exact(
 /// `SIMPLE_RADIAL_FISHEYE`, whose forward map is
 /// [`distort_ray_equidistant`] with `k2 = k3 = k4 = 0`. Both are single-focal
 /// models whose distorted coordinate is `θ_d` times the unit 2D direction, so
-/// one derivative covers both.
+/// one derivative covers both: [`radial_ray_jacobian`] with
+/// `θ_d' = 1 + 3·k1·θ²`, which carries the derivation, the on-axis limit
+/// `diag(1/rz, 1/rz)` and the gates.
 ///
-/// With `ρ = r_xy`, `n² = ρ² + rz²`, unit direction `(ux, uy) = (rx, ry)/ρ`,
-/// `θ = atan2(ρ, rz)` and `θ_d' = dθ_d/dθ = 1 + 3·k1·θ²`:
-///
-/// ```text
-/// ∂θ/∂rx = ux·rz/n²   ∂θ/∂ry = uy·rz/n²   ∂θ/∂rz = −ρ/n²
-/// ∂ux/∂rx = uy²/ρ     ∂ux/∂ry = −ux·uy/ρ  (and the mirror for uy)
-/// ```
-///
-/// so, chaining `x_d = θ_d(θ)·ux` and writing `c = θ_d'·rz/n² − θ_d/ρ` for
-/// the shared off-diagonal factor,
-///
-/// ```text
-/// ∂x_d/∂rx = θ_d·uy²/ρ + θ_d'·ux²·rz/n²   ∂x_d/∂ry = ux·uy·c
-///                                         ∂x_d/∂rz = −θ_d'·rx/n²
-/// ∂y_d/∂rx = ux·uy·c                      ∂y_d/∂ry = θ_d·ux²/ρ + θ_d'·uy²·rz/n²
-///                                         ∂y_d/∂rz = −θ_d'·ry/n²
-/// ```
-///
-/// Nothing here is guarded on `rz`: the expressions are finite and correct
-/// past 90°, which is the whole point of a fisheye-native derivative.
-///
-/// Two limits:
-///
-/// - **On axis, in front** (`ρ → 0`, `rz > 0`): `θ_d/ρ → 1/rz` and
-///   `θ_d' → 1`, so the off-diagonal factor `c → 0` and the third column
-///   vanishes, leaving `diag(1/rz, 1/rz)` — the pinhole small-angle
-///   Jacobian, independent of both `k1` and the direction `(ux, uy)` that is
-///   undefined there.
-/// - **At the antipode** (`ρ → 0`, `rz < 0`): `θ → π` while `ρ → 0`, so
-///   `θ_d/ρ` diverges and no finite Jacobian exists. Returns `None`; this is
-///   the one measure-zero direction where the derivative is narrower than
-///   [`distort_ray_equidistant_exact`]'s domain.
-///
-/// `None` also where the forward map itself is out of domain — a `k1` strong
+/// `None` at the antipode (`ρ → 0`, `rz < 0`), the one measure-zero direction
+/// where the derivative is narrower than [`distort_ray_equidistant_exact`]'s
+/// domain, and where the forward map itself is out of domain — a `k1` strong
 /// enough to fold `θ_d` non-positive at this `θ`, the same gate
 /// [`distort_ray_equidistant`] applies.
 pub(in crate::camera::distortion) fn radial_fisheye_ray_jacobian(
@@ -472,46 +434,8 @@ pub(in crate::camera::distortion) fn radial_fisheye_ray_jacobian(
     rz: f64,
     k1: f64,
 ) -> Option<NormalizedRayJacobian> {
-    let rho2 = rx * rx + ry * ry;
-    let rho = rho2.sqrt();
-    let n2 = rho2 + rz * rz;
-    if n2 == 0.0 {
-        return None;
-    }
-    if rho <= EQUIDISTANT_AXIS_EPS * n2.sqrt() {
-        // On the optical axis: only the forward limit is finite.
-        if rz <= 0.0 {
-            return None;
-        }
-        let inv = 1.0 / rz;
-        return Some(((0.0, 0.0), [[inv, 0.0, 0.0], [0.0, inv, 0.0]]));
-    }
-    let theta = rho.atan2(rz);
-    let theta2 = theta * theta;
-    let theta_d = theta * (1.0 + k1 * theta2);
-    let dtheta_d = 1.0 + 3.0 * k1 * theta2;
-    // The forward map's domain gate (`distort_ray_equidistant`): past the
-    // fold there is no projection to differentiate.
-    if theta > 0.0 && theta_d <= 0.0 {
-        return None;
-    }
-    let (ux, uy) = (rx / rho, ry / rho);
-    let rz_n2 = rz / n2;
-    let theta_rho = theta_d / rho;
-    let cross = ux * uy * (dtheta_d * rz_n2 - theta_rho);
-    Some((
-        (theta_d * ux, theta_d * uy),
-        [
-            [
-                theta_rho * uy * uy + dtheta_d * (ux * ux * rz_n2),
-                cross,
-                -dtheta_d * rx / n2,
-            ],
-            [
-                cross,
-                theta_rho * ux * ux + dtheta_d * (uy * uy * rz_n2),
-                -dtheta_d * ry / n2,
-            ],
-        ],
-    ))
+    radial_ray_jacobian(rx, ry, rz, |theta| {
+        let theta2 = theta * theta;
+        (theta * (1.0 + k1 * theta2), 1.0 + 3.0 * k1 * theta2)
+    })
 }

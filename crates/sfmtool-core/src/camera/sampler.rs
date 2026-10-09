@@ -131,6 +131,11 @@ pub const DEFAULT_ANISOTROPIC_THRESHOLD: f64 = 1.5;
 /// [`Sampler::BilinearMip`] reads for a pixel whose Jacobian's larger singular
 /// value is `sigma_major`, before any clamp to the pyramid's depth. `0` for a
 /// `sigma_major` that is not a number, and `u32::MAX` for an infinite one.
+///
+/// The kernels that render with `BilinearMip` select their level through this
+/// function too, on their `f32` singular value widened to `f64`, so the level
+/// the sampler rule predicts and the level a kernel reads cannot differ for
+/// the same singular value.
 pub fn bilinear_mip_level(sigma_major: f64) -> u32 {
     if sigma_major.is_nan() {
         return 0;

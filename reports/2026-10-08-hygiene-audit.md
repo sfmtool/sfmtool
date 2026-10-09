@@ -254,6 +254,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Add `radial_ray_jacobian(rx, ry, rz, |θ| …)` in `kernels/`, as was done with `newton_2d`.
 - Effort: low. Risk: low, with an undistort hash check.
 
+> _Status (2026-10-09): **Done** — `sample_aniso_with_grad` calls `aniso_footprint` and `remap_aniso` calls `ImageU8Pyramid::full_levels`. The two mip formulas did disagree: over all 167,772,161 `f32` values in [1, 2^20], the `f32` `log2` in `mip_level_for_sigma` rounded up at 75 values just below a boundary `2^(k+½)` (for example σ = 2.828427 read level 2, not 1), while the `f64` `bilinear_mip_level` matched the exact rule `2^(2l−1) ≤ σ² < 2^(2l+1)` at every value. `mip_level_for_sigma` now calls `bilinear_mip_level` on σ widened to `f64`, with a test that checks it against the exact rule within 4096 ulps of each boundary. The two fisheye kernels now call `radial_ray_jacobian` in `kernels/radial_ray.rs` with their own `(θ_d, θ_d')`, pinned by a central-difference test; specs `image-warping.md` and `projection-jacobian.md` updated, branch `hygiene-fix-1009-11-remap-mip-level`._
+
 **Add one `CameraModel::has_bare_focal`**
 - Location: `geometry/bundle_adjust.rs:1776-1785` and `camera/intrinsics.rs:736-747`.
 - Problem: the five-model list is written twice, and the two copies are tied together only by "`with_focal` mirrors this gate".

@@ -25,6 +25,8 @@
 //!   spline.
 //! - [`blend`] — the tail the fisheye inverses share.
 //! - [`newton`] — the 2D Newton solve the two thin-prism inverses share.
+//! - [`radial_ray`] — the ray Jacobian the equidistant-family fisheye models
+//!   share.
 //!
 //! Every kernel is re-exported here, so the parent keeps reaching them
 //! through a single `use kernels::*` and no name carries its family in the
@@ -35,6 +37,7 @@ mod brown;
 mod equidistant;
 mod newton;
 mod rad_tan;
+mod radial_ray;
 mod sfmtool_fisheye;
 mod sfmtool_pinhole;
 mod thin_prism;

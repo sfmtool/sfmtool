@@ -5,6 +5,7 @@
 
 use rayon::prelude::*;
 
+use crate::camera::sampler::bilinear_mip_level;
 use crate::camera::warp_map::{parallelize_rows, WarpMap};
 
 mod aniso_avx2;
@@ -304,8 +305,14 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
 /// aliasing bounded by √2× while staying within half an octave of the ideal
 /// blur.
 ///
-/// A NaN `sigma_major` (degenerate local Jacobian) resolves to level 0 via the
-/// `max(rho, 1)` (`f32::max` returns the non-NaN operand).
+/// The unclamped level is [`bilinear_mip_level`] of `sigma_major` widened to
+/// `f64`, so the sampler rule's prediction of the level and the level a kernel
+/// reads are one formula. In `f64` the rounding is exact for every `f32`
+/// input; an `f32` `log2` instead rounds up at a few `f32` values just below
+/// each boundary `2^(k + ½)`, where its result rounds to `k + ½`.
+///
+/// A NaN `sigma_major` (degenerate local Jacobian) resolves to level 0, and an
+/// infinite one to the top level.
 ///
 /// `pub(crate)` so view selection's affine fast path selects its level by the
 /// **same** rule the per-pixel slow path applies, evaluated once on the affine
@@ -313,8 +320,7 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
 /// [`affine_core_map`](crate::patch::view_selection)).
 #[inline]
 pub(crate) fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize {
-    let l = sigma_major.max(1.0).log2().round() as usize;
-    l.min(num_levels - 1)
+    (bilinear_mip_level(f64::from(sigma_major)) as usize).min(num_levels - 1)
 }
 
 /// Apply a warp map with a single bilinear sample from the nearest mip level.
@@ -399,10 +405,7 @@ pub fn remap_bilinear_mip(pyramid: &ImageU8Pyramid, map: &WarpMap) -> ImageU8 {
 ///
 /// `max_anisotropy` caps the number of samples along the major axis.
 pub fn remap_aniso(src: &ImageU8, map: &WarpMap, max_anisotropy: u32) -> ImageU8 {
-    // Number of levels = floor(log2(min(w, h))) + 1, but at least 1.
-    let min_dim = src.width.min(src.height).max(1);
-    let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
-    let pyramid = ImageU8Pyramid::build(src, max_levels);
+    let pyramid = ImageU8Pyramid::build(src, ImageU8Pyramid::full_levels(src.width, src.height));
     remap_aniso_with_pyramid(&pyramid, map, max_anisotropy)
 }
 
@@ -716,18 +719,13 @@ fn sample_aniso_with_grad(
         return sample_bilinear_with_grad_u8(pyramid.level(0), sx, sy, channel);
     }
 
-    // Mirror the value-only LOD selection.
-    let level_f = sigma_minor.max(1.0_f32).log2();
-    let level_lo = (level_f.floor() as usize).min(num_levels - 1);
-    let level_hi = (level_lo + 1).min(num_levels - 1);
-    let frac = if level_lo == level_hi {
-        0.0
-    } else {
-        level_f - level_lo as f32
-    };
-
-    let ratio = sigma_major / sigma_minor.max(1.0);
-    let n = (ratio.ceil() as u32).clamp(1, max_anisotropy);
+    // The same footprint the value-only path walks.
+    let AnisoFootprint {
+        level_lo,
+        level_hi,
+        frac,
+        n,
+    } = aniso_footprint(sigma_major, sigma_minor, num_levels, max_anisotropy);
 
     let scale_lo = (1u32 << level_lo) as f32;
     let scale_hi = (1u32 << level_hi) as f32;

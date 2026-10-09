@@ -583,7 +583,12 @@ pub fn remap_aniso(src: &ImageU8, map: &WarpMap, max_anisotropy: u32) -> ImageU8
 `remap_bilinear` and the anisotropic path: per output pixel it selects the
 pyramid level nearest the warp's local compression —
 `level = round(log2(max(sigma_major, 1)))`, clamped to the built levels — and
-takes a single bilinear sample there at `(x / 2^level, y / 2^level)`. Using
+takes a single bilinear sample there at `(x / 2^level, y / 2^level)`. The
+level comes from `sampler::bilinear_mip_level`, the same function the sampler
+rule in § "Choosing the sampler per view" predicts the level with, evaluated
+in `f64` on the map's `f32` singular value; in `f64` the rounding is exact for
+every `f32` input, where an `f32` `log2` would round up at a few values just
+below each boundary `2^(k + ½)`. Using
 `sigma_major` (the larger singular value, the GL texture-LOD convention) means
 the chosen level never aliases in any direction; on anisotropic footprints it
 over-blurs the minor axis, which remains `remap_aniso`'s job. Use it where a

@@ -45,6 +45,9 @@ choose the analytic or fallback path.
 and `CameraModel::distort_jacobian` in
 [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs), the
 per-model kernels in one file per model family —
+`radial_ray_jacobian`, the chain rule the two fisheye kernels share with the
+radial map `θ ↦ (θ_d, θ_d')` passed in, in
+[kernels/radial_ray.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/radial_ray.rs),
 `radial_fisheye_ray_jacobian` in
 [kernels/equidistant.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/equidistant.rs),
 `sfmtool_fisheye_ray_jacobian` in

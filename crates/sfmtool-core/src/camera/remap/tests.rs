@@ -1360,3 +1360,38 @@ fn aniso_tile_is_unchanged_when_photograph_and_map_turn_together() {
         );
     }
 }
+
+/// The level `remap_bilinear_mip` reads is `round(log2 max(σ, 1))` exactly,
+/// checked without a logarithm: level `l` covers `2^(2l−1) ≤ σ² < 2^(2l+1)`,
+/// and `σ²` of an `f32` is exact in `f64`. Every `f32` within 4096 ulps of
+/// each boundary `2^(k + ½)` is checked, which is where an `f32` `log2`
+/// rounded up 75 values between 1 and 2^20 before the level was computed in
+/// `f64`.
+#[test]
+fn mip_level_for_sigma_rounds_exactly_at_every_level_boundary() {
+    let num_levels = 40;
+    let exact = |s: f32| -> usize {
+        let s2 = f64::from(s) * f64::from(s);
+        let mut l = 0;
+        while s2 >= (2.0f64).powi(2 * l as i32 + 1) {
+            l += 1;
+        }
+        l
+    };
+    for k in 0..30 {
+        let boundary = (2.0f64).powf(k as f64 + 0.5) as f32;
+        let centre = boundary.to_bits();
+        for bits in centre - 4096..=centre + 4096 {
+            let s = f32::from_bits(bits);
+            assert_eq!(mip_level_for_sigma(s, num_levels), exact(s), "sigma {s}");
+        }
+    }
+    // Below 1, NaN, infinity, and the clamp to the pyramid's depth.
+    assert_eq!(mip_level_for_sigma(0.25, num_levels), 0);
+    assert_eq!(mip_level_for_sigma(f32::NAN, num_levels), 0);
+    assert_eq!(
+        mip_level_for_sigma(f32::INFINITY, num_levels),
+        num_levels - 1
+    );
+    assert_eq!(mip_level_for_sigma(1000.0, 4), 3);
+}

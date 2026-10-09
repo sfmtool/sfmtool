@@ -3,10 +3,10 @@
 
 //! `SFMTOOL_FISHEYE`: equidistant base + monotone radial spline.
 
+use super::radial_ray::{radial_ray_jacobian, NormalizedRayJacobian};
 use super::{
     distort_equidistant, distort_ray_equidistant_exact, equidistant_to_ray,
-    radial_fisheye_ray_jacobian, undistort_equidistant, NormalizedRayJacobian,
-    EQUIDISTANT_AXIS_EPS,
+    radial_fisheye_ray_jacobian, undistort_equidistant,
 };
 use crate::camera::distortion::{bspline, UNDISTORT_EPS, UNDISTORT_MAX_ITER};
 
@@ -200,10 +200,12 @@ pub(in crate::camera::distortion) fn sfmtool_fisheye_to_ray(
 }
 
 /// Distorted coordinate and analytic `∂(x_d, y_d)/∂(rx, ry, rz)` of the
-/// spline map — [`radial_fisheye_ray_jacobian`]'s template with
-/// `θ_d = θ + δ(θ)` and `θ_d' = 1 + δ'(θ)` substituted for the polynomial
-/// pair. Same conventions throughout: optical frame, axis handling via
-/// [`EQUIDISTANT_AXIS_EPS`], `None` at the antipode and past the fold.
+/// spline map — [`radial_ray_jacobian`] with `θ_d = θ + δ(θ)` and
+/// `θ_d' = 1 + δ'(θ)`, the pair [`radial_fisheye_ray_jacobian`] fills from
+/// `k1`. Same conventions throughout: optical frame, axis handling via
+/// [`EQUIDISTANT_AXIS_EPS`](super::radial_ray::EQUIDISTANT_AXIS_EPS), `None`
+/// at the antipode and past the fold (the gate
+/// [`distort_ray_sfmtool_fisheye`] applies).
 ///
 /// The on-axis forward limit is the same pinhole `diag(1/rz, 1/rz)` as the
 /// k-family's: the gauge pins `δ(0) = 0` and `δ'(0) = 0`, so `θ_d/ρ → 1/rz`
@@ -222,46 +224,8 @@ pub(in crate::camera::distortion) fn sfmtool_fisheye_ray_jacobian(
     if bspline::bspline_is_inactive(coeffs, theta_max) {
         return radial_fisheye_ray_jacobian(rx, ry, rz, 0.0);
     }
-    let rho2 = rx * rx + ry * ry;
-    let rho = rho2.sqrt();
-    let n2 = rho2 + rz * rz;
-    if n2 == 0.0 {
-        return None;
-    }
-    if rho <= EQUIDISTANT_AXIS_EPS * n2.sqrt() {
-        // On the optical axis: only the forward limit is finite.
-        if rz <= 0.0 {
-            return None;
-        }
-        let inv = 1.0 / rz;
-        return Some(((0.0, 0.0), [[inv, 0.0, 0.0], [0.0, inv, 0.0]]));
-    }
-    let theta = rho.atan2(rz);
-    let (d, dp) = bspline::delta_and_deriv(coeffs, theta_max, theta);
-    let theta_d = theta + d;
-    let dtheta_d = 1.0 + dp;
-    // The forward map's fold gate (`distort_ray_sfmtool_fisheye`): past it
-    // there is no projection to differentiate.
-    if theta > 0.0 && theta_d <= 0.0 {
-        return None;
-    }
-    let (ux, uy) = (rx / rho, ry / rho);
-    let rz_n2 = rz / n2;
-    let theta_rho = theta_d / rho;
-    let cross = ux * uy * (dtheta_d * rz_n2 - theta_rho);
-    Some((
-        (theta_d * ux, theta_d * uy),
-        [
-            [
-                theta_rho * uy * uy + dtheta_d * (ux * ux * rz_n2),
-                cross,
-                -dtheta_d * rx / n2,
-            ],
-            [
-                cross,
-                theta_rho * ux * ux + dtheta_d * (uy * uy * rz_n2),
-                -dtheta_d * ry / n2,
-            ],
-        ],
-    ))
+    radial_ray_jacobian(rx, ry, rz, |theta| {
+        let (d, dp) = bspline::delta_and_deriv(coeffs, theta_max, theta);
+        (theta + d, 1.0 + dp)
+    })
 }
