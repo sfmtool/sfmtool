@@ -45,6 +45,57 @@ pub fn reprojection_residuals(
 ) -> Vec<f64>;               // n_obs * 2, (dx, dy) per observation
 ```
 
+The poses, points and pixels are flat slices in row-major `(n, k)` order,
+not slices of `UnitQuaternion` or `[f64; 3]`, so a caller passes the arrays it
+already holds without converting them:
+
+- The Python binding receives numpy arrays of shape `(n_img, 4)`, `(n_img, 3)`,
+  `(n_pt, 3)` and `(n_obs, 2)`, and passes each C-contiguous one to this
+  function as a borrowed slice of its buffer (`to_contiguous!` in
+  [lib.rs](../../../crates/sfmtool-py/src/lib.rs) copies only an array that is
+  not C-contiguous).
+- An `.sfmr` reconstruction holds its image poses as `(N, 4)` and `(N, 3)`
+  `Array2<f64>` (`quaternions_wxyz`, `translations_xyz`), which in standard
+  layout are these slices.
+- The cluster census builds its candidate poses, observed pixels and
+  triangulated points as flat `Vec<f64>`s and passes them as they are
+  ([cluster_census.rs](../../../crates/sfmtool-core/src/analysis/cluster_census.rs)).
+
+The function converts each quaternion to a `UnitQuaternion` once per image,
+not once per observation, and writes the output as one flat buffer that the
+parallel pass fills two values per observation.
+
+An example with two images that share a pinhole camera and observe one point.
+The second image is translated 0.1 along `x`, so it projects the point to
+`u = 330`, and its observation at `u = 330.5` gives a residual of `−0.5`:
+
+```rust
+use sfmtool_core::geometry::{inlier_fraction, reprojection_residuals};
+use sfmtool_core::{CameraIntrinsics, CameraModel};
+
+let cam = CameraIntrinsics {
+    model: CameraModel::SimplePinhole {
+        focal_length: 500.0,
+        principal_point_x: 320.0,
+        principal_point_y: 240.0,
+    },
+    width: 640,
+    height: 480,
+};
+let quats_wxyz = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]; // two images
+let translations = [0.0, 0.0, 0.0, 0.1, 0.0, 0.0];
+let points = [0.0, 0.0, -5.0]; // one point, 5 units in front of both
+let uv = [320.0, 240.0, 330.5, 240.0]; // one observation per image
+let obs_img = [0, 1];
+let obs_pt = [0, 0];
+
+let res = reprojection_residuals(
+    &cam, &quats_wxyz, &translations, &points, &uv, &obs_img, &obs_pt, f64::INFINITY,
+);
+assert_eq!(res, [0.0, 0.0, -0.5, 0.0]);
+assert_eq!(inlier_fraction(&res, 1.0), 1.0);
+```
+
 For each observation `k`: transform its point into the camera frame,
 `x_cam = R_img · X_pt + t_img`, project it with the model-general
 `CameraIntrinsics::ray_to_pixel`, and emit `(u − uv_x, v − uv_y)`. The output
