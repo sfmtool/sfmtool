@@ -100,22 +100,21 @@ holds at most `d + 1` members; when the search misses the seed's own row, all
 Σ span² ≤ (d + 2) · (accepted members)      — linear in observations
 ```
 
-Empirically, across three campaign datasets, mean span ≈ 3.3 and
-`Σ span²` ≈ 4.6 × members. Ten million observations is therefore ≈ 50 M
-increments — a few hundred milliseconds serial; parallelism is not required
-at current scales.
+Clusters are small in practice: on the datasets this was measured on, the
+mean span is about 3.3 and `Σ span²` about 4.6 × members, so ten million
+observations take about 50 M increments, a few hundred milliseconds on one
+thread. Construction is serial.
 
-Storage is dense row-major `u32`, `4·N²` bytes, and is the actual scaling
-wall: ~25 MB at N = 2,500 images, ~400 MB at N = 10,000. The public API
-does not expose dense-ness (see below), so a sparse/CSR backend can be added
-behind the same type when a >4–5 k-image consumer appears; construction
-errors with a clear message above the bound — `MAX_DENSE_IMAGES = 4096`
-(64 MB dense) — until then. Long
-videos — the capture style that produces such N — have banded covisibility,
-so the sparse variant is compact where dense is hopeless.
+Storage is dense row-major `u32`, `4·N²` bytes, and it is what limits the
+number of images: ~25 MB at N = 2,500 images, ~400 MB at N = 10,000.
+Construction returns an error above `MAX_DENSE_IMAGES = 4096` (64 MB dense).
+The public API does not expose the dense storage (see below), so a sparse
+backend could replace it without changing callers. Long videos, the capture
+style that produces such N, have banded covisibility, which a sparse matrix
+stores in memory proportional to the band rather than to `N²`.
 
 The `d` coupling is an assumption worth keeping visible: raising the
-matcher's `d` (e.g. to ~100 for long-track experiments) scales
+matcher's `d` (for example to ~100) scales
 construction cost by about `d` and makes each large cluster vote on up to
 `(d + 2)(d + 1)/2` pairs.
 
@@ -168,8 +167,8 @@ impl ClusterCovisibility {
     pub fn row(&self, i: u32) -> &[u32];
 
     /// Lazy iterator of greedy mutually-covisible groups of images; see
-    /// Seed-group algorithm.  Each `next()` produces one group; consumers
-    /// take as many as they need and drop the rest unpaid.
+    /// Seed-group algorithm.  Each `next()` computes one group; consumers
+    /// take as many as they need, and groups not taken are never computed.
     pub fn seed_image_groups(
         &self,
         params: &SeedImageGroupParams,
@@ -224,8 +223,9 @@ indexes, and nothing about the receiver being a cluster-covisibility matrix
 makes it a set of clusters.
 
 `seed_pair` and `seed_shared` are the founding edge the algorithm's first
-step already picked, carried out rather than discarded, so a caller that
-wants the group's best-supported pair pays nothing for it.
+step already picked, returned rather than discarded, so a caller that
+wants the group's best-supported pair reads it without scanning the group's
+pairs.
 
 `pair_shared`, `pair_displacement_magnitude` and `pair_displacement_vector`
 carry out what the receiver already holds about the group's **internal**
@@ -263,9 +263,9 @@ entry sits at `a·(2·len − a − 1)/2 + (b − a − 1)` — the pairs enumer
   own `f64` accumulation and means — pose verification reads those — and the
   narrowing happens only where the group is filled.
 
-`min_shared = 8` is carried over from the experiments unvalidated; a
-data-derived constructor (`SeedImageGroupParams::derive`, e.g. a fraction of the
-median nonzero edge weight) is the intended replacement once evaluated.
+The default `min_shared = 8` has not been validated against data; whether
+to derive it from the edge-weight distribution is listed under Open
+questions.
 
 ### Seed-group algorithm
 
@@ -387,17 +387,12 @@ use `read_matches` + numpy + `from_arrays`.
   ([pose-verification.md](../geometry/pose-verification.md)) works on the
   `DisplacementNeighborhood` a positioned build holds. The seed-group
   iterator has no consumer outside its tests and its binding.
-- Evaluation experiments (separate from this spec's implementation): the
-  filter-aware cluster budget (replace the span-only `MAX_CLUSTERS`
-  selection with span + consistency + ZNCC + feature-size priority)
-  measured against the campaign baselines — does dino_dog_toy's >10° camera
-  count drop; does kerry's usable field grow when admission is restricted
-  by image radius and then relaxed.
 
 ## Open questions
 
-- `min_shared` derivation from the edge-weight distribution (and whether
-  seed quality is sensitive to it at all on well-connected sets).
+- Whether `min_shared` should be derived from the edge-weight distribution,
+  for example as a fraction of the median nonzero edge weight, and whether
+  seed quality is sensitive to it at all on well-connected sets.
 - The trigger and representation for the sparse backend (banded CSR vs
   hash-based), when a >4–5 k-image consumer exists.
 - Weighted covisibility: whether any consumer actually needs graded
