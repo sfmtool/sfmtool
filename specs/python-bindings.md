@@ -76,8 +76,8 @@ import any internal name. Tests, scripts, the docs and spec examples import
 from the public modules; [`tests/test_module_layout.py`](../tests/test_module_layout.py)
 fails on a path into the extension there outside its allowlist, which names
 the registration tests (their subject is what each extension submodule
-registers), the test of `run_explorer` (which has no public home) and one
-monkeypatch that has to replace a binding where `src/` looks it up.
+registers), the test of `run_explorer` (which has no public home) and two
+monkeypatches that replace a binding where `src/` looks it up.
 [`test_reconstruction_patches_registration.py`](../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py)
 checks that each public module exports exactly its submodule's `__all__`.
 
