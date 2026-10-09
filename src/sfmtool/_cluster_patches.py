@@ -56,7 +56,7 @@ def _run_cluster_patches(
     import numpy as np
 
     from ._progress import _poll_progress
-    from ._sfmtool.io import read_matches, write_matches
+    from ._sfmtool.fileio import read_matches, write_matches
     from ._sfmtool.matching import refine_cluster_patches as _refine
 
     data = read_matches(in_path)

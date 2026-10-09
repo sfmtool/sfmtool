@@ -216,7 +216,7 @@ def _build_cluster_patches(
     from types import SimpleNamespace
 
     from sfmtool._cluster_patches import _run_cluster_patches
-    from sfmtool.io import read_sift_metadata
+    from sfmtool.fileio import read_sift_metadata
     from sfmtool.matching import background_floor_clusters_kdf
     from sfmtool.feature_match._run import _write_clusters_matches
     from sfmtool.sift.file import get_sift_path_for_image

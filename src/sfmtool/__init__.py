@@ -5,9 +5,9 @@
 
 The Rust bindings live in the compiled ``sfmtool._sfmtool`` extension, which is
 internal; each of its submodules has a public home, a module of the same name
-on this package: ``sfmtool.geometry``, ``sfmtool.io``, ``sfmtool.reconstruction``
+on this package: ``sfmtool.geometry``, ``sfmtool.fileio``, ``sfmtool.reconstruction``
 and so on, and ``sfmtool.sift`` for the SIFT bindings. Read a binding from its
-module (``from sfmtool.io import read_sfmr``). The package root binds only the
+module (``from sfmtool.fileio import read_sfmr``). The package root binds only the
 three root-level names of the extension, ``THUMBNAIL_SIZE``, ``ProgressCounter``
 and ``build_profile``, when it is imported, since loading the extension takes
 about 10 ms.
@@ -18,7 +18,7 @@ and pycolmap, which take hundreds of milliseconds on a warm disk cache and
 seconds on a cold one, and a program that imports one part of the package, such
 as ``sfm explorer`` or ``sfm --help``, should not pay for the rest. The
 submodules in ``_LAZY_SUBPACKAGES``, which include the binding modules, are
-bound the same way, so ``sfmtool.io`` works after ``import sfmtool`` alone.
+bound the same way, so ``sfmtool.fileio`` works after ``import sfmtool`` alone.
 ``from sfmtool import X``, ``sfmtool.X``, ``from sfmtool import *`` and
 ``dir(sfmtool)`` all see the same names either way.
 """
@@ -79,9 +79,9 @@ _LAZY = {name: module for module, names in _LAZY_NAMES.items() for name in names
 _LAZY_SUBPACKAGES = (
     "analysis",
     "bench",
+    "fileio",
     "flow",
     "geometry",
-    "io",
     "matching",
     "patches",
     "reconstruction",
@@ -98,9 +98,9 @@ if TYPE_CHECKING:
     from sfmtool import (  # noqa: F401
         analysis,
         bench,
+        fileio,
         flow,
         geometry,
-        io,
         matching,
         patches,
         reconstruction,

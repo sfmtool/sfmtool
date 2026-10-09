@@ -8,7 +8,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from sfmtool.camrig.resolver import resolve_camrig_for_solve
-from sfmtool.io import (
+from sfmtool.fileio import (
     read_camrig,
     read_camrig_metadata,
     verify_camrig,

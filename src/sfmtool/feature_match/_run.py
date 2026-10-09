@@ -177,7 +177,7 @@ def _run_matching(
 
         # Read matches + TVGs back from the DB
         click.echo("Reading matches from database...")
-        from .._sfmtool.io import read_colmap_db_matches
+        from .._sfmtool.fileio import read_colmap_db_matches
 
         matches_data = read_colmap_db_matches(str(db_path), include_tvg=True)
 
@@ -250,7 +250,7 @@ def _run_matching(
     ).replace("\\", "/")
 
     # Write the .matches file
-    from .._sfmtool.io import write_matches
+    from .._sfmtool.fileio import write_matches
 
     click.echo(f"Writing {out}...")
     write_matches(out, matches_data)
@@ -284,7 +284,7 @@ def _write_clusters_matches(
     from concurrent.futures import ThreadPoolExecutor
     from importlib.metadata import version as get_version
 
-    from .._sfmtool.io import read_sift_metadata, read_sift_partial, write_matches
+    from .._sfmtool.fileio import read_sift_metadata, read_sift_partial, write_matches
 
     cluster_count = len(clusters.cluster_starts) - 1
     member_count = len(clusters.member_images)

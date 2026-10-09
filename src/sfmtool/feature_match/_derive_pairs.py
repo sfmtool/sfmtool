@@ -38,7 +38,7 @@ def _run_derive_pairs(
 
     import pycolmap
 
-    from .._sfmtool.io import read_colmap_db_matches, read_matches, write_matches
+    from .._sfmtool.fileio import read_colmap_db_matches, read_matches, write_matches
     from ..colmap.db_setup import (
         _setup_for_sfm_from_matches,
         resolve_image_and_sift_paths,

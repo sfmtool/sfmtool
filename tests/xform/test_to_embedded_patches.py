@@ -18,7 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.reconstruction import SfmrReconstruction
-from sfmtool.io import verify_sfmr
+from sfmtool.fileio import verify_sfmr
 from sfmtool.cli import main
 from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
 from sfmtool.xform import ToEmbeddedPatchesTransform

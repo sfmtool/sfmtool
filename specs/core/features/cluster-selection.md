@@ -21,7 +21,7 @@ The operation is `MatchesData::select_clusters(&ClusterSelect)` in
 `sfmtool-matches-format` crate. It returns a new `MatchesData` and leaves the
 source untouched; writing the result is the caller's choice. Python reaches it
 as `MatchesFile.select_clusters` in
-[`matches_file.rs`](../../../crates/sfmtool-py/src/io/matches_file.rs), which
+[`matches_file.rs`](../../../crates/sfmtool-py/src/fileio/matches_file.rs), which
 returns a new `MatchesFile` handle. `select.rs` also holds the decode
 accessors described [below](#decode-accessors).
 

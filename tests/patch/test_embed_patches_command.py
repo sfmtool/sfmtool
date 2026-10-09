@@ -25,7 +25,7 @@ from sfmtool._patch_compaction import (
     image_file_hashes_from_sift,
 )
 from sfmtool.reconstruction import SfmrReconstruction
-from sfmtool.io import verify_sfmr
+from sfmtool.fileio import verify_sfmr
 from sfmtool.cli import main
 
 from ..conftest import assert_references_name_track_observations

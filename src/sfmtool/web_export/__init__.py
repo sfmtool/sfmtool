@@ -4,7 +4,7 @@
 """A reconstruction as static web files, for ``sfm web-export``.
 
 The data files (``scene.json`` and the JPEG atlas pages) are written by the
-Rust core through :func:`sfmtool._sfmtool.io.write_web_export`. This package
+Rust core through :func:`sfmtool._sfmtool.fileio.write_web_export`. This package
 holds the other two files, ``index.html`` and ``web-export.js``, which are the
 same for every scene, and copies them in beside the data. ``--single-file``
 folds all of it into one ``index.html``.
@@ -121,7 +121,7 @@ def export_reconstruction(
 ) -> dict:
     """Write ``recon`` as a web export into ``out_dir``.
 
-    Returns the report of :func:`sfmtool._sfmtool.io.write_web_export`, with
+    Returns the report of :func:`sfmtool._sfmtool.fileio.write_web_export`, with
     ``files`` listing what is in ``out_dir`` now, by name and size in bytes.
 
     Raises:
@@ -129,7 +129,7 @@ def export_reconstruction(
             single-file page would pass :data:`SINGLE_FILE_LIMIT`, or an option
             does not fit the reconstruction.
     """
-    from .._sfmtool.io import write_web_export
+    from .._sfmtool.fileio import write_web_export
 
     out_dir = Path(out_dir)
     options = dict(

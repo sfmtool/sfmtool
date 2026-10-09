@@ -1840,9 +1840,9 @@ The code that reads, writes and verifies `.sfmr` files is:
 
 - Rust: `read_sfmr`, `read_sfmr_metadata`, `write_sfmr` and `verify_sfmr` in
   [`sfmtool-sfmr-format`](../../crates/sfmtool-sfmr-format/src/lib.rs).
-- Python: the same four functions in `sfmtool.io`, which take and
+- Python: the same four functions in `sfmtool.fileio`, which take and
   return a dict of NumPy arrays and metadata
-  ([bindings](../../crates/sfmtool-py/src/io/sfmr.rs)), and
+  ([bindings](../../crates/sfmtool-py/src/fileio/sfmr.rs)), and
   `sfmtool.reconstruction.SfmrReconstruction`, whose `load` and `save`
   most of the Python package uses
   ([bindings](../../crates/sfmtool-py/src/reconstruction/sfmr_reconstruction.rs)).

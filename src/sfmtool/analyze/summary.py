@@ -105,7 +105,7 @@ def _absolute_path_text(workspace_info: dict) -> str:
 
 def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sfmr` reconstruction file."""
-    from .._sfmtool.io import read_sfmr_metadata, verify_sfmr
+    from .._sfmtool.fileio import read_sfmr_metadata, verify_sfmr
 
     valid, errors = verify_sfmr(str(path))
 
@@ -153,7 +153,7 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
 
 def print_sift_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sift` feature file."""
-    from .._sfmtool.io import read_sift_metadata, verify_sift
+    from .._sfmtool.fileio import read_sift_metadata, verify_sift
     from ..sift.file import SiftReader, feature_size_x, feature_size_y
 
     valid, errors = verify_sift(str(path))
@@ -207,7 +207,7 @@ def print_sift_summary(path: Path, verbose: bool = False) -> None:
 
 def print_matches_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.matches` file."""
-    from .._sfmtool.io import read_matches_metadata, verify_matches
+    from .._sfmtool.fileio import read_matches_metadata, verify_matches
 
     valid, errors = verify_matches(str(path))
     meta = read_matches_metadata(str(path))
@@ -242,7 +242,7 @@ def print_matches_summary(path: Path, verbose: bool = False) -> None:
     _print_block(rows)
 
     if verbose:
-        from .._sfmtool.io import read_matches
+        from .._sfmtool.fileio import read_matches
 
         click.echo("")
         ws = meta.get("workspace", {})
@@ -330,7 +330,7 @@ def print_matches_summary(path: Path, verbose: bool = False) -> None:
 
 def print_camrig_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.camrig` camera rig file."""
-    from .._sfmtool.io import read_camrig_metadata, verify_camrig
+    from .._sfmtool.fileio import read_camrig_metadata, verify_camrig
 
     valid, errors = verify_camrig(str(path))
     info = read_camrig_metadata(str(path))
@@ -348,7 +348,7 @@ def print_camrig_summary(path: Path, verbose: bool = False) -> None:
     _print_block(rows)
 
     if verbose:
-        from .._sfmtool.io import read_camrig
+        from .._sfmtool.fileio import read_camrig
 
         attrs = meta.get("rig_attributes")
         if isinstance(attrs, dict) and attrs:

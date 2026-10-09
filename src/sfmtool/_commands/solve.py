@@ -201,7 +201,7 @@ def solve(
         # two-view geometry table, so a clusters-bearing file — which by
         # format never carries two-view geometries — would hand it an empty
         # graph and register nothing. Say so instead of solving into silence.
-        from .._sfmtool.io import read_matches_metadata
+        from .._sfmtool.fileio import read_matches_metadata
 
         try:
             matches_metadata = read_matches_metadata(str(matches_file))

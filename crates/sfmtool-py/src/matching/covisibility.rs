@@ -18,7 +18,7 @@ use sfmtool_core::features::cluster_match::covisibility::{
     SeedImageGroupParams,
 };
 
-use crate::io::matches_file::PyMatchesFile;
+use crate::fileio::matches_file::PyMatchesFile;
 
 use super::cluster::extract_u32_1d;
 

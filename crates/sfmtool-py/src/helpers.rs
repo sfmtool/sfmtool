@@ -221,15 +221,14 @@ pub(crate) fn extract_optional_3x3_matrix(
 /// `public_name` is the `__name__` the binding objects expose to Python
 /// introspection (tracebacks, IPython `?`, Sphinx, `pickle.dumps`,
 /// `inspect.getmodule`). The last `.`-segment of `public_name` becomes the
-/// attribute on `parent` (so `public_name = "sfmtool.io"` makes
-/// `parent.io = child`).
+/// attribute on `parent` (so `public_name = "sfmtool.fileio"` makes
+/// `parent.fileio = child`).
 ///
 /// Wires up the three things every PyO3 submodule needs:
 /// 1. `__name__ == public_name`, set at creation so every function and class
 ///    registered on the child reports `__module__ == public_name` rather
-///    than the bare attribute (which collides with stdlib for names like
-///    `io`). The Python introspection name is independent of the actual
-///    dotted import path.
+///    than the bare attribute name. The Python introspection name is
+///    independent of the actual dotted import path.
 /// 2. An entry in `sys.modules` keyed at the real import path
 ///    (`parent.__name__ + "." + attr`), populated before `register` runs so
 ///    any class registration that introspects its own module sees the

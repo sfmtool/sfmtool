@@ -15,7 +15,7 @@ import numpy as np
 import xxhash
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool._sfmtool.io import (
+from sfmtool._sfmtool.fileio import (
     SiftWriteQueue as _SiftWriteQueue,
     read_sift as _core_read_sift,
     read_sift_metadata,

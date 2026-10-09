@@ -17,7 +17,7 @@ use pyo3::prelude::*;
 
 use sfmtool_matches_format::MatchesData;
 
-use crate::io::matches_file::PyMatchesFile;
+use crate::fileio::matches_file::PyMatchesFile;
 
 /// The first positional argument of a CSR-taking binding, resolved.
 pub(crate) enum CsrSource<'a> {

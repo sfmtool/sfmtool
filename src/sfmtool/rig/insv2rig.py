@@ -248,7 +248,7 @@ def write_insv_camrig(
 
     from ..camera.cameras import _CAMERA_PARAM_NAMES
     from .._sfmtool.geometry import CameraIntrinsics
-    from .._sfmtool.io import write_camrig
+    from .._sfmtool.fileio import write_camrig
 
     param_names = _CAMERA_PARAM_NAMES[camera_model]
     if len(camera_params) != len(param_names):

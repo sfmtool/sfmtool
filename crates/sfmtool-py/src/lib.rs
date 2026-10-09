@@ -8,7 +8,7 @@
 //! PyO3.
 //!
 //! Every binding lives on a PyO3 submodule (`_sfmtool.geometry`,
-//! `_sfmtool.io`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
+//! `_sfmtool.fileio`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
 //! `_sfmtool.patches`, `_sfmtool.bench`, `_sfmtool.matching`,
 //! `_sfmtool.analysis`, `_sfmtool.flow`, `_sfmtool.spatial`,
 //! `_sfmtool.spherical`). The extension is internal to the Python package:
@@ -28,8 +28,8 @@
 //! # Example
 //!
 //! ```python
-//! from sfmtool.io import read_sfmr, write_sfmr, verify_sfmr
-//! from sfmtool.io import read_sift, write_sift, verify_sift
+//! from sfmtool.fileio import read_sfmr, write_sfmr, verify_sfmr
+//! from sfmtool.fileio import read_sift, write_sift, verify_sift
 //!
 //! data = read_sfmr("reconstruction.sfmr")
 //! valid, errors = verify_sfmr("reconstruction.sfmr")
@@ -115,7 +115,7 @@ pub use reconstruction::sfmr_reconstruction::PySfmrReconstruction;
 
 // ── File I/O (incl. header-only image inspection) ─────────────────────────
 
-mod io;
+mod fileio;
 
 // ── Feature matching ──────────────────────────────────────────────────────
 
@@ -220,7 +220,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // File-format I/O: `.sfmr`, `.sift`, `.matches`, `.camrig`, COLMAP binary
     // + db, header-only image inspection.
-    helpers::install_submodule(m, "sfmtool.io", io::register)?;
+    helpers::install_submodule(m, "sfmtool.fileio", fileio::register)?;
 
     // sfmtool SIFT detection / extraction.
     helpers::install_submodule(m, "sfmtool.sift", sift::register)?;

@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool.io import read_sfmr
+from sfmtool.fileio import read_sfmr
 
 # The two columns that dominate memory by an order of magnitude over everything
 # else, and the reason the umbrella draft asks whether bases should share them.

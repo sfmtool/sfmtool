@@ -144,7 +144,7 @@ The write refuses -- with the report still printed -- when:
 
 - Registered under the Reconstruction category in `cli.py`; source in
   `src/sfmtool/_commands/estimate_intrinsics.py`.
-- The `.matches` read goes through `sfmtool.io.MatchesFile`. The
+- The `.matches` read goes through `sfmtool.fileio.MatchesFile`. The
   command passes the unrestricted selection handle itself to the kernel's
   object form, which reads the backbone's own CSR index, member images and
   member positions off it; the command derives nothing from those arrays but

@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from sfmtool.reconstruction import SfmrReconstruction
-from sfmtool.io import verify_sfmr
+from sfmtool.fileio import verify_sfmr
 
 from .conftest import load_images
 

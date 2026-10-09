@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._sfmtool.io import read_sift_partial
+from .._sfmtool.fileio import read_sift_partial
 
 
 def keep_infinity_points(

@@ -25,7 +25,7 @@ from sfmtool._patch_compaction import (
 )
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
-from sfmtool.io import verify_sfmr
+from sfmtool.fileio import verify_sfmr
 
 from .conftest import load_images, rotation_matrices
 

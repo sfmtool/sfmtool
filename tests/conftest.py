@@ -653,7 +653,7 @@ def build_reconstruction_at_poses(
     tests' time scales with the point count: with 794 points they take a third
     of what they took with 2486.
     """
-    from sfmtool.io import read_matches
+    from sfmtool.fileio import read_matches
     from sfmtool.reconstruction import SfmrReconstruction
     from sfmtool._workspace import load_workspace_config
     from sfmtool.colmap.io import (

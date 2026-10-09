@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use sfmtool_colmap::colmap_db;
 
+use crate::fileio::matches::matches_data_to_py;
 use crate::helpers::{extract_cameras_as_sfmr, extract_optional_3x3_matrix, get_item};
-use crate::io::matches::matches_data_to_py;
 
 /// Create a COLMAP SQLite database from reconstruction data.
 ///

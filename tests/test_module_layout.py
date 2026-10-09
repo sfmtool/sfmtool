@@ -4,7 +4,7 @@
 """Code outside the package reads the bindings from their public modules.
 
 The compiled extension `sfmtool._sfmtool` is internal. Each of its submodules
-has a public module of the same name (`sfmtool.io`, `sfmtool.geometry`, ...),
+has a public module of the same name (`sfmtool.fileio`, `sfmtool.geometry`, ...),
 and the tests, the scripts and the docs import from those. This test scans
 them as text for a path into the extension and fails on any it finds outside
 the allowlist below.
@@ -36,7 +36,7 @@ ALLOWED_COUNTS = {
     # since `sfm explorer` is how users reach it, and it is what this tests.
     "tests/test_explorer_command.py": 1,
     # Replaces `read_colmap_binary` where `_incremental_sfm` looks it up at
-    # call time, on the extension submodule. Patching `sfmtool.io` would leave
+    # call time, on the extension submodule. Patching `sfmtool.fileio` would leave
     # the solve calling the real binding.
     "tests/test_solve.py": 1,
     # Replaces `estimate_intrinsics` where `sfm estimate-intrinsics` imports
@@ -74,7 +74,7 @@ def test_no_path_into_the_extension_outside_the_package():
     assert not found, (
         "These lines reach into the internal `sfmtool._sfmtool` extension. "
         "Import the binding from its public module instead, such as "
-        "`from sfmtool.io import read_sfmr`:\n"
+        "`from sfmtool.fileio import read_sfmr`:\n"
         + "\n".join(hit for hits in found.values() for hit in hits)
     )
 

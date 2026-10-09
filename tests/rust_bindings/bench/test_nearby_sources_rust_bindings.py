@@ -103,7 +103,7 @@ def sift_paths(embedded):  # noqa: F811
 
 @pytest.fixture(scope="module")
 def sources(embedded, descriptor_index):  # noqa: F811
-    from sfmtool.io import MatchesFile
+    from sfmtool.fileio import MatchesFile
 
     forest, _ = descriptor_index
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))

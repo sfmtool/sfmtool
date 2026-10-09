@@ -139,7 +139,7 @@ def _save_reconstructions(
             )
             camera_count = len(pycolmap_recon.cameras)
         else:
-            from ._sfmtool.io import read_colmap_binary
+            from ._sfmtool.fileio import read_colmap_binary
 
             recon_dir = reconstruction_path / str(idx)
             colmap_data = read_colmap_binary(recon_dir)

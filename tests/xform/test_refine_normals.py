@@ -277,7 +277,7 @@ def test_refine_normals_persists_patch_cloud_round_trips(
     which survives a save/load round trip through the version-3 ``.sfmr``
     points3d patch frame. The frame is always saved (it must stay consistent
     with the rewritten normals); there is no opt-out knob."""
-    from sfmtool.io import verify_sfmr
+    from sfmtool.fileio import verify_sfmr
 
     recon = _embedded(seoul_bull_workspace)
 
@@ -322,7 +322,7 @@ def test_refine_normals_bitmaps_default_and_optout(seoul_bull_workspace, tmp_pat
     per-point RGBA patch textures (so the output is self-contained) that survive
     a save/load round trip and pass ``verify_sfmr``; ``bitmaps=false`` opts out
     (the frame is still re-persisted, but no textures are rendered)."""
-    from sfmtool.io import verify_sfmr
+    from sfmtool.fileio import verify_sfmr
 
     recon = _embedded(seoul_bull_workspace)
     npoints = len(np.asarray(recon.positions))

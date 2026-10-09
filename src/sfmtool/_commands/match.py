@@ -329,7 +329,7 @@ def _run_derive_pairs_mode(
     paths: tuple[str, ...], output_path: str | None, camera_model: str | None
 ) -> None:
     """Validate `--derive-pairs` arguments and run the derivation."""
-    from .._sfmtool.io import read_matches_metadata
+    from .._sfmtool.fileio import read_matches_metadata
 
     stray = [
         flag

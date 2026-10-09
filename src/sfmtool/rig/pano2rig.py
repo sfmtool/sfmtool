@@ -226,7 +226,7 @@ def write_pano_camrig(
     relative to the directory holding the ``.camrig`` file (the rig root).
     """
     from .._sfmtool.geometry import CameraIntrinsics
-    from .._sfmtool.io import write_camrig
+    from .._sfmtool.fileio import write_camrig
 
     # 90° FOV over a square face: half-FOV is 45°, so fx = fy = face_size / 2.
     # The principal point sits at the image centre, face_size / 2 in COLMAP's

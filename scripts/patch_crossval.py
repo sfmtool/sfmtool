@@ -57,7 +57,7 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool.geometry import RigidTransform
 from sfmtool.flow import ImagePyramid, WarpMap
-from sfmtool.io import read_matches, read_sift
+from sfmtool.fileio import read_matches, read_sift
 
 
 def find_sift_paths(workspace: str, names: list[str]) -> dict[str, str]:

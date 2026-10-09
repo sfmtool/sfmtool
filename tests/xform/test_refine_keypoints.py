@@ -205,7 +205,7 @@ def test_refine_keypoints_structural_invariance(seoul_bull_workspace, tmp_path):
     arrays, observation counts, point count, positions, and normals are
     identical to the input's; and the result still saves cleanly (the in-frame
     clamp keeps the writer's keypoint checks green)."""
-    from sfmtool.io import verify_sfmr
+    from sfmtool.fileio import verify_sfmr
 
     recon = _embedded(seoul_bull_workspace)
     orig_track_images = np.asarray(recon.track_image_indexes).copy()

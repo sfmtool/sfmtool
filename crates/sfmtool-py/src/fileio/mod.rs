@@ -6,7 +6,7 @@
 //! the data files of a web export.
 //!
 //! Each child file owns its own `pub fn register`; this module just chains them
-//! into the `_sfmtool.io` Python submodule wired up by `lib.rs`.
+//! into the `_sfmtool.fileio` Python submodule wired up by `lib.rs`.
 
 use pyo3::prelude::*;
 

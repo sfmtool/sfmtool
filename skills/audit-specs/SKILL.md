@@ -275,7 +275,7 @@ Each one narrows 131 specs to a handful worth close attention.
    because the corpus is small enough to cover whole: list every outbound link
    to `../core/`, `../gui/`, `../cli/`, `../../crates/` or `../../src/`, and
    every hit for a library identifier or actor in the format proper -- `::`,
-   `fn `, `pub `, `_sfmr(`, `sfmtool._sfmtool`, `sfmtool.io`, "the kernel", "the solve",
+   `fn `, `pub `, `_sfmr(`, `sfmtool._sfmtool`, `sfmtool.fileio`, "the kernel", "the solve",
    "this tool", "the binding" -- outside a heading named *Implementations*.
    Each hit is a lead into failure 6: read the sentence and decide whether it
    carries a definition (a finding), names an implementation where the format

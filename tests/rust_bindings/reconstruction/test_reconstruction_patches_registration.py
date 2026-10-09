@@ -91,9 +91,9 @@ def test_root_surface_is_deliberate_and_minimal():
 _SUBMODULES = (
     "analysis",
     "bench",
+    "fileio",
     "flow",
     "geometry",
-    "io",
     "matching",
     "patches",
     "reconstruction",

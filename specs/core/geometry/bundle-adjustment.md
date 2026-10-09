@@ -604,7 +604,7 @@ A reconstruction read from a `.sfmr` carries its constraints as the
 free, `1` ranged, `2` held) whatever legend the file stored, and `write_sfmr`
 takes it the same way; the file's legend never reaches the dict or
 `SfmrReconstruction.point_constraints`.
-`sfmtool.io.POINT_CONSTRAINT_NAMES` is that canonical numbering as a
+`sfmtool.fileio.POINT_CONSTRAINT_NAMES` is that canonical numbering as a
 tuple of names, so a consumer labels a code with
 `POINT_CONSTRAINT_NAMES[code]` rather than hard-coding the numbers, and a caller
 building `held=` and `distance=` from the column compares against those codes.

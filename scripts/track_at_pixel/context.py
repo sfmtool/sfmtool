@@ -239,7 +239,7 @@ class DatasetContext:
         measured and the detections for the rest.
         """
         from sfmtool.analysis import cluster_radii
-        from sfmtool.io import MatchesFile
+        from sfmtool.fileio import MatchesFile
         from sfmtool.spatial import KdTree2d
 
         mf = MatchesFile(str(path))

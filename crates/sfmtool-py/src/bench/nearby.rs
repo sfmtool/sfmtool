@@ -27,7 +27,7 @@ use sfmtool_core::bench::{
 use sfmtool_core::features::kdforest::ImageKeypoints;
 
 use super::{read_keypoints, views_of};
-use crate::io::matches_file::PyMatchesFile;
+use crate::fileio::matches_file::PyMatchesFile;
 use crate::patches::views::{resolve_pyramids, PosedViews, PyramidSet};
 use crate::reconstruction::edited::PyEditedReconstruction;
 use crate::spatial::kdf::PyLazyKdForest;

@@ -88,7 +88,7 @@ def _load_selection(matches_path: Path) -> tuple:
     """
     import numpy as np
 
-    from .._sfmtool.io import MatchesFile
+    from .._sfmtool.fileio import MatchesFile
 
     mfile = MatchesFile(matches_path)
     if not mfile.has_clusters:
@@ -283,7 +283,7 @@ def _write_camrig(
     import numpy as np
 
     from ..camrig.create import CamrigCreateError, find_images, normalize_pattern
-    from .._sfmtool.io import write_camrig
+    from .._sfmtool.fileio import write_camrig
 
     verdict = estimate["camera_model"]
     focal = estimate["focal_px"]

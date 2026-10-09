@@ -243,8 +243,8 @@ The code that reads, writes and verifies `.sift` files is:
   `verify_sift`, which returns `(is_valid, error_messages)`, reports it as an
   error. None of them checks the feature order.
 - Python: `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`
-  and `verify_sift` in `sfmtool.io`, which take and return a dict of
-  NumPy arrays and metadata ([bindings](../../crates/sfmtool-py/src/io/sift.rs)),
+  and `verify_sift` in `sfmtool.fileio`, which take and return a dict of
+  NumPy arrays and metadata ([bindings](../../crates/sfmtool-py/src/fileio/sift.rs)),
   and `SiftReader` and `write_sift` in
   [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py), which most of the
   Python package uses.

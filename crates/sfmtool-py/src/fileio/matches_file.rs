@@ -25,7 +25,7 @@ use crate::helpers::serde_to_py;
 /// Construct from a path; array accessors return numpy copies. The file must
 /// use the cluster backbone for the cluster accessors and `select_clusters`;
 /// pairwise files can still be opened for the image-table accessors.
-#[pyclass(name = "MatchesFile", module = "sfmtool.io", frozen)]
+#[pyclass(name = "MatchesFile", module = "sfmtool.fileio", frozen)]
 pub struct PyMatchesFile {
     inner: MatchesData,
 }

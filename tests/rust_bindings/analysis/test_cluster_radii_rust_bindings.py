@@ -10,7 +10,7 @@ import numpy.testing as npt
 import pytest
 
 from sfmtool.analysis import cluster_radii, coarsest_cluster_ids
-from sfmtool.io import MatchesFile, write_matches
+from sfmtool.fileio import MatchesFile, write_matches
 
 # ── Fixture data ──────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool.io import MatchesFile, write_matches
+from sfmtool.fileio import MatchesFile, write_matches
 from sfmtool.matching import ClusterCovisibility
 
 

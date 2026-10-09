@@ -11,7 +11,7 @@ from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.analysis import (
     find_point_correspondences as _rust_find_point_correspondences,
 )
-from ._sfmtool.io import read_sift_partial
+from ._sfmtool.fileio import read_sift_partial
 from .sift.file import get_sift_path_from_recon
 
 

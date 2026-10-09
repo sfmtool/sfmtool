@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from sfmtool.geometry import CameraIntrinsics, RotQuaternion, resect_images
-from sfmtool.io import write_matches
+from sfmtool.fileio import write_matches
 from sfmtool.reconstruction import SfmrReconstruction
 
 WIDTH, HEIGHT = 640, 480

@@ -381,7 +381,7 @@ def colmap_binary_to_rust_sfmr(
     solve could not pin down are reclassified as points at infinity.
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
-    from .._sfmtool.io import read_colmap_binary
+    from .._sfmtool.fileio import read_colmap_binary
 
     colmap_dir = Path(colmap_dir)
     image_dir = Path(image_dir).absolute()
@@ -777,7 +777,7 @@ def save_colmap_binary(
         apply_world_rotation: Apply the ``W^-1`` world rotation (external
             export). False for an S-only in-pipeline round trip.
     """
-    from .._sfmtool.io import write_colmap_binary
+    from .._sfmtool.fileio import write_colmap_binary
 
     recon = materialize_infinity_for_export(recon, "COLMAP binary export")
 

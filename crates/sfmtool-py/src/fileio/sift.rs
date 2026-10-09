@@ -131,7 +131,7 @@ pub fn write_sift(
 // `unsendable`: the queue holds mpsc Receivers (Send but not Sync) and is only
 // ever used from the single Python thread that owns it; the spawned rayon tasks
 // hold the Senders. This avoids the default pyclass `Send + Sync` requirement.
-#[pyclass(unsendable, module = "sfmtool.io")]
+#[pyclass(unsendable, module = "sfmtool.fileio")]
 pub struct SiftWriteQueue {
     pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Result<(), String>>>,
 }

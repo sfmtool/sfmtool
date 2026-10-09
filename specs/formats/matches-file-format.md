@@ -1184,11 +1184,11 @@ The code that reads, writes and verifies `.matches` files is:
 - Rust: `read_matches`, `read_matches_metadata`, `write_matches` and
   `verify_matches` in
   [`sfmtool-matches-format`](../../crates/sfmtool-matches-format/src/lib.rs).
-- Python: the same four functions in `sfmtool.io`, which take and
+- Python: the same four functions in `sfmtool.fileio`, which take and
   return a dict of NumPy arrays and metadata
-  ([bindings](../../crates/sfmtool-py/src/io/matches.rs)), and
-  `sfmtool.io.MatchesFile`, which opens a file for the cluster
-  queries ([bindings](../../crates/sfmtool-py/src/io/matches_file.rs)).
+  ([bindings](../../crates/sfmtool-py/src/fileio/matches.rs)), and
+  `sfmtool.fileio.MatchesFile`, which opens a file for the cluster
+  queries ([bindings](../../crates/sfmtool-py/src/fileio/matches_file.rs)).
 
 The member statuses are the `ClusterMemberStatus` enum, whose discriminants
 are the canonical codes and whose `NAMES` is the canonical

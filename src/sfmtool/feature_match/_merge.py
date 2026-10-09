@@ -26,7 +26,7 @@ def _run_merge(paths, output_path):
     """
     from datetime import datetime
 
-    from .._sfmtool.io import read_matches, write_matches
+    from .._sfmtool.fileio import read_matches, write_matches
 
     if not paths:
         raise click.UsageError("Must provide .matches file paths.")

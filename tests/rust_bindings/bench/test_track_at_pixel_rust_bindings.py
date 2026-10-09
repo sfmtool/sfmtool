@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from sfmtool import bench
-from sfmtool.io import MatchesFile
+from sfmtool.fileio import MatchesFile
 from sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)

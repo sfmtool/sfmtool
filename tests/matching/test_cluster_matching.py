@@ -185,7 +185,7 @@ class TestClusterCli:
         assert "track clusters" in result.output
         assert clusters_path.exists()
 
-        from sfmtool.io import read_matches, verify_matches
+        from sfmtool.fileio import read_matches, verify_matches
 
         # The clusters file is the whole output: no COLMAP database is opened
         # and no verified pairwise file is written.
@@ -299,7 +299,7 @@ class TestDerivePairsCli:
         out_path = workspace_dir / "tvg-matches" / "seoul.matches"
         assert out_path.exists()
 
-        from sfmtool.io import read_matches, verify_matches
+        from sfmtool.fileio import read_matches, verify_matches
 
         valid, errors = verify_matches(str(out_path))
         assert valid, errors
@@ -320,7 +320,7 @@ class TestDerivePairsCli:
         provenance = meta["matching_options"]["derived_pairs"]
         assert provenance["source_path"].endswith("seoul-clusters.matches")
 
-        from sfmtool.io import MatchesFile
+        from sfmtool.fileio import MatchesFile
 
         assert provenance["source_content_xxh128"] == (
             MatchesFile(clusters_path).content_xxh128
@@ -376,7 +376,7 @@ class TestDerivePairsCli:
         assert result.exit_code == 0, result.output
         assert out_path.exists()
 
-        from sfmtool.io import read_matches
+        from sfmtool.fileio import read_matches
 
         assert read_matches(str(out_path))["has_two_view_geometries"]
 

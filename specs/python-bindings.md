@@ -5,7 +5,7 @@ The Python package reaches the Rust code through one compiled extension module,
 crate with PyO3. The extension is internal: each of its submodules has a
 public module of the same name on the package, `sfmtool.<name>`, and code
 outside the package imports the bindings from there
-(`from sfmtool.io import read_sfmr`). The bindings convert NumPy arrays and
+(`from sfmtool.fileio import read_sfmr`). The bindings convert NumPy arrays and
 Python objects to the Rust types and back; the behaviour of each binding is the
 behaviour of the Rust code it calls, and that code's spec is where the behaviour
 is described. This page is the index from the bindings to those specs: for each
@@ -39,9 +39,9 @@ the same objects:
 |---------------|---------------------|
 | [`sfmtool.analysis`](../src/sfmtool/analysis.py) | `_sfmtool.analysis` |
 | [`sfmtool.bench`](../src/sfmtool/bench.py) | `_sfmtool.bench` |
+| [`sfmtool.fileio`](../src/sfmtool/fileio.py) | `_sfmtool.fileio` |
 | [`sfmtool.flow`](../src/sfmtool/flow.py) | `_sfmtool.flow` |
 | [`sfmtool.geometry`](../src/sfmtool/geometry.py) | `_sfmtool.geometry` |
-| [`sfmtool.io`](../src/sfmtool/io.py) | `_sfmtool.io` |
 | [`sfmtool.matching`](../src/sfmtool/matching.py) | `_sfmtool.matching` |
 | [`sfmtool.patches`](../src/sfmtool/patches.py) | `_sfmtool.patches` |
 | [`sfmtool.reconstruction`](../src/sfmtool/reconstruction.py) | `_sfmtool.reconstruction` |
@@ -54,22 +54,25 @@ the Python SIFT file I/O and the OpenCV and COLMAP extractors. `sfmtool.analysis
 holds the analysis bindings and is a different module from `sfmtool.analyze`,
 the Python reconstruction analysis that calls some of them; each keeps its
 name, the one from the extension and the one from the code it holds.
+`sfmtool.fileio` is named `fileio` rather than `io` because
+`from sfmtool import *` binds every public module, and a module named `io`
+would replace the standard library's `io` in the importing namespace.
 
 The package root [`sfmtool/__init__.py`](../src/sfmtool/__init__.py) imports
 the three root names of the extension and no binding from a submodule, so a
-binding is always read through its module: `sfmtool.io.read_sfmr`, or
+binding is always read through its module: `sfmtool.fileio.read_sfmr`, or
 `bench.commit(…)` after `from sfmtool import bench`. One name means one thing
 this way, where a flat root surface would hold the binding
 `match_image_pair` and `sfmtool.feature_match` the Python
 `match_image_pair` that takes different arguments, and the bench's steps
 (`commit`, `split`, `fit`) would read as something else beside the rest. The
 public modules are bound on the root on first use through `_LAZY_SUBPACKAGES`,
-so `import sfmtool` followed by `sfmtool.io.read_sfmr(…)` works and `import
+so `import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and `import
 sfmtool` still loads nothing but the extension. Since each binding's `__module__`
 is its public module, a class with a `__reduce__`, such as `CameraIntrinsics`,
 pickles and unpickles through that path. `sfmtool.write_sift` on the
 root is the Python function in `sfmtool.sift.file`, which checks its arguments
-and then calls `sfmtool.io.write_sift`.
+and then calls `sfmtool.fileio.write_sift`.
 
 Code inside `src/sfmtool/` may import from `._sfmtool` directly, as it may
 import any internal name. Tests, scripts, the docs and spec examples import
@@ -115,17 +118,17 @@ Paths in the *Source* column are relative to
 | [geometry/relative_pose.rs](../crates/sfmtool-py/src/geometry/relative_pose.rs) | `estimate_essential_rays`, `fit_ray_rotation` | [relative-pose.md](core/geometry/relative-pose.md) |
 | [geometry/translation_averaging.rs](../crates/sfmtool-py/src/geometry/translation_averaging.rs) | `average_translations`, `relative_lengths`, `direction_reading`, `orientation_reading` and their solver constants | [translation-averaging.md](core/geometry/translation-averaging.md) |
 
-### `io`
+### `fileio`
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [io/sfmr.rs](../crates/sfmtool-py/src/io/sfmr.rs) | `read_sfmr`, `read_sfmr_metadata`, `read_sfmr_content_hash`, `write_sfmr`, `verify_sfmr`, `POINT_CONSTRAINT_NAMES` | [sfmr-file-format.md](formats/sfmr-file-format.md); `POINT_CONSTRAINT_NAMES` in [bundle-adjustment.md](core/geometry/bundle-adjustment.md) |
-| [io/sift.rs](../crates/sfmtool-py/src/io/sift.rs) | `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`, `verify_sift`, `SiftWriteQueue` | [sift-file-format.md](formats/sift-file-format.md); `SiftWriteQueue` in [sift.md](core/features/sift.md) |
-| [io/matches.rs](../crates/sfmtool-py/src/io/matches.rs), [matches_file.rs](../crates/sfmtool-py/src/io/matches_file.rs) | `read_matches`, `read_matches_metadata`, `write_matches`, `verify_matches`, `MatchesFile` | [matches-file-format.md](formats/matches-file-format.md) |
-| [io/camrig.rs](../crates/sfmtool-py/src/io/camrig.rs) | `read_camrig`, `read_camrig_metadata`, `write_camrig`, `verify_camrig`, and the image-pattern helpers `validate_camrig_pattern`, `camrig_pattern_to_glob`, `camrig_pattern_matches`, `camrig_pattern_frame_index` | [camrig-file-format.md](formats/camrig-file-format.md) |
-| [io/colmap_binary.rs](../crates/sfmtool-py/src/io/colmap_binary.rs), [colmap_db.rs](../crates/sfmtool-py/src/io/colmap_db.rs) | `read_colmap_binary`, `write_colmap_binary`, `write_colmap_db`, `read_colmap_db_matches` | [colmap-interop.md](formats/colmap-interop.md) |
-| [io/image.rs](../crates/sfmtool-py/src/io/image.rs) | `image_dimensions` | none |
-| [io/web_export.rs](../crates/sfmtool-py/src/io/web_export.rs) | `write_web_export` | [web-export-command.md](cli/visualization/web-export-command.md) |
+| [fileio/sfmr.rs](../crates/sfmtool-py/src/fileio/sfmr.rs) | `read_sfmr`, `read_sfmr_metadata`, `read_sfmr_content_hash`, `write_sfmr`, `verify_sfmr`, `POINT_CONSTRAINT_NAMES` | [sfmr-file-format.md](formats/sfmr-file-format.md); `POINT_CONSTRAINT_NAMES` in [bundle-adjustment.md](core/geometry/bundle-adjustment.md) |
+| [fileio/sift.rs](../crates/sfmtool-py/src/fileio/sift.rs) | `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`, `verify_sift`, `SiftWriteQueue` | [sift-file-format.md](formats/sift-file-format.md); `SiftWriteQueue` in [sift.md](core/features/sift.md) |
+| [fileio/matches.rs](../crates/sfmtool-py/src/fileio/matches.rs), [matches_file.rs](../crates/sfmtool-py/src/fileio/matches_file.rs) | `read_matches`, `read_matches_metadata`, `write_matches`, `verify_matches`, `MatchesFile` | [matches-file-format.md](formats/matches-file-format.md) |
+| [fileio/camrig.rs](../crates/sfmtool-py/src/fileio/camrig.rs) | `read_camrig`, `read_camrig_metadata`, `write_camrig`, `verify_camrig`, and the image-pattern helpers `validate_camrig_pattern`, `camrig_pattern_to_glob`, `camrig_pattern_matches`, `camrig_pattern_frame_index` | [camrig-file-format.md](formats/camrig-file-format.md) |
+| [fileio/colmap_binary.rs](../crates/sfmtool-py/src/fileio/colmap_binary.rs), [colmap_db.rs](../crates/sfmtool-py/src/fileio/colmap_db.rs) | `read_colmap_binary`, `write_colmap_binary`, `write_colmap_db`, `read_colmap_db_matches` | [colmap-interop.md](formats/colmap-interop.md) |
+| [fileio/image.rs](../crates/sfmtool-py/src/fileio/image.rs) | `image_dimensions` | none |
+| [fileio/web_export.rs](../crates/sfmtool-py/src/fileio/web_export.rs) | `write_web_export` | [web-export-command.md](cli/visualization/web-export-command.md) |
 
 ### `sift`
 

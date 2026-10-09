@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from sfmtool.io import read_sfmr_content_hash, read_sfmr_metadata
+from sfmtool.fileio import read_sfmr_content_hash, read_sfmr_metadata
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
 
@@ -729,7 +729,7 @@ class TestSiftFilesInlineKeypoints:
         return keypoints
 
     def test_from_data_save_load_keeps_the_column(self, seoul_bull_sfmr_only, tmp_path):
-        from sfmtool.io import read_sfmr
+        from sfmtool.fileio import read_sfmr
 
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         keypoints = self._in_bounds_keypoints(recon)

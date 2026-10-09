@@ -399,7 +399,7 @@ def camrig_root(tmp_path) -> Path:
 
 
 def test_write_camrig_writes_the_verdict_model(stub_estimate, camrig_root):
-    from sfmtool.io import read_camrig
+    from sfmtool.fileio import read_camrig
 
     result = _estimate(
         camera_model="EquidistantFisheye",
@@ -516,7 +516,7 @@ def test_the_vote_reads_the_backbones_positions(cluster_matches_file):
     """The file states its members' positions, so the vote reads them straight
     off the selection handle -- no `.sift` file is opened, and there is no
     other path to take."""
-    from sfmtool.io import MatchesFile
+    from sfmtool.fileio import MatchesFile
 
     assert not hasattr(ei, "_positions_from_sift"), (
         "the legacy .sift lookup is gone; version <= 5 cluster files are refused"
@@ -578,7 +578,7 @@ def test_a_pairwise_matches_file_is_refused(cluster_matches_file: Path):
     extracted, and only adds the pairwise match.
     """
     from sfmtool.geometry import estimate_intrinsics as estimate
-    from sfmtool.io import MatchesFile
+    from sfmtool.fileio import MatchesFile
 
     workspace_dir = cluster_matches_file.parent.parent
     out = cluster_matches_file.parent / "pairs.matches"
@@ -606,7 +606,7 @@ def test_an_unreadable_matches_file_is_a_clean_cli_error(tmp_path):
 
 def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
     """The seoul bull capture is a 270x480 pinhole one; the vote should say so."""
-    from sfmtool.io import read_camrig
+    from sfmtool.fileio import read_camrig
 
     runner = CliRunner()
     out = runner.invoke(main, ["estimate-intrinsics", "-i", str(cluster_matches_file)])

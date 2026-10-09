@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool.io import (
+from sfmtool.fileio import (
     POINT_CONSTRAINT_NAMES,
     read_sfmr,
     read_sfmr_metadata,

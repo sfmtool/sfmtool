@@ -61,7 +61,7 @@ tests, and otherwise uses public names. A name with no `_`, reached by a path
 with no `_`-prefixed component, is public API. The compiled extension
 `sfmtool._sfmtool` is internal by this rule; the public home of its bindings is
 the module of the same name on the package, `sfmtool.<submodule>`
-(`from sfmtool.io import read_sfmr`), and `tests/test_module_layout.py` fails
+(`from sfmtool.fileio import read_sfmr`), and `tests/test_module_layout.py` fails
 on a path into the extension from `tests/`, `scripts/` or `docs/`. See
 `specs/python-bindings.md`.
 
@@ -79,7 +79,7 @@ on a path into the extension from `tests/`, `scripts/` or `docs/`. See
 - **The `sfmtool` package root** binds its public names through `_LAZY_NAMES`
   in `__init__.py`, so its own modules are `_`-named, except `cli.py`, the
   `sfm` entry point named in `pyproject.toml`, and the binding modules
-  (`analysis.py`, `geometry.py`, `io.py`, …), each of which re-exports one
+  (`analysis.py`, `geometry.py`, `fileio.py`, …), each of which re-exports one
   extension submodule. The root re-exports no binding flat.
 - **`_commands/`** is internal as a whole, because of its underscore. Inside
   it, a plain name is a command module, one per row in `cli.COMMANDS`, and a

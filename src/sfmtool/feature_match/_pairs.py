@@ -24,7 +24,7 @@ def pairs_from_matches(data: dict, sift_paths: list[Path] | None = None) -> dict
     """Return the four pairwise match arrays for a ``read_matches`` dict.
 
     Args:
-        data: A dict as returned by ``sfmtool._sfmtool.io.read_matches`` (or a
+        data: A dict as returned by ``sfmtool._sfmtool.fileio.read_matches`` (or a
             compatible dict carrying either the pairwise or the cluster
             backbone).
         sift_paths: Optional per-image ``.sift`` paths, parallel to

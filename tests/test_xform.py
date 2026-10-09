@@ -208,7 +208,7 @@ def test_xform_joined_negative_translation_translates(
     """`--translate=-1,2,3` moves every point and is recorded with the other steps."""
     import numpy as np
 
-    from sfmtool.io import read_sfmr
+    from sfmtool.fileio import read_sfmr
 
     output_sfmr = tmp_path / "translated.sfmr"
     args = [
@@ -240,7 +240,7 @@ def test_xform_separated_negative_value_matches_joined(
     seoul_bull_ground_truth_sfmr: Path, tmp_path: Path
 ):
     """`--translate -1,2,3` and `--translate=-1,2,3` write the same points."""
-    from sfmtool.io import read_sfmr
+    from sfmtool.fileio import read_sfmr
 
     outputs = []
     for spelling in (["--translate", "-1,2,3"], ["--translate=-1,2,3"]):

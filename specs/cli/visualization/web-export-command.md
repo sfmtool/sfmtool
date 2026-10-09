@@ -315,7 +315,7 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
   let report = write_web_export(&recon, Path::new("site"), &options, &Progress::none())?;
   ```
 
-- **Binding**: `sfmtool.io.write_web_export(recon, out_dir, *, patches,
+- **Binding**: `sfmtool.fileio.write_web_export(recon, out_dir, *, patches,
   thumbnails, patch_size, jpeg_quality, max_points, start_image, source_name,
   generator)`, returning the report as a dict.
 - **Python**: the command in

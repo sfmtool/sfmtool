@@ -118,7 +118,7 @@ def find_sfmr_by_content_hash(workspace: Path, hash_prefix: str) -> Path | None:
 
     Returns the matching path, or None if no reconstruction matches.
     """
-    from ._sfmtool.io import read_sfmr_content_hash
+    from ._sfmtool.fileio import read_sfmr_content_hash
 
     def matches(path: Path) -> bool:
         try:

@@ -13,7 +13,7 @@ from .._filenames import normalize_workspace_path
 from .._image_pair_graph import build_covisibility_pairs
 from ..sift.file import SiftReader, image_files_to_sift_files
 from .._sfmtool.geometry import RotQuaternion
-from .._sfmtool.io import write_colmap_db
+from .._sfmtool.fileio import write_colmap_db
 
 __all__ = ["create_colmap_db_from_reconstruction"]
 
