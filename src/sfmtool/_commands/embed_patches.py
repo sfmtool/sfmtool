@@ -258,8 +258,9 @@ from .._cli_utils import timed_command
         "view: 'bilinear' reads the full-resolution level only; "
         "'bilinear_mip' reads the pyramid level nearest the view's "
         "compression, which limits aliasing on views at a different scale; "
-        "'anisotropic' also samples obliquely seen patches correctly and is "
-        "slower. See specs/core/camera/image-warping.md."
+        "'anisotropic' also samples obliquely seen patches correctly; its "
+        "cost against 'bilinear_mip' depends on the view and on whether the "
+        "CPU has AVX2. See specs/core/camera/image-warping.md."
     ),
 )
 def embed_patches_command(
