@@ -841,6 +841,8 @@ fn kept_member(s: Mat2, p: [f64; 2]) -> MemberOutcome {
         zncc_grid: [[0.9; 3]; 3],
         shift: 0.5,
         cells: None,
+        refined_radius: f32::NAN,
+        refined_radius_grid: [[f32::NAN; 3]; 3],
     }
 }
 

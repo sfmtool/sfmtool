@@ -883,3 +883,298 @@ fn avx2_matches_scalar_scores() {
         }
     }
 }
+
+// ── The gates at the refined shape ──────────────────────────────────────────
+
+/// [`texture`] left of `x = 57` and flat to its right: a member's grid around
+/// `(64, 64)` at shape `2.5` spans `x` from 49 to 79, so its left column of
+/// cells is textured and the other six cells are flat or hold the step.
+fn texture_left_third(x: f64, y: f64) -> f64 {
+    if x < 57.0 {
+        texture(x, y)
+    } else {
+        127.0
+    }
+}
+
+/// [`texture`] with its two fine terms weakened to three tenths: the same surface
+/// seen out of focus, so its patch at the true shape slides further over
+/// itself than [`texture`]'s does.
+fn defocused_texture(x: f64, y: f64) -> f64 {
+    127.0
+        + 40.0 * (0.11 * x + 0.06 * y + 1.3).sin()
+        + 28.0 * (0.05 * x - 0.12 * y + 0.7).sin()
+        + 20.0 * (0.17 * x + 0.13 * y + 2.9).sin()
+        + 10.0 * (0.29 * x - 0.23 * y + 0.4).cos()
+        + 4.5 * (0.83 * x + 0.47 * y + 0.2).sin()
+        + 3.6 * (-0.52 * x + 0.88 * y + 1.1).sin()
+}
+
+#[test]
+fn capped_cells_are_the_cells_at_the_cap_or_with_no_reading() {
+    let mut cells = [[0.5; 3]; 3];
+    assert_eq!(capped_cell_count(&cells), 0);
+    cells[0][0] = 3.0;
+    cells[1][2] = f64::NAN;
+    cells[2][2] = 2.999;
+    assert_eq!(capped_cell_count(&cells), 2);
+    assert_eq!(capped_cell_count(&[[3.0; 3]; 3]), 9);
+}
+
+#[test]
+fn the_refined_shape_verdict_follows_both_bars() {
+    let sharp = [[0.5; 3]; 3];
+    let mut three_capped = sharp;
+    three_capped[0] = [3.0; 3];
+    let on = ClusterRefineParams {
+        regate_at_refined_shape: true,
+        max_capped_cells: 2,
+        ..Default::default()
+    };
+    assert!(on.refined_shape_gate_is_on() && on.capped_cell_gate_is_on());
+    assert_eq!(on.refined_shape_verdict(1.0, &sharp), None);
+    assert_eq!(on.refined_shape_verdict(2.5, &sharp), None);
+    assert_eq!(
+        on.refined_shape_verdict(2.6, &sharp),
+        Some(MemberStatus::RejectedUnlocalizableRefined)
+    );
+    assert_eq!(
+        on.refined_shape_verdict(f64::NAN, &sharp),
+        Some(MemberStatus::RejectedUnlocalizableRefined)
+    );
+    assert_eq!(
+        on.refined_shape_verdict(1.0, &three_capped),
+        Some(MemberStatus::RejectedUnlocalizableCells)
+    );
+    // A member failing both takes the whole grid's status.
+    assert_eq!(
+        on.refined_shape_verdict(3.0, &three_capped),
+        Some(MemberStatus::RejectedUnlocalizableRefined)
+    );
+    // Three capped cells pass a bar of three.
+    let three = ClusterRefineParams {
+        max_capped_cells: 3,
+        ..on.clone()
+    };
+    assert_eq!(three.refined_shape_verdict(1.0, &three_capped), None);
+    // The whole-grid gate is off without its flag, and with the member gate's
+    // bar off; nine turns the cell gate off.
+    let off = ClusterRefineParams {
+        regate_at_refined_shape: false,
+        max_capped_cells: CELL_COUNT,
+        ..Default::default()
+    };
+    assert!(!off.reads_refined_shape());
+    assert_eq!(off.refined_shape_verdict(3.0, &[[3.0; 3]; 3]), None);
+    let bar_off = ClusterRefineParams {
+        max_member_zncc_self_similarity_radius: 0.0,
+        ..on.clone()
+    };
+    assert!(!bar_off.refined_shape_gate_is_on());
+    assert_eq!(bar_off.refined_shape_verdict(3.0, &sharp), None);
+}
+
+#[test]
+fn the_member_reading_counts_flat_cells_as_capped() {
+    let params = ClusterRefineParams::default();
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    let read = |f: fn(f64, f64) -> f64| {
+        let pyr = pyramid(&make_image(128, 128, f));
+        let parts = member_zncc_self_similarity_parts(&pyr, [64.0, 64.0], a, &params)
+            .expect("an interior member's grid can be sampled");
+        // The parts' whole is the up-front gate's template, read with shared
+        // sums.
+        let whole = member_zncc_self_similarity_radius(&pyr, [64.0, 64.0], a, &params).unwrap();
+        assert!(
+            (parts.whole.radius - whole).abs() < 1e-4,
+            "{} {whole}",
+            parts.whole.radius
+        );
+        let cells = parts
+            .grid
+            .each_ref()
+            .map(|row| row.each_ref().map(|c| c.radius));
+        (parts.whole.radius, capped_cell_count(&cells))
+    };
+    let (radius, capped) = read(texture);
+    assert!(radius < 1.5, "textured: {radius}");
+    assert_eq!(capped, 0);
+    // Texture in the left column of cells pins the whole patch, while the six
+    // cells to its right match themselves at every shift.
+    let (radius, capped) = read(texture_left_third);
+    assert!(radius <= 2.5, "textured third: {radius}");
+    assert!(capped >= 6, "textured third: {capped} capped cells");
+    let (radius, capped) = read(|_, _| 127.0);
+    assert_eq!(radius, 3.0);
+    assert_eq!(capped, 9);
+}
+
+/// One cluster over the same point in two images showing `f`, both members
+/// at shape `2.5`: member 0 is the reference and member 1 is refined against
+/// it.
+fn run_pair(f: fn(f64, f64) -> f64, params: &ClusterRefineParams) -> ClusterRefineResult {
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+    ];
+    let pyramids = [
+        pyramid(&make_image(128, 128, f)),
+        pyramid(&make_image(128, 128, f)),
+    ];
+    refine_cluster_patches(
+        &pyramids,
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        params,
+        None,
+    )
+}
+
+#[test]
+fn the_capped_cell_gate_refuses_a_member_textured_in_one_third() {
+    // The member's whole patch pins a position, so the up-front gate and the
+    // whole-grid gate at the refined shape pass it, but six of its nine cells
+    // are capped: a bar of five refuses it.
+    let five = ClusterRefineParams {
+        max_capped_cells: 5,
+        ..Default::default()
+    };
+    let result = run_pair(texture_left_third, &five);
+    assert_eq!(result.member_status[0], MemberStatus::Reference);
+    assert_eq!(
+        result.member_status[1],
+        MemberStatus::RejectedUnlocalizableCells
+    );
+    // A refused member keeps its measurement and its readings.
+    assert!(result.member_zncc[1] > 0.99);
+    let radius = result.refined_zncc_self_similarity_radius[1];
+    assert!(radius <= 2.5, "{radius}");
+    let cells = result.refined_zncc_self_similarity_radius_grid[1].map(|r| r.map(f64::from));
+    assert_eq!(capped_cell_count(&cells), 6);
+    // The reference is not read at the refined shape.
+    assert!(result.refined_zncc_self_similarity_radius[0].is_nan());
+
+    // The default bar, eight, keeps it, with the same readings; with both
+    // gates off nothing is read.
+    let default = run_pair(texture_left_third, &ClusterRefineParams::default());
+    assert_eq!(default.member_status[1], MemberStatus::Kept);
+    assert_eq!(
+        default.refined_zncc_self_similarity_radius[1].to_bits(),
+        radius.to_bits()
+    );
+    let off = run_pair(
+        texture_left_third,
+        &ClusterRefineParams {
+            regate_at_refined_shape: false,
+            max_capped_cells: CELL_COUNT,
+            ..Default::default()
+        },
+    );
+    assert_eq!(off.member_status[1], MemberStatus::Kept);
+    assert!(off.refined_zncc_self_similarity_radius[1].is_nan());
+    assert!(off.refined_zncc_self_similarity_radius_grid[1]
+        .iter()
+        .flatten()
+        .all(|r| r.is_nan()));
+    // The readings change no other output.
+    assert_eq!(
+        off.member_zncc[1].to_bits(),
+        default.member_zncc[1].to_bits()
+    );
+    assert_eq!(off.member_affine_shapes, default.member_affine_shapes);
+}
+
+#[test]
+fn the_gates_at_the_refined_shape_are_on_by_default() {
+    let params = ClusterRefineParams::default();
+    assert!(params.regate_at_refined_shape);
+    assert_eq!(params.max_capped_cells, DEFAULT_MAX_CAPPED_CELLS);
+    assert_eq!(DEFAULT_MAX_CAPPED_CELLS, 8);
+    assert!(params.refined_shape_gate_is_on() && params.capped_cell_gate_is_on());
+}
+
+/// A cluster whose member passes the up-front gate at its SIFT seed and not
+/// at its refined shape: the reference shows [`texture`] magnified by 1.4 at
+/// shape `3.5`, and the member shows the same surface out of focus
+/// ([`defocused_texture`]) at its true shape `2.5`, detected at a shape 1.35
+/// times too large. The seed's grid spans more of the defocused surface, so it
+/// reads sharper than the grid at the true shape the cascade recovers.
+fn run_defocused_member(params: &ClusterRefineParams) -> (ClusterRefineResult, ImageU8Pyramid) {
+    let zoom = 1.4;
+    let a_ref = [[2.5 * zoom, 0.0], [0.0, 2.5 * zoom]];
+    let seed = [[2.5 * 1.35, 0.0], [0.0, 2.5 * 1.35]];
+    let reference = pyramid(&make_image(128, 128, move |x, y| {
+        texture(64.0 + (x - 64.0) / zoom, 64.0 + (y - 64.0) / zoom)
+    }));
+    let member = pyramid(&make_image(128, 128, defocused_texture));
+    let member_again = pyramid(&make_image(128, 128, defocused_texture));
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], a_ref)]),
+        ImageFeatures::new(&[([64.0, 64.0], seed)]),
+    ];
+    let result = refine_cluster_patches(
+        &[reference, member],
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        params,
+        None,
+    );
+    (result, member_again)
+}
+
+#[test]
+fn the_whole_grid_gate_reads_the_member_at_its_refined_shape() {
+    let params = ClusterRefineParams::default();
+    let seed = [[2.5 * 1.35, 0.0], [0.0, 2.5 * 1.35]];
+    let (result, member) = run_defocused_member(&params);
+    // The up-front gate reads the seed and passes it.
+    let at_seed = member_zncc_self_similarity_radius(&member, [64.0, 64.0], seed, &params).unwrap();
+    assert!(at_seed < 2.5, "at the seed: {at_seed}");
+    assert_eq!(result.member_status[0], MemberStatus::Reference);
+    assert_eq!(
+        result.member_status[1],
+        MemberStatus::RejectedUnlocalizableRefined
+    );
+    // The cascade found the true shape, and the reading is the up-front
+    // gate's own reading of the member's grid there.
+    let shape = result.member_affine_shapes.index_axis(ndarray::Axis(0), 1);
+    let shape = [
+        [shape[[0, 0]], shape[[0, 1]]],
+        [shape[[1, 0]], shape[[1, 1]]],
+    ];
+    assert!(
+        (shape[0][0] - 2.5).abs() < 0.15 && (shape[1][1] - 2.5).abs() < 0.15,
+        "{shape:?}"
+    );
+    let position = [
+        result.member_positions[[1, 0]],
+        result.member_positions[[1, 1]],
+    ];
+    let at_refined = member_zncc_self_similarity_radius(&member, position, shape, &params).unwrap();
+    assert!(at_refined > 2.5, "at the refined shape: {at_refined}");
+    assert_eq!(
+        result.refined_zncc_self_similarity_radius[1].to_bits(),
+        (at_refined as f32).to_bits()
+    );
+    // The member keeps its measurement.
+    assert!(result.member_zncc[1] >= params.min_zncc as f32);
+
+    // Without the gate it is kept, at the same shape.
+    let off = ClusterRefineParams {
+        regate_at_refined_shape: false,
+        ..Default::default()
+    };
+    let (kept, _) = run_defocused_member(&off);
+    assert_eq!(kept.member_status[1], MemberStatus::Kept);
+    assert_eq!(kept.member_affine_shapes, result.member_affine_shapes);
+    // The cell gate still reads the grid, so the readings are there.
+    assert_eq!(
+        kept.refined_zncc_self_similarity_radius[1].to_bits(),
+        result.refined_zncc_self_similarity_radius[1].to_bits()
+    );
+}

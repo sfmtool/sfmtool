@@ -11,7 +11,10 @@ one member as the group's reference, cuts a small square of image around it,
 and then, for every other member, searches for the affine transform of that
 square which best reproduces what the member's image actually shows. What comes
 back, per member, is a photometrically verified local shape, a corrected
-keypoint position, and a verdict on whether the member belongs at all.
+keypoint position, and a verdict on whether the member belongs at all. Part of
+that verdict is read twice: a member whose own patch does not pin a position is
+refused before refinement, and again after it, when its patch at the refined
+shape no longer pins one as a whole or has too many parts that do not.
 
 Doing this early pays twice: a later stage can read a member's image-space
 extent and refined position directly, and members that agree on a descriptor
@@ -64,6 +67,14 @@ pub enum MemberStatus {
     DuplicateImage = 4,
     NotEvaluated = 5,
     RejectedUnlocalizable = 6,
+    RejectedUnlocalizableRefined = 7,
+    RejectedUnlocalizableCells = 8,
+}
+
+impl MemberStatus {
+    /// Whether the member's geometry is the refinement's answer: the
+    /// reference, a kept member, and the four statuses that reject after the fit.
+    pub fn is_measured(self) -> bool;
 }
 
 /// `reference_members` entry for a cluster with no usable reference.
@@ -88,6 +99,8 @@ pub struct ClusterRefineResult {
     pub member_shift_px: Vec<f32>,            // (M,), NaN if not evaluated
     pub cells: Vec<Option<CellRefinement>>,   // (M,), Some only for a kept member
                                               // when `params.piecewise` is set
+    pub refined_zncc_self_similarity_radius: Vec<f32>,             // (M,), at the refined shape
+    pub refined_zncc_self_similarity_radius_grid: Vec<[[f32; 3]; 3]>, // (M,), its nine cells
 }
 
 pub fn refine_cluster_patches(
@@ -111,10 +124,30 @@ pub fn member_zncc_self_similarity_radius(
     pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
 ) -> Option<f64>;
+/// The same grid read as a whole, its middle and its nine cells: the cells
+/// are what the capped-cell gate counts.
+pub fn member_zncc_self_similarity_parts(
+    pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<SelfSimilarityParts>;
+/// Cells at the largest radius the reading reports (`3`), or with no reading.
+pub fn capped_cell_count(cells: &[[f64; 3]; 3]) -> usize;
+
+pub const CELL_COUNT: u8 = 9;
+pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
+pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
 
 impl ClusterRefineParams {
     pub fn member_self_similarity_gate_is_on(&self) -> bool;
     pub fn admits_member_zncc_self_similarity_radius(&self, radius: f64) -> bool;
+    pub fn refined_shape_gate_is_on(&self) -> bool;   // regate and the bar both on
+    pub fn capped_cell_gate_is_on(&self) -> bool;     // max_capped_cells < 9
+    pub fn reads_refined_shape(&self) -> bool;        // either of the two
+    pub fn admits_capped_cells(&self, capped: usize) -> bool;
+    /// `None` when a member passes both gates at the refined shape, else the
+    /// status of the first it fails (the whole grid's before the cells').
+    pub fn refined_shape_verdict(&self, radius: f64, cells: &[[f64; 3]; 3])
+        -> Option<MemberStatus>;
 }
 
 /// The reconstruction-free contamination signal computed from the refined
@@ -143,7 +176,10 @@ over a whole refined cluster set, and a caller that only wants warps should not
 pay for it. The member-grid sampler and the radius are public so the bench
 ([editable-track.md](../bench/editable-track.md)) reads a cluster-stage
 sighting's self-similarity from the same tile the gate reads, rather than from a
-second copy of the sampling.
+second copy of the sampling. The verdict of the gates at the refined shape is a
+method of the parameters, beside the up-front gate's pass rule, so a consumer
+holding the stored readings can re-gate at another bar with the kernel's own
+rule; the readings are in the result whether or not they refused the member.
 
 ```rust
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
@@ -411,7 +447,10 @@ feature index or a degenerate shape (`|det A| < 1e-9`).
 
 A refined member is vetted in a fixed order: ZNCC below `min_zncc` →
 `RejectedLowZncc`; otherwise `|t|` above `max_shift_px` → `RejectedShift`;
-otherwise kept. The ZNCC gate is deliberately permissive, because the measured
+otherwise the two gates of [the member gate at the refined
+shape](#the-member-gate-at-the-refined-shape), the whole grid's →
+`RejectedUnlocalizableRefined` and then the cells' →
+`RejectedUnlocalizableCells`; otherwise kept. The ZNCC gate is deliberately permissive, because the measured
 failure mode is over-culling rather than contamination and because the achieved
 ZNCC routinely exceeds the *ground-truth* warp's own — the score gates match
 validity, never warp correctness. Consumers re-gate on the stored signals, which
@@ -449,6 +488,73 @@ Finally, at most one member per image survives: among provisionally kept members
 sharing an image the highest ZNCC wins, ties to the lowest member index, and the
 rest become `DuplicateImage` — as does any member sharing the reference's own
 image, which is marked before it is ever refined.
+
+### The member gate at the refined shape
+
+The up-front gate reads a member's grid at its SIFT detection's position and
+shape. The refinement then finds the position and shape at which the member
+matches the reference, and the grid there covers a different stretch of the
+member's photograph: a larger or smaller footprint, another skew, a shift of a
+few px. A member can pin a position at its detection and not at its refined
+shape. Two gates read the member's own `R×R` grid again at its refined shape
+(`sample_member_grid` at the shape and position the result reports), for every
+member that passes the ZNCC and shift gates:
+
+- **The whole grid** (`regate_at_refined_shape`, on by default). The grid is
+  read by the up-front gate's own function, so a grid gives the same radius
+  before and after refinement, and judged by the same bar,
+  `max_member_zncc_self_similarity_radius`, with the same pass rule. A member
+  over it is `RejectedUnlocalizableRefined`. The gate shares the bar, so it is
+  off whenever the up-front gate is.
+- **The cells** (`max_capped_cells`, `8` by default). The same grid is read as
+  the nine cells of the ZNCC grid's split, each a template whose shifted
+  windows come from the rest of the grid (`zncc_self_similarity_parts`). A
+  cell is **capped** when its radius is the largest the reading reports,
+  `max_radius = 3`, which stands for "3 or further", or when it has no reading.
+  A member with more capped cells than `max_capped_cells` is
+  `RejectedUnlocalizableCells`: a patch whose texture sits in a few cells can
+  pin a position as a whole while the rest of it matches anything. `9` turns the
+  gate off.
+
+The whole grid is judged first, so a member failing both is
+`RejectedUnlocalizableRefined`. A refused member keeps its measurement, as a
+ZNCC- or shift-rejected member does, and `refined_zncc_self_similarity_radius`
+and `refined_zncc_self_similarity_radius_grid` carry both readings for every
+member that reached them, refused or not, whenever either gate is on. The
+reference is not read again: it is not refined, and its detection passed the
+up-front gate.
+
+The gates run before the per-image dedupe, so a refused member cannot cost its
+image a member that would have passed. When the piecewise stage moves a kept
+member, both are read again at the moved shape, and a member that fails there
+takes the refusing status with the moved shape and its readings; that is the
+one way the stage changes a status. The dedupe has run by then, so that image
+keeps no member of the cluster.
+
+**What the defaults rest on.** Both were measured on five captures
+([measurements](cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-08)),
+four of which have ground-truth poses good enough to judge a kept member: a
+member is counted *wrong* when its refined position lies further from the
+epipolar half-line of its reference's detection, under the ground-truth poses,
+than `max(3, 5 × m)` px of its own photograph, `m` the capture's median over
+kept members, and *right* otherwise. A wrong correspondence that lies along the
+epipolar line counts as right, so the wrong counts are lower bounds.
+
+- The whole grid's bar is the up-front bar by construction. On the two
+  captures with the tightest ground truths, pooled, kept members whose radius
+  at the refined shape is at most 2.5 are wrong at most 38% of the time per
+  0.25-px band, and those above 2.75 at least 53%; the band between reads 49%.
+  The gate refuses 0.3% to 4.5% of kept members; 35% to 74% of them are wrong,
+  against 7% to 17% of all kept members, and it refuses 0.24% to 2.1% of the
+  members counted right. It is on by default.
+- The cell bar is the largest count of capped cells such that, on every
+  capture with usable ground truth, the members with more capped cells are more
+  often wrong than right. Only members with all nine capped are (73% to 97%
+  wrong); members with eight are 30% wrong on one capture, so the bar is `8`.
+  There the cell rule refuses 0.02% to 0.9% of kept members, and on the two
+  tightest captures every member it refuses is also over the whole grid's bar.
+  Lower bars refuse many right members: at `2`, 10% to 27% of kept members,
+  more right than wrong on every capture with usable ground truth.
 
 ### What is returned, and why it is absolute
 
@@ -714,8 +820,9 @@ happens when any iteration fails: a failed render, no surviving cell, or a
 fitted map that reflects (`det A ≤ 0`) or is not finite. What earlier iterations
 fitted is discarded, because it was read at a shape that would not be the one
 returned. A rejected update is not a failure: the member keeps the shape the last
-render was made at, with that render's readings. The member's status is always
-the cascade's.
+render was made at, with that render's readings. The member's status is the
+cascade's, except that a moved member is read again by [the member gate at the
+refined shape](#the-member-gate-at-the-refined-shape) at its moved shape.
 
 #### What the fleet measurements decide
 
@@ -758,6 +865,11 @@ The measurements are in
   at most 5.3, no whole-member ZNCC falls, and the CPU cost is 1.11× to
   1.25×. The seed's `KerryPark480` pick passes, better than with the cascade
   file, while the candidates it commits change.
+- **The gates at the refined shape** ([subset
+  run](cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-08)):
+  the whole grid's gate refuses 0.3% to 4.5% of the kept members, a third to
+  three quarters of them wrong by the ground truths, and refuses no moved member
+  that it passed at the cascade's shape; the cell gate at `8` adds 0 to 53.
 - **The cell gates.** Neither the cell ZNCC distribution nor the curvature's has
   a valley or a knee to place a bar in
   ([gate sweep](cluster-patch-refinement-measurements.md#gate-sweep)); `0.8`
@@ -878,6 +990,14 @@ runs over these files move little: at the resected pose its default rule recover
 kerry_park, and the recovery at the ground-truth pose is unchanged.
 
 
+### The gates at the refined shape: cost
+
+Each member that passes the ZNCC and shift gates costs one more sample of its
+`R×R` grid, one whole reading and one parts reading, and a moved member the same
+again. Through the binding with the piecewise stage on, the CPU time of the
+whole call rose by 2.5% to 12% on the five subset entries, most on the smallest,
+where the refinement itself is cheapest per member.
+
 ### Piecewise stage internals
 
 - **Determinism and precision.** Tile intensities are `f32`, matching the
@@ -931,6 +1051,8 @@ template edge length while the kernel's `radius` is a half-width;
 | `min_zncc` | `0.85` | Acceptance threshold on the achieved windowed ZNCC |
 | `max_shift_px` | `3.0` | Max translation drift from the SIFT seed, source px |
 | `max_member_zncc_self_similarity_radius` | `2.5` | Member gate on the ZNCC self-similarity radius of the member's own patch, template-grid px; `0` disables it (CLI `--max-member-zncc-self-similarity-radius`) |
+| `regate_at_refined_shape` | `true` | Read that gate again, with the same bar, on the member's grid at its refined shape (`DEFAULT_REGATE_AT_REFINED_SHAPE`; CLI `--regate-at-refined-shape/--no-regate-at-refined-shape`) |
+| `max_capped_cells` | `8` | The most capped cells the member's grid at its refined shape may have; `9` turns the gate off (`DEFAULT_MAX_CAPPED_CELLS`; CLI `--max-capped-cells`) |
 | `max_iters` | `120` | Nelder-Mead iterations per cascade stage |
 | `convergence` | `1e-5` | Simplex value-spread stop, affine stage |
 | `intermediate_convergence` | `1e-4` | …and for the shift and similarity stages, which only seed the next |
@@ -978,6 +1100,7 @@ refine_cluster_patches(
     window="gaussian_disk", window_sigma=None,
     min_zncc=0.85, max_shift_px=3.0,
     max_member_zncc_self_similarity_radius=2.5,
+    regate_at_refined_shape=None, max_capped_cells=None,
     max_iters=120, piecewise=False, move_shape=None,
     cell_shift_bound_px=None, min_cell_zncc=None, min_cell_curvature=None,
     update_tolerance_px=None, max_iterations=None, progress=None,
@@ -1005,9 +1128,14 @@ The returned dict is member-parallel: `reference_members` `(C,)` uint32
 `member_positions` `(M, 2)` float64, `member_affine_shapes` `(M, 2, 2)`
 float64, `member_zncc` `(M,)` float32, `member_zncc_middle` `(M,)` float32,
 `member_zncc_grid` `(M, 3, 3)` float32,
-`member_shift_px` `(M,)` float32, and
+`member_shift_px` `(M,)` float32,
 `member_consistency_residual` `(M,)` float32 — the warp-consistency signal,
-computed inside the same call.
+computed inside the same call — and the two readings of the gates at the
+refined shape, `member_refined_zncc_self_similarity_radius` `(M,)` float32 and
+`member_refined_zncc_self_similarity_radius_grid` `(M, 3, 3)` float32, which the
+file does not store. `regate_at_refined_shape=None` and `max_capped_cells=None`
+take the Rust defaults, and the dict reports the values the call ran with under
+the same two keys.
 
 `piecewise=True` runs the piecewise stage; the six `PiecewiseParams` settings
 are keyword arguments under their field names, each `None` for the Rust default,
@@ -1052,7 +1180,16 @@ alone, while a reading with a ring around the grid reads it under 3; at the defa
 and an edge member are refused and a textured one kept, `0` refuses nobody and
 `3` turns nothing out; the pass rule at, over and under the bar and for `NaN`);
 **determinism**, two runs bit-identical; and a **dual-path**
-check that AVX2 and scalar scores agree within 1e-4. The synthetic `texture`
+check that AVX2 and scalar scores agree within 1e-4. **The gates at the refined
+shape**: the capped-cell count (the cap and `NaN`), the verdict at, over and
+under both bars with each gate off; a textured patch reads no capped cell, a
+flat one nine and one textured in its left third six; a member whose
+defocused photograph pins a position at its oversized SIFT seed but not at the
+true shape the cascade recovers is `RejectedUnlocalizableRefined` with the
+reading the up-front function gives at the returned shape, and kept with the
+gate off; the left-third member is `RejectedUnlocalizableCells` at a bar of
+five and kept at the default, the readings are absent with both gates off and
+change no other output; and the defaults. The synthetic `texture`
 carries two fine terms (periods near 6 px) beside its smooth ones, because the
 smooth terms alone read over `2.5` on the template grid and the default gate
 would refuse every member; `smooth_texture` keeps the smooth terms alone for
@@ -1115,8 +1252,10 @@ at least one member, and that statuses stay inside the enum; with
   When it runs it moves shapes by default; `move_shape` off is the
   measurement-only option.
 - **No repair of a spurious member.** A member whose correspondence is wrong
-  keeps whatever shape maximises its score; the loop does not detect it, and
-  refusing it is a matching and gating question.
+  keeps whatever shape maximises its score; the loop does not detect it. The
+  gates at the refined shape refuse such a member only when its own patch there
+  does not pin a position; a wrong correspondence on distinctive texture, or
+  one a period of a repeating texture away, passes them.
 - **No consumer reads the cells.** No pipeline stage, the seed's writer
   included, derives frames or normals from them or calls
   [cell-plane-normals.md](cell-plane-normals.md)'s kernel; frames built from

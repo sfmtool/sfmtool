@@ -22,7 +22,7 @@ from sfmtool.cli import main
 STATUS_REFERENCE = 0
 STATUS_KEPT = 1
 STATUS_REJECTED_UNLOCALIZABLE = 6
-VALID_STATUSES = {0, 1, 2, 3, 4, 5, 6}
+VALID_STATUSES = {0, 1, 2, 3, 4, 5, 6, 7, 8}
 
 
 @pytest.fixture
@@ -76,6 +76,8 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     assert data["refine_options"]["patch_size"] == 12.0
     assert data["refine_options"]["min_zncc"] == 0.85
     assert data["refine_options"]["max_member_zncc_self_similarity_radius"] == 2.5
+    assert data["refine_options"]["regate_at_refined_shape"] is True
+    assert data["refine_options"]["max_capped_cells"] == 8
     # Without --piecewise the file carries no per-cell columns.
     assert data["refine_options"]["piecewise"] is False
     assert "min_cell_zncc" not in data["refine_options"]
@@ -142,7 +144,7 @@ def test_matcher_output_states_the_detections(cluster_matches_file: Path):
     from sfmtool.fileio import read_matches, read_sift_partial
 
     data = read_matches(cluster_matches_file)
-    assert data["metadata"]["version"] == 9
+    assert data["metadata"]["version"] == 10
     positions = data["member_positions"]
     shapes = data["member_affine_shapes"]
     assert positions.dtype == np.float32 and shapes.dtype == np.float32
@@ -169,9 +171,11 @@ def test_matcher_output_states_the_detections(cluster_matches_file: Path):
         assert sift["affine_shapes"][feats].tobytes() == shapes[on_image].tobytes()
 
 
-#: The statuses whose rows the refinement cascade measured. Everything else
-#: (duplicate_image, not_evaluated, rejected_unlocalizable) it never fitted.
-MEASURED_STATUSES = (0, 1, 2, 3)
+#: The statuses whose rows the refinement cascade measured: reference, kept,
+#: rejected_low_zncc, rejected_shift, rejected_unlocalizable_refined and
+#: rejected_unlocalizable_cells. Everything else (duplicate_image,
+#: not_evaluated, rejected_unlocalizable) it never fitted.
+MEASURED_STATUSES = (0, 1, 2, 3, 7, 8)
 
 
 def test_enriched_output_states_the_refinement(cluster_matches_file: Path):

@@ -42,6 +42,29 @@ pub enum MemberStatus {
     /// [`ClusterRefineParams::max_member_zncc_self_similarity_radius`]
     /// (excluded before reference selection and refinement).
     RejectedUnlocalizable = 6,
+    /// Rejected: the member passed the ZNCC and shift gates, but its own patch
+    /// read at its refined shape and position (the piecewise stage's, when
+    /// that moved it) does not pin a position: its ZNCC self-similarity radius
+    /// there is above
+    /// [`ClusterRefineParams::max_member_zncc_self_similarity_radius`]. Only
+    /// with [`ClusterRefineParams::regate_at_refined_shape`].
+    RejectedUnlocalizableRefined = 7,
+    /// Rejected: the member passed the ZNCC and shift gates, but more of the
+    /// nine cells of its own patch at its refined shape and position read the
+    /// largest ZNCC self-similarity radius than
+    /// [`ClusterRefineParams::max_capped_cells`] allows.
+    RejectedUnlocalizableCells = 8,
+}
+
+impl MemberStatus {
+    /// Whether the refinement fitted the member, so that its position and
+    /// shape are the refinement's answer rather than the detection: the
+    /// reference (whose answer is its detection), a kept member, and every
+    /// status that rejects a member after its fit. A `.matches` writer stores
+    /// these members' refined geometry and the detection for the rest.
+    pub fn is_measured(self) -> bool {
+        ClusterMemberStatus::from_u8(self as u8).is_some_and(|status| status.is_measured())
+    }
 }
 
 const _: () = {
@@ -53,7 +76,23 @@ const _: () = {
     assert!(MemberStatus::DuplicateImage as u8 == F::DuplicateImage as u8);
     assert!(MemberStatus::NotEvaluated as u8 == F::NotEvaluated as u8);
     assert!(MemberStatus::RejectedUnlocalizable as u8 == F::RejectedUnlocalizable as u8);
+    assert!(
+        MemberStatus::RejectedUnlocalizableRefined as u8 == F::RejectedUnlocalizableRefined as u8
+    );
+    assert!(MemberStatus::RejectedUnlocalizableCells as u8 == F::RejectedUnlocalizableCells as u8);
+    assert!(F::ALL.len() == 9);
 };
+
+/// The number of cells in the three-by-three split of a member's patch that
+/// [`ClusterRefineParams::max_capped_cells`] counts over; a bar of this many or
+/// more turns nothing out.
+pub const CELL_COUNT: u8 = 9;
+
+/// The default of [`ClusterRefineParams::regate_at_refined_shape`].
+pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
+
+/// The default of [`ClusterRefineParams::max_capped_cells`].
+pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
 
 /// Sentinel in [`ClusterRefineResult::reference_members`] for a cluster with
 /// no usable reference; the same value as [`CLUSTER_REFERENCE_UNREFINABLE`].
@@ -99,6 +138,30 @@ pub struct ClusterRefineParams {
     /// [`DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`], `2.5`, so the two
     /// member gates start from the same bar.
     pub max_member_zncc_self_similarity_radius: f64,
+    /// Read the member gate again at the member's refined shape and position,
+    /// for every member that passes the ZNCC and shift gates: the member's own
+    /// `R×R` grid is sampled at the shape the cascade returned (and again at
+    /// the piecewise stage's shape, where that moved it), its ZNCC
+    /// self-similarity radius is read as the up-front gate reads it, and a
+    /// member whose radius is above
+    /// [`Self::max_member_zncc_self_similarity_radius`] becomes
+    /// [`MemberStatus::RejectedUnlocalizableRefined`]. The up-front gate reads
+    /// the SIFT detection's shape, which can sample a different stretch of the
+    /// photograph than the shape the member is matched at. Off when the bar
+    /// itself is off. See [`Self::refined_shape_verdict`].
+    pub regate_at_refined_shape: bool,
+    /// The most cells of the three-by-three split of a member's own grid, read
+    /// at the refined shape and position as [`Self::regate_at_refined_shape`]
+    /// reads the whole grid, that may be *capped*: read the largest ZNCC
+    /// self-similarity radius, the default
+    /// [`SelfSimilarityParams`](crate::patch::self_similarity::SelfSimilarityParams)'
+    /// `max_radius`, which reads "that far or further" (a cell with no
+    /// reading counts as capped too). A member with more capped cells becomes
+    /// [`MemberStatus::RejectedUnlocalizableCells`]: a patch whose texture
+    /// sits in a few cells can pin a position as a whole while most of it
+    /// matches anything. [`CELL_COUNT`] (`9`) or more turns nothing out. See
+    /// [`Self::admits_capped_cells`].
+    pub max_capped_cells: u8,
     /// Nelder-Mead iterations per cascade stage.
     pub max_iters: u32,
     /// Simplex value-spread stop threshold for the affine stage (the stored
@@ -148,6 +211,8 @@ impl Default for ClusterRefineParams {
             min_zncc: 0.85,
             max_shift_px: 3.0,
             max_member_zncc_self_similarity_radius: DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
+            regate_at_refined_shape: DEFAULT_REGATE_AT_REFINED_SHAPE,
+            max_capped_cells: DEFAULT_MAX_CAPPED_CELLS,
             max_iters: 120,
             convergence: 1e-5,
             // Tuned on dino_dog_toy (85 images, 105K clusters): together
@@ -180,6 +245,63 @@ impl ClusterRefineParams {
         !self.member_self_similarity_gate_is_on()
             || radius <= self.max_member_zncc_self_similarity_radius
     }
+
+    /// Whether [`Self::regate_at_refined_shape`] is on: it is set and the
+    /// member gate's bar is on.
+    pub fn refined_shape_gate_is_on(&self) -> bool {
+        self.regate_at_refined_shape && self.member_self_similarity_gate_is_on()
+    }
+
+    /// Whether [`Self::max_capped_cells`] is on: below [`CELL_COUNT`].
+    pub fn capped_cell_gate_is_on(&self) -> bool {
+        self.max_capped_cells < CELL_COUNT
+    }
+
+    /// Whether either gate at the refined shape is on, so that the member's
+    /// own grid is read there.
+    pub fn reads_refined_shape(&self) -> bool {
+        self.refined_shape_gate_is_on() || self.capped_cell_gate_is_on()
+    }
+
+    /// Whether a member with `capped` capped cells passes the capped-cell
+    /// gate: always when it is off, otherwise when `capped` is at most
+    /// [`Self::max_capped_cells`].
+    pub fn admits_capped_cells(&self, capped: usize) -> bool {
+        capped <= self.max_capped_cells as usize
+    }
+
+    /// What the two gates at the refined shape make of a member whose own
+    /// grid there reads `radius` as a whole and `cells` per cell: `None` when
+    /// it passes both, or both are off, and otherwise the status of the first
+    /// it fails, the whole grid's gate before the cells'.
+    pub fn refined_shape_verdict(
+        &self,
+        radius: f64,
+        cells: &[[f64; 3]; 3],
+    ) -> Option<MemberStatus> {
+        if self.refined_shape_gate_is_on()
+            && !self.admits_member_zncc_self_similarity_radius(radius)
+        {
+            return Some(MemberStatus::RejectedUnlocalizableRefined);
+        }
+        if self.capped_cell_gate_is_on() && !self.admits_capped_cells(capped_cell_count(cells)) {
+            return Some(MemberStatus::RejectedUnlocalizableCells);
+        }
+        None
+    }
+}
+
+/// How many of a reading's nine cell radii are capped: at or above the default
+/// [`SelfSimilarityParams`](crate::patch::self_similarity::SelfSimilarityParams)'
+/// `max_radius`, the largest radius the reading reports, which reads "that
+/// far or further", or `NaN`, no reading.
+pub fn capped_cell_count(cells: &[[f64; 3]; 3]) -> usize {
+    let cap = crate::patch::self_similarity::SelfSimilarityParams::default().max_radius as f64;
+    cells
+        .iter()
+        .flatten()
+        .filter(|&&r| r.is_nan() || r >= cap)
+        .count()
 }
 
 /// One image's SIFT feature geometry (borrowed views of the `.sift` arrays).
@@ -250,4 +372,19 @@ pub struct ClusterRefineResult {
     /// are the stage's, and its ZNCC, middle ZNCC, ZNCC grid and shift are
     /// read again at that shape and position; its status stays the cascade's.
     pub cells: Vec<Option<CellRefinement>>,
+    /// `(M,)` the ZNCC self-similarity radius of the member's own grid at its
+    /// refined shape and position, the reading
+    /// [`ClusterRefineParams::regate_at_refined_shape`] judges, template-grid
+    /// px. Read for every member that passed the ZNCC and shift gates when
+    /// either gate at the refined shape is on
+    /// ([`ClusterRefineParams::reads_refined_shape`]), whether or not it
+    /// refuses the member; where the piecewise stage moved the member it is
+    /// read at the moved shape. `NaN` for every other member, and throughout
+    /// when both gates are off.
+    pub refined_zncc_self_similarity_radius: Vec<f32>,
+    /// `(M,)` the same reading's nine cell radii, `[row][col]` from the
+    /// top-left cell, which [`ClusterRefineParams::max_capped_cells`] counts
+    /// ([`capped_cell_count`]); `NaN` where
+    /// [`Self::refined_zncc_self_similarity_radius`] is.
+    pub refined_zncc_self_similarity_radius_grid: Vec<[[f32; 3]; 3]>,
 }

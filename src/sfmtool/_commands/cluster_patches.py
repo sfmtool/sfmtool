@@ -84,6 +84,33 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
+    "--regate-at-refined-shape/--no-regate-at-refined-shape",
+    "regate_at_refined_shape",
+    default=True,
+    show_default=True,
+    help=(
+        "Read the member gate again, with the same bar, on each member's own "
+        "patch at its refined shape and position (after --piecewise, where "
+        "that moved it), for every member that passes the ZNCC and shift "
+        "gates, and mark a member over the bar there "
+        "rejected_unlocalizable_refined. See "
+        "specs/core/patch/cluster-patch-refinement.md."
+    ),
+)
+@click.option(
+    "--max-capped-cells",
+    "max_capped_cells",
+    type=click.IntRange(0, 9),
+    default=8,
+    show_default=True,
+    help=(
+        "The most of the nine cells of a member's own patch at its refined "
+        "shape that may read the largest ZNCC self-similarity radius (3, "
+        "'3 or further'); a member with more is marked "
+        "rejected_unlocalizable_cells. 9 turns nothing out."
+    ),
+)
+@click.option(
     "--piecewise/--no-piecewise",
     "piecewise",
     default=False,
@@ -106,6 +133,8 @@ def cluster_patches(
     min_zncc,
     max_shift,
     max_member_zncc_self_similarity_radius,
+    regate_at_refined_shape,
+    max_capped_cells,
     piecewise,
 ):
     """Refine a cluster-bearing .matches file into patch clusters.
@@ -114,8 +143,11 @@ def cluster_patches(
     pick a reference member (largest SIFT scale), refine a
     Gaussian-windowed-ZNCC affine warp from the reference's patch to every
     other member (seeded from the SIFT affine shapes), vet members by
-    achieved ZNCC and translation drift, and keep at most one member per
-    image. With --piecewise, every kept member's patch is then cut into
+    achieved ZNCC and translation drift, read each surviving member's own
+    patch again at its refined shape and refuse those that do not pin a
+    position there as a whole or have too many cells that do not, and keep
+    at most one member per image. With --piecewise, every kept member's
+    patch is then cut into
     nine cells that are registered separately against the member's image,
     an affine map fitted to their shifts updates the member's shape where the
     whole-patch ZNCC does not fall, and each cell's displacement, ZNCC and
@@ -142,6 +174,8 @@ def cluster_patches(
             max_shift,
             max_member_zncc_self_similarity_radius,
             piecewise,
+            regate_at_refined_shape,
+            max_capped_cells,
         )
     except click.UsageError:
         raise

@@ -407,6 +407,16 @@ pub fn clusters_to_pair_matches(
 ///         disables the gate exactly. Default 2.5, the same bar as the
 ///         keypoint localizer's member gate
 ///         (specs/core/patch/zncc-self-similarity-radius.md).
+///     regate_at_refined_shape: Read the member gate again, with the same
+///         bar, on the member's own grid at its refined shape and position,
+///         for every member that passes the ZNCC and shift gates (and again
+///         at the piecewise stage's shape where that moved it). A member over
+///         the bar there is marked rejected_unlocalizable_refined. None takes
+///         the Rust default (True); off when the bar is 0.
+///     max_capped_cells: The most of the nine cells of that same reading
+///         that may read the largest radius, 3 ("3 or further"); a member with
+///         more is marked rejected_unlocalizable_cells. 9 or more turns
+///         nothing out. None takes the Rust default (8).
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     piecewise: Run the piecewise refinement after the cascade for every
 ///         kept member: the nine cells of the reference's patch are
@@ -457,7 +467,17 @@ pub fn clusters_to_pair_matches(
 ///     weak-perspective factorization of all cluster warps (lower = more
 ///     consistent; NaN where not fitted; see
 ///     specs/core/patch/cluster-warp-consistency.md). A stored signal, not a
-///     gate. With ``piecewise`` the dict also carries the per-cell columns of
+///     gate. ``member_refined_zncc_self_similarity_radius`` (M,) float32 and
+///     ``member_refined_zncc_self_similarity_radius_grid`` (M, 3, 3) float32
+///     are the readings the two gates at the refined shape judge, the whole
+///     grid's radius and each cell's, template-grid px, for every member that
+///     passed the ZNCC and shift gates whether or not they refused it, NaN
+///     for every other member and throughout when both gates are off; not
+///     stored in the ``.matches`` section. ``regate_at_refined_shape`` (bool)
+///     and ``max_capped_cells`` (int) are the two gates' settings the run
+///     used, the Rust defaults where the arguments were None. With
+///     ``piecewise`` the dict also
+///     carries the per-cell columns of
 ///     the ``cluster_patches/`` section, cells ``[m, row, col]`` from the
 ///     top-left, with readings only for kept members:
 ///     ``member_cell_shift_px`` (M, 3, 3, 2) float32 (each cell's displacement
@@ -485,6 +505,7 @@ pub fn clusters_to_pair_matches(
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_member_zncc_self_similarity_radius = 2.5,
+                    regate_at_refined_shape = None, max_capped_cells = None,
                     max_iters = 120, piecewise = false, move_shape = None,
                     cell_shift_bound_px = None, min_cell_zncc = None,
                     min_cell_curvature = None, update_tolerance_px = None,
@@ -505,6 +526,8 @@ pub fn refine_cluster_patches<'py>(
     min_zncc: f64,
     max_shift_px: f64,
     max_member_zncc_self_similarity_radius: f64,
+    regate_at_refined_shape: Option<bool>,
+    max_capped_cells: Option<u8>,
     max_iters: u32,
     piecewise: bool,
     move_shape: Option<bool>,
@@ -573,6 +596,7 @@ pub fn refine_cluster_patches<'py>(
         )));
     }
 
+    let defaults = ClusterRefineParams::default();
     let params = ClusterRefineParams {
         radius,
         resolution,
@@ -580,6 +604,9 @@ pub fn refine_cluster_patches<'py>(
         min_zncc,
         max_shift_px,
         max_member_zncc_self_similarity_radius,
+        regate_at_refined_shape: regate_at_refined_shape
+            .unwrap_or(defaults.regate_at_refined_shape),
+        max_capped_cells: max_capped_cells.unwrap_or(defaults.max_capped_cells),
         max_iters,
         piecewise: piecewise.then(|| {
             let default = PiecewiseParams::default();
@@ -661,6 +688,27 @@ pub fn refine_cluster_patches<'py>(
     )
     .expect("nine values per member");
     dict.set_item("member_zncc_grid", grid.into_pyarray(py))?;
+    dict.set_item(
+        "member_refined_zncc_self_similarity_radius",
+        result.refined_zncc_self_similarity_radius.into_pyarray(py),
+    )?;
+    let refined_grid = ndarray::Array3::from_shape_vec(
+        (m, 3, 3),
+        result
+            .refined_zncc_self_similarity_radius_grid
+            .iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .collect(),
+    )
+    .expect("nine values per member");
+    dict.set_item(
+        "member_refined_zncc_self_similarity_radius_grid",
+        refined_grid.into_pyarray(py),
+    )?;
+    dict.set_item("regate_at_refined_shape", params.regate_at_refined_shape)?;
+    dict.set_item("max_capped_cells", params.max_capped_cells)?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
     let cell_keys = [

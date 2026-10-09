@@ -37,7 +37,7 @@ use crate::patch::blur_matched::TilePlanes;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
-    MemberStatus, REFERENCE_UNREFINABLE,
+    CELL_COUNT, REFERENCE_UNREFINABLE,
 };
 use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
@@ -147,10 +147,13 @@ impl Default for EvaluateOptions {
         Self {
             // The bench judges a sighting's tile by its self-similarity radius
             // in its painting (`Thresholds::max_zncc_self_similarity_radius`),
-            // so the refinement's own member gate on the same radius is off:
-            // a gate is a decision, and the reading makes none.
+            // so the refinement's own member gates on the same radius are off,
+            // the up-front one and the two read at the refined shape: a gate
+            // is a decision, and the reading makes none. (The whole-grid gate
+            // at the refined shape is off with the bar it shares.)
             cluster: ClusterRefineParams {
                 max_member_zncc_self_similarity_radius: 0.0,
+                max_capped_cells: CELL_COUNT,
                 ..ClusterRefineParams::default()
             },
             localize: KeypointLocalizeParams {
@@ -818,13 +821,7 @@ pub(super) fn evaluate_cluster(
     let mut measured = 0;
     for (k, &i) in members.iter().enumerate() {
         let status = result.member_status[k];
-        let fitted = matches!(
-            status,
-            MemberStatus::Reference
-                | MemberStatus::Kept
-                | MemberStatus::RejectedLowZncc
-                | MemberStatus::RejectedShift
-        );
+        let fitted = status.is_measured();
         let measurement = next.observations[i]
             .cluster
             .as_mut()

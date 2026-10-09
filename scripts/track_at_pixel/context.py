@@ -423,7 +423,8 @@ class HoldoutContext:
         reconstruction image, ``.sift`` row, position, affine shape, status (the
         ``member_status`` legend: ``reference``, ``kept``, ``rejected_low_zncc``,
         ``rejected_shift``, ``duplicate_image``, ``not_evaluated``,
-        ``rejected_unlocalizable``), ZNCC against the reference and shift from
+        ``rejected_unlocalizable``, ``rejected_unlocalizable_refined``,
+        ``rejected_unlocalizable_cells``), ZNCC against the reference and shift from
         its seed. ``radius`` is the cluster's patch radius in pixels of its
         widest member; the patch cluster is the ``reference`` plus the ``kept``.
         """
@@ -516,6 +517,8 @@ MEMBER_STATUS = (
     "duplicate_image",
     "not_evaluated",
     "rejected_unlocalizable",
+    "rejected_unlocalizable_refined",
+    "rejected_unlocalizable_cells",
 )
 
 

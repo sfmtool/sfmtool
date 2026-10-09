@@ -48,6 +48,8 @@ def _run_cluster_patches(
     max_shift: float,
     max_member_zncc_self_similarity_radius: float,
     piecewise: bool = False,
+    regate_at_refined_shape: bool | None = None,
+    max_capped_cells: int | None = None,
 ):
     import os
     from concurrent.futures import ThreadPoolExecutor
@@ -160,6 +162,8 @@ def _run_cluster_patches(
             min_zncc=min_zncc,
             max_shift_px=max_shift,
             max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
+            regate_at_refined_shape=regate_at_refined_shape,
+            max_capped_cells=max_capped_cells,
             piecewise=piecewise,
             progress=counter,
         )
@@ -171,15 +175,19 @@ def _run_cluster_patches(
     n_dup = int((statuses == 4).sum())
     n_skip = int((statuses == 5).sum())
     n_unloc = int((statuses == 6).sum())
+    n_unloc_refined = int((statuses == 7).sum())
+    n_unloc_cells = int((statuses == 8).sum())
 
     # The output's stage is refinement, so the backbone's geometry becomes the
     # refinement's — for the members the cascade measured. Those are exactly
-    # the reference, the kept, and the two rejected-with-a-measurement
-    # statuses; the members it never fitted (duplicate_image, not_evaluated,
-    # rejected_unlocalizable) keep the detection they came in with, so every
-    # row holds a real position and shape and member_status alone says which
-    # reading it is.
-    measured = np.isin(statuses, (0, 1, 2, 3))
+    # the reference, the kept, and the four rejected-with-a-measurement
+    # statuses (rejected_low_zncc, rejected_shift and the two gates read at
+    # the refined shape, rejected_unlocalizable_refined and
+    # rejected_unlocalizable_cells); the members it never fitted
+    # (duplicate_image, not_evaluated, rejected_unlocalizable) keep the
+    # detection they came in with, so every row holds a real position and
+    # shape and member_status alone says which reading it is.
+    measured = np.isin(statuses, (0, 1, 2, 3, 7, 8))
     out_positions = detected_positions.copy()
     out_shapes = detected_shapes.copy()
     out_positions[measured] = result["member_positions"][measured].astype(np.float32)
@@ -222,6 +230,10 @@ def _run_cluster_patches(
             "min_zncc": min_zncc,
             "max_shift_px": max_shift,
             "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
+            # The settings the kernel ran with (its defaults where the caller
+            # passed None).
+            "regate_at_refined_shape": result["regate_at_refined_shape"],
+            "max_capped_cells": result["max_capped_cells"],
             "piecewise": piecewise,
             # The piecewise refinement's settings, as flat keys beside
             # `piecewise`, when the stage ran.
@@ -266,6 +278,7 @@ def _run_cluster_patches(
         click.echo(summary)
     click.echo(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "
-        f"{n_unloc} unlocalizable, {n_dup} duplicate-image, "
-        f"{n_skip} not evaluated"
+        f"{n_unloc} unlocalizable, {n_unloc_refined} unlocalizable at the "
+        f"refined shape, {n_unloc_cells} with too many capped cells, "
+        f"{n_dup} duplicate-image, {n_skip} not evaluated"
     )

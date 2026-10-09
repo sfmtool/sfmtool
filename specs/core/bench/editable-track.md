@@ -1400,12 +1400,15 @@ reading fails it.
 
 The bench judges the self-similarity radius in its painting and never through a
 kernel's gate. The evaluation's cluster refinement therefore runs
-with its own member gate off (`EvaluateOptions::default()` sets
-`cluster.max_member_zncc_self_similarity_radius` to `0`), as the track stage's
+with its own member gates off (`EvaluateOptions::default()` sets
+`cluster.max_member_zncc_self_similarity_radius` to `0`, which also turns off
+the whole-grid gate at the refined shape that shares the bar, and
+`cluster.max_capped_cells` to `CELL_COUNT`), as the track stage's
 `open_localizer` does, so no member of a bench cluster is
-`RejectedUnlocalizable`. That gate reads the same radius from the same tile, so
-a member the batch pass would refuse is a row the painting turns out at the same
-bar.
+`RejectedUnlocalizable`, `RejectedUnlocalizableRefined` or
+`RejectedUnlocalizableCells`. The up-front gate reads the same radius from the
+same tile, so a member the batch pass would refuse is a row the painting turns
+out at the same bar.
 
 ### The reference view
 

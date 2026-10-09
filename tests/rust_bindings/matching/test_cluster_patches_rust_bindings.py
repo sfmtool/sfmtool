@@ -15,6 +15,8 @@ STATUS_KEPT = 1
 STATUS_REJECTED_LOW_ZNCC = 2
 STATUS_NOT_EVALUATED = 5
 STATUS_REJECTED_UNLOCALIZABLE = 6
+STATUS_REJECTED_UNLOCALIZABLE_REFINED = 7
+STATUS_REJECTED_UNLOCALIZABLE_CELLS = 8
 
 # sfmtool_matches_format::ClusterCellStatus discriminants.
 CELL_FITTED = 0
@@ -90,6 +92,10 @@ class TestRefineClusterPatches:
             "member_zncc_grid",
             "member_shift_px",
             "member_consistency_residual",
+            "member_refined_zncc_self_similarity_radius",
+            "member_refined_zncc_self_similarity_radius_grid",
+            "regate_at_refined_shape",
+            "max_capped_cells",
             "member_cell_shift_px",
             "member_cell_zncc",
             "member_cell_status",
@@ -123,6 +129,17 @@ class TestRefineClusterPatches:
         assert result["member_shift_px"].dtype == np.float32
         assert result["member_consistency_residual"].dtype == np.float32
         assert result["member_consistency_residual"].shape == (2,)
+        # The gates at the refined shape run at their defaults and read the
+        # kept member's own grid there; the reference is not read.
+        assert result["regate_at_refined_shape"] is True
+        assert result["max_capped_cells"] == 8
+        radius = result["member_refined_zncc_self_similarity_radius"]
+        grid = result["member_refined_zncc_self_similarity_radius_grid"]
+        assert radius.dtype == np.float32 and radius.shape == (2,)
+        assert grid.dtype == np.float32 and grid.shape == (2, 3, 3)
+        assert np.isnan(radius[0]) and np.isnan(grid[0]).all()
+        assert 0.0 <= radius[1] <= 2.5
+        assert np.isfinite(grid[1]).all()
         # A single pure-translation cluster fits the factorization exactly.
         assert np.isfinite(result["member_consistency_residual"]).all()
         assert (result["member_consistency_residual"] < 0.05).all()
@@ -292,6 +309,70 @@ class TestRefineClusterPatches:
             max_member_zncc_self_similarity_radius=0.0,
         )
         assert result["member_status"][1] == STATUS_REJECTED_LOW_ZNCC
+
+    def test_capped_cell_gate_refuses_a_member(self):
+        # Texture in the left third of the patch and a flat surface over the
+        # rest: the whole patch pins a position, six of its nine cells read
+        # the largest radius.
+        images, pos, aff, starts, m_img, m_feat = _inputs(shift=(0.0, 0.0))
+        for img in images:
+            img[:, 48 - 7 :] = 127
+        result = refine_cluster_patches(
+            images, pos, aff, starts, m_img, m_feat, max_capped_cells=5
+        )
+        assert result["max_capped_cells"] == 5
+        assert result["member_status"][1] == STATUS_REJECTED_UNLOCALIZABLE_CELLS
+        grid = result["member_refined_zncc_self_similarity_radius_grid"][1]
+        assert (grid >= 3.0).sum() == 6
+        # A refused member keeps its measurement.
+        assert result["member_zncc"][1] > 0.99
+        kept = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        assert kept["member_status"][1] == STATUS_KEPT
+
+    def test_whole_grid_gate_refuses_a_member_at_its_refined_shape(self):
+        # The reference shows a texture magnified 1.4 times; the member shows
+        # it out of focus at its true scale, detected 1.35 times too large.
+        # The seed's grid reads sharp enough to pass the up-front gate, the
+        # grid at the shape the cascade recovers does not.
+        def surface(zoom, fine):
+            y, x = np.mgrid[0:128, 0:128].astype(np.float64) + 0.5
+            x = 64.0 + (x - 64.0) / zoom
+            y = 64.0 + (y - 64.0) / zoom
+            v = (
+                127.0
+                + 40.0 * np.sin(0.11 * x + 0.06 * y + 1.3)
+                + 28.0 * np.sin(0.05 * x - 0.12 * y + 0.7)
+                + 20.0 * np.sin(0.17 * x + 0.13 * y + 2.9)
+                + 10.0 * np.cos(0.29 * x - 0.23 * y + 0.4)
+                + fine * 15.0 * np.sin(0.83 * x + 0.47 * y + 0.2)
+                + fine * 12.0 * np.sin(-0.52 * x + 0.88 * y + 1.1)
+            )
+            return np.clip(np.round(v), 0, 255).astype(np.uint8)
+
+        images = [surface(1.4, 1.0), surface(1.0, 0.3)]
+        pos = [np.array([[64.0, 64.0]], dtype=np.float32)] * 2
+        aff = [
+            np.array([[[3.5, 0.0], [0.0, 3.5]]], dtype=np.float32),
+            np.array([[[3.375, 0.0], [0.0, 3.375]]], dtype=np.float32),
+        ]
+        starts = np.array([0, 2], dtype=np.uint32)
+        m_img = np.array([0, 1], dtype=np.uint32)
+        m_feat = np.array([0, 0], dtype=np.uint32)
+        result = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        assert result["member_status"][1] == STATUS_REJECTED_UNLOCALIZABLE_REFINED
+        assert result["member_refined_zncc_self_similarity_radius"][1] > 2.5
+        assert result["member_zncc"][1] >= 0.85
+        off = refine_cluster_patches(
+            images,
+            pos,
+            aff,
+            starts,
+            m_img,
+            m_feat,
+            regate_at_refined_shape=False,
+        )
+        assert off["regate_at_refined_shape"] is False
+        assert off["member_status"][1] == STATUS_KEPT
 
     def test_progress_counter_ticks(self):
         from sfmtool import ProgressCounter

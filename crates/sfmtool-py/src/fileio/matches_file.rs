@@ -69,13 +69,13 @@ fn parse_status(item: &Bound<'_, PyAny>) -> PyResult<ClusterMemberStatus> {
     if let Ok(v) = item.extract::<u8>() {
         return ClusterMemberStatus::from_u8(v).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!(
-                "invalid ClusterMemberStatus discriminant {v} (valid: 0..=6)"
+                "invalid ClusterMemberStatus discriminant {v} (valid: 0..=8)"
             ))
         });
     }
     let s: String = item.extract().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err(
-            "accepted_statuses items must be status ints (0..=6) or names (e.g. 'kept')",
+            "accepted_statuses items must be status ints (0..=8) or names (e.g. 'kept')",
         )
     })?;
     ClusterMemberStatus::from_str(&s)

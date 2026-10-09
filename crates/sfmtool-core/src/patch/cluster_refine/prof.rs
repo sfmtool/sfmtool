@@ -35,6 +35,11 @@ pub static TEMPLATE: Phase = Phase::new("build_template");
 /// Whole per-member refinement cascades (`refine_member`), enclosing
 /// [`TILE`] and [`EVAL`].
 pub static REFINE: Phase = Phase::new("refine_member");
+/// The gates at the refined shape after the cascade: per member that passed
+/// the ZNCC and shift gates, a sample of its own grid at the refined shape and
+/// the whole-and-parts self-similarity reading of it. The reading taken again
+/// after a piecewise move is inside [`PIECEWISE`] and not timed here.
+pub static REFINED_GATE: Phase = Phase::new("refined_gate");
 /// Piecewise refinements of kept members (`refine_kept_member_cells`): the
 /// working-patch renders, the cell searches and update fits, and the
 /// whole-patch readings taken again at the refined shape. Encloses the
@@ -56,6 +61,11 @@ pub static N_MEMBERS: AtomicU64 = AtomicU64::new(0);
 pub static N_GATED: AtomicU64 = AtomicU64::new(0);
 /// Members the gate rejected.
 pub static N_GATE_REJECTED: AtomicU64 = AtomicU64::new(0);
+/// Members read by the gates at the refined shape, after the cascade or
+/// after a piecewise move.
+pub static N_REFINED_GATED: AtomicU64 = AtomicU64::new(0);
+/// Members those gates rejected.
+pub static N_REFINED_GATE_REJECTED: AtomicU64 = AtomicU64::new(0);
 /// `refine_member` cascades run.
 pub static N_REFINES: AtomicU64 = AtomicU64::new(0);
 /// Objective evaluations (calls of `eval_zncc`, all cascade stages).
@@ -73,12 +83,13 @@ pub static N_TILE_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Pixels copied into (re)built `LevelTile`s (tile area × channels).
 pub static N_TILE_PIXELS: AtomicU64 = AtomicU64::new(0);
 
-const PHASES: [&Phase; 8] = [
+const PHASES: [&Phase; 9] = [
     &TOTAL,
     &GATE_SAMPLE,
     &GATE_SCORE,
     &TEMPLATE,
     &REFINE,
+    &REFINED_GATE,
     &PIECEWISE,
     &TILE,
     &EVAL,
@@ -92,6 +103,8 @@ pub fn reset() {
             &N_MEMBERS,
             &N_GATED,
             &N_GATE_REJECTED,
+            &N_REFINED_GATED,
+            &N_REFINED_GATE_REJECTED,
             &N_REFINES,
             &N_EVALS,
             &N_EVALS_SHIFT,
@@ -113,7 +126,14 @@ pub fn report(clusters: usize, wall_secs: f64) {
     );
     report_phases(PHASES, total_ns, &PATCH_ROWS);
     report_overhead(
-        &[&GATE_SAMPLE, &GATE_SCORE, &TEMPLATE, &REFINE, &PIECEWISE],
+        &[
+            &GATE_SAMPLE,
+            &GATE_SCORE,
+            &TEMPLATE,
+            &REFINE,
+            &REFINED_GATE,
+            &PIECEWISE,
+        ],
         total_ns,
         "cluster_total",
         &PATCH_ROWS,
@@ -160,7 +180,9 @@ pub fn report(clusters: usize, wall_secs: f64) {
          sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)",
     );
     eprintln!(
-        "[sfmtool-profile]   piecewise members {}",
+        "[sfmtool-profile]   refined-shape gates read {} (rejected {})  piecewise members {}",
+        N_REFINED_GATED.load(Ordering::Relaxed),
+        N_REFINED_GATE_REJECTED.load(Ordering::Relaxed),
         N_PIECEWISE.load(Ordering::Relaxed),
     );
 }

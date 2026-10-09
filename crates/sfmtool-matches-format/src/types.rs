@@ -70,6 +70,15 @@ pub use sfmtool_archive_io::WorkspaceMetadata;
 /// this version; [`crate::read_matches`] accepts any version up to it, except
 /// a cluster-backbone file below version 6, which it refuses.
 ///
+/// Version 10 adds two member statuses, `rejected_unlocalizable_refined`
+/// ([`ClusterMemberStatus::RejectedUnlocalizableRefined`]) and
+/// `rejected_unlocalizable_cells`
+/// ([`ClusterMemberStatus::RejectedUnlocalizableCells`]), to the names the
+/// `member_status_names` legend may state, so a version 10 writer, which
+/// states the whole legend, writes a file a version 9 reader refuses. A
+/// version 9 file reads unchanged; one whose legend names either is refused,
+/// since no version 9 writer wrote those names.
+///
 /// Version 9 adds the cell status `refused_outlier`
 /// ([`crate::ClusterCellStatus::RefusedOutlier`]) to the names the
 /// `member_cell_status_names` legend may state, so a version 9 writer, which
@@ -90,7 +99,7 @@ pub use sfmtool_archive_io::WorkspaceMetadata;
 /// [`ClusterMemberStatus::NAMES`]. What each earlier version changed, and how
 /// a reader treats a file of that version, is in
 /// `specs/formats/matches-file-format.md` § "Versioning and Migration".
-pub const MATCHES_FORMAT_VERSION: u32 = 9;
+pub const MATCHES_FORMAT_VERSION: u32 = 10;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -436,13 +445,23 @@ pub enum ClusterMemberStatus {
     /// read the radius set this status from an earlier score of the same
     /// patch, the curvature of its self-similarity at the peak.
     RejectedUnlocalizable = 6,
+    /// Rejected: the member passed the refinement's ZNCC and shift gates, but
+    /// its own patch read again at the refined shape and position does not
+    /// pin a position: its ZNCC self-similarity radius there is above the
+    /// member gate's bar. Defined from version 10.
+    RejectedUnlocalizableRefined = 7,
+    /// Rejected: the member passed the refinement's ZNCC and shift gates, but
+    /// more cells of a three-by-three split of its own patch at the refined
+    /// shape and position read the largest ZNCC self-similarity radius than
+    /// the bar allows. Defined from version 10.
+    RejectedUnlocalizableCells = 8,
 }
 
 impl ClusterMemberStatus {
     /// Every status this format defines, in canonical order: a status's
     /// position here is its discriminant, and this is the legend a writer
     /// states and a reader normalises onto.
-    pub const ALL: [ClusterMemberStatus; 7] = [
+    pub const ALL: [ClusterMemberStatus; 9] = [
         Self::Reference,
         Self::Kept,
         Self::RejectedLowZncc,
@@ -450,11 +469,13 @@ impl ClusterMemberStatus {
         Self::DuplicateImage,
         Self::NotEvaluated,
         Self::RejectedUnlocalizable,
+        Self::RejectedUnlocalizableRefined,
+        Self::RejectedUnlocalizableCells,
     ];
 
     /// The canonical `member_status_names` legend, one name per entry of
     /// [`Self::ALL`].
-    pub const NAMES: [&'static str; 7] = [
+    pub const NAMES: [&'static str; 9] = [
         "reference",
         "kept",
         "rejected_low_zncc",
@@ -462,6 +483,8 @@ impl ClusterMemberStatus {
         "duplicate_image",
         "not_evaluated",
         "rejected_unlocalizable",
+        "rejected_unlocalizable_refined",
+        "rejected_unlocalizable_cells",
     ];
 
     /// The canonical lowercase name used in metadata JSON (the
@@ -474,6 +497,24 @@ impl ClusterMemberStatus {
     /// Decode a stored discriminant; `None` when out of range.
     pub fn from_u8(value: u8) -> Option<Self> {
         Self::ALL.get(value as usize).copied()
+    }
+
+    /// Whether the refinement measured the member: its row in the backbone's
+    /// geometry is the refinement's answer rather than the detection. True
+    /// for the reference (whose answer is its detection), a kept member, and
+    /// every status that rejects a member after its fit (low ZNCC, shift, and
+    /// the two gates read at the refined shape); false for a member the
+    /// refinement never fitted.
+    pub fn is_measured(self) -> bool {
+        matches!(
+            self,
+            Self::Reference
+                | Self::Kept
+                | Self::RejectedLowZncc
+                | Self::RejectedShift
+                | Self::RejectedUnlocalizableRefined
+                | Self::RejectedUnlocalizableCells
+        )
     }
 }
 
@@ -501,6 +542,11 @@ impl fmt::Display for ClusterMemberStatus {
 /// fixed numbering of [`ClusterMemberStatus::ALL`], so that is the legend it is
 /// read through.
 pub(crate) const MEMBER_STATUS_LEGEND_VERSION: u32 = 7;
+
+/// The first format version whose `member_status_names` legend may name
+/// [`ClusterMemberStatus::RejectedUnlocalizableRefined`] and
+/// [`ClusterMemberStatus::RejectedUnlocalizableCells`].
+pub(crate) const REFINED_SHAPE_GATES_VERSION: u32 = 10;
 
 /// The canonical code each name of a `*_names` legend denotes, in the order
 /// given: entry `i` is the canonical code that stored code `i` stands for.
@@ -595,9 +641,10 @@ pub(crate) fn normalize_codes(
 /// From [`MEMBER_STATUS_LEGEND_VERSION`] on the metadata must carry
 /// `member_status_names`. A version 6 file must not — the key did not exist —
 /// and is read through the canonical legend its writer's fixed numbering
-/// amounts to. The legend rides inside that metadata entry, which is hashed
-/// into the `cluster_patches` section digest, so it is covered by the same
-/// integrity envelope as the column it describes.
+/// amounts to. A file below [`REFINED_SHAPE_GATES_VERSION`] must not name the
+/// two statuses that version added. The legend rides inside that metadata
+/// entry, which is hashed into the `cluster_patches` section digest, so it is
+/// covered by the same integrity envelope as the column it describes.
 pub(crate) fn read_member_status_legend(
     cp_meta: &serde_json::Value,
     version: u32,
@@ -605,7 +652,13 @@ pub(crate) fn read_member_status_legend(
     let names = legend_names(cp_meta, "member_status_names")?;
     if version < MEMBER_STATUS_LEGEND_VERSION {
         return match names {
-            None => Ok(ClusterMemberStatus::ALL.iter().map(|s| *s as u8).collect()),
+            // The seven statuses a version 6 writer could store, in its
+            // fixed numbering.
+            None => Ok(ClusterMemberStatus::ALL
+                [..=ClusterMemberStatus::RejectedUnlocalizable as usize]
+                .iter()
+                .map(|s| *s as u8)
+                .collect()),
             Some(_) => Err(format!(
                 "version {version} file carries cluster_patches/metadata.json \
                  member_status_names (introduced in version {MEMBER_STATUS_LEGEND_VERSION})"
@@ -617,7 +670,21 @@ pub(crate) fn read_member_status_legend(
          member_status codes through"
             .to_string()
     })?;
-    parse_legend("member_status_names", &names, &ClusterMemberStatus::NAMES)
+    let legend = parse_legend("member_status_names", &names, &ClusterMemberStatus::NAMES)?;
+    if version < REFINED_SHAPE_GATES_VERSION {
+        for status in [
+            ClusterMemberStatus::RejectedUnlocalizableRefined,
+            ClusterMemberStatus::RejectedUnlocalizableCells,
+        ] {
+            if legend.contains(&(status as u8)) {
+                return Err(format!(
+                    "version {version} file names {status} in cluster_patches/metadata.json \
+                     member_status_names (introduced in version {REFINED_SHAPE_GATES_VERSION})"
+                ));
+            }
+        }
+    }
+    Ok(legend)
 }
 
 /// Rewrite stored `member_status` codes in place onto the canonical numbering,
@@ -643,9 +710,9 @@ pub struct ClusterPatchData {
     /// refined.
     pub reference_members: Array1<u32>,
     /// `(M,)` [`ClusterMemberStatus`] discriminants — the authority on what
-    /// each of the backbone's geometry rows means: `Reference`, `Kept`,
-    /// `RejectedLowZncc` and `RejectedShift` rows are the refinement's own
-    /// measurement, and the rest are the detection it never displaced.
+    /// each of the backbone's geometry rows means: the rows of a status for
+    /// which [`ClusterMemberStatus::is_measured`] holds are the refinement's
+    /// own measurement, and the rest are the detection it never displaced.
     pub member_status: Array1<u8>,
     /// `(M,)` achieved windowed ZNCC vs the reference (NaN where not
     /// evaluated).

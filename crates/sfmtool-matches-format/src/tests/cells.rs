@@ -14,6 +14,16 @@ const ZNCC: &str = "cluster_patches/member_cell_zncc.5.3.3.float32.zst";
 const STATUS: &str = "cluster_patches/member_cell_status.5.3.3.uint8.zst";
 const ITERATIONS: &str = "cluster_patches/member_cell_iterations.5.uint8.zst";
 
+/// Relabel a written file as `version`, below version 10, dropping the two
+/// member statuses version 10 added from its `member_status_names` legend, so
+/// the cell rules are what the reader meets first.
+fn relabel_below_refined_shape_gates(entries: &mut [(String, Vec<u8>)], version: u32) {
+    mutate_metadata(entries, |json| json["version"] = serde_json::json!(version));
+    mutate_cp_metadata(entries, |json| {
+        json["member_status_names"] = serde_json::json!(ClusterMemberStatus::NAMES[..7]);
+    });
+}
+
 /// `make_cluster_patch_test_data` with per-cell columns: member 1, the one
 /// `kept` member, carries readings with every cell status; the others carry
 /// none.
@@ -419,17 +429,13 @@ fn test_malformed_member_cells_rejected() {
         ),
         (
             "version_7_with_legend",
-            Box::new(|entries| {
-                mutate_metadata(entries, |json| json["version"] = serde_json::json!(7))
-            }),
+            Box::new(|entries| relabel_below_refined_shape_gates(entries, 7)),
             "version 7 file carries cluster_patches/metadata.json member_cell_status_names \
              (introduced in version 8)",
         ),
         (
             "version_8_names_refused_outlier",
-            Box::new(|entries| {
-                mutate_metadata(entries, |json| json["version"] = serde_json::json!(8))
-            }),
+            Box::new(|entries| relabel_below_refined_shape_gates(entries, 8)),
             "version 8 file names refused_outlier in cluster_patches/metadata.json \
              member_cell_status_names (introduced in version 9)",
         ),

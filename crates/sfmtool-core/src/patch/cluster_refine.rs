@@ -14,9 +14,11 @@
 //! reference detection, refines an affine warp to every other member by a
 //! shift → similarity → affine Nelder-Mead cascade on the windowed ZNCC
 //! (seeded from the SIFT affine shapes, `M₀ = A_mem · A_ref⁻¹`), vets by
-//! achieved ZNCC and translation drift, dedupes to one kept member per image,
-//! and emits member-parallel arrays that map 1:1 onto the `.matches`
-//! `cluster_patches/` section.
+//! achieved ZNCC and translation drift, reads each surviving member's own
+//! patch again at its refined shape (the whole patch's self-similarity radius
+//! and how many of its nine cells read the largest), dedupes to one kept
+//! member per image, and emits member-parallel arrays that map 1:1 onto the
+//! `.matches` `cluster_patches/` section.
 //!
 //! The refinement's working unknown is the relative warp `W`, but what the
 //! member arrays STORE is the absolute affine shape `S = W · A_ref` — the map
@@ -53,7 +55,10 @@ use crate::camera::image::ImageU8Pyramid;
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
 };
-use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
+use crate::patch::self_similarity::{
+    zncc_self_similarity_parts, zncc_self_similarity_radius, PatchTile, SelfSimilarityParams,
+    SelfSimilarityParts,
+};
 use crate::patch::view_selection::AffineCoreMap;
 
 use kernels::{
@@ -62,7 +67,8 @@ use kernels::{
 
 pub use consistency::warp_consistency_residuals;
 pub use params::{
-    ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
+    capped_cell_count, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus,
+    CELL_COUNT, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_REGATE_AT_REFINED_SHAPE, REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
     member_cell_data, CellRefinement, CellStatus, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
@@ -241,6 +247,11 @@ struct MemberOutcome {
     /// The piecewise refinement's cells, for a kept member when the stage
     /// runs.
     cells: Option<CellRefinement>,
+    /// The ZNCC self-similarity radius of the member's own grid at its
+    /// refined shape, and its nine cells' radii, when the gates at the
+    /// refined shape read it.
+    refined_radius: f32,
+    refined_radius_grid: [[f32; 3]; 3],
 }
 
 impl Default for MemberOutcome {
@@ -253,6 +264,8 @@ impl Default for MemberOutcome {
             zncc_grid: [[f32::NAN; 3]; 3],
             shift: f32::NAN,
             cells: None,
+            refined_radius: f32::NAN,
+            refined_radius_grid: [[f32::NAN; 3]; 3],
         }
     }
 }
@@ -262,6 +275,42 @@ impl MemberOutcome {
     fn set_parts(&mut self, parts: PartZncc) {
         self.zncc_middle = parts.middle as f32;
         self.zncc_grid = parts.grid.map(|row| row.map(|z| z as f32));
+    }
+
+    /// The member's refined shape and position, from the stored affine.
+    fn shape_and_position(&self) -> (Mat2, [f64; 2]) {
+        let a = &self.affine;
+        ([[a[0][0], a[0][1]], [a[1][0], a[1][1]]], [a[0][2], a[1][2]])
+    }
+
+    /// Read the member's own grid at its refined shape and position, store
+    /// the readings, and return the verdict of the two gates at the refined
+    /// shape ([`ClusterRefineParams::refined_shape_verdict`]): `None` when it
+    /// passes, or when the grid cannot be sampled there, which skips the
+    /// gates as non-finite geometry skips the up-front gate.
+    ///
+    /// The whole grid is read by the up-front gate's own reading
+    /// ([`grid_self_similarity_radius`]), so a grid gives the same radius
+    /// before and after refinement; the cells come from the parts reading of
+    /// the same grid ([`grid_self_similarity_parts`]).
+    fn read_refined_shape(
+        &mut self,
+        pyramid: &ImageU8Pyramid,
+        params: &ClusterRefineParams,
+    ) -> Option<MemberStatus> {
+        let (shape, position) = self.shape_and_position();
+        let samples = sample_member_grid(pyramid, position, shape, params)?;
+        let resolution = params.resolution.max(2) as usize;
+        let parts = grid_self_similarity_parts(&samples, resolution)?;
+        let radius = grid_self_similarity_radius(&samples, resolution);
+        prof::count(&prof::N_REFINED_GATED, 1);
+        let cells = parts
+            .grid
+            .each_ref()
+            .map(|row| row.each_ref().map(|c| c.radius));
+        self.refined_radius = radius as f32;
+        self.refined_radius_grid = cells.map(|row| row.map(|r| r as f32));
+        params.refined_shape_verdict(radius, &cells)
     }
 }
 
@@ -334,6 +383,48 @@ pub fn member_zncc_self_similarity_radius(
     Some(grid_self_similarity_radius(
         &samples,
         params.resolution.max(2) as usize,
+    ))
+}
+
+/// The overlap reading of one member's own `R×R` grid
+/// ([`sample_member_grid`]) at `position` and `affine_shape`, as a whole, its
+/// middle square and its nine cells, with the default
+/// [`SelfSimilarityParams`]. Its `grid` is what
+/// [`ClusterRefineParams::max_capped_cells`] judges at the refined shape. Its
+/// `whole` is the template [`member_zncc_self_similarity_radius`] reads, read
+/// with the parts' shared sums, so the two can differ in the last bits; the
+/// gates judge the whole grid by [`member_zncc_self_similarity_radius`]'s
+/// reading. `None` where the grid cannot be sampled, or has no channels.
+pub fn member_zncc_self_similarity_parts(
+    pyramid: &ImageU8Pyramid,
+    position: [f64; 2],
+    affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<SelfSimilarityParts> {
+    let samples = sample_member_grid(pyramid, position, affine_shape, params)?;
+    grid_self_similarity_parts(&samples, params.resolution.max(2) as usize)
+}
+
+/// The overlap reading of an interleaved `R×R×C` grid from
+/// [`sample_member_grid`] as a whole, its middle and its nine cells; `None`
+/// for a grid with no channels.
+fn grid_self_similarity_parts(samples: &[f32], resolution: usize) -> Option<SelfSimilarityParts> {
+    let channels = samples.len() / (resolution * resolution);
+    if channels == 0 {
+        return None;
+    }
+    let (planes, colour) =
+        PatchTile::planes_from_interleaved(samples, resolution, resolution, channels);
+    let tile = PatchTile {
+        values: &planes,
+        channels: colour,
+        width: resolution,
+        height: resolution,
+    };
+    Some(zncc_self_similarity_parts(
+        &tile,
+        None,
+        &SelfSimilarityParams::default(),
     ))
 }
 
@@ -950,6 +1041,18 @@ fn refine_cluster(
                 ..MemberOutcome::default()
             };
             members[j].set_parts(parts);
+            // The member gate again, at the shape the cascade returned:
+            // before the per-image dedupe, so a refused member cannot cost
+            // its image a member that would have passed.
+            if status == MemberStatus::Kept && params.reads_refined_shape() {
+                let member = &mut members[j];
+                if let Some(refused) =
+                    prof::REFINED_GATE.time(|| member.read_refined_shape(pyramids[g.image], params))
+                {
+                    prof::count(&prof::N_REFINED_GATE_REJECTED, 1);
+                    member.status = refused;
+                }
+            }
         }
     }
 
@@ -1018,9 +1121,14 @@ fn refine_cluster(
 /// Run the piecewise refinement on one kept member and store its outcome:
 /// the cells always, and, when the loop moved the shape, the new shape and
 /// position with the whole-patch ZNCC, its parts and the shift from the seed
-/// read again at the new map. The member's status stays the cascade's.
-/// Without [`PiecewiseParams::move_shape`] the shape never moves, so only the
-/// cells are stored and every other reading of the member is left untouched.
+/// read again at the new map. Without [`PiecewiseParams::move_shape`] the
+/// shape never moves, so only the cells are stored and every other reading of
+/// the member is left untouched.
+///
+/// A moved member is read by the gates at the refined shape again, at the new
+/// shape ([`ClusterRefineParams::reads_refined_shape`]), and one that fails
+/// them takes that status, with the moved shape and its readings. That is the
+/// one way the stage changes a member's status.
 ///
 /// The member was kept on the cascade's readings, so the stage's shape must
 /// pass the same gates to replace it: the ZNCC read again at the new map must
@@ -1092,6 +1200,12 @@ fn refine_kept_member_cells(
     member.set_parts(parts);
     member.shift = shift as f32;
     member.cells = Some(out.cells);
+    if params.reads_refined_shape() {
+        if let Some(refused) = member.read_refined_shape(pyramid, params) {
+            prof::count(&prof::N_REFINED_GATE_REJECTED, 1);
+            member.status = refused;
+        }
+    }
 }
 
 /// The whole-patch windowed ZNCC and its part readings of a member at
@@ -1276,6 +1390,8 @@ pub fn refine_cluster_patches_borrowed(
         member_zncc_grid: vec![[[f32::NAN; 3]; 3]; m],
         member_shift_px: vec![f32::NAN; m],
         cells: vec![None; m],
+        refined_zncc_self_similarity_radius: vec![f32::NAN; m],
+        refined_zncc_self_similarity_radius_grid: vec![[[f32::NAN; 3]; 3]; m],
     };
     for (c, out) in outcomes.into_iter().enumerate() {
         result.reference_members[c] = out.reference;
@@ -1287,6 +1403,8 @@ pub fn refine_cluster_patches_borrowed(
             result.member_zncc_middle[k] = mo.zncc_middle;
             result.member_zncc_grid[k] = mo.zncc_grid;
             result.member_shift_px[k] = mo.shift;
+            result.refined_zncc_self_similarity_radius[k] = mo.refined_radius;
+            result.refined_zncc_self_similarity_radius_grid[k] = mo.refined_radius_grid;
             if mo.status == MemberStatus::Kept {
                 result.cells[k] = mo.cells;
             }

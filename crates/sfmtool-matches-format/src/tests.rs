@@ -320,11 +320,11 @@ fn test_round_trip_no_tvg() {
     let data = make_test_data();
     let (dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
-    // Frozen from the writer at format version 9 (the version is in the
+    // Frozen from the writer at format version 10 (the version is in the
     // hashed top-level metadata, so a version bump moves this value).
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "6530c24ed1388269af47606b05ed9e2f"
+        "fd546e5f19bf0d2d8795daf4ef7afaa0"
     );
 
     // Verify metadata
@@ -873,7 +873,7 @@ fn test_write_validation_cluster_patches_wrong_lengths() {
 #[test]
 fn test_write_validation_invalid_status() {
     let mut data = make_cluster_patch_test_data();
-    data.cluster_patches.as_mut().unwrap().member_status[2] = 7;
+    data.cluster_patches.as_mut().unwrap().member_status[2] = 9;
     expect_write_error(
         "matches_test_cp_bad_status",
         &data,
@@ -964,11 +964,11 @@ fn test_invalid_config_string() {
 
 #[test]
 fn test_cluster_member_status_round_trip() {
-    for value in 0u8..=6 {
+    for value in 0u8..=8 {
         let status = ClusterMemberStatus::from_u8(value).unwrap();
         assert_eq!(status as u8, value);
     }
-    assert!(ClusterMemberStatus::from_u8(7).is_none());
+    assert!(ClusterMemberStatus::from_u8(9).is_none());
     assert!(ClusterMemberStatus::from_u8(255).is_none());
 }
 
@@ -1144,8 +1144,11 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
 /// version-7 `member_status_names` legend for `version <= 6`, the version-8
 /// per-cell columns and their `member_cell_status_names` legend for
 /// `version <= 7` and the version-9 `refused_outlier` name from that legend
-/// for `version <= 8`, matching what old writers produced; a cell stored as
-/// `refused_outlier` is left past the shortened legend), then recomputing the
+/// for `version <= 8`, and the version-10 `rejected_unlocalizable_refined` and
+/// `rejected_unlocalizable_cells` names from the `member_status_names` legend
+/// for `version <= 9`, matching what old writers produced; a cell or member
+/// stored under a dropped name is left past the shortened legend), then
+/// recomputing the
 /// stored hashes so the result is an internally consistent file of that
 /// version — for authoring old- or future-version fixture bytes.
 fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
@@ -1167,6 +1170,18 @@ fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version
         entries.retain(|(n, _)| {
             !n.starts_with("clusters/member_positions.")
                 && !n.starts_with("clusters/member_affine_shapes.")
+        });
+    }
+    if (7..=9).contains(&version) && entries.iter().any(|(n, _)| n == CP_METADATA) {
+        mutate_cp_metadata(&mut entries, |json| {
+            if let Some(names) = json
+                .get_mut("member_status_names")
+                .and_then(|v| v.as_array_mut())
+            {
+                names.retain(|n| {
+                    n != "rejected_unlocalizable_refined" && n != "rejected_unlocalizable_cells"
+                });
+            }
         });
     }
     if version == 8 && entries.iter().any(|(n, _)| n == CP_METADATA) {
@@ -1501,10 +1516,10 @@ fn test_verify_rejects_invalid_status() {
             mutate_entry(
                 entries,
                 "cluster_patches/member_status.5.uint8.zst",
-                |bytes| bytes[3] = 7,
+                |bytes| bytes[3] = 9,
             )
         },
-        "member_status[3] is 7, past the 7 names its legend gives",
+        "member_status[3] is 9, past the 9 names its legend gives",
     );
 }
 
@@ -3408,6 +3423,16 @@ fn test_malformed_member_status_legend_rejected() {
             }),
             "version 6 file carries cluster_patches/metadata.json member_status_names",
         ),
+        (
+            // The writer states the whole legend, so a file relabelled as
+            // version 9 names the two statuses version 10 added.
+            "version_9_names_refined_shape_statuses",
+            Box::new(|entries| {
+                mutate_metadata(entries, |json| json["version"] = serde_json::json!(9))
+            }),
+            "version 9 file names rejected_unlocalizable_refined in \
+             cluster_patches/metadata.json member_status_names (introduced in version 10)",
+        ),
     ];
     for (label, mutate, expected) in cases {
         let (dir, path) =
@@ -3422,6 +3447,90 @@ fn test_malformed_member_status_legend_rejected() {
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+#[test]
+fn test_refined_shape_statuses_round_trip() {
+    // The two statuses of the gates read at the refined shape are written
+    // under the canonical legend, read back and verified like any other.
+    let mut data = make_cluster_patch_test_data();
+    let cp = data.cluster_patches.as_mut().unwrap();
+    cp.member_status[3] = ClusterMemberStatus::RejectedUnlocalizableRefined as u8;
+    cp.member_status[4] = ClusterMemberStatus::RejectedUnlocalizableCells as u8;
+    let (dir, path) = write_to_temp("matches_test_refined_shape_statuses", &data);
+    assert_eq!(
+        stored_member_status_names(&path),
+        serde_json::json!(ClusterMemberStatus::NAMES)
+    );
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "{errors:?}");
+    let loaded = read_matches(&path).unwrap();
+    let status = &loaded.cluster_patches.as_ref().unwrap().member_status;
+    assert_eq!(
+        status,
+        &data.cluster_patches.as_ref().unwrap().member_status
+    );
+    assert_eq!(
+        ClusterMemberStatus::from_u8(status[3]),
+        Some(ClusterMemberStatus::RejectedUnlocalizableRefined)
+    );
+    assert_eq!(
+        ClusterMemberStatus::from_u8(status[4]),
+        Some(ClusterMemberStatus::RejectedUnlocalizableCells)
+    );
+    assert_eq!(
+        ClusterMemberStatus::RejectedUnlocalizableRefined.as_str(),
+        "rejected_unlocalizable_refined"
+    );
+    assert_eq!(
+        ClusterMemberStatus::RejectedUnlocalizableCells.as_str(),
+        "rejected_unlocalizable_cells"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_member_status_is_measured() {
+    use ClusterMemberStatus as S;
+    let measured: Vec<S> = S::ALL.into_iter().filter(|s| s.is_measured()).collect();
+    assert_eq!(
+        measured,
+        [
+            S::Reference,
+            S::Kept,
+            S::RejectedLowZncc,
+            S::RejectedShift,
+            S::RejectedUnlocalizableRefined,
+            S::RejectedUnlocalizableCells,
+        ]
+    );
+}
+
+#[test]
+fn test_version_9_cluster_patches_read_unchanged() {
+    // A version 9 file's legend cannot name the two statuses version 10
+    // added: with the seven it defined, it reads and verifies as before.
+    let data = make_cluster_patch_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v9_status_legend");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.matches");
+    let v9 = dir.join("v9.matches");
+    write_matches(&current, &data, 3).unwrap();
+    rewrite_matches_version(&current, &v9, 9);
+    assert_eq!(
+        stored_member_status_names(&v9),
+        serde_json::json!(ClusterMemberStatus::NAMES[..7])
+    );
+    let (valid, errors) = verify_matches(&v9).unwrap();
+    assert!(valid, "{errors:?}");
+    let loaded = read_matches(&v9).unwrap();
+    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    assert_eq!(
+        loaded.cluster_patches.as_ref().unwrap().member_status,
+        data.cluster_patches.as_ref().unwrap().member_status
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

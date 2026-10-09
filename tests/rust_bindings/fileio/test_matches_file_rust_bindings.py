@@ -457,7 +457,7 @@ def test_member_cells_round_trip(tmp_path):
     assert cp_meta["member_cell_status_names"] == CELL_STATUS_NAMES
 
     mf = MatchesFile(path)
-    assert mf.metadata["version"] == 9
+    assert mf.metadata["version"] == 10
     assert mf.has_member_cells
     assert mf.member_cell_status_names == CELL_STATUS_NAMES
     assert mf.member_cell_shift_px.shape == (8, 3, 3, 2)
