@@ -16,6 +16,7 @@ Pose estimation, epipolar geometry, and optimization. Implemented in
 | [rotation-init.md](rotation-init.md) | Far-field, parallax-free correspondences fixing rotations before any translation is known. |
 | [reconstruction-growth.md](reconstruction-growth.md) | Registering the un-posed images of a cluster-track set against a seeded reconstruction, in batches. |
 | [bundle-adjustment.md](bundle-adjustment.md) | Staged bundle adjustment over one or more cameras, each with its own lens block, with free points solved in inverse depth and stored as a position or a direction on the point-or-bearing test at the end of the solve. |
+| [bundle-adjustment-measurements.md](bundle-adjustment-measurements.md) | Measurements behind the free-point choices of the bundle adjustment: inverse depth against re-deciding a point between rounds, where the storage decision is read on an unconverged solve, the anchor, what `converged` reports, rough starts with the lenses released, and cost. |
 | [reprojection-residuals.md](reprojection-residuals.md) | Batched reprojection residuals and inlier fractions. |
 | [affine-factorization.md](affine-factorization.md) | Joint weak-perspective factorization over sparse, partly-junk cluster observations. |
 | [pose-verification.md](pose-verification.md) | Displacement-neighbourhood check that flags — and repairs — poses the structure disagrees with. |

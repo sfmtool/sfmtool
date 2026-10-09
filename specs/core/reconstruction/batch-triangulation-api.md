@@ -1172,11 +1172,13 @@ score's bearing, a finite one at the position the solve placed (or at
 `fit_point_and_bearing`'s point where the solve left it at `ρ = 0`). Its noise
 level is not a stored reconstruction's: it is this section's estimator read
 over the observations of finite points the final round solved on, at the state
-the solve ended at. The interface, the choices, and the measurements against the
-rejected alternative of re-deciding a point between rounds while it is carried
-as a position or a direction, are in
+the solve ended at. The interface and the choices are in
 [bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
-inverse depth and the storage decision". On the four inputs measured there, a
+inverse depth and the storage decision", and the measurements against the
+rejected alternative of re-deciding a point between rounds while it is carried
+as a position or a direction are in
+[bundle-adjustment-measurements.md](../geometry/bundle-adjustment-measurements.md).
+On the four inputs measured there, a
 converged solve's stored representation agrees with the test at the level the
 decision read on every point, and with the test at the result's own measured
 noise, which is what `sfm analyze --depth-reliability` lists, on all but 0 to

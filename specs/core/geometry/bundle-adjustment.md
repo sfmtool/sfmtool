@@ -159,9 +159,10 @@ state is a whole answer rather than a half-written candidate. A stopped solve
 returns the state it had reached rather than an error, since it has no `Result`
 to put one in, and the caller asks `Progress::is_cancelled` again to find out.
 `&Progress::none()` reports nothing and never stops: every method on it is a
-branch on a null sink, and the solve runs exactly as it did before the parameter
-existed, which is asserted bit for bit
-([../../gui/operation-progress.md](../../gui/operation-progress.md)).
+branch on a null sink. Reporting changes nothing the solve computes: a run that
+reports every phase into a sink returns the same output bit for bit as one
+passed `&Progress::none()`, which the reconstruction-level adjustment's tests
+assert ([../../gui/operation-progress.md](../../gui/operation-progress.md)).
 
 Per schedule round:
 
@@ -173,13 +174,9 @@ Per schedule round:
    cheirality and bar rules off (under `FreePointPolicy::cross`, `cheirality`
    on, and a free point starts the round from the best of three states, see
    "Re-estimation between rounds" under "The parametrisation"; a ranged or held
-   point reads neither, see "Point constraints"):
-   world rays `R_iᵀ · pixel_to_ray(uv)`, each through the camera of its own
-   image, so a track seen by two cameras back-projects each observation through
-   its own lens, and centers `−R_iᵀ t_i` per
-   observation, grouped by point with a STABLE sort so a track
-   accumulates its own observations in the order the caller listed them, and
-   solved through [`reconstruction::triangulation::triangulate_batch`]. A track
+   point reads neither, see "Point constraints"). Each observation's ray is
+   back-projected through the camera of its own image, so a track seen by two
+   cameras reads each observation through its own lens. A track
    with fewer than 2 usable observations becomes `NaN`; a point with no
    observations at all becomes `NaN` too. What happens to such a point is the
    caller's choice: growth refills it from its full observation set after the
@@ -277,8 +274,8 @@ zero is the same rule at zero inverse depth, not a separate one.
 ## The solve
 
 Levenberg–Marquardt over a local parameterization, minimizing the soft-L1
-robust cost applied per residual COMPONENT (matching scipy's element-wise
-`loss="soft_l1"` that this kernel replaces)
+robust cost applied per residual COMPONENT (scipy's element-wise
+`loss="soft_l1"`)
 
 ```
 cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_scale
@@ -301,26 +298,27 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   (`x_d = (ρ + δ(ρ))·ûx` with `ρ = ρ_xy/rz`), whose coefficients are
   dimensionless and likewise ride on the ray's own radial coordinate. In
   all five `∂u/∂f = x_d = (u − cx)/f` at every incidence angle, the
-  fisheye periphery past `θ = 90°` included. `opt_k1` is the fisheye family's radial rung
-  and requires `SIMPLE_RADIAL_FISHEYE`:
+  fisheye periphery past `θ = 90°` included. `opt_k1` is the fisheye family's radial
+  distortion release and requires `SIMPLE_RADIAL_FISHEYE`:
   `∂(u, v)/∂k1 = f·θ³·(ûx, ûy)` exactly — the θ³ curvature the
   equidistant map cannot express, which is what lets the adjustment
-  flatten a lens's residual field instead of buying it back with
-  geometry (the finite dome that pulls sky and horizon off infinity).
+  flatten a lens's residual field instead of absorbing it into the
+  geometry (as a finite dome that pulls sky and horizon points in from
+  infinity).
   Every other model fails the conditions — a second focal `fy` (no slot
   in the camera block), or higher polynomial coefficients recovered
   through `f`-dependent normalization. The binding rejects `opt_f` /
   `opt_k1` for those loudly, and the core silently holds that camera's
   parameter fixed (never a half-modeled DOF) while releasing it on the cameras
-  whose models admit it. The rung also needs the
+  whose models admit it. The `k1` release also needs the
   model's INVERSE to carry `k1`: retriangulation and direction
   re-estimation read `pixel_to_ray`, which for `SIMPLE_RADIAL_FISHEYE` is
   the Newton recovery of `θ` without the family's wide-angle blend — that
   blend hands back the identity `θ = r_d` ray past 90°, dropping `k1`
   exactly where `k1·θ³` is largest (a 105° rim at `k1 = 0.02` comes back
   6° off, which is a ray, not a rounding error).
-- **The spline release.** `opt_bspline` is the radial rung of
-  the two models that carry one, `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`
+- **The spline release.** `opt_bspline` is the radial distortion
+  release of the two models that carry one, `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`
   ([../../formats/sfmtool-camera-models.md](../../formats/sfmtool-camera-models.md)),
   and only when that spline is defined: at least two coefficients on a
   positive finite domain end (`bspline_theta_max` / `bspline_rho_max`;
@@ -334,7 +332,7 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   gates, so the caller sees the real reason) and the core degrades each on its
   own model test. Retriangulation and direction re-estimation read the model's Newton
   inverse, which carries the spline over the model's whole radial domain, for
-  the same reason the `k1` rung needs its own (for the fisheye that means no
+  the same reason the `k1` release needs its own (for the fisheye that means no
   wide-angle blend; for the pinhole, an explicit Newton arm rather than the
   generic fixed-point undistortion).
   **Unsupported coefficients are pinned.** A coefficient whose basis span no
@@ -356,7 +354,7 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
 - **Staged releases.** Callers open the shared parameters in stages:
   fixed → `opt_f` → `opt_f` plus a distortion release, so a distortion
   parameter opens only on a focal that has already settled — `opt_f + opt_k1`
-  for the `k1` rung, `opt_f + opt_bspline` for the spline. The spline
+  for the `k1` release, `opt_f + opt_bspline` for the spline. The spline
   **must** be co-released with the focal, even where an earlier stage froze
   `f`: under the center-anchored gauge the spline pins `δ(0) = δ'(0) = 0` and
   so cannot express a central-scale correction at all — that is what `f` is
@@ -413,9 +411,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   `(1 + z)^(−¾)` — and the residual by `ρ'/√(ρ' + 2ρ''z) = (1 + z)^(+¼)`,
   so `Jᵀr` is the true robust gradient while `JᵀJ` carries the corrected
   curvature. The true robust cost (not the surrogate) decides step
-  acceptance. First-order IRLS was measurably worse here: its shallower
-  valley model stopped the focal release short on seoul (kept f at the
-  scan winner where scipy walked −20% to the reference focal).
+  acceptance. First-order IRLS is not used: its curvature model is
+  shallower, and on the seoul bull images it stopped a released focal short,
+  at its starting value, where the second-order scaling moves it the 20% to
+  the reference focal.
 - **Schur complement.** Points are eliminated: per-point 3×3 blocks are
   inverted directly and the reduced camera system (one lens block
   `[f_j?, k1_j?, c_j,0..c_j,N_j−1?]` per camera, then `6·n_im`, dense) is
@@ -428,8 +427,9 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   `x_scale="jac"` parameter-scale invariance of the scipy original.
 - **Termination.** `max_iters` accepted-step budget per round; stop early
   when accepted steps improve the cost by less than `1e-8` relative TWICE
-  in a row (one tiny step is how a traverse of a nearly-flat valley starts
-  — the focal release walks −20% through one), or when no damping in a
+  in a row (a single small improvement is also how a long run of small steps
+  across a nearly flat stretch of the cost begins, and a focal release can
+  move the focal 20% across one), or when no damping in a
   bounded ladder (12 ×4 escalations, capped at `λ = 10¹²`) finds a
   downhill step.
 
@@ -659,7 +659,7 @@ Python's point of view).
   scene (`RADIAL_FISHEYE`) with `opt_f = true` also returns its focal
   bit-identically (the core's degrade, since that model's `∂u/∂f` is not
   `(u − cx)/f`).
-- **The curvature rung**: `∂(u, v)/∂k1` matches a central difference of the
+- **The `k1` release**: `∂(u, v)/∂k1` matches a central difference of the
   projection in `k1` over a field sampled past `θ = 90°`, to rounding (the
   derivative of an exactly-linear dependence, like the focal column); a
   planted `k1` is recovered from a `k1 = 0` start with the focal fixed and
@@ -691,13 +691,13 @@ Python's point of view).
   release is exercised on its own for each spline model, leaving the
   unreleased coefficients bit for bit; coefficient slots with no observation
   support hold nonzero input sentinels exactly through a field-limited
-  scene; and directions carry the rung where a near-axis finite cloud
+  scene; and directions carry the release where a near-axis finite cloud
   cannot.
 - **The spline step guard**: the admissibility predicate rejects a folded
   spline and non-finite coefficients on either radial coordinate; end to
   end, a released solve never returns a spline violating `1 + δ'(d) > 0` on
   `[0, d_max]`.
-- **Directions carry the rung**: on a scene whose finite cloud sits near the
+- **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
   direction observations removed does not.
@@ -737,10 +737,7 @@ Python's point of view).
 ## Points at infinity
 
 There is one staged loop, not two: direction handling is a per-point branch
-inside it, so with nothing marked the loop *is* the finite-only solve. (It was
-originally a second mirrored copy of the whole kernel, entered only when a
-direction was marked; the copies were merged once the reduction was shown to
-hold bit for bit.)
+inside it, so with nothing marked the loop *is* the finite-only solve.
 
 A point at infinity is a pure direction: its observations depend on the
 observing image's rotation and its camera's model, never on any
@@ -1096,7 +1093,9 @@ were fitted to it as a finite point: re-solving the result of the clean
 [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
 with the crossing off, every point held in the representation the decision
 stored, lowers its cost by 17.3 noise units and takes the scores of the six
-far points the decision made finite (see the table below) back under the
+far points the decision made finite
+([measurements](bundle-adjustment-measurements.md#the-default-schedule-against-the-crossing-between-rounds))
+back under the
 threshold of 25, to 18.8 to 24.2. No refit follows the decision, because a solve
 that carries a point in the representation just chosen is the direction bias
 described below ("Why inverse depth"), which pulls each score toward the side
@@ -1105,38 +1104,31 @@ no representation imposed.
 
 #### Why inverse depth
 
-The alternative is to carry each free point as a position or a direction for a
-whole round and re-decide it on the test between rounds, and it is rejected
-because the geometry of a round is then solved with the point in the
-representation it has, and the solve fits that representation: over ten cameras and 300 points with 0.76 px of noise, a track
-1,500 units out whose rays score 33 at the true poses scores 38 at the end of a
-solve that starts it finite and 6 at the end of one that starts it as a
-direction, so a borderline track keeps the representation it starts with, and
-over six cameras and 40 points one round bends the poses by up to half a degree
-to fit a far track as whichever it is given. A marginal track needs several
-rounds to settle (on a Kerry Park solve with 1 px of keypoint noise the points
-changing at each of the seven re-estimations of an eight-round schedule are
-137, 39, 26, 14, 7, 6 and 7). And a round that stops on its iteration budget
-far from convergence measures a level that is mostly pose error, makes points
-with a depth directions at it, and the next round bends the poses to fit them:
-on the Kerry Park solve with five iterations a round, from poses perturbed by
-1° and 5% of the camera extents and 1 px of keypoint noise, the first
-re-estimation measures 3.1 px and makes 633 of its 886 points directions, and
-the solve ends with 658 directions and a median residual of 2.03 px, against
-1.05 px with the crossing off.
+The alternative, called the crossing between rounds, carries each free point
+as a position or a direction for a whole round and re-decides it on the test
+between rounds. It is rejected because the geometry of a round is then solved
+with the point in the representation it has, and the solve fits that
+representation: a borderline track's score moves toward the representation it
+starts in, so the track keeps it, and one round bends the poses to fit a far
+track as whichever it is given. A marginal track needs several rounds to
+settle. A round that stops on its iteration budget far from convergence
+measures a level that is mostly pose error, makes points with a depth
+directions at it, and the next round bends the poses to fit them
+([measurements](bundle-adjustment-measurements.md#the-crossing-between-rounds)).
 
 In inverse depth `ρ = 0` is a value the solve can reach, so a point carries no
 representation through a round and the poses are not fitted to one chosen
-before it; a far
-point stays well conditioned because its inverse depth is close to linear in
-the observations; and nothing is decided at a round boundary, so a rough round
-cannot demote anything. Over 24 far tracks spanning the threshold in each of
-four noise draws on the ten-camera scene above (96 tracks, 0.81 px of noise),
-the verdict at the result agrees with the verdict at the true poses on 85
-tracks solved in inverse depth, on 83 carried as positions and on 74 carried as
-directions; the scores read at the result move from those at the true poses by
-−7.2 to +13.7 on average per draw in inverse depth and by −11.8 to −13.6 when
-carried as directions.
+before it; a far point stays well conditioned because its inverse depth is
+close to linear in the observations; and nothing is decided at a round
+boundary, so a rough round cannot demote anything. On synthetic far tracks
+spanning the threshold, the verdict at the result agrees with the verdict at
+the true poses on more tracks solved in inverse depth than carried as positions
+or as directions. On the default schedule over the four inputs of the
+point-or-bearing work, every converged solve stores every point as the test at
+the level the decision read says; read at the result's own level, the Kerry
+Park solve disagrees on 2 to 10 points, where the crossing between rounds left
+27 to 34
+([measurements](bundle-adjustment-measurements.md#the-default-schedule-against-the-crossing-between-rounds)).
 
 #### Decisions
 
@@ -1144,289 +1136,85 @@ carried as directions.
 `ρ > 0` the translation column is the Euclidean point's (`ρ·J` at `p̃ = ρ·p_cam`
 is `J` at `p_cam`), and the Schur complement is invariant under an invertible
 reparametrisation of a point, so the reduced camera system is the Euclidean one
-up to the Marquardt damping. Measured at the first linearization of the first
-round, where both parametrisations read the same state, the translation blocks
-of the reduced system agree to the printed digits for the images observing the
-most far points (on the Kerry Park solve with 1 px of keypoint noise up to 30%
-of an image's observations on points more than fifty times farther from their
-anchor than the camera is), with smallest-to-largest eigenvalue
-ratios of 0.09 to 0.65. Only `ρ = 0` exactly makes the column zero, and that is
-the case the existing pin covers; no damping that reads the column's size is
-needed.
+up to the Marquardt damping; on the images observing the most far points the
+translation blocks of the two agree to the printed digits
+([measurements](bundle-adjustment-measurements.md#translation-observability-in-inverse-depth)).
+Only `ρ = 0` exactly makes the column zero, and that is the case the existing
+pin covers; no damping that reads the column's size is needed.
 
 **The anchor is re-read at the start of every round.** The anchor only chooses
 the parametrisation, but the bound at `ρ = 0` and the singularity at the anchor
 are places a point cannot move through, and an anchor left at the input poses
 can sit away from cameras a rough start has moved. Because the re-estimation
 reads a position between rounds anyway, `ρ` keeping its meaning across rounds
-buys nothing. Measured on the default schedule, the two choices store the same
-representation for every point, and agree on the median residual to 0.001 px,
-on every start up to 1° and 5% on the seoul bull ground truth, the Kerry Park
-solve and the seoul bull `sift_files` solve. From 4° and 20% on the
-Kerry Park solve, at 200 iterations a round, where both converge, the anchor at
-the input poses stops the second round after 17 iterations and the result keeps
-3,002 observations under 4 px, with 165 directions and 9 points disagreeing with
-the test at the converged level; re-anchored, the second round runs 102
-iterations further and the result keeps 3,120 (3,016 with the crossing off),
-with 147 directions and none disagreeing.
+buys nothing. From starts up to 1° and 5% the two choices store the same
+representation for every point and agree on the median residual to 0.001 px;
+from 4° and 20% the anchor left at the input poses stops the second round early
+and keeps fewer observations under 4 px
+([measurements](bundle-adjustment-measurements.md#re-reading-the-anchor-every-round)).
 
 **The decision is read at the end of an unconverged solve too.** A final round
 that stops on its iteration budget measures a level that still carries pose
 error, which errs toward a direction, and `converged: false` says so. Not
-deciding was measured as the alternative, storing each point as the solve left
-it. On the Kerry Park solve from 1° and 5% with 1 px of keypoint noise,
-counting the points whose stored representation disagrees with the test at the
-converged level of 0.77 px:
-
-| Iterations a round | Final level (px) | Decided: dirs, disagree, median (px) | Not decided | Crossing between rounds | Crossing off: disagree, median |
-|---|---|---|---|---|---|
-| 5 | 1.00 | 225, 74, 1.17 | 8, 155, 0.96 | 658, 434, 2.03 | 116, 1.05 |
-| 10 | 0.85 | 185, 34, 1.01 | 8, 151, 0.87 | 537, 303, 1.54 | 115, 1.00 |
-| 20 | 0.77 | 155, 1, 0.90 | 1, 155, 0.77 | 222, 17, 0.90 | 136, 0.78 |
-| 40 (converges) | 0.77 | 158, 1, 0.90 | 1, 158, 0.77 | 218, 16, 0.90 | 155, 0.77 |
-| 60, from 4° and 20% (converges) | 0.77 | 149, 5, 0.89 | 1, 151, 0.77 | 265, 53, 0.96 | 176, 0.84 |
-
-"Not decided" is the same solve with the decision skipped, and the crossing
-between rounds is the rejected alternative of "Why inverse depth". Deciding is
-closer to the converged answer at every budget. The solve's own `ρ` makes few
-points directions, because noise puts the best `ρ` of a far point above zero
-about half the time, so leaving it undecided keeps nearly every far point
-finite. The 20-iteration run does not meet the convergence test, though its
-level has already settled at the converged one, so a rule that decided only
-after convergence would leave it undecided. No budget brings back the mass
-demotion of the crossing between rounds: at five iterations the decision makes
-225 of the 886 points directions, against 658, and the median residual is
-1.17 px, against 2.03.
+deciding, storing each point as the solve left it, is further from the
+converged answer at every budget measured: noise puts the best `ρ` of a far
+point above zero about half the time, so the solve's own `ρ` leaves nearly
+every far point finite. A rule that decided only after convergence would also
+leave undecided a run whose level has already settled at the converged one
+([measurements](bundle-adjustment-measurements.md#deciding-at-the-end-of-an-unconverged-solve)).
 
 **At the default budget an unconverged end is rare, and its level is the
-converged one.** Every caller runs 60 iterations a round. Measured through the
-reconstruction-level adjustment, which is what `sfm xform --bundle-adjust` and
-the viewer's Bundle Adjust run, with each camera's focal and distortion released
-where its model admits them, over thirteen inputs -- the incremental and global
-solves of `seoul_bull_sculpture`, `seattle_backyard`, `kerry_park` and
-`dino_dog_toy` converted to embedded patches and a spline camera
-(`SFMTOOL_FISHEYE` for Kerry Park, `SFMTOOL_PINHOLE` for the others), the Kerry
-Park global solve after `--find-points-at-infinity`, the Kerry Park ground
-truth, the seoul bull
-ground truth, the Kerry Park solve and the seoul bull `sift_files` solve -- each
-clean and from poses perturbed by 0.2° and 1%, 1° and 5%, and 4° and 20% of the
-camera extents with 1 px of keypoint noise: 48 of the 52 solves run (four from
-4° and 20% exit degenerate), 6 of those end with an unconverged final round,
-none of them from a clean start, and in 5 more an earlier round stops on its
-budget and the final round converges. Each unconverged end is compared with the
-same input solved at 3,000 iterations a round, where every round converges:
+converged one.** Every caller runs 60 iterations a round. Of 48 solves of
+thirteen inputs through the reconstruction-level adjustment, with the lenses
+released, 6 end with an unconverged final round, none of them from a clean
+start, and in each the level is within 2% of the level the same input reaches
+when every round converges
+([measurements](bundle-adjustment-measurements.md#unconverged-ends-at-the-default-budget)).
 
-| Input | Start | Level, decided / converged (px) | Directions, decided / converged | Disagree | Disagree at the converged level |
-|---|---|---|---|---|---|
-| seoul bull global solve | 0.2° and 1% | 0.823 / 0.825 | 0 / 3 | 3 | 3 |
-| dino incremental solve | 0.2° and 1% | 1.082 / 1.087 | 1 / 5 | 6 | 6 |
-| Kerry Park global solve, points at infinity found | 1° and 5% | 0.733 / 0.733 | 735 / 737 | 2 | 2 |
-| Kerry Park global solve, points at infinity found | 4° and 20% | 0.311 / 0.311 | 532 / 532 | 0 | 0 |
-| seoul bull `sift_files` solve | 4° and 20% | 0.693 / 0.705 | 34 / 34 | 6 | 6 |
-| seoul bull ground truth | 4° and 20% | 0.672 / 0.670 | 5 / 15 | 12 | 12 |
-
-"Disagree" counts the free points whose stored representation differs from the
-converged solve's, and the last column the same count when the unconverged state
-is decided at the converged solve's level. The levels agree to within 2%, and
-deciding at the converged level changes no point, so where the two answers
-differ it is because the poses and points differ, not the level. The three from
-4° and 20% are solves that failed: their final rounds keep 476 of 4,172, 732 of
-3,007 and 552 of 1,277 observations, and their 3,000-iteration references
-failed too (median residuals of 48.2 px on the seoul bull ground truth,
-165 px on the seoul bull `sift_files` solve and 12.5 px on the Kerry Park
-global solve with points at infinity), so those three rows compare two failed
-states.
+**At short budgets the remaining error is the unconverged state.** At 5 to 20
+iterations a round, deciding at the converged level instead of the measured one
+removes a small part of the disagreement with the converged solve; the rest
+comes from poses and points that are not yet the converged ones, which no level
+corrects. Deciding at the previous round's level or at a median-based level, or
+never demoting a point handed in as a position, disagrees more. Running the
+last round once more disagrees a little less in total but more on some inputs,
+and far more on a solve that has collapsed; what it approximates is a larger
+`max_iters`, which is the caller's to choose
+([measurements](bundle-adjustment-measurements.md#remedies-at-short-budgets)).
+So the decision is read at the final round's measured level whether or not that
+round converged, `converged: false` and the progress line saying when it did
+not.
 
 **`converged` reports the iteration budget, not success.** It says whether the
 final round met its convergence test, and a solve that has collapsed meets it as
-readily as one that has recovered. Of the 48 solves above, 8 more report
-`converged: true` from a collapsed state, and their points are decided all the
-same:
-
-| Input | Start | Final round keeps | Median residual, crossing on (px) | Directions | Crossing off (px) |
-|---|---|---|---|---|---|
-| seoul bull incremental solve | 4° and 20% | 20 of 3,258 | 106.7 | 2 | 89.8, 227 points deleted |
-| seoul bull global solve | 1° and 5% | 63 of 2,921 | 92.1 | 13 | 50.6, 243 points deleted |
-| dino incremental solve | 1° and 5% | 587 of 85,805 | 322.7 | 0 | 249.9, 1,139 points deleted |
-| dino global solve | 1° and 5% | 100 of 81,324 | 311.1 | 0 | degenerate exit |
-| seattle incremental solve | 4° and 20% | 2,257 of 14,448 | 18.1 | 77 | 0.95, 205 points deleted |
-| seattle global solve | 4° and 20% | 909 of 14,386 | 27.8 | 48 | 2.31, 233 points deleted |
-| Kerry Park global solve | 4° and 20% | 724 of 2,797 | 9.2 | 163 | 51.3 |
-| Kerry Park ground truth | 4° and 20% | 640 of 3,767 | 14.8 | 22 | 19.3 |
-
-The Kerry Park incremental solve from 1° and 5% is borderline (30 of 70 kept,
-3.69 px; 5.39 px off). A collapse shows in the final round's kept count and the
-median residual, not in `converged`. It is not specific to the crossing: with
-the crossing off the same starts collapse in six of the eight, and reach 0.95
-and 2.31 px only on seattle, in a draw the five-draw table under "Rough starts
-with the lenses released" below shows to be the one of five where that happens.
-`FreePointDecision` carries `observation_count`, the finite observations the
-level was measured over, which a caller can set against the number it supplied;
-stating the kept fraction in the progress line, so a collapse is visible where
-the decision is reported, is a possible follow-up.
-
-Growth's adjustments end converged in every case measured, all 49 of them, on
-the tracks of the seoul bull, seattle and dino incremental solves, each camera
-of the Kerry Park global solve, the Kerry Park solve and the first camera of the
-Kerry Park ground truth. `rotation_init` validates no rotation
-edge on any of these inputs, which have no far field; on the binding tests'
-synthetic far-field scene its finishing adjustment converges for each of four
-seeds.
-
-**Remedies, measured where budgets are short.** An unconverged end changes the
-answer only at budgets well under the default. From 1° and 5% with 1 px of
-keypoint noise, at 5, 10 and 20 iterations a round, each candidate rule is
-compared with the converged solve of the same input, counting disagreements as
-above:
-
-| Input | Iterations | Level / converged level | As decided | At the converged level | At the previous round's level | At a robust level | No demotion | One more final round | Not decided |
-|---|---|---|---|---|---|---|---|---|---|
-| Kerry Park solve | 5 | 1.30 | 106 | 91 | 236 | 104 | 161 | 87 | 165 |
-| Kerry Park solve | 10 | 1.10 | 78 | 81 | 159 | 94 | 161 | 70 | 163 |
-| Kerry Park solve | 20 | 1.00 | 14 | 14 | 11 | 79 | 161 | 13 | 160 |
-| Kerry Park global solve | 5 | 1.51 | 192 | 160 | 356 | 160 | 137 | 181 | 150 |
-| Kerry Park global solve | 10 | 1.18 | 121 | 114 | 168 | 115 | 137 | 115 | 145 |
-| Kerry Park global solve | 20 | 1.01 | 44 | 42 | 52 | 65 | 137 | 27 | 135 |
-| Kerry Park ground truth | 5 | 1.56 | 10 | 4 | 20 | 5 | 15 | 19 | 26 |
-| Kerry Park ground truth | 10 | 1.81 | 12 | 2 | 18 | 5 | 15 | 14 | 25 |
-| Kerry Park ground truth | 20 | 1.18 | 2 | 0 | 15 | 0 | 15 | 13 | 25 |
-| seoul bull `sift_files` solve | 5 | 1.46 | 9 | 2 | 25 | 2 | 0 | 3 | 0 |
-| seoul bull `sift_files` solve | 10 | 1.25 | 2 | 1 | 16 | 1 | 0 | 2 | 0 |
-| seoul bull `sift_files` solve | 20 | 1.00 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Total | | | 590 | 511 | 1,076 | 630 | 939 | 544 | 994 |
-
-"As decided" is the rule above. "At the converged level" decides the same state
-at a level no solve can know before it converges, and shows how much of the
-error the level accounts for; it is not a bound, and a rule that reads another
-level does better than it in a few rows. "At the previous round's level" decides
-at the level measured at the end of the second round, "at a robust level" at
-1.4826 times the median absolute per-axis residual over the observations the
-final round kept, "no demotion" keeps a position every free point handed in as a
-position, "one more final round" runs the last schedule round again from where
-the solve stopped, at the same budget, and decides there, and "not decided"
-stores the solve's own `ρ`. What the table shows:
-
-- **The level is the smaller part of the error.** Deciding at the converged
-  level takes the total from 590 disagreements to 511. Those 511 come from
-  deciding at poses and points that are not yet the converged ones, which no
-  level corrects.
-- **The previous round's level is higher**, its trim being wider and its poses
-  rougher, and makes more directions: 1,076.
-- **A robust level is lower than the converged one even where the level has
-  settled** (0.59 to 0.61 px on the two Kerry Park inputs at 20 iterations,
-  whose levels are within 1% of the converged 0.77, though the solves have not
-  converged): the residuals have heavier tails than a Gaussian, whose spread
-  the median-based estimate assumes. It makes far points finite that the
-  converged solve stores as directions, 79 against 14 on the Kerry Park solve at
-  20 iterations.
-- **Not demoting is right only where the converged solve makes no direction.**
-  It agrees on the seoul bull `sift_files` solve. On the two Kerry Park solves
-  it leaves every one of the 161 and 137 converged directions finite at every
-  budget, and on the Kerry Park ground truth, whose 9 bearings are handed in as
-  directions, it leaves finite the 15 points the converged solve demotes. It
-  is the asymmetric guard the point-or-bearing work measured and rejected, and
-  it fails here for the same reason.
-- **One more final round** removes 46 disagreements in all, at 0.01 to 0.30 s,
-  converges in 1 of the 12 runs, and is worse than deciding on the Kerry Park
-  ground truth. On the
-  seoul bull global solve from 1° and 5%, which collapses to between 63 and 92
-  kept observations at these budgets, it raises the disagreements from 0 to 3 to
-  between 86 and 117, and at the default budget, on the Kerry Park global solve
-  with points at infinity from 4° and 20%, from 0 to 441. A run to convergence
-  is what it approximates, and that is a larger `max_iters`, which is the
-  caller's to choose.
-
-So the decision is read at the final round's measured level whether or not that
-round converged, `converged: false` and the progress line saying when it did
-not. At the default budget the level of an unconverged end is the converged
-level; at budgets short enough that it is not, what remains is the unconverged
-state, which only more iterations change.
+readily as one that has recovered, so its points are decided all the same. A
+collapse shows in the final round's kept count and the median residual, not in
+`converged`, and it is not specific to the crossing: with the crossing off the
+same rough starts collapse too
+([measurements](bundle-adjustment-measurements.md#collapsed-solves-that-report-convergence)).
+`FreePointDecision::observation_count` is the number of observations the level
+was measured over, which a caller can set against the number it supplied.
 
 **Rough starts with the lenses released.** The crossing changes which rough
 starts the reconstruction-level adjustment recovers from, in both directions,
-and with every lens released neither setting recovers reliably from 4° and 20%.
-Over five perturbation draws each, the median residual after the solve with the
-crossing on and off:
-
-| Input | Start | Crossing on (px) | Crossing off (px) |
-|---|---|---|---|
-| dino global solve | 0.2° and 1% | 1.62 to 2.71 | 5.20 to 32.98 |
-| Kerry Park global solve | 1° and 5% | 0.89, 2.40, 2.13, 1.41, 2.13 | 3.80, 0.94, 1.07, 0.78, 3.39 |
-| Kerry Park global solve | 4° and 20% | 3.18 to 16.03 | 28.20 to 151.61 |
-| Kerry Park ground truth | 4° and 20% | 14.83 to 58.12, lower in four draws | 19.34 to 92.67 |
-| seattle incremental and global solves | 4° and 20% | 18.06 and 27.81 in the first draw; 19.16 to 120.48 in the others | 0.95 and 2.31 in the first draw; 26.19 to 70.12 and one degenerate exit in the others |
-| seoul bull incremental solve | 1° and 5% | 0.81 to 1.10 in three draws; 22.3 and 22.5 in two | 0.82 in three draws; 20.3 and 32.5 in two |
-
-With the lenses held, the first seattle draw recovers with the crossing on as
-well (1.11 and 0.99 px, against 0.93 and 0.90 off).
-
-**What the crossing left at a converged end, inverse depth does not.** From 4°
-and 20% the Kerry Park result disagrees with the test at the converged level on
-5 points at 60 iterations and on 3 at 200 (both converge, at the level of
-0.77 px), where the crossing between rounds left 53 and 35. Read at the
-result's own measured level, which is what `sfm analyze --depth-reliability`
-lists, the counts are 35 and 50: that level is the stored measure over every
-observation, and the 13 observations over 4 px, which the adjustment's last
-trim left out and the stored measure's gate passes, raise it to 0.86 and
-0.89 px, where the decision read the 0.77 px of the observations it solved on.
+and with every lens released neither setting recovers reliably from 4° and 20%
+([measurements](bundle-adjustment-measurements.md#rough-starts-with-the-lenses-released)).
 
 **Cost is the solve's own.** The crossing changes how many iterations the
-rounds take, not what an iteration costs. Seconds, best of five runs alternating
-crossing off and on (three for the 1° and 5% starts and for dino growth, seven
-for `rotation_init`), on the inputs above:
-
-| Caller | Input | Off (s) | On (s) | On / off |
-|---|---|---|---|---|
-| reconstruction-level adjustment | seoul bull incremental solve | 0.169 | 0.151 | 0.89 |
-| reconstruction-level adjustment | seoul bull global solve | 0.292 | 0.471 | 1.62 |
-| reconstruction-level adjustment | seattle incremental solve | 0.904 | 0.746 | 0.83 |
-| reconstruction-level adjustment | seattle global solve | 0.668 | 0.456 | 0.68 |
-| reconstruction-level adjustment | Kerry Park global solve | 0.225 | 0.120 | 0.53 |
-| reconstruction-level adjustment | Kerry Park global solve, points at infinity found | 0.180 | 0.255 | 1.42 |
-| reconstruction-level adjustment | dino incremental solve | 11.903 | 8.852 | 0.74 |
-| reconstruction-level adjustment | dino global solve | 9.965 | 5.480 | 0.55 |
-| reconstruction-level adjustment | Kerry Park ground truth | 0.400 | 0.226 | 0.57 |
-| reconstruction-level adjustment | Kerry Park solve | 0.110 | 0.053 | 0.48 |
-| reconstruction-level adjustment | seoul bull `sift_files` solve | 0.042 | 0.030 | 0.72 |
-| reconstruction-level adjustment | seoul bull ground truth | 0.033 | 0.021 | 0.64 |
-| reconstruction-level adjustment, from 1° and 5% | Kerry Park solve | 0.516 | 0.394 | 0.77 |
-| reconstruction-level adjustment, from 1° and 5% | Kerry Park ground truth | 1.216 | 1.397 | 1.15 |
-| reconstruction-level adjustment, from 1° and 5% | Kerry Park global solve | 0.156 | 0.418 | 2.68 |
-| reconstruction-level adjustment, from 1° and 5% | seattle global solve | 1.516 | 1.833 | 1.21 |
-| `grow_reconstruction` | seoul bull incremental solve | 0.339 | 0.295 | 0.87 |
-| `grow_reconstruction` | seattle incremental solve | 2.445 | 2.103 | 0.86 |
-| `grow_reconstruction` | Kerry Park solve | 0.745 | 0.515 | 0.69 |
-| `grow_reconstruction` | Kerry Park ground truth, first camera | 0.418 | 0.180 | 0.43 |
-| `grow_reconstruction` | dino incremental solve | 46.658 | 27.771 | 0.60 |
-| `rotation_init` | synthetic far-field scene, four seeds | 0.059 to 0.432 | 0.056 to 0.430 | 0.92 to 1.03 |
-
-`rotation_init` has no opt-out, so its "off" column was timed through a switch
-built for the measurement and not kept.
-
-Timed round by round, an iteration costs the same in either parametrisation:
-3.4 ms off and 3.6 ms on for the seoul bull global solve, and 1.198 s and
-1.209 s for the 11 iterations of the first round of the dino global solve. The
-re-estimation under the crossing costs 0.08 to 0.09 s a round on the dino global
-solve, against 0.03 off, and the decision 0.015 s. The slower runs take more
-iterations: the seoul bull global solve takes 59, 16 and 17 iterations a round
-off and 60, 60 and 17 on; the Kerry Park global solve with points at infinity,
-13, 11 and 11 off and 28, 6 and 9 on; the seattle global solve from 1° and 5%,
-39, 11 and 36 off and 53, 22 and 24 on; the Kerry Park ground truth from 1°
-and 5%, 29, 25 and 37 off and 25, 33 and 55 on. The dino global solve saves the same
-way, with 11, 32 and 34 off and 11, 6 and 26 on. The Kerry Park global solve
-from 1° and 5% takes longer because its second round runs the whole budget and
-the solve recovers, to 0.886 px, where with the crossing off that round stops
-after 15 iterations and the solve ends at 3.797 px. The time is spent on the
-path the solve takes rather than on any step the crossing adds, so the
-crossing's own work holds nothing to remove.
+rounds take, not what an iteration costs: an iteration costs the same in either
+parametrisation, and the re-estimation and the decision under the crossing add
+hundredths of a second a round on the dino global solve. Over the callers
+and inputs measured the solve with the crossing takes 0.43 to 2.68 times the
+time it takes with the crossing off, and the slower runs are the ones whose
+rounds take more iterations
+([measurements](bundle-adjustment-measurements.md#cost)).
 
 **Inverse depth is the crossing, not a second switch.** The two halves are not
 useful apart. Inverse depth without the decision stores the solve's own `ρ`,
-which leaves almost every far point finite (the "Not decided" column above: 151
-to 158 disagreements at the converged level where the decision leaves 1 to 74),
-and a decision on a point carried through the solve as a position or a
-direction reads the score that representation has pulled toward itself (the
-synthetic measurement above). With the switch off every free point keeps the
+which leaves almost every far point finite (see the decision at an unconverged
+end, above), and a decision on a point carried through the solve as a position
+or a direction reads the score that representation has pulled toward itself
+("Why inverse depth"). With the switch off every free point keeps the
 representation it is handed in, which is what a caller that opts out relies
 on.
 
@@ -1437,72 +1225,12 @@ clean inputs run from 0.19 px on the Kerry Park solve to 1.05 px on
 `dino_dog_toy`. The level comes from the final round's kept observations, the
 residuals the solve has just minimised, whose trim capped every residual it
 kept at 4 px by default, which bounds what a gross outlier the gate passes can
-add.
-
-#### Measured against the crossing between rounds
-
-The default schedule over the four inputs of the point-or-bearing work, clean
-and degraded (poses perturbed by 0.2° and 1% of the camera extents, 1 px of
-keypoint noise, both, and 1° and 5% with 1 px), and the same 1° and 5% start
-with five iterations a round, every free point crossing and the focal held.
-"Disagree" counts the points whose stored representation the test at the
-result's own measured noise disagrees with; "dirs" are the directions in and
-out. Every default-iteration run converges.
-
-| Input | Start | Between rounds: dirs, disagree, median (px) | Inverse depth: dirs, disagree, median (px) |
-|---|---|---|---|
-| Kerry Park ground truth | clean | 9 → 9, 0, 0.167 | 9 → 3, 0, 0.165 |
-| Kerry Park ground truth | 1 px keypoints | 9 → 12, 0, 1.016 | 9 → 12, 0, 1.022 |
-| Kerry Park ground truth | 0.2° and 1%, 1 px | 9 → 12, 1, 1.018 | 9 → 12, 1, 1.021 |
-| Kerry Park ground truth | 1° and 5%, 1 px | 9 → 12, 1, 1.018 | 9 → 12, 1, 1.019 |
-| seoul bull ground truth | clean | 14 → 14, 0, 0.256 | 14 → 13, 0, 0.254 |
-| seoul bull ground truth | 1 px keypoints | 14 → 14, 0, 0.913 | 14 → 14, 0, 0.913 |
-| seoul bull ground truth | 0.2° and 1%, 1 px | 14 → 14, 0, 0.911 | 14 → 14, 0, 0.912 |
-| seoul bull ground truth | 1° and 5%, 1 px | 14 → 14, 1, 0.921 | 14 → 14, 0, 0.925 |
-| Kerry Park solve | clean | 0 → 0, 0, 0.173 | 0 → 0, 0, 0.173 |
-| Kerry Park solve | 1 px keypoints | 0 → 174, 27, 0.863 | 0 → 134, 7, 0.869 |
-| Kerry Park solve | 0.2° and 1%, 1 px | 0 → 213, 34, 0.892 | 0 → 161, 2, 0.899 |
-| Kerry Park solve | 1° and 5%, 1 px | 0 → 218, 33, 0.897 | 0 → 161, 10, 0.901 |
-| seoul bull `sift_files` solve | every start | 0 → 0, 0 | 0 → 0, 0 |
-| Kerry Park ground truth | 1° and 5%, 5 iterations | 9 → 43, 78, 3.75 | 9 → 27, 83, 1.39 |
-| seoul bull ground truth | 1° and 5%, 5 iterations | 14 → 24, 114, 4.29 | 14 → 13, 87, 1.51 |
-| Kerry Park solve | 1° and 5%, 5 iterations | 0 → 658, 58, 2.03 | 0 → 225, 272, 1.17 |
-| seoul bull `sift_files` solve | 1° and 5%, 5 iterations | 0 → 75, 228, 6.29 | 0 → 9, 276, 2.81 |
-
-On the converged Kerry Park runs the disagreements fall from 27 to 34 to 2 to
-10, and the directions from 174 to 218 to 134 to 161: the crossing between
-rounds left marginal far points still settling as directions when the three
-rounds ended, and inverse depth settles them within the rounds. The
-disagreements on the converged degraded runs are read at the result's own
-level, a little above the level the decision read; at the decision's level
-every converged run in the table agrees with the test on every point. On the
-clean Kerry Park ground truth the solve makes 6 of its 9 bearings finite
-(156, 157, 176, 268, 269 and 270), where the crossing between rounds makes
-none. The six score 9 to 16 at the input, 9 to 16 after the solve that carries
-them as directions, and 28 to 34 after the one that carries them in inverse
-depth. They are depth
-the capture supports. Rebuilt synthetically on the Kerry Park ground truth's
-own geometry -- its poses, lenses and finite points, with the observation
-patterns of its 9 bearings repeated five times (45 far tracks) and 0.21 px of
-noise, over four draws (ten for the tracks truly at infinity) -- tracks that
-are truly at infinity are made finite by the inverse-depth solve in 0 of 450
-cases (mean score 0.5 to 1.8, against 0.2 to 1.1 at the true poses). Tracks
-truly 2,500 m out score about 37.9 to 42.8 at the true poses and 41.3 to 46.1
-after the inverse-depth solve, which makes 166 of 180 finite, but about 3.8 to
-4.6 when carried as directions: the crossing between rounds makes 2 of 180
-finite and the crossing off 0. At 5,000 m 9 of 180 are finite at the true
-poses and 26 of 180 after the inverse-depth solve. A lens error moves the
-scores of true bearings further in inverse depth than when they are carried as
-directions: with the focal 1% off, the mean score of the truly infinite tracks
-is about 58 to 66 against about 35 under the crossing between rounds, and 1 of
-180 is made finite; with it 0.3% off, the mean score is about 7 to 9 against
-about 4, and none is made finite. The five-iteration
-disagreements are read at the result's own level, which unconverged poses put
-at 3.1 to 12 px on the three inputs other than the Kerry Park solve, a level at
-which the test calls most points bearings; the decision's level, read over the
-observations the final round kept, is 1.0 to 1.3 px there. Those runs leave 28
-to 315 points unscored, each in the representation it was handed in with. No input produced a
-`NaN` point.
+add. The level `sfm analyze --depth-reliability` reports for a result is the
+stored measure over every observation, including those the adjustment's last
+trim left out, so it can be higher than the level the decision read, and a
+point it lists as disagreeing with its stored representation can be one the
+decision stored as the test said
+([measurements](bundle-adjustment-measurements.md#disagreements-left-at-a-converged-end)).
 
 ### Ranged points: a direction at a distance
 
@@ -1631,8 +1359,7 @@ directions keeps its translation live, which is what a surveyed landmark is for.
   each, over six rounds, the thirty points 250 to 395 units out, whose rays
   carry a depth at the converged level but not at three pixels, and every near
   point end finite with three iterations a round and with 60, and the decision
-  makes no point a direction. (The crossing between rounds made at least 25 of
-  them directions at its first re-estimation with three iterations a round.)
+  makes no point a direction.
 - **Held points**: their coordinates come back to the bit while free points
   move, and their observations still carry residuals; an image whose only
   finite evidence is one held point solves its translation, where the same
@@ -1731,7 +1458,8 @@ matches so the trim never discards them.
   or dominating a well-supported fit. The widened scale is applied per
   observation inside the solve (cost and Triggs weighting); nothing else in
   the LM changes. Note the saturated cost is still *linear* in the residual
-  — protection is vouching, not a safety net: enough mutually inconsistent
+  — protection states that the caller trusts the observation, and does not
+  bound the harm a wrong one does: enough mutually inconsistent
   protected pixels can outweigh the clean majority's fit, so the caller
   marks only observations whose evidential standing warrants exactly that
   trade.

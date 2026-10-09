@@ -153,8 +153,8 @@ crossing off. Every adjustment growth runs ends with a converged final round on
 the real tracks measured (49 adjustments over the seoul bull, seattle, dino
 and Kerry Park solves and the Kerry Park ground truth), so the storage decision
 is read at a converged level, and growth with the crossing takes 0.43 to 0.87 of the time it takes
-with the crossing off ([bundle-adjustment.md](bundle-adjustment.md) § "Cost is
-the solve's own").
+with the crossing off
+([bundle-adjustment-measurements.md](bundle-adjustment-measurements.md#cost)).
 
 Everything covisibility-driven here rests on the dense cluster
 covisibility, which is only built up to `MAX_DENSE_IMAGES` (4096) images.
