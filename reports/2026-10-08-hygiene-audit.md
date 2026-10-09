@@ -649,7 +649,7 @@ These figures were measured at `18b1f970` on 2026-10-08. They are not permanent 
 
 ## Top 3
 
-> _Status (2026-10-08): item 1 is done by PR #868._
+> _Status (2026-10-09): item 1 is done by PR #868, and item 3 by PR #870._
 
 1. **Unbind the colliding root names before #866 merges.** It is low effort, and it prevents an API hazard that this round's own rename created.
 2. **Turn on `unreachable_pub` in `sfm-explorer`.** One lint and one `cargo fix` turn an 839-site prose rule into one that CI enforces.
