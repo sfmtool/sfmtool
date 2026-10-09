@@ -189,7 +189,8 @@ pub(super) fn delete_point(state: &mut AppState, label: &str, query: &PointQuery
 /// A point edit, and it finishes inside the call: one track's rays are a
 /// microsecond of arithmetic whatever the reconstruction's size. The reply is
 /// the edit's own Action Log sentence, which carries what the operation did to
-/// the point -- its verdict, such as finite or at infinity, and unchanged --
+/// the point -- its verdict, such as finite or at infinity, and whether its
+/// geometry is unchanged --
 /// and the new index a rewritten point took, so an agent learns what the
 /// observations supported and where to find the point next, not merely that
 /// something moved.

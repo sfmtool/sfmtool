@@ -302,7 +302,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           since it renumbers the images they are in. Both the cluster and the track block carry \
                           zncc_middle beside zncc: the same samples correlated over only the \
                           middle square of the patch, half its width (rows and columns R/4 to \
-                          R - R/4 of the patch grid, R being its size, given below). A high zncc with a low zncc_middle is an agreement \
+                          R - R/4 of the patch grid, R being its size, given below). A high \
+                          zncc with a low zncc_middle is an agreement \
                           carried by the parts of the patch away from the pixel, such as a \
                           background behind a small near object, the far side of a depth edge, \
                           or a texture that repeats along the epipolar line. zncc_middle is null \

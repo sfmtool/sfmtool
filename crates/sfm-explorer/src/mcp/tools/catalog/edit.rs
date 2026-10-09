@@ -130,8 +130,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           which the reply's report names ('now point N') along with what its \
                           observations supported - a verdict such as finite, at infinity or \
                           'behind a camera that sees it, so at infinity' - and 'unchanged' where \
-                          the answer is the \
-                          geometry it had. A point the reconstruction holds at a fixed \
+                          the answer is the geometry it had. A point the reconstruction holds at a fixed \
                           coordinate is refused, and a point fewer than two of whose \
                           observations state a usable ray keeps the geometry it had. Undo puts \
                           it back.",

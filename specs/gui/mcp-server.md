@@ -3426,9 +3426,11 @@ then `unchanged` where the answer is the geometry the point had, and last `now
 point N` where the point was rewritten and took index `N`. The verdict's words
 are `PointVerdict::label` in
 [`points.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/points.rs)
-and the rest is `RetriangulateOutcome`'s `Display` in
+the prune count and `unchanged` are `RetriangulateOutcome`'s `Display` in
 [`retriangulate.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs),
-so the Action Log and the wire say the same words:
+and `AppState::retriangulate_point` in
+[`state/edits.rs`](../../crates/sfm-explorer/src/state/edits.rs) adds `now point
+N`, so the Action Log and the wire say the same words:
 
 ```text
 Retriangulated point 1207 in seoul_bull: finite, now point 5310 (v3 → v4)
