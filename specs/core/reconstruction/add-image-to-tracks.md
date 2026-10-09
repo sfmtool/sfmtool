@@ -19,10 +19,7 @@ It answers a narrower question than the bench's evaluation
 congealing all of its observations together, which moves every keypoint and puts
 the view being judged into the consensus it is judged against. Here the existing
 observations are the reference and are not touched; only the new view's
-keypoint is searched for, against a consensus it did not contribute to. That is
-the question the localizer's consensus-basis tail registration asks
-([keypoint-localization-consensus-basis.md](../patch/keypoint-localization-consensus-basis.md),
-Phase B), with the basis supplied rather than congealed.
+keypoint is searched for, against a consensus it did not contribute to.
 
 ## Rust API
 

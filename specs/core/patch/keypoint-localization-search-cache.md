@@ -1,180 +1,90 @@
-# Per-View Cache + SIMD Search for Keypoint Localization
+# Context Tile and SIMD Search for Keypoint Localization
 
-Keypoint localization slides a small patch template over a window of each view
-and scores the match, and that discrete search is the single step that dominates
-`sfm embed-patches`. This spec covers the two things that make it cheap: a
-per-view context cache rendered **once** instead of once per congealing round,
-and hand-written AVX2 kernels that score the whole shift grid at full
-resolution. It models its structure on the
-[fronto-parallel patch cache](fronto-parallel-patch-cache.md) — render once,
-score many — and accelerates the congealing algorithm specified in
-[patch-keypoint-localization.md](patch-keypoint-localization.md).
+Keypoint localization places each view of a 3D point by sliding the view's patch
+tile over a small window and scoring, at every shift, how well it matches the
+point's reference render; that discrete search, and the render it reads, are
+most of the time `sfm embed-patches` spends localizing. This spec covers what
+makes them cheap: each view's **context tile** rendered once, wide enough for
+every shift the search tries, and hand-written AVX2 kernels that score shifts
+from it, either the whole shift grid at once or one cell at a time along a
+local descent. The algorithm they serve is specified in
+[patch-keypoint-localization.md](patch-keypoint-localization.md); the structure
+follows the [fronto-parallel patch cache](fronto-parallel-patch-cache.md):
+render once, score many.
 
-Its scope is the **integer** search only: the discrete search, view selection
-and consensus, whose job is to land each keypoint in the right integer cell (the
-basin). Getting from there to true sub-pixel is a separate, independent
-algorithm,
-[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), which
-consumes this one's output as a seed. The design is the regular full-resolution
-integer grid made cheap by SIMD, not a reduced-resolution search; a resolution
-multiplier exists as a knob but is not the expected path (see "Search resolution
-multiplier").
+Its scope is the **integer** search: landing each keypoint in the right integer
+cell, with a parabolic estimate of the sub-pixel step. Getting from there to an
+accurate sub-pixel keypoint is a separate algorithm,
+[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), which takes
+this one's output as its seed.
 
-## Problem
+## Where it lives
 
-During keypoint localization the patch frame and normal are **fixed**
-(refinement already ran); only each view's in-plane offset moves across rounds.
-Yet the current loop, per round, **re-renders** each view's `cr×cr` context tile
-from the source (`render_context`) and then slides an integer windowed-ZNCC
-search over it (`search_shift`). On the dino reconstruction (85 imgs @
-2040×1536, 19 024 pts):
-
-| Phase | Share of `localize` | Notes |
-|---|---|---|
-| `search_shift` | 55.9% | 1.44 M calls, 241 µs each (post-reformulation) |
-| `render_context` | 32.9% | one `cr×cr` warp+remap per view **per round** |
-| `loo_template` | 10.4% | leave-one-out consensus build |
-
-Measured sizes (the defaults `KeypointLocalizeParams` carries): `R = 24`
-(resolution), `search = 6`, `margin = ⌈search⌉ = 6`, `span = 2·margin+1 = 13`
-(the `13×13 = 169` shift grid), `cr = R + 2·margin = 36`, support `n ≈ 452` (the
-`GaussianDisk` unit disk over `R²`), `channels ≈ 3` (RGB). The reformulated
-search does `channels·n·span²·3 ≈ 0.69 M` FMA per call at 241 µs ≈ **~5.7
-GFLOP/s — ~25% of one core's f64 AVX2 peak**, i.e. the inner loop is *not* well
-vectorized. There is ~4× headroom in f64, ~8× in f32, plus the renders are a
-second large slice that is mostly redundant work.
-
-## Idea
-
-Two compounding changes:
-
-1. **Render one expanded cache per view, once.** The base the whole round loop
-   reads from — both the leave-one-out consensus build *and* every round's
-   search — instead of re-warping per round.
-2. **Hand-roll the search as a register-blocked AVX2 kernel** over that cache,
-   in centered `f32` (an integer `i16` form was measured and is slower; see
-   [Why the correlation stays `f32`](#why-the-correlation-stays-f32)).
-
-### Why render-once is exact, not an approximation
-
-During localization the patch `(center, u, v, normal)` is fixed; the only
-per-round change is the in-plane offset (patch-grid px). A grid pixel `(g)`
-rendered at offset `δ` samples the source at `project(center + (g+δ)·axes)` —
-which is exactly the cache sample at grid position `g+δ`. So **reading the cache
-at an integer-shifted position is bit-identical to re-warping the patch at that
-offset.** The current per-round re-render recomputes those same samples.
-
-This exactness holds only for **integer** shifts, so the congealer tracks an
-**integer** read accumulator `iacc` (the cache index it reads consensus cores
-and search candidates from) separately from the **sub-pixel residual** the
-parabolic estimate accumulates. The residual feeds convergence detection and the
-hand-off seed (below) but is **never folded back into the read position** — if it
-were, the reads would become fractional and we would forfeit the exactness (back
-to a bilinear resample per candidate). With integer-tracked reads, *every* cache
-read in the loop is exact; the cache is an exact restructuring, not a
-fronto-cache-style affine approximation. (The accurate sub-pixel offset is then a
-separate algorithm — see "Sub-pixel hand-off" below.)
-
-## The cache
-
-The cache (`ContextTile` / `render_context`, with padded `cache_istride` rows)
-lives in
-[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs)
-and the AVX2 search kernels (`compute_channel_grids_avx2` for the dense grid,
-`score_cell_one_channel_avx2` for the "+"-descent per-cell path) in
-[keypoint_localize/kernels.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/kernels.rs),
-with scalar fallbacks retained and dispatched at runtime; opt-in phase timing is
-in
+The context tile (`ContextTile`, `render_context`, with padded `cache_istride`
+rows) is in
+[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs),
+the two searches (`search_shift` for the whole grid, `search_shift_plus_descent`
+for the descent) and their reused `SearchScratch` in
+[keypoint_localize/search.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/search.rs),
+and the AVX2 kernels (`compute_channel_grids_avx2` for the whole grid,
+`score_cell_one_channel_avx2` for one cell) with their scalar fallbacks,
+dispatched at runtime, in
+[keypoint_localize/kernels.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/kernels.rs).
+Opt-in phase timing (`SFMTOOL_PROFILE=1`) is in
 [keypoint_localize/prof.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/prof.rs).
+None of it is public: a caller chooses the search through
+`KeypointLocalizeParams::search_strategy` and sizes it through
+`KeypointLocalizeParams::search`, and can ask what one view's tile costs with
+`view_cache_bytes(params, channels)`.
 
-Per view, render once at the seed (`acc = 0`, i.e. centered on `project_i(X_p)`):
+Sizes at the defaults: `R = 24` (resolution), `search = 6`, `margin =
+⌈search⌉ = 6`, the shift grid `span = 2·margin + 1 = 13` on a side (169 cells),
+the context tile `R + 2·margin = 36` on a side, the support `n ≈ 452` pixels
+(the `GaussianDisk` window over `R²`), and 3 channels (RGB).
 
-- **Geometry / size.** The window centre can reach `acc + d` where `|acc| ≤
-  search` (the clipped accumulated drift) and `|d| ≤ margin` (the in-round
-  search), so it spans `±2·search`; the window itself extends `±R/2`. The cache
-  must cover `R + 4·search` per axis (`= 48` at the defaults). A view held out
-  of the consensus by the
-  [consensus-basis cap](keypoint-localization-consensus-basis.md) runs one
-  search around its own seed and so needs no drift headroom: its cache is
-  `R + 2·search`. The frame
-  orientation is the patch's fixed `(u, v)`; pixels map to the patch grid 1:1
-  (no supersampling — see below).
-  - *Alternative (smaller cache):* clamp the **search window** to a global
-    `±search` (not just the accumulated `acc`). Then the centre stays in
-    `±search`, the cache is `R + 2·search = 36` (today's tile size), and one
-    render still covers every round. This is a minor change to the search
-    semantics (the probe can no longer transiently exceed `±search` mid-round)
-    and must be validated against the reference; if equivalent, prefer it.
-- **Rendering.** The same `WarpMap::from_patch` + `remap_*` path
-  `render_context` uses, just over the expanded grid and once per view. The
-  source pyramid is touched **once per view** (today: once per view per round).
-- **Format / layout.** Planar **per channel**, **centered** `f32`:
-  `plane[c][row·istride + col]`, value `I − c̄_c` where `c̄_c` is that channel's
-  mean over the cache. Centering is load-bearing (next section). The row stride
-  is padded so a 16-wide aligned load from any support column is in bounds:
-  `istride = align_up(cacheW − 1 + 16, 8)`; pad columns hold `0` (= the mean,
-  harmless — they only feed discarded grid cells).
-- **Validity.** One per-pixel invalidity plane (`1.0` out of frame else `0.0`),
-  built with the cache. A search window with any invalid support pixel is
-  unscorable (`−∞`), exactly as `extract_core` returning `false` today.
+## The context tile
 
-## Round loop with the cache
+For each view other than the reference, the localizer renders one tile,
+centred on the view's starting keypoint: the `R×R` core extended by `margin`
+grid px on every side, so `R + 2·margin` on a side. The search reads every
+candidate shift `(dy, dx)`, `|dy|, |dx| ≤ margin`, from that one tile, and the
+member self-similarity gate reads the core at the zero shift from it too.
+The reference's own render, the template, is a tile of side `R` with no margin.
 
-```
-once per view:   render the view's expanded cache (planar centered f32 + validity)
-each round:
-   per view:   read the current R×R core from its cache at integer iacc   (no render, exact)
-               z-normalize → contribute to the leave-one-out consensus
-   per view:   integer search within its cache vs the LOO consensus → grid
-               argmax → integer δ_int; parabolic(grid) → δ_sub
-               iacc += δ_int   (clip);   residual_v = δ_sub
-   drop failing views (max_shift_px / LOO-ZNCC / out-of-frame)
-   converge when the mean round-over-round change of each view's refined
-   position (iacc + residual, this round vs last) < convergence_px
-   AND no view was dropped this round (a drop changes the consensus the
-   survivors registered against, so they get >= 1 more round against the
-   survivor-only template)
-```
+**Why reading the tile at an integer shift is exact.** During localization the
+patch's centre, axes and normal are fixed; only the in-plane offset varies. A
+grid pixel `g` rendered at offset `δ` samples the source at
+`project(center + (g + δ)·axes)`, which is exactly the tile's sample at grid
+position `g + δ`. So reading the tile at an integer shift is bit-identical to
+rendering the patch at that shift, and the search touches the source pyramid
+once per view. The exactness holds only for **integer** shifts, which is why
+the search reads integer cells and keeps its sub-pixel step as a separate
+parabolic estimate that never becomes a fractional read.
 
-**The leave-one-out consensus is built in Gram space.** The direct form —
-copy the other views' z-normalized rows into a compacted stack per (view,
-round), run the IRLS over pixels, build the unit template — dominates the round
-loop (3.59M calls, 170 s CPU, 29.5% of `localize` on dino). The IRLS recursion
-touches the pixel data only through inner products, so the loop instead makes
-**one shared per-round accumulation**, the live-view Gram matrix
-`G[a][b] = ⟨x_a, x_b⟩` in f64 (`build_loo_gram`), and runs every holdout's IRLS
-entirely in that space: `r_u² = G[u][u] − 2(Gw)_u + wᵀGw`, then the exact shared
-Tukey/MAD reweight. Only the final unit template is materialized in pixel space,
-skipping the held-out row in place, with no holdout stack copied. In real
-arithmetic this is the same computation as the per-holdout form — same uniform
-init, same iteration count, same degenerate early-out — and the float output
-differs only at accumulation order, which the
-`incremental_loo_template_matches_reference` test bounds.
+**Rendering** is the same `WarpMap::from_patch` and remap every patch render
+uses, with the sampler chosen once for the view at its starting keypoint. Pixels
+map to the patch grid one to one; there is no supersampling.
 
-**Convergence is a round-over-round change, not an absolute search output.** The
-tracked quantity is each live view's refined position `iacc + residual`, scaled
-to patch-grid pixels when the supersampling factor `m ≠ 1`; a view with no
-scorable window contributes `0`, because its position did not move. Summing the
-absolute `|δ_int + δ_sub|` per round instead would never fire: the parabolic
-`δ_sub` is recomputed from scratch each round and never feeds back into the read
-position, so it holds a ~0.1–0.5 grid-px floor and every point runs all
-`max_iters` rounds (5.00 average rounds per point on dino).
+**Layout.** Planar per channel, in **centered `f32`**:
+`plane[c][row·istride + col]` holds `I − c̄_c`, where `c̄_c` is that channel's
+mean over the tile. Centering is what makes `f32` accurate (below). Rows are
+padded so a 16-wide aligned load from any support column stays in bounds:
+`istride = align_up(side − 1 + 16, 8)`; the pad columns hold `0` (the mean after
+centering), which only feeds grid cells that are discarded.
 
-Both the consensus-core read and the search candidates are at **integer** cache
-positions (`iacc`, `iacc + d`), so they are mutually aligned and exact. `δ_sub`
-is the parabolic estimate off the discrete grid; it contributes to the tracked
-position `iacc + residual` (whose round-over-round change gates convergence)
-and seeds the sub-pixel hand-off, but does not move `iacc`. Reads are L1 hits (a view's
-cache is `cacheW²·channels·4 B ≈ 27 KB` at `cacheW = 48`, ~15 KB at 36). The
-`render_context` phase collapses from per-(view, round) to per-view.
+**Validity.** A per-pixel invalidity plane (`1.0` out of frame, else `0.0`) is
+built with the tile in the same row layout, beside a `bool` validity map. A
+shift whose window has any out-of-frame support pixel cannot be scored.
 
-Building the consensus from integer-aligned cores (vs the reference's
-fractionally-rendered cores) is a sub-px behaviour change — see Validation.
+**Memory.** At the defaults one view's tile is about 15 KB and stays in L1
+while it is searched. The side grows with `search`, so the tile grows as its
+square; the tile planes and the shift grids are reserved fallibly
+([patch-keypoint-localization.md](patch-keypoint-localization.md#implementation-details)).
 
-## Search kernel (centered f32, register-blocked AVX2)
+## The search kernel (whole grid, centered f32, register-blocked AVX2)
 
 Windowed ZNCC over the shift grid, per kept channel `c`, as three correlation
-maps (already implemented scalar; this is the AVX2 form):
+maps:
 
 ```
 Ncross_c(s) = Σ_k kern_c[k]·I_c[s+k]     kern_c[k] = √w[k]·tmpl_c[k]
@@ -184,13 +94,15 @@ zncc_c(s)   = (Ncross_c − mean_c·Σ√w·tmpl_c) / √(S2_c − S1_c²/W)   (
 ZNCC(s)     = (1/channels) Σ_c zncc_c(s)        mean_c = S1_c/W
 ```
 
-(`s` runs over the `span×span` grid; `W = Σ w`. The mean term is carried
-explicitly so the result is algebraically identical to z-normalize-then-dot for
-any template.)
+(`s` runs over the `span×span` grid; `W = Σ w`. The template is the reference
+render's core, z-normalized with `√w` folded in. The mean term is carried
+explicitly, so the result is algebraically identical to z-normalizing each
+candidate core and taking its dot product with the template.)
 
-**Register-blocked loop**, order **channel → grid-row `gy` → support `k`**,
-holding the row's accumulators in registers across the `k`-loop so the image
-streams through once and the grids never round-trip to memory in the hot loop:
+**Register-blocked loop**, in the order channel → grid row `gy` → support pixel
+`k`, holding the row's accumulators in registers across the `k` loop so the
+tile streams through once and the grids never round-trip to memory in the hot
+loop:
 
 ```
 for c in channels:                         // plane_c (centered), kern_c, w, Σkern_c
@@ -207,272 +119,160 @@ for c in channels:                         // plane_c (centered), kern_c, w, Σk
     combine this row's `span` cells → zncc_c, add into the combined grid
 ```
 
-Inner loop: **2 loads, 2 mul, 6 FMA, 2 broadcasts** for 16 lanes; ~12 YMM live
-(≤16). The three maps share each `src` load (high arithmetic intensity); the
-`span→16` padding wastes ~19% lanes (acceptable). The whole plane is in L1, so
-every load hits L1.
-
-**Combine** (per row, after the `k`-loop): `zncc_c` for the row's `span` cells
-(scalar, or AVX2 `rsqrt` + one Newton step over `span` lanes), accumulated into
-the combined grid. `~span²·channels` cells — small.
-
-**Validity**: a separate single-accumulator pass over the invalidity plane (same
-structure, channel-independent) masks `−∞`. **Argmax + separable parabolic
-sub-pixel** are unchanged from `search_shift_ref`.
+The inner loop is 2 loads, 2 multiplies, 6 FMAs and 2 broadcasts for 16 lanes,
+with about 12 YMM registers live. The three maps share each load; padding the
+13-cell row to 16 lanes wastes about 19% of them. The combine step (per row,
+after the `k` loop) is scalar over `span` cells per channel, which is small.
+A separate single-accumulator pass over the invalidity plane, with the same
+structure, marks unscorable shifts. The argmax and the separable parabolic
+sub-pixel fit follow.
 
 ### Why centering enables f32
 
-The denominator `S2 − S1²/W` is a catastrophic-cancellation trap in `f32`
-(`S2 ~ 10⁷`). Centering the cache by the per-channel mean makes `S1 ≈ 0` and
-`S2 ≈ variance·W` (small), so the cancellation vanishes and `f32` is accurate —
-which buys the 8-lane width over 4-lane `f64`. The numerator is recovered
-exactly: `Ncross = Ncross' + c̄·Σkern`. Centering is the layout decision that
-makes the `f32` kernel both fast and correct.
+The denominator `S2 − S1²/W` cancels catastrophically in `f32` when `I ~ 10²`
+(`S2 ~ 10⁷`). Centering the tile by the per-channel mean makes `S1 ≈ 0` and
+`S2 ≈ variance · W`, so the cancellation goes away and `f32` is accurate, which
+buys the 8-lane width over 4-lane `f64`. The numerator is recovered exactly:
+`Ncross = Ncross' + c̄·Σkern`.
 
-### Why the correlation stays `f32`
+## Search strategy: whole grid or "+"-descent
 
-The source is `u8`, so the cache could be `u8`/`i16` and the accumulation could
-use integer SIMD. `Ncross` (`Σ kern_q·I`) and `S1` (`Σ I`) convert to integers
-cleanly, but `S2 = Σ w·I²` does not: `I²` is 16-bit, the per-pixel Gaussian
-weight does not fuse into `_mm256_madd_epi16`, and an `i32` accumulator can
-overflow over about 450 pixels. The integer form that avoids this normalizes
-with an unweighted box window, which approximates the ZNCC denominator rather
-than reproducing it.
+`KeypointLocalizeParams::search_strategy` chooses which cells of the
+`(2·margin+1)²` shift grid are scored. Both strategies share the tile, the
+support, the template and the result: the integer peak, its sub-pixel
+parabolic refinement from the peak's axis neighbours, and the ZNCC at the
+integer peak.
 
-A prototype of that form (scalar reference plus AVX2 `vpmulld`/`vpaddd` over
-`i32` lanes, with a `u8` cache plane) was measured against the `f32` kernel on
-dino (18 961 points) and was not merged:
+The choice is coupled to the kernel:
 
-- It was about 5 % slower (98.7 µs per `search_shift` call against 93.6 µs).
-  `vpmulld` costs more than FMA, and `i32` lanes hold no more cells per register
-  than `f32` lanes. Gathering cache samples, not the multiplies, takes about
-  88 % of `search_shift`, so a `madd_epi16` lane-packing design would not remove
-  the main cost either.
-- Its argmax differed from the `f32` kernel's on 14.7 % of calls, although the
-  kept point count was the same.
-
-The `search_acc`, `search_combine` and `search_argmax` sub-phase timers in
-`keypoint_localize::prof`, which located the gather cost, come from that
-measurement.
-
-## Sub-pixel hand-off
-
-This spec covers **integer refinement only**: the discrete cross-view search,
-view selection, and consensus, accelerated by the cache. The parabolic estimate
-it computes stays *inside* the integer solve — it detects convergence and seeds
-the next stage — but the cache reads remain integer (above), so this spec never
-produces an accurate fractional keypoint.
-
-The accurate sub-pixel offset is a **separate algorithm**: a continuous
-photometric (ECC / Lucas–Kanade) solve that optimizes the image objective with
-gradients, run once after this converges, seeded by `iacc + residual`. It is
-specified in
-[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md). Keeping it
-separate is what lets the integer search stay integer-exact.
-
-> _The sub-pixel refiner now has its own render-once tile (`RefineTile`,
-> 2026-07): the same "render one expanded frame-oriented tile per view" idea,
-> but with **fractional** cubic-spline reads (prefiltered B-spline
-> coefficients) plus stored analytic gradient planes, since the continuous GN
-> solve cannot restrict itself to integer reads. Its exactness contract is
-> therefore weaker than this cache's bit-exact integer reads — see the
-> "Render-once context tile" section of
-> [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)._
-
-## Search resolution multiplier (`f32`) — an available knob, not the plan
-
-The expectation is to run the **full-resolution** integer grid (`R`) and let SIMD
-carry the cost; we don't expect to reduce resolution. This knob is documented as a
-fallback in case SIMD isn't enough, not as the intended path.
-
-A configurable multiplier `m` (`f32`, **default `1.0`**) sets the **search
-resolution** `R_s = round(m·R)`: the cache, support, window, and shift grid are
-built at `R_s`. Its cost scales with the support count `n ∝ R_s²` (and the grid
-`span_s`), so `m < 1` is a smooth speed fallback — `m = 0.5` quarters `n`
-(~452 → ~113). It's safe here only because of the two-stage split: the grid search
-just has to land the right **integer cell**, and the separate fine tune recovers
-true sub-pixel accuracy at full resolution; a lower `R_s` smooths the ZNCC surface
-but keeps the peak within `1/m` patch-px of the true offset.
-
-The multiplier is **orthogonal to the search strategy** — it changes the
-*correlation resolution*, not which candidates are visited (not coarse-to-fine
-pruning). Units: an integer step in the `R_s` grid is `1/m` patch-px, so the found
-shift is scaled by `1/m` back to patch-px for the accumulator and the fine-tune
-seed. The cache's integer-shift exactness holds unchanged at `R_s`.
-
-Expose it as `KeypointLocalizeParams { search_resolution_multiplier: f32 }`,
-default `1.0`; only reach for `m < 1` if profiling shows the full-resolution SIMD
-grid is still too slow.
-
-**`m > 1` is a faster, *discrete* sub-pixel approximation — a cheaper option, not a
-replacement for the high-accuracy refiner.** At `m > 1` an integer step in the
-`R_s` grid is `1/m < 1` patch-px, so the supersampled grid resolves sub-pixel
-offsets **directly** in one all-SIMD kernel (no gradients / consensus-refresh /
-fractional sampling), at ~`m²`-ish more search work. But it stays *quantized* to
-the grid; the continuous LK fine tune
-([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) reaches the
-true optimum and remains the high-accuracy / ground-truth option. So they
-**coexist**: the supersampled grid when its accuracy is good enough and speed
-matters; the LK fine tune when quality matters most. Where that line falls is a
-measurement question.
-
-## Search strategy: dense vs "+"-descent
-
-Whether the grid search visits **every** cell is a per-call axis exposed as the
-`SearchStrategy` enum on `KeypointLocalizeParams`. Both variants share the same
-cache, support, IRLS template, and `ShiftResult` contract; they differ only in
-which cells inside the `(2·margin+1)²` shift grid get scored. See the doc
-comments on `keypoint_localize::SearchStrategy` for the per-variant detail.
-
-The choice is **coupled to the kernel**:
-
-- **Dense grid → accumulation kernel** (`Exhaustive`). Cost is ~independent of
-  how peaked the surface is; amortized, SIMD-friendly, robust (can't miss a
-  cell). Best when the grid is small.
-- **Non-exhaustive (hill-climb / local / early-out) → per-candidate scoring**
-  (`PlusDescent`). Visits few candidates but forfeits the amortization, so
-  each candidate pays the full support gather. Wins only if it visits *few
-  enough* candidates to beat the dense kernel's amortized total — and it
-  risks landing in a wrong local peak, which the fine tune (a *local* solve)
-  cannot rescue.
-
-The earlier rejection of coarse-to-fine was specifically that it was the wrong
-*SIMD lever* (it prunes candidates but leaves each scalar and risks the peak);
-with the cache + accumulation, dense became cheap. The "+"-descent variant
-reopens that axis at the per-call level, with a hand-rolled AVX2 single-
-position kernel so each visited cell stays in the SIMD register file.
+- **Whole grid → accumulation kernel** (`Exhaustive`). Its cost does not depend
+  on the shape of the correlation surface, it is SIMD-friendly, and it returns
+  the global maximum over the window.
+- **Local descent → per-cell kernel** (`PlusDescent`). It visits few cells but
+  pays the full support gather for each, so it wins only while it visits few
+  enough, and it returns the peak nearest the starting keypoint rather than the
+  highest one in the window.
 
 ### "+"-descent (the default)
 
-Steepest descent on the integer shift grid: seed at `(dy, dx) = (0, 0)` (the
-view's current integer base offset), evaluate the 4 axis neighbors per step,
-move to the best improver, stop when no neighbor beats the current cell. Each
-cell is scored at most once (visited-cache keyed by `(dy, dx)`); the final
-separable parabolic sub-pixel fit reuses the 4 cardinal neighbors already in
-the cache.
+Steepest ascent on the integer shift grid: start at `(dy, dx) = (0, 0)`, the
+view's starting keypoint, score the 4 axis neighbours, move to the best one that
+improves on the current cell, and stop when none does. Each cell is scored at
+most once; the visited cache is a dense `Vec<f64>` of the grid's size, with
+`NaN` for unvisited, `−∞` for visited and unscorable, and the ZNCC otherwise.
+The final parabolic fit reuses the 4 neighbours already scored to find that the
+walk had stopped. A walk visits `5 + 3 · walk_steps` cells: the start and its 4
+neighbours, then 3 new cells per step. Neighbours past `±margin` or with any
+out-of-frame support pixel are skipped.
 
-**Per-cell scoring (`score_cell_one_channel`).** A hand-rolled AVX2 kernel
-processes 8 support pixels per iteration via `_mm256_i32gather_ps` against a
-per-batch index vector (`(win_y + r_k)·istride + (win_x + c_k)`), with three
-FMAs per iteration into 8-lane accumulators for `Σ kern·I` / `Σ w·I` /
-`Σ w·I²`, then a horizontal reduce + scalar tail. The gather is the path's
-bottleneck (~10–12 cycles per lane on this generation) but the per-call total
-stays well below the SAXPY's amortized cost because the descent visits only
-a handful of cells. Scalar fallback for non-x86 / non-AVX2; equivalence test
-(`score_cell_matches_compute_channel_grids`) locks both forms against the
-existing SAXPY's per-cell slice at every cell of the search grid.
+**Per-cell scoring (`score_cell_one_channel`).** The AVX2 kernel processes 8
+support pixels per iteration with `_mm256_i32gather_ps` over a per-batch index
+vector (`(win_y + r_k)·istride + (win_x + c_k)`), with three FMAs per iteration
+into 8-lane accumulators for `Σ kern·I`, `Σ w·I` and `Σ w·I²`, then a horizontal
+reduction and a scalar tail. The gather is the bottleneck, about 4.1 µs per cell
+on dino, but a walk of a few cells still costs a fraction of the whole grid's
+accumulation (about 31 µs per search against about 145 µs on dino at the
+defaults). The scratch the descent uses (`pd_kerns`, `pd_tsums`,
+`pd_per_channel`, `pd_visited`) is reused across every view of a point, so it
+allocates nothing after the first view.
 
-**Cells per call.** `5 + 3 · walk_steps` (1 seed + 4 neighbors at each step,
-with 1 cache hit per move). When the seed wins immediately (common in late-
-round congealing), exactly 5 cells scored.
+**Why it is the default.** The descent climbs to the correlation peak nearest
+the starting keypoint, which is the evidence for which of several similar peaks
+is meant. On the seoul_bull and kerry_park ground truths it places views closer
+to the truth than the whole-grid search from starting keypoints within 1 px of
+it, where a side peak of a repeated texture can score higher than the true one,
+and it is the faster of the two (0.42 against 0.52 ms per 3-5-view track on
+seoul_bull, 3.42 against 4.25 ms per track of 21 or more views on kerry_park).
+From starting keypoints 2 to 3 px off, the whole grid's global maximum does
+better. The measurements are in
+[patch-keypoint-localization.md](patch-keypoint-localization.md#how-the-alignment-was-measured).
 
-**Measured on dino-full** (85 images, 19 077 points, 87 632 obs; `sfm
-embed-patches dino_dog_toy_ws/sfmr/inf.sfmr`, `SFMTOOL_PROFILE=1`):
+## Sub-pixel hand-off
 
-|  | `Exhaustive` | `PlusDescent` | Δ |
-|---|---|---|---|
-| Total command wall | 3 m 51.6 s | 2 m 01.2 s | **1.91×** |
-| Localize wall | 139.1 s | 70.4 s | **1.98×** |
-| `search_shift` CPU | 240.5 s (42 % of localize) | 55.0 s (19 %) | **4.4×** |
-| per-`search_shift` | 145 µs | 31.3 µs | **4.6×** |
-| Avg cells visited / call | 169 (SAXPY) | 6.76 (from `N_CELLS / N_SEARCH` directly off the profile output) | < 10 ✓ |
-| Points kept | 19 012 | 19 068 | within rayon scheduling noise (±0.3 %) |
+The search's parabolic step is the localizer's sub-pixel estimate: the view's
+final offset is its starting offset plus the integer peak plus that step. The
+tile is never read at a fractional position. An accurate sub-pixel offset is a
+separate, continuous photometric (ECC) solve that optimizes the same template
+match with gradients, seeded by the localizer's keypoints:
+[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md). Keeping it
+separate is what lets this search stay integer-exact.
 
-The `search_shift` per-call cost is dominated by the per-cell AVX2
-gather kernel (`search_acc`, 4.14 µs/cell × 6.76 cells/call ≈ 28 µs);
-combine + argmax + the descent's own overhead account for the rest.
-The PlusDescent path allocates nothing per call after the first
-`search_shift_plus_descent` invocation on a given `SearchScratch` —
-`pd_kerns`, `pd_tsums`, `pd_per_channel`, and a dense
-`pd_visited: Vec<f64>` of size `(2·margin+1)²` are reused across every
-`(view, round)` call for a point, with the visited cache sentinel-
-encoded (NaN = unvisited, -Inf = visited+unscorable, finite = scored).
+The sub-pixel refiner has a render-once tile of its own (`RefineTile`), on the
+same idea, but read at fractional positions through prefiltered cubic B-spline
+coefficients and carrying analytic gradient planes, since a continuous solve
+cannot restrict itself to integer reads. Its exactness contract is weaker than
+this tile's bit-exact integer reads; see "Render-once context tile" in
+[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md).
 
-**Accuracy** (per-observation keypoint shift vs `Exhaustive`, 297 240 matched
-observations on dino):
-- median 0.048 px, 51 % within 0.05 px, 87 % within 0.5 px, **91 % within 1 px**
-- tail: p99 3.13 px, max 64.5 px — the local-optima failure mode the descent
-  risks on multi-modal ZNCC landscapes (same shape as the
-  `normal_refine::SearchStrategy::PlusDescent` prototype).
-- `PlusDescent` kept +22 k observations (321 k vs 299 k) — its view-drop
-  decisions diverge from `Exhaustive`'s on some patches.
+## An integer `i16` kernel: investigated, not built
 
-**When to pick `Exhaustive` instead.** When the keypoint-tail matters more than
-wall time (e.g. ground-truth registration runs), or for any bit-equivalent
-A/B comparison. The dense kernel remains the global-argmax fallback with no
-local-optima risk; the strategies share everything else.
+The source is `u8`, so in principle the tile could be `u8`/`i16` and the hot
+accumulation could use integer SIMD (`_mm256_madd_epi16` fuses multiply and add
+over 16 `i16` lanes; `_mm256_sad_epu8` sums `u8` nearly free), potentially twice
+the `f32` lanes. `Ncross` (`Σ kern_q·I`) and `S1` (`Σ I`) convert cleanly. The
+obstacle is `S2 = Σ w·I²`: `I²` is 16-bit, the per-pixel weight does not fuse
+into `madd`, and an `i32` accumulator can overflow over about 450 pixels. The
+clean integer route normalizes with a box window while keeping the Gaussian
+weights only in the numerator kernel, which approximates the ZNCC denominator
+and is no longer equivalent to the reference.
 
-**Round-dependent strategy** is not currently exposed —
-`KeypointLocalizeParams::search_strategy` is one value for the whole call, and
-the match at the per-(view, round) `search_shift` call site dispatches on it
-unchanged. A future revisit could split this into per-round strategy (e.g.
-`Exhaustive` in round 1 to lock the basin, `PlusDescent` in later rounds to
-refine cheaply) but it would require a new params field and call-site
-plumbing.
+A prototype (scalar reference plus AVX2 with `vpmulld`/`vpaddd` over `i32`
+lanes, a `u8` tile plane and a kernel switch) was benchmarked against the `f32`
+kernel on dino (18 961 points) and failed both of its gates:
 
-## Numerical fidelity & validation
+- **No speedup.** 98.7 µs per search against 93.6 µs for `f32`, about 5% slower:
+  `vpmulld` has 5-cycle latency and half the throughput of an FMA, and with 8
+  cells per half it has the same lane count as `f32`. The "twice the lanes"
+  design needs the harder `_mm256_madd_epi16` horizontal pair-sum layout, which
+  was not attempted, since the gather pattern was already about 88% of the
+  search's time and the multiplies were not the main cost.
+- **14.67% argmax disagreement** with the `f32` kernel (242 472 of 1 653 238
+  searches), although the number of kept points was identical (18 961).
 
-Two levels — the **search kernel** is provably equivalent; the **congealing loop**
-is a deliberate sub-px behaviour change:
+What remains of it in the code is the `search_acc` / `search_combine` /
+`search_argmax` sub-phase timers in `keypoint_localize::prof`. A future attempt
+should start from the `madd_epi16` lane-packing design or address the gather
+pattern instead.
 
-- **Search kernel (equivalent).** `score_grid` is algebraically identical to the
-  per-candidate `extract → z-normalize → dot` for a given tile + template;
-  validate with a relative tolerance (~1e-3) on the ZNCC grid and **exact argmax**
-  on clear-peak fixtures (templates built from the tile's own core at a known
-  shift, as in `search_shift_matches_reference`).
-- **AVX2 vs scalar.** Keep the centered-`f32` scalar form as the reference and
-  add an `avx2_matches_scalar` test within `f32` tolerance (mirrors the fronto
-  cache's `resample_avx2_matches_scalar`). The scalar form is also the
-  non-x86 / non-AVX2 fallback (runtime-dispatched, like the cache).
-- **Congealing loop (argmax/selection agreement, not bit-equivalence).**
-  Integer-tracked reads build the consensus from integer-aligned cores rather
-  than the reference's fractionally-rendered ones, so the loop is no longer
-  bit-equivalent. Validate that it picks the **same kept views and the same
-  integer registrations** as `search_shift_ref`-based congealing on the datasets,
-  and that the integer-plus-residual offsets agree within ~1 px.
-- **End-to-end.** `sfm embed-patches` on dino keeps a sane point count and the
-  registrations are as good or better; re-profile with `SFMTOOL_PROFILE=1` to
-  confirm the `render_context` collapse and the `search_shift` speedup. (The
-  final keypoint *accuracy* is owned by
-  [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), validated
-  there.)
-- The existing 19 keypoint-localization kernel tests must continue to pass.
+## Numerical fidelity and validation
 
-## Design choices (and why)
+- **The whole-grid kernel against the per-candidate reference.**
+  `search_shift` is algebraically identical to extracting, z-normalizing and
+  dotting each candidate core (`search_shift_ref`, test-only); the tests check
+  the ZNCC grid to a relative tolerance of about `1e-3` and the **exact argmax**
+  on clear-peak fixtures (a template cut from the tile's own core at a known
+  shift), including a flat channel, an out-of-frame region and a dropped
+  channel (`search_shift_matches_reference*`).
+- **AVX2 against scalar.** The centered-`f32` scalar forms are the reference and
+  the non-x86 / non-AVX2 fallback; `compute_channel_grids_avx2_matches_scalar`
+  checks the whole-grid kernel within `f32` tolerance, and
+  `score_cell_matches_compute_channel_grids` checks the per-cell kernel against
+  the whole-grid kernel's value at every cell of the grid.
+- **End to end.** The localizer's own accuracy, against ground truth, is measured
+  in [patch-keypoint-localization.md](patch-keypoint-localization.md#how-the-alignment-was-measured);
+  the final sub-pixel accuracy is owned by
+  [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md).
 
-- **Render once per view, not per round.** The frame is fixed during
-  localization; integer in-plane shift = integer cache index shift, so one
-  expanded render reproduces every round's integer-shift samples exactly.
-  Removes the redundant per-round warp (the 33% `render_context` slice).
+## Design choices
+
+- **One render per view.** The patch frame is fixed during localization, and an
+  integer in-plane shift is an integer index shift in the tile, so one render of
+  side `R + 2·margin` around the starting keypoint covers every shift the search
+  tries, exactly.
 - **Centered `f32`.** Removes the variance cancellation that would otherwise
-  bar `f32`, unlocking 8-lane width with no accuracy loss.
-- **Register-blocked on the grid row.** Keeps the search's hot loop pure
-  register FMA with the image streamed once — the structural fix for the ~25%
-  ALU utilization the profile shows.
-- **Integer-only search; sub-pixel is a separate algorithm.** Tracking integer
-  reads keeps every cache access exact and avoids fractional resampling
-  entirely; the parabolic estimate stays inside the loop only to seed
-  and detect convergence. Accuracy is owned by the continuous solve
-  ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)). No
-  supersampling — it would inflate the bottleneck for sub-pixel produced better
-  elsewhere.
-- **Cache `R + 4·search` vs `R + 2·search`.** The larger cache is unconditionally
-  correct for the current incremental-clip search; the smaller one needs a
-  search-window clamp and validation. Prefer the smaller if it proves equivalent.
+  rule out `f32`, which unlocks the 8-lane width with no loss of accuracy.
+- **Register-blocked on the grid row.** Keeps the whole-grid kernel's hot loop
+  in register FMAs with the tile streamed once.
+- **Integer-only reads; sub-pixel is a separate algorithm.** Integer reads keep
+  every tile access exact; the parabolic estimate is the localizer's sub-pixel
+  step, and accuracy is owned by the continuous solve. There is no
+  supersampled search grid: it would enlarge the most expensive step for a
+  sub-pixel result the continuous solve gives better.
 
 ## Open questions
 
-- Cache size: confirm the `±search`-clamped `R + 2·search` cache is equivalent
-  to the reference, or keep `R + 4·search`.
-- Centering constant: per-channel cache mean (best conditioning) vs a fixed
-  `127.5` (cheaper). Measure whether the fixed constant is accurate enough.
-- Combine step: scalar vs AVX2 `rsqrt` — only worth vectorizing if it shows up
-  after the accumulation is sped up.
-- Search resolution multiplier `m < 1`: only relevant if the full-resolution SIMD
-  grid is too slow. If it comes to that, where is the speed/quality knee — how low
-  can `m` go before the grid lands the wrong cell often enough that the fine tune
-  can't recover it? (Measure kept-view/registration agreement vs `m`.)
-- Supersampled grid (`m > 1`) as a cheaper sub-pixel approximation: how close does
-  its discrete accuracy get to the continuous LK fine tune, and at what `m`/cost?
-  This sizes *when* the grid is good enough vs. when the high-accuracy fine tune is
-  worth it — the two coexist, this isn't grid-replaces-fine-tune.
+- **The centering constant**: the per-channel tile mean (best conditioning)
+  against a fixed `127.5` (cheaper). Whether the fixed constant is accurate
+  enough is not measured.
+- **The combine step**: scalar against AVX2 `rsqrt`, only worth vectorizing if
+  it shows up in a profile.

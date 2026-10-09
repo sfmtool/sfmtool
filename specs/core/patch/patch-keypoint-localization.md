@@ -1,35 +1,111 @@
-# Patch-Keypoint Localization (Congealing)
+# Patch-Keypoint Localization
 
-Patch-keypoint localization refines, for a single 3D point, exactly where that
+Patch-keypoint localization finds, for a single 3D point, exactly where that
 point's piece of surface appears in each image that sees it. Given the point's
-patch — a small oriented square of surface carrying a reference bitmap — a set of
-views, and a rough starting keypoint in each of them, it registers all the views
-against a shared consensus of the patch's appearance, moves every keypoint to
-sub-pixel, and **drops the views that will not co-register** so the rest agree
-against a cleaner consensus; it reports which views it kept. It is the per-point
-refinement step of the [sift-based → patch-based reconstruction
-pipeline](sift-to-patch-reconstruction.md). The keypoints it produces are defined
-geometrically in [sfmr-file-format.md](../../formats/sfmr-file-format.md)
+patch (a small oriented square of surface), a set of views, a rough starting
+keypoint in each of them, and which of those views is the point's reference
+observation, it renders the reference observation's patch tile at its own
+keypoint, slides every other view's tile over a small window to where it
+matches that render best, and moves each keypoint there to sub-pixel. It
+**drops the views that do not match**, and reports the views it kept. It is the
+per-point keypoint step of the [sift-based → patch-based reconstruction
+pipeline](sift-to-patch-reconstruction.md), of `sfm xform --refine-keypoints`,
+of the bench's *Fit* and of Track at Pixel. The keypoints it produces are
+defined geometrically in [sfmr-file-format.md](../../formats/sfmr-file-format.md)
 ("Observation source"); this spec is one way to obtain them, not part of their
-definition. Aligning every view to the point's reference render in place of the
-consensus, and removing congealing, is proposed in
-[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 9.
+definition.
 
-## Problem
+## Rust API
 
-An `embedded_patches` `.sfmr` stores, per observation, a 2D `keypoints_xy[j]`
-that **anchors that observation's patch**: the surfel re-anchored within its
-plane so its centre projects to the keypoint in that view (the relationship is
-defined in the v4 format spec). We *refine* those keypoints for a point that
-already carries an oriented patch (the v3 `(u, v)` frame + normal), starting from
-a seed the caller supplies.
+The kernel is in
+[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs),
+with the one-pass alignment in
+[keypoint_localize/align.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/align.rs),
+the parameters and result in
+[keypoint_localize/params.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/params.rs),
+the shift search in
+[keypoint_localize/search.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/search.rs)
+(described in [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md)),
+and the keypoint-to-grid mapping in
+[keypoint_localize/seed.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/seed.rs).
 
-The naive keypoint is the projection of the point, `project_i(X_p)`. That can sit
-slightly off where the surfel's appearance actually lands in a view, so
-refinement searches a per-view sub-pixel offset `δ_j` that maximizes cross-view
-patch correlation; the refined keypoint `project_i(X_p) + δ_j` then sits on the
-image content.
+```rust
+pub fn localize_patch_keypoints(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],          // one per reconstruction image
+    view_set: &[u32],                      // the views to localize
+    starting_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to view_set
+    reference: Option<usize>,              // position in view_set of the reference
+    params: &KeypointLocalizeParams,
+) -> KeypointLocalization;
+
+pub fn try_localize_patch_keypoints(
+    /* the same arguments */, progress: &Progress<'_>,
+) -> Result<KeypointLocalization, LocalizeError>;
+
+pub fn localize_patch_cloud_keypoints(
+    cloud: &PatchCloud,
+    views: &[ProjectedImage<'_>],
+    view_sets: &[Vec<u32>],
+    starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    references: Option<&[Option<usize>]>,  // parallel to the cloud
+    params: &KeypointLocalizeParams,
+    done: Option<&AtomicUsize>,
+    progress: &Progress<'_>,
+) -> Result<Vec<KeypointLocalization>, Cancelled>;
+
+pub fn keypoint_grid_offset(
+    patch: &OrientedPatch, view: &ProjectedImage<'_>,
+    keypoint: [f64; 2], params: &KeypointLocalizeParams,
+) -> Option<[f64; 2]>;
+
+pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usize;
+```
+
+**Why it is shaped this way.**
+
+- **The reference is an argument, not something the kernel keeps.** The
+  reference observation is stored with the point (`tracks/reference_observations`
+  in the `.sfmr` file, an index within the point's own track) or held by a
+  bench track (`TrackPayload::reference`), so the caller is the one that knows
+  it. It passes the position of that observation in `view_set`. `None` has the
+  kernel ask the [reference-view rule](reference-view.md) instead, so a caller
+  with no reference gets the same template a writer of the stored bitmap would
+  pick.
+- **Each starting keypoint is independently optional.** A view set can mix
+  views that carry a keypoint (an observation's stored position) with views
+  that carry none (a view added by [view selection](patch-view-selection.md)
+  observes nothing, so it has no keypoint); `None` starts that view at the
+  point's projection `project_i(X_p)`. An all-`None` list is the same as no
+  list.
+- **The fallible entry point exists because the buffers are the caller's to
+  size.** The context tile grows as the square of `search` (below), so a caller
+  that takes the radius from a person runs `try_localize_patch_keypoints`, which
+  reports `LocalizeError::OutOfMemory` and `LocalizeError::Cancelled` instead of
+  aborting the process. `localize_patch_keypoints` is the same call for callers
+  whose radius is a constant.
+- **The batch form is parallel over points** (rayon) and takes a `done` counter
+  for a Python poller and a `Progress` that counts `patches`, is polled for
+  cancellation before each patch and between a patch's views, and, when
+  detailed, times each sampler's renders in its own detail phase.
+
+The kernel is bound as `PatchCloud.localize_keypoints` and called per point by
+the pipeline in [_embed_patches.py](../../../src/sfmtool/_embed_patches.py).
+
+**Example.** The first view of the set is the point's reference observation:
+
+```rust
+let localized = try_localize_patch_keypoints(
+    patch,
+    views,
+    view_set,
+    None,      // every view starts at the point's projection
+    Some(0),   // view_set[0] is the reference observation
+    &KeypointLocalizeParams::default(),
+    &Progress::none(),
+)?;
+assert_eq!(localized.reference, Some(view_set[0]));
+```
 
 ## What the keypoint encodes
 
@@ -42,266 +118,186 @@ keypoint_j = project_i(X_p) + δ_j        # image px
 ```
 
 `δ_j` is the in-plane shift of the surfel centre for view `i`. The reader
-recovers it by unprojecting the keypoint onto the patch plane.
+recovers it by unprojecting the keypoint onto the patch plane. The naive
+keypoint, `project_i(X_p)`, can sit slightly off where the surfel's appearance
+actually lands in a view; localization chooses `δ_j` so the keypoint sits on the
+image content.
 
-## Inputs
+## The template: the reference render
 
-- One 3D point `X_p` with its **patch frame**: the half-vectors `u_p`, `v_p` and
-  normal `n_p = normalize(u_p × v_p)`.
-- A **view set** `G`: the `nv` views (camera pose + intrinsics + source image) to
-  refine.
-- A **starting keypoint** per view — it should already be approximately right,
-  since the refinement only nudges it; the 3D point's projection
-  `project_i(X_p)` is a good seed, and is the seed a view supplies no keypoint
-  for. The seed is **per view, independently optional**: a view set can mix views
-  that carry a keypoint (an observation's stored position — the appearance that
-  was actually matched) with views that carry none (a view added by [view
-  selection](patch-view-selection.md) observes nothing, so it has no keypoint),
-  and each is seeded from what it has. A view set in which no view carries a
-  keypoint is the all-projection case, identical to supplying no seeds at all.
-- **Drop thresholds** — the per-view gates the refiner uses to drop a view
-  in-loop (below), in two families. The **photometric** gates judge one view's
-  pixels on their own and their verdicts stand:
-  `max_member_zncc_self_similarity_radius` (the view's own tile pins no 2D
-  position; 2.5 grid px by default), `min_absolute_zncc` (its
-  leave-one-out ZNCC is below a fixed floor), and the grazing cutoff. The
-  **positional** gate `max_shift_px` (its keypoint sits too far from the
-  projection) and the **relative** gate `min_relative_zncc` (does a view agree
-  as well as its peers?) are judgements about the geometry and the consensus
-  rather than the pixels, and the two-view LOO floor restores the two best when
-  they drop everything. The caller
-  supplies them all; the refiner reports what survived, which can be fewer than
-  two views, and the per-point `min_views` cull is the caller's.
+Every view is aligned to one template, the **reference render**: the `R×R`
+render of the point's reference observation at its own starting keypoint, with
+the sampler the [sampler rule](../camera/image-warping.md) picks for that
+observation. It is the tile a `.sfmr` stores as the point's patch bitmap
+([reference-view.md](reference-view.md#the-stored-bitmap)), so the views are
+placed against the same pixels every score on the bench reads them against.
 
-## Algorithm: group-wise translation registration (congealing)
+**Which reference.**
 
-For one point with view set `G` (the `nv` views to refine), first **pre-filter
-grazing views** — drop any whose ray is near-parallel to `Π_p` (`|d · n_p|` below
-the grazing cutoff), where the in-plane anchor is ill-conditioned and the view
-would only contaminate the consensus. The surviving views are the consensus
-membership; optionally that membership is *capped* at `K` and the views past the
-cap register once against the finished consensus instead of joining it — see
-[keypoint-localization-consensus-basis.md](keypoint-localization-consensus-basis.md).
-Then maintain a per-view in-plane
-coordinate `acc[v]` (patch-grid units) for the patch centre on `Π_p`, measured
-from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
-(zero when the seed is the point's own projection).
+1. The caller's: the position in `view_set` of the point's stored reference
+   observation, or on the bench the reference the track holds.
+2. Where the caller passes none, or the one it passes is turned away by the
+   grazing pre-filter, the reference-view rule picks one from the views' renders
+   at their starting keypoints, as every render of the stored bitmap does.
+3. Where the rule picks none it would store (it picks no view, or reaches its
+   pick only through its last fallback), the template is the **fused mean** of
+   the views at their starting keypoints (the IRLS-weighted mean of
+   [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md#the-fused-mean)),
+   which is then the point's stored bitmap. No view is the anchor, and every
+   view is searched. Where no fused mean renders either, the rule's
+   last-fallback pick is the reference after all.
 
-Before the first round, when the gate is on, each surviving view's own tile
-faces the **member self-similarity gate**: the
-[ZNCC self-similarity radius](zncc-self-similarity-radius.md) of its `R×R` core
-at its seed offset is read, and a view whose radius is over
-`max_member_zncc_self_similarity_radius` is dropped. A member that pins no 2D
-position of its own — a flat sky or water crop, a lone straight edge — matches
-itself a few pixels away, so its ZNCC to anything cannot place it; refusing it
-up front keeps it out of every round's template rather than letting it vote and
-then be judged by the votes. It is read once, on the member's appearance rather
-than the round's, and no later step restores it. The bar is 2.5 by default
-(see [The member gate's default](#the-member-gates-default)). Then each round:
+A view set of one view is its own reference.
 
-1. **Render** every view's patch tile from its source image at its accumulated
-   offset `acc[v]` — a *single* resample of the source, with the patch centre
-   translated in-plane by `acc[v]` (never re-sampling an already-warped tile, so
-   applying offsets across rounds cannot compound blur). Tiles are rendered onto
-   a **context tile** larger than the scored `PATCH×PATCH` core so the shift
-   search can slide without running off the edge.
-2. **Consensus.** Build the robust (IRLS) z-normalized weighted-mean template
-   over the stack — the same robust photometric consensus used by [patch-normal
-   refinement](patch-normal-refinement.md). Its weights come from each view's
-   agreement with the mean alone; [sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-   proposes weighting the views by their zoom and sharpness as well.
-3. **Per-view shift.** For each view `v`, search the residual in-plane shift that
-   maximizes windowed ZNCC against the **leave-one-out** consensus of the *other*
-   views (so a view is never aligned to a template its own pixels polluted): a
-   full-res integer search then a separable parabolic sub-pixel fit. That integer
-   search runs one of two strategies (`search_strategy`): by **default**,
-   `PlusDescent` — a local "+"-descent that seeds at the current cell, steps to
-   the best of its 4 axis neighbors, and stops when none improves (~6 cells per
-   call), *not* a scan of the whole grid; `Exhaustive` scores every cell of the
-   `(2·margin+1)²` grid and is retained as the global-argmax fallback (no
-   local-optima risk). See
-   [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md)
-   for the strategy trade-off. The parabolic
-   fit is a cheap estimate to converge and seed on; an accurate sub-pixel keypoint
-   is a separate continuous-photometric algorithm
-   ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) that runs
-   after this converges.
-4. **Accumulate** `acc[v] += δ_v`, clipping the total move from the point's
-   projection (`acc[v]`, which `project_i(X_p)` sets to zero) to `±search` — the
-   same anchor the `max_shift_px` gate below uses.
-5. **Drop failing views.** Remove any view whose keypoint has left the frame,
-   whose keypoint sits more than `max_shift_px` from the point's projection
-   (`|acc[v]|` mapped to source-image px — an *absolute* distance from
-   `project_i(X_p)`, not the move from the seed), whose leave-one-out ZNCC is
-   finite and below the absolute floor `min_absolute_zncc`, or whose
-   leave-one-out ZNCC falls below `min_relative_zncc` of the views' median LOO
-   ZNCC (relative, so a low-texture patch isn't over-dropped); the next round's
-   consensus is rebuilt from the survivors, so the remaining views register
-   against a cleaner template.
+**The reference is not moved.** Its keypoint is the anchor of the track:
+aligning it to its own render would return it where it is. Whatever error the
+reference's keypoint carries is shared by every view aligned to it, so it moves
+the triangulated point rather than adding reprojection error, and the
+per-observation confidence, not the alignment, is where its uncertainty belongs.
+The reference is returned at exactly the keypoint it was given, with ZNCC
+`1.0`, and faces no gate after the grazing pre-filter.
 
-   The **two-view floor** is the remedy for the positional and relative gates
-   alone: when fewer than two views clear all the gates, the two best-scoring
-   views *among those the photometric gates left standing* are kept anyway, so a
-   set that merely disagrees uniformly, or whose projection came from a wrong
-   pose, still produces a pair -- members that match each other survive the
-   geometry and keep reporting the contradiction through their residual. A view
-   the photometric gates rejected is never restored, and a point can therefore
-   end a round with one view or none. This is what makes
-   the gates bite on a **two-view point**, where the relative bar is decorative:
-   each view's leave-one-out template *is* the other view, so both score the same
-   pairwise correlation, `min_relative_zncc × median` reduces to a fraction of
-   that same number, and the floor would restore the pair regardless. Two
-   unrelated surfaces are refused by `min_absolute_zncc`; a textureless member is
-   refused by the member self-similarity gate, when it is on, before the round
-   begins.
-6. **Repeat** to convergence or a small iteration cap (default 5). Convergence
-   is the mean **round-over-round change** of each view's refined position
-   (integer accumulator + sub-pixel residual, this round vs the previous one)
-   dropping below `convergence_px` (`~0.05` px), **and** the view set having
-   survived the round unchanged — a round that dropped a view changed the
-   consensus the survivors registered against, so they always get at least one
-   more round against the survivor-only template before the stationarity test
-   can fire. (The raw per-round search output is *not* the metric: it includes
-   the freshly recomputed parabolic residual, which never moves the read
-   position, so its magnitude has a fraction-of-a-pixel floor even once the
-   search stops moving.)
+**The template is never blurred.** A blurred template places views no closer
+and lowers the curvature of the correlation peak, so the peak is placed less
+precisely ([sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
+Part 6). A blur-matched score may be read afterwards, for judging a view, but
+the alignment reads the render as it is.
 
-The converged `acc[v]`, mapped from patch-grid units back to image pixels via the
-view's projection, is `δ_j`; the emitted keypoint is `project_i(X_p) + δ_j`.
+**One pass.** The template does not change while the views are aligned, so each
+view is searched once. There are no rounds, no convergence test and no weights
+that depend on the other views.
 
-### Why these guards matter
+**When the reference changes** (*Set as reference* on the bench, unpinning the
+reference row, a writer that picks again), the views are aligned to the new
+reference at the next localization. A low score is not a reason to move a view;
+only a localization moves it.
 
-- **No compounding blur.** Each round re-renders the tile from the source at the
-  accumulated offset instead of re-warping an already-warped tile, so
-  interpolation blur can't compound across iterations. Re-rendering from the
-  source every round is the simple thing to start with; rendering one expanded
-  cache per view up front and reading each round's core from *that* removes the
-  redundant renders — and because an in-plane shift maps to an integer index
-  shift in the cache, the read is **exact** for integer offsets (no extra blur),
-  not an approximation. That cache, plus a SIMD search over it, is specified in
-  [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md).
-- **Leave-one-out scoring** is the honest "did it register?" signal: mean per-view
-  ZNCC against the consensus of the *others* can only rise if the views genuinely
-  co-register; a template fitting its own noise would inflate self-agreement but
-  not LOO.
-- **In-loop dropping** removes a contaminating view as soon as it reveals itself,
-  so the consensus the *other* views refine against keeps improving — better than
-  refining the whole set and discarding afterward.
+## Algorithm
+
+For one point with view set `G`:
+
+1. **Deduplicate** the view set in order (a point can carry two observations in
+   one image), and **pre-filter grazing views**: drop a view whose ray is
+   near-parallel to the plane (`|d̂ · n̂|` below `min_grazing_cos`), where the
+   in-plane anchor is ill-conditioned, and a view the point does not project
+   into.
+2. **Seed.** Each remaining view's starting keypoint is unprojected onto the
+   patch plane to its starting offset `start[v]`, in patch-grid px from `X_p`
+   (zero for a view started at the projection). The sampler for every render of
+   the view is chosen once, at that keypoint.
+3. **Resolve the reference** and render the template, as above. Where nothing
+   renders to align to (the reference's tile leaves the frame or is flat, or no
+   fused mean renders), every view stays at its start, unscored.
+4. **Per view other than the reference:**
+   - render one **context tile**, the `R×R` core extended by `margin =
+     ⌈search⌉` grid px on every side, centred on `start[v]`;
+   - read the **member self-similarity gate** on the tile's core (below), and
+     drop the view if it fails;
+   - **search** the integer shift over `±margin` that maximizes the windowed
+     ZNCC of the view's core against the template, by `search_strategy`
+     (`PlusDescent` by default, a local "+"-descent from the zero shift;
+     `Exhaustive` scores every cell), then refine it to sub-pixel by a
+     separable parabola through the peak and its axis neighbours. The view's
+     final offset is `start[v]` plus that shift, and its score is the ZNCC at
+     the integer peak. A view no shift could be scored for (its core out of
+     frame at every shift) is dropped.
+5. **Gates.** A searched view is dropped when its keypoint leaves the frame,
+   when its keypoint sits more than `max_shift_px` from the point's projection
+   (an absolute distance from `project_i(X_p)` in source px, not the move from
+   its start), when its ZNCC is finite and below `min_absolute_zncc`, or when it
+   is below `min_relative_zncc` times the median ZNCC of the views other than
+   the reference.
+
+The search, the context tile and the kernels that make them cheap are in
+[keypoint-localization-search-cache.md](keypoint-localization-search-cache.md).
+The parabolic step is an estimate; an accurate sub-pixel keypoint is the job of
+the continuous refiner
+([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)), which runs
+after this against the same reference render.
+
+**Every render is from the source photograph.** The context tile is rendered
+once per view from the source image, and every candidate shift reads it at an
+integer offset, which is exactly the render at that shift, so no tile is ever
+re-warped from another tile and interpolation blur cannot compound.
+
+**A starting keypoint is not clipped.** The tile is centred on it, so the search
+reaches `±search` grid px around wherever it starts, and `max_shift_px` then
+judges where the view ended. `keypoint_grid_offset` gives the same offset the
+seeding computes, on the params' own grid, for a caller that wants to know how
+far a keypoint sits from the projection in grid px.
 
 ## Mapping a shift to a keypoint
 
-`acc[v]` locates the patch centre on `Π_p` in patch-grid units, measured from
-`X_p`; the starting keypoint sets its initial value and refinement moves it. The
-keypoint is the image projection of that centre:
+`off[v] = start[v] + shift` locates the patch centre on the plane in patch-grid
+units, measured from `X_p`. The keypoint is the image projection of that centre:
 
 ```
-center_v = X_p + acc[v].s · û_p + acc[v].t · v̂_p     # patch centre on Π_p
+center_v = X_p + off[v].s · û_p + off[v].t · v̂_p     # patch centre on the plane
 keypoint_j = ray_to_pixel_i(R_i · center_v + t_i)
 ```
 
-Unprojecting the emitted keypoint back onto `Π_p` recovers `center_v` — the
-inverse of the format spec's reader relationship (`keypoint → anchor` by
-ray∩plane), so a producer and a reader round-trip.
+Grid rows count downward from `+v̂`, so a positive `t` steps along `−v̂`, as in
+`WarpMap::from_patch`. Unprojecting the emitted keypoint back onto the plane
+recovers `center_v`: the inverse of the format spec's reader relationship
+(`keypoint → anchor` by ray∩plane), so a producer and a reader round-trip.
 
 ## Outputs
 
-The algorithm returns:
+`KeypointLocalization` holds parallel arrays over the **kept** views, in the
+input order:
 
-- the **kept views** — a mask over the input `G` of which views survived the
-  in-loop drops (grazing, unlocalizable on their own, out-of-frame, large-shift,
-  low-agreement absolutely or relative to their peers). It can hold fewer than
-  two views, since the absolute gates are not undone by the two-view floor;
-- per kept view, its **refined keypoint** (`project_i(X_p) + δ_j` in the format's
-  terms) and **quality signals** — its offset from the point's projection
-  (`acc[v]` mapped to source-image px), the final leave-one-out ZNCC against
-  the other views' consensus (`loo_zncc`), and beside it the **middle ZNCC**
-  (`loo_zncc_middle`) and the **ZNCC grid** (`loo_zncc_grid`).
-
-The middle ZNCC is the same reading narrowed to the middle of the core: the
-view's samples at the integer peak the round's search reported, read from the
-cached context tile, against the same leave-one-out template, with each channel
-mean-removed and normalized over only the centred square half the grid's width
-(rows and columns `R/4 .. R - R/4`) under the same window weights. The template
-is held z-normalized with `√w` folded in; dividing the fold back out leaves an
-affine image of the consensus, which a ZNCC is blind to. Nothing is rendered
-again. A whole-core agreement the middle does not share is carried by the parts
-of the tile away from the keypoint: a background behind a small near object, the
-far side of a depth edge, or a texture repeating along the epipolar line. No
-gate reads it. It is `NaN` wherever `loo_zncc` is and where the template's middle
-is flat.
-
-The ZNCC grid is the same peak against the same consensus, read over each
-cell of a three-by-three split of the whole `R×R` square of the core, the rows
-and columns cut at `R/3` and `R - R/3`, with every pixel weighted equally,
-`[row][col]` from the top-left cell. It covers the corners of the square the
-window's disk leaves out. The consensus carries to them exactly: the template
-is a weighted sum of the other views' cores, each z-normalized by its own
-windowed moments over the support, so the same weights (the round's
-leave-one-out weights, or the basis weights for a tail view) on each view's
-whole square, normalized the same way, are the same consensus over the whole
-square. The squares are read from the cached context tiles, so nothing is
-rendered again. The grid says where in the tile an agreement or a disagreement
-is. No gate reads it. Every cell is `NaN` wherever `loo_zncc` is, and one cell
-is where the template is flat over it or a pixel of it is out of frame.
-
-## Implementation
-
-The refiner is `localize_patch_keypoints` / `localize_patch_cloud_keypoints` in
-[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs),
-bound as `PatchCloud.localize_keypoints` and called per point by the pipeline in
-[_embed_patches.py](../../../src/sfmtool/_embed_patches.py). It reuses the
-existing patch machinery:
-
-- Patch rendering per view reuses `WarpMap::from_patch`
-  and the patch cloud ([patch-cloud.md](patch-cloud.md)) — already camera-model
-  agnostic via `ray_to_pixel`. Each view's context tile is rendered with the
-  sampler the `sampler` choice picks once for the observation at its seed
-  keypoint and the patch resolution `R` (the sampler rule by default,
-  [image-warping.md](../camera/image-warping.md) § "Choosing the sampler per
-  view"), so the localizer reads a view through the sampler the bench and the
-  fuse read it through.
-- `localize_patch_cloud_keypoints` takes a `done` counter for a Python poller
-  and a `Progress`: it counts `patches`, is polled for cancellation before each
-  patch and between a patch's rounds (a cancelled batch returns `Cancelled`),
-  and, when detailed, times each sampler's renders in its own detail phase.
-- The robust consensus reuses the IRLS template from patch-normal refinement.
-- The per-view sub-pixel ZNCC shift search is the new kernel it
-  adds, in the same crate alongside the rendering and consensus it sits between.
+- `views`: the kept image indices. The reference observation is always kept
+  when its render is the template. Every other view can be dropped, so the set can hold one view, or none, for the caller's `min_views`
+  cull to remove;
+- `keypoints`: the localized keypoint per kept view, source px; the reference's
+  is its starting keypoint, exactly;
+- `offsets_px`: the keypoint's distance from the point's projection, source px;
+- `zncc`: the plain ZNCC against the template at the search's integer peak:
+  `1.0` for the reference, `NaN` for a view that was not searched because there
+  was no template;
+- `reference`: the image index of the reference observation the views were
+  aligned to, or `None` where they were aligned to the fused mean or to nothing.
 
 ## Parameters (defaults)
 
 | parameter | default | meaning |
 |---|---|---|
-| `max_iters` | 5 | max congealing rounds (stops early at convergence) |
-| `search` | 6 px | max total per-view drift from the projection (patch-grid px), bounds runaway; also the context-tile margin |
-| `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
-| `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it); `0` disables |
-| `min_absolute_zncc` | 0.5 | drop a view whose LOO ZNCC is finite and below this absolute floor, however many views remain; `0` disables |
-| `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own tile's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more rejects nothing; see [The member gate's default](#the-member-gates-default) |
+| `search` | 6 | the reach of each view's search around its starting keypoint, patch-grid px: the context tile's margin on every side, and the `±search` shift window |
+| `max_shift_px` | 3 | drop a view whose keypoint sits more than this from the point's projection (source px); never applied to the reference |
+| `min_relative_zncc` | 0.7 | drop a view whose ZNCC against the template falls below this fraction of the median over the views other than the reference; `0` disables |
+| `min_absolute_zncc` | 0.5 | drop a view whose ZNCC against the template is finite and below this floor, however many views remain; `0` disables |
+| `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own core's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more rejects nothing; see [The member gate's default](#the-member-gates-default) |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
-| `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
-| `robust_iters` | 3 | IRLS passes for the robust consensus |
-| `convergence_px` | 0.05 | stop once a round's mean round-over-round change of the per-view refined positions is below this (patch-grid px) |
-| `search_strategy` | `PlusDescent` | per-(view, round) shift-grid traversal: `PlusDescent` (default, local "+"-descent) or `Exhaustive` (full-grid global-argmax fallback); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
-| `search_resolution_multiplier` | 1.0 | discrete-search resolution multiplier `m` (`1.0` = no-op); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
+| `resolution` | 24 | the `R×R` patch grid the template and the ZNCC are scored on |
+| `window` | `GaussianDisk { sigma: 0.6 }` | per-pixel scoring weight and support, shared with [normal refinement](patch-normal-refinement.md) |
+| `sampler` | the sampler rule | which sampler renders each view's tiles, chosen once per view at its starting keypoint ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per view"), so the localizer reads a view through the sampler the bench and the stored bitmap read it through |
+| `robust_iters` | 3 | IRLS passes for the fused mean, where it is the template |
+| `search_strategy` | `PlusDescent` | how each view's shift grid is traversed: `PlusDescent` or `Exhaustive`; see [How the alignment was measured](#how-the-alignment-was-measured) |
 
-(plus `window` and `sampler`, shared with [normal refinement](patch-normal-refinement.md); `sampler` defaults to the sampler rule.)
-
-The patch size is carried by the frame the algorithm is handed (the `(u, v)`
-half-vectors).
+The patch size is carried by the frame the kernel is handed (the `(u, v)`
+half-vectors). Setting `min_absolute_zncc`, `min_relative_zncc` or
+`max_member_zncc_self_similarity_radius` to `0` (or a non-finite value) disables
+that gate exactly: the relative bar reads `0` as "off" rather than as a bar at
+zero, so a caller that asked for no gate keeps even an anti-correlated view and
+its number, which is what a *reading* of a track rather than a fit of one needs
+([editable-track.md](../bench/editable-track.md)).
 
 ## The member self-similarity gate
 
-The member gate reads each view's own `R×R` core, at its seed offset, with the
-default `SelfSimilarityParams` (`max_radius` `r = 3`), on the grid the search
-runs on (`R_s`, which is `R` at the default multiplier). The core is cut from the
-tile the localizer already rendered for that view (a round-loop cache, a tail
-view's tile or a reference search's tile) and read
+A view whose own tile pins no 2D position (a flat sky or water crop, a lone
+straight edge) matches itself a few pixels away, so its ZNCC against anything
+cannot place it. The member gate refuses such a view before it is searched.
+
+It reads each view's own `R×R` core at its starting offset, cut from the context
+tile rendered for its search, with the default `SelfSimilarityParams`
+(`max_radius` `r = 3`), read
 [the overlap way](zncc-self-similarity-radius.md#the-overlap-reading): at each
 shift only the samples both windows hold inside the core are correlated, so no
 pixel of the tile around the core enters the reading, and the radius does not
 depend on the search radius. Every sample counts as data; a pixel out of frame
 reads as the black it was rendered as, as every other read of the tile does.
+The reference is not read: it is not moved, so it is not placed by its own
+texture.
 
 A view passes when its radius is at or below the bar
 (`KeypointLocalizeParams::admits_member_zncc_self_similarity_radius`). A `NaN`
@@ -316,7 +312,10 @@ itself along the whole search.
 The default, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, is `2.5` patch-grid
 px, the same bar as the bench's `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The
 user chose it from a sweep on the seoul_bull and kerry_park ground truths: two
-measurements run with the gate off and with the gate at bars from 1 to 2.9.
+measurements run with the gate off and with the gate at bars from 1 to 2.9. The
+sweep was run when the localizer aligned views to a leave-one-out consensus of
+the other views; the gate reads each view's own tile at its starting keypoint,
+which did not change with the alignment, so the radii it judges are the same.
 
 The sweeps read the radius of a tile rendered `r` px wider than the core, with
 the core as the template. The overlap reading the gate uses reads a few
@@ -374,72 +373,177 @@ samples renders a smooth tile that matches itself a few grid px away; whether
 a radius read in image px would separate the views better is the open question
 in [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md).
 
+## How the alignment was measured
+
+Aligning to the reference render replaced congealing, which aligned each view
+over several rounds to the robust (IRLS) mean of all the other views and scored
+it by that leave-one-out ZNCC. The two were compared on the seoul_bull (259
+tracks) and kerry_park (380 tracks) ground truths, which are metric
+reconstructions with known poses. Each view's starting keypoint was displaced
+from its ground-truth projection by 0, 0.5, 1, 2 or 3 px in a random direction,
+the reference kept at its stored keypoint; the agreement bars and
+`max_shift_px` were off and the member gate at its default. Four variants of the
+alignment were run: the "+"-descent and the exhaustive search, each alone and
+each after an exhaustive search at half resolution (a **coarse level**, from
+which the full-resolution search starts).
+
+Two errors were read per kept view:
+
+- the **raw error**, its distance from the ground-truth projection;
+- the **re-triangulated residual**, its reprojection residual after each track
+  is re-triangulated from its aligned keypoints at the ground-truth poses. This
+  leaves out the offset the reference shares with every view aligned to it,
+  which moves the point rather than adding reprojection error.
+
+A view more than 1.5 px from the ground-truth projection is counted as **locked
+to a side peak**.
+
+**Mean raw error (px) / side-peak share**, by starting displacement:
+
+| dataset | disp px | congealing | "+"-descent | exhaustive | coarse, then descent | coarse, then exhaustive |
+|---|---|---|---|---|---|---|
+| seoul_bull | 0 | 0.53 / 5.7% | **0.48 / 6.7%** | 0.59 / 7.9% | 0.63 / 7.8% | 0.62 / 7.6% |
+| seoul_bull | 0.5 | 0.58 / 5.6% | **0.50 / 6.7%** | 0.60 / 7.9% | 0.65 / 7.8% | 0.64 / 7.6% |
+| seoul_bull | 1 | 0.78 / 8.0% | **0.51 / 6.5%** | 0.60 / 7.5% | 0.66 / 7.6% | 0.65 / 7.6% |
+| seoul_bull | 2 | 1.29 / 30.0% | **0.54 / 8.2%** | 0.63 / 8.2% | 0.68 / 8.9% | 0.67 / 8.4% |
+| seoul_bull | 3 | 1.79 / 60.1% | **0.90 / 14.8%** | 0.69 / 9.2% | 0.69 / 8.9% | 0.69 / 9.1% |
+| kerry_park | 0 | 0.29 / 0.6% | **0.29 / 1.0%** | 0.32 / 1.6% | 0.37 / 1.9% | 0.36 / 1.8% |
+| kerry_park | 0.5 | 0.38 / 0.9% | **0.31 / 1.0%** | 0.34 / 1.7% | 0.40 / 2.5% | 0.37 / 2.1% |
+| kerry_park | 1 | 0.64 / 4.2% | **0.31 / 1.1%** | 0.35 / 1.7% | 0.41 / 2.6% | 0.40 / 2.3% |
+| kerry_park | 2 | 1.26 / 38.2% | **0.54 / 9.1%** | 0.43 / 4.2% | 0.47 / 5.1% | 0.44 / 4.6% |
+| kerry_park | 3 | 1.86 / 60.3% | **1.22 / 27.8%** | 0.77 / 12.1% | 0.69 / 10.6% | 0.65 / 9.3% |
+
+**Median re-triangulated residual (px):**
+
+| dataset | disp px | congealing | "+"-descent | exhaustive | coarse, then descent | coarse, then exhaustive |
+|---|---|---|---|---|---|---|
+| seoul_bull | 0 | 0.27 | **0.26** | 0.26 | 0.26 | 0.26 |
+| seoul_bull | 1 | 0.29 | **0.28** | 0.27 | 0.27 | 0.27 |
+| seoul_bull | 3 | 0.36 | **0.34** | 0.29 | 0.28 | 0.28 |
+| kerry_park | 0 | 0.17 | **0.17** | 0.17 | 0.17 | 0.17 |
+| kerry_park | 1 | 0.19 | **0.18** | 0.18 | 0.17 | 0.17 |
+| kerry_park | 3 | 0.55 | **0.86** | 0.37 | 0.24 | 0.22 |
+
+**Time per track** with the reference given, from the stored keypoints, by
+track length (ms):
+
+| dataset | method | 3-5 views | 6-10 | 11-20 | 21+ |
+|---|---|---|---|---|---|
+| seoul_bull | congealing | 1.21 | 2.19 | 3.74 | - |
+| seoul_bull | "+"-descent | **0.42** | **0.77** | **1.44** | - |
+| seoul_bull | exhaustive | 0.52 | 0.97 | 1.76 | - |
+| seoul_bull | coarse, then descent | 0.66 | 1.26 | 2.20 | - |
+| kerry_park | congealing | 1.59 | 3.03 | 4.29 | 5.19 |
+| kerry_park | "+"-descent | **0.61** | **1.29** | **2.27** | **3.42** |
+| kerry_park | exhaustive | 0.73 | 1.52 | 2.76 | 4.25 |
+| kerry_park | coarse, then descent | 1.04 | 2.13 | 3.72 | 5.86 |
+
+Where the point has no reference and the reference-view rule picks one, the
+pick adds a mean of 1.4 ms per track on seoul_bull and 3.9 ms on kerry_park.
+
+What it decided:
+
+- **Alignment to the reference replaced congealing.** It is 1.5 to 2.9 times
+  faster, and from starting keypoints 1 px or more off it places views far
+  closer: congealing's share of views locked to a side peak rises to 30-60% at 2
+  and 3 px, against 8-28% for the "+"-descent. From the stored keypoints the two
+  are close (mean raw error 0.48 against 0.53 px on seoul_bull, 0.29 against
+  0.29 on kerry_park), with congealing leaving slightly fewer views past 1.5 px
+  (5.7% against 6.7%, 0.6% against 1.0%).
+- **There is no coarse level.** It lowered the error only from starting
+  keypoints 2 to 3 px off, and raised it from 0 to 1 px: from the stored keypoints its mean raw error is
+  0.63 against 0.48 px on seoul_bull and 0.37 against 0.29 px on kerry_park. Its
+  time per track is 1.6 to 1.7 times the descent's.
+- **The "+"-descent is the default search.** From starting keypoints within
+  1 px of the truth it places views closer than the exhaustive search, because
+  a side peak of a repeated texture can score higher than the true peak, and
+  the descent climbs to the peak nearest the start, which is the evidence for
+  which peak is meant. From 2 to 3 px off the exhaustive search does better, so
+  a caller whose starting keypoints may be that far off can choose
+  `SearchStrategy::Exhaustive`.
+
+### The agreement gates on the plain score
+
+The gates `min_absolute_zncc` and `min_relative_zncc` read the plain ZNCC
+against the reference render. Their bars were measured on the views of the 0,
+0.5 and 1 px runs: a **good** view is within 1 px of the ground-truth
+projection, a **bad** one more than 1.5 px from it. The table gives the share of
+each a bar drops, for the plain score against the reference and for congealing's
+leave-one-out score it replaced:
+
+| bar | seoul_bull plain: good / bad | seoul_bull leave-one-out | kerry_park plain | kerry_park leave-one-out |
+|---|---|---|---|---|
+| absolute 0.4 | 0.5% / 10.9% | 0.0% / 0.6% | 0.3% / 4.4% | 0.3% / 1.2% |
+| **absolute 0.5** | **0.9% / 13.1%** | 0.4% / 1.8% | **0.6% / 7.7%** | 0.5% / 2.4% |
+| absolute 0.6 | 4.2% / 18.3% | 1.8% / 3.0% | 1.5% / 16.5% | 0.8% / 7.3% |
+| relative 0.6 | 0.3% / 0.6% | 0.1% / 0.6% | 0.3% / 3.3% | 0.3% / 1.2% |
+| **relative 0.7** | **0.7% / 5.7%** | 0.5% / 1.2% | **0.5% / 7.7%** | 0.5% / 3.6% |
+| relative 0.8 | 2.7% / 9.1% | 2.0% / 1.8% | 1.8% / 8.8% | 1.4% / 7.9% |
+
+(2632 views on seoul_bull, 2361 good and 175 bad; 8660 on kerry_park, 8465
+good and 91 bad.) The plain score separates the two better than the
+leave-one-out score did: at the same bars it drops slightly more good views and
+2 to 7 times as many bad ones. The defaults stay at 0.5 and 0.7, where each bar
+drops under 1% of good views. The median plain score of a good view is lower
+than its leave-one-out score was (0.85 and 0.88, against 0.90 and 0.93), since
+a single sharp render correlates less with a view than the mean of the other
+views did.
+
+### A spot check on four other reconstructions
+
+400 tracks of each, from their stored keypoints with the default gates, the
+reference given:
+
+| reconstruction | method | views kept | tracks with 2+ views | median score | ms per track |
+|---|---|---|---|---|---|
+| dino_dog_toy, 13 images | congealing | 90.3% | 383 | 0.950 | 2.41 |
+| dino_dog_toy, 13 images | "+"-descent | 91.7% | 383 | 0.943 | 0.95 |
+| dino_dog_toy, 85 images | congealing | 66.2% | 311 | 0.907 | 4.90 |
+| dino_dog_toy, 85 images | "+"-descent | 69.8% | 310 | 0.856 | 1.81 |
+| MossyRailing | congealing | 94.3% | 398 | 0.921 | 3.82 |
+| MossyRailing | "+"-descent | 96.2% | 398 | 0.886 | 1.31 |
+| ChristmasTreeWithPresents | congealing | 94.0% | 398 | 0.951 | 4.48 |
+| ChristmasTreeWithPresents | "+"-descent | 95.0% | 397 | 0.935 | 1.97 |
+
+The alignment keeps 1 to 4 percentage points more of the views and the same
+number of tracks with two or more views to within one, and is 2.3 to 2.9 times
+faster.
+
 ## Implementation details
 
-`PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
-max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
-min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=2.5,
-min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
-`{point_index, views, keypoints, offsets_px, loo_zncc, loo_zncc_middle, loo_zncc_grid, is_basis}`,
-with `loo_zncc_grid` a `(K, 3, 3)` array. Each round renders a
-**context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
-shift search slides without re-warping), z-normalizes the cores into a shared
-compacted channel space (a channel flat in any view is dropped, as in normal
-refinement), builds the leave-one-out IRLS consensus of the *other* views, and
-runs a full-res integer windowed-ZNCC search refined by a separable parabolic fit;
-the per-view offset accumulates and is clipped to `±search`. A view is dropped when
-its own tile's ZNCC self-similarity radius is over
-`max_member_zncc_self_similarity_radius` (checked once, on the tile at its seed,
-before the first round, when the gate is on), when its core leaves the frame (any
-window-support pixel out of frame), its keypoint sits more than `max_shift_px`
-from the projection, its leave-one-out ZNCC is finite and below
-`min_absolute_zncc`, or its leave-one-out ZNCC falls below `min_relative_zncc ×`
-the views' median. Only the last of those is subject to the two-view
-leave-one-out floor: when it would leave fewer than two, the two best-agreeing
-views *that cleared the absolute gates* are kept, so the result can carry one view
-or none and the caller's `min_views` cull removes the point. Setting
-`min_absolute_zncc`, `max_member_zncc_self_similarity_radius` or `min_relative_zncc` to
-`0` (or a non-finite value) disables that gate exactly -- the relative bar reads
-`0` as "off" rather than as a bar at zero, so a caller that asked for no gate
-keeps even the anti-correlated view and its number, which is what a *reading* of
-a track rather than a fit of one needs
-([`../bench/editable-track.md`](../bench/editable-track.md)). Grazing views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
-order-preserving, and seeds default to the point's own projection (`acc = 0`); a
-supplied starting keypoint is unprojected onto the plane to initialize `acc`. The
-render → z-normalize → robust-consensus primitives are shared with `normal_refine`
-(`pub(super)`), not duplicated. Defaults match the table above with
-`min_grazing_cos = 0.1`, `robust_iters = 3`, and `convergence_px = 0.05`. The
-starting-keypoint seed is a per-view `Option` parallel to the view set
-(`localize_patch_keypoints(..., starting_keypoints, ...)`, exposed on the PyO3
-binding as `starting_keypoints={point_index: [[x, y] | None, ...]}`): `None` for
-one view seeds that view at its projection while its siblings keep their explicit
-seeds, and an all-`None` list is bit-identical to supplying no seeds.
+**The render path is shared.** Each view's context tile is rendered by
+`WarpMap::from_patch` and the sampler's remap, over the patch cloud's frame
+([patch-cloud.md](patch-cloud.md)), which is camera-model agnostic through
+`ray_to_pixel`. The z-normalization and the fused mean's robust consensus are
+shared with [normal refinement](patch-normal-refinement.md) (`pub(super)`), not
+duplicated, and the reference-view rule's render is
+`stored_bitmap::render_reference`, the one every writer of the stored bitmap
+calls.
 
-**A seed beyond `search` is clipped onto that bound**, because the accumulator it
-initializes is the one the rounds clip. A caller that means to read a view *where
-its observation actually sits* therefore asks `keypoint_grid_offset(patch, view,
-keypoint, params)` -- the same offset the seeding computes, in patch-grid px on
-the params' own grid -- and widens `search` to cover the furthest answer before it
-calls. That is what the bench's reading does
-([`../bench/editable-track.md`](../bench/editable-track.md)); the alternative is
-a measurement made at a pixel the sighting is not at.
+**Mixed channel counts.** A view can be narrower than the template (a grayscale
+frame beside a colour reference). Its search reads the template's leading kept
+channels, which is all a narrower tile can line up with.
 
 **Widening is quadratic, so the big buffers are asked for fallibly.** The context
-tile is `R_s + 4 · margin` on a side and the shift grids are `(2 · margin + 1)²`
-cells, so a caller that widens `search` to reach a far-out seed asks for memory
-that grows as the square of that radius -- and an allocation the global allocator
-cannot make **aborts the process**, which in a window takes everything unsaved
-with it. `view_cache_bytes(params, channels)` is what one view's tile and the
-render scratch behind it cost, so a caller can decide before it asks; and
+tile is `R + 2 · margin` on a side and the shift grids are `(2 · margin + 1)²`
+cells, so a caller that widens `search` asks for memory that grows as the
+square of that radius, and an allocation the global allocator cannot make
+**aborts the process**, which in a window takes everything unsaved with it.
+`view_cache_bytes(params, channels)` is what one view's tile and the render
+scratch behind it cost, so a caller can decide before it asks; the views are
+searched one after another, so one tile is held at a time.
 `try_localize_patch_keypoints` reserves the tile planes and the shift grids
-through `try_reserve_exact`, reporting `LocalizeError::OutOfMemory` with the size
-it asked for. `localize_patch_keypoints` and
-`localize_patch_keypoints_with_basis` are that call with the panic left in, for
-the pipeline callers whose radius is a constant.
+through `try_reserve_exact`, and probes the render scratch at its own size
+before a tile over 16 MB is built, reporting `LocalizeError::OutOfMemory` with
+the size it asked for.
 
 **The fallible call is also the cancellable one.** `try_localize_patch_keypoints`
-takes the `Progress` every long kernel takes and polls it between rounds and
-between the views it renders -- which is where a widened search spends its time
--- reporting `LocalizeError::Cancelled`. Nothing else about the two paths
-differs: with an uncancelled `Progress::none()` and buffers that fit, they
-compute the same numbers.
+polls its `Progress` after resolving the reference and before each view's
+render, which is where a widened search spends its time, and reports
+`LocalizeError::Cancelled`. Nothing else about the two paths differs: with an
+uncancelled `Progress::none()` and buffers that fit, they compute the same
+numbers.
+
+**Profiling.** `SFMTOOL_PROFILE=1` times the reference resolution, the renders,
+the searches and their sub-phases, and counts the views each gate drops
+([keypoint_localize/prof.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/prof.rs)).

@@ -79,8 +79,8 @@ first, then the photometrically-vetted candidates in ascending index order),
 their per-view ZNCC to the reference, the track's self-agreement, and the
 **track-view count**: how many leading admitted entries are track views, so a
 consumer can split `G` by provenance without re-deriving the track. The
-localizer's [consensus-basis pick](keypoint-localization-consensus-basis.md)
-consumes both the scores and that count.
+bench's geometry search reads that count to tell the views it added from the
+track's own.
 
 ## Parameters (defaults)
 

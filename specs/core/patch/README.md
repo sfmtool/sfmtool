@@ -28,11 +28,9 @@ across views, and everything refined on top of it. Implemented in
 
 | Document | Description |
 |----------|-------------|
-| [patch-keypoint-localization.md](patch-keypoint-localization.md) | Congealing: refining a point's keypoint position across all its views jointly. |
-| [keypoint-localization-consensus-basis.md](keypoint-localization-consensus-basis.md) | The consensus-basis cap — basis congealing, then tail registration against it. |
-| [keypoint-localization-consensus-basis-measurements.md](keypoint-localization-consensus-basis-measurements.md) | The runs behind the cap's default of eight views on a high-`V` capture: localizer cost, per-observation agreement with the uncapped path, and the downstream size cull and bundle adjustment. |
-| [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) | The per-view render cache and the AVX2 search kernels that make the search affordable. |
-| [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) | Forward-additive ECC Gauss-Newton subpixel refinement, with an analytic Jacobian. |
+| [patch-keypoint-localization.md](patch-keypoint-localization.md) | Placing each view of a point by aligning it, in one pass, to the point's reference render; the gates, and how the alignment was measured against congealing. |
+| [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) | The per-view context tile and the AVX2 search kernels that make the search affordable; the "+"-descent and the whole-grid search. |
+| [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) | Forward-additive ECC Gauss-Newton subpixel refinement against the reference render, with an analytic Jacobian; the stored bitmap and the fused mean. |
 
 ## Clusters and tracks
 

@@ -49,10 +49,10 @@ trying to move.
 ## What it needs first
 
 The scores have to reach the kernel. `select_views` computes a per-view score for
-every admitted view, and `_embed_patches.py` now keeps those scores and threads
-them into `localize_keypoints` for the consensus-basis cap (see
-[`../core/patch/keypoint-localization-consensus-basis.md`](../core/patch/keypoint-localization-consensus-basis.md)),
-so the plumbing pattern already exists and works. What remains is that the
+every admitted view, and `_embed_patches.py` has threaded those scores into
+`localize_keypoints` before, for a consensus-basis cap since removed with
+congealing ([sharper-patch-bitmap.md](sharper-patch-bitmap.md) Part 9), so the
+plumbing pattern is known to work. What remains is that the
 normal-refinement path runs per round with the point set compacted between
 rounds — point indices are renumbered — so the score map has to be re-keyed each
 round rather than passed through once. Whether the right score is
