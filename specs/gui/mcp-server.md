@@ -1951,13 +1951,14 @@ The reply says the request was made, not that the operation has stopped: the
 operation stops at its next poll of the cancel flag, writes a failed Action Log
 entry and pushes no version, and `get_background_task` reports it as finished
 with `failed: true` once it has. A run that finishes before it next polls the
-flag lands as it would have without the request. With nothing running it refuses with *"Nothing
-is running in the background."*, and for an operation that never polls the flag
-with *"{operation} cannot be cancelled: it never asks whether it should stop."*,
-the sentence the button's tooltip carries (`AppState::cancel_refusal` in
+flag lands as it would have without the request. With nothing running it
+refuses with *"Nothing is running in the background."*, and for an operation
+that never polls the flag with *"{operation} cannot be cancelled: it never asks
+whether it should stop."*, the sentence the button's tooltip carries
+(`AppState::cancel_refusal` in
 [background/mod.rs](../../crates/sfm-explorer/src/background/mod.rs)).
-`get_background_task`'s `cancellable` says beforehand which of the two a call
-would get.
+`get_background_task`'s `cancellable` says beforehand whether the running
+operation can be cancelled.
 
 ### `get_timing_detail`, `set_timing_detail`
 
@@ -3374,8 +3375,9 @@ image, a node with no points, a `sift_files` node, a node with no patch frames
 and an image whose photograph cannot be found.
 
 **It runs on a worker thread** and replies the way `bundle_adjust` does
-(§ "`resect_camera_image` / `bundle_adjust`"): with the version and the Action Log sentence when it finishes within 200 ms,
-with a `running: true` handle otherwise, and `cancel_background_task` stops it.
+(§ "`resect_camera_image` / `bundle_adjust`"): with the version and the Action
+Log sentence when it finishes within 200 ms, with a `running: true` handle
+otherwise, and `cancel_background_task` stops it.
 A call that adds nothing pushes no version and answers `changed: false` at the
 version the node still stands at. The Action Log row reads *"Added
 frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
@@ -3773,9 +3775,9 @@ required `method`: `photometric`, `finite_difference` or `grid_plane`. The two
 piece methods take `pieces` (default 2) and `overlap_percent` (default 0), and
 `photometric` refuses either. It is refused in the call, before a photograph is
 read, at the cluster stage, with no patch yet, at infinity and with fewer than
-two `in` observations, in a sentence that starts *"Cannot fit the normal of …"*, *"Cannot
-take the finite-difference normal of …"* or *"Cannot take the grid-plane normal
-of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
+two `in` observations, in a sentence that starts *"Cannot fit the normal of
+…"*, *"Cannot take the finite-difference normal of …"* or *"Cannot take the
+grid-plane normal of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
 does: inside the reply window, an edit's reply (`serial`, `cursor`, `label`,
 `dirty`, `report`, `changed`), and after it a `running: true` handle whose
 `operation` is `Fit normal`, `Finite difference normal` or `Grid plane normal`.
