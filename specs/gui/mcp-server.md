@@ -3383,9 +3383,10 @@ nothing. It runs on the GUI thread: a fit takes milliseconds.
 
 The image menu's `Add Image to Tracks`
 ([edits/add-image-to-tracks.md](edits/add-image-to-tracks.md)): every point the
-image does not observe is looked for in its photograph, and the sightings that
-agree with the point's other observations are added, as the node's next
-version. Nothing else moves and no index of its own moves, so image indexes
+image does not observe is looked for in its photograph against the point's
+stored bitmap or its reference observation's render, and the sightings that
+agree with the point's patch as well as its other observations do are added, as
+the node's next version. Nothing else moves and no index of its own moves, so image indexes
 read before the call still mean what they meant, and point indexes do too
 unless a point edit was pending, whose deleted slots close up first
 (§ "The editing family"). It is the call to make
@@ -3862,8 +3863,8 @@ unit direction as a point one unit from the world origin, which is the one thing
 a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat, with `walked_to`, the pixel the walk would have reached, and
-`walked_zncc`, the leave-one-out ZNCC the localizer scored there (null where it
-scored none), to set beside the row's `loo_zncc` at its seed, with
+`walked_zncc`, the plain score of the tile there against the stored bitmap
+(null where there is none), to set beside the row's `zncc` at its seed, with
 `walked_zncc_middle` beside it. **Both the `cluster` and the `track` block
 carry `zncc_middle` beside `zncc`**: the same samples correlated over only the
 middle square of the patch, half its width, so a high `zncc` with a low
@@ -4024,11 +4025,13 @@ leaves the kept bitmap pending its render, and on a row whose score could not
 be read, and `reason` then says why (`there is no bitmap to score it against`
 for the first, `the bitmap is to be rendered again before the row is scored`
 for the second); the bars leave such a row's verdict where it is. No bar judges `blur_matched_zncc`.
-The localizer's own reading is `loo_zncc`, the row's leave-one-out ZNCC against
-the consensus of the other rows at the correlation peak `seed_shift_px` is
-measured to, with `loo_zncc_middle` beside it; no bar judges them, and a commit
-writes `loo_zncc` as the observation's confidence. Where the localizer could
-not read the row they are null and `reason` names its refusal, whether or not
+A commit writes `zncc` as the observation's confidence, and a track put on the
+bench from a point carries that confidence as its `zncc` until the first
+evaluation. The keypoint localizer aligns every row to the render of the
+track's reference observation, and `seed_shift_px` is how far the peak of that
+alignment sits from the row's keypoint, `0` on the reference's own row. Where
+the localizer could not read the row `seed_shift_px` is null and `reason` names
+its refusal, whether or not
 the row has a score, and the bars leave its verdict where it is. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars,
 eight in all: at the track stage `min_zncc`, `0.65` on a new track, and

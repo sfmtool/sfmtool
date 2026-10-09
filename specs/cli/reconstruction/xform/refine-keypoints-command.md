@@ -4,17 +4,22 @@ The `sfm xform --refine-keypoints` operation surfaces the sub-pixel keypoint
 refinement described in
 [keypoint-subpixel-refinement.md](../../../core/patch/keypoint-subpixel-refinement.md)
 as a reconstruction transform: it rewrites each observation's stored 2D
-keypoint in place, moving it to the sub-pixel position that best agrees with
-the point's other views.
+keypoint in place, moving it to the sub-pixel position that best matches the
+point's reference render.
 
 ## What it does
 
 Refines each observation's stored 2D keypoint to **sub-pixel** by a local
-continuous photometric solve: forward-additive ECC Gauss–Newton against a
-robust cross-view consensus. The binding does no grid search, **changes no view
-membership**, and is **never worse than the seed** (a step is accepted only if
-it raises the ECC score and stays in frame). Points at infinity are refined
-like finite ones, not skipped.
+continuous photometric solve: forward-additive ECC Gauss–Newton against the
+point's **reference render**, the `R×R` render of its reference observation at
+its stored keypoint, in one pass. The reference observation is the one the
+point stores in `tracks/reference_observations`, and where it stores none, the
+reference-view rule's pick from the views' renders at their stored keypoints;
+where the rule picks none it would store, the template is the views' fused mean
+and no view is the reference. The reference's keypoint is not moved. The
+binding does no grid search, **changes no view membership**, and is **never
+worse than the seed** (a step is accepted only if it raises the ECC score and
+stays in frame). Points at infinity are refined like finite ones, not skipped.
 
 It is therefore a **pure in-place modifier** — the keypoint counterpart of
 `--refine-normals`:
@@ -36,7 +41,8 @@ The refiner is *local*: it needs a seed already close to the optimum (≲ 1 px),
 and only an `embedded_patches` recon carries real per-observation keypoints to
 seed from. The refiner seeds every view from the recon's stored inline keypoint
 and refines each point's full track (the binding's `view_sets=None` /
-`starting_keypoints=None` default path); the stored per-point patch frame
+`starting_keypoints=None` default path), passing each point's stored reference
+observation as `reference_images`; the stored per-point patch frame
 (`recon.patches`) supplies the patch geometry and is never rebuilt.
 
 Because the refinement is photometric it reads the workspace source images
@@ -60,14 +66,14 @@ sfm xform <input.sfmr> [<output.sfmr>] --refine-keypoints [<params>] [...]
 `--refine-keypoints` takes an **optional** comma-separated parameter string of
 `key=value` modifiers (the Click option is `is_flag=False, flag_value=""`, so
 all three forms work: bare `--refine-keypoints`, space-separated
-`--refine-keypoints max_outer_sweeps=2`, and joined
-`--refine-keypoints=max_outer_sweeps=2` — while a following option, e.g.
+`--refine-keypoints max_gn_steps=20`, and joined
+`--refine-keypoints=max_gn_steps=20` — while a following option, e.g.
 `--refine-keypoints --refine-normals`, is left untouched). With no value it
 runs the binding defaults.
 
 ```
 --refine-keypoints
---refine-keypoints max_outer_sweeps=2,sampler=anisotropic
+--refine-keypoints max_gn_steps=20,sampler=anisotropic
 --refine-keypoints bitmaps=false
 --to-embedded-patches --refine-keypoints --refine-normals
 ```
@@ -84,13 +90,10 @@ exactly, so the CLI re-specifies nothing and the two layers cannot drift.
 | `window`               | `gaussian_disk` | `refine_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`         | `0.6`           | `refine_keypoints`                             |
 | `sampler`              | `per_view`      | `refine_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` applies the sampler rule to each view, `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and `bilinear_mip` otherwise; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression, bounding the aliasing `bilinear` suffers on cross-scale views at the same cost; `anisotropic` resolves oblique footprints; the value+gradient render this step reads has no AVX2 kernel and costs 2.8–7× the `bilinear_mip` one) |
-| `robust_iters`         | `3`             | `refine_keypoints` (IRLS passes for the consensus) |
-| `max_outer_sweeps`     | `1`             | `refine_keypoints` (`1` = single-pass frozen consensus; `>1` refreshes per sweep) |
-| `outer_convergence_px` | `0.005`         | `refine_keypoints` (outer-loop stop, patch-grid px; ignored at 1 sweep) |
-| `max_gn_steps`         | `10`            | `refine_keypoints` (Gauss–Newton steps per view per sweep) |
+| `robust_iters`         | `3`             | `refine_keypoints` (IRLS passes for the fused mean, where it is the template) |
+| `max_gn_steps`         | `10`            | `refine_keypoints` (Gauss–Newton steps per view) |
 | `convergence_px`       | `0.01`          | `refine_keypoints` (per-view stop, patch-grid px) |
 | `max_offset_px`        | `2.0`           | `refine_keypoints` (max per-view drift from the seed, patch-grid px) |
-| `consensus_refresh`    | `per_sweep`     | `refine_keypoints` (`per_sweep`/`per_move`)    |
 | `bitmaps`              | `true`          | render + persist the per-point RGBA patch bitmaps (below); `bitmaps=false` skips the render |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), duplicate keys,
@@ -117,19 +120,18 @@ round a near-edge value up to exactly width/height, which the writer's
 
 **Persisting the patch bitmaps (`bitmaps`).** With `bitmaps` (the default) the
 binding additionally renders each point's stored bitmap at the **final**
-refined keypoints, the tile of the view the reference-view rule picks, or the
-fused mean of the views, naming no observation, where the rule picks none or
-reaches its pick only through its last fallback
-([reference-view.md](../../../core/patch/reference-view.md) § "The stored
-bitmap"), and the command scatters them into a `(point_count, R, R, 4)` uint8
-array (zero rows where the point produced no valid cross-view consensus) and
-records each point's reference observation, attached via
+refined keypoints, the tile of the reference observation the views were
+aligned to, or the fused mean of the views, naming no observation, where there
+is none ([reference-view.md](../../../core/patch/reference-view.md) § "The
+stored bitmap"), and the command scatters them into a `(point_count, R, R, 4)`
+uint8 array (zero rows where the point produced no bitmap) and records each
+point's reference observation, attached via
 `clone_with_changes(patches=cloud, patch_bitmaps=…,
 reference_observations=…)`; the stored frame is
 re-persisted alongside so the bitmaps have a frame to attach to (the frame
 itself is unchanged — keypoints moved, not the surfel). A point whose
 `tracks/reference_observations` entry already names an observation keeps it,
-and only a point at `-1` takes the refiner's pick. Every point with a
+and only a point at `-1` takes the reference its views were aligned to. Every point with a
 reference then has its bitmap rendered again from that observation at its
 refined keypoint as the file stores it, in `f32` (`render_from_references` in
 [`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py), through
@@ -140,13 +142,15 @@ without re-rendering; it costs a tile render and a self-similarity reading per v
 point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
 and render once on the finalizing stage. With `bitmaps=false` the command
 writes the keypoints and drops any stored bitmaps, which were rendered at the
-old keypoints, as `--refine-normals bitmaps=false` does; the
-`tracks/reference_observations` entries carry across as they were, so a later
-`--add-patch-bitmaps` renders each point from its reference.
+old keypoints, as `--refine-normals bitmaps=false` does; a point that stores a
+reference observation keeps it, and a point at `-1` records the reference its
+views were aligned to, so a later `--add-patch-bitmaps` renders each point from
+the reference its keypoints were refined against.
 
 The transform prints a one-line summary in the established `xform` style over
-the finitely-scored views (a point with fewer than two views has no consensus;
-its views carry NaN scores and keep their seed):
+the finitely-scored views, the reference's included (a point with fewer than
+two views, or with no template rendered, carries NaN scores and keeps its
+seeds):
 
 ```
   Refined N keypoints (mean |offset| 0.142 patch-grid px)
@@ -155,7 +159,8 @@ its views carry NaN scores and keep their seed):
 ## Ordering and interactions
 
 - **Invariant to global similarity.** `--rotate` / `--translate` / `--scale`
-  move points and poses together, so the photometric consensus is unchanged;
+  move points and poses together, so the renders the views are aligned to are
+  unchanged;
   ordering relative to those is immaterial.
 - **Repeatable.** A second pass starts from the first's stored keypoints and
   can move them further (within `max_offset_px` of the *new* seed).
@@ -175,5 +180,5 @@ its views carry NaN scores and keep their seed):
 
 Same envelope as `--refine-normals`: the binding loads **all** full-resolution
 images (plus pyramids) into memory at once and releases the GIL during the
-solve, parallelizing across points. Work scales with observations × GN steps ×
-sweeps; there is no streaming of the image set.
+solve, parallelizing across points. Work scales with observations × GN steps,
+each view refined once; there is no streaming of the image set.

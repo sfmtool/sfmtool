@@ -50,7 +50,7 @@ reference appearance a candidate view is admitted against:
 - A pair's score is the mean of its per-channel correlations.
 
 Sharing that path keeps a member's pairwise agreement in the same photometric
-*space* as the member-vs-consensus score the rest of the patch pipeline gates on:
+*space* as the member-vs-template scores the rest of the patch pipeline gates on:
 same window, same sampler, same channel treatment, same frozen-support discipline,
 and they cannot drift apart as the render conventions evolve. It is **not the same
 estimator** — selection scores one view against the fused consensus, and does it

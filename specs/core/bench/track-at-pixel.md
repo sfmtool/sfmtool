@@ -37,7 +37,8 @@ this cascade first ran as a Python composition of the bench bindings
 ([`candidates/cascade.py`](../../../scripts/track_at_pixel/candidates/cascade.py)); the Rust operation is a port of it and scores the
 same there. The Python candidates read a track with `evaluate(...,
 render_bitmap=True)`, as the Rust operation does, and take their medians of
-`loo_zncc`. What is still open about the operation, and the other candidates,
+the plain score against the stored bitmap (`zncc`), the reference row left
+out. What is still open about the operation, and the other candidates,
 is in [the draft](../../drafts/track-at-pixel.md).
 
 ## Rust API
@@ -139,7 +140,7 @@ last, and its `stage()` is `"cascade"`. The other variants refuse a query that
 names no place before any member runs.
 
 **The track** is at the track stage and has just been evaluated, so every
-observation carries its leave-one-out ZNCC, shift and projection offset.
+observation carries its score against the bitmap, shift and projection offset.
 Observation 0 is the queried sighting, `in` and pinned, with its keypoint within
 `max_query_offset_px` of the pixel. The track has no origin, so a commit of it
 creates a point. It **carries its patch bitmap and colour**, rendered where it
@@ -162,10 +163,11 @@ thresholds' verdicts in every step below come from, judge each row's score
 against a bitmap rendered where the patch then stands
 ([editable-track.md](editable-track.md) § "The reference view"). The median
 ZNCC that scores a candidate, keeps or drops a refit or a tilt, and is judged
-by the gate is the median of the `in` rows' leave-one-out ZNCC (`loo_zncc`),
-because the cascade's gates were tuned on that reading; the tracks do carry a
-bitmap. The `Final` record's middle median is likewise the median of
-`loo_zncc_middle`.
+by the gate is the median of the `in` rows' plain score against that bitmap
+(`zncc`), leaving out the reference row, which scores `1` against its own
+render and says nothing about agreement; the blur-matched score plays no part.
+The `Final` record's middle median is likewise the median of `zncc_middle` over
+the same rows.
 
 ```rust
 use sfmtool_core::bench::{
@@ -195,7 +197,8 @@ candidate's `(image, pixel)` sightings become a one-sighting cluster with every
 sighting added and set `in` by hand, the cluster is upgraded to the track stage
 (which triangulates the sightings and runs the track-stage fit), the track is
 given an [anchored fit](#anchoring) and the thresholds' verdicts, and it is
-scored as its `in` count times its median leave-one-out ZNCC, floored at zero. The best score
+scored as its `in` count times its median ZNCC against the bitmap, floored at
+zero. The best score
 is finished.
 
 **Clusters** (stage `clusters`). The clusters with a member in the queried image
@@ -257,15 +260,18 @@ Every member ends here, with the queried sighting as observation 0.
 
 ### Anchoring
 
-A track-stage fit localizes every sighting, the queried one included, against
-the consensus of the others. Beside a feature more distinctive than the pixel's
-own, the whole patch slides toward it in every photograph at once: the sightings
-stay consistent with one another, but the track is no longer at the pixel.
+A track-stage fit aligns every sighting other than the reference observation to
+the reference's render, the queried one included where it is not the
+reference, and triangulates the patch again from where they land. Where the
+reference's render is centred off the pixel, as beside a feature more
+distinctive than the pixel's own, the whole patch moves off it in every
+photograph at once: the sightings stay consistent with one another, but the
+track is no longer at the pixel.
 Anchoring slides the patch back across its own plane until its centre in the
 queried photograph is the pixel (`translate_patch_to_pixel`), which carries every
 sighting by the same in-plane displacement, and reads the track there
 (`evaluate_rendering_bitmap`). An **anchored fit** is an anchor followed by `anchor_refits` rounds
-of fit-then-anchor. A round is kept when the median leave-one-out ZNCC does not fall, and
+of fit-then-anchor. A round is kept when the median ZNCC against the bitmap does not fall, and
 always when an `in` sighting has no keypoint, since the fit gives it one. The
 first round is also kept always after growth, whose new sightings sit at the
 patch centre's projection until a fit localizes them.
@@ -280,7 +286,7 @@ patch centre's projection until a fit localizes them.
    `normal_prior_k`, a distance-weighted mean normal. The patch is tilted toward
    it (flipped to face the queried camera), refit with an anchored fit and
    thresholded against the scores of a bitmap rendered at the tilted patch,
-   and the tilt is kept unless the median leave-one-out ZNCC falls by more
+   and the tilt is kept unless the median ZNCC against the bitmap falls by more
    than `normal_prior_tolerance`.
 3. **Growth.** With two or more `in` views, the geometry search from the queried
    sighting adds the photographs the patch projects into and reads well in. When
@@ -294,13 +300,14 @@ patch centre's projection until a fit localizes them.
    fit.
 5. **Gates** (stage `gate`), in this order: the queried sighting is `in`; its
    keypoint is within `max_query_offset_px` of the pixel; at least
-   `min_in_views` views are `in`; their median leave-one-out ZNCC
-   (`loo_zncc`) is at least `min_zncc_median`; and no `in` view's keypoint
+   `min_in_views` views are `in`; the median of their plain score against the
+   bitmap (`zncc`), the reference row left out, is at least
+   `min_zncc_median`; and no `in` view's keypoint
    sits more than `max_projection_offset_px` from the point's projection. The
    `Final` record carries the median the gate judged and, beside it, the median
-   leave-one-out middle ZNCC over the same views (`zncc_middle_median`, of
-   `loo_zncc_middle`, [`editable-track.md`](editable-track.md) § "The middle
-   ZNCC"), which no gate reads.
+   middle ZNCC over the same views (`zncc_middle_median`, of `zncc_middle`,
+   [`editable-track.md`](editable-track.md) § "The middle ZNCC"), which no gate
+   reads.
 6. **Bitmap.** The track that passed already carries the bitmap its last
    reading rendered where the patch stands, with every row scored against it.
    Only where it ends with no bitmap is it given one here, by the render a fit
@@ -326,7 +333,7 @@ They are the Python candidates' defaults, which the harness chose.
 | `finish.clean_max_projection_px` | `1.5` | keypoint-to-projection distance that turns a view out |
 | `finish.clean_rounds` | `2` | cleaning rounds at most |
 | `finish.min_in_views` | `3` | gate: fewest `in` views |
-| `finish.min_zncc_median` | `0.8` | gate: lowest median ZNCC |
+| `finish.min_zncc_median` | `0.7` | gate: lowest median plain ZNCC against the bitmap, the reference row left out (§ "How the median gate was set") |
 | `finish.max_query_offset_px` | `2.0` | gate: queried keypoint's distance from the pixel |
 | `finish.max_projection_offset_px` | `1.5` | gate: any `in` keypoint's distance from the projection |
 | `clusters.search_radius_px` | `16.0` | how far from the pixel a cluster's member may be |
@@ -352,6 +359,39 @@ They are the Python candidates' defaults, which the harness chose.
 | `*.depth_mode_gap` | `1.15` | depth ratio that separates two surfaces |
 | `*.default_radius_px` | `8.0` | patch half-width when no neighbour states one |
 | `*.min_radius_px`, `*.max_radius_px` | `4.0`, `40.0` | bounds on a patch half-width |
+
+### How the median gate was set
+
+The median gate reads the plain score against the bitmap since the
+leave-one-out ZNCC was removed (2026-10-09); before that it read the
+leave-one-out ZNCC at a default of `0.8`. It was measured again in the harness
+([`scripts/track_at_pixel/README.md`](../../../scripts/track_at_pixel/README.md)
+§ "The median gate on the score against the bitmap"): `core_cascade`, a full
+pass over every query of the seoul_bull (1277 queries) and Kerry Park (3767)
+ground truths, sweeping `finish.min_zncc_median`. A track is correct here when
+it passes the harness's good bar on position and view precision; the bar's own
+ZNCC test is left out, since it reads the same score.
+
+| gate | seoul_bull built | correct | wrong | precision | Kerry Park built | correct | wrong | precision |
+|---|---|---|---|---|---|---|---|---|
+| off | 1180 (92.4%) | 991 | 189 | 0.840 | 3196 (84.8%) | 2587 | 609 | 0.809 |
+| 0.6 | 1117 (87.5%) | 970 | 147 | 0.868 | 3062 (81.3%) | 2550 | 512 | 0.833 |
+| 0.65 | 1095 (85.7%) | 957 | 138 | 0.874 | 3040 (80.7%) | 2538 | 502 | 0.835 |
+| **0.7** | **1065 (83.4%)** | **937** | **128** | **0.880** | **2983 (79.2%)** | **2495** | **488** | **0.836** |
+| 0.75 | 1015 (79.5%) | 901 | 114 | 0.888 | 2873 (76.3%) | 2396 | 477 | 0.834 |
+| 0.8 | 915 (71.7%) | 818 | 97 | 0.894 | 2676 (71.0%) | 2231 | 445 | 0.834 |
+
+With the gate off, the median score of correct tracks is 0.86 (seoul_bull) and
+0.89 (Kerry Park), and of tracks at the wrong position 0.75 and 0.86, so the
+gate mostly removes tracks with a low score of either kind. On Kerry Park
+precision stops rising at `0.65`; on seoul_bull each step of `0.05` buys half a
+point of precision for 1 to 3 points of correct tracks. `0.7` is the default.
+`0.6` would return 2.6 (seoul_bull) and 1.5 (Kerry Park) points more correct
+tracks per query at a precision 1.2 and 0.3 points lower. After a fit, `0.7`
+refuses about as many ground-truth tracks (5.1% of 450 from seoul_bull,
+kerry_park and a dino_dog_toy reconstruction) as `0.8` did on the leave-one-out
+score (5.8%), and passes 0.7% of the same tracks with every keypoint moved 15
+to 30 px off.
 
 ## Implementation notes
 
@@ -437,7 +477,9 @@ runs; and the returned track carries a bitmap on the reconstruction's own
 bitmap grid, with the colour at its centre, which rendering again does not
 change.
 The arithmetic (the weighted affine, depth modes, the median) is tested
-directly.
+directly, and so is the median gate's reading: the plain score against the
+bitmap over the `in` rows other than the reference, with the blur-matched score
+playing no part.
 [`test_track_at_pixel_rust_bindings.py`](../../../tests/rust_bindings/bench/test_track_at_pixel_rust_bindings.py)
 runs the
 binding on the seoul_bull capture. The harness run over every point of seoul_bull

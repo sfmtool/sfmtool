@@ -83,11 +83,12 @@ threshold slider in Track View judge the same numbers.
 
 - **Of the spot.** The queried observation is `in`, and the point is the
   piece of surface seen at the pixel, as above.
-- **Supported.** Enough `in` observations that the leave-one-out consensus
-  means something: two is a correspondence, and three or more is a track.
-- **Photometrically consistent.** Each `in` observation's leave-one-out ZNCC
-  against the consensus of the others clears the bar, and the median clears a
-  higher one.
+- **Supported.** Enough `in` observations that agreement means something: two
+  is a correspondence, and three or more is a track.
+- **Photometrically consistent.** Each `in` observation's ZNCC against the
+  stored bitmap, the render of the track's reference observation, clears the
+  bar, and the median over the observations other than the reference clears
+  another.
 - **Geometrically consistent.** The finite-or-bearing classification
   ([editable-track.md](../core/bench/editable-track.md) § "Finite points and
   bearings") is one the sightings support, and the reprojection residuals are
@@ -171,7 +172,8 @@ tracks and the cameras alone:
 - **Frame:** normal error, and the ratio of patch half-sizes.
 - **Membership:** the precision and recall of the image set against the
   ground truth's, and the keypoint error in the images both hold.
-- **Photometry:** the median and minimum leave-one-out ZNCC, set beside the
+- **Photometry:** the median and minimum ZNCC against the stored bitmap over
+  the `in` views other than the reference, set beside the
   same `evaluate` reading taken of the ground-truth track. Localizability and
   reprojection residuals.
 - **Cost:** time per query.
@@ -188,7 +190,10 @@ track against a single bar of its own and counts the tracks that pass it
 (good) and the ones that do not (built but not good). A track is good when its
 queried observation is `in`, its point is within one ground-truth half-extent
 of the ground-truth point (0.5 degrees for a bearing), at least three quarters of its `in` views pass the geometric
-membership test above, and its median leave-one-out ZNCC is at least 0.7.
+membership test above, and its median ZNCC against the stored bitmap, over the
+`in` views other than the reference, is at least 0.7. (Results dated before
+2026-10-09 read the leave-one-out ZNCC against the consensus of the other
+views, which the localizer no longer computes.)
 Candidates are ranked on the good count, with the not-good count beside it.
 
 A refusal is scored by its stage, and the summary groups refusals by reason,
@@ -339,6 +344,6 @@ Once a track stands, the last four share one finish:
   two against each other, or treats the clusters as one more source of
   proposals, is open.
 - **Kernels with no binding.** Registering one patch bitmap directly against
-  another, and congealing a bare stack of bitmaps, are reachable today only
-  through a one-patch cloud. A candidate that leans on either may justify a
+  another, and aligning a bare stack of bitmaps to one of them, are reachable
+  today only through a one-patch cloud. A candidate that leans on either may justify a
   direct binding.

@@ -43,4 +43,4 @@ across views, and everything refined on top of it. Implemented in
 | [cell-plane-normals.md](cell-plane-normals.md) | A cluster's patch normal from the stored cell displacements once poses exist: each cell's rays triangulated, a Tukey-weighted plane through the cells, and a verdict naming which of the normal's axes the cells fix. |
 | [cluster-warp-consistency.md](cluster-warp-consistency.md) | A reconstruction-free per-member consistency signal: the weak-perspective factorization residual. |
 | [member-coherence-validation.md](member-coherence-validation.md) | Pairwise track agreement and the max-support block that decides which members belong. |
-| [candidate-track-spawning.md](candidate-track-spawning.md) | Congealing new candidate tracks at offsets from an existing patch frame. |
+| [candidate-track-spawning.md](candidate-track-spawning.md) | Localizing new candidate tracks at offsets from an existing patch frame. |

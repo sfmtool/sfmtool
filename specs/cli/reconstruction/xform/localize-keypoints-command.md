@@ -3,9 +3,9 @@
 The `sfm xform --localize-keypoints` operation moves the 2D keypoints of an
 `embedded_patches` reconstruction, which stores a patch for each 3D point (a
 small oriented square of the surface around it). For each point it starts from
-the point's projection into every image that observes it, searches for the shift
-at which that image's view of the patch best agrees with the point's other
-views, and drops the views it cannot register this way. It then **rebuilds** the
+each observation's stored keypoint, searches for the shift at which that
+image's view of the patch best matches the point's reference render (the tile
+of its reference observation), and drops the views it cannot align this way. It then **rebuilds** the
 reconstruction from the views that remain, removing points left with too few of
 them. It is the search that places each keypoint near enough to the best match
 for `--refine-keypoints` to refine it locally, and a way to remove the
@@ -15,17 +15,20 @@ itself is specified in
 
 ## What it does
 
-Localizes each observation's 2D keypoint by group-wise translation registration
-(**congealing**): each round renders every view's patch tile at its accumulated
-in-plane offset, builds the robust cross-view consensus, and searches each
-view's residual shift against the **leave-one-out** consensus of the others.
-Views that drift too far, leave the frame, graze the patch plane
+Localizes each observation's 2D keypoint by aligning it, in one pass, to the
+point's **reference render**: the `R×R` render of the point's reference
+observation at its stored keypoint. The reference observation is the one the
+point stores in `tracks/reference_observations`, and where it stores none, the
+reference-view rule's pick from the views' renders at their stored keypoints
+(where the rule picks none it would store, the template is the views' fused
+mean and no view is the reference). The reference's keypoint is not moved.
+Every other view renders one tile around its stored keypoint and searches the
+shift, within `±search` patch-grid px, at which it best matches the reference
+render. Views that drift too far, leave the frame, graze the patch plane
 (`min_grazing_cos`), pin no 2D position of their own
-(`max_member_zncc_self_similarity_radius`, 2.5 by default), or stop agreeing
-— absolutely (`min_absolute_zncc`) or relative to their peers (`min_relative_zncc`) — are
-**dropped**.
-Seeds are each point's own projection (`project_i(X_p)`); a view's total drift
-from its seed is limited to `search` patch-grid px.
+(`max_member_zncc_self_similarity_radius`, 2.5 by default), or match the
+reference render too poorly — absolutely (`min_absolute_zncc`) or relative to
+the other views (`min_relative_zncc`) — are **dropped**.
 
 It is therefore a **structural** operation — the search counterpart of the
 in-place `--refine-keypoints`, with a fundamentally different shape:
@@ -45,10 +48,11 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   (points at infinity stay at infinity).
 - **Bitmaps are dropped.** The localizer renders no bitmaps, and any stored
   ones are stale once keypoints move and views drop, so the output carries
-  patch *frames* but no bitmaps. Each point keeps its
-  `tracks/reference_observations` entry, moved to the observation of the same
-  image in its rebuilt track (`-1` where that image was dropped), so a later
-  render renders the point from it. Re-run
+  patch *frames* but no bitmaps. Each point records the reference observation
+  its views were aligned to in `tracks/reference_observations` (its stored
+  reference, or the rule's pick where it stored none), as the observation of
+  that image in its rebuilt track, or `-1` where the views were aligned to the
+  fused mean, so a later render renders the point from it. Re-run
   `sfm xform --refine-keypoints bitmaps=true` (or
   `--refine-normals bitmaps=true`) to regenerate them (a frames-without-bitmaps
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).
@@ -128,22 +132,18 @@ the binding's own default. The "Default" column lists those binding defaults.
 | Key                            | Default         | Forwards to                                    |
 |--------------------------------|-----------------|------------------------------------------------|
 | `min_views`                    | `2`             | `compact_to_embedded_patches` (drop a point with fewer kept views; `>= 1`) |
-| `max_iters`                    | `5`             | `localize_keypoints` (max congealing rounds)   |
-| `search`                       | `6.0`           | `localize_keypoints` (max total per-view drift, patch-grid px) |
+| `search`                       | `6.0`           | `localize_keypoints` (reach of each view's search around its stored keypoint, patch-grid px) |
 | `max_shift_px`                 | `3.0`           | `localize_keypoints` (drop a view whose keypoint sits further than this from the point's projection, source-image px) |
-| `min_relative_zncc`            | `0.7`           | `localize_keypoints` (drop a view whose leave-one-out ZNCC falls below this fraction of the median — the one gate the two-view floor can undo) |
-| `min_absolute_zncc`            | `0.5`           | `localize_keypoints` (drop a view whose leave-one-out ZNCC is finite and below this absolute floor, whatever the view count; `0` disables) |
-| `max_member_zncc_self_similarity_radius` | `2.5` | `localize_keypoints` (drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px — see [`specs/core/patch/patch-keypoint-localization.md`](../../../core/patch/patch-keypoint-localization.md#the-member-self-similarity-gate); `0` disables, `3` or more rejects nothing) |
+| `min_relative_zncc`            | `0.7`           | `localize_keypoints` (drop a view whose ZNCC against the reference render falls below this fraction of the median over the views other than the reference; `0` disables) |
+| `min_absolute_zncc`            | `0.5`           | `localize_keypoints` (drop a view whose ZNCC against the reference render is finite and below this absolute floor, whatever the view count; `0` disables) |
+| `max_member_zncc_self_similarity_radius` | `2.5` | `localize_keypoints` (drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px — see [`specs/core/patch/patch-keypoint-localization.md`](../../../core/patch/patch-keypoint-localization.md#the-member-self-similarity-gate); `0` disables, `3` or more turns nothing out) |
 | `min_grazing_cos`              | `0.1`           | `localize_keypoints` (drop a view whose ray grazes the patch plane) |
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |
 | `window`                       | `gaussian_disk` | `localize_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`                 | `0.6`           | `localize_keypoints`                           |
 | `sampler`                      | `per_view`      | `localize_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` picks `anisotropic` or `bilinear_mip` for each view by the rule in [image-warping.md](../../../core/camera/image-warping.md#choosing-the-sampler-per-view), which also gives each sampler's cost) |
-| `robust_iters`                 | `3`             | `localize_keypoints` (IRLS passes for the consensus) |
-| `convergence_px`               | `0.05`          | `localize_keypoints` (round-level stop, patch-grid px) |
-| `search_resolution_multiplier` | `1.0`           | `localize_keypoints` (supersampled search grid; `> 1` resolves sub-pixel offsets at ~m² cost) |
+| `robust_iters`                 | `3`             | `localize_keypoints` (IRLS passes for the fused mean, where it is the template) |
 | `search_strategy`              | `plus_descent`  | `localize_keypoints` (`plus_descent`/`exhaustive`) |
-| `basis_max_views`              | `8`             | `localize_keypoints` (consensus-basis cap `K`; `0` congeals all views — the cleanest error metrics. A track of `≤ K` views takes the uncapped path either way. This surface runs over each point's own track and supplies no per-view appearance scores, so a biting cap ranks the basis by grazing angle) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), duplicate keys,
 or unparseable values raise `click.UsageError`, and so does a value out of its
@@ -170,11 +170,13 @@ The transform prints a structural summary in the established `xform` style:
   gives the normal refiner cleaner view sets. Both orderings are legitimate —
   pick per dataset rather than by rule.
 - **Invariant to global similarity.** `--rotate` / `--translate` / `--scale`
-  move points and poses together, so the photometric consensus is unchanged;
+  move points and poses together, so the renders the views are aligned to are
+  unchanged;
   ordering relative to those is immaterial.
-- **Repeatable, not idempotent.** A second pass re-seeds at each point's
-  projection and re-runs the search over the already-culled track; it can drop
-  further views.
+- **Repeatable, not idempotent.** A second pass starts from the keypoints the
+  first one wrote and aligns them to the reference observation the first pass
+  recorded, over the already-culled track; it can move views again and drop
+  further ones.
 - **Downstream ops see the culled structure.** Track-based filters
   (`--remove-short-tracks`, `--remove-narrow-tracks`) and `--bundle-adjust`
   after this op operate on the rebuilt, smaller track set — often exactly what
@@ -187,6 +189,5 @@ The transform prints a structural summary in the established `xform` style:
 Same envelope as `--refine-keypoints` / `--refine-normals`: the binding loads
 **all** full-resolution images (plus pyramids) into memory at once and releases
 the GIL during the search, parallelizing across points. Work scales with
-observations × rounds × the search area (`search²`, × `m²` under
-`search_resolution_multiplier`); `plus_descent` (default) prunes the search
-against `exhaustive`. There is no streaming of the image set.
+observations × the search area (`search²`), with each view searched once;
+`plus_descent` (default) scores far fewer shifts than `exhaustive`. There is no streaming of the image set.

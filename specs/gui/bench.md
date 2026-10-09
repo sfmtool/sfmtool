@@ -494,7 +494,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207`; a put of the viewed point that carries Track View's read-only bars names the bars that differ from the defaults: `Put point 1207 on the bench as pt3d_a1b2c3d4_1207, with min ZNCC 80%` (§ "Live evaluation") |
 | Put a point on the bench again, once it has a patch frame its item lacks (§ "A view-only bench") | `Rebuilt pt3d_a1b2c3d4_1207 from point 1207, which now carries a patch frame` |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
-| Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member: 9 observations in, median leave-one-out ZNCC 91% / 88%` (the version's own label stops before the colon; `, after constellation refused` follows where earlier members were refused) |
+| Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member: 9 observations in, median ZNCC 91% / 88%` (the version's own label stops before the colon; `, after constellation refused` follows where earlier members were refused) |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
 | Unpin one verdict | `Handed image_012.jpg back to the thresholds in pt3d_a1b2c3d4_1207: in` |
@@ -1001,7 +1001,7 @@ enum Subject {
 **It is built the way a put builds a bench track**: core's `create_track`, from
 the version at the cursor, under the label a put gives it (the point's portable
 ID) and with the same options. Its rows arrive `in` and pinned, the
-leave-one-out ZNCC (`loo_zncc`) is read back from the point's stored column, and the bars are
+score against the bitmap (`zncc`) is read back from the point's stored confidence column, and the bars are
 the defaults. It is held in `AppState::viewed_tracks` as a `ViewedTrack` (node,
 point, document serial, label, track, evaluation state), never in a version: no
 step accepts it, the Scene tree does not list it, and the bench layers do not
@@ -1193,7 +1193,7 @@ reconstruction that stores a bitmap per point as on one that does not.
 first is a bench step: the track put on the bench under the label a cluster
 started at that pixel would take (`IMG_0042@142,198`), focused, one `Bench`
 row whose sentence names the pixel, the member that built it, its `in` count and
-median leave-one-out ZNCC with the median middle ZNCC beside it (`median leave-one-out ZNCC 93% / 71%`),
+median ZNCC against the stored bitmap with the median middle ZNCC beside it (`median ZNCC 93% / 71%`),
 and any members that refused before it. The second is
 `commit_bench_track`, the step Track View's *Commit* takes, so its version, its
 `Edit` row, the selection of the written point and the item left seated on it
@@ -1515,9 +1515,9 @@ axis is the radius, in grid px, image px and along the patch, and
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 ZNCC self-similarity radius"), at the track stage
 `zncc` as the score against the stored bitmap with `blur_matched_zncc`,
-`bitmap_blur_sigma` and `sharper_than_bitmap` beside it, the localizer's
-leave-one-out `loo_zncc` and `loo_zncc_middle`, the two distances
-(`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to`, `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid` for a row the last fit
+`bitmap_blur_sigma` and `sharper_than_bitmap` beside it, the two distances
+(`seed_shift_px`, the localizer's peak against the reference render, and
+`projection_offset_px`), `walked_px`, `walked_to`, and `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid` (the plain score against the bitmap of the tile there) for a row the last fit
 refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the localizer could
 not read or that has no score, the `reason` sentence. The track stage's data names
 the reference in use as `reference_observation` and the reference-view rule's

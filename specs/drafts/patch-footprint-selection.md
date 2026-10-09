@@ -63,7 +63,7 @@ impl PatchCloud {
 }
 ```
 
-**Why this shape.** A ladder rather than a continuous search, because every stored bitmap, the consensus basis and the display assume all patches of a reconstruction share one grid, and a small set of allowed half-extents keeps that true per rung. Every reading is returned, not only the choice, because the choice rule will be tuned by looking at readings across a capture, and because [two-tier-patch-density.md](two-tier-patch-density.md) reads `footprint_ref_px` from the same sweep. The gates arrive as an argument so that one capture-level pass derives them and every track reads the same ones.
+**Why this shape.** A ladder rather than a continuous search, because every stored bitmap and the display assume all patches of a reconstruction share one grid, and a small set of allowed half-extents keeps that true per rung. Every reading is returned, not only the choice, because the choice rule will be tuned by looking at readings across a capture, and because [two-tier-patch-density.md](two-tier-patch-density.md) reads `footprint_ref_px` from the same sweep. The gates arrive as an argument so that one capture-level pass derives them and every track reads the same ones.
 
 **Example.** The embedding step sweeps the ladder for every track at the coarse tier, derives the gates from the distribution of the readings, picks a size per track, and only then renders the bitmaps that are stored.
 

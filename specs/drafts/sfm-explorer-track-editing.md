@@ -263,8 +263,8 @@ hit or a pixel, and what the refinement kernel `refine_cluster_patches`
 evaluates.
 
 **The track stage** is an `embedded_patches` point that is not in the value
-yet: a position, a patch frame, a consensus bitmap, and per observation a keypoint
-with the localizer's leave-one-out ZNCC, the reprojection error against the
+yet: a position, a patch frame, a patch bitmap, and per observation a keypoint
+with its ZNCC against that bitmap, the reprojection error against the
 triangulated position, the ray angle and the observation's tile localizability. It
 is what a track is when put on the bench from a committed point, and what the
 localizer, the sub-pixel refiner, view selection and the coherence matrix
@@ -506,9 +506,10 @@ the one-step edits refuse: an observation the localizer moved is a keypoint and
 not a `.sift` feature index.
 
 **What it writes** is a `PointRecord`: the triangulated position, the frame, the
-consensus bitmap, the colour read from the bitmap's centre, the normal the frame
-states, and one observation per `in` observation with its localized keypoint and the
-fit's leave-one-out ZNCC in `observation_confidence` where the column exists.
+patch bitmap, the colour read from the bitmap's centre, the normal the frame
+states, and one observation per `in` observation with its localized keypoint and
+its plain ZNCC against the bitmap in `observation_confidence` where the column
+exists.
 
 - **With no origin**, `EditedReconstruction::add_point`, pushed with
   `push_creating` so the point has an id of the `pt3d_{edit hash}_{k}` form
@@ -636,7 +637,7 @@ so a reader who knows that panel reads this one, then what the bench adds:
 | Verdict | tri-state, click cycles `in` / `out` / `candidate` | same |
 | Tile | the reference template warped onto this observation | the surfel re-rendered from this observation at its keypoint, the view-only panel's tile |
 | Thumbnail, Image, Name | as view mode | as view mode |
-| ZNCC | against the reference | leave-one-out against the consensus |
+| ZNCC | against the reference | against the stored bitmap, the reference observation's render |
 | Seed sh., Proj. off | from the seed, px | the peak's move from the sighting, and the sighting's distance from the projection |
 | Self-similarity | the ZNCC self-similarity radius of the observation's own tile | the same |
 | Error, Angle | absent | as view mode |

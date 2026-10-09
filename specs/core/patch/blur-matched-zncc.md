@@ -768,18 +768,18 @@ row reads 1. The Python tests are in
   sharp along it (§ "Which tile is blurred, and to what length").
 - **The bench's ZNCC bars blur-matched.** The bars judge each row's plain
   score against the stored bitmap; blur-matched, they would stop reacting to
-  views that are out of focus. The localizer's leave-one-out ZNCC, which
-  places each row and which Track at Pixel's median gates read, is not blur-matched
-  either: it would need each row's leave-one-out template and its
-  self-similarity reading, which the localizer builds per round and does not
-  return, and the localizer is also the alignment, which stays unblurred.
+  views that are out of focus. The localizer's own gates, which read each
+  view's plain ZNCC against the reference render it aligns the view to, and
+  Track at Pixel's median gate, which reads the plain score against the
+  bitmap, are not blur-matched either: the alignment runs against the
+  unblurred template, and the gates judge the score at its peak.
 - **The fused means' IRLS residuals.** The stored bitmap is the reference
   view's tile, not a mean ([reference-view.md](reference-view.md) § "The
   stored bitmap"). The kernels that still build a weighted mean as their
-  template (the localizer, the sub-pixel refiner, normal refinement, and the
-  stored bitmap's fallback where the rule picks no view or reaches its pick
-  only through its last fallback) read their residuals
-  plain; each would blur-match them only on its own measurement.
+  template (normal refinement, and the localizer, the sub-pixel refiner and
+  the stored bitmap where the point has no reference and the rule picks no
+  view or reaches its pick only through its last fallback) read their
+  residuals plain; each would blur-match them only on its own measurement.
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.
 - **Choosing a patch's size.** No caller reads the blur-matched readings of a

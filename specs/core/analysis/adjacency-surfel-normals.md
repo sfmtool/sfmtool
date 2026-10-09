@@ -83,7 +83,7 @@ its determinacy in this form is proposed in [piece-gated-grid-normal.md](../../d
 ## Extra neighbours
 
 Callers may pass synthesized neighbour **positions** for specific points
-(e.g. congealed helper patches acquired for points whose graph
+(e.g. localized helper patches acquired for points whose graph
 neighbourhood is under-determined). They enter the fit exactly like graph
 neighbours — displacement from `p`, unit direction, IRLS weight — and count
 toward every diagnostic. Extras for unselected points are ignored.

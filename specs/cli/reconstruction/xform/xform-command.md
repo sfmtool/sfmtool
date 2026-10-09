@@ -522,8 +522,9 @@ full parameter list and semantics.
 #### `--refine-keypoints [<params>]`
 
 Refines each observation's stored 2D keypoint to sub-pixel by a local
-photometric solve (forward-additive ECC Gauss–Newton against a robust
-cross-view consensus; never worse than the seed). A pure in-place modifier: the
+photometric solve (forward-additive ECC Gauss–Newton against the point's
+reference render, the tile of its reference observation, whose keypoint is not
+moved; never worse than the seed). A pure in-place modifier: the
 point count, positions, poses, cameras, normals, and the entire track structure
 are unchanged — only `keypoints_xy` values move. It does **not** re-fit the
 stored patch frames; with `bitmaps` (on by default) it additionally re-renders
@@ -543,24 +544,26 @@ the full parameter list and semantics.
 
 ```bash
 --refine-keypoints
---refine-keypoints max_outer_sweeps=2,sampler=anisotropic
+--refine-keypoints max_gn_steps=20,sampler=anisotropic
 --refine-keypoints bitmaps=false
 --to-embedded-patches --refine-keypoints --refine-normals
 ```
 
 #### `--localize-keypoints [<params>]`
 
-Localizes each observation's 2D keypoint by a discrete cross-view search
-(congealing against a leave-one-out consensus), seeded at each point's own
-projection. **Structural**, unlike the two refine ops: views that won't
+Localizes each observation's 2D keypoint by a discrete search that aligns it,
+in one pass, to the point's reference render (the tile of its stored reference
+observation, or of the reference-view rule's pick where it stores none),
+starting at each observation's stored keypoint; the reference's keypoint is
+not moved. **Structural**, unlike the two refine ops: views that won't
 co-register are dropped, points whose kept-view count falls below `min_views`
 (default 2) are culled, and `keypoints_xy` plus the entire track structure are
 rebuilt from the survivors (via the same compaction helper the `embed-patches`
 pipeline uses). Cameras, poses, and each surviving point's 3D geometry are
 unchanged. Stored patch bitmaps are dropped as stale (the frames are kept, and
-each point keeps its `tracks/reference_observations` entry, moved to the
-observation of the same image in its rebuilt track, `-1` where the localizer
-dropped that image) —
+each point records the reference observation its views were aligned to in
+`tracks/reference_observations`, as the observation of that image in its
+rebuilt track, `-1` where the views were aligned to the fused mean) —
 re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
 render bitmaps by default); there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be

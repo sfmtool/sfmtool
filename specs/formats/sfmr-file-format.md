@@ -205,7 +205,7 @@ reconstruction.sfmr (ZIP archive)
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
     ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files) (version 4+)
-    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation sharpness confidence (version 6+)
+    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation ZNCC against the patch bitmap (version 6+)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
     ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from (version 12+)
@@ -1508,34 +1508,43 @@ identifies nothing on its own, so it may accompany `feature_indexes`.
 
 #### `tracks/observation_confidence.{M}.uint8.zst` (Optional, version 6+)
 
-Per-observation confidence in that observation's **photometric sharpness relative
-to its track's consensus**: how well this image resolves the detail the rest of the
-track agrees on.
+Per-observation confidence in how well the observation agrees with its point's
+appearance: the observation's **plain ZNCC against the point's stored patch
+bitmap**, the render of its reference observation (`reference_observations`
+below), read at the observation's keypoint. The reference observation itself
+scores `1.0`. It holds this score until the per-observation keypoint covariance
+replaces it as the confidence bundle adjustment weighs observations by.
 
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint8` (little-endian)
 - **Format**: `0` means the observation carries **no data-derived support** — no
   writer measured it. It is *not* a claim that the observation is poor, and a
-  reader must not treat it as the bottom of the scale. Measured values occupy
-  `1..=255`, running from maximally soft against the track's consensus to fully
-  sharp. Consumers must treat the value monotonically (higher = sharper), never
-  switch on exact codes.
+  reader must not treat it as the bottom of the scale. A measured ZNCC `z` is
+  stored as `round(255 · clamp(z, 0, 1))`, so measured values occupy
+  `1..=255`, with `255` for the reference observation. The bench commit writes
+  `0` for a row it has no score for; Add Image to Tracks raises a measured `0`
+  to `1`. Consumers must treat the value monotonically (higher = agrees
+  better), never switch on exact codes.
 - **Constraint**: parallel to the other `tracks/*` arrays, so it follows the same
   lexicographic `(point_indexes[j], image_indexes[j])` order and is permuted in
   lockstep when the writer sorts.
-- **Presence**: independent of `feature_source` — an observation has a sharpness
+- **Presence**: independent of `feature_source` — an observation has a score
   whether a `.sift` feature index or an inline keypoint backs it. Present only when
   `has_observation_confidence` is `true`. An absent array means **no information**,
-  which is not "every observation is sharp".
+  which is not "every observation agrees".
 - **Writer responsibility**: the array passes through the writer untouched. A
   writer that appends observations and also supplies this column is responsible for
   extending it — a newly created observation nothing has measured takes `0`.
 
-**Why it exists**: a soft frame and a sharp one are indistinguishable in
-`keypoints_xy`, which records where the observation is and nothing about how well
-it is resolved. A reader that wants to **select the sharp observations of a track**
-— to render from, to measure against, or to compare a track's images by — has
-otherwise to re-derive that from the source images.
+- **Writers**: the bench's commit and Add Image to Tracks fill it for the
+  observations they write, where the file has the column.
+
+**Why it exists**: an observation that matches its point's appearance well and
+one that matches it poorly are indistinguishable in `keypoints_xy`, which records
+where the observation is and nothing about how well it agrees. A reader that
+wants to **select the observations of a track that agree best** — to render
+from, to measure against, or to compare a track's images by — has otherwise to
+re-derive that from the source images.
 
 #### `tracks/point_indexes.{M}.uint32.zst`
 

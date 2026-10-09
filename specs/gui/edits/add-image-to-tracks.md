@@ -2,7 +2,7 @@
 
 An action of the image menu that looks for every point an image does not
 observe in that image's photograph, adds the observations whose appearance
-agrees with the point's other observations, and installs the answer as the
+agrees with the point's patch as well as its other observations do, and installs the answer as the
 reconstruction's next **version**, which an undo steps back out of. Nothing else
 moves: no point, frame, bitmap or camera, and every index still means what it
 meant, except that point edits still pending in the overlay are folded in

@@ -67,7 +67,7 @@ The fine tier can change which members survive a gate, because sharper bitmaps r
 Two tiers mean two patch resolutions can exist for one reconstruction. The options:
 
 - **Replace on upgrade.** The file holds one `R`. Upgrading a reconstruction rewrites its bitmaps at 24 and its unupgraded tracks are rendered at 24 anyway, interpolated, with a per-track flag saying so. Simplest; loses the honest coarse bitmap for refused tracks.
-- **Two resolutions per file.** Each track records its own `R` from the pair. Bitmap storage becomes ragged. Consumers that assume one grid, the consensus basis and the display, need a per-track `R`.
+- **Two resolutions per file.** Each track records its own `R` from the pair. Bitmap storage becomes ragged. Consumers that assume one grid, such as the display, need a per-track `R`.
 - **Two files.** The coarse product and the fine product are separate reconstructions with the same tracks. Clean for the seed, which already writes candidate files, and awkward for a single edited reconstruction.
 
 The cluster-patches file has the same question at `patch_size`. The fleet refresh standardised on 12, and the file is a precursor the seed reads once, so the proposal is that the cluster-patches file stays at one size and the fine tier is only ever a property of a reconstruction.

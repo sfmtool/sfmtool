@@ -18,8 +18,8 @@ defined in [sfmr-file-format.md](../../formats/sfmr-file-format.md),
 patch matching, in place of SIFT descriptor matching, decide each point's track
 and keypoints: an image joins the track when the point's patch rendered in it
 agrees with the other images' renders, an observation whose render does not
-agree is dropped, and each kept keypoint is placed by registering the patch
-across the track's images rather than kept at the SIFT detection. The `.sift`
+agree is dropped, and each kept keypoint is placed by aligning the image's
+render to the point's reference render rather than kept at the SIFT detection. The `.sift`
 files seed this and are not read afterwards.
 
 In order, it builds an oriented patch per point (the `(u, v)` frame + normal),
@@ -176,24 +176,30 @@ thereafter (the per-round obliquity drop).
 3. **Select the views (per point).** Run [patch-view
    selection](patch-view-selection.md): geometric candidacy plus photometric
    vetting against a track-seeded template yields the view set `G`.
-4. **Project starting keypoints (per point).** For each view in `G`, project the
-   point to its naive keypoint `project_i(X_p)` — the seed the refinement starts
-   from.
-5. **Refine keypoints (per point).** Refine each seed with the
-   [keypoint-localization algorithm](patch-keypoint-localization.md): it drops
-   views that won't
-   co-register (grazing, out-of-frame, large-shift `max_shift_px`, low-agreement
-   `min_relative_zncc`) in-loop, and returns the kept views with their refined
-   keypoints and quality signals. The sub-pixel pass
-   ([keypoint-subpixel-refinement](keypoint-subpixel-refinement.md)) then settles
-   the final keypoints **and renders each point's stored bitmap at them**
-   (`refine_keypoints(render_bitmaps=True)`): the tile of the view the
-   [reference-view rule](reference-view.md) picks, rendered at its keypoint, or
-   the fused mean of the views where the rule picks none or reaches its pick
-   only through its last fallback — points at infinity
-   included, via the same `w`-aware render path — reporting per-point validity
-   (a point with fewer than two views, or with no reference view and fewer than
-   two views in frame for the mean, gets no bitmap).
+4. **Starting keypoints (per point).** Each view of `G` the point already
+   observes starts at its stored keypoint; a view step 3 added has no
+   observation, so it starts at the point's projection `project_i(X_p)`.
+5. **Align keypoints (per point).** Align each view to the point's reference
+   render with the [keypoint-localization
+   algorithm](patch-keypoint-localization.md), in one pass. The reference is
+   the point's stored reference observation where an `embedded_patches` input
+   stores one in `G`, or the one an earlier round recorded, and otherwise the
+   [reference-view rule](reference-view.md)'s pick from the renders at the
+   starting keypoints; its keypoint is not moved. The localizer drops views
+   that cannot be aligned (grazing, out-of-frame, a tile that pins no position,
+   large-shift `max_shift_px`, a ZNCC against the reference below
+   `min_absolute_zncc` or below `min_relative_zncc` times the median of the
+   other views) and returns the kept views with their keypoints and their ZNCC
+   against the reference. The sub-pixel pass
+   ([keypoint-subpixel-refinement](keypoint-subpixel-refinement.md)) then
+   refines the keypoints against the same reference **and renders each point's
+   stored bitmap at them** (`refine_keypoints(render_bitmaps=True)`): the tile
+   of the reference observation, rendered at its keypoint, or the fused mean of
+   the views where there is none — points at infinity included, via the same
+   `w`-aware render path — reporting per-point validity and the reference's
+   image, which the output records as the point's reference observation (a point
+   with fewer than two views, or with no reference and fewer than two views in
+   frame for the mean, gets no bitmap).
 6. **Cull unsupported points (per point).** Drop any point whose kept-view count
    fell below `min_views`, **and** any point the sub-pixel pass produced no
    valid bitmap for — one uniform rule for finite and infinity points
@@ -230,10 +236,9 @@ over Rust kernels reached through the PyO3 bindings:
 - Per-point view selection is [patch-view selection](patch-view-selection.md), in
   `sfmtool-core::patch` — geometric candidacy plus photometric vetting against a
   track-seeded template.
-- Per-point refinement is the [congealing
+- Per-point keypoint alignment is the [keypoint-localization
   algorithm](patch-keypoint-localization.md), which lives in
-  `sfmtool-core::patch` (Rust) and reuses the same patch rendering and IRLS
-  consensus.
+  `sfmtool-core::patch` (Rust) and reuses the same patch rendering.
 - The source images are decoded into per-image pyramids **once**, up front:
   `embed_patches()` builds an `ImagePyramidSet` (a PyO3 class wrapping the
   rayon-parallel `ImageU8Pyramid` build) from the numpy image list and passes it
@@ -245,12 +250,14 @@ over Rust kernels reached through the PyO3 bindings:
 ## Parameters (defaults)
 
 These are the pipeline-exposed knobs; most are forwarded to the algorithm that
-owns them (the congealing knobs `max_iters` / `search` live entirely in the
-keypoint-localization spec).
+owns them (the localizer's `search` is described in the keypoint-localization
+spec).
 
 | parameter | default | forwarded to / meaning |
 |---|---|---|
-| `min_relative_zncc` | ~0.7 | view selection **and** keypoint refiner: a view must agree at least this fraction as well as the reference (the track's self-agreement on admission; the views' median LOO ZNCC during refinement) |
+| `min_relative_zncc` | `0.7` | view selection **and** keypoint localizer: a view must agree at least this fraction as well as the reference (the track's self-agreement on admission; during alignment, the median ZNCC against the reference render of the views other than the reference) |
+| `min_absolute_zncc` | `0.5` | keypoint localizer: drop a view whose ZNCC against the reference render is below this (`0` disables) |
+| `max_member_zncc_self_similarity_radius` | `2.5` | keypoint localizer: drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px (`0` disables) |
 | `patch_size` | `11.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_views` | 2 | pipeline cull: drop a point left with fewer kept views |
@@ -259,24 +266,24 @@ keypoint-localization spec).
 | `obliquity_weight_power` | `2.0` | normal refinement: exponent `p` of the multiplicative obliquity view-weight `\|v̂·n\|^p` in the robust consensus (`0` disables; `2` = cos²θ foreshortening) |
 | `fronto_prior_weight` | `0.05` | normal refinement: weight `λ` of the additive fronto-parallel prior `λ·mean(v̂·n)²` pulling a low-parallax normal toward facing the cameras (`0` disables) |
 | `max_refine_views` (`--refine-max-views`) | `8` | normal refinement: cap the round-2+ refinement basis at the N most normal-informative views/point (`0` = all); output-lossless ([patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)) |
-| `subpixel` | `1` | keypoint refiner: LK/ECC sub-pixel outer-sweep count applied once per round (per-sweep consensus); `0` disables movement (the bitmap render still runs), `≥1` = that many sweeps ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) |
-| `localize_search_strategy` | `plus_descent` | keypoint refiner: discrete shift-grid traversal — `plus_descent` (local descent) or `exhaustive` (full grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
-| `search_resolution_multiplier` | `1.0` | keypoint refiner: discrete-search resolution multiplier `m` (`1.0` = no-op; `>1` = supersampled grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
+| `subpixel` | `True` | keypoint refiner: run the ECC sub-pixel refinement against the reference render once per round; `False` moves no keypoint after the localizer (the bitmap render still runs) ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) |
+| `localize_search_strategy` | `plus_descent` | keypoint localizer: discrete shift-grid traversal — `plus_descent` (local descent) or `exhaustive` (full grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 
 ## Scope
 
 For each point, the conversion builds a patch frame (initializes and refines
 the normal), selects its view set (track and photometrically vetted views),
-refines each view's keypoint from its projection (the refiner drops views that
-do not co-register), culls points left below `min_views`, and compacts the
+aligns each view's keypoint to the point's reference render (the localizer
+drops views that cannot be aligned), culls points left below `min_views`, and compacts the
 result into a valid `embedded_patches` reconstruction. The observation set starts from the
 input track, then is expanded with vetted views and filtered by drops.
 
 The conversion does not move 3D points: where all of a point's views shift by
 the same in-plane offset, which indicates a mis-located point, the point is
 not re-triangulated. It uses each
-observation's leave-one-out score and shift to prune and then discards them;
-the `.sfmr` format has no column to store them.
+observation's ZNCC against the reference render and its shift to prune and
+then discards them; it does not write the format's optional
+`observation_confidence` column.
 
 Every patch is sized at `patch_size` times its SIFT feature scale; the
 embedding does not choose a size per track. Choosing each track's size from a
@@ -284,18 +291,21 @@ short ladder of sizes is proposed in [patch-footprint-selection.md](../../drafts
 
 ## Implementation notes
 
-`embed_patches(recon, images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,
-search, resolution, search_resolution_multiplier, subpixel, rounds,
-max_obliquity_deg, obliquity_weight_power, fronto_prior_weight, max_refine_views,
-localize_search_strategy)` runs the whole pipeline (steps 0–7, iterated over
+`embed_patches(recon, images, *, min_relative_zncc, min_absolute_zncc,
+max_member_zncc_self_similarity_radius, patch_size, max_shift_px, min_views,
+search, resolution, subpixel, rounds, max_obliquity_deg, obliquity_weight_power,
+fronto_prior_weight, max_refine_views, max_zncc_self_similarity_radius,
+localize_search_strategy, sampler, progress)` in
+[_embed_patches.py](../../../src/sfmtool/_embed_patches.py) runs the whole pipeline (steps 0–7, iterated over
 `rounds` alternating normal/keypoint passes): a single
 `recon.to_embedded_patches(...)` bridge (the only `.sift` read) builds the
 mean-viewing, feature-sized frames + inline SIFT keypoints + image hashes; the
 cloud is read back via `embedded.patches` and its normal refined photometrically
 over the embedded recon (`use_stored_keypoints=True`), anchored on the carried-in
-keypoints; then view selection, keypoint congealing, the sub-pixel refinement
-(which renders the stored bitmaps at the final keypoints and reports per-point
-validity — with `subpixel=0` it runs render-only so the bitmaps/validity are
+keypoints; then view selection, keypoint alignment to the reference render, the
+sub-pixel refinement against the same reference (which renders the stored
+bitmaps at the final keypoints and reports per-point validity and the
+reference's image — with `subpixel=False` it runs render-only so the bitmaps/validity are
 still produced), and `compact_to_embedded_patches` (the write/compaction tail,
 given the original `recon` for geometry carry-over and `embedded.image_file_hashes`
 so there is no second `.sift` read; its `valid` mask drops the points with no

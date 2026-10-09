@@ -15,11 +15,13 @@ the same image as before; the bitmap is not re-rendered. What a caller does
 afterwards (retriangulate, adjust, or nothing) is the caller's.
 
 It answers a narrower question than the bench's evaluation
-([editable-track.md](../bench/editable-track.md)). The bench reads a track by
-congealing all of its observations together, which moves every keypoint and puts
-the view being judged into the consensus it is judged against. Here the existing
-observations are the reference and are not touched; only the new view's
-keypoint is searched for, against a consensus it did not contribute to.
+([editable-track.md](../bench/editable-track.md)), which aligns every row of a
+track to its reference render and can move every keypoint but the reference's.
+Here the existing observations are not touched; only the new view's keypoint is
+searched for. Like every kernel that places a view, it aligns the new view to the
+point's reference render: the point's stored bitmap, or the bitmap the point
+would store, rendered from its existing observations
+([patch-keypoint-localization.md](../patch/patch-keypoint-localization.md)).
 
 ## Rust API
 
@@ -27,10 +29,10 @@ The operation lives in
 [add_image_to_tracks.rs](../../../crates/sfmtool-core/src/reconstruction/add_image_to_tracks.rs),
 bound as `EditedReconstruction.add_image_to_tracks` on
 `sfmtool.reconstruction`. Its per-point kernels are
-`ReferenceConsensus` in
+`TrackReferences` in
 [reference.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/reference.rs)
-(build the references' consensus, search one view against it, score one view at
-a keypoint) and `refine_view_against_references` in
+(render the existing observations and settle the template, search one view
+against it, score one view at a keypoint) and `refine_view_against_reference` in
 [keypoint_subpixel.rs](../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs).
 The viewer's image menu entry is
 [../../gui/edits/add-image-to-tracks.md](../../gui/edits/add-image-to-tracks.md).
@@ -68,6 +70,7 @@ pub struct PairRule { pub statistic: PairStatistic, pub factor: f64 }
 pub enum PairStatistic { Min, Mean, Max }
 pub enum PositionGate { Off, MaxPx(f64), ImageMad { k: f64, floor_px: f64 } }
 pub enum TemplateSource { Rendered, StoredBitmap }
+pub enum TemplateKind { StoredBitmap, ReferenceObservation, FusedMean }
 
 pub struct AddImageToTracksReport {
     pub image: usize,
@@ -89,7 +92,7 @@ materialises an `EditedReconstruction` first, as
 
 **Why it takes decoded photographs rather than posed views.** The target image
 must be decoded, and so must the images of the observations used as references,
-because the reference consensus and the leave-one-out scores are measured, not
+because the template and the references' scores against it are measured, not
 read. Poses and cameras are read from `recon`, so a view can never disagree
 with the value it is being added to. An image whose photograph is `None` is left
 out of every reference set rather than failing the call, the rule
@@ -105,9 +108,12 @@ one `CandidateReport` with its outcome (`refusal` is `None` for an added
 observation, or a named `Refusal`) and the numbers the verdict was made on: the
 projection, the searched and final keypoints, the offset from the projection,
 the ZNCC self-similarity radius of the new view's core
-(`zncc_self_similarity_radius`), the ZNCC against the consensus and against each
-reference, the references' leave-one-out and pairwise ZNCCs, and the
-number the rule compared with its bar. A caller can see why a point was not
+(`zncc_self_similarity_radius`), what the template was (`template`, a
+`TemplateKind`, and `reference_observation`, the position among the references
+of the observation the template is rendered from), the new view's ZNCC against
+the template and against each reference, the references' ZNCCs against the
+template (`reference_zncc`) and their pairwise ZNCCs, and the number the rule
+compared with its bar. A caller can see why a point was not
 added, and a harness can re-judge without re-running. The refusals are
 `no_patch`, `not_in_frame`, `grazing`, `back_facing`, `too_few_references`,
 `unlocalizable`, `no_peak`, `peak_at_edge`, `unscorable`, `below_floor`,
@@ -142,22 +148,32 @@ For a point `p` with existing observations in images `J`, and the target image
    plane's side is read from the existing observers rather than from the stored
    normal's sign, which no writer promises. A point at infinity has no plane
    side and skips the grazing and facing checks.
-2. **Reference consensus.** Each existing observation in a decoded image is
+2. **Template.** Each existing observation in a decoded image (a reference) is
    rendered on the patch grid anchored at its own keypoint (the in-plane offset
-   its keypoint states, as the bench and the bitmap render anchor it). The renders
-   are z-normalised and combined into the robust IRLS consensus. From the same
-   renders come each reference's leave-one-out ZNCC (against the robust
-   consensus of the others) and the pairwise ZNCCs between references. Fewer
-   than two references in frame is `too_few_references`. With
-   `TemplateSource::StoredBitmap` the search template is the point's stored
-   bitmap instead, on the bitmap's own grid, and the references still supply the
-   leave-one-out and pairwise numbers.
+   its keypoint states, as the bench and the bitmap render anchor it). Fewer
+   than two references in frame is `too_few_references`. The template
+   (`TemplateKind`) is the first of these that applies:
+   - with `TemplateSource::StoredBitmap`, the point's stored bitmap where it has
+     a textured one, on the bitmap's own grid (`StoredBitmap`);
+   - the render of the point's reference observation at its own keypoint, which
+     is the bitmap the point would store: its `reference_observations` entry
+     where that observation rendered, else the [reference-view
+     rule](../patch/reference-view.md)'s pick from the references' renders
+     (`ReferenceObservation`);
+   - the fused mean of the references' renders, where the point has no
+     reference observation and the rule picks none it would store
+     (`FusedMean`).
+
+   The template is never blurred. Each reference's plain ZNCC against it
+   (`reference_zncc`, `1.0` for the reference observation where the template is
+   its render) and the pairwise ZNCCs between references are read from the same
+   renders.
 3. **Search.** The target's context tile is rendered once around the point's
    projection and its own core's [ZNCC self-similarity
    radius](../patch/zncc-self-similarity-radius.md) is read (`unlocalizable`
    over `max_member_zncc_self_similarity_radius`, when that gate is on). One windowed-ZNCC shift search over
-   `±search` patch-grid pixels then finds the peak: the tail registration's
-   search, run exhaustively because it is one view per point. A peak on the edge
+   `±search` patch-grid pixels then finds the peak, run exhaustively because it is
+   one view per point. A peak on the edge
    of the window is `peak_at_edge`, because the true maximum may lie outside
    what was searched. With `ascend_on_edge`, such a window is searched again by
    the "+"-descent from the projection, and the local maximum it climbs to is
@@ -165,13 +181,13 @@ For a point `p` with existing observations in images `J`, and the target image
    correlation a period away, and the projection is the evidence for which
    period is meant.
 4. **Sub-pixel.** With `subpixel`, the keypoint is refined by the ECC
-   Gauss-Newton solve against the references' frozen consensus, moving only the
-   target, with the solve's never-worse guard.
-5. **Score.** At the final keypoint the target's core is rendered, and its ZNCC
-   against the template and against each reference is taken by the same scorer
-   that took the references' leave-one-out ZNCCs. The target never contributed
-   to the consensus, so its ZNCC is a leave-one-out number and comparable with
-   theirs.
+   Gauss-Newton solve against the same template
+   (`TrackReferences::refine_template`), moving only the target, with the
+   solve's never-worse guard.
+5. **Score.** At the final keypoint the target's core is rendered, and its plain
+   ZNCC against the template and against each reference is taken by the same
+   scorer that took the references' scores. Each is one view's plain ZNCC
+   against the template, so the target's is comparable with theirs.
 6. **Judge.** The rule decides (below). `min_zncc` is a floor the basis rules
    also apply (`0` disables it); under `FixedZncc` it is the whole rule.
 7. **Place.** The positional gate, then one observation per place: an accepted
@@ -191,15 +207,17 @@ as it was, since nothing moved the point.
 
 - `FixedZncc`: accept when the ZNCC is at least `min_zncc`.
 - `TrackBasis`: the point's own references set the bar. With three or more, the
-  bar is a statistic of their leave-one-out ZNCCs: the minimum, the median minus
-  `k` times the scaled median absolute deviation (MAD × 1.4826), or a fraction
-  of the median. With exactly two, each reference's leave-one-out ZNCC is their
-  pairwise ZNCC, so a statistic of two copies of one number says little;
-  instead the minimum, mean or maximum of the target's ZNCC against each
-  reference must reach `factor` times the ZNCC between the two references.
-- `PooledBasis`: the statistic over the leave-one-out ZNCCs of every reference
-  of every candidate that reached the verdict, which is one bar for the whole
-  image.
+  bar is a statistic of their ZNCCs against the template, with the reference
+  observation's own score left out (`CandidateReport::bar_zncc`), since it is
+  the template or what the template was rendered from: the minimum, the median
+  minus `k` times the scaled median absolute deviation (MAD × 1.4826), or a
+  fraction of the median. With exactly two, one of them is usually the
+  template's source, so a statistic of what is left says little; instead the
+  minimum, mean or maximum of the target's ZNCC against each reference must
+  reach `factor` times the ZNCC between the two references.
+- `PooledBasis`: the statistic over the ZNCCs against the template of every
+  reference but the reference observation, of every candidate that reached the
+  verdict, which is one bar for the whole image.
 - `PooledOrTrack`: accept a candidate that reaches either the pooled bar or its
   own track's bar (`TrackBasis` with `track` and `pair`).
 
@@ -212,10 +230,39 @@ constant: a fixed ZNCC bar that suits one capture refuses good sightings on
 another. The pooled bar is what keeps a track whose references barely agree with
 each other from lowering the bar for itself; the track's own bar is what keeps a
 good sighting on a surface harder than the rest of the image from being refused
-for it. A new view's ZNCC runs lower than its references' leave-one-out numbers
-for the same quality of match, because their keypoints were fitted together and
-its keypoint was not, which is why no bar is the minimum of the references'.
-The positional gate is what removes most wrong sightings that correlate well.
+for it. The positional gate is what removes most wrong sightings that correlate
+well.
+
+**How the bars were measured on the reference render.** The bars were chosen
+when the template was the consensus of the references and their scores were
+leave-one-out against it, and were measured again once both read the reference
+render
+([`scripts/add_image_to_tracks/README.md`](../../../scripts/add_image_to_tracks/README.md)
+§ "The bars once the new view is aligned to the reference render"). One image's
+observations are removed and the image is added back at its resected pose.
+"Extra" counts the tracks it joins that it was not in, "bad" those of them whose
+new observation's residual exceeds 2 px once the point is retriangulated with
+it, and "worse" those whose largest residual over all observations grew by more
+than 1 px:
+
+| Rule | seoul_bull recall | kerry_park recall | kerry_park extra | bad | worse |
+|---|---|---|---|---|---|
+| Default, before the change | 82.8% | 79.2% | 1107 | 0 | 8 |
+| **Default** | **81.9%** | **79.6%** | **1330** | **5** | **25** |
+| Pooled bar `k = 2` | 80.0% | 77.7% | 1142 | 2 | 14 |
+| Pooled bar `k = 4` | 82.1% | 80.7% | 1508 | 8 | 40 |
+
+Recall is unchanged to within a point. The references score lower and spread
+wider against one sharp render than they did against the consensus of the
+others, so the pooled bar (median − 3 scaled MADs) falls from about 0.68 to 0.55
+on seoul_bull and the `0.5` floor applies more often; on kerry_park that admits
+about 20% more extra tracks. The rejoined keypoints sit 0.10 px from the
+ground truth's at the median rather than 0.06, since a view aligned to one
+reference shares whatever offset that reference's keypoint has, and they
+retriangulate at about the same residual. The track bar and the pair rule
+change almost nothing between 0.8 and 1.0. The defaults are kept; whether to
+tighten the pooled bar to `k = 2`, giving up 2 points of recall on each capture
+for kerry_park's precision, is not decided.
 
 ## Positional gate
 
@@ -262,7 +309,10 @@ strings plus their numbers (`rule="pooled_or_track"`, `basis="median_minus_mad"`
 Rust enums; `basis` is the pooled statistic and `track_basis` the track's. The
 report's per-candidate numbers come back as columns under `candidates`: numpy
 arrays for the scalars and `(N, 2)` arrays for the keypoints, lists for the
-ragged fields. A refused call raises `ValueError`.
+ragged fields (`reference_zncc`, `reference_pair_zncc`, `pair_zncc`).
+`template` is a list of `"stored_bitmap"`, `"reference_observation"`,
+`"fused_mean"` or `None`, and `reference_observation` an `int64` array with `-1`
+for none. A refused call raises `ValueError`.
 
 ```python
 from sfmtool.reconstruction import EditedReconstruction
@@ -277,7 +327,10 @@ Unit tests in
 on a synthetic capture (pinhole cameras over a textured plane): a removed
 observation is found again within 0.1 px of its projection; the same with a
 stored bitmap as the template, fused by `fuse_patch_bitmap`, which pins the
-bitmap's grid orientation; existing observations, positions and frames come back
+bitmap's grid orientation; the template is the stored bitmap where there is
+one, else the stored reference observation's render, else the rule's pick, else
+the fused mean, and the bars read the references' scores against it; existing
+observations, positions and frames come back
 unchanged and tracks stay in image order; a reference observation moves with
 its observation where the new one lands before it in the track and stays where
 it lands after it; a two-reference track is judged by the
@@ -300,6 +353,6 @@ an image joins on ground-truth captures.
 No retriangulation, no bundle adjustment, no new points. No occlusion test
 against other geometry is made: an occluded point fails the photometric rule,
 because the target sees a different surface there. The stored
-`observation_confidence` column is not read as the basis: the leave-one-out
-ZNCC the operation measures is the same measurement as the new view's, which a
-column written by another step need not be.
+`observation_confidence` column is not read as the basis: the ZNCC against the
+template the operation measures is the same measurement as the new view's, which
+a column written by another step need not be.

@@ -1,11 +1,12 @@
-# Candidate track spawning: congeal new tracks at patch-frame offsets
+# Candidate track spawning: localize new tracks at patch-frame offsets
 
 ## Overview
 
 Given reconstructed points with patch frames, spawn **candidate tracks** at
 chosen in-plane offsets from those parents: place a synthetic patch, find
 it photometrically in the parent's views, and triangulate what was found —
-exactly the way a real track is congealed, with the same acceptance gates.
+exactly the way a real track's views are localized, with the same acceptance
+gates.
 The primitive itself neither picks offsets nor assembles tracks — it
 turns (parent, offset) requests into vetted `(position, views,
 keypoints)` results, batch — and nothing in the repo calls it yet: it is
@@ -38,10 +39,10 @@ Per request `(parent p, du, dv)`:
   have: expansion passes the parent's views (a candidate one patch
   diameter away is imaged by essentially the same cameras), while a
   densification caller can propose views from frustum or coverage
-  queries. The set should stay tight — every view in it congeals against
-  every other (the uncapped consensus basis below), so an inflated set
-  costs quadratically and dilutes the photometric consensus with views
-  that never see the spot.
+  queries. The set should stay tight: the reference-view rule picks the
+  candidate's reference from every view in it, and every view in it is
+  rendered and searched, so a view that never sees the spot costs time and
+  can be the one the rule picks.
 
 Candidates are finite: the offsets displace the frame in world units and the
 output is a triangulated position, neither of which a point at infinity has, so
@@ -56,11 +57,14 @@ parallelism of its own):
 
 1. **Discrete localization** over each candidate's views, seeded at the
    view's projection of `X_c`, with the kernel's `search` /
-   `max_shift_px` semantics. Views the localizer rejects are gone. The
-   consensus basis is uncapped: a candidate carries its parent's view set,
-   which is small, so every view congeals against every other.
-2. **Sub-pixel refinement** (`subpixel_sweeps`; 0 skips) seeded at the
-   localized keypoints.
+   `max_shift_px` semantics. Views the localizer rejects are gone. A
+   candidate has no stored reference, so the [reference-view
+   rule](reference-view.md) picks one from the views' renders at their
+   seeds, and every other view is aligned to that render in one pass (to
+   the views' fused mean where the rule picks none it would store;
+   [patch-keypoint-localization.md](patch-keypoint-localization.md)).
+2. **Sub-pixel refinement** (`refine_subpixel`; `false` skips) seeded at the
+   localized keypoints, against the reference the localizer aligned them to.
 3. **Triangulation** from the refined keypoints' camera rays.
 4. **Gates**, in order, each recording its casualty:
    - `too_few_views` — fewer than `min_views` views survived localization.
@@ -90,7 +94,7 @@ pub struct SpawnParams {
     pub resolution: u32,          // sampling grid, as in localization (24)
     pub search: f64,              // localizer search half-width, grid px (6.0)
     pub max_shift_px: f64,        // localizer shift gate, image px (8.0)
-    pub subpixel_sweeps: u32,     // refinement outer sweeps (1)
+    pub refine_subpixel: bool,    // run the sub-pixel refinement (true)
     pub min_views: u32,           // surviving-view floor (3)
     pub max_reproj_rms_px: f64,   // acceptance gate, image px (2.0)
 }
@@ -169,7 +173,7 @@ triangulates onto the plane (status `spawned`, position on the plane
 within tolerance, `n_views` full); a candidate pushed off every image
 (`too_few_views`); a `min_views` floor just above the surviving count
 (`too_few_views`); an unreachable `max_reproj_rms_px` (`high_reproj`);
-`subpixel_sweeps = 0` still spawning (discrete-only); multiple candidates
+`refine_subpixel = false` still spawning (discrete-only); multiple candidates
 per parent in one batch matching the same candidates spawned separately
 (batch independence); and CSR bookkeeping (offsets sum to observation
 count, view-index ordering). Binding tests exercise the dict surface, the
