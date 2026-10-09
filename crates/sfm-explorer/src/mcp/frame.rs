@@ -25,6 +25,8 @@ use super::{
     apply_as_agent, panel_crop, Deferred, Outcome, Reply, Request, ScreenshotSource, ToolError,
     ToolOutput,
 };
+use crate::action_log::{Actor, Kind};
+use crate::state::AppState;
 use crate::App;
 
 /// Why a `screenshot` of the window is refused where the platform will not let
@@ -376,9 +378,9 @@ impl App {
                              read, so there is no listing to go with it.",
                         )),
                     };
-                    let _ = reply.send(
-                        image.and_then(|image| encode(image, max_dimension, caption, listing?)),
-                    );
+                    let answer =
+                        image.and_then(|image| encode(image, max_dimension, caption, listing?));
+                    let _ = reply.send(record_late_refusal(&mut self.state, "screenshot", answer));
                 }
                 // Answered by `resolve_mcp_widgets` straight after the egui
                 // pass; one still here is from a frame that stopped before its
@@ -488,6 +490,29 @@ impl App {
             pixels,
         })
     }
+}
+
+/// A deferred read's answer, with a refusal reached at readback recorded.
+///
+/// The drain logged the read when it applied the call, before the frame it
+/// waits for had been drawn, so a refusal only that frame can reach (a surface
+/// that cannot be read back, a panel that was not laid out, a crop outside the
+/// picture taken) would otherwise leave that row on its own, reading as a
+/// success. This adds one failed row as the agent's, in the words the agent
+/// receives, which is what a refusal at apply time leaves.
+pub(super) fn record_late_refusal(
+    state: &mut AppState,
+    tool: &'static str,
+    answer: Reply,
+) -> Reply {
+    if let Err(error) = &answer {
+        state.action_log.fail_as(
+            Actor::Mcp,
+            Kind::Query(tool),
+            format!("{tool} failed: {error}"),
+        );
+    }
+    answer
 }
 
 /// Whether a deferred screenshot needs the presented surface.

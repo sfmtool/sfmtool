@@ -428,7 +428,8 @@ impl ActionLog {
     /// [`ActionLog::fail`] as `actor`, restoring the standing one afterwards.
     ///
     /// The refusal of an MCP input tool, which is reached in the egui pass
-    /// that was to deliver the input, where the standing actor is the person.
+    /// that was to deliver the input, or of a `screenshot` reached at
+    /// readback: in both the standing actor is the person.
     pub(crate) fn fail_as(&mut self, actor: Actor, kind: Kind, text: impl Into<String>) {
         let standing = self.actor;
         self.actor = actor;

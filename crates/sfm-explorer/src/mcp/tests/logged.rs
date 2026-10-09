@@ -170,6 +170,46 @@ fn a_deferred_screenshot_is_logged_when_it_is_drained() {
     );
 }
 
+/// A screenshot refused at readback, after its row was written at apply time,
+/// adds one failed row as the agent's in the words the agent receives, so the
+/// log does not show only what reads as a success. One that succeeds adds none.
+#[test]
+fn a_screenshot_refused_at_readback_records_one_failed_entry() {
+    let (mut state, mut viewer) = quiet_scene();
+    viewer.panel_size = [1280, 720];
+    agent(&mut state, &mut viewer, screenshot(None, true, None));
+    let refusal = ToolError::new("The window could not be read back off the GPU this frame.");
+    let answer =
+        super::super::frame::record_late_refusal(&mut state, "screenshot", Err(refusal.clone()));
+    assert_eq!(answer.err(), Some(refusal));
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let failed: Vec<_> = entries.iter().filter(|entry| entry.failed).collect();
+    assert_eq!(failed.len(), 1, "{entries:?}");
+    assert_eq!(
+        failed[0].text,
+        "screenshot failed: The window could not be read back off the GPU this frame."
+    );
+    assert_eq!(failed[0].actor, Actor::Mcp);
+    assert_eq!(failed[0].kind, Kind::Query("screenshot"));
+    assert_eq!(
+        state.action_log.actor(),
+        Actor::User,
+        "the actor was left moved"
+    );
+
+    let (mut state, mut viewer) = quiet_scene();
+    viewer.panel_size = [1280, 720];
+    agent(&mut state, &mut viewer, screenshot(None, true, None));
+    let answer = super::super::frame::record_late_refusal(
+        &mut state,
+        "screenshot",
+        Ok(ToolOutput::Json(json!({}))),
+    );
+    assert!(answer.is_ok());
+    assert_eq!(state.action_log.entries().count(), 1);
+}
+
 /// A screenshot is not a value an agent is scrubbing through: it is a picture
 /// it took and presumably looked at, so every one taken is its own row however
 /// fast they arrive.

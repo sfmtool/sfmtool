@@ -718,7 +718,10 @@ coalescing, with the exceptions named above (a multi-field
   `Query` — `get_scene`, `screenshot window 1920×1080`, and so on — because
   there is no state method for a read to log through. A deferred screenshot logs
   when it is *applied* (the frame the request was drained), not when the pixels
-  come back, so its line appears in order with the commands around it.
+  come back, so its line appears in order with the commands around it. A
+  screenshot refused only at readback adds one failed
+  `screenshot failed: {message}` row then, as the agent's, after the line
+  that recorded the request ([mcp-server.md](mcp-server.md) § "`screenshot`").
 - A refusal — `apply` returning a tool error — is written by the drain as a
   failed entry, `{tool} failed: {message}`, with the same message the agent
   receives. So that a failure is not logged twice, once by the method in its

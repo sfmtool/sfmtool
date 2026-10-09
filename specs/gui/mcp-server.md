@@ -2120,7 +2120,16 @@ without HUD`, and with a crop and a listing `screenshot window crop 10,20 300×2
 300×200 with widgets`. The size is the size the picture will be, after
 `max_dimension`; for a panel, the crop's size is not known until the frame, so
 the text records the panel's *last* laid-out size, which is the right size in
-every frame but the one that opened it.
+every frame but the one that opened it. That row is written when the call is
+applied, before the frame it waits for has been drawn, so a refusal only that
+frame can reach (a surface that cannot be read back or is in a format the
+viewer cannot encode, a 3D viewport that has not rendered, a panel that was not
+laid out, a crop outside the picture taken, a listing with no widgets read) is
+recorded at readback as a second row:
+a failed `screenshot failed: {message}`, as the agent's, with the message the
+agent receives (`record_late_refusal` in
+[frame.rs](../../crates/sfm-explorer/src/mcp/frame.rs)). The refusal is still
+one failed entry; the row before it says what was asked for.
 
 ### `get_widgets`
 
@@ -4660,7 +4669,9 @@ status line and in the panel, where before only a success reached them. It is
 recorded by the drain rather than by the method that produced it, which is why
 every `AppState` method the MCP layer calls returns its failure instead of
 logging it, except for the methods that word their own, where the drain stands
-down instead (§ "Threading"). One failure, one entry, either way. Protocol errors
+down instead (§ "Threading"). A `screenshot` refused only at readback is
+recorded by the frame that reached the refusal, in the same form
+(§ "`screenshot`"). One failure, one entry, either way. Protocol errors
 are **not** logged — they never reach the viewer, and a request the GUI thread
 never saw belongs in the agent's own transcript.
 
