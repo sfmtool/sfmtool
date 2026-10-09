@@ -2152,7 +2152,11 @@ fn a_column_the_commit_writes_is_a_column_it_compares() {
         measurement.keypoint = Some([keypoint[0] + 0.001, keypoint[1]]);
     });
     moved("an observation's confidence", &|t| {
-        t.observations[0].track.as_mut().expect("a track slot").loo_zncc = Some(0.5);
+        t.observations[0]
+            .track
+            .as_mut()
+            .expect("a track slot")
+            .loo_zncc = Some(0.5);
     });
     moved("the error", &|t| {
         t.observations[0]

@@ -96,13 +96,13 @@ pub use stage::{set_stage, set_stage_preconditions, StageError, StageReport};
 pub use steps::{
     add_observation, apply_thresholds, bar_checks, clamp_to_photograph, create_cluster,
     create_track, duplicate, half_width_px, pin_verdicts, resize_patch, resize_patch_to_pixel,
-    set_reference, set_verdict, shape_observation, sight_observation, spin_patch, split, tilt_patch,
-    translate_patch, translate_patch_to_pixel, unpin_verdicts, verdicts_if_unpinned,
+    set_reference, set_verdict, shape_observation, sight_observation, spin_patch, split,
+    tilt_patch, translate_patch, translate_patch_to_pixel, unpin_verdicts, verdicts_if_unpinned,
     AddObservationReport, Axis, BarCheck, BarChecks, ClusterSeed, CreateClusterError, CreateReport,
     CreateTrackError, CreateTrackOptions, DuplicateError, DuplicateReport, Edge, ObservationSeed,
-    PinReport, ReferenceReport, ResizeReport, ShapeReport, SightReport, SpinReport, SplitError, SplitReport,
-    ThresholdReport, TiltReport, TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport,
-    UnpinReport, VerdictReport, Viewpoint, MAX_TILT_DEG,
+    PinReport, ReferenceReport, ResizeReport, ShapeReport, SightReport, SpinReport, SplitError,
+    SplitReport, ThresholdReport, TiltReport, TiltStop, TrackEditError, TranslateReport,
+    TranslateToPixelReport, UnpinReport, VerdictReport, Viewpoint, MAX_TILT_DEG,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,

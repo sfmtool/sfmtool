@@ -316,7 +316,11 @@ pub(in crate::bench) fn fixture_with_columns(
         };
         let view_set: Vec<u32> = point.observations().iter().map(|o| o.image_index).collect();
         let Some(keypoints) = (0..view_set.len())
-            .map(|k| point.keypoint_xy(k).map(|p| [f64::from(p[0]), f64::from(p[1])]))
+            .map(|k| {
+                point
+                    .keypoint_xy(k)
+                    .map(|p| [f64::from(p[0]), f64::from(p[1])])
+            })
             .collect::<Option<Vec<_>>>()
         else {
             continue;

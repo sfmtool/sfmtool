@@ -542,10 +542,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         if Some(i) == payload.reference {
             assert_eq!(measured.zncc, Some(1.0), "row {i}");
         } else if measured.keypoint.is_some() {
-            assert!(
-                measured.zncc.is_some(),
-                "row {i} has no bitmap score"
-            );
+            assert!(measured.zncc.is_some(), "row {i} has no bitmap score");
         }
     }
 

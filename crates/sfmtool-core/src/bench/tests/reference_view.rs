@@ -11,9 +11,9 @@ use ndarray::Array3;
 
 use crate::bench::{
     commit, create_track, evaluate, evaluate_rendering_bitmap, fit, pin_verdicts,
-    render_bitmap_in_place, score_bitmap, set_reference, set_stage, set_verdict,
-    sight_observation, tilt_patch, unpin_verdicts, Bench, CreateTrackOptions, EditableTrack,
-    EvaluateOptions, FitOptions, StageKind, TrackEditError, Verdict,
+    render_bitmap_in_place, score_bitmap, set_reference, set_stage, set_verdict, sight_observation,
+    tilt_patch, unpin_verdicts, Bench, CreateTrackOptions, EditableTrack, EvaluateOptions,
+    FitOptions, StageKind, TrackEditError, Verdict,
 };
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
@@ -740,10 +740,7 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         let (a, b) = (a.track.as_ref().unwrap(), b.track.as_ref().unwrap());
         assert!(a.zncc.is_some(), "row {i} is scored");
         assert_eq!(a.zncc, b.zncc, "row {i}");
-        assert_eq!(
-            a.blur_matched_zncc, b.blur_matched_zncc,
-            "row {i}"
-        );
+        assert_eq!(a.blur_matched_zncc, b.blur_matched_zncc, "row {i}");
         assert_eq!(a.sharper_than_bitmap, b.sharper_than_bitmap, "row {i}");
     }
     // The combined call gives the same answer.
@@ -792,10 +789,7 @@ fn assert_same_bitmap_and_scores(a: &EditableTrack, b: &EditableTrack) {
     for (i, (x, y)) in a.observations.iter().zip(&b.observations).enumerate() {
         let (x, y) = (x.track.as_ref().unwrap(), y.track.as_ref().unwrap());
         assert_eq!(x.zncc, y.zncc, "row {i}");
-        assert_eq!(
-            x.blur_matched_zncc, y.blur_matched_zncc,
-            "row {i}"
-        );
+        assert_eq!(x.blur_matched_zncc, y.blur_matched_zncc, "row {i}");
         assert_eq!(x.bitmap_blur_sigma, y.bitmap_blur_sigma, "row {i}");
         assert_eq!(x.sharper_than_bitmap, y.sharper_than_bitmap, "row {i}");
     }
@@ -884,7 +878,11 @@ fn assert_rendered_from(
     for (i, o) in track.observations.iter().enumerate() {
         if i != row && o.verdict == Verdict::In {
             let m = o.track.as_ref().unwrap();
-            assert!(m.zncc.is_some_and(|z| z < 1.0), "{step}: row {i} {:?}", m.zncc);
+            assert!(
+                m.zncc.is_some_and(|z| z < 1.0),
+                "{step}: row {i} {:?}",
+                m.zncc
+            );
         }
     }
 }
@@ -997,7 +995,10 @@ fn set_as_reference_pins_the_row_and_renders_from_it() {
     assert!(report.changed);
     assert!(set.observations[third].pinned);
     assert_eq!(set.held_reference(), Some(third));
-    assert!(set.track().unwrap().bitmap.is_none(), "the old bitmap is stale");
+    assert!(
+        set.track().unwrap().bitmap.is_none(),
+        "the old bitmap is stale"
+    );
     let rendered = render_with(&set, &edited, &views);
     assert_rendered_from(&rendered, &views, &edited, third, "set as reference");
     assert_eq!(rule_pick(&rendered), Some(picked));

@@ -541,7 +541,11 @@ fn read_keeping_tiles(
 /// [`evaluate`]'s repaint of `read`, the reading of `track`: the bars painted
 /// onto the unpinned rows ([`apply_thresholds`]), unless the evaluation only
 /// follows a repaint of `track`'s, with what it moved counted in `report`.
-fn repaint(track: &EditableTrack, read: EditableTrack, report: &mut EvaluateReport) -> EditableTrack {
+fn repaint(
+    track: &EditableTrack,
+    read: EditableTrack,
+    report: &mut EvaluateReport,
+) -> EditableTrack {
     if track.repainted() {
         return read;
     }

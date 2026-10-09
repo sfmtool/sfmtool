@@ -619,10 +619,10 @@ impl<'a> BitmapScorer<'a> {
             _ => false,
         };
         let zncc_middle = windowed_zncc(self.bitmap, observation, &self.middle_weights);
-        let zncc_grid = self
-            .cell_weights
-            .each_ref()
-            .map(|row| row.each_ref().map(|w| windowed_zncc(self.bitmap, observation, w)));
+        let zncc_grid = self.cell_weights.each_ref().map(|row| {
+            row.each_ref()
+                .map(|w| windowed_zncc(self.bitmap, observation, w))
+        });
         let plain = BitmapScore {
             zncc,
             zncc_middle,
