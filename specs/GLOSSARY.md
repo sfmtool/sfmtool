@@ -205,18 +205,16 @@ describe rendering. Inside the bench it is wrong. *If this boundary is ever
 removed it should be removed deliberately and in one pass, not eroded from
 either side.*
 
-**`_module.py`** (a re-exporting Python package) and **`module.py`** (a
-module-path one). Scope: Python module file names under `src/sfmtool/`. The
-underscore says that the package's `__init__.py`, not the module's file, is
-where other code finds the module's names; the full rule is in
-[AGENTS.md](../AGENTS.md) § "Python module names". It was chosen over reading
-the underscore as *imported only inside its package*, because that is not what
-the tree does: `_commands/` imports `feature_match._run` and
-`visualization._epipolar_display` directly, for command entry points
-(`_run_matching`, `draw_epipolar_visualization`) that their `__init__.py` does
-not re-export. A count of the two
-spellings (five subpackages with underscores, nine without) is not a split to
-converge; it follows each package's `__init__.py`.
+**`_name`** (internal) and **`name`** (public). Scope: Python module,
+function, class, constant and attribute names under `src/sfmtool/`. A leading
+`_` means internal to `sfmtool`, not public API: any code inside the package
+may import it, across subpackages, while `scripts/`, the docs, spec examples
+and users' code do not, and a test does only when the internal name is what it
+tests. A name with no `_`, reached by a path with no `_`-prefixed component, is
+public. A re-exporting subpackage (`compare/`, `feature_match/`, `strips/`,
+`visualization/`, `xform/`) has `_`-named modules because its public names are
+the ones its `__init__.py` re-exports. The full rule is in
+[AGENTS.md](../AGENTS.md) § "Python names and privacy".
 
 ## Contrast pairs that are not synonyms
 

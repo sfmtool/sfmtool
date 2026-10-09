@@ -48,39 +48,37 @@ it. Use `pub(crate)` when sibling modules need it, including methods and fields
 of types declared in private modules. Reserve bare `pub` for an item exposed
 through the crate's public interface.
 
-### Python module names
+### Python names and privacy
 
-A leading underscore on a Python module name says that the module's file is not
-where other code finds its names; the package's `__init__.py` is. It does not
-mean that no code outside the package imports the module. A new module takes the
-spelling its siblings use, which follows from what their `__init__.py` does:
+A leading `_` on a Python module, function, class, constant or attribute name
+means the name is internal to `sfmtool`: it is not public API. Code inside
+`src/sfmtool/` may import an internal name from any other subpackage
+(`_commands/match.py` imports `feature_match._run`, and `analyze/summary.py`
+imports `camera.cameras._CAMERA_PARAM_NAMES`). Code outside the package, such
+as `scripts/`, the docs, spec examples and users' code, does not import
+internal names. A test may import an internal name when that name is what it
+tests, and otherwise uses public names. A name with no `_`, reached by a path
+with no `_`-prefixed component, is public API. The compiled extension
+`sfmtool._sfmtool` is internal by this rule.
 
-- **Re-exporting subpackage, underscore names.** The subpackage's `__init__.py`
-  imports the names other code uses from its own modules and lists them in
-  `__all__` (`compare/`, `feature_match/`, `strips/`, `visualization/`,
-  `xform/`). Every module in it starts with `_`.
-- **Module-path subpackage, plain names.** The `__init__.py` holds a docstring
-  and re-exports nothing from its own modules, and callers import
-  `sfmtool.<subpackage>.<module>` (`align/`, `analyze/`, `camera/`, `camrig/`,
-  `colmap/`, `merge/`, `motion/`, `rig/`, `sift/`; `sift/__init__.py`
-  re-exports the extension's `_sfmtool.sift`, not its own modules). No module
-  in it starts with `_`. `web_export/` has no module beside its `__init__.py`.
-- **The `sfmtool` package root** is a re-exporting package: `__init__.py` binds
-  the public names through `_LAZY_NAMES`, so its own modules are `_`-named. The
-  one exception is `cli.py`, the `sfm` entry point named in `pyproject.toml`.
-- **`_commands/`**: a plain name is a command module, one per row in
-  `cli.COMMANDS`. A helper shared by several commands takes `_`
-  (`_range_options.py`), so it is not mistaken for a command.
-
-Outside a re-exporting subpackage, import a name from the subpackage when its
-`__init__.py` re-exports it (`from ..visualization import
-render_heatmap_overlay`). Import from an `_`-named module only for a name the
-`__init__.py` does not re-export. Importing an `_`-named module runs the
-package's `__init__.py` first, so it does not avoid loading the rest of the
-subpackage. Tests and `scripts/` may import from any module. When a new
-subpackage is created, make it re-exporting when callers outside it need only a
-few entry points, and module-path when callers each need a different module
-from it.
+- **Re-exporting subpackage.** Its `__init__.py` imports names from its own
+  modules and lists them in `__all__` (`compare/`, `feature_match/`, `strips/`,
+  `visualization/`, `xform/`). Its modules are `_`-named, and its public names
+  are the ones the `__init__.py` re-exports. Import a re-exported name from the
+  subpackage (`from ..visualization import render_heatmap_overlay`), not from
+  the `_`-named module that defines it.
+- **Module-path subpackage.** Its `__init__.py` re-exports nothing from its own
+  modules, and callers import `sfmtool.<subpackage>.<module>` (`align/`,
+  `analyze/`, `camera/`, `camrig/`, `colmap/`, `merge/`, `motion/`, `rig/`,
+  `sift/`). A plain module name there is public; a module that is not meant as
+  API, such as a helper for one sibling, takes `_` (`motion/_recon_console.py`).
+- **The `sfmtool` package root** binds its public names through `_LAZY_NAMES`
+  in `__init__.py`, so its own modules are `_`-named. `cli.py` is the `sfm`
+  entry point named in `pyproject.toml`.
+- **`_commands/`** is internal as a whole, because of its underscore. Inside
+  it, a plain name is a command module, one per row in `cli.COMMANDS`, and a
+  helper shared by several commands takes `_` (`_range_options.py`) so it is
+  not mistaken for a command.
 
 ### Opening a pull request
 
