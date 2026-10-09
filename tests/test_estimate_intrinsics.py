@@ -22,7 +22,7 @@ import numpy.testing as npt
 import pytest
 from click.testing import CliRunner
 
-import sfmtool.geometry as _geometry
+import sfmtool._sfmtool.geometry as _geometry
 from sfmtool.cli import main
 
 # The package re-exports the click command under the module's own name, so the
@@ -140,6 +140,8 @@ def stub_estimate(monkeypatch, tmp_path):
             calls.append(k)
             return dict(result)
 
+        # The command imports the kernel from the extension submodule when it
+        # runs, so the stub replaces it there, not on `sfmtool.geometry`.
         monkeypatch.setattr(_geometry, "estimate_intrinsics", stub)
         return CliRunner().invoke(
             main,

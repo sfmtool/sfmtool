@@ -39,6 +39,9 @@ ALLOWED_COUNTS = {
     # call time, on the extension submodule. Patching `sfmtool.io` would leave
     # the solve calling the real binding.
     "tests/test_solve.py": 1,
+    # Replaces `estimate_intrinsics` where `sfm estimate-intrinsics` imports
+    # it at call time, on the extension submodule, for the same reason.
+    "tests/test_estimate_intrinsics.py": 1,
 }
 
 

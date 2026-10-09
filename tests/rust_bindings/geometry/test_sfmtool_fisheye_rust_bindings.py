@@ -258,19 +258,15 @@ def test_zero_bspline_equals_equidistant_fisheye_exactly():
 
 
 def test_copy_and_dict_serialization_round_trip():
-    """Copy and the dict path — the supported serialization contract.
-
-    PyO3 camera objects are not picklable (binding-wide: the registered
-    class path is not importable, so every model fails the same way);
-    `to_dict`/`from_dict` is the contract for crossing process boundaries,
-    and it must carry the variable-length spline losslessly.
-    """
+    """Copy, the dict path and pickle all carry the variable-length spline
+    losslessly. Pickle finds the class at its public path,
+    `sfmtool.geometry.CameraIntrinsics`, and rebuilds it through
+    `__reduce__`."""
     cam = CameraIntrinsics.from_dict(SFMTOOL)
     assert copy.copy(cam) == cam
     assert copy.deepcopy(cam) == cam
     assert CameraIntrinsics.from_dict(cam.to_dict()) == cam
-    with pytest.raises(pickle.PicklingError):
-        pickle.dumps(cam)
+    assert pickle.loads(pickle.dumps(cam)) == cam
 
 
 def test_best_fit_inside_pinhole_raises():
