@@ -161,9 +161,9 @@ The transform prints a structural summary in the established `xform` style:
 - **Pairs with `--refine-keypoints`.** The localizer is the discrete *search*
   that moves each view's keypoint to the shift where its tile best matches the
   other views (and drops the views it cannot place); the refiner is the *local*
-  sub-pixel solve, which needs a starting keypoint already near that shift. `--localize-keypoints --refine-keypoints` (search,
-  then sub-pixel refinement) is the chain the `embed-patches` pipeline itself
-  runs.
+  sub-pixel solve, which needs a starting keypoint already near that shift.
+  `--localize-keypoints --refine-keypoints` (search, then sub-pixel
+  refinement) is the chain the `embed-patches` pipeline itself runs.
   Either op is also useful alone.
 - **`--refine-normals` is an option on either side.** Refining normals first
   gives the localizer a better patch plane to search over; localizing first
