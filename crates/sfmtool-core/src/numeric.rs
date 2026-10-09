@@ -159,12 +159,14 @@ pub fn median(values: &[f64]) -> f64 {
 /// slice sorted with [`f64::total_cmp`] carries its NaNs at the top, so a NaN
 /// quantile means NaN reached that rank of the population.
 ///
-/// An infinite order statistic is returned as is rather than turned into NaN
-/// by `∞ − ∞`: the rank itself (`t = 0`) or two equal bracketing values give
-/// that value, and an infinite gap `b − a` interpolates from `a`, which gives
-/// `∞` for any `t > 0`. A residual of `∞` marks a point outside the camera's
-/// domain, and a trim bound at such a rank keeps every residual at or below it,
-/// as the copies this replaced did. Finite input is unaffected.
+/// When `a` or `b` is infinite, numpy's arithmetic can give NaN from `∞ − ∞`
+/// where the answer is a number, so that case is decided directly: at `t = 0`
+/// the result is `a`; between two equal infinities it is that infinity;
+/// between a finite value and an infinity it is the infinity for any `t > 0`.
+/// Only `−∞` against `+∞`, or a NaN input, gives NaN. A residual of `∞` marks
+/// a point outside the camera's domain, so a trim bound that falls between a
+/// finite residual and an infinite one is `∞` and keeps every residual.
+/// Whenever `b − a` is finite the result is numpy's, bit for bit.
 pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
     let n = sorted.len();
     if n == 0 {
@@ -175,14 +177,22 @@ pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
     let high = (low + 1).min(n - 1);
     let t = position - low as f64;
     let (a, b) = (sorted[low], sorted[high]);
-    if t == 0.0 || a == b {
-        return a;
-    }
     let gap = b - a;
-    if t >= 0.5 && gap.is_finite() {
-        b - gap * (1.0 - t)
+    if gap.is_finite() {
+        if t >= 0.5 {
+            b - gap * (1.0 - t)
+        } else {
+            a + gap * t
+        }
+    } else if t == 0.0 || a == b || b.is_finite() {
+        // The rank itself, two equal infinities, or `−∞` below a finite `b`.
+        a
+    } else if a.is_finite() {
+        // `+∞` above a finite `a`, with `t > 0`.
+        b
     } else {
-        a + gap * t
+        // `−∞` below `+∞`, or a NaN.
+        f64::NAN
     }
 }
 

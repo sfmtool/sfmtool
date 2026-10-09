@@ -227,6 +227,26 @@ fn an_infinite_order_statistic_is_not_turned_into_nan() {
     assert_eq!(quantile_of_sorted(&[1.0, inf], 0.75), inf);
     // A finite rank below an infinite neighbour.
     assert_eq!(quantile_of_sorted(&[1.0, 2.0, inf], 0.5), 2.0);
+    // `−∞` below a finite value, on both sides of the split (numpy gives NaN
+    // below it and `−∞` above it).
+    assert_eq!(quantile_of_sorted(&[-inf, 1.0], 0.25), -inf);
+    assert_eq!(quantile_of_sorted(&[-inf, 1.0], 0.75), -inf);
+    assert_eq!(quantile_of_sorted(&[-inf, -inf, 1.0], 0.25), -inf);
+    // `−∞` against `+∞` has no answer.
+    assert!(quantile_of_sorted(&[-inf, inf], 0.5).is_nan());
+    // The `resect_images` trim: `KEEP_FRACTION = 0.6` of four residuals falls
+    // at t = 0.8 between a finite residual and `∞`, and the bound keeps all.
+    let residuals = [0.5, 1.0, inf, inf];
+    let bound = quantile(&residuals, 0.6);
+    assert_eq!(bound, inf);
+    assert_eq!(residuals.iter().filter(|&&r| r <= bound).count(), 4);
+}
+
+#[test]
+fn a_signed_zero_keeps_numpys_sign() {
+    // numpy computes `a + 0·t` and `b − 0·(1 − t)`, which give +0.0 here.
+    assert!(quantile_of_sorted(&[-0.0, 0.0], 0.75).is_sign_positive());
+    assert!(quantile_of_sorted(&[-0.0, 1.0], 0.0).is_sign_positive());
 }
 
 #[test]
