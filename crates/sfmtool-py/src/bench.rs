@@ -1112,8 +1112,8 @@ fn set_reference(
     ))
 }
 
-/// Slide the track's patch across its own plane until its centre sits under
-/// ``pixel`` in ``observation``'s photograph.
+/// Slide the track's patch across its own plane until ``observation``'s
+/// sighting sits under ``pixel`` in that observation's photograph.
 ///
 /// This moves the **patch**, not one sighting: a track-stage track has one
 /// patch and every observation is a view of it, so the centre moves in-plane,
