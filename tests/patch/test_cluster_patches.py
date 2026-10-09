@@ -317,7 +317,7 @@ def test_cluster_patches_piecewise_writes_the_cells(cluster_matches_file: Path):
             "max_iterations",
         )
     } == {
-        "move_shape": False,
+        "move_shape": True,
         "cell_shift_bound_px": 2.0,
         "min_cell_zncc": 0.8,
         "min_cell_curvature": 0.02,

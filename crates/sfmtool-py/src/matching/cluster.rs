@@ -410,15 +410,15 @@ pub fn clusters_to_pair_matches(
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     piecewise: Run the piecewise refinement after the cascade for every
 ///         kept member: the nine cells of the reference's patch are
-///         registered separately at the member's cascade shape, and a robust
-///         affine map is fitted to their shifts (default False, which
+///         registered separately against the member's photograph, and a
+///         robust affine map is fitted to their shifts (default False, which
 ///         carries no cells). See
 ///         specs/core/patch/cluster-patch-refinement.md.
 ///     move_shape: Piecewise setting: let the fitted map move the member's
 ///         shape and position, by a loop that applies it as an update while
-///         the whole-member ZNCC does not fall (default False, which measures
-///         the cells once and leaves every member output exactly the
-///         cascade's).
+///         the whole-member ZNCC does not fall (default True). False measures
+///         the cells once at the cascade's shape and leaves every member
+///         output exactly the cascade's.
 ///     cell_shift_bound_px: Piecewise setting: the search bound for a cell's
 ///         shift from its affine placement, template grid px (default 2.0).
 ///     min_cell_zncc: Piecewise setting: a cell whose ZNCC at its optimum is

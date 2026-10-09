@@ -121,10 +121,10 @@ pub struct ClusterRefineParams {
     /// The piecewise refinement that follows the cascade for every kept
     /// member: the nine cells of the template are registered separately at
     /// the member's cascade shape, and [`ClusterRefineResult::cells`] carries
-    /// what each cell read. The member's shape, position and readings stay
-    /// the cascade's unless [`PiecewiseParams::move_shape`] lets the cells'
-    /// shifts refine them. `None` skips the stage, leaving every output the
-    /// cascade's.
+    /// what each cell read. By default ([`PiecewiseParams::move_shape`]) the
+    /// cells' shifts refine the member's shape and position where the
+    /// whole-member ZNCC does not fall; with `move_shape` off they stay the
+    /// cascade's. `None` skips the stage, leaving every output the cascade's.
     ///
     /// Off (`None`) by default. `sfm cluster-patches --piecewise` turns it on
     /// and stores the cells as the `.matches` per-cell entries (format

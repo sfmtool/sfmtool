@@ -190,7 +190,11 @@ A member carries one shape for its whole patch. A file written with
 status for each of the nine cells of its patch, the displacement measured from
 where the member's stored shape places the cell (format version 8's per-cell
 entries, [matches-file-format.md](../../formats/matches-file-format.md#per-cell-entries-optional-version-8)).
-The piecewise refinement that measures them is specified in
+In such a file the kept members' shapes and positions are also the
+piecewise refinement's: an affine map fitted to the cells' shifts moves a
+member's shape wherever the whole-patch ZNCC does not fall, so a member's
+stored shape can differ from the affine cascade's optimum. The piecewise
+refinement is specified in
 [cluster-patch-refinement.md](cluster-patch-refinement.md#piecewise-refinement);
 once poses exist, [cell-plane-normals.md](cell-plane-normals.md) turns them into
 a patch normal. A file written without `--piecewise` holds no per-cell

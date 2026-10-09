@@ -157,7 +157,7 @@ class TestRefineClusterPatches:
         images, pos, aff, starts, m_img, m_feat = _inputs()
         plain = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
         result = refine_cluster_patches(
-            images, pos, aff, starts, m_img, m_feat, piecewise=True
+            images, pos, aff, starts, m_img, m_feat, piecewise=True, move_shape=False
         )
         shift = result["member_cell_shift_px"]
         zncc = result["member_cell_zncc"]
@@ -172,7 +172,7 @@ class TestRefineClusterPatches:
         accepted = result["member_cell_update_accepted"]
         assert stop.dtype == np.uint8 and stop.shape == (2,)
         assert accepted.dtype == np.bool_ and accepted.shape == (2,)
-        # The settings the run used: the Rust defaults.
+        # The settings the run used: the Rust defaults, with the loop off.
         assert result["piecewise_options"] == {
             "move_shape": False,
             "cell_shift_bound_px": 2.0,
@@ -189,9 +189,9 @@ class TestRefineClusterPatches:
         assert iterations[0] == 0
         assert stop[0] == LOOP_NOT_RUN and not accepted[0]
 
-        # The kept member is a pure translation: the stage measures it once,
-        # its fitted cells sit where its affine shape places them, and every
-        # member output is the cascade's, bit for bit.
+        # The kept member is a pure translation: without the loop the stage
+        # measures it once, its fitted cells sit where its affine shape places
+        # them, and every member output is the cascade's, bit for bit.
         assert result["member_status"][1] == STATUS_KEPT
         assert iterations[1] == 1
         assert stop[1] == LOOP_MEASURED and not accepted[1]
@@ -210,11 +210,11 @@ class TestRefineClusterPatches:
         ):
             np.testing.assert_array_equal(result[key], plain[key], err_msg=key)
 
-    def test_piecewise_move_shape_runs_the_loop(self):
+    def test_piecewise_runs_the_loop_by_default(self):
         images, pos, aff, starts, m_img, m_feat = _inputs()
         plain = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
         result = refine_cluster_patches(
-            images, pos, aff, starts, m_img, m_feat, piecewise=True, move_shape=True
+            images, pos, aff, starts, m_img, m_feat, piecewise=True
         )
         assert result["piecewise_options"]["move_shape"] is True
         assert result["member_status"][1] == STATUS_KEPT
@@ -238,7 +238,7 @@ class TestRefineClusterPatches:
             m_img,
             m_feat,
             piecewise=True,
-            move_shape=True,
+            move_shape=False,
             cell_shift_bound_px=3.0,
             min_cell_zncc=0.9,
             min_cell_curvature=0.05,
@@ -246,14 +246,14 @@ class TestRefineClusterPatches:
             max_iterations=1,
         )
         assert result["piecewise_options"] == {
-            "move_shape": True,
+            "move_shape": False,
             "cell_shift_bound_px": 3.0,
             "min_cell_zncc": 0.9,
             "min_cell_curvature": 0.05,
             "update_tolerance_px": 0.1,
             "max_iterations": 1,
         }
-        # A cap of one render stops every member's loop after one pass.
+        # Without the loop every member is rendered once.
         assert result["member_cell_iterations"].max() <= 1
 
     def test_out_of_range_feature_is_not_evaluated(self):

@@ -16,16 +16,16 @@
 //! least squares with a Tukey biweight, so a cell that disagrees with the
 //! others is refused as an outlier.
 //!
-//! By default ([`PiecewiseParams::move_shape`] is `false`) that is the whole
-//! stage: one render, and the member's shape is left as the cascade found it.
-//! With `move_shape`, the fitted map is an update of the shape and the stage is
-//! a loop with two levels. An update is applied only when the cascade's own
-//! objective, the whole-member windowed ZNCC, does not fall at the updated
-//! shape (see [`ACCEPT_ZNCC_TOLERANCE`]), and the loop renders again with the
+//! By default ([`PiecewiseParams::move_shape`] is `true`) the fitted map is an
+//! update of the shape and the stage is a loop with two levels. An update is
+//! applied only when the cascade's own objective, the whole-member windowed
+//! ZNCC, does not fall at the updated shape (see [`ACCEPT_ZNCC_TOLERANCE`]), and the loop renders again with the
 //! updated shape until the update moves no cell centre by more than
 //! [`PiecewiseParams::update_tolerance_px`], until an update is rejected, until
 //! the update's largest movement stops shrinking, or until
-//! [`PiecewiseParams::max_iterations`].
+//! [`PiecewiseParams::max_iterations`]. With `move_shape` off, the stage is
+//! one render and a measurement, and the member's shape is left as the
+//! cascade found it.
 //!
 //! The cells are the `[0, R/3, R - R/3, R]` split the ZNCC grid uses. Shifts
 //! and cell centres are in template grid px. A grid position `g` (column,
@@ -96,13 +96,13 @@ pub const DEFAULT_MIN_CELL_CURVATURE: f32 = 0.02;
 /// every kept member.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiecewiseParams {
-    /// Whether the fitted affine map may move the member's shape. `false`, the
-    /// default, measures the cells once at the cascade's shape and leaves the
-    /// member's shape, position and readings exactly as the cascade produced
-    /// them. `true` runs the loop that applies the fitted map as an update of
-    /// the shape while the whole-member ZNCC does not fall. It is off by
-    /// default because, on captures, the few members the loop moves, each to a
-    /// shape of higher whole-member ZNCC, changed which seed candidate passes.
+    /// Whether the fitted affine map may move the member's shape. `true`, the
+    /// default, runs the loop that applies the fitted map as an update of the
+    /// shape while the whole-member ZNCC does not fall. It is on by default
+    /// because a blind human review of the shapes it moves preferred them to
+    /// the cascade's, increasingly so the further they moved. `false`
+    /// measures the cells once at the cascade's shape and leaves the member's
+    /// shape, position and readings exactly as the cascade produced them.
     pub move_shape: bool,
     /// Search bound for a cell's shift from its affine placement, in template
     /// grid px. The working patch is rendered with a margin of this many grid
@@ -133,7 +133,7 @@ pub struct PiecewiseParams {
 impl Default for PiecewiseParams {
     fn default() -> Self {
         Self {
-            move_shape: false,
+            move_shape: true,
             cell_shift_bound_px: 2.0,
             min_cell_zncc: DEFAULT_MIN_CELL_ZNCC,
             min_cell_curvature: DEFAULT_MIN_CELL_CURVATURE,

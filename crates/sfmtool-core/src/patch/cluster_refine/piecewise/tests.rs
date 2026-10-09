@@ -9,9 +9,9 @@
 //! frame, the rejection of an update that lowers the whole-member ZNCC, the
 //! early stop of an oscillating loop, the robust fit's refusal of an outlier
 //! cell, and the stage as it runs inside `refine_cluster_patches`, on one
-//! thread and on four. Those run the shape-moving loop
-//! (`PiecewiseParams::move_shape`); the tests at the end run the default,
-//! which measures the cells at the cascade's shape and leaves the member
+//! thread and on four. Those run the default, the shape-moving loop
+//! (`PiecewiseParams::move_shape`); the tests at the end turn it off, which
+//! measures the cells at the cascade's shape and leaves the member
 //! bit-identical to the cascade's.
 
 use super::super::kernels::{SupportTables, TemplateKernel};
@@ -94,25 +94,31 @@ struct Fixture {
     off: f64,
 }
 
-/// The default piecewise settings with the shape-moving loop turned on.
+/// The default piecewise settings, which run the shape-moving loop.
 fn loop_params() -> PiecewiseParams {
+    let pp = PiecewiseParams::default();
+    assert!(pp.move_shape, "the shape-moving loop is the default");
+    pp
+}
+
+/// The default piecewise settings with the shape-moving loop turned off, so
+/// the stage measures the cells at the cascade's shape and never moves it.
+fn measuring_params() -> PiecewiseParams {
     PiecewiseParams {
-        move_shape: true,
+        move_shape: false,
         ..PiecewiseParams::default()
     }
 }
 
-/// The fixture with the shape-moving loop on, which most tests here exercise.
+/// The fixture at the default settings, with the shape-moving loop on, which
+/// most tests here exercise.
 fn fixture() -> Fixture {
     fixture_with(loop_params())
 }
 
-/// The fixture at the default settings, which measure the cells at the
-/// cascade's shape and never move it.
+/// The fixture with the shape-moving loop off.
 fn measuring_fixture() -> Fixture {
-    let fx = fixture_with(PiecewiseParams::default());
-    assert!(!fx.pp().move_shape, "measuring is the default");
-    fx
+    fixture_with(measuring_params())
 }
 
 fn fixture_with(pp: PiecewiseParams) -> Fixture {
@@ -1454,7 +1460,7 @@ fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
         C,
         0.48,
         &layout,
-        &PiecewiseParams::default(),
+        &measuring_params(),
         |_: &Mat2, _: [f64; 2]| {
             renders += 1;
             Some(pass)
@@ -1488,7 +1494,7 @@ fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
         C,
         0.48,
         &layout,
-        &PiecewiseParams::default(),
+        &measuring_params(),
         |_: &Mat2, _: [f64; 2]| None,
         |_: &Mat2, _: [f64; 2]| Some(0.9),
     );

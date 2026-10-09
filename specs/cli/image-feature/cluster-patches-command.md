@@ -65,10 +65,14 @@ radius. Its default, `2.5`, is the same bar as the keypoint localizer's member
 gate (`embed-patches --max-member-zncc-self-similarity-radius`).
 `--piecewise` runs the piecewise refinement of
 [cluster-patch-refinement.md](../../core/patch/cluster-patch-refinement.md#piecewise-refinement)
-with its default parameters, which measure the cells and never move the
-member's shape (`move_shape` false), so every other output is the one the
-command writes without the flag. It is off by default: whether it becomes the
-default is decided once a consumer reads the cells.
+with its default parameters (`move_shape` true): it measures the cells, and
+an affine map fitted to their shifts moves a kept member's shape and position
+wherever the whole-patch ZNCC does not fall, re-reading the member's ZNCC and
+shift at the moved shape. A blind human review preferred the moved shapes to
+the cascade's
+([measurements](../../core/patch/cluster-patch-refinement-measurements.md#human-review-of-moved-shapes-2026-10-09)).
+The stage is off by default: whether it becomes the default is decided once a
+consumer reads the cells.
 
 ## Process
 
@@ -99,11 +103,13 @@ default is decided once a consumer reads the cells.
    poller reporting per-cluster progress. With `--piecewise` the call passes
    `piecewise=True` and leaves the piecewise settings at the kernel's
    defaults, and the kernel follows the cascade with the piecewise
-   refinement of every kept member: it registers the nine cells of the
-   reference's patch separately at the member's cascade shape, fits a robust
-   affine map to their shifts to find the cells that disagree, and returns
-   each cell's displacement, ZNCC and status and the member's pass count,
-   leaving the member's shape, position and scores as the cascade found them.
+   refinement of every kept member: starting at the member's cascade shape,
+   it registers the nine cells of the reference's patch separately, fits a
+   robust affine map to their shifts, and applies that map as an update of
+   the member's shape and position while the whole-patch ZNCC does not fall,
+   re-reading the member's scores at the moved shape. It returns each cell's
+   displacement, ZNCC and status and the member's pass count; the member's
+   status stays the cascade's.
 4. **Write.** A new `.matches` file at the current format version: the images
    and clusters sections carried over, with the backbone's geometry advanced
    to this file's stage. For every member the cascade **measured** — status
@@ -135,7 +141,8 @@ default is decided once a consumer reads the cells.
    ([`matches-file-format.md`](../../formats/matches-file-format.md),
    Per-cell entries); without it the file carries none. Summary lines report
    the consistency distribution (median / p90), with `--piecewise` how many
-   of the kept members' cells were fitted, and the status breakdown
+   of the kept members' cells were fitted and to how many kept members the
+   last shape update was applied, and the status breakdown
    (references / kept / rejected / unlocalizable / duplicate-image / not
    evaluated).
 
