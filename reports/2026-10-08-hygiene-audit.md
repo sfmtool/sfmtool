@@ -200,6 +200,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Extend the scan to `quantile|percentile` with an allowlist.
 - Effort: low–medium. Risk: medium, because last-bit changes can flip a threshold; pin fixtures before and after.
 
+> _Status (2026-10-09): **Done** — `numeric::quantile_of_sorted` now uses numpy's `_lerp` arithmetic and returns NaN for empty input, with `quantile_in_place` and `quantile` (both sorting with `total_cmp`) beside it. The five private copies in `cluster_census`, `affine_factorization`, `column_scan`, `pose_refine` and `member_coherence/decide` are gone and their callers use the shared functions; the census keeps its `+∞` threshold for an empty population at the call site. `numeric/tests.rs` now scans for `quantile|percentile` names against an allowlist, and the copies' numpy reference tests moved there. All `sfmtool-core` tests pass unchanged, branch `hygiene-fix-1009-06-one-quantile`._
+
 **Share the Levenberg–Marquardt damping step**
 - Location:
   - Same rule: `geometry/pose_refine.rs:196-223`, `geometry/resect_images/finite.rs:395-422`, `reconstruction/triangulation/points.rs:972-991`, `analysis/cluster_census/group_consistency.rs:422-452`, `geometry/bundle_adjust.rs:2357-2680`.

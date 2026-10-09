@@ -27,10 +27,8 @@ use nalgebra::{Matrix6, Point3, UnitQuaternion, Vector3, Vector6};
 use crate::camera::report::angle_between;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::absolute_pose::p3p_solve;
-use crate::geometry::pose_refine::{
-    compose_pose_jacobian, project_with_jac, quantile, INVALID_RESIDUAL,
-};
-use crate::numeric::splitmix64;
+use crate::geometry::pose_refine::{compose_pose_jacobian, project_with_jac, INVALID_RESIDUAL};
+use crate::numeric::{quantile, splitmix64};
 
 use super::{Pose, INLIER_PX};
 

@@ -27,7 +27,7 @@ use crate::features::cluster_match::covisibility::{
     ClusterCovisibility, CovisibilityError, MAX_DENSE_IMAGES,
 };
 use crate::geometry::reprojection::reprojection_residuals;
-use crate::numeric::median_in_place;
+use crate::numeric::{median_in_place, quantile_in_place};
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 
@@ -229,29 +229,6 @@ pub fn wilson_lower_bound(k: u32, n: u32, z: f64) -> f64 {
     let c = p + z * z / (2.0 * n);
     let r = z * (p * (1.0 - p) / n + z * z / (4.0 * n * n)).sqrt();
     ((c - r) / d).max(0.0)
-}
-
-/// Linearly-interpolated percentile of `values` (NumPy's default `linear`
-/// method, including its `t >= 0.5` reformulation, so the threshold matches
-/// the reference prototype bit for bit). `values` is sorted in place;
-/// `percentile` is in `[0, 100]`. Empty input gives `+∞`.
-fn percentile_linear(values: &mut [f64], percentile: f64) -> f64 {
-    if values.is_empty() {
-        return f64::INFINITY;
-    }
-    values.sort_by(f64::total_cmp);
-    let n = values.len();
-    let pos = (n - 1) as f64 * (percentile / 100.0);
-    let lo = pos.floor();
-    let lo_i = (lo as usize).min(n - 1);
-    let hi_i = (lo_i + 1).min(n - 1);
-    let t = pos - lo;
-    let (a, b) = (values[lo_i], values[hi_i]);
-    if t >= 0.5 {
-        b - (b - a) * (1.0 - t)
-    } else {
-        a + (b - a) * t
-    }
 }
 
 /// Greedy-modularity (CNM) communities of a dense symmetric weight matrix,
@@ -772,7 +749,13 @@ fn evidence_eligibility(
         .filter(|&s| measurable[s] && med[s] < params.sat_px && warp[s].is_finite())
         .map(|s| warp[s])
         .collect();
-    let q_eligible = percentile_linear(&mut satisfied_warp, params.warp_percentile);
+    // With no satisfied cluster there is no population to take the percentile
+    // of, and every finite warp is eligible.
+    let q_eligible = if satisfied_warp.is_empty() {
+        f64::INFINITY
+    } else {
+        quantile_in_place(&mut satisfied_warp, params.warp_percentile / 100.0)
+    };
     warp.iter()
         .map(|&q| q.is_finite() && q <= q_eligible)
         .collect()

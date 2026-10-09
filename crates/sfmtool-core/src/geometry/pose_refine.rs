@@ -16,6 +16,7 @@
 use nalgebra::{Matrix6, UnitQuaternion, Vector3, Vector6};
 
 use crate::camera::PixelJacobian;
+use crate::numeric::quantile;
 use crate::CameraIntrinsics;
 
 /// A point behind the camera / outside the model domain contributes this pixel
@@ -227,24 +228,6 @@ fn lm_fit(
 
     let axis = r.scaled_axis();
     [axis.x, axis.y, axis.z, t.x, t.y, t.z]
-}
-
-/// numpy-compatible linear-interpolation quantile of `values` at `q ∈ [0, 1]`.
-pub(crate) fn quantile(values: &[f64], q: f64) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut s = values.to_vec();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let pos = q * (s.len() - 1) as f64;
-    let lo = pos.floor() as usize;
-    let hi = pos.ceil() as usize;
-    if lo == hi {
-        s[lo]
-    } else {
-        let frac = pos - lo as f64;
-        s[lo] + frac * (s[hi] - s[lo])
-    }
 }
 
 /// Refine a world-to-camera pose against 2D-3D correspondences by trimmed

@@ -394,20 +394,6 @@ fn wilson_bound_shrinks_small_denominators() {
     assert_eq!(wilson_lower_bound(0, 25, 1.96), 0.0);
 }
 
-// ── Percentile ───────────────────────────────────────────────────────────
-
-#[test]
-fn percentile_matches_numpy_linear() {
-    let mut v = vec![1.0, 2.0, 3.0, 4.0];
-    assert!((percentile_linear(&mut v, 50.0) - 2.5).abs() < 1e-12);
-    let mut v = vec![1.0, 2.0, 3.0, 4.0];
-    assert!((percentile_linear(&mut v, 95.0) - 3.85).abs() < 1e-12);
-    let mut v = vec![7.0];
-    assert!((percentile_linear(&mut v, 95.0) - 7.0).abs() < 1e-12);
-    let mut v: Vec<f64> = Vec::new();
-    assert!(percentile_linear(&mut v, 95.0).is_infinite());
-}
-
 // ── Grouping ─────────────────────────────────────────────────────────────
 
 #[test]

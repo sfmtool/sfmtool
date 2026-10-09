@@ -22,7 +22,7 @@ use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 use rayon::prelude::*;
 
 use crate::geometry::focal_vote::prof;
-use crate::numeric::splitmix64;
+use crate::numeric::{quantile, splitmix64};
 
 mod residuals;
 
@@ -398,21 +398,6 @@ impl ScanCandidate {
 }
 
 // ── Small numeric helpers ────────────────────────────────────────────────────
-
-/// Linear-interpolated quantile of an already-sorted, non-empty slice.
-fn quantile_sorted(sorted: &[f64], p: f64) -> f64 {
-    let t = p * (sorted.len() - 1) as f64;
-    let lo = t.floor() as usize;
-    let hi = t.ceil() as usize;
-    sorted[lo] + (sorted[hi] - sorted[lo]) * (t - lo as f64)
-}
-
-/// Linear-interpolated quantile of an unsorted, non-empty slice.
-fn quantile(vals: &[f64], p: f64) -> f64 {
-    let mut v = vals.to_vec();
-    v.sort_by(f64::total_cmp);
-    quantile_sorted(&v, p)
-}
 
 /// Smallest eigenvector of `AᵀA` over the selected rows, reshaped row-major
 /// into a `3×3` matrix. `None` for a design that carries no constraint.

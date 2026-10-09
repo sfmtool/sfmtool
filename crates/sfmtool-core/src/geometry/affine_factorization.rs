@@ -22,6 +22,8 @@
 
 use nalgebra::{DMatrix, DVector, Matrix3, Vector3};
 
+use crate::numeric::quantile_of_sorted;
+
 /// Dense-init size bound on `num_images × num_clusters`. The initialization
 /// builds a dense 2N×C `f64` matrix (16·N·C bytes): 64 MB at this bound,
 /// mirroring the dense-covisibility budget. The intended inputs are small
@@ -144,27 +146,6 @@ pub struct MetricHypothesis {
     pub rotations: Vec<[[f64; 3]; 3]>,
     /// Per-image scales; 0 where unused.
     pub scales: Vec<f64>,
-}
-
-/// The `(1 - trim_fraction)`-style quantile with linear interpolation
-/// between order statistics, bit-matching numpy's default `quantile` method
-/// (including its `t >= 0.5` lerp branch). `sorted` must be ascending and
-/// non-empty; `q` in `[0, 1]`.
-fn quantile_linear(sorted: &[f64], q: f64) -> f64 {
-    let n = sorted.len();
-    let h = q * (n - 1) as f64;
-    let lo = h.floor() as usize;
-    let t = h - lo as f64;
-    if lo + 1 >= n {
-        return sorted[n - 1];
-    }
-    let (a, b) = (sorted[lo], sorted[lo + 1]);
-    // numpy's _lerp: the t >= 0.5 branch computes from `b` for accuracy.
-    if t >= 0.5 {
-        b - (b - a) * (1.0 - t)
-    } else {
-        a + (b - a) * t
-    }
 }
 
 /// Exact linear least-squares solve of `a·x = b` (any shape, multiple RHS)
@@ -358,7 +339,7 @@ pub fn factorize_affine(
                 .collect();
             if !kept_norms.is_empty() {
                 kept_norms.sort_by(f64::total_cmp);
-                let thr = quantile_linear(&kept_norms, 1.0 - params.trim_fraction);
+                let thr = quantile_of_sorted(&kept_norms, 1.0 - params.trim_fraction);
                 for (o, kept) in keep.iter_mut().enumerate() {
                     *kept = residuals[o][0].hypot(residuals[o][1]) < thr;
                 }

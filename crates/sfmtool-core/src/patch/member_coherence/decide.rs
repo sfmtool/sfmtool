@@ -11,6 +11,8 @@
 //!
 //! See `specs/core/patch/member-coherence-validation.md` for the design.
 
+use crate::numeric::quantile_of_sorted;
+
 use super::{
     scored_mask, MemberCoherenceParams, MemberDecision, MemberMatrix, MemberVerdict,
     EXONERATION_MIN_DEFICIT, SELF_BAR_CEILING, SELF_BAR_MIN_PAIRS, SELF_BAR_MIN_SCATTER,
@@ -82,21 +84,6 @@ pub(super) fn max_support_block(zncc: &[f64], k: usize, bar: f64) -> Vec<bool> {
     (0..k).map(|j| adj[best * k + j]).collect()
 }
 
-/// The `q`-quantile of an already-sorted non-empty slice, by linear
-/// interpolation between the bracketing order statistics — a pure function of
-/// the multiset, with no dependence on how it arrived.
-fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
-    let n = sorted.len();
-    let pos = q * (n - 1) as f64;
-    let lo = pos.floor() as usize;
-    let frac = pos - lo as f64;
-    if lo + 1 >= n {
-        sorted[n - 1]
-    } else {
-        sorted[lo] + frac * (sorted[lo + 1] - sorted[lo])
-    }
-}
-
 /// The **centre and scatter of one block's own agreement**: the statistics the
 /// self-normalized admission bar is measured in.
 ///
@@ -147,8 +134,8 @@ pub fn core_coherence(zncc: &[f64], k: usize, block: &[bool]) -> Option<(f64, f6
         return None;
     }
     v.sort_by(|a, b| a.total_cmp(b));
-    let center = quantile_sorted(&v, 0.5);
-    let scatter = (1.4826 * (quantile_sorted(&v, 0.75) - center)).max(SELF_BAR_MIN_SCATTER);
+    let center = quantile_of_sorted(&v, 0.5);
+    let scatter = (1.4826 * (quantile_of_sorted(&v, 0.75) - center)).max(SELF_BAR_MIN_SCATTER);
     Some((center, scatter))
 }
 

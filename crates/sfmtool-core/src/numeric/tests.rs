@@ -1,15 +1,18 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Median tests, weighted toward the cases the six merged copies disagreed on.
+//! Median and quantile tests, weighted toward the cases the merged copies
+//! disagreed on.
 //!
-//! The clean-data cases are the cheap half — all six already agreed there.
+//! The clean-data cases are the cheap half — the copies already agreed there.
 //! What needs pinning is the part that was previously unspecified: what a NaN
 //! in the population does, and what an empty one returns. Those are the
 //! contract now, so they get named tests rather than being left to whichever
 //! comparator a given copy happened to use.
 
-use super::{median, median_in_place, SELECT_MIN_LEN};
+use super::{
+    median, median_in_place, quantile, quantile_in_place, quantile_of_sorted, SELECT_MIN_LEN,
+};
 
 /// Straightforward full-sort median, used to hold the optimized implementation
 /// to account across the quickselect threshold.
@@ -183,6 +186,48 @@ fn the_quickselect_path_applies_the_same_nan_rule() {
     }
 }
 
+#[test]
+fn the_quantile_matches_numpy_linear_to_the_last_bit() {
+    // `np.quantile` reference values (default linear method). numpy returns
+    // 3.8499999999999996 here, not 3.85: the `t >= 0.5` branch of its `_lerp`
+    // works from the upper order statistic.
+    assert_eq!(
+        quantile_of_sorted(&[1.0, 2.0, 3.0, 4.0], 0.95),
+        3.849_999_999_999_999_6
+    );
+    assert_eq!(quantile_of_sorted(&[1.0, 2.0, 3.0, 4.0], 0.5), 2.5);
+    assert_eq!(quantile_of_sorted(&[1.0, 2.0, 3.0, 4.0, 5.0], 0.5), 3.0);
+    // The `t >= 0.5` branch: 10 − 8·(1 − 0.9).
+    assert_eq!(
+        quantile_of_sorted(&[2.0, 10.0], 0.9),
+        10.0 - 8.0 * (1.0 - 0.9)
+    );
+    // The `t < 0.5` branch.
+    assert_eq!(quantile_of_sorted(&[2.0, 10.0], 0.25), 4.0);
+    assert_eq!(quantile_of_sorted(&[7.0], 0.3), 7.0);
+    assert_eq!(quantile_of_sorted(&[1.0, 2.0], 1.0), 2.0);
+    assert_eq!(quantile_of_sorted(&[1.0, 2.0], 0.0), 1.0);
+}
+
+#[test]
+fn an_empty_quantile_is_nan() {
+    assert!(quantile_of_sorted(&[], 0.5).is_nan());
+    assert!(quantile(&[], 0.9).is_nan());
+    assert!(quantile_in_place(&mut [], 0.1).is_nan());
+}
+
+#[test]
+fn a_nan_minority_stays_above_a_low_quantile() {
+    // `total_cmp` sorts NaN to the top, so it reaches only the quantiles at
+    // the rank it occupies.
+    let values = [4.0, f64::NAN, 1.0, 3.0, 2.0];
+    assert_eq!(quantile(&values, 0.5), 3.0);
+    assert!(quantile(&values, 1.0).is_nan());
+    let mut scratch = values.to_vec();
+    assert_eq!(quantile_in_place(&mut scratch, 0.25), 2.0);
+    assert_eq!(&scratch[..4], &[1.0, 2.0, 3.0, 4.0]);
+}
+
 /// Every `fn …median…` in the workspace's non-test sources, with why it is not
 /// a second copy of [`median_in_place`].
 ///
@@ -267,6 +312,33 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Every `fn …quantile…` or `fn …percentile…` in the workspace's non-test
+/// sources, with why it is not a second copy of [`quantile_of_sorted`].
+///
+/// Paths are relative to `crates/`.
+const QUANTILE_ALLOWLIST: &[(&str, &str, &str)] = &[
+    (
+        "sfmtool-core/src/numeric.rs",
+        "quantile_of_sorted",
+        "the shared quantile itself",
+    ),
+    (
+        "sfmtool-core/src/numeric.rs",
+        "quantile_in_place",
+        "the shared quantile, sorting in place",
+    ),
+    (
+        "sfmtool-core/src/numeric.rs",
+        "quantile",
+        "the shared quantile, copying to sort",
+    ),
+    (
+        "sfmtool-core/src/reconstruction/move_camera.rs",
+        "residual_quantiles_px",
+        "delegates: the shared median and 90th percentile of a pose's residuals",
+    ),
+];
+
 /// Recursively collect `.rs` files under `dir`, skipping test modules.
 fn rs_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     let entries = std::fs::read_dir(dir).expect("readable source directory");
@@ -286,22 +358,9 @@ fn rs_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// The mechanical half of "one median in this workspace".
-///
-/// The module docs have said so since the six copies were merged, and a doc
-/// comment is exactly what the next new median will not read: the copy this
-/// test was written for landed thirteen days after that merge, in a crate
-/// that already imported the shared one. So the rule is enforced by reading
-/// the sources: any `fn` whose name contains `median` outside this file's
-/// allowlist fails, and the fix is normally to call [`median_in_place`]
-/// rather than to extend the list. Extending it is for an operation that is
-/// genuinely not this median — say so in the reason, which is the review
-/// this test is really asking for.
-///
-/// Test modules are exempt: an independent reference implementation is how
-/// this file checks the real one (see `reference_median` above).
-#[test]
-fn the_workspace_has_one_median() {
+/// The `fn` items in the workspace's non-test sources whose name contains any
+/// of `words`, as `path: fn name`, that are not on `allowlist`.
+fn unlisted_definitions(words: &[&str], allowlist: &[(&str, &str, &str)]) -> Vec<String> {
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("crates/ is the parent of this crate");
@@ -325,23 +384,58 @@ fn the_workspace_has_one_median() {
             .lines()
         {
             let Some(name) = fn_name(line) else { continue };
-            if !name.to_ascii_lowercase().contains("median") {
+            let lower = name.to_ascii_lowercase();
+            if !words.iter().any(|w| lower.contains(w)) {
                 continue;
             }
-            if !MEDIAN_ALLOWLIST
-                .iter()
-                .any(|(p, f, _)| *p == rel && *f == name)
-            {
+            if !allowlist.iter().any(|(p, f, _)| *p == rel && *f == name) {
                 unlisted.push(format!("{rel}: fn {name}"));
             }
         }
     }
+    unlisted
+}
+
+/// The mechanical half of "one median in this workspace".
+///
+/// The module docs have said so since the six copies were merged, and a doc
+/// comment is exactly what the next new median will not read: the copy this
+/// test was written for landed thirteen days after that merge, in a crate
+/// that already imported the shared one. So the rule is enforced by reading
+/// the sources: any `fn` whose name contains `median` outside this file's
+/// allowlist fails, and the fix is normally to call [`median_in_place`]
+/// rather than to extend the list. Extending it is for an operation that is
+/// genuinely not this median — say so in the reason, which is the review
+/// this test is really asking for.
+///
+/// Test modules are exempt: an independent reference implementation is how
+/// this file checks the real one (see `reference_median` above).
+#[test]
+fn the_workspace_has_one_median() {
+    let unlisted = unlisted_definitions(&["median"], MEDIAN_ALLOWLIST);
     assert!(
         unlisted.is_empty(),
         "new median implementations outside `crate::numeric`:\n  {}\n\
          Call `sfmtool_core::numeric::median_in_place` instead — it is `pub`, \
          so the bindings reach it too. If this really is a different \
          operation, add it to MEDIAN_ALLOWLIST in numeric/tests.rs with the \
+         reason.",
+        unlisted.join("\n  ")
+    );
+}
+
+/// The same scan for quantiles: any `fn` whose name contains `quantile` or
+/// `percentile` outside [`QUANTILE_ALLOWLIST`] fails. Five private copies
+/// had built up before this test existed.
+#[test]
+fn the_workspace_has_one_quantile() {
+    let unlisted = unlisted_definitions(&["quantile", "percentile"], QUANTILE_ALLOWLIST);
+    assert!(
+        unlisted.is_empty(),
+        "new quantile implementations outside `crate::numeric`:\n  {}\n\
+         Call `crate::numeric::quantile` (or `quantile_in_place` / \
+         `quantile_of_sorted`) instead. If this really is a different \
+         operation, add it to QUANTILE_ALLOWLIST in numeric/tests.rs with the \
          reason.",
         unlisted.join("\n  ")
     );

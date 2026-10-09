@@ -431,24 +431,6 @@ fn error_cases() {
 }
 
 #[test]
-fn quantile_matches_numpy_linear_interpolation() {
-    // np.quantile reference values (default linear method), bitwise: numpy
-    // returns 3.8499999999999996 here, not 3.85.
-    assert_eq!(
-        quantile_linear(&[1.0, 2.0, 3.0, 4.0], 0.95),
-        3.849_999_999_999_999_6
-    );
-    assert_eq!(quantile_linear(&[1.0, 2.0, 3.0, 4.0, 5.0], 0.5), 3.0);
-    // t >= 0.5 lerp branch: 10 - 8 * (1 - 0.9).
-    assert_eq!(quantile_linear(&[2.0, 10.0], 0.9), 10.0 - 8.0 * (1.0 - 0.9));
-    // t < 0.5 branch.
-    assert_eq!(quantile_linear(&[2.0, 10.0], 0.25), 4.0);
-    assert_eq!(quantile_linear(&[7.0], 0.3), 7.0);
-    assert_eq!(quantile_linear(&[1.0, 2.0], 1.0), 2.0);
-    assert_eq!(quantile_linear(&[1.0, 2.0], 0.0), 1.0);
-}
-
-#[test]
 fn metric_upgrade_none_when_unused_or_degenerate() {
     // No used images.
     let empty = AffineFactorization {
