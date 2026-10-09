@@ -281,6 +281,7 @@ class TestTheEditableTrack:
             "unpinned": 1,
             "turned_in": 0,
             "turned_out": 0,
+            "bitmap_pending": False,
             "changed": True,
         }
         _, again = unpin_verdict(unpinned, 1)
@@ -307,6 +308,7 @@ class TestTheEditableTrack:
             "unpinned": 0,
             "turned_in": 0,
             "turned_out": 0,
+            "bitmap_pending": False,
             "changed": False,
         }
         with pytest.raises(ValueError, match="unknown observations"):
@@ -369,8 +371,10 @@ class TestTheEditableTrack:
         # evaluation searches and how far a fit may move a sighting.
         _, track = create_track(Bench(), edited, long_track_point)
         assert track.thresholds == {
-            "min_zncc": 0.65,
-            "min_zncc_middle": 0.5,
+            "min_zncc": 0.6,
+            "min_zncc_middle": 0.0,
+            "cluster_min_zncc": 0.7,
+            "cluster_min_zncc_middle": 0.7,
             "max_shift_px": 6.0,
             "max_zncc_self_similarity_radius": 2.5,
             "max_projection_error_px": 3.0,

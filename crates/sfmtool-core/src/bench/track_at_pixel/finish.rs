@@ -15,7 +15,7 @@
 
 use nalgebra::Vector3;
 
-use crate::bench::evaluate::{evaluate, EvaluateOptions};
+use crate::bench::evaluate::{evaluate_rendering_bitmap, EvaluateOptions};
 use crate::bench::fit::{fit, FitOptions};
 use crate::bench::geometry_search::{search_geometry, GeometrySearchOptions};
 use crate::bench::stage::set_stage;
@@ -135,13 +135,18 @@ fn unplaced(track: &EditableTrack) -> bool {
         .any(|o| o.verdict == Verdict::In && o.track.as_ref().and_then(|m| m.keypoint).is_none())
 }
 
-/// Read `track` as it stands, with the default reading.
+/// Read `track` as it stands, with the default reading, rendering its bitmap
+/// where the patch stands when it has none
+/// ([`evaluate_rendering_bitmap`]): a move of the patch drops the bitmap, and
+/// without one no row is scored against it, so the bars, which judge that
+/// score, would judge nothing.
 pub(super) fn read(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<EditableTrack, String> {
-    evaluate(
+    evaluate_rendering_bitmap(
         track,
         ctx.edited,
         ctx.views,
         &EvaluateOptions::default(),
+        &FitOptions::default(),
         &Progress::none(),
     )
     .map(|(t, _)| t)

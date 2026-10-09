@@ -153,8 +153,10 @@ impl Evaluation {
 
 /// How one evaluation ended.
 pub(crate) enum Measured {
-    /// The track with its measurement slots filled.
-    Track(Box<EditableTrack>),
+    /// The track with its measurement slots filled, and how many unpinned
+    /// rows its repaint turned `in` and `out` (`EvaluateReport::turned_in` and
+    /// `turned_out`).
+    Track(Box<EditableTrack>, (usize, usize)),
     /// Asked to stop, and did.
     Cancelled,
     /// The kernel refused, in its own words.
@@ -324,7 +326,7 @@ impl AppState {
             // next frame starts it over.
             Measured::Cancelled => {}
             Measured::Failed(message) => self.record_failure(inputs, message),
-            Measured::Track(track) => {
+            Measured::Track(track, turned) => {
                 let Ok(index) = self.node_index(key.0) else {
                     return;
                 };
@@ -334,10 +336,23 @@ impl AppState {
                 let Some(label) = bench.label_of(item) else {
                     return;
                 };
-                let Ok(next) = bench.replace(label, BenchItem::Track(Arc::clone(&track))) else {
+                let label = label.to_string();
+                let Ok(next) = bench.replace(&label, BenchItem::Track(Arc::clone(&track))) else {
                     return;
                 };
                 history.replace_current_bench(Arc::new(next));
+                // The repaint judged the rows against the bitmap the track
+                // now has, which a step that handed the reference back to the
+                // rule could not: the log says what the bars moved.
+                if turned != (0, 0) {
+                    self.action_log.record(
+                        crate::action_log::Kind::Bench,
+                        format!(
+                            "Evaluated {label}: the bars turned {} in and {} out",
+                            turned.0, turned.1
+                        ),
+                    );
+                }
                 // A repaint that moved a verdict left readings taken under the
                 // old `in` set, so the track is not settled: the next frame
                 // reads it again, and that evaluation, of a track carrying the
@@ -362,7 +377,7 @@ impl AppState {
             // The viewed track's rows are pinned, so a repaint moves nothing
             // on it; the rule is still the bench's, so a track carrying the
             // repaint mark is read once more like any other.
-            Measured::Track(track) => {
+            Measured::Track(track, _) => {
                 let track = Arc::new(*track);
                 let evaluation = if track.repainted() {
                     Evaluation::Evaluating

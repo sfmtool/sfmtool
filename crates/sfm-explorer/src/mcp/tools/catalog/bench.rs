@@ -620,7 +620,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           stage, for an observation that is out and for one with no keypoint. \
                           A call on the reference already held on a pinned row pushes no \
                           version. The reply carries the observation and was, the reference \
-                          the track held before, or null.",
+                          the track held before, or null. was names that row whether or not \
+                          its bitmap had been rendered yet, so it can name a row for which \
+                          get_bench_track reported reference_observation null while the \
+                          render was pending.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -638,7 +641,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the call does not name stays where the track has it. The reply's report \
                           says how many were turned in, turned out, left pinned and left \
                           unmeasured. Track View's threshold boxes are this step: releasing \
-                          one applies the six bars as one version.",
+                          one applies the eight bars as one version.",
             kind: Write,
             schema: object(
                 &[
@@ -646,19 +649,34 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     (
                         "min_zncc",
                         threshold_schema(
-                            "The ZNCC an observation has to reach: the achieved template ZNCC at \
-                             the cluster stage, the plain ZNCC with the stored patch bitmap at \
-                             the track stage. The bench's default is 0.65. An \
-                             observation with no zncc, as a track-stage one has before the \
-                             first render of the bitmap, is not judged and keeps its verdict.",
+                            "The ZNCC a track-stage observation has to reach: the plain ZNCC of \
+                             its tile with the stored patch bitmap. The bench's default is 0.6. \
+                             An observation with no zncc, as one has before the first render of \
+                             the bitmap, or with no loo_zncc, because the keypoint localizer \
+                             refused it, is not judged and keeps its verdict.",
                         ),
                     ),
                     (
                         "min_zncc_middle",
                         threshold_schema(
-                            "The zncc_middle an observation has to reach: the same samples as \
-                             its zncc, read over only the middle square of the patch. The \
-                             bench's default is 0.5, and 0 turns the bar off. An observation \
+                            "The zncc_middle a track-stage observation has to reach: the same \
+                             samples as its zncc, read over only the middle square of the patch. \
+                             0 turns the bar off, and is the bench's default. An observation \
+                             with no zncc_middle clears it.",
+                        ),
+                    ),
+                    (
+                        "cluster_min_zncc",
+                        threshold_schema(
+                            "The achieved template ZNCC a cluster-stage observation has to \
+                             reach. The bench's default is 0.7.",
+                        ),
+                    ),
+                    (
+                        "cluster_min_zncc_middle",
+                        threshold_schema(
+                            "The zncc_middle a cluster-stage observation has to reach. The \
+                             bench's default is 0.7, and 0 turns the bar off. An observation \
                              with no zncc_middle clears it.",
                         ),
                     ),

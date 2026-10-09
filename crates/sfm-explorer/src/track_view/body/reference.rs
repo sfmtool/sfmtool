@@ -61,6 +61,9 @@ pub(crate) enum ReferenceMark {
     /// The reference in use, which the rule does not pick: a red cell. Its
     /// row's pin holds it.
     ReferenceNotPick,
+    /// The reference in use where the rule picks no row: a cell with no fill,
+    /// since there is no pick to accept in its place.
+    ReferenceWithoutPick,
     /// The rule's pick where it is not the reference in use, or where the
     /// track has none: a grey cell.
     Pick,
@@ -105,6 +108,8 @@ impl ReferenceRows {
         if self.reference == Some(index) {
             if self.pick == Some(index) {
                 ReferenceMark::Reference
+            } else if self.pick.is_none() {
+                ReferenceMark::ReferenceWithoutPick
             } else {
                 ReferenceMark::ReferenceNotPick
             }
@@ -163,7 +168,12 @@ pub(super) fn reference_cell(
         return ReferenceCell::empty();
     }
     let word = match (mark, m.reference_view) {
-        (ReferenceMark::Reference | ReferenceMark::ReferenceNotPick, _) => "reference",
+        (
+            ReferenceMark::Reference
+            | ReferenceMark::ReferenceNotPick
+            | ReferenceMark::ReferenceWithoutPick,
+            _,
+        ) => "reference",
         (ReferenceMark::Pick, _) => "pick",
         (ReferenceMark::None, None) => "-",
         (ReferenceMark::None, Some(standing)) => standing_word(standing),
@@ -202,6 +212,11 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
                 " Its row is not pinned, so the reference follows the rule's pick at every \
                  render."
             }
+        ),
+        ReferenceMark::ReferenceWithoutPick => format!(
+            "The track's reference: the patch bitmap is this row's render. The \
+             reference-view rule picks no row.{}",
+            if pinned { " Its pin holds it." } else { "" }
         ),
         ReferenceMark::ReferenceNotPick => {
             let pick = match rows.pick {

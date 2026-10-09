@@ -563,3 +563,62 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         );
     }
 }
+
+/// Track at Pixel's reading of a moved patch renders the bitmap the move
+/// dropped, scores the rows against it, and lets the bars judge those scores:
+/// an unpinned `out` row that matches the bitmap is turned `in`. Without the
+/// render no row would carry a score and the bars would move nothing.
+#[test]
+fn a_reading_after_the_patch_moves_scores_the_rows_and_the_bars_judge_them() {
+    use crate::bench::{
+        create_track, translate_patch_to_pixel, unpin_verdicts, Bench, CreateTrackOptions,
+        Viewpoint,
+    };
+    let scene = Scene::new();
+    let edited = EditedReconstruction::new(Arc::new(crate::bench::tests::scene::with_columns(
+        fixture_points(&scene, &grid()),
+        6,
+    )));
+    let views = scene.views();
+    let (bench, report) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .expect("the point is live");
+    let track = (**bench.track(&report.label).expect("just put on")).clone();
+    let every: Vec<usize> = (0..track.observations.len()).collect();
+    let (mut track, _) = unpin_verdicts(&track, &every).expect("live rows");
+    let last = track.observations.len() - 1;
+    track.observations[last].verdict = Verdict::Out;
+    let pixel = scene.project(0, grid()[0]);
+    let (moved, _) = translate_patch_to_pixel(
+        &track,
+        &edited,
+        Viewpoint::Observation(0),
+        [pixel[0] + 0.5, pixel[1]],
+    )
+    .expect("a pixel on the sensor");
+    assert!(moved.track().unwrap().bitmap.is_none(), "the move drops it");
+    assert_eq!(moved.observations[last].verdict, Verdict::Out);
+
+    let sources = TrackAtPixelSources::default();
+    let ctx = Ctx {
+        edited: &edited,
+        views: &views,
+        cameras: views.iter().map(ViewCamera::new).collect(),
+        observations: ObservationIndex::new(&edited),
+        sources: &sources,
+        thresholds: track.thresholds.clone(),
+    };
+    let read = finish::read(&ctx, &moved).expect("the track reads");
+    assert!(
+        read.track().is_some_and(|p| p.bitmap.is_some()),
+        "the reading rendered the bitmap"
+    );
+    for (i, o) in read.observations.iter().enumerate() {
+        let m = o.track.as_ref().expect("a track slot");
+        assert!(m.zncc.is_some(), "row {i} is scored against the bitmap");
+    }
+    assert_eq!(
+        read.observations[last].verdict,
+        Verdict::In,
+        "the bars turned the matching row in"
+    );
+}

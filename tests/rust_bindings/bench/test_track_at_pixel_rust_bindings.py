@@ -69,9 +69,10 @@ def test_a_held_out_point_is_rebuilt_on_its_pixel(
     assert offset <= 2.0
     assert track.verdict_counts[0] >= 3
     assert report["final"]["in"] == track.verdict_counts[0]
-    # Every in view carries the reading the final gates judged.
+    # Every in view carries the leave-one-out reading the final median gate
+    # judges, and a score against the bitmap the bars judge.
     assert all(
-        o["track"].get("zncc") is not None
+        o["track"].get("loo_zncc") is not None and o["track"].get("zncc") is not None
         for o in track.observations
         if o["verdict"] == "in"
     )

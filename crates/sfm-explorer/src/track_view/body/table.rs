@@ -120,68 +120,68 @@ const SORT_TRIANGLE_HALF_WIDTH: f32 = 4.0;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RowSummary {
     /// The observation's index in the track, which is stable for its life.
-    pub observation: usize,
+    pub(crate) observation: usize,
     /// The image it names.
-    pub image: u32,
+    pub(crate) image: u32,
     /// The verdict it carries.
-    pub verdict: Verdict,
+    pub(crate) verdict: Verdict,
     /// Whether that verdict was set by hand.
-    pub pinned: bool,
+    pub(crate) pinned: bool,
     /// What the thresholds propose for it were its verdict unpinned, which is
     /// what its verdict cell is tinted by, or `None` for a row nothing at this
     /// stage has measured, whose cell is not tinted. In Viewed mode this is
     /// the row's *Verdict*.
-    pub proposal: Option<Verdict>,
+    pub(crate) proposal: Option<Verdict>,
     /// The verdict cell's hover text: in Edited mode what the switch and the
     /// pin say and why the bars propose what they do, in Viewed mode why the
     /// bars give the row the verdict they do.
-    pub keep_hover: String,
+    pub(crate) keep_hover: String,
     /// The *Verdict* cell as printed, `in`, `out`, `out (2)` or `-`, in Viewed mode;
     /// `None` in Edited mode, which draws a switch there.
-    pub verdict_text: Option<String>,
+    pub(crate) verdict_text: Option<String>,
     /// The colour the verdict cell was tinted, or `None` for an untinted one.
-    pub tint: Option<egui::Color32>,
+    pub(crate) tint: Option<egui::Color32>,
     /// The line the crop's hover view adds under the picture: the pixel and
     /// the feature index. `None` where no crop was drawn.
-    pub crop_caption: Option<String>,
+    pub(crate) crop_caption: Option<String>,
     /// The five measurement cells, as printed, a cell with two readings
     /// holding them on two lines.
-    pub cells: [String; 5],
+    pub(crate) cells: [String; 5],
     /// The whole and middle readings' ellipses, which the *Self-similarity*
     /// cell's hover lays out under [`SELF_SIMILARITY_ELLIPSE_CAPTION`] in grid
     /// px, image px and along the patch's axes
     /// ([`super::self_similarity_ellipse_text`], built only while the cell is
     /// hovered). Both `None` where the cell has no hover.
-    pub self_similarity_ellipse: [Option<SelfSimilarityEllipseUnits>; 2],
+    pub(crate) self_similarity_ellipse: [Option<SelfSimilarityEllipseUnits>; 2],
     /// The Jacobian at the centre of the row's tile, in photograph pixels per
     /// patch-grid px at the reconstruction's patch resolution, computed
     /// without the photograph ([`super::tile::patch_jacobian`], which lists
     /// where there is none).
-    pub jacobian: Option<PatchJacobian>,
+    pub(crate) jacobian: Option<PatchJacobian>,
     /// The *Zoom* cell as printed, `3.1/4.8×`, or `-`.
-    pub zoom_text: String,
+    pub(crate) zoom_text: String,
     /// What each line of each cell was coloured by, indexed as
     /// [`RowSummary::cells`] and then by line: a pass is drawn green, a fail
     /// red, and a reading no bar judged in the plain text colour. A cell's
     /// second entry is [`BarCheck::NotJudged`] where it has one line.
-    pub checks: [[BarCheck; 2]; 5],
+    pub(crate) checks: [[BarCheck; 2]; 5],
     /// The two grids drawn beside the ZNCC and the self-similarity cells.
-    pub grids: RowGrids,
+    pub(crate) grids: RowGrids,
     /// Whether the row drew a rendered tile, rather than the empty frame that
     /// stands in when there is nothing to render.
-    pub tile: bool,
+    pub(crate) tile: bool,
     /// Whether the row drew the crop of its photograph around the patch's
     /// outline, rather than the empty frame that stands in for it.
-    pub crop: bool,
+    pub(crate) crop: bool,
     /// Whether the row drew the self-similarity surface plot.
-    pub self_similarity_plot: bool,
+    pub(crate) self_similarity_plot: bool,
     /// The *Reference* cell as drawn, with its hover text and whether the
     /// rule picks the row.
-    pub reference: ReferenceCell,
+    pub(crate) reference: ReferenceCell,
     /// The *ZNCC* cell's hover text at the track stage: the score against
     /// the stored bitmap, the blur-matched score and the leave-one-out
     /// reading ([`zncc_hover`]). `None` where the cell has no hover.
-    pub zncc_hover: Option<String>,
+    pub(crate) zncc_hover: Option<String>,
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
@@ -643,7 +643,11 @@ pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in pe
     tile is, with every pixel weighted equally: green at 100, yellow at 75, red at 50 and \
     below, grey where the patch is flat. Hover it for the numbers.\n\n\
     At the cluster stage the match is against the reference's template. At the track stage it \
-    is against the consensus of the other observations, with this one left out.";
+    is against the stored patch bitmap, the render of the reference row (or the mean of the \
+    views where there is no reference), so the reference row reads 100%. A track stage with no \
+    bitmap yet has no score until the first render. Where the cell reads 50% ⏵ 53% whole, the \
+    first number is the plain score, which the bars judge, and the one after ⏵ is the \
+    blur-matched score: the bitmap blurred to this view's sharpness before the match.";
 
 /// The shift heading's hover text.
 pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where the \
@@ -1015,13 +1019,15 @@ fn check_color(visuals: &egui::Visuals, check: BarCheck, plain: egui::Color32) -
 }
 
 /// The fill of a row's *Reference* cell by its mark: green for the reference
-/// the rule also picks, red for a reference it does not pick, grey for the
-/// rule's pick where it is not the reference, and none for any other row.
+/// the rule also picks, red for a reference it does not pick when it picks
+/// another row, grey for the rule's pick where it is not the reference, and
+/// none for any other row, a reference among them where the rule picks none.
 pub(super) fn reference_fill(mark: ReferenceMark) -> Option<egui::Color32> {
     match mark {
         ReferenceMark::None => None,
         ReferenceMark::Reference => Some(KEEP_ON_FILL),
         ReferenceMark::ReferenceNotPick => Some(REFERENCE_NOT_PICK_FILL),
+        ReferenceMark::ReferenceWithoutPick => None,
         ReferenceMark::Pick => Some(PICK_FILL),
     }
 }
@@ -1269,6 +1275,7 @@ impl TrackBody {
             bars_rect,
             &cols,
             &mut self.thresholds,
+            stage,
             bars_hover,
         )
     }
@@ -2490,16 +2497,18 @@ fn paint_sort_triangle(
 
 /// The threshold row under the headings: each bar's box in the column whose
 /// readings it judges, followed by the unit and the name those readings print
-/// with, so `[70]% whole` stands over `93% whole`. The two ZNCC bars stack as
+/// with, so `[60]% whole` stands over `93% whole`. The two ZNCC bars stack as
 /// the ZNCC cell stacks its two readings. The columns no bar judges are empty,
 /// so the word *Thresholds* takes the left of the row. Drawn the same in both
-/// modes, and greyed when `hover` is a refusal.
+/// modes, and greyed when `hover` is a refusal. The ZNCC boxes edit the bars of
+/// `stage`, the stage the track is in.
 fn draw_threshold_row(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     band: egui::Rect,
     cols: &ColumnLayout,
     bars: &mut Thresholds,
+    stage: StageKind,
     hover: BoxHover<'_>,
 ) -> BoxesMoved {
     let line = ui.spacing().interact_size.y;
@@ -2519,11 +2528,20 @@ fn draw_threshold_row(
     // read in percent, as the ZNCC cell does; the track stores them on the 0
     // to 1 scale. Listed left to right and top to bottom, which is the order
     // Tab moves through them.
+    // The two ZNCC boxes are the bars of the stage the track is in: the
+    // cluster stage judges another score, and has its own pair.
+    let (zncc_bar, middle_bar) = match stage {
+        StageKind::Track => (&mut bars.min_zncc, &mut bars.min_zncc_middle),
+        StageKind::Cluster => (
+            &mut bars.cluster_min_zncc,
+            &mut bars.cluster_min_zncc_middle,
+        ),
+    };
     let boxes = [
         (
             cols.zncc,
             0,
-            percent(egui::DragValue::new(&mut bars.min_zncc)),
+            percent(egui::DragValue::new(zncc_bar)),
             MIN_ZNCC_LABEL,
             MIN_ZNCC_TIP,
         ),
@@ -2531,7 +2549,7 @@ fn draw_threshold_row(
         (
             cols.zncc,
             1,
-            percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
+            percent(egui::DragValue::new(middle_bar)),
             MIN_ZNCC_MIDDLE_LABEL,
             MIN_ZNCC_MIDDLE_TIP,
         ),

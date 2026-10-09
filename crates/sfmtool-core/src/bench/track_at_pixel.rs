@@ -630,9 +630,10 @@ pub enum StageRecord {
     Final {
         /// How many views are `in`.
         in_views: usize,
-        /// The median ZNCC over them.
+        /// The median leave-one-out ZNCC over them (`TrackMeasurement::loo_zncc`),
+        /// the reading the median gate judges.
         zncc_median: f64,
-        /// The median middle ZNCC over them (`TrackMeasurement::zncc_middle`),
+        /// The median leave-one-out middle ZNCC over them (`TrackMeasurement::loo_zncc_middle`),
         /// `NaN` when none carries one. Shown beside `zncc_median`; no gate
         /// reads it.
         zncc_middle_median: f64,
@@ -842,31 +843,38 @@ pub fn build_track_at_pixel(
         };
         match result {
             Ok(track) => {
-                // Every member ends by sliding the patch onto the pixel, which
-                // drops the bitmap rendered where the patch stood before; render
-                // it again where it stands now, moving nothing, so the track can
-                // be committed into a reconstruction that stores one, and score
-                // the rows against it, which the member's evaluation could not.
-                let track = super::fit::render_bitmap_in_place(
-                    &track,
-                    edited,
-                    views,
-                    &super::fit::FitOptions::default(),
-                );
-                let track = match super::evaluate::score_bitmap(
-                    &track,
-                    edited,
-                    views,
-                    &super::evaluate::EvaluateOptions::default(),
-                    progress,
-                ) {
-                    Ok(track) => track,
-                    Err(super::evaluate::EvaluateError::Cancelled) => {
-                        return Err(TrackAtPixelError::Cancelled)
+                // The member's readings render the bitmap where the patch
+                // stands and judge the scores against it. A last step that
+                // dropped it (a clean-up that moved the patch) leaves none:
+                // render it again where the patch stands, moving nothing, so
+                // the track can be committed into a reconstruction that stores
+                // one, and score the rows against it. The verdicts stay the
+                // ones the final gates judged.
+                let track = if track.track().is_some_and(|p| p.bitmap.is_some()) {
+                    track
+                } else {
+                    let rendered = super::fit::render_bitmap_in_place(
+                        &track,
+                        edited,
+                        views,
+                        &super::fit::FitOptions::default(),
+                    );
+                    match super::evaluate::score_bitmap(
+                        &rendered,
+                        edited,
+                        views,
+                        &super::evaluate::EvaluateOptions::default(),
+                        progress,
+                    ) {
+                        Ok(scored) => scored,
+                        Err(super::evaluate::EvaluateError::Cancelled) => {
+                            return Err(TrackAtPixelError::Cancelled)
+                        }
+                        // The member read every view already, so no other
+                        // error arises; the track stands unscored rather than
+                        // lost.
+                        Err(_) => rendered,
                     }
-                    // The member read every view already, so no other error
-                    // arises; the track stands unscored rather than lost.
-                    Err(_) => track,
                 };
                 return Ok((
                     track,

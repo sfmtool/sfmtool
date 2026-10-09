@@ -1123,7 +1123,24 @@ impl AppState {
             });
             return Ok(());
         }
+        // Where the unpin handed the reference to the rule's pick on another
+        // row, the scores were read against the outgoing bitmap, so the bars
+        // judged nothing: the evaluation that follows renders the new one,
+        // judges the rows and logs what it moved.
+        let pending = report.bitmap_pending.then(|| {
+            let from = next
+                .reference_view_pick()
+                .map(|row| {
+                    self.image_name(ImageRef::new(id, next.observations[row].image as usize))
+                })
+                .unwrap_or_else(|| "the mean of the views".to_string());
+            format!("waiting for the bitmap to be rendered from {from}")
+        });
         let text = match &one {
+            Some((_, name)) if pending.is_some() => format!(
+                "Handed {name} back to the thresholds in {label}: {}",
+                pending.as_deref().unwrap_or_default()
+            ),
             Some((observation, name)) => format!(
                 "Handed {name} back to the thresholds in {label}: {}",
                 next.observations[*observation].verdict
@@ -1156,6 +1173,10 @@ impl AppState {
                     next.observations.len() - total_in
                 )
             }
+        };
+        let text = match (&one, &pending) {
+            (None, Some(pending)) => format!("{text}; {pending}"),
+            _ => text,
         };
         let bench = install(&bench, label, next)?;
         self.push_bench_step(index, bench, text);
@@ -2554,12 +2575,7 @@ pub(crate) fn reference_in_use(track: &EditableTrack) -> Option<usize> {
 /// unpinning that row, or *Set as reference* on this one, makes the two agree.
 /// The wire names it `reference_view_observation`.
 pub(crate) fn reference_view_pick(track: &EditableTrack) -> Option<usize> {
-    track.observations.iter().position(|o| {
-        o.track
-            .as_ref()
-            .and_then(|m| m.reference_view)
-            .is_some_and(|standing| standing.is_reference())
-    })
+    track.reference_view_pick()
 }
 
 /// The sampler choice the bench's evaluation renders each view's tile with
@@ -2615,7 +2631,9 @@ pub(crate) fn evaluate_job(
             &FitOptions::default(),
             progress,
         ) {
-            Ok((measured, _)) => live::Measured::Track(Box::new(measured)),
+            Ok((measured, report)) => {
+                live::Measured::Track(Box::new(measured), (report.turned_in, report.turned_out))
+            }
             Err(sfmtool_core::bench::EvaluateError::Cancelled) => live::Measured::Cancelled,
             Err(e) => live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
         }

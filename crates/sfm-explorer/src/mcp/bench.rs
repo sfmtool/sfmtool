@@ -1098,7 +1098,9 @@ pub(super) fn set_bench_track_verdict(
 
 /// `set_bench_track_reference`: Track View's *Set as reference*, one row made
 /// the track's reference and pinned. The reply names the row and the reference
-/// the track held before, `was`, or null.
+/// the track held before, `was`, or null: the payload's reference whether or
+/// not its bitmap has been rendered yet, where `get_bench_track`'s
+/// `reference_observation` is null until it is.
 pub(super) fn set_bench_track_reference(
     state: &mut AppState,
     label: &str,
@@ -1622,6 +1624,8 @@ pub(super) fn thresholds(bars: &Thresholds) -> Value {
     json!({
         "min_zncc": bars.min_zncc,
         "min_zncc_middle": bars.min_zncc_middle,
+        "cluster_min_zncc": bars.cluster_min_zncc,
+        "cluster_min_zncc_middle": bars.cluster_min_zncc_middle,
         "max_shift_px": bars.max_shift_px,
         "max_zncc_self_similarity_radius": bars.max_zncc_self_similarity_radius,
         "max_projection_error_px": bars.max_projection_error_px,

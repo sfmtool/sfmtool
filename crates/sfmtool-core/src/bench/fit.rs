@@ -457,17 +457,33 @@ pub fn render_bitmap_in_place(
     images: &[ProjectedImage<'_>],
     options: &FitOptions,
 ) -> EditableTrack {
-    let mut next = rendered_in_place(track, edited, images, options);
+    render_bitmap_in_place_from(track, edited, images, options, track.held_reference())
+}
+
+/// [`render_bitmap_in_place`], rendering the tile of row `from` where it is an
+/// `in` row with a keypoint, and otherwise the one the reference-view rule
+/// picks: what the bench's evaluation calls once it has chosen the row itself
+/// (the reference the track holds, or the row its own reading of the rule
+/// picked), so the render cannot pick another.
+pub(super) fn render_bitmap_in_place_from(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FitOptions,
+    from: Option<usize>,
+) -> EditableTrack {
+    let mut next = rendered_in_place(track, edited, images, options, from);
     next.repaint = track.repaint.carried();
     next
 }
 
-/// [`render_bitmap_in_place`] before the mark is carried across.
+/// [`render_bitmap_in_place_from`] before the mark is carried across.
 fn rendered_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
     options: &FitOptions,
+    from: Option<usize>,
 ) -> EditableTrack {
     let Stage::Track(payload) = &track.stage else {
         return track.clone();
@@ -483,6 +499,7 @@ fn rendered_in_place(
         placement,
         &ins,
         options,
+        from,
         &Progress::none(),
     );
     let Some(bitmap) = bitmap else {
@@ -900,7 +917,16 @@ pub(super) fn fit_track(
     );
     let (bitmap, reference, color) = {
         let mut phase = progress.phase("bitmap");
-        let rendered = render_bitmap(&next, edited, images, &placed, &ins, options, &phase);
+        let rendered = render_bitmap(
+            &next,
+            edited,
+            images,
+            &placed,
+            &ins,
+            options,
+            next.held_reference(),
+            &phase,
+        );
         progress_note!(phase, "{} observations", ins.len());
         rendered
     };
@@ -1179,17 +1205,18 @@ pub(super) fn triangulate_rays(
 /// Render the track's stored bitmap from the `in` observations at their final
 /// keypoints, and read the point's colour off its centre.
 ///
-/// Where the track holds a defined reference observation
-/// ([`TrackPayload::reference`]) that is one of the `in` rows with a keypoint,
-/// the bitmap is that row's tile at its keypoint ([`render_view_tile`]), and
-/// the reference stays. Otherwise the reference is undefined and the bitmap is
-/// [`render_patch_bitmap`]: the tile of the observation the reference-view
+/// Where `from` is one of the `in` rows with a keypoint (the fit passes the
+/// reference the track holds, [`EditableTrack::held_reference`]; the bench's
+/// evaluation passes the row it chose), the bitmap is that row's tile at its
+/// keypoint ([`render_view_tile`]), and that row is the reference. Otherwise
+/// the bitmap is [`render_patch_bitmap`]: the tile of the observation the reference-view
 /// rule picks among the `in` observations, or the fused mean where it picks
 /// none or reaches its pick only through its last fallback. Nothing moves: the
 /// keypoints are the ones the fit already settled. The grid is the
 /// reconstruction's own bitmap grid where it stores one, so what is rendered
 /// is a tile the column can hold. The second value is the row of the track
 /// whose tile the bitmap is.
+#[allow(clippy::too_many_arguments)]
 fn render_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -1197,6 +1224,7 @@ fn render_bitmap(
     patch: &OrientedPatch,
     ins: &[usize],
     options: &FitOptions,
+    from: Option<usize>,
     progress: &Progress<'_>,
 ) -> (Option<Array3<u8>>, Option<usize>, Option<[u8; 3]>) {
     let (resolution, channels) = bitmap_layout(edited, options);
@@ -1215,11 +1243,9 @@ fn render_bitmap(
     if view_set.len() < 2 {
         return (None, None, None);
     }
-    // A reference its pinned row holds is rendered from; otherwise the rule
-    // picks, and its pick becomes the reference.
-    let held = track
-        .held_reference()
-        .and_then(|r| rows.iter().position(|&i| i == r));
+    // The row the caller names is rendered from where it is one of the keyed
+    // `in` rows; otherwise the rule picks, and its pick becomes the reference.
+    let held = from.and_then(|r| rows.iter().position(|&i| i == r));
     if let Some(k) = held {
         let tile = render_view_tile(
             patch,

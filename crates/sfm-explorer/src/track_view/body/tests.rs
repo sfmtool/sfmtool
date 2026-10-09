@@ -554,6 +554,27 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         super::table::reference_fill(ReferenceMark::Pick)
     );
 
+    // A reference where the rule picks no row is not red: there is no pick to
+    // accept in its place.
+    let alone = ReferenceRows {
+        pick: None,
+        pick_image: None,
+        ..held
+    };
+    let drawn = cells(&alone);
+    assert_eq!(drawn[0].mark, ReferenceMark::ReferenceWithoutPick);
+    assert!(
+        drawn[0].text.starts_with("reference\n"),
+        "{}",
+        drawn[0].text
+    );
+    assert_eq!(
+        super::table::reference_fill(ReferenceMark::ReferenceWithoutPick),
+        None
+    );
+    let hover = drawn[0].hover.as_deref().expect("a hover");
+    assert!(hover.contains("picks no row"), "{hover}");
+
     // No reference: a fused mean, or no bitmap yet, marks only the pick.
     for has_bitmap in [true, false] {
         let none = ReferenceRows {
@@ -768,6 +789,102 @@ fn set_as_reference_is_offered_on_an_in_row_with_a_keypoint() {
     );
 }
 
+/// *Set as reference* in a row's menu: drawn on an `in` row that is not the
+/// reference and answers a click with that row, greyed on the held
+/// reference, and absent on an `out` row.
+#[test]
+fn set_as_reference_is_drawn_in_the_row_menu_and_clicked() {
+    let (mut state, id, label, _panel, _ctx) = on_the_bench();
+    state.settle_bench_evaluation();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let held = track
+        .held_reference()
+        .expect("a track from a point holds its reference");
+    let other = (0..track.observations.len())
+        .find(|&i| i != held)
+        .expect("a second row");
+
+    let menu_at = |state: &AppState, row: usize| {
+        let (mut panel, ctx) = settled(state);
+        let image = track.observations[row].image as usize;
+        let y = row_y(&mut panel, &ctx, state, image);
+        let at = egui::pos2(400.0, y);
+        open_row_menu(&mut panel, &ctx, state, at);
+        let texts = painted(&mut panel, &ctx, state, vec![egui::Event::PointerMoved(at)]);
+        (panel, ctx, texts)
+    };
+
+    // Offered and clicked on another `in` row.
+    let (mut panel, ctx, texts) = menu_at(&state, other);
+    assert!(
+        texts.iter().any(|t| t == super::SET_REFERENCE_LABEL),
+        "{texts:?}"
+    );
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::SET_REFERENCE_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert_eq!(response.set_reference, Some(other));
+
+    // Greyed on the reference its pin holds: drawn, but a click does nothing.
+    let (mut panel, ctx, texts) = menu_at(&state, held);
+    assert!(
+        texts.iter().any(|t| t == super::SET_REFERENCE_LABEL),
+        "{texts:?}"
+    );
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::SET_REFERENCE_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert_eq!(response.set_reference, None);
+
+    // Absent on an `out` row.
+    state
+        .set_bench_verdict(id, &label, other, Verdict::Out)
+        .expect("a verdict");
+    state.settle_bench_evaluation();
+    let (_, _, texts) = menu_at(&state, other);
+    assert!(
+        !texts.iter().any(|t| t == super::SET_REFERENCE_LABEL),
+        "{texts:?}"
+    );
+}
+
+/// Unpinning the row that holds the reference, where the rule picks another
+/// row, logs that the verdicts wait for the new bitmap rather than a verdict
+/// judged against the outgoing one; the live evaluation then renders from the
+/// pick and the track's reference is the pick.
+#[test]
+fn unpinning_the_held_reference_logs_that_the_verdicts_wait_for_the_render() {
+    let (mut state, id, label, _panel, _ctx) = on_the_bench();
+    state.settle_bench_evaluation();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let pick = track.reference_view_pick().expect("the rule picks a row");
+    let other = (0..track.observations.len())
+        .find(|&i| i != pick)
+        .expect("a second row");
+    state
+        .set_bench_reference(id, &label, other)
+        .expect("an in row with a keypoint");
+    state.settle_bench_evaluation();
+
+    state
+        .unpin_bench_verdicts(id, &label, &[other])
+        .expect("a pinned row");
+    let logged = state
+        .action_log
+        .entries()
+        .last()
+        .expect("a row")
+        .text
+        .clone();
+    assert!(
+        logged.contains("waiting for the bitmap to be rendered from"),
+        "{logged}"
+    );
+    let pending = state.bench_track(id, &label).expect("on the bench").clone();
+    assert!(pending.track().is_some_and(|p| p.bitmap.is_none()));
+
+    state.settle_bench_evaluation();
+    let after = state.bench_track(id, &label).expect("on the bench").clone();
+    assert_eq!(crate::bench::reference_in_use(&after), Some(pick));
+}
 #[test]
 fn the_table_has_a_row_per_observation_in_index_order() {
     let (_state, _id, _label, panel, _ctx) = on_the_bench();
@@ -1797,6 +1914,10 @@ fn every_heading_carries_hover_text() {
         "{tip}"
     );
     assert!(tip.contains("percent"), "{tip}");
+    assert!(
+        tip.contains("stored patch bitmap") && tip.contains("blur-matched"),
+        "{tip}"
+    );
 }
 
 #[test]
@@ -2328,7 +2449,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
         super::measurements(&scored, StageKind::Track, &current)[4],
-        "walked 19 grid px (ZNCC 87% / 41% there), kept at seed"
+        "walked 19 grid px (leave-one-out ZNCC 87% / 41% there), kept at seed"
     );
 
     // The same row without the flag is the ordinary scored row.
@@ -3553,6 +3674,7 @@ fn readings_no_bar_judges_are_drawn_plain() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
+            loo_zncc: Some(0.95),
             zncc: Some(0.95),
             ..TrackMeasurement::default()
         }),

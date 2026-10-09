@@ -2713,6 +2713,8 @@ fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
     assert_eq!(set["observation"], json!(other), "{set}");
     assert_eq!(set["was"], json!(held), "{set}");
     assert_eq!(version_count(&state), before + 1);
+    let logged = &state.action_log.entries().last().expect("a row").text;
+    assert!(logged.contains(" in place of "), "{logged}");
     state.settle_bench_evaluation();
     let track = read(&mut state, &mut viewer);
     assert_eq!(track["evaluation"]["state"], json!("current"), "{track}");
@@ -2740,6 +2742,11 @@ fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
         json!({ "reconstruction_label": "run_a", "observation": other }),
     );
     assert_eq!(version_count(&state), again);
+    let logged = &state.action_log.entries().last().expect("a row").text;
+    assert!(
+        logged.ends_with("no effect, it is the reference already"),
+        "{logged}"
+    );
 
     // An out row cannot be the reference.
     let out = (0..rows).find(|&i| i != other).expect("a third row");
@@ -2754,6 +2761,36 @@ fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
         &mut viewer,
         "set_bench_track_reference",
         json!({ "reconstruction_label": "run_a", "observation": out }),
+    );
+    assert!(
+        error.to_string().contains("Cannot set that reference"),
+        "{error}"
+    );
+
+    // An index past the end.
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_reference",
+        json!({ "reconstruction_label": "run_a", "observation": rows }),
+    );
+    assert!(
+        error.to_string().contains("Cannot set that reference"),
+        "{error}"
+    );
+
+    // The cluster stage has no bitmap to render.
+    worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "cluster" }),
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_reference",
+        json!({ "reconstruction_label": "run_a", "observation": other }),
     );
     assert!(
         error.to_string().contains("Cannot set that reference"),

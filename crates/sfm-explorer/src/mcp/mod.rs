@@ -778,6 +778,8 @@ pub(crate) struct IntrinsicsChange {
 pub(crate) struct ThresholdChange {
     pub(crate) min_zncc: Option<f64>,
     pub(crate) min_zncc_middle: Option<f64>,
+    pub(crate) cluster_min_zncc: Option<f64>,
+    pub(crate) cluster_min_zncc_middle: Option<f64>,
     pub(crate) max_shift_px: Option<f64>,
     pub(crate) max_zncc_self_similarity_radius: Option<f64>,
     pub(crate) max_projection_error_px: Option<f64>,
@@ -796,6 +798,12 @@ impl ThresholdChange {
         }
         if let Some(value) = self.min_zncc_middle {
             next.min_zncc_middle = value;
+        }
+        if let Some(value) = self.cluster_min_zncc {
+            next.cluster_min_zncc = value;
+        }
+        if let Some(value) = self.cluster_min_zncc_middle {
+            next.cluster_min_zncc_middle = value;
         }
         if let Some(value) = self.max_shift_px {
             next.max_shift_px = value;

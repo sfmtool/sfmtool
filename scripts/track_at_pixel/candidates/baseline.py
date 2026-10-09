@@ -237,7 +237,7 @@ def build_track(
 
     # 4. Cluster evaluation and the thresholds' verdicts.
     try:
-        track, _ = B.evaluate(track, ctx.edited, ctx.pyramids)
+        track, _ = B.evaluate(track, ctx.edited, ctx.pyramids, render_bitmap=True)
     except ValueError as e:
         fail("cluster evaluate", str(e))
     track, _ = B.apply_thresholds(track)

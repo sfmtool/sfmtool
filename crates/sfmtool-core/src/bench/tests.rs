@@ -941,6 +941,8 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
         observation.verdict = Verdict::Out;
         observation.pinned = false;
         let measurement = observation.track.as_mut().expect("a track slot");
+        // The localizer read the row: a row it refused is not judged.
+        measurement.loo_zncc = Some(score);
         measurement.zncc = Some(score);
         measurement.seed_shift_px = Some(0.5);
         measurement.zncc_self_similarity_radius = Some(0.5);
@@ -948,6 +950,39 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
     track
 }
 
+/// A row the keypoint localizer refused carries no leave-one-out reading; a
+/// score against the bitmap alone does not let the bars turn it in, and they
+/// leave it where it is.
+#[test]
+fn a_row_the_localizer_refused_is_not_judged_on_its_bitmap_score() {
+    let mut track = scored_track([0.95, 0.95]);
+    slot(&mut track, 1).loo_zncc = None;
+    slot(&mut track, 1).reason = Some(Unmeasured::Grazing { cosine: 0.05 });
+    let stage = track.stage_kind();
+    assert!(bar_checks(&track.observations[1], stage, &track.thresholds).is_none());
+    let (painted, report) = apply_thresholds(&track);
+    assert_eq!(painted.observations[0].verdict, Verdict::In);
+    assert_eq!(painted.observations[1].verdict, Verdict::Out);
+    assert_eq!(report.unmeasured, 1);
+}
+
+/// The cluster stage judges its own ZNCC bars, not the track stage's.
+#[test]
+fn the_cluster_stage_judges_its_own_zncc_bars() {
+    let bars = Thresholds {
+        min_zncc: 0.1,
+        cluster_min_zncc: 0.9,
+        ..Thresholds::default()
+    };
+    assert_eq!(
+        bars.zncc_bars(StageKind::Track),
+        (0.1, bars.min_zncc_middle)
+    );
+    assert_eq!(
+        bars.zncc_bars(StageKind::Cluster),
+        (0.9, bars.cluster_min_zncc_middle)
+    );
+}
 #[test]
 fn the_painting_proposes_verdicts_from_the_stored_measurements() {
     let track = scored_track([0.95, 0.40]);
@@ -1122,6 +1157,7 @@ fn unpinning_gives_the_verdict_back_to_the_thresholds() {
             unpinned: 1,
             turned_in: 1,
             turned_out: 1,
+            bitmap_pending: false,
             changed: true,
         },
         "the unpinned row goes out, and the unpinned 0.95 the bars take comes in"
@@ -1169,6 +1205,7 @@ fn unpinning_rows_that_are_not_pinned_changes_nothing() {
             unpinned: 0,
             turned_in: 0,
             turned_out: 0,
+            bitmap_pending: false,
             changed: false,
         }
     );
@@ -2834,6 +2871,17 @@ fn three_rows_the_bars_decide(scene: &Scene) -> (EditableTrack, usize) {
     let mut on_the_bench = track_of(&bench, &label);
     on_the_bench.thresholds.max_zncc_self_similarity_radius = 3.0;
     let (track, _) = unpin_verdicts(&on_the_bench, &[0, 1]).expect("live rows");
+    // Unpinning the reference's row hands the bitmap to the rule's pick; the
+    // evaluation that follows the unpin renders it and scores the rows.
+    let (track, _) = evaluate_rendering_bitmap(
+        &track,
+        &edited,
+        &scene.views(),
+        &EvaluateOptions::default(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect("a framed track");
     let (track, added) = add_observation(
         &track,
         &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
@@ -6293,6 +6341,14 @@ fn the_bench_s_shift_bar_defaults_to_the_localizer_s_search_radius() {
 fn the_bench_s_zncc_bars_default_below_the_cluster_refinement_s() {
     assert_eq!(Thresholds::default().min_zncc, BENCH_MIN_ZNCC);
     assert_eq!(Thresholds::default().min_zncc_middle, BENCH_MIN_ZNCC_MIDDLE);
+    assert_eq!(
+        Thresholds::default().cluster_min_zncc,
+        BENCH_CLUSTER_MIN_ZNCC
+    );
+    assert_eq!(
+        Thresholds::default().cluster_min_zncc_middle,
+        BENCH_CLUSTER_MIN_ZNCC_MIDDLE
+    );
     // The kernel keeps its own bar: the batch pass is not moved by the bench.
     assert_eq!(ClusterRefineParams::default().min_zncc, 0.85);
 }

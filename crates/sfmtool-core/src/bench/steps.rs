@@ -21,7 +21,7 @@ use crate::progress::Progress;
 use crate::readable::Readable;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::evaluate::restate_reference_view;
+use super::evaluate::{bitmap_target, clear_bitmap_scores, restate_reference_view};
 use super::fit::FitOptions;
 use super::stage::{set_stage, StageError};
 use super::track::{
@@ -861,6 +861,14 @@ pub struct UnpinReport {
     pub turned_in: usize,
     /// How many they turned `out`.
     pub turned_out: usize,
+    /// Whether the unpin handed the reference to the reference-view rule's
+    /// pick on another row, so the bitmap is to be rendered again from it. The
+    /// bitmap is then dropped and every row's score against it cleared, so the
+    /// bars judge nothing here; the evaluation that follows
+    /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
+    /// renders it, scores the rows and judges them, and its report says what
+    /// the bars moved.
+    pub bitmap_pending: bool,
     /// Whether anything changed. False exactly when none of the named
     /// observations was pinned, and then the track comes back as it was.
     pub changed: bool,
@@ -889,7 +897,11 @@ pub struct UnpinReport {
 /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
 /// renders the bitmap from the rule's pick, and from then on the reference
 /// follows the pick at every render until a row holding it is pinned again or
-/// [`set_reference`] names one.
+/// [`set_reference`] names one. Where the pick is another row, every score was
+/// read against the bitmap that render replaces, so the bitmap is dropped and
+/// the scores cleared here: the bars judge none of them, and the report says
+/// [`UnpinReport::bitmap_pending`]. The evaluation that follows renders the
+/// new bitmap, scores the rows against it and judges them.
 ///
 /// When none of `observations` is pinned nothing changes: the report says
 /// `changed: false` and a caller pushes no version for it. An index past the
@@ -933,9 +945,20 @@ pub fn unpin_verdicts(
                 unpinned: 0,
                 turned_in: 0,
                 turned_out: 0,
+                bitmap_pending: false,
                 changed: false,
             },
         ));
+    }
+    // An unpinned reference row hands the reference to the rule: where the
+    // rule picks another row, the scores were read against a bitmap that is
+    // about to be replaced, so the bars wait for the new one.
+    let bitmap_pending = track.held_reference().is_some() && bitmap_target(&next).is_some();
+    if bitmap_pending {
+        if let Stage::Track(payload) = &mut next.stage {
+            payload.drop_stale_bitmap();
+        }
+        clear_bitmap_scores(&mut next);
     }
     let (painted, report) = apply_thresholds(&next);
     Ok((
@@ -944,6 +967,7 @@ pub fn unpin_verdicts(
             unpinned,
             turned_in: report.turned_in,
             turned_out: report.turned_out,
+            bitmap_pending,
             changed: true,
         },
     ))
@@ -2641,17 +2665,34 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
 /// better. It is what the thresholds say about each row whatever the person
 /// decided, which is what a viewer shows beside a verdict set by hand to say
 /// whether the hand agrees with the bars.
+///
+/// The pinned row that holds the reference scores `1` against its own render,
+/// which says nothing about it. Where unpinning it would move the bitmap to
+/// the reference-view rule's pick on another row ([`unpin_verdicts`] reports
+/// that as [`UnpinReport::bitmap_pending`]), its entry is `None`: the bars
+/// can judge it only against the bitmap that unpin leads to.
 pub fn verdicts_if_unpinned(track: &EditableTrack) -> Vec<Option<Verdict>> {
     let painted = paint(track, &[]);
     (0..track.observations.len())
         .map(|i| {
             if track.observations[i].pinned {
+                if track.held_reference() == Some(i) && reference_would_move(track, i) {
+                    return None;
+                }
                 paint(track, &[i])[i]
             } else {
                 painted[i]
             }
         })
         .collect()
+}
+
+/// Whether unpinning row `i` of `track` would move its bitmap: the row holds
+/// the reference, and the reference-view rule picks another row.
+fn reference_would_move(track: &EditableTrack, i: usize) -> bool {
+    let mut unpinned = track.clone();
+    unpinned.observations[i].pinned = false;
+    bitmap_target(&unpinned).is_some()
 }
 
 /// The verdicts the painting gives, one per observation: `None` for an
@@ -2786,7 +2827,12 @@ impl BarChecks {
 
 /// What each bar of `thresholds` says about `observation` at `stage`, or
 /// `None` when nothing at that stage has measured it, which is when it carries
-/// no whole-patch ZNCC.
+/// no whole-patch ZNCC. At the track stage a row the keypoint localizer could
+/// not read (no
+/// [`loo_zncc`](super::track::TrackMeasurement::loo_zncc): its seed too far
+/// from the projection, a grazing view, or nothing to score) is unmeasured as
+/// well, even where it has a score against the bitmap: its status cell shows
+/// the localizer's refusal, and a bitmap score alone does not turn it `in`.
 ///
 /// This is the whole of what the thresholds judge a row by, so the verdict
 /// they propose and anything that shows a reading as passing or failing its
@@ -2823,6 +2869,7 @@ pub fn bar_checks(
         }
         StageKind::Track => {
             let m = observation.track.as_ref()?;
+            m.loo_zncc?;
             (
                 m.zncc?,
                 m.zncc_middle,
@@ -2832,12 +2879,13 @@ pub fn bar_checks(
             )
         }
     };
+    let (min_zncc, min_middle) = thresholds.zncc_bars(stage);
     Some(BarChecks {
-        min_zncc: BarCheck::of(Some(zncc), |z| z >= thresholds.min_zncc),
-        min_zncc_middle: if thresholds.min_zncc_middle <= 0.0 {
+        min_zncc: BarCheck::of(Some(zncc), |z| z >= min_zncc),
+        min_zncc_middle: if min_middle <= 0.0 {
             BarCheck::NotJudged
         } else {
-            BarCheck::of(middle, |z| z >= thresholds.min_zncc_middle)
+            BarCheck::of(middle, |z| z >= min_middle)
         },
         max_shift_px: BarCheck::of(shift, |s| s <= thresholds.max_shift_px),
         max_zncc_self_similarity_radius: BarCheck::of(radius, |r| {

@@ -607,13 +607,7 @@ impl PyEditableTrack {
     /// evaluation, and where the rule picked none.
     #[getter]
     fn reference_view_observation(&self) -> Option<usize> {
-        self.inner.track()?;
-        self.inner.observations.iter().position(|o| {
-            o.track
-                .as_ref()
-                .and_then(|m| m.reference_view)
-                .is_some_and(|s| s.is_reference())
-        })
+        self.inner.reference_view_pick()
     }
 
     /// Which observation the cluster stage cuts its template around, or
@@ -642,6 +636,8 @@ impl PyEditableTrack {
         let d = PyDict::new(py);
         d.set_item("min_zncc", t.min_zncc)?;
         d.set_item("min_zncc_middle", t.min_zncc_middle)?;
+        d.set_item("cluster_min_zncc", t.cluster_min_zncc)?;
+        d.set_item("cluster_min_zncc_middle", t.cluster_min_zncc_middle)?;
         d.set_item("max_shift_px", t.max_shift_px)?;
         d.set_item(
             "max_zncc_self_similarity_radius",
@@ -994,7 +990,11 @@ fn verdict_targets(track: &EditableTrack, observations: &Bound<'_, PyAny>) -> Py
 /// the report says ``changed: False``.
 ///
 /// Returns ``(EditableTrack, report)``. The report carries ``unpinned`` (how
-/// many pins were cleared), ``turned_in``, ``turned_out`` and ``changed``.
+/// many pins were cleared), ``turned_in``, ``turned_out``, ``bitmap_pending``
+/// (the unpin handed the reference to the rule's pick on another row, so the
+/// bitmap and every score against it were dropped and the bars judged nothing;
+/// ``evaluate(..., render_bitmap=True)`` renders, scores and judges) and
+/// ``changed``.
 /// Raises ``ValueError`` for an index past the end.
 #[pyfunction]
 fn unpin_verdict(
@@ -1008,6 +1008,7 @@ fn unpin_verdict(
     d.set_item("unpinned", report.unpinned)?;
     d.set_item("turned_in", report.turned_in)?;
     d.set_item("turned_out", report.turned_out)?;
+    d.set_item("bitmap_pending", report.bitmap_pending)?;
     d.set_item("changed", report.changed)?;
     Ok((
         PyEditableTrack {
@@ -1458,7 +1459,7 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 #[pyo3(signature = (
     track, *, min_zncc = None, max_shift_px = None, max_zncc_self_similarity_radius = None,
     geometry_search_min_relative_zncc = None, min_zncc_middle = None,
-    max_projection_error_px = None
+    max_projection_error_px = None, cluster_min_zncc = None, cluster_min_zncc_middle = None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn apply_thresholds(
@@ -1470,6 +1471,8 @@ fn apply_thresholds(
     geometry_search_min_relative_zncc: Option<f64>,
     min_zncc_middle: Option<f64>,
     max_projection_error_px: Option<f64>,
+    cluster_min_zncc: Option<f64>,
+    cluster_min_zncc_middle: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let mut seeded = (*track.inner).clone();
     let t = &mut seeded.thresholds;
@@ -1486,6 +1489,8 @@ fn apply_thresholds(
         ),
         (&mut t.min_zncc_middle, min_zncc_middle),
         (&mut t.max_projection_error_px, max_projection_error_px),
+        (&mut t.cluster_min_zncc, cluster_min_zncc),
+        (&mut t.cluster_min_zncc_middle, cluster_min_zncc_middle),
     ] {
         if let Some(value) = value {
             *slot = value;
@@ -1538,6 +1543,7 @@ fn evaluate_report_dict<'py>(
     d.set_item("stage", report.stage.to_string())?;
     d.set_item("measured", report.measured)?;
     d.set_item("unmeasured", report.unmeasured)?;
+    d.set_item("scored", report.scored)?;
     d.set_item("turned_in", report.turned_in)?;
     d.set_item("turned_out", report.turned_out)?;
     if let Some(reference) = report.reference {
@@ -1715,8 +1721,10 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// may take together; a round past it is refused rather than attempted.
 ///
 /// Returns ``(EditableTrack, report)``. The report carries ``stage``,
-/// ``measured``, ``unmeasured``, and ``turned_in`` and ``turned_out`` for what
-/// the repaint moved; ``reference`` at the cluster stage; and
+/// ``measured`` and ``unmeasured`` (the rows the localizer read and did not),
+/// ``scored`` (the measured rows that also carry a score against the bitmap,
+/// which are the ones the bars judge), and ``turned_in`` and ``turned_out`` for
+/// what the repaint moved; ``reference`` at the cluster stage; and
 /// ``position`` and ``condition_number`` at the track stage. Raises
 /// ``ValueError`` with the reason when the reading is refused.
 #[pyfunction]

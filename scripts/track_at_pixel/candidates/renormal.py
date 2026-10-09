@@ -357,9 +357,9 @@ def depth_probe(ctx, track, q, pixel, opts, info):
                 track, ctx.edited, (float(d @ u), float(d @ v), float(d @ n))
             )
             moved, _ = B.translate_patch_to_pixel(moved, ctx.edited, q, list(pixel))
-            moved, _ = B.evaluate(moved, ctx.edited, ctx.pyramids)
+            moved, _ = B.evaluate(moved, ctx.edited, ctx.pyramids, render_bitmap=True)
             grown, geo = B.search_geometry(moved, q, ctx.edited, ctx.pyramids)
-            grown, _ = B.evaluate(grown, ctx.edited, ctx.pyramids)
+            grown, _ = B.evaluate(grown, ctx.edited, ctx.pyramids, render_bitmap=True)
             grown, _ = B.apply_thresholds(grown)
             if grown.verdict_counts[0] < 2:
                 tried.append({"factor": factor, "in": grown.verdict_counts[0]})
@@ -456,7 +456,9 @@ def build_track(ctx, image: int, pixel, options: dict | None = None):
             grown, geo = B.search_geometry(tilted, q, ctx.edited, ctx.pyramids)
             info["regrow_added"] = geo["added"]
             if geo["added"]:
-                grown, _ = B.evaluate(grown, ctx.edited, ctx.pyramids)
+                grown, _ = B.evaluate(
+                    grown, ctx.edited, ctx.pyramids, render_bitmap=True
+                )
                 grown, _ = B.apply_thresholds(grown)
                 grown = anchored_fit(ctx, grown, q, pixel, opts["anchor_refits"])
                 tilted, _ = B.apply_thresholds(grown)

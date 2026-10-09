@@ -85,11 +85,15 @@ def query_offset(track, q: int, pixel) -> float | None:
 
 
 def anchor(ctx, track, q: int, pixel):
-    """Slide the patch so its centre in observation ``q`` is ``pixel``, then read it."""
+    """Slide the patch so its centre in observation ``q`` is ``pixel``, then read it.
+
+    The move drops the stored bitmap; the reading renders it again where the
+    patch stands, so the rows carry a score against it for the bars to judge.
+    """
     from sfmtool import bench as B
 
     moved, _ = B.translate_patch_to_pixel(track, ctx.edited, q, list(pixel))
-    moved, _ = B.evaluate(moved, ctx.edited, ctx.pyramids)
+    moved, _ = B.evaluate(moved, ctx.edited, ctx.pyramids, render_bitmap=True)
     return moved
 
 
@@ -484,7 +488,9 @@ def finish(ctx, track, q: int, pixel, opts: dict, diag: dict) -> TrackAtPixelRes
                 "self_agreement": geo["self_agreement"],
             }
             if geo["added"]:
-                grown, _ = B.evaluate(grown, ctx.edited, ctx.pyramids)
+                grown, _ = B.evaluate(
+                    grown, ctx.edited, ctx.pyramids, render_bitmap=True
+                )
                 grown, _ = B.apply_thresholds(grown)
                 if opts["anchor"]:
                     grown = anchored_fit(ctx, grown, q, pixel, opts["anchor_refits"])

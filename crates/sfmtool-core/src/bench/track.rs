@@ -519,8 +519,9 @@ pub struct TrackMeasurement {
     /// The middle ZNCC beside [`Self::walked_zncc`], read the way
     /// [`Self::loo_zncc_middle`] is. Set and cleared with [`Self::walked_px`].
     pub walked_zncc_middle: Option<f64>,
-    /// The ZNCC grid beside [`Self::walked_zncc`], against the same consensus,
-    /// cut the way [`Self::zncc_grid`] is. Set and cleared with [`Self::walked_px`].
+    /// The leave-one-out ZNCC grid beside [`Self::walked_zncc`], against the same
+    /// consensus, cut into ninths of the patch as [`Self::zncc_grid`] cuts the
+    /// score against the bitmap. Set and cleared with [`Self::walked_px`].
     pub walked_zncc_grid: Option<[[f64; 3]; 3]>,
     /// Why a reading is missing, when an evaluation has read the row: where
     /// the localizer could not read the observation ([`Self::loo_zncc`] is
@@ -829,32 +830,47 @@ pub struct Origin {
 /// [`Self::geometry_search_min_relative_zncc`]'s default is read from view
 /// selection's own parameter type rather than written out again, so the bench and the batch
 /// pass start from the same bar and moving it is the person choosing to
-/// differ. The other five are the bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
+/// differ. The others are the bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
 /// fit may move a sighting, and the cluster refinement's 3 px turned away walks
-/// a person wanted. [`BENCH_MIN_ZNCC`] and [`BENCH_MIN_ZNCC_MIDDLE`]: the
-/// cluster refinement's `0.85` judges the score it reached by fitting a whole
-/// affine warp, and the track stage's leave-one-out score runs lower on correct
-/// sightings, so that bar turned out sightings a person would keep.
+/// a person wanted. [`BENCH_CLUSTER_MIN_ZNCC`] and
+/// [`BENCH_CLUSTER_MIN_ZNCC_MIDDLE`]: the cluster refinement's `0.85` judges
+/// the score it reached by fitting a whole affine warp, and turned out
+/// sightings a person would keep. [`BENCH_MIN_ZNCC`] and
+/// [`BENCH_MIN_ZNCC_MIDDLE`]: the track stage judges another score, a row's
+/// tile against the stored bitmap, and has bars measured for it.
 /// [`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`]: the keypoint localizer's member
 /// gate has the same default, but the bench runs that kernel with its gate off
 /// and judges the radius by this bar instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
-    /// The ZNCC an observation has to reach: the achieved template ZNCC at the
-    /// cluster stage, the plain score against the stored bitmap
-    /// ([`TrackMeasurement::zncc`]) at the track stage.
+    /// The ZNCC an observation has to reach at the track stage: the plain
+    /// score of its tile against the stored bitmap ([`TrackMeasurement::zncc`]).
+    /// The default is [`BENCH_MIN_ZNCC`]. The cluster stage judges another
+    /// score, and has its own bar, [`Self::cluster_min_zncc`].
     pub min_zncc: f64,
-    /// The middle ZNCC an observation has to reach: [`ClusterMeasurement::zncc_middle`]
-    /// at the cluster stage and [`TrackMeasurement::zncc_middle`] at the track
-    /// stage. It turns out a sighting whose whole-patch agreement is carried
-    /// by the patch's surroundings rather than its middle.
+    /// The middle ZNCC an observation has to reach at the track stage
+    /// ([`TrackMeasurement::zncc_middle`]). It turns out a sighting whose
+    /// whole-patch agreement is carried by the patch's surroundings rather
+    /// than its middle.
     ///
-    /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`]. An
+    /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`], which
+    /// is `0`: the measurement behind it found that the middle bar turns out
+    /// no more wrong views than the whole bar does alone. An
     /// observation with no middle reading, because its middle is flat or it
     /// was read back from a committed point, has nothing to judge and clears
     /// the bar, as a row with no self-similarity reading clears
     /// [`Self::max_zncc_self_similarity_radius`].
     pub min_zncc_middle: f64,
+    /// The achieved template ZNCC an observation has to reach at the cluster
+    /// stage ([`ClusterMeasurement::zncc`]). The default is
+    /// [`BENCH_CLUSTER_MIN_ZNCC`].
+    pub cluster_min_zncc: f64,
+    /// The middle ZNCC an observation has to reach at the cluster stage
+    /// ([`ClusterMeasurement::zncc_middle`]), judged as
+    /// [`Self::min_zncc_middle`] is at the track stage: `0` turns it off, and
+    /// a row with no middle reading clears it. The default is
+    /// [`BENCH_CLUSTER_MIN_ZNCC_MIDDLE`].
+    pub cluster_min_zncc_middle: f64,
     /// How far the correlation peak may sit from where the observation sits, in
     /// **patch-grid px**: [`ClusterMeasurement::shift_px`] at the cluster stage
     /// and [`TrackMeasurement::seed_shift_px`] at the track stage.
@@ -922,27 +938,51 @@ pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 /// source-image px.
 pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 
-/// The bench's default [`Thresholds::min_zncc`].
+/// The bench's default [`Thresholds::min_zncc`], the track stage's bar on the
+/// plain score against the stored bitmap.
 ///
 /// Below the cluster refinement's own `min_zncc` (0.85), which stays the batch
-/// pass's bar. At the track stage it judges the plain score against the
-/// stored bitmap, one view's render, which reads lower on a correct sighting
-/// than a score against a consensus does. Measured on 465 tracks of eight
-/// reconstructions, with two wrong views planted in each, `0.65` (with a
-/// middle bar of `0.5`) keeps 93.4% of the members and turns out 94.9% of the
-/// planted views, where `0.7` and `0.7` on the leave-one-out ZNCC the bars
-/// judged before kept 90.9% and turned out 78.6%.
-pub const BENCH_MIN_ZNCC: f64 = 0.65;
+/// pass's bar: a correct sighting's tile reads lower against one view's render
+/// than a fitted template does. Chosen by leave-one-reconstruction-out on
+/// eight reconstructions (two ground truths, six solves whose members are
+/// taken as correct), 150 tracks each, with wrong views planted where the
+/// geometry bars cannot see them: at the point's projection, with the
+/// photograph's pixels there replaced by another place's, the most similar
+/// one found or a random one, in images the track observes and images it
+/// does not; and with true members blurred, which are to be kept. The
+/// objective was the mean over tracks of the share of members kept and the
+/// share of wrong views turned out, every bar applied. Held out, the pick
+/// (`0.60` on seven of the eight folds) scores 86.1% against 83.5% for a
+/// `0.7` bar on the same score; `0.65` scores within 0.1 point of it. Of the
+/// wrong views that clear every geometry bar, `0.60` turns out 97% of those
+/// less than 0.5 similar to the true content and fewer of the more similar
+/// ones. The spec of the editable track (specs/core/bench/editable-track.md)
+/// gives the tables.
+pub const BENCH_MIN_ZNCC: f64 = 0.60;
 
-/// The bench's default [`Thresholds::min_zncc_middle`].
+/// The bench's default [`Thresholds::min_zncc_middle`]: `0`, off.
 ///
-/// No higher than [`BENCH_MIN_ZNCC`]: the middle reading covers a quarter of
+/// In the measurement behind [`BENCH_MIN_ZNCC`], adding a middle bar to the
+/// whole bar improved the held-out score on one fold of eight and lowered it
+/// on two; bars from 0.30 to 0.45 changed the overall score by at most 0.1
+/// point, and from 0.50 up lowered it. The middle reading covers a quarter of
 /// the samples, so on a correct sighting it scatters more and reads lower
-/// than the whole-patch one (the members' 5th percentile against the bitmap
-/// was 0.52, against 0.66 for the whole), and a middle bar near the whole bar
-/// would turn out correct sightings the whole bar keeps. At `0.5` only 8 of
-/// 928 planted wrong views fail it alone.
-pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.5;
+/// than the whole-patch one, and a middle bar costs members the whole bar
+/// keeps. The bar stays for a person to set.
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.0;
+
+/// The bench's default [`Thresholds::cluster_min_zncc`], the cluster stage's
+/// bar on the achieved template ZNCC.
+///
+/// `0.7`, below the cluster refinement's own `min_zncc` (0.85), which stays
+/// the batch pass's bar and turned out sightings a person would keep. The
+/// measurement behind [`BENCH_MIN_ZNCC`] read the track stage only; this bar
+/// is not measured.
+pub const BENCH_CLUSTER_MIN_ZNCC: f64 = 0.7;
+
+/// The bench's default [`Thresholds::cluster_min_zncc_middle`]: `0.7`, the
+/// same as [`BENCH_CLUSTER_MIN_ZNCC`], and likewise not measured.
+pub const BENCH_CLUSTER_MIN_ZNCC_MIDDLE: f64 = 0.7;
 
 /// The bench's default [`Thresholds::max_zncc_self_similarity_radius`], in
 /// patch-grid px.
@@ -961,14 +1001,30 @@ const _: () = assert!(
         == crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS
 );
 
-// The middle bar sits no higher than the whole bar, for the reason above.
+// The middle bar, where it is on, sits no higher than the whole bar: the
+// middle reading reads lower than the whole one on a correct sighting.
 const _: () = assert!(BENCH_MIN_ZNCC_MIDDLE <= BENCH_MIN_ZNCC);
+
+impl Thresholds {
+    /// The whole and middle ZNCC bars at `stage`: [`Self::min_zncc`] and
+    /// [`Self::min_zncc_middle`] at the track stage, and
+    /// [`Self::cluster_min_zncc`] and [`Self::cluster_min_zncc_middle`] at the
+    /// cluster stage, which judge another score.
+    pub fn zncc_bars(&self, stage: StageKind) -> (f64, f64) {
+        match stage {
+            StageKind::Track => (self.min_zncc, self.min_zncc_middle),
+            StageKind::Cluster => (self.cluster_min_zncc, self.cluster_min_zncc_middle),
+        }
+    }
+}
 
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
             min_zncc: BENCH_MIN_ZNCC,
             min_zncc_middle: BENCH_MIN_ZNCC_MIDDLE,
+            cluster_min_zncc: BENCH_CLUSTER_MIN_ZNCC,
+            cluster_min_zncc_middle: BENCH_CLUSTER_MIN_ZNCC_MIDDLE,
             max_shift_px: BENCH_MAX_SHIFT_PX,
             max_zncc_self_similarity_radius: BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
             max_projection_error_px: BENCH_MAX_PROJECTION_ERROR_PX,
@@ -1038,14 +1094,32 @@ pub struct RepaintMark {
     /// The verdict and pin of each observation as the repaint left them, or
     /// `None` for no mark.
     left: Option<Vec<(Verdict, bool)>>,
+    /// The rows the stored bitmap has been rendered from by the evaluations
+    /// since the last step (`None` for a render left to the reference-view
+    /// rule's own choice), so an evaluation of the marked track does not move
+    /// the bitmap back to one of them
+    /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap)).
+    rendered_from: Vec<Option<usize>>,
 }
 
 impl RepaintMark {
     /// The mark for `track`'s verdicts and pins as they stand.
     pub(super) fn of(track: &EditableTrack) -> Self {
+        Self::after_renders(track, Vec::new())
+    }
+
+    /// The mark for `track`'s verdicts and pins as they stand, after
+    /// evaluations that rendered the bitmap from the rows `rendered_from`.
+    pub(super) fn after_renders(track: &EditableTrack, rendered_from: Vec<Option<usize>>) -> Self {
         Self {
             left: Some(verdicts_and_pins(track)),
+            rendered_from,
         }
+    }
+
+    /// The rows the bitmap has been rendered from since the last step.
+    pub(super) fn rendered_from(&self) -> &[Option<usize>] {
+        &self.rendered_from
     }
 
     /// The same mark, for a value that differs from the marked one in nothing
@@ -1054,6 +1128,7 @@ impl RepaintMark {
     pub(super) fn carried(&self) -> Self {
         Self {
             left: self.left.clone(),
+            rendered_from: self.rendered_from.clone(),
         }
     }
 }
@@ -1228,6 +1303,22 @@ impl EditableTrack {
             Stage::Track(payload) => Some(payload),
             Stage::Cluster(_) => None,
         }
+    }
+
+    /// The row the reference-view rule picked when the track was last read:
+    /// the one whose
+    /// [`reference_view`](TrackMeasurement::reference_view) standing is the
+    /// reference. `None` at the cluster stage, before an evaluation, and where
+    /// the rule picked none. Where the reference's row is pinned this can
+    /// differ from the reference in use ([`TrackPayload::reference`]).
+    pub fn reference_view_pick(&self) -> Option<usize> {
+        self.track()?;
+        self.observations.iter().position(|o| {
+            o.track
+                .as_ref()
+                .and_then(|m| m.reference_view)
+                .is_some_and(|standing| standing.is_reference())
+        })
     }
 
     /// The reference observation the next render of the bitmap renders from

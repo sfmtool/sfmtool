@@ -295,6 +295,15 @@ pub(super) fn bars_phrase(bars: &Thresholds) -> String {
     if bars.min_zncc_middle != defaults.min_zncc_middle {
         named.push(percent("min middle ZNCC", bars.min_zncc_middle));
     }
+    if bars.cluster_min_zncc != defaults.cluster_min_zncc {
+        named.push(percent("cluster min ZNCC", bars.cluster_min_zncc));
+    }
+    if bars.cluster_min_zncc_middle != defaults.cluster_min_zncc_middle {
+        named.push(percent(
+            "cluster min middle ZNCC",
+            bars.cluster_min_zncc_middle,
+        ));
+    }
     if bars.max_shift_px != defaults.max_shift_px {
         named.push(px("max shift", bars.max_shift_px));
     }
