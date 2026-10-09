@@ -233,7 +233,7 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
         ReferenceMark::ReferenceNotPick if !pinned => format!(
             "The track's reference: the patch bitmap is this row's render. Its row is not \
              pinned, so the reference-view rule's pick, the row of image {}, becomes the \
-             reference at the next render that reads it. Pinning this row keeps it.",
+             reference at the next evaluation after a step. Pinning this row keeps it.",
             image(rows.pick_image)
         ),
         ReferenceMark::ReferenceNotPick => {
@@ -253,8 +253,8 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
         ReferenceMark::Pick => match rows.reference {
             Some(_) if !rows.reference_pinned => format!(
                 "The reference-view rule's pick. The track's reference is the row of image {}, \
-                 whose row is not pinned, so this row becomes the reference at the next render \
-                 that reads it.",
+                 whose row is not pinned, so this row becomes the reference at the next \
+                 evaluation after a step.",
                 image(rows.reference_image)
             ),
             Some(_) => format!(

@@ -766,13 +766,15 @@ pub struct TrackPayload {
     /// it: an unpin handed the reference to the reference-view rule
     /// ([`unpin_verdicts`](super::steps::unpin_verdicts)), whose pick is
     /// another row, so every score read against this bitmap is about to be
-    /// replaced. While it is set and the reference is not held again
-    /// ([`EditableTrack::bitmap_pending`]), no row is scored against the
-    /// bitmap (each says [`Unmeasured::BitmapPending`]) and the bars judge
-    /// none; the next render
+    /// replaced. While it is set, no row is scored against the bitmap (each
+    /// says [`Unmeasured::BitmapPending`]) and the bars judge none. The next
+    /// render
     /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
-    /// replaces the bitmap and clears it. A commit in between writes this
-    /// bitmap with the reference it is the render of.
+    /// replaces the bitmap and clears it, and a step that holds the reference
+    /// again by pinning its row ([`pin_verdicts`](super::steps::pin_verdicts),
+    /// [`set_verdict`](super::steps::set_verdict)) clears it with nothing
+    /// rendered, since the bitmap is that row's render. A commit in between
+    /// writes this bitmap with the reference it is the render of.
     pub bitmap_pending: bool,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
@@ -1413,5 +1415,17 @@ impl EditableTrack {
         self.track()
             .is_some_and(|p| p.bitmap_pending && p.bitmap.is_some())
             && self.held_reference().is_none()
+    }
+
+    /// Clear [`TrackPayload::bitmap_pending`] where the reference is held
+    /// again by its row's pin: the bitmap is that row's render, so nothing is
+    /// pending. Every step that pins a row calls this, so the field is set only
+    /// while a render is still to replace the bitmap.
+    pub(crate) fn end_pending_if_held(&mut self) {
+        if self.held_reference().is_some() {
+            if let Stage::Track(payload) = &mut self.stage {
+                payload.bitmap_pending = false;
+            }
+        }
     }
 }

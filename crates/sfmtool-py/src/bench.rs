@@ -614,6 +614,17 @@ impl PyEditableTrack {
         self.inner.track().is_some_and(|p| p.bitmap_for_judging)
     }
 
+    /// Whether the track's patch bitmap is kept only until the next render
+    /// replaces it: an unpin handed the reference to the reference-view rule,
+    /// whose pick is another row. No row is scored against the bitmap until
+    /// that render (``evaluate(..., render_bitmap=True)``, :func:`fit`), and
+    /// pinning the reference's row again ends the wait. ``False`` at the
+    /// cluster stage and where the track has no bitmap.
+    #[getter]
+    fn bitmap_pending(&self) -> bool {
+        self.inner.bitmap_pending()
+    }
+
     /// The row the last evaluation's reference-view rule picked, as an index
     /// into :attr:`observations` (the row whose ``reference_view`` has
     /// ``is_reference``), or ``None``: at the cluster stage, before an

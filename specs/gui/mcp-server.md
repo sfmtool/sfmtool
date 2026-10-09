@@ -3883,7 +3883,11 @@ them.
 
 **`stage_data.reference_observation` is the reference in use**, the row the
 track's stored bitmap is rendered from, and `stage_data.has_bitmap` says whether
-there is a bitmap. `stage_data.bitmap_for_judging` says whether that bitmap is
+there is a bitmap. `stage_data.bitmap_pending` says whether that bitmap is kept
+only until the next render replaces it: an unpin handed the reference to the
+reference-view rule, whose pick is another row, so no row is scored against it
+and each read row's `reason` says so; the live evaluation's render, or pinning
+the reference's row again, ends it. `stage_data.bitmap_for_judging` says whether that bitmap is
 one rendered only so the bars can score the rows of a track fewer than two
 `in` rows of which carry a keypoint, so that no render from the `in` rows
 makes a bitmap: from the rule's pick among every row with a keypoint, `in` or

@@ -1668,7 +1668,9 @@ row the reference is on says which of the two decides:
   (`EditableTrack::bitmap_pending`), no row is scored against it: each row's
   `reason` is `BitmapPending`, a plain `evaluate` scores none, and the next
   `evaluate_rendering_bitmap` renders whatever the rule picks. Pinning the
-  reference's row again ends the wait, and every render clears the mark. The
+  reference's row again (`pin_verdicts`, `set_verdict`) ends the wait and
+  clears the mark, since the bitmap is that row's render, so a later unpin of
+  that row decides afresh from the rule's pick; every render clears it too. The
   next evaluation renders the bitmap from the rule's pick, scores every
   row against it and judges them. While the reference row is unpinned the
   reference follows the rule's pick at every evaluation that renders, so it
@@ -3229,8 +3231,9 @@ by name (`"coverage"`, `"clipped"`, `"angle"`, `"cells"`, `"agreement"`,
 stored bitmap is the tile of, or `None`; `EditableTrack.reference_view_observation`
 is the row the last evaluation's reference-view rule picked, or `None`.
 `EditableTrack.bitmap_for_judging` says whether the bitmap is one for judging
-only (§ "The stored bitmap's reference"). While an unpin leaves the bitmap
-pending its render, each read row's `reason` is the `BitmapPending` sentence,
+only (§ "The stored bitmap's reference"). `EditableTrack.bitmap_pending` says
+whether an unpin left the bitmap pending its render (`EditableTrack::bitmap_pending`).
+While it does, each read row's `reason` is the `BitmapPending` sentence,
 and `evaluate(..., render_bitmap=False)` scores no row.
 `set_reference(track, observation)` is *Set as reference*, returning
 `(track, {"observation", "was", "changed"})`. Both stages' dicts carry

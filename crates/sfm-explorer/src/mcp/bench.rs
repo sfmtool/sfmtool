@@ -1674,6 +1674,10 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 // every row with a keypoint because fewer than two `in` rows
                 // carry one. It names no row and a commit does not write it.
                 "bitmap_for_judging": payload.bitmap_for_judging,
+                // Whether that bitmap is kept only until the next render
+                // replaces it: an unpin handed the reference to the rule,
+                // whose pick is another row, so no row is scored against it.
+                "bitmap_pending": track.bitmap_pending(),
                 // The reference in use: the row the stored bitmap is rendered
                 // from, as an index into `observations`, or null for a track
                 // with no bitmap or one whose bitmap is the render of no row,

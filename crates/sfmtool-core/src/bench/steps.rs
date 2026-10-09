@@ -843,6 +843,7 @@ pub fn set_verdict(
     if was != verdict {
         restate_reference_view(&mut next);
     }
+    next.end_pending_if_held();
     Ok((
         next,
         VerdictReport {
@@ -941,6 +942,9 @@ pub fn unpin_verdicts(
         });
     }
     let mut next = track.clone();
+    // A mark left from before the reference was held again says nothing now:
+    // decide from the pins as they stand.
+    next.end_pending_if_held();
     let mut unpinned = 0;
     for &i in observations {
         if next.observations[i].pinned {
@@ -1053,6 +1057,9 @@ pub fn pin_verdicts(
             pinned += 1;
         }
     }
+    // Pinning the reference's row holds the reference again: the bitmap is
+    // that row's render, so no render is pending.
+    next.end_pending_if_held();
     Ok((
         next,
         PinReport {
@@ -2723,6 +2730,7 @@ pub fn verdicts_if_unpinned(track: &EditableTrack) -> Vec<Option<Verdict>> {
 /// the reference, and the reference-view rule picks another row.
 fn reference_would_move(track: &EditableTrack, i: usize) -> bool {
     let mut unpinned = track.clone();
+    unpinned.end_pending_if_held();
     unpinned.observations[i].pinned = false;
     bitmap_target(&unpinned).is_some()
 }

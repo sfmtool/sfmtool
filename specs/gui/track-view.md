@@ -1374,8 +1374,9 @@ pick alternated between rows. The marks (`reference::ReferenceRows`,
   or *Set as reference* on the pick, makes the pick the reference, and the
   hover of each of the two cells says so, naming the other row by its image.
   Where the reference's row is already unpinned, the hovers say instead that
-  the pick becomes the reference at the next render that reads the track, and
-  the reference's hover that pinning its row keeps it.
+  the pick becomes the reference at the next evaluation after a step (an
+  evaluation that stopped because the pick alternated between rows leaves it
+  until the next step), and the reference's hover that pinning its row keeps it.
 - **No reference:** where the bitmap is the fused mean of the `in` rows, the
   render of no row, is a bitmap for judging, or the track has no bitmap yet,
   only the pick is marked, `pick` on a grey fill. The pick's hover says which:

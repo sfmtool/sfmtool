@@ -645,9 +645,11 @@ class TestEvaluating:
         held, _ = evaluate(chosen, edited, images)
         assert held.reference_observation == other
         assert held.reference_view_observation == pick
+        assert held.bitmap_pending is False
 
         unpinned, report = unpin_verdict(held, other)
         assert report["bitmap_pending"] is True
+        assert unpinned.bitmap_pending is True
         assert (report["turned_in"], report["turned_out"]) == (0, 0)
         assert all("zncc" not in o["track"] for o in unpinned.observations)
         # The bitmap and its reference stay until the render replaces them.
@@ -666,6 +668,47 @@ class TestEvaluating:
         rendered, _ = evaluate(unpinned, edited, images)
         assert rendered.reference_observation == pick
         assert rendered.observation(pick)["track"]["zncc"] == 1.0
+        assert rendered.bitmap_pending is False
+
+    def test_a_re_pinned_reference_is_unpinned_again_as_if_never_unpinned(
+        self, edited, images, long_track_point
+    ):
+        """Unpin, pin again and unpin the held reference: where the rule by
+        then picks that row, the second unpin waits for no render and keeps
+        every score."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        read, _ = evaluate(track, edited, images)
+        pick = read.reference_view_observation
+        other = next(
+            i
+            for i, o in enumerate(read.observations)
+            if i != pick and o["verdict"] == "in"
+        )
+        chosen, _ = set_reference(read, other)
+        held, _ = evaluate(chosen, edited, images)
+
+        unpinned, report = unpin_verdict(held, other)
+        assert report["bitmap_pending"] is True
+        repinned, _ = pin_verdict(unpinned, other)
+        assert repinned.bitmap_pending is False
+        t, _ = evaluate(repinned, edited, images)
+        assert t.reference_observation == other
+        # Turn the rule's picks `out` until it picks `other`.
+        for _ in range(t.observation_count):
+            p = t.reference_view_observation
+            if p == other:
+                break
+            t, _ = set_verdict(t, p, "out")
+            t, _ = evaluate(t, edited, images)
+        assert t.reference_view_observation == other
+
+        def scored(track):
+            return sum("zncc" in o["track"] for o in track.observations)
+
+        again, report = unpin_verdict(t, other)
+        assert report["bitmap_pending"] is False
+        assert again.bitmap_pending is False
+        assert scored(again) == scored(t) > 0
 
     def test_a_track_with_every_row_out_is_judged_against_a_bitmap_for_judging(
         self, edited, images, long_track_point

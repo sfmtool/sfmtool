@@ -935,7 +935,7 @@ the reference is on:
   ([../core/bench/editable-track.md](../core/bench/editable-track.md) §
   "The stored bitmap's reference"). In both, the *Reference* hovers say the
   reference's row is unpinned and the pick becomes the reference at the next
-  render that reads the track, rather than that a pin holds it.
+  evaluation after a step, rather than that a pin holds it.
 - **Tracks built on the bench start with pinned rows.** The seed of a cluster
   started from a pixel, the sightings Track at Pixel adds (every one `in` and
   pinned) and a row placed by a sighting step are pinned, so the rule's first

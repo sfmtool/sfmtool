@@ -1225,6 +1225,28 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
         }
     }
 
+    // A commit before the render writes the outgoing bitmap with the row it
+    // is the render of.
+    let mut recon = (*edited.base).clone();
+    let r = payload.bitmap.as_ref().unwrap().shape()[0];
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(ndarray::Array4::zeros((
+        recon.point_count(),
+        r,
+        r,
+        4,
+    ))));
+    let storing = EditedReconstruction::new(Arc::new(recon));
+    let (committed, report) = commit(&storing, &unpinned).expect("the track commits");
+    let view = committed.point(report.point).expect("the committed point");
+    let images: Vec<u32> = view.observations().iter().map(|o| o.image_index).collect();
+    let at = view.reference_observation().expect("the column is carried") as usize;
+    assert_eq!(images[at], first.observations[other].image);
+    assert_eq!(
+        view.patch_bitmap().expect("the column is carried"),
+        first.track().unwrap().bitmap.as_ref().unwrap().view(),
+        "the outgoing bitmap is written"
+    );
+
     // A reading that renders nothing scores no row against the bitmap the
     // render is to replace, and the bars judge none.
     let (plain, report) = evaluate(
@@ -1253,6 +1275,7 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
     // pending, and a plain reading scores against it.
     let (held, _) = pin_verdicts(&unpinned, &[other]).expect("a live row");
     assert!(!held.bitmap_pending());
+    assert!(!held.track().unwrap().bitmap_pending, "the mark is cleared");
     let (_, report) = evaluate(
         &held,
         &edited,
@@ -1273,6 +1296,55 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
         .find(|&i| i != other && i != picked)
         .expect("a third row");
     let (_, report) = unpin_verdicts(&first, &[third]).expect("a live row");
+    assert!(!report.bitmap_pending);
+}
+
+/// Unpinning the held reference, pinning it again and unpinning it once more
+/// is decided from the pins as they stand: where the rule by then picks that
+/// same row, the second unpin waits for no render and keeps every score, as
+/// for a track that was never unpinned.
+#[test]
+fn a_re_pinned_reference_is_unpinned_again_as_if_never_unpinned() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, _, other) = track_with_another_reference(&truth);
+    let first = render_with(&track, &edited, &views);
+
+    // Turn the rule's picks `out`, by hand, until it picks `other`.
+    let until_the_rule_picks_other = |mut t: EditableTrack| {
+        for _ in 0..t.observations.len() {
+            let pick = rule_pick(&t).expect("the rule picks one");
+            if pick == other {
+                return t;
+            }
+            let (out, _) = set_verdict(&t, pick, Verdict::Out).expect("a live row");
+            t = render_with(&out, &edited, &views);
+        }
+        panic!("the rule never picks row {other}");
+    };
+    let scored = |t: &EditableTrack| {
+        t.observations
+            .iter()
+            .filter(|o| o.track.as_ref().is_some_and(|m| m.zncc.is_some()))
+            .count()
+    };
+
+    let (unpinned, report) = unpin_verdicts(&first, &[other]).expect("a live row");
+    assert!(report.bitmap_pending);
+    let (held, _) = pin_verdicts(&unpinned, &[other]).expect("a live row");
+    assert!(!held.track().unwrap().bitmap_pending, "the mark is cleared");
+    let cycled = until_the_rule_picks_other(render_with(&held, &edited, &views));
+    assert_eq!(cycled.track().unwrap().reference, Some(other));
+    assert_eq!(verdicts_if_unpinned(&cycled)[other], Some(Verdict::In));
+    let (again, report) = unpin_verdicts(&cycled, &[other]).expect("a live row");
+    assert!(!report.bitmap_pending, "the rule picks the held row");
+    assert!(!again.bitmap_pending());
+    assert_eq!(scored(&again), scored(&cycled), "every score is kept");
+    assert!(scored(&again) > 0);
+
+    // The same as for the track never unpinned.
+    let control = until_the_rule_picks_other(first);
+    let (_, report) = unpin_verdicts(&control, &[other]).expect("a live row");
     assert!(!report.bitmap_pending);
 }
 

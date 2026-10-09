@@ -2582,6 +2582,11 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         json!(false),
         "a fitted track's bitmap is its patch: {track}"
     );
+    assert_eq!(
+        track["stage_data"]["bitmap_pending"],
+        json!(false),
+        "a fit renders the bitmap: {track}"
+    );
     let bitmap_row = track["stage_data"]["reference_observation"].as_u64();
     let mut picked = Vec::new();
     for (i, row) in rows.iter().enumerate() {
