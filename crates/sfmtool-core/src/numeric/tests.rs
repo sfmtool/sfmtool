@@ -243,6 +243,16 @@ fn an_infinite_order_statistic_is_not_turned_into_nan() {
 }
 
 #[test]
+fn finite_bounds_whose_gap_overflows_still_interpolate() {
+    let m = f64::MAX;
+    assert_eq!(quantile_of_sorted(&[-m, m], 0.0), -m);
+    assert_eq!(quantile_of_sorted(&[-m, m], 0.5), 0.0);
+    let r = quantile_of_sorted(&[-m, m], 0.75);
+    assert!((r / (m * 0.5) - 1.0).abs() < 1e-15, "{r}");
+    assert_eq!(quantile_of_sorted(&[-m, m], 1.0), m);
+}
+
+#[test]
 fn a_signed_zero_keeps_numpys_sign() {
     // numpy computes `a + 0·t` and `b − 0·(1 − t)`, which give +0.0 here.
     assert!(quantile_of_sorted(&[-0.0, 0.0], 0.75).is_sign_positive());

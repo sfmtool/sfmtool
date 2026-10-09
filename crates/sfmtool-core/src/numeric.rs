@@ -166,7 +166,9 @@ pub fn median(values: &[f64]) -> f64 {
 /// Only `−∞` against `+∞`, or a NaN input, gives NaN. A residual of `∞` marks
 /// a point outside the camera's domain, so a trim bound that falls between a
 /// finite residual and an infinite one is `∞` and keeps every residual.
-/// Whenever `b − a` is finite the result is numpy's, bit for bit.
+/// Whenever `b − a` is finite the result is numpy's, bit for bit. Two finite
+/// values whose difference overflows are interpolated as `a·(1 − t) + b·t`,
+/// which stays finite, where numpy's arithmetic would give an infinity.
 pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
     let n = sorted.len();
     if n == 0 {
@@ -184,6 +186,10 @@ pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
         } else {
             a + gap * t
         }
+    } else if a.is_finite() && b.is_finite() {
+        // `b − a` overflowed. `a` and `b` then have opposite signs, so the
+        // weighted sum cannot overflow.
+        a * (1.0 - t) + b * t
     } else if t == 0.0 || a == b || b.is_finite() {
         // The rank itself, two equal infinities, or `−∞` below a finite `b`.
         a
