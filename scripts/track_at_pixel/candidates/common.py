@@ -70,9 +70,9 @@ FINISH_DEFAULTS = {
 
 def median_zncc(track) -> float:
     z = [
-        o["track"]["zncc"]
+        o["track"]["loo_zncc"]
         for o in track.observations
-        if o["verdict"] == "in" and o.get("track", {}).get("zncc") is not None
+        if o["verdict"] == "in" and o.get("track", {}).get("loo_zncc") is not None
     ]
     return float(np.median(z)) if z else float("-inf")
 
@@ -370,7 +370,7 @@ def ray_consensus(ctx, track, q: int, pixel, opts: dict, diag: dict):
         if i == q or o["verdict"] != "in":
             continue
         tr = o.get("track", {})
-        kp, z = tr.get("keypoint"), tr.get("zncc")
+        kp, z = tr.get("keypoint"), tr.get("loo_zncc")
         if kp is None or z is None or z < opts["ray_min_zncc"]:
             continue
         # A keypoint the correlation peak has left is not a sighting yet.

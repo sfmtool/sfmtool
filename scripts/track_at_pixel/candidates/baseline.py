@@ -99,9 +99,9 @@ def local_prior(ctx, image: int, pixel, opts: dict) -> dict:
 
 def _median_zncc(track) -> float:
     z = [
-        o["track"]["zncc"]
+        o["track"]["loo_zncc"]
         for o in track.observations
-        if o["verdict"] == "in" and o.get("track", {}).get("zncc") is not None
+        if o["verdict"] == "in" and o.get("track", {}).get("loo_zncc") is not None
     ]
     return float(np.median(z)) if z else float("-inf")
 
