@@ -172,15 +172,52 @@ pub(super) fn render_frame(
         .unwrap_or_else(|| frame.clone())
 }
 
+/// What a track's bitmap is, for the header's patch slot to say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BitmapKind {
+    /// The track's patch, the one a commit writes.
+    Patch,
+    /// The track's patch, kept only until the next render replaces it
+    /// (`EditableTrack::bitmap_pending`): no row is scored against it.
+    Pending,
+    /// A bitmap for judging only (`TrackPayload::bitmap_for_judging`): not
+    /// the track's patch, and never committed.
+    Judging,
+}
+
+impl BitmapKind {
+    /// What `track`'s bitmap is; [`Self::Patch`] at the cluster stage.
+    pub(super) fn of(track: &EditableTrack) -> Self {
+        if track.track().is_some_and(|p| p.bitmap_for_judging) {
+            Self::Judging
+        } else if track.bitmap_pending() {
+            Self::Pending
+        } else {
+            Self::Patch
+        }
+    }
+}
+
 /// The picture of a track's own patch: the patch bitmap at the track
 /// stage ([`stored_patch_image`]), the template at the cluster stage, `None`
-/// where there is neither.
+/// where there is neither. A bitmap for judging
+/// (`TrackPayload::bitmap_for_judging`) is drawn at a third of its
+/// brightness, so it does not pass for the track's patch.
 ///
 /// What the header's patch slot draws, and what the recent items strip draws
 /// in each chip, so an item looks the same in both places.
 pub(crate) fn track_patch_image(track: &EditableTrack) -> Option<egui::ColorImage> {
     match &track.stage {
-        Stage::Track(payload) => stored_patch_image(payload.bitmap.as_ref()?.view()),
+        Stage::Track(payload) => {
+            let mut image = stored_patch_image(payload.bitmap.as_ref()?.view())?;
+            if payload.bitmap_for_judging {
+                for pixel in &mut image.pixels {
+                    let [r, g, b, a] = pixel.to_array();
+                    *pixel = egui::Color32::from_rgba_unmultiplied(r / 3, g / 3, b / 3, a);
+                }
+            }
+            Some(image)
+        }
         Stage::Cluster(payload) => {
             let samples = &payload.template.as_ref()?.samples;
             let shape = samples.shape();

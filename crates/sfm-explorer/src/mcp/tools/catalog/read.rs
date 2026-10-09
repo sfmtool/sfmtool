@@ -115,7 +115,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           another row, which the bars cannot judge until then), has_bitmap, \
                           whether the point has a stored bitmap its rows are scored against, \
                           bitmap_for_judging, whether that bitmap was rendered only for the \
-                          bars because no in row could hold the reference, reference_observation, \
+                          bars because fewer than two in rows carry a keypoint, \
+                          reference_observation, \
                           the row that bitmap is rendered from (the reference in use), or null, \
                           and reference_view_observation, the row the reference-view rule \
                           picked, which can differ from it, or null. While evaluating, the measurements are the \
@@ -426,15 +427,19 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the render of an observation since removed from the point); \
                           has_bitmap says whether there is a bitmap, and bitmap_for_judging \
                           whether it was rendered only so the bars can score the rows of a \
-                          track no in row of which can hold the reference: from the rule's \
-                          pick among every row with a keypoint, naming no row, never \
-                          committed, and replaced by the next evaluation once a row is in. \
+                          track fewer than two in rows of which carry a keypoint: from the \
+                          rule's pick among every row with a keypoint, naming no row, never \
+                          committed, and replaced by the next evaluation once two in rows \
+                          carry one. \
                           stage_data.reference_view_observation is the index of the row the \
                           rule picked from the current readings, or null. While the reference's \
                           row is pinned every render renders from it, whichever row the rule \
                           picks, so the two can differ; a track put on the bench from a point \
                           has every row pinned. Unpinning the reference's row hands the \
-                          reference to the rule's pick at the next render, and \
+                          reference to the rule's pick at the next render, so the two also \
+                          differ between that unpin and the render, while no row is scored \
+                          against the bitmap kept until then (each row's reason says so), and \
+                          where the pick alternated between rows within one evaluation. \
                           set_bench_track_reference makes a row the reference and pins it. \
                           Beside zncc, every track-stage observation with a score carries \
                           blur_matched_zncc, the same after the bitmap alone is blurred \

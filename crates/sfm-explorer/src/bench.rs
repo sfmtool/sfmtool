@@ -1131,7 +1131,21 @@ impl AppState {
         // `bitmap_target`), which is the rule's pick unless only its last
         // fallback reached it (the render is then the mean of the views) or no
         // reading has given the rule a pick yet (the render runs the rule).
+        // Where fewer than two `in` rows carry a keypoint the render makes a
+        // bitmap for judging instead, from every row with one.
+        let keyed_ins = next
+            .observations
+            .iter()
+            .filter(|o| {
+                o.verdict == Verdict::In && o.track.as_ref().is_some_and(|m| m.keypoint.is_some())
+            })
+            .count();
         let pending = report.bitmap_pending.then(|| {
+            if keyed_ins < 2 {
+                return "waiting for a bitmap for judging to be rendered from the rows with a \
+                        keypoint, in or out"
+                    .to_string();
+            }
             let from = sfmtool_core::bench::bitmap_target(&next)
                 .flatten()
                 .map(|row| {

@@ -33,8 +33,8 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     cell where it does not. Then the rule's pick reads pick, on a grey cell: unpinning the \
     reference's row, or Set as reference on the pick, makes the pick the reference. While the \
     reference's row is pinned every render keeps it; a track put on the bench from a point has \
-    every row pinned. Where the bitmap is the mean of the rows that are in, or there is no \
-    bitmap yet, only the pick is marked.\n\n\
+    every row pinned. Where the bitmap is the mean of the rows that are in, is one for judging \
+    only, or there is no bitmap yet, only the pick is marked.\n\n\
     A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
     under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
     of the tile where it agrees with the other rows more than 0.3 below the track's typical \
@@ -83,9 +83,15 @@ pub(crate) struct ReferenceRows {
     pub(crate) pick: Option<usize>,
     /// The pick's image index, for the hover.
     pub(crate) pick_image: Option<u32>,
-    /// Whether the track has a patch bitmap: with one and no reference, the
-    /// bitmap is a fused mean.
+    /// Whether the track has a patch bitmap a commit writes: with one and no
+    /// reference, the bitmap is a fused mean.
     pub(crate) has_bitmap: bool,
+    /// Whether the reference's row is pinned, which holds the reference
+    /// whatever the rule picks.
+    pub(crate) reference_pinned: bool,
+    /// Whether the track's bitmap is one for judging only
+    /// (`TrackPayload::bitmap_for_judging`).
+    pub(crate) judging: bool,
 }
 
 impl ReferenceRows {
@@ -102,6 +108,10 @@ impl ReferenceRows {
             has_bitmap: track
                 .track()
                 .is_some_and(|p| p.committable_bitmap().is_some()),
+            reference_pinned: reference
+                .and_then(|r| track.observations.get(r))
+                .is_some_and(|o| o.pinned),
+            judging: track.track().is_some_and(|p| p.bitmap_for_judging),
         }
     }
 
@@ -220,6 +230,12 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
              reference-view rule picks no row.{}",
             if pinned { " Its pin holds it." } else { "" }
         ),
+        ReferenceMark::ReferenceNotPick if !pinned => format!(
+            "The track's reference: the patch bitmap is this row's render. Its row is not \
+             pinned, so the reference-view rule's pick, the row of image {}, becomes the \
+             reference at the next render that reads it. Pinning this row keeps it.",
+            image(rows.pick_image)
+        ),
         ReferenceMark::ReferenceNotPick => {
             let pick = match rows.pick {
                 Some(_) => format!(
@@ -235,12 +251,24 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
             )
         }
         ReferenceMark::Pick => match rows.reference {
+            Some(_) if !rows.reference_pinned => format!(
+                "The reference-view rule's pick. The track's reference is the row of image {}, \
+                 whose row is not pinned, so this row becomes the reference at the next render \
+                 that reads it.",
+                image(rows.reference_image)
+            ),
             Some(_) => format!(
                 "The reference-view rule's pick. The track's reference is the row of image {}, \
                  held by its pin. Unpinning that row, or Set as reference on this one, makes \
                  this row the reference.",
                 image(rows.reference_image)
             ),
+            None if rows.judging => "The reference-view rule's pick among the rows that are \
+                 in. Fewer than two rows that are in carry a keypoint, and a render from the \
+                 rows that are in needs two, so the bitmap is one for judging only: rendered \
+                 from the rows with a keypoint, in or out, for the bars to score the rows \
+                 against, and never committed. There is no reference to mark."
+                .to_string(),
             None if rows.has_bitmap => "The reference-view rule's pick. The patch bitmap is \
                  the mean of the rows that are in, the render of no row, so there is no \
                  reference to mark. Set as reference on this row renders the bitmap from it."

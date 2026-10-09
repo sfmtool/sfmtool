@@ -151,6 +151,7 @@ pub enum Unmeasured {
     NoConsensus,
     Unscorable,
     NoBitmap,                        // no bitmap on the tile's grid to score against
+    BitmapPending,                   // the bitmap kept waits for the next render
 }
 
 pub enum Verdict { In, Out }
@@ -629,19 +630,21 @@ pub fn score_bitmap(
 ) -> Result<EditableTrack, EvaluateError>;
 
 // `evaluate`'s reading, then, for a track-stage track with a placement and
-// either no bitmap or an unpinned reference row the rule does not pick, a
-// render from the held reference or the rule's pick (the fused mean where the
+// either no bitmap, a bitmap an unpin left pending its render, or an unpinned
+// reference row the rule does not pick, a render from the held reference or the rule's pick (the fused mean where the
 // rule picks none or only through its last fallback), `score_bitmap`, and the
 // repaint, which judges the scores against the new bitmap. Where the repaint
 // moves a verdict and the rule, rerun over the rows still `in`, picks another
 // row, the bitmap moves to it and the rows are scored and judged again, until
 // a repaint moves nothing or the pick returns to a row already rendered from
-// since the last step (§ "The stored bitmap's reference"). Where every `in`
-// row has a keypoint and the evaluation's tiles are on the bitmap's grid with
-// the render's sampler, the bitmap is taken from the evaluation's own tile of
-// the held reference or the rule's pick and the rows are scored on the
-// evaluation's tiles, so nothing is rendered twice. Where no `in` row can hold
-// the reference, the render is a bitmap for judging
+// since the last step (§ "The stored bitmap's reference"). Where the row
+// rendered from is `in` with a keypoint, at least two `in` rows carry a
+// keypoint, and the evaluation's tiles are on the bitmap's grid with the
+// render's sampler, the bitmap is taken from the evaluation's own tile of the
+// held reference or the rule's pick and the rows are scored on the
+// evaluation's tiles, so nothing is rendered twice. Where fewer than two `in`
+// rows carry a keypoint, both ways of rendering give no bitmap from the `in`
+// rows, and the render is a bitmap for judging
 // (`TrackPayload::bitmap_for_judging`, § "The stored bitmap's reference"). The
 // viewer's live evaluation and `fit_normal` / `finite_difference_normal` end
 // with it.
@@ -1546,7 +1549,11 @@ turns out 5.6%, against 3.5% of the sharp ones. The self-similarity bar is
 another matter: it turns out 55% of the blurred members. A row the track has no
 bitmap to read against, before its first render or after a step dropped the
 bitmap, has no score: its `reason` is `NoBitmap` where the localizer read it,
-and the bars leave its verdict where it is (`bar_checks` is `None` for it). A
+and the bars leave its verdict where it is (`bar_checks` is `None` for it).
+So does a row of a track whose bitmap an unpin kept only until the next
+render replaces it (`TrackPayload::bitmap_pending`, below): no row is scored
+against that bitmap, not even by an `evaluate` that renders nothing, and its
+`reason` is `BitmapPending`. A
 row the localizer refused (`SeedTooFar`, `Grazing`, `Unscorable`) has no
 `loo_zncc`, and the bars leave its verdict where it is too, even where it has
 a score against the bitmap: `bar_checks` judges a track-stage row only when it
@@ -1656,9 +1663,17 @@ row the reference is on says which of the two decides:
   says `UnpinReport::bitmap_pending`, a commit before the render writes the
   old bitmap with the row it is the render of, and `verdicts_if_unpinned` proposes nothing
   for the held reference's row, whose `1` against its own render says nothing.
-  The next evaluation renders the bitmap from the rule's pick, scores every
+  The payload marks the kept bitmap `TrackPayload::bitmap_pending`, and
+  while it is marked and no pin holds the reference again
+  (`EditableTrack::bitmap_pending`), no row is scored against it: each row's
+  `reason` is `BitmapPending`, a plain `evaluate` scores none, and the next
+  `evaluate_rendering_bitmap` renders whatever the rule picks. Pinning the
+  reference's row again ends the wait, and every render clears the mark. The
+  next evaluation renders the bitmap from the rule's pick, scores every
   row against it and judges them. While the reference row is unpinned the
-  reference follows the rule's pick at every evaluation that renders.
+  reference follows the rule's pick at every evaluation that renders, so it
+  differs from the pick between such an unpin and the render, as well as at
+  the loop's exit below.
 - **The evaluation follows the pick its own repaint moves.** In
   `evaluate_rendering_bitmap`, where the repaint after the scores moves a
   verdict, the rule is run again over the rows still `in`; when its pick is
@@ -1666,9 +1681,10 @@ row the reference is on says which of the two decides:
   that row and the rows are scored and judged again. The loop stops when a
   repaint moves nothing, when the bitmap needs no move, or when the pick
   returns to a row the bitmap was already rendered from since the last step:
-  the bitmap then stays where it is and the pick is on another row. That is
-  the one case in which an unpinned track's reference and pick differ, and
-  the next step reads it afresh. A track carrying a `RepaintMark` is read
+  the bitmap then stays where it is and the pick is on another row. That and
+  the wait between an unpin and its render (above) are the two cases in which
+  an unpinned track's reference and pick differ, and the next step reads it
+  afresh. A track carrying a `RepaintMark` is read
   without repainting unless its bitmap moves; the mark records the rows the
   bitmap has been rendered from since the step, so a chain of evaluations
   cannot move it back and forth. `EvaluateReport::turned_in` and `turned_out`
@@ -1680,19 +1696,31 @@ row the reference is on says which of the two decides:
   turns every row `out` (a bar no row clears, or an unpin of every row under
   such a bar), the bitmap goes with its reference row, and without more no
   row could be scored again and loosening a bar could bring none back. Where
-  the render from the `in` rows gives no bitmap, `evaluate_rendering_bitmap`
+  the render from the `in` rows gives no bitmap, because fewer than two of
+  them carry a keypoint (both ways of rendering, from the evaluation's tile
+  and on their own, apply that rule alike, so a track with one `in` row gets
+  the same bitmap whichever runs), `evaluate_rendering_bitmap`
   renders a **bitmap for judging** instead (`TrackPayload::bitmap_for_judging`):
   the render of the rule's pick among every row that carries a keypoint, `in`
   or `out`, or their fused mean where the rule picks none. Every row is scored
-  against it and the bars judge those scores as any others. It is a judging
+  against it and the bars judge those scores as any others, including the row
+  it is the tile of, which scores about `1` against its own tile and is not
+  set aside as a held reference's row is, so a loosened bar always turns that
+  row `in`. It is a judging
   aid, not a reference: it names no row (`TrackPayload::reference` is
-  `None`), a step that turns rows `out` leaves it in place, and a commit
+  `None`), a step that turns rows `out` leaves it in place, a step that moves
+  or removes a row (`sight_observation`, `split`, `delete_image`) drops it,
+  since it can be that row's tile, and a commit
   treats it as no bitmap (`TrackPayload::committable_bitmap`), so a commit is
-  refused with `TooFewObservations` while no row is `in` and with `NoBitmap`
-  where rows are `in` again but no render has replaced it yet. While no row
-  is `in` it stands; once a row is `in`, the next render (in the same call,
-  where the repaint turned the row `in`) replaces it with a bitmap rendered by
-  the usual rule.
+  refused with `TooFewObservations` while fewer than two rows are `in`, and
+  with `NoBitmap` where rows are `in` again but no render has replaced it yet
+  and the reconstruction stores bitmaps; into one that stores none it writes
+  the point with no reference observation. While fewer than two `in` rows
+  carry a keypoint it stands; once two do, the next render (in the same call,
+  where the repaint turned the rows `in`) replaces it with a bitmap rendered
+  by the usual rule. An unpin on such a track reports no `bitmap_pending`,
+  even where its repaint turned rows `in` and the next render will replace
+  the bitmap, since that bitmap was never the track's patch.
 - **Tracks built on the bench start with pinned rows.** A track built on the
   bench starts with no reference and takes the rule's pick at its first
   render. The row a cluster starts from (`create_cluster`), the rows Track at
@@ -2470,9 +2498,11 @@ ray grazes the patch plane, with the cosine), `SeedTooFar` (its seed sits
 further from the projection than the reading will widen its window for, with the
 offset and the bound), `NoConsensus` (fewer than two observations of its round
 could be read together), `Unscorable` (its tile could not be scored: it runs
-off the photograph, or no channel of it carries texture) and `NoBitmap` (the
+off the photograph, or no channel of it carries texture), `NoBitmap` (the
 localizer read it, but the track has no bitmap on the tile's grid to score it
-against). The first five are decided before any correlation, from the observation and the geometry, which is
+against) and `BitmapPending` (the localizer read it, but the bitmap the track
+holds waits for the next render to replace it, so no row is scored against
+it). The first five are decided before any correlation, from the observation and the geometry, which is
 what lets the row carry the reason instead of simply going missing from the
 kernel's answer.
 
@@ -2997,14 +3027,19 @@ The badlands reconstruction cannot inform the ZNCC bar: every member there
 that clears the geometry bars reads at least 0.855, so no whole bar up to 0.85
 loses one, and its fold prefers whichever bar turns out the most substitutions.
 
-Which rows the objective counts moves the pick between `0.60` and `0.75`, and
-`0.65` lies inside that range. With the keep half over every member and every
+`0.65` edges `0.70` narrowly: 93.64 against 93.46 held out, better on four
+folds of eight. Which rows the objective counts moves the pick between `0.60`
+and `0.70`, and `0.65` lies inside that range. With the keep half over every member and every
 bar applied, so that the members the geometry bars lose dilute how the keep
 half answers the ZNCC bar, the whole bar alone picks `0.70` on all eight folds. With substitutions
 in unobserved images counted too, it picks `0.65` on all eight. With every
 member, every substitution and every bar, the first analysis of this data, it
 picks `0.60` on seven folds and `0.65` on one. With the similar substitutions
-alone, it picks `0.70` on six folds and `0.75` on two.
+alone, it picks `0.70` on all eight folds.
+
+These bars are expected to be measured again once normal estimation and
+fitting improve: both move the tiles the scores are read from, and so the
+scores of members and wrong views alike.
 
 The middle bar is off by default. Beside a whole bar of `0.65`, a middle bar
 from 0.30 to 0.55 raises the score over all the data by 0.1 to 0.3 point, and
@@ -3194,7 +3229,9 @@ by name (`"coverage"`, `"clipped"`, `"angle"`, `"cells"`, `"agreement"`,
 stored bitmap is the tile of, or `None`; `EditableTrack.reference_view_observation`
 is the row the last evaluation's reference-view rule picked, or `None`.
 `EditableTrack.bitmap_for_judging` says whether the bitmap is one for judging
-only (§ "The stored bitmap's reference").
+only (§ "The stored bitmap's reference"). While an unpin leaves the bitmap
+pending its render, each read row's `reason` is the `BitmapPending` sentence,
+and `evaluate(..., render_bitmap=False)` scores no row.
 `set_reference(track, observation)` is *Set as reference*, returning
 `(track, {"observation", "was", "changed"})`. Both stages' dicts carry
 `zncc_middle`, `zncc_self_similarity_radius` and
@@ -3333,6 +3370,10 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   not is turned out.
 - On a track with no bitmap no row has a score, each row the localizer read
   says `NoBitmap`, and the evaluation's repaint moves no verdict.
+- After an unpin that hands the reference on, each row the localizer read says
+  `BitmapPending`, a plain `evaluate` scores none of them against the kept
+  bitmap and moves no verdict, and pinning the reference's row again lets it
+  score them.
 - `verdicts_if_unpinned` gives an unpinned row the painting's verdict, and a
   pinned one, `in` or `out`, with and without a competing sighting in its
   image, exactly what unpinning it and applying the thresholds makes it.
@@ -3390,6 +3431,16 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   render is a bitmap for judging, the rows are scored against it, and
   loosening the bar turns rows back `in`, after which a render by the usual
   rule replaces it.
+- A track with one `in` row gets a bitmap for judging, and two evaluations in
+  a row give it the same bitmap, scores and verdicts; a second row set `in` by
+  hand gets the render by the usual rule, and a sighting or a deleted image
+  drops the bitmap for judging with every score against it.
+- A bitmap for judging re-rendered by a pass with the same `in` rows stands:
+  the loop renders it once.
+- A bitmap for judging is refused at commit where the reconstruction stores
+  bitmaps, and elsewhere commits a point with no reference observation.
+- Turning the reference row `out`, sighting it, splitting it off and deleting
+  its image each clear every score with the bitmap.
 - A point's pinned rows stay `in` whatever the bars say, rows pinned with
   `pin_verdicts` stay where they stood under bars no reading clears, and a
   pinned `out` is scored and left `out`.

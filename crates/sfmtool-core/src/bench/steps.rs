@@ -26,7 +26,7 @@ use super::fit::FitOptions;
 use super::stage::{set_stage, StageError};
 use super::track::{
     ClusterMeasurement, ClusterPayload, EditableTrack, Observation, Origin, Provenance,
-    RepaintMark, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Verdict,
+    RepaintMark, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Unmeasured, Verdict,
 };
 use super::{check_label, Bench, BenchError, BenchItem, ItemKind};
 
@@ -220,6 +220,7 @@ pub fn create_track(
         // from -- for a column rendered for display, the observation that
         // render rendered it from.
         bitmap_for_judging: false,
+        bitmap_pending: false,
         reference: view
             .reference_observation()
             .and_then(|r| usize::try_from(r).ok()),
@@ -743,7 +744,7 @@ pub struct AddObservationReport {
 /// an image that only half holds it; bringing that seed inside would report a
 /// sighting where the search never said there was one, rather than leaving the
 /// reading to refuse it as
-/// [`Unmeasured::OffSensor`](super::track::Unmeasured::OffSensor). The clamp for
+/// [`Unmeasured::OffSensor`]. The clamp for
 /// a pixel a person or a caller named belongs to the caller that knows it is one,
 /// which for the viewer is `AppState::add_bench_observation`.
 pub fn add_observation(
@@ -904,8 +905,10 @@ pub struct UnpinReport {
 /// follows the pick at every render until a row holding it is pinned again or
 /// [`set_reference`] names one. Where the pick is another row, every score was
 /// read against the bitmap that render replaces, so the scores are cleared
-/// here and the bitmap kept until the render replaces it: the bars judge none
-/// of the rows, and the report says [`UnpinReport::bitmap_pending`]. A commit
+/// here and the bitmap kept until the render replaces it, marked
+/// [`TrackPayload::bitmap_pending`]: the bars judge none of the rows, each
+/// row's reason says [`Unmeasured::BitmapPending`], no evaluation scores a row
+/// against that bitmap, and the report says [`UnpinReport::bitmap_pending`]. A commit
 /// before that render writes the old bitmap with the reference it is the
 /// render of. The evaluation that follows renders the new bitmap, scores the
 /// rows against it and judges them.
@@ -964,7 +967,12 @@ pub fn unpin_verdicts(
     let released = track.held_reference().is_some() && next.held_reference().is_none();
     let moving = released && bitmap_target(&next).is_some();
     if moving {
-        clear_bitmap_scores(&mut next);
+        clear_bitmap_scores(&mut next, Unmeasured::BitmapPending);
+    }
+    if released {
+        if let Stage::Track(payload) = &mut next.stage {
+            payload.bitmap_pending = moving;
+        }
     }
     let (painted, report) = apply_thresholds(&next);
     // Judged after the repaint, which can turn the reference row `out` and
@@ -1129,7 +1137,7 @@ pub fn set_reference(
             payload.drop_stale_bitmap();
             payload.reference = Some(observation);
         }
-        clear_bitmap_scores(&mut next);
+        clear_bitmap_scores(&mut next, Unmeasured::NoBitmap);
     }
     Ok((
         next,
@@ -1291,16 +1299,18 @@ pub fn sight_observation(
     // The bitmap of a track whose reference observation is sighted elsewhere
     // is that observation's render at its old keypoint, so it goes; the
     // observation stays on the track, and so does the reference. Every score
-    // read against that bitmap goes with it.
+    // read against that bitmap goes with it. A bitmap for judging names no
+    // row and can be this observation's tile, so it goes as well.
     let mut stale = false;
     if let Stage::Track(payload) = &mut next.stage {
-        if payload.reference == Some(observation) && payload.bitmap.is_some() {
+        let named = payload.reference == Some(observation) || payload.bitmap_for_judging;
+        if named && payload.bitmap.is_some() {
             payload.drop_stale_bitmap();
             stale = true;
         }
     }
     if stale {
-        clear_bitmap_scores(&mut next);
+        clear_bitmap_scores(&mut next, Unmeasured::NoBitmap);
     }
     let target = &mut next.observations[observation];
     match track.stage {
@@ -1718,7 +1728,7 @@ pub struct TranslateToPixelReport {
 /// them.
 ///
 /// A sighting the moved centre no longer projects into is left with no keypoint
-/// and [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection) as
+/// and [`Unmeasured::NoProjection`] as
 /// its reason, which is the truth about it: the patch is no longer in that
 /// photograph.
 pub fn translate_patch_to_pixel(
@@ -1821,7 +1831,7 @@ pub struct TranslateReport {
 /// move by *different* amounts, and that spread is the parallax the old depth was
 /// wrong by. A sighting the moved patch no longer projects into is left with no
 /// keypoint and
-/// [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection), which is
+/// [`Unmeasured::NoProjection`], which is
 /// the truth about it.
 ///
 /// The axes, the normal and the size are untouched. The bitmap and the
@@ -2049,7 +2059,7 @@ pub struct TiltReport {
 /// it preserves the same thing, which is where each photograph sees the patch's
 /// content against where the geometry puts its middle. A sighting the turned
 /// patch no longer projects into is left with no keypoint and
-/// [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection).
+/// [`Unmeasured::NoProjection`].
 ///
 /// **The turn stops [`MAX_TILT_DEG`] from any observation.** With `e_i` the
 /// unit vector from the centre to observation `i`'s camera centre, a normal is
@@ -2379,7 +2389,7 @@ pub fn half_width_px(shape: [[f64; 2]; 2], radius: f64) -> f64 {
 /// a patch slid until its centre meets that pixel's ray is flung across the
 /// reconstruction. So the target is taken to the nearest pixel of
 /// `[0, width) x [0, height)` -- the sensor's own half-open extent, the range
-/// [`Unmeasured::OffSensor`](super::track::Unmeasured::OffSensor) is written
+/// [`Unmeasured::OffSensor`] is written
 /// against -- and the step reports that it did, so the sentence a person reads
 /// says where the patch went and why it is not where they pointed.
 ///
@@ -3148,9 +3158,15 @@ pub fn split(
     // The bitmap stays with the first track, and the row it is the tile of
     // moves up past the rows taken from before it. A bitmap whose row was
     // taken is the tile of a sighting the first track no longer has, so it
-    // goes with its reference, and with every score read against it.
+    // goes with its reference, and with every score read against it. A
+    // bitmap for judging names no row and can be a taken row's tile, so it
+    // goes as well.
     let mut dropped = false;
     if let Stage::Track(payload) = &mut first.stage {
+        if payload.bitmap_for_judging {
+            payload.drop_bitmap();
+            dropped = true;
+        }
         if let Some(r) = payload.reference {
             if taken.binary_search(&r).is_ok() {
                 payload.drop_bitmap();
@@ -3161,7 +3177,7 @@ pub fn split(
         }
     }
     if dropped {
-        clear_bitmap_scores(&mut first);
+        clear_bitmap_scores(&mut first, Unmeasured::NoBitmap);
     }
     reseat_reference(&mut first);
     let mut second = (**track).clone();

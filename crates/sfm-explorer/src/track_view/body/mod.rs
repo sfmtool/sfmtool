@@ -575,7 +575,8 @@ impl TrackBody {
         };
         let mut moved = BoxesMoved::default();
         ui.horizontal_top(|ui| {
-            show_track_patch(ui, patch, track.stage_kind(), BodyMode::Edited);
+            let kind = patch::BitmapKind::of(track);
+            show_track_patch(ui, patch, track.stage_kind(), BodyMode::Edited, kind);
             ui.vertical(|ui| {
                 show_headline(ui, track);
                 self.show_toolbar(ui, state, node, label, track, response);
@@ -638,7 +639,8 @@ impl TrackBody {
         let on_bench = state.bench_item_from_point(PointRef::new(id, viewed.point as usize));
         let patch = self.ensure_track_patch(ui.ctx(), &viewed.label, track);
         ui.horizontal_top(|ui| {
-            show_track_patch(ui, patch, track.stage_kind(), BodyMode::Viewed);
+            let kind = patch::BitmapKind::Patch;
+            show_track_patch(ui, patch, track.stage_kind(), BodyMode::Viewed, kind);
             ui.vertical(|ui| {
                 ui.weak(bench_line(on_bench.as_deref()));
                 ui.horizontal_wrapped(|ui| show_evaluation(ui, &self.evaluation));
@@ -2309,12 +2311,15 @@ pub(crate) fn position_text(payload: &sfmtool_core::bench::TrackPayload) -> Stri
 /// no label, since the picture says what it is. With nothing to show -- a point
 /// with no stored patch, a track with no bitmap rendered yet, a cluster with no
 /// template cut -- the slot is an empty frame of the same size, so the controls
-/// beside it do not move when a fit or a stage change fills it.
+/// beside it do not move when a fit or a stage change fills it. A bitmap for
+/// judging is drawn dimmed ([`patch::track_patch_image`]) and its hover says it
+/// is not the track's patch; a patch the next render replaces says so too.
 fn show_track_patch(
     ui: &mut egui::Ui,
     texture: Option<egui::TextureId>,
     stage: StageKind,
     mode: BodyMode,
+    kind: patch::BitmapKind,
 ) {
     let size = STORED_PATCH_SIZE;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
@@ -2326,20 +2331,7 @@ fn show_track_patch(
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
-            response.on_hover_text(match (stage, mode) {
-                (StageKind::Track, BodyMode::Viewed) => {
-                    "The point's stored patch: the render of its reference observation, or \
-                     the mean of its views where it has none"
-                }
-                (StageKind::Track, BodyMode::Edited) => {
-                    "The track's patch: the render of its reference observation, the row \
-                     marked in the Reference column, or the mean of its views where it has \
-                     none; a commit writes it as the point's stored patch"
-                }
-                (StageKind::Cluster, _) => {
-                    "The cluster's template, which every member registers onto"
-                }
-            });
+            response.on_hover_text(track_patch_hover(stage, mode, kind));
         }
         None => {
             ui.painter()
@@ -2354,6 +2346,34 @@ fn show_track_patch(
                 }
             });
         }
+    }
+}
+
+/// The hover text of the header's patch slot where it draws a picture.
+fn track_patch_hover(stage: StageKind, mode: BodyMode, kind: patch::BitmapKind) -> &'static str {
+    match (stage, mode, kind) {
+        (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Judging) => {
+            "A bitmap for judging, drawn dimmed: not the track's patch. Fewer than two \
+             rows that are in carry a keypoint, so it was rendered from the rows with a \
+             keypoint, in or out, only for the bars to score the rows against. No row is \
+             its reference and a commit does not write it; the first evaluation after two \
+             rows that are in carry a keypoint renders the track's patch"
+        }
+        (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Pending) => {
+            "The track's patch, kept until the next render replaces it: the reference's row \
+             is unpinned and the reference-view rule picks another row, so no row is scored \
+             against it. A commit before that render writes it as the point's stored patch"
+        }
+        (StageKind::Track, BodyMode::Viewed, _) => {
+            "The point's stored patch: the render of its reference observation, or the mean \
+             of its views where it has none"
+        }
+        (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Patch) => {
+            "The track's patch: the render of its reference observation, the row marked in \
+             the Reference column, or the mean of its views where it has none; a commit \
+             writes it as the point's stored patch"
+        }
+        (StageKind::Cluster, _, _) => "The cluster's template, which every member registers onto",
     }
 }
 

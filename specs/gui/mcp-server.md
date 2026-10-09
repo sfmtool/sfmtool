@@ -3587,9 +3587,11 @@ stage, for an `out` row and for a row with no keypoint; a call on the
 reference the track holds on a pinned row has no effect. Unpinning the
 reference's row with `set_bench_track_verdict` hands the reference back to the
 reference-view rule's pick at the next render; where the rule picks another
-row, the unpin drops the bitmap and the rows' scores, its report ends `waiting
-for the bitmap to be rendered from <image>`, and the bars judge nothing until
-the live evaluation renders the new bitmap, which logs `Evaluated <label>: the
+row, the unpin clears every row's score and keeps the bitmap until the render
+replaces it, its report ends `waiting for the bitmap to be rendered from
+<image>`, and the bars judge nothing until the live evaluation renders the new
+bitmap; where the unpin's repaint turns the reference's row `out`, the bitmap
+goes with it and the report ends the same way. The live evaluation logs `Evaluated <label>: the
 bars turned N in and M out` where its repaint moves verdicts.
 
 **A step that had no effect answers successfully, with `changed: false`.**
@@ -3882,11 +3884,13 @@ them.
 **`stage_data.reference_observation` is the reference in use**, the row the
 track's stored bitmap is rendered from, and `stage_data.has_bitmap` says whether
 there is a bitmap. `stage_data.bitmap_for_judging` says whether that bitmap is
-one rendered only so the bars can score the rows of a track no `in` row of
-which can hold the reference: from the rule's pick among every row with a
-keypoint, `in` or `out`, so that loosening a bar can bring rows back. It names
-no row, a commit does not write it, and the next evaluation after a row is
-`in` again replaces it
+one rendered only so the bars can score the rows of a track fewer than two
+`in` rows of which carry a keypoint, so that no render from the `in` rows
+makes a bitmap: from the rule's pick among every row with a keypoint, `in` or
+`out`, so that loosening a bar can bring rows back. It names no row, a commit
+does not write it (where the reconstruction stores bitmaps the commit is
+refused, and elsewhere it writes no reference observation), and the next
+evaluation after two `in` rows carry a keypoint replaces it
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 stored bitmap's reference"). It is null where the track has no bitmap and for a bitmap
 that is the render of no row: a fused mean of the `in` rows, where the rule
@@ -3907,7 +3911,9 @@ still names the old row (a commit in between writes that bitmap and that row)
 and the bars have judged nothing; the evaluation then renders from the pick, scores
 the rows and judges them, and its Action Log row says what the bars moved.
 While the row stays unpinned the reference follows the pick at every
-evaluation. `set_bench_track_reference` makes a row the reference and pins it.
+evaluation, so the two fields differ on an unpinned row only until that render
+and where the pick alternated between rows within one evaluation.
+`set_bench_track_reference` makes a row the reference and pins it.
 A step that sights the reference's row elsewhere drops the bitmap and keeps the
 reference, and the live evaluation renders a new one from the same row; one
 that takes the row off the track or turns it `out` drops both, and the live
@@ -3926,9 +3932,11 @@ where read plain; and `sharper_than_bitmap`, true where the row's tile is
 sharper than the bitmap along every direction. The reference's own row reads
 `1` for both scores and every ninth, `0` for `bitmap_blur_sigma` and null for
 `sharper_than_bitmap`. Each is null on a row of a track with no bitmap, before
-the first render, and on a row whose score could not be read, and `reason`
-then says why (`there is no bitmap to score it against`, for one); the bars
-leave such a row's verdict where it is. No bar judges `blur_matched_zncc`.
+the first render, on every row while an unpin that handed the reference on
+leaves the kept bitmap pending its render, and on a row whose score could not
+be read, and `reason` then says why (`there is no bitmap to score it against`
+for the first, `the bitmap is to be rendered again before the row is scored`
+for the second); the bars leave such a row's verdict where it is. No bar judges `blur_matched_zncc`.
 The localizer's own reading is `loo_zncc`, the row's leave-one-out ZNCC against
 the consensus of the other rows at the correlation peak `seed_shift_px` is
 measured to, with `loo_zncc_middle` beside it; no bar judges them, and a commit

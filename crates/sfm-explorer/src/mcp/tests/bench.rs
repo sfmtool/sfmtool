@@ -2577,6 +2577,11 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     // against it, plain and blur-matched, and the row it is the render of
     // reads 1.
     assert_eq!(track["stage_data"]["has_bitmap"], json!(true), "{track}");
+    assert_eq!(
+        track["stage_data"]["bitmap_for_judging"],
+        json!(false),
+        "a fitted track's bitmap is its patch: {track}"
+    );
     let bitmap_row = track["stage_data"]["reference_observation"].as_u64();
     let mut picked = Vec::new();
     for (i, row) in rows.iter().enumerate() {
@@ -4016,6 +4021,11 @@ fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
     assert_eq!(
         evaluation["has_bitmap"],
         json!(payload.bitmap.is_some()),
+        "{point}"
+    );
+    assert_eq!(
+        evaluation["bitmap_for_judging"],
+        json!(payload.bitmap_for_judging),
         "{point}"
     );
     assert_eq!(

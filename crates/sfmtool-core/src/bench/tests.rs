@@ -1061,6 +1061,69 @@ fn a_marked_evaluation_that_renders_carries_its_row_into_the_mark() {
     assert_eq!(settled.track.observations[0].verdict, Verdict::Out);
 }
 
+/// A bitmap for judging rendered again by a pass that finds rows `in` stands
+/// while the `in` set is the one it was rendered with: where the render from
+/// the `in` rows gives no bitmap, the loop renders once and stops rather than
+/// rendering the same bitmap for judging over and over.
+#[test]
+fn a_bitmap_for_judging_stands_while_the_in_rows_it_was_rendered_with_stand() {
+    let mut track = scored_track([0.95, 0.95]);
+    for observation in &mut track.observations {
+        observation.verdict = Verdict::In;
+        observation.pinned = true;
+    }
+    {
+        let payload = payload_of(&mut track);
+        payload.bitmap = Some(Array3::zeros((4, 4, 4)));
+        payload.bitmap_for_judging = true;
+        payload.reference = None;
+    }
+    let renders = std::cell::Cell::new(0);
+    // Render while the bitmap is one for judging, as `bitmap_target` asks
+    // once two `in` rows carry a keypoint; the render gives one for judging
+    // again, as it does where the render from the `in` rows fails.
+    let target = |t: &EditableTrack| t.track()?.bitmap_for_judging.then_some(None);
+    let settled = super::evaluate::settle(track, Vec::new(), true, target, |t, _| {
+        renders.set(renders.get() + 1);
+        let mut next = t.clone();
+        payload_of(&mut next).bitmap_for_judging = true;
+        Ok(next)
+    })
+    .expect("no render fails");
+    assert_eq!(renders.get(), 1, "rendered once for these `in` rows");
+    assert!(settled.track.track().unwrap().bitmap_for_judging);
+    assert_eq!(settled.rendered_from, vec![None]);
+}
+
+/// A bitmap for judging is never committed: into a reconstruction that stores
+/// a bitmap per point the commit is refused, and into one that stores none it
+/// writes the point with no reference observation.
+#[test]
+fn a_bitmap_for_judging_is_not_committed() {
+    let scene = Scene::new();
+    let judging = |edited: &EditedReconstruction| {
+        let (bench, label) = bench_with_point(edited, 0);
+        let mut track = track_of(&bench, &label);
+        let payload = payload_of(&mut track);
+        payload.bitmap = Some(Array3::zeros((BITMAP_R, BITMAP_R, 4)));
+        payload.bitmap_for_judging = true;
+        payload.reference = None;
+        track
+    };
+    let carried = edited_with_columns(&scene, WORLD);
+    assert_eq!(
+        commit(&carried, &judging(&carried)).expect_err("the base stores a bitmap per point"),
+        CommitError::NoBitmap
+    );
+    let plain = edited_fixture(&scene, WORLD);
+    assert!(!plain.has_patch_bitmaps());
+    let track = judging(&plain);
+    assert!(track.in_observations().len() >= 2);
+    let (next, report) = commit(&plain, &track).expect("no bitmap column to fill");
+    let written = next.point(report.point).expect("just written");
+    assert_eq!(written.reference_observation(), None);
+}
+
 /// The cluster stage judges its own ZNCC bars, not the track stage's.
 #[test]
 fn the_cluster_stage_judges_its_own_zncc_bars() {

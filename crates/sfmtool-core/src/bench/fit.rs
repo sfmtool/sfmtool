@@ -547,6 +547,7 @@ pub(super) fn render_bitmap_for_judging(
         payload.bitmap = Some(bitmap);
         payload.reference = None;
         payload.bitmap_for_judging = true;
+        payload.bitmap_pending = false;
     }
     next.repaint = track.repaint.carried();
     next
@@ -563,6 +564,7 @@ pub(super) fn install_bitmap(
     if let Stage::Track(payload) = &mut track.stage {
         payload.bitmap = Some(bitmap);
         payload.bitmap_for_judging = false;
+        payload.bitmap_pending = false;
         payload.reference = reference;
         if let Some(color) = color {
             payload.color = color;
@@ -996,6 +998,7 @@ pub(super) fn fit_track(
         bitmap,
         reference,
         bitmap_for_judging: false,
+        bitmap_pending: false,
         normal_confidence: previous.and_then(|p| p.normal_confidence),
         condition_number: finite(triangulation.condition_number),
     });

@@ -1671,14 +1671,16 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "placement": super::render::placement(payload.placement.as_ref()),
                 "has_bitmap": payload.bitmap.is_some(),
                 // Whether that bitmap is one for judging only: rendered from
-                // every row with a keypoint because no `in` row could hold the
-                // reference. It names no row and a commit does not write it.
+                // every row with a keypoint because fewer than two `in` rows
+                // carry one. It names no row and a commit does not write it.
                 "bitmap_for_judging": payload.bitmap_for_judging,
                 // The reference in use: the row the stored bitmap is rendered
                 // from, as an index into `observations`, or null for a track
                 // with no bitmap or one whose bitmap is the render of no row,
-                // a fused mean. While its row is pinned it can differ from the
-                // rule's pick below.
+                // a fused mean. It can differ from the rule's pick below while
+                // its row is pinned, between an unpin and the render that moves
+                // it to the pick, and where the pick alternated between rows
+                // within one evaluation.
                 "reference_observation": crate::bench::reference_in_use(track),
                 "patch_resolution": recon.map(crate::bench::patch_resolution),
                 // The row the reference-view rule picked at the last

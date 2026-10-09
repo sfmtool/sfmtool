@@ -650,6 +650,19 @@ class TestEvaluating:
         assert report["bitmap_pending"] is True
         assert (report["turned_in"], report["turned_out"]) == (0, 0)
         assert all("zncc" not in o["track"] for o in unpinned.observations)
+        # The bitmap and its reference stay until the render replaces them.
+        assert unpinned.reference_observation == other
+        pending = "the bitmap is to be rendered again before the row is scored"
+        assert any(o["track"].get("reason") == pending for o in unpinned.observations)
+
+        # A reading that renders nothing scores no row against that bitmap.
+        plain, report = evaluate(unpinned, edited, images, render_bitmap=False)
+        assert report["scored"] == 0
+        assert all("zncc" not in o["track"] for o in plain.observations)
+        assert [o["verdict"] for o in plain.observations] == [
+            o["verdict"] for o in unpinned.observations
+        ]
+
         rendered, _ = evaluate(unpinned, edited, images)
         assert rendered.reference_observation == pick
         assert rendered.observation(pick)["track"]["zncc"] == 1.0

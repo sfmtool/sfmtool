@@ -652,8 +652,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "The ZNCC a track-stage observation has to reach: the plain ZNCC of \
                              its tile with the stored patch bitmap. The bench's default is 0.65. \
                              An observation with no zncc, as one has before the first render of \
-                             the bitmap, or with no loo_zncc, because the keypoint localizer \
-                             refused it, is not judged and keeps its verdict.",
+                             the bitmap and while an unpin leaves the bitmap to be rendered \
+                             again (its reason says which), or with no loo_zncc, because the \
+                             keypoint localizer refused it, is not judged and keeps its \
+                             verdict.",
                         ),
                     ),
                     (

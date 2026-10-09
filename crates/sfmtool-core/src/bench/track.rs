@@ -261,6 +261,10 @@ pub enum Unmeasured {
     /// The track has no patch bitmap to score the observation against, as
     /// before its first render, or one on another grid than the tile's.
     NoBitmap,
+    /// The track holds a bitmap that the next render replaces
+    /// ([`TrackPayload::bitmap_pending`]), so no row is scored against it
+    /// until that render has run.
+    BitmapPending,
 }
 
 impl std::fmt::Display for Unmeasured {
@@ -281,6 +285,10 @@ impl std::fmt::Display for Unmeasured {
             Unmeasured::NoConsensus => write!(f, "nothing to correlate against"),
             Unmeasured::Unscorable => write!(f, "its tile could not be scored"),
             Unmeasured::NoBitmap => write!(f, "there is no bitmap to score it against"),
+            Unmeasured::BitmapPending => write!(
+                f,
+                "the bitmap is to be rendered again before the row is scored"
+            ),
         }
     }
 }
@@ -727,7 +735,10 @@ pub struct TrackPayload {
     /// the reference row is unpinned the reference follows the rule's pick at
     /// every render. The rule's pick that an evaluation reports per row
     /// (`TrackMeasurement::reference_view`) can therefore differ from this
-    /// reference, the one in use, only while the reference row is pinned.
+    /// reference, the one in use, while the reference row is pinned, between
+    /// an unpin that hands the reference on and the render
+    /// ([`Self::bitmap_pending`]), and where the pick alternated between rows
+    /// within one evaluation.
     /// [`set_reference`](super::steps::set_reference) makes a row the
     /// reference and pins it. A track put on the bench from a point has every
     /// row pinned, so the point's stored reference stays until the person
@@ -751,6 +762,18 @@ pub struct TrackPayload {
     /// bitmap ([`Self::committable_bitmap`]). Once a row is `in` again, the
     /// next render replaces it with a bitmap rendered by the usual rule.
     pub bitmap_for_judging: bool,
+    /// Whether [`Self::bitmap`] is kept only until the next render replaces
+    /// it: an unpin handed the reference to the reference-view rule
+    /// ([`unpin_verdicts`](super::steps::unpin_verdicts)), whose pick is
+    /// another row, so every score read against this bitmap is about to be
+    /// replaced. While it is set and the reference is not held again
+    /// ([`EditableTrack::bitmap_pending`]), no row is scored against the
+    /// bitmap (each says [`Unmeasured::BitmapPending`]) and the bars judge
+    /// none; the next render
+    /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
+    /// replaces the bitmap and clears it. A commit in between writes this
+    /// bitmap with the reference it is the render of.
+    pub bitmap_pending: bool,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
     pub color: [u8; 3],
@@ -767,6 +790,7 @@ impl TrackPayload {
     pub(crate) fn drop_bitmap(&mut self) {
         self.bitmap = None;
         self.bitmap_for_judging = false;
+        self.bitmap_pending = false;
         self.reference = None;
     }
 
@@ -776,6 +800,7 @@ impl TrackPayload {
     pub fn drop_stale_bitmap(&mut self) {
         self.bitmap = None;
         self.bitmap_for_judging = false;
+        self.bitmap_pending = false;
     }
 
     /// The bitmap a commit writes: [`Self::bitmap`], or `None` where the track
@@ -979,8 +1004,11 @@ pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 /// for a `0.7` bar alone. At `0.65` the bar loses 3.5% of the members that
 /// clear the geometry bars and turns out 92.8% of the wrong views that do:
 /// 82.8% of those 0.5 to 0.7 similar to the true content and 55.9% of those
-/// 0.7 to 0.85 similar. Which wrong views the objective counts moves the pick
-/// between `0.60` and `0.75`. The spec of the editable track
+/// 0.7 to 0.85 similar. The margin over `0.70` is narrow: 93.64 against 93.46
+/// held out, better on four folds of eight. Which wrong views the objective
+/// counts moves the pick between `0.60` and `0.70`. The bar is expected to be
+/// measured again once normal estimation and fitting improve, since both move
+/// the scores it judges. The spec of the editable track
 /// (specs/core/bench/editable-track.md) gives the tables.
 pub const BENCH_MIN_ZNCC: f64 = 0.65;
 
@@ -1311,6 +1339,12 @@ impl EditableTrack {
             // score read against it, and the live evaluation renders one from
             // the rows that remain.
             Stage::Track(payload) => {
+                // A bitmap for judging names no row and can be the tile of a
+                // dropped observation, so it goes where any row went.
+                if payload.bitmap_for_judging && map.iter().any(Option::is_none) {
+                    payload.drop_bitmap();
+                    dropped = true;
+                }
                 if let Some(r) = payload.reference {
                     match map.get(r).copied().flatten() {
                         Some(kept) => payload.reference = Some(kept),
@@ -1323,7 +1357,7 @@ impl EditableTrack {
             }
         }
         if dropped {
-            super::evaluate::clear_bitmap_scores(&mut next);
+            super::evaluate::clear_bitmap_scores(&mut next, Unmeasured::NoBitmap);
         }
         Some((next, map))
     }
@@ -1370,5 +1404,14 @@ impl EditableTrack {
         let row = self.observations.get(r)?;
         let keyed = row.track.as_ref().is_some_and(|m| m.keypoint.is_some());
         (row.pinned && row.verdict == Verdict::In && keyed).then_some(r)
+    }
+
+    /// Whether the track's bitmap is kept only until the next render
+    /// replaces it ([`TrackPayload::bitmap_pending`]) while the reference is
+    /// not held again by its row's pin: no row is scored against it.
+    pub fn bitmap_pending(&self) -> bool {
+        self.track()
+            .is_some_and(|p| p.bitmap_pending && p.bitmap.is_some())
+            && self.held_reference().is_none()
     }
 }

@@ -13,7 +13,7 @@ use crate::bench::{
     apply_thresholds, commit, create_track, evaluate, evaluate_rendering_bitmap, fit, pin_verdicts,
     render_bitmap_in_place, score_bitmap, set_reference, set_stage, set_verdict, sight_observation,
     split, tilt_patch, unpin_verdicts, verdicts_if_unpinned, Bench, BenchItem, CreateTrackOptions,
-    EditableTrack, EvaluateOptions, FitOptions, StageKind, TrackEditError, Verdict,
+    EditableTrack, EvaluateOptions, FitOptions, StageKind, TrackEditError, Unmeasured, Verdict,
 };
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
@@ -1106,6 +1106,7 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
     let (moved, _) =
         sight_observation(&sighted, &edited, other, [x + 0.5, y - 0.5]).expect("sighted");
     assert!(moved.track().unwrap().bitmap.is_none());
+    assert!(unscored(&moved), "no score outlives the bitmap");
     let moved = render(&moved);
     assert_rendered_from(&moved, &views, &edited, other, "reference sighted");
 
@@ -1147,6 +1148,7 @@ fn the_rule_sets_the_reference_again_after_its_row_goes() {
 
     let (out, _) = set_verdict(&first, other, Verdict::Out).expect("a verdict");
     assert_eq!(out.track().unwrap().reference, None);
+    assert!(unscored(&out), "no score outlives the bitmap");
     let again = render(&out);
     let pick = rule_pick(&again).expect("the rule picks one");
     assert_ne!(pick, other);
@@ -1155,12 +1157,21 @@ fn the_rule_sets_the_reference_again_after_its_row_goes() {
     let image = first.observations[other].image;
     let (deleted, _) = first.delete_image(image).expect("the track sees it");
     assert_eq!(deleted.track().unwrap().reference, None);
+    assert!(unscored(&deleted), "no score outlives the bitmap");
     let again = render(&deleted);
     let pick = rule_pick(&again).expect("the rule picks one");
     assert_rendered_from(&again, &views, &edited, pick, "deleted");
 }
 
 // ---- The bars judge scores against the bitmap the track ends with ----------
+
+/// Whether no row of `track` carries a score against the bitmap.
+fn unscored(track: &EditableTrack) -> bool {
+    track
+        .observations
+        .iter()
+        .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none()))
+}
 
 /// Whether the bars would move none of `track`'s verdicts: every unpinned
 /// verdict is what the bars say about the scores the track carries.
@@ -1206,8 +1217,54 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
             "no verdict is judged on a stale score"
         );
     }
+    assert!(unpinned.bitmap_pending());
+    for o in &unpinned.observations {
+        let m = o.track.as_ref().unwrap();
+        if m.loo_zncc.is_some() {
+            assert_eq!(m.reason, Some(Unmeasured::BitmapPending));
+        }
+    }
+
+    // A reading that renders nothing scores no row against the bitmap the
+    // render is to replace, and the bars judge none.
+    let (plain, report) = evaluate(
+        &unpinned,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    assert_eq!(report.scored, 0, "{report}");
+    assert!(unscored(&plain));
+    assert!(plain.bitmap_pending());
+    assert_eq!(plain.track().unwrap().bitmap, payload.bitmap);
+    for (a, b) in first.observations.iter().zip(&plain.observations) {
+        assert_eq!(a.verdict, b.verdict);
+    }
+    let pending = plain.observations.iter().any(|o| {
+        o.track
+            .as_ref()
+            .is_some_and(|m| m.reason == Some(Unmeasured::BitmapPending))
+    });
+    assert!(pending, "the rows say the bitmap is to be rendered again");
+
+    // Pinning the row again holds the reference: the bitmap is no longer
+    // pending, and a plain reading scores against it.
+    let (held, _) = pin_verdicts(&unpinned, &[other]).expect("a live row");
+    assert!(!held.bitmap_pending());
+    let (_, report) = evaluate(
+        &held,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    assert!(report.scored > 0, "{report}");
 
     let moved = render_with(&unpinned, &edited, &views);
+    assert!(!moved.bitmap_pending());
     assert_rendered_from(&moved, &views, &edited, picked, "after the unpin");
     assert!(verdicts_agree_with_the_bars(&moved));
 
@@ -1402,6 +1459,86 @@ fn a_track_whose_rows_all_go_out_is_judged_against_a_bitmap_for_judging() {
     assert!(verdicts_agree_with_the_bars(&settled));
 }
 
+/// A track with one `in` row gets a bitmap for judging whichever way the
+/// render runs: the `in` rows give no bitmap of their own, so two evaluations
+/// in a row give the same bitmap and the same verdicts. Turning a second row
+/// `in` by hand gets the render by the usual rule; a sighting or a deleted
+/// image drops the bitmap for judging, which can be that row's tile.
+#[test]
+fn a_track_with_one_in_row_is_judged_against_the_same_bitmap_for_judging() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, _, _) = track_with_another_reference(&truth);
+    let every: Vec<usize> = (0..track.observations.len()).collect();
+    let (loose, _) = unpin_verdicts(&track, &every).expect("live rows");
+    let first = render_with(&loose, &edited, &views);
+    let ins = first.in_observations();
+    assert!(ins.len() >= 3);
+    let (kept, second) = (ins[0], ins[1]);
+    // Every other row out by hand, and the kept one pinned `in`.
+    let mut one = first.clone();
+    for i in 0..one.observations.len() {
+        let verdict = if i == kept { Verdict::In } else { Verdict::Out };
+        one = set_verdict(&one, i, verdict).expect("a verdict").0;
+    }
+    assert_eq!(one.in_observations(), vec![kept]);
+
+    let a = render_with(&one, &edited, &views);
+    let payload = a.track().unwrap();
+    assert!(payload.bitmap_for_judging, "one `in` row holds no bitmap");
+    assert_eq!(payload.reference, None);
+    // Read again, with the reading's rule now naming the kept row: the same
+    // bitmap for judging, the same scores and the same verdicts.
+    let b = render_with(&a, &edited, &views);
+    assert!(b.track().unwrap().bitmap_for_judging);
+    assert_eq!(b.track().unwrap().bitmap, payload.bitmap);
+    for (x, y) in a.observations.iter().zip(&b.observations) {
+        assert_eq!(x.verdict, y.verdict);
+        let (mx, my) = (x.track.as_ref().unwrap(), y.track.as_ref().unwrap());
+        assert_eq!(mx.zncc, my.zncc);
+    }
+    // A plain reading scores the rows against it.
+    let (plain, report) = evaluate(
+        &a,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    assert!(report.scored > 0, "{report}");
+    assert_eq!(plain.track().unwrap().bitmap, payload.bitmap);
+
+    // A second row turned `in` by hand: the usual render replaces it.
+    let (two, _) = set_verdict(&a, second, Verdict::In).expect("a verdict");
+    assert!(two.track().unwrap().bitmap_for_judging, "until the render");
+    let rendered = render_with(&two, &edited, &views);
+    let payload = rendered.track().unwrap();
+    assert!(!payload.bitmap_for_judging);
+    let reference = payload.reference.expect("the render names its row");
+    assert!([kept, second].contains(&reference));
+
+    // Set as reference on such a track renders from the row named.
+    let (set, _) = set_reference(&two, second).expect("an in row with a keypoint");
+    assert!(set.track().unwrap().bitmap.is_none());
+    let rendered = render_with(&set, &edited, &views);
+    assert_rendered_from(&rendered, &views, &edited, second, "set as reference");
+
+    // A sighting drops a bitmap for judging with every score against it, and
+    // so does deleting an image the track sees.
+    let [x, y] = keypoint_of(&a, kept);
+    let (sighted, _) = sight_observation(&a, &edited, kept, [x + 0.5, y]).expect("sighted");
+    assert!(sighted.track().unwrap().bitmap.is_none());
+    assert!(unscored(&sighted));
+    let out_row = (0..a.observations.len())
+        .find(|&i| i != kept)
+        .expect("another row");
+    let image = a.observations[out_row].image;
+    let (deleted, _) = a.delete_image(image).expect("the track sees it");
+    assert!(deleted.track().unwrap().bitmap.is_none());
+    assert!(unscored(&deleted));
+}
+
 /// *Set as reference* refuses a row with no keypoint and an index past the
 /// end.
 #[test]
@@ -1467,6 +1604,7 @@ fn splitting_the_held_reference_off_renders_from_the_pick_of_the_rows_left() {
     let left = bench.track(&label).expect("the first half");
     assert!(left.track().unwrap().bitmap.is_none());
     assert_eq!(left.track().unwrap().reference, None);
+    assert!(unscored(left), "no score outlives the bitmap");
     let read = render_with(left, &edited, &views);
     let pick = rule_pick(&read).expect("the rule picks one");
     assert_rendered_from(&read, &views, &edited, pick, "after the split");

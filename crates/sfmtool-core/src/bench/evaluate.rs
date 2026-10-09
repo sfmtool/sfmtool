@@ -601,12 +601,14 @@ fn evaluate_keeping_tiles(
 ///    the rule's pick, so the reference and the pick are one row on an
 ///    unpinned track; where the rule picks none, or reaches its pick only
 ///    through its last fallback, the bitmap is the fused mean. Where that
-///    render gives no bitmap (no row is `in`, or fewer than two `in` rows
-///    carry a keypoint), a **bitmap for judging** is rendered instead
+///    render gives no bitmap (fewer than two `in` rows carry a keypoint, a
+///    rule the render from the reading's tile and the render of its own
+///    share), a **bitmap for judging** is rendered instead
 ///    ([`TrackPayload::bitmap_for_judging`]), from the rule's pick among every
 ///    row with a keypoint, `in` or `out`, so the bars still have scores to
-///    judge and a loosened bar can turn rows back `in`; once a row is `in`,
-///    the next pass renders by the usual rule. Every row is scored against
+///    judge and a loosened bar can turn rows back `in`. It stands while fewer
+///    than two `in` rows carry a keypoint; once two do, the next pass renders
+///    by the usual rule. Every row is scored against
 ///    the new bitmap ([`score_bitmap`]).
 /// 2. **Repaint.** The bars judge those scores ([`apply_thresholds`]).
 /// 3. When the repaint moved a verdict, the rule has been run again over the
@@ -619,8 +621,9 @@ fn evaluate_keeping_tiles(
 /// when the bitmap needs no move, or when the pick returns to a row the
 /// bitmap was already rendered from since the last step: the rule then
 /// alternates between rows, and the bitmap stays where it is, with the pick
-/// on another row. That is the one case in which an unpinned track's
-/// reference and pick differ, and the next step reads it afresh.
+/// on another row. That and the wait between an unpin that hands the
+/// reference on and the render are the two cases in which an unpinned
+/// track's reference and pick differ, and the next step reads it afresh.
 ///
 /// A track carrying the [`RepaintMark`] of an evaluation's repaint is read
 /// without repainting, as [`evaluate`] reads it, unless its bitmap moves: a
@@ -781,13 +784,13 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     payload.placement.as_ref()?;
     let held = track.held_reference();
     let stored = stored_pick(track);
-    if payload.bitmap.is_none() {
+    if payload.bitmap.is_none() || track.bitmap_pending() {
         return Some(held.or(stored));
     }
-    // A bitmap for judging stands only while no row is `in`.
+    // A bitmap for judging stands while the `in` rows give no bitmap of
+    // their own: fewer than two of them carry a keypoint.
     if payload.bitmap_for_judging {
-        let any_in = track.observations.iter().any(|o| o.verdict == Verdict::In);
-        return any_in.then_some(held.or(stored));
+        return (keyed_in_rows(track) >= 2).then_some(held.or(stored));
     }
     let reference = payload.reference?;
     // A track the rule has not read yet has no pick to move to.
@@ -805,6 +808,18 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
         Some(pick) => (pick != reference).then_some(Some(pick)),
         None => (track.reference_view_pick() != Some(reference)).then_some(None),
     }
+}
+
+/// How many of `track`'s `in` rows carry a keypoint: the rows a render of
+/// the bitmap reads, which makes none from fewer than two.
+fn keyed_in_rows(track: &EditableTrack) -> usize {
+    track
+        .observations
+        .iter()
+        .filter(|o| {
+            o.verdict == Verdict::In && o.track.as_ref().is_some_and(|m| m.keypoint.is_some())
+        })
+        .count()
 }
 
 /// The row whose tile the reference-view rule's last reading of `track` says
@@ -849,9 +864,13 @@ fn render_and_score(
         return Ok(next);
     }
     let mut cleared = track.clone();
-    clear_bitmap_scores(&mut cleared);
+    clear_bitmap_scores(&mut cleared, Unmeasured::NoBitmap);
+    // A bitmap for judging, or one pending this render, is not kept where
+    // the render gives none: the rows are then judged against a new bitmap
+    // for judging rather than the one this render was to replace.
+    let pending = cleared.bitmap_pending();
     if let Stage::Track(payload) = &mut cleared.stage {
-        if payload.bitmap_for_judging {
+        if payload.bitmap_for_judging || pending {
             payload.drop_bitmap();
         }
     }
@@ -866,9 +885,10 @@ fn render_and_score(
 
 /// `track` with row `row`'s tile from the reading `kept` installed as its
 /// bitmap and every row scored against it, or `None` where that tile is not
-/// the one the render would make: the row is not `in`, has no keypoint or no
-/// tile, or the tiles are on another grid or were rendered with another
-/// sampler.
+/// the one the render would make: fewer than two `in` rows carry a keypoint
+/// (where the render makes no bitmap from the `in` rows), the row is not
+/// `in`, has no keypoint or no tile, or the tiles are on another grid or were
+/// rendered with another sampler.
 fn bitmap_from_tile_of(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -886,6 +906,7 @@ fn bitmap_from_tile_of(
         .is_some_and(|m| m.keypoint.is_some());
     if !keyed
         || observation.verdict != Verdict::In
+        || keyed_in_rows(track) < 2
         || resolution != kept.resolution
         || fit.refine.sampler != options.localize.sampler
     {
@@ -902,8 +923,10 @@ fn bitmap_from_tile_of(
 /// Clear every row's scores against the stored bitmap, as a track whose
 /// bitmap is about to be replaced holds them, so the bars leave each row
 /// alone until it is scored against the new one
-/// ([`bar_checks`](super::steps::bar_checks)).
-pub(super) fn clear_bitmap_scores(track: &mut EditableTrack) {
+/// ([`bar_checks`](super::steps::bar_checks)). A row the localizer read says
+/// `reason`: [`Unmeasured::NoBitmap`] where the bitmap was dropped,
+/// [`Unmeasured::BitmapPending`] where it is kept until the render.
+pub(super) fn clear_bitmap_scores(track: &mut EditableTrack, reason: Unmeasured) {
     for observation in &mut track.observations {
         if let Some(m) = observation.track.as_mut() {
             m.zncc = None;
@@ -913,7 +936,7 @@ pub(super) fn clear_bitmap_scores(track: &mut EditableTrack) {
             m.bitmap_blur_sigma = None;
             m.sharper_than_bitmap = None;
             if m.loo_zncc.is_some() {
-                m.reason = Some(Unmeasured::NoBitmap);
+                m.reason = Some(reason);
             }
         }
     }
@@ -2088,10 +2111,17 @@ fn score_against_bitmap(
         ))
     });
     let reference = payload.reference;
-    let Some(planes) = planes else {
+    // A bitmap the next render replaces is scored against by no row.
+    let pending = next.bitmap_pending();
+    let (Some(planes), false) = (planes, pending) else {
+        let missing = if pending {
+            Unmeasured::BitmapPending
+        } else {
+            Unmeasured::NoBitmap
+        };
         for (i, _) in tiles {
             if let Some(measurement) = next.observations[*i].track.as_mut() {
-                settle_reason(measurement, false);
+                settle_reason(measurement, Some(missing));
             }
         }
         return;
@@ -2111,7 +2141,7 @@ fn score_against_bitmap(
             measurement.blur_matched_zncc = Some(1.0);
             measurement.bitmap_blur_sigma = Some(0.0);
             measurement.sharper_than_bitmap = None;
-            settle_reason(measurement, true);
+            settle_reason(measurement, None);
             continue;
         }
         let ellipse = measurement
@@ -2126,7 +2156,7 @@ fn score_against_bitmap(
         measurement.blur_matched_zncc = finite(score.blur_matched_zncc);
         measurement.bitmap_blur_sigma = measurement.zncc.map(|_| score.blur_sigma);
         measurement.sharper_than_bitmap = measurement.zncc.map(|_| score.sharper_than_bitmap);
-        settle_reason(measurement, true);
+        settle_reason(measurement, None);
         blurred += usize::from(score.blur_sigma > 0.0);
         sharper += usize::from(score.sharper_than_bitmap);
     }
@@ -2140,17 +2170,17 @@ fn score_against_bitmap(
 /// Settle why a row lacks a reading, once its score against the bitmap has
 /// been read: the localizer's own refusal where the localizer could not read
 /// it, whether or not the row has a score; otherwise no reason where it has a
-/// score, [`Unmeasured::NoBitmap`] where the track had no bitmap on the tile's
-/// grid to score it against, and [`Unmeasured::Unscorable`] where it had one.
-fn settle_reason(measurement: &mut super::track::TrackMeasurement, had_bitmap: bool) {
+/// score, `missing` where the row was not scored for want of a bitmap to
+/// score against ([`Unmeasured::NoBitmap`] where the track had none on the
+/// tile's grid, [`Unmeasured::BitmapPending`] where the one it holds waits
+/// for the next render), and [`Unmeasured::Unscorable`] where it had one.
+fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Option<Unmeasured>) {
     measurement.reason = if measurement.loo_zncc.is_none() {
         measurement.reason.or(Some(Unmeasured::Unscorable))
     } else if measurement.zncc.is_some() {
         None
-    } else if had_bitmap {
-        Some(Unmeasured::Unscorable)
     } else {
-        Some(Unmeasured::NoBitmap)
+        Some(missing.unwrap_or(Unmeasured::Unscorable))
     };
 }
 
@@ -2260,7 +2290,8 @@ pub fn score_bitmap(
 /// where the observation the bitmap is the render of turned `out`, when the
 /// bitmap is dropped with its reference ([`TrackPayload::reference`]), every
 /// row's score against it is cleared, and the next evaluation renders one from
-/// the rows that are `in` (or, where none can hold it, a bitmap for judging,
+/// the rows that are `in` (or, where fewer than two `in` rows carry a
+/// keypoint, a bitmap for judging,
 /// [`TrackPayload::bitmap_for_judging`], which this leaves in place).
 pub(super) fn restate_reference_view(track: &mut EditableTrack) {
     let mut dropped = false;
@@ -2270,7 +2301,7 @@ pub(super) fn restate_reference_view(track: &mut EditableTrack) {
         dropped = had && payload.bitmap.is_none();
     }
     if dropped {
-        clear_bitmap_scores(track);
+        clear_bitmap_scores(track, Unmeasured::NoBitmap);
     }
     let mut rows = Vec::new();
     for (i, observation) in track.observations.iter_mut().enumerate() {

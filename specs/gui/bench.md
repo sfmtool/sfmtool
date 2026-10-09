@@ -884,7 +884,15 @@ bitmap the track shows. So a tilted patch shows its texture again
 as soon as the evaluation lands, and can be committed into a reconstruction
 that stores a bitmap per point without a fit first. The bitmap is installed with
 the measurements, under the same rule: no version and no Action Log row. A track with fewer than two
-`in` sightings that carry a keypoint has nothing to render, and stays without one.
+`in` sightings that carry a keypoint has no patch to render, and gets a
+**bitmap for judging** instead (core's `TrackPayload::bitmap_for_judging`):
+the tile of the rule's pick among every row that carries a keypoint, `in` or
+`out`, or their fused mean, rendered only so that the bars have scores to
+judge and a loosened bar can turn rows back `in`. It names no reference, a
+commit does not write it, and Track View draws it dimmed with a hover saying
+it is not the track's patch ([track-view.md](track-view.md) § "The header").
+The first evaluation after two `in` rows carry a keypoint renders the patch by
+the usual rule in its place.
 
 ### The reference
 
@@ -911,15 +919,23 @@ the reference is on:
   for the bitmap to be rendered from IMG_0042.jpg`; the row named is the one
   the render will take, core's `bitmap_target`, and `the rule's pick at the
   render, or the mean of the views` stands in its place where that names no
-  row). The live evaluation then
+  row, and `a bitmap for judging to be rendered from the rows with a keypoint,
+  in or out` where fewer than two `in` rows carry one). Until that render, each
+  row's Status says `the bitmap is to be rendered again before the row is
+  scored`, and Track View's patch slot says the patch is kept only until then.
+  The live evaluation then
   renders the bitmap from the pick, scores every row against it and judges
   them; where its repaint moves verdicts it logs `Evaluated 7f3a: the bars
   turned 2 in and 1 out` (`Kind::Bench`, no version). While the row stays
   unpinned the reference follows the pick at every evaluation, so the two
-  differ on an unpinned track only where the pick alternates between rows
-  within one evaluation and the bitmap stays on the row it was last rendered
-  from ([../core/bench/editable-track.md](../core/bench/editable-track.md) §
-  "The stored bitmap's reference").
+  differ on an unpinned track only until that render (which waits as long as
+  the photographs it needs are not decoded), and where the pick alternates
+  between rows within one evaluation and the bitmap stays on the row it was
+  last rendered from
+  ([../core/bench/editable-track.md](../core/bench/editable-track.md) §
+  "The stored bitmap's reference"). In both, the *Reference* hovers say the
+  reference's row is unpinned and the pick becomes the reference at the next
+  render that reads the track, rather than that a pin holds it.
 - **Tracks built on the bench start with pinned rows.** The seed of a cluster
   started from a pixel, the sightings Track at Pixel adds (every one `in` and
   pinned) and a row placed by a sighting step are pinned, so the rule's first

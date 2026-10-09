@@ -847,12 +847,16 @@ pub fn build_track_at_pixel(
             Ok(track) => {
                 // The member's readings render the bitmap where the patch
                 // stands and judge the scores against it. A last step that
-                // dropped it (a clean-up that moved the patch) leaves none:
+                // dropped it (a clean-up that moved the patch) leaves none, or
+                // only a bitmap for judging, which a commit does not write:
                 // render it again where the patch stands, moving nothing, so
                 // the track can be committed into a reconstruction that stores
                 // one, and score the rows against it. The verdicts stay the
                 // ones the final gates judged.
-                let track = if track.track().is_some_and(|p| p.bitmap.is_some()) {
+                let track = if track
+                    .track()
+                    .is_some_and(|p| p.committable_bitmap().is_some())
+                {
                     track
                 } else {
                     let rendered = super::fit::render_bitmap_in_place(

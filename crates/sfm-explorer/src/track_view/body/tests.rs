@@ -501,6 +501,8 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         pick: Some(2),
         pick_image: Some(12),
         has_bitmap: true,
+        reference_pinned: true,
+        judging: false,
     };
     let drawn = cells(&agreed);
     assert_eq!(drawn[2].mark, ReferenceMark::Reference);
@@ -554,6 +556,33 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         super::table::reference_fill(ReferenceMark::Pick)
     );
 
+    // An unpinned reference row that is not the pick, as between an unpin
+    // and the render that moves the bitmap: neither hover says a pin holds
+    // it, and both say the pick becomes the reference at the next render.
+    let mut loose_rows = rows.clone();
+    loose_rows[0].pinned = false;
+    let loose = ReferenceRows {
+        reference_pinned: false,
+        ..held
+    };
+    let drawn: Vec<_> = loose_rows
+        .iter()
+        .enumerate()
+        .map(|(i, o)| reference_cell(i, o, StageKind::Track, &current, &loose))
+        .collect();
+    assert_eq!(drawn[0].mark, ReferenceMark::ReferenceNotPick);
+    let hover = drawn[0].hover.as_deref().expect("a hover");
+    assert!(!hover.contains("pin holds"), "{hover}");
+    assert!(!hover.contains("Unpinning"), "{hover}");
+    assert!(hover.contains("Its row is not pinned"), "{hover}");
+    assert!(
+        hover.contains("the row of image 12, becomes the"),
+        "{hover}"
+    );
+    let hover = drawn[2].hover.as_deref().expect("a hover");
+    assert!(!hover.contains("held by its pin"), "{hover}");
+    assert!(hover.contains("whose row is not pinned"), "{hover}");
+
     // A reference where the rule picks no row is not red: there is no pick to
     // accept in its place.
     let alone = ReferenceRows {
@@ -601,6 +630,20 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         };
         assert!(hover.contains(says), "{hover}");
     }
+    // A bitmap for judging: only the pick is marked, and its hover says the
+    // bitmap is not one the track keeps.
+    let judging = ReferenceRows {
+        reference: None,
+        reference_image: None,
+        has_bitmap: false,
+        judging: true,
+        ..agreed
+    };
+    let drawn = cells(&judging);
+    assert_eq!(drawn[2].mark, ReferenceMark::Pick);
+    let hover = drawn[2].hover.as_deref().expect("a hover");
+    assert!(hover.contains("one for judging only"), "{hover}");
+    assert!(!hover.contains("no patch bitmap yet"), "{hover}");
 
     // Sorting by the column puts the reference first, then the pick.
     let rank = |i: usize| super::reference::reference_rank(i, &rows[i], &held);
@@ -2391,6 +2434,56 @@ fn a_stored_patch_image_reads_any_channel_count() {
         "the confidence channel is not dropped for an opaque alpha"
     );
     assert!(image(4, &[0, 0, 0, 0]).is_none(), "an empty patch drew");
+}
+
+/// A bitmap for judging is drawn dimmed in the header's slot and in a recent
+/// chip, and the slot's hover says it is not the track's patch and that a
+/// commit does not write it; a patch the next render replaces says so.
+#[test]
+fn a_bitmap_for_judging_is_not_shown_as_the_track_s_patch() {
+    use super::patch::{track_patch_image, BitmapKind};
+    use sfmtool_core::bench::Stage;
+
+    let mut track = position_track();
+    let Stage::Track(payload) = &mut track.stage else {
+        unreachable!("a track-stage fixture")
+    };
+    payload.bitmap = Some(ndarray::Array3::from_elem((2, 2, 3), 90));
+    assert_eq!(BitmapKind::of(&track), BitmapKind::Patch);
+    let patch = track_patch_image(&track).expect("a patch");
+    assert_eq!(patch.pixels[0], egui::Color32::from_rgb(90, 90, 90));
+    let hover =
+        super::track_patch_hover(StageKind::Track, super::BodyMode::Edited, BitmapKind::Patch);
+    assert!(hover.contains("a commit writes it"), "{hover}");
+
+    let Stage::Track(payload) = &mut track.stage else {
+        unreachable!("a track-stage fixture")
+    };
+    payload.bitmap_for_judging = true;
+    assert_eq!(BitmapKind::of(&track), BitmapKind::Judging);
+    let dimmed = track_patch_image(&track).expect("drawn");
+    assert_eq!(dimmed.pixels[0], egui::Color32::from_rgb(30, 30, 30));
+    let hover = super::track_patch_hover(
+        StageKind::Track,
+        super::BodyMode::Edited,
+        BitmapKind::Judging,
+    );
+    assert!(hover.contains("not the track's patch"), "{hover}");
+    assert!(hover.contains("a commit does not write it"), "{hover}");
+    assert!(!hover.contains("Reference column"), "{hover}");
+
+    let Stage::Track(payload) = &mut track.stage else {
+        unreachable!("a track-stage fixture")
+    };
+    payload.bitmap_for_judging = false;
+    payload.bitmap_pending = true;
+    assert_eq!(BitmapKind::of(&track), BitmapKind::Pending);
+    let hover = super::track_patch_hover(
+        StageKind::Track,
+        super::BodyMode::Edited,
+        BitmapKind::Pending,
+    );
+    assert!(hover.contains("until the next render"), "{hover}");
 }
 
 /// A bearing and a position are the same three numbers under different rules,

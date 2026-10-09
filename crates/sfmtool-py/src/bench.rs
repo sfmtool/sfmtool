@@ -602,13 +602,13 @@ impl PyEditableTrack {
     }
 
     /// Whether the track's patch bitmap is one for judging only: rendered by
-    /// an evaluation where no ``in`` row could hold the reference (every row
-    /// is ``out``, or fewer than two ``in`` rows carry a keypoint), from the
-    /// reference-view rule's pick among every row with a keypoint, so that the
-    /// bars still score the rows and a loosened bar can turn them back ``in``.
-    /// It names no reference and a commit does not write it; the next
-    /// evaluation after a row is ``in`` again renders the bitmap by the usual
-    /// rule. ``False`` at the cluster stage and where the track has no bitmap.
+    /// an evaluation where the ``in`` rows give no bitmap (fewer than two of
+    /// them carry a keypoint), from the reference-view rule's pick among
+    /// every row with a keypoint, so that the bars still score the rows and a
+    /// loosened bar can turn them back ``in``. It names no reference and a
+    /// commit does not write it; the first evaluation after two ``in`` rows
+    /// carry a keypoint renders the bitmap by the usual rule. ``False`` at the
+    /// cluster stage and where the track has no bitmap.
     #[getter]
     fn bitmap_for_judging(&self) -> bool {
         self.inner.track().is_some_and(|p| p.bitmap_for_judging)
@@ -1004,10 +1004,14 @@ fn verdict_targets(track: &EditableTrack, observations: &Bound<'_, PyAny>) -> Py
 ///
 /// Returns ``(EditableTrack, report)``. The report carries ``unpinned`` (how
 /// many pins were cleared), ``turned_in``, ``turned_out``, ``bitmap_pending``
-/// (the unpin handed the reference to the rule's pick on another row, so the
-/// bitmap and every score against it were dropped and the bars judged nothing;
-/// ``evaluate(..., render_bitmap=True)`` renders, scores and judges) and
-/// ``changed``.
+/// and ``changed``. ``bitmap_pending`` is true in two cases: the unpin handed
+/// the reference to the rule's pick on another row, so every row's score was
+/// cleared and the bitmap kept until the render replaces it (each row's
+/// ``reason`` says so, and ``evaluate(..., render_bitmap=False)`` scores no
+/// row against it); or the repaint turned the reference row ``out``, which
+/// drops the bitmap with every score against it. Either way the bars judged
+/// nothing, and ``evaluate(..., render_bitmap=True)`` renders, scores and
+/// judges.
 /// Raises ``ValueError`` for an index past the end.
 #[pyfunction]
 fn unpin_verdict(
@@ -1726,12 +1730,14 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// evaluation: a track with a patch and no bitmap, or whose reference row is
 /// unpinned and is not the rule's pick, has its bitmap rendered where the
 /// patch stands, moving nothing, every row is scored against it, and the
-/// repaint judges those scores. A track with no row ``in`` that can hold the
-/// reference gets a bitmap for judging (``bitmap_for_judging``), so the bars
-/// still score its rows. The render reuses the reading's tile, so it costs
-/// about what the reading does. ``render_bitmap=False`` renders nothing: after
-/// a step that leaves the bitmap to be rendered it scores no row, and the bars
-/// judge nothing.
+/// repaint judges those scores. A track whose ``in`` rows give no bitmap
+/// (fewer than two carry a keypoint) gets a bitmap for judging
+/// (``bitmap_for_judging``), so the bars still score its rows. The render
+/// reuses the reading's tile, so it costs about what the reading does.
+/// ``render_bitmap=False`` renders nothing: after a step that leaves the
+/// bitmap to be rendered (an unpin that reports ``bitmap_pending``,
+/// :func:`set_reference`, a patch move) it scores no row, and the bars judge
+/// nothing.
 ///
 /// The peak is looked for within the track's ``max_shift_px`` of each
 /// observation, in patch-grid px, the bar the shift is judged by; both shifts

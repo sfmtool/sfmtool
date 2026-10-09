@@ -80,7 +80,9 @@ def ground_truth_reading(dataset, point: int) -> dict:
 
     edited = EditedReconstruction(dataset.recon)
     _, track = B.create_track(B.Bench(), edited, int(point))
-    track, _ = B.evaluate(track, edited, dataset.pyramids)
+    # A reading only: every row is pinned, so the verdicts stand, and the
+    # leave-one-out numbers read here need no bitmap rendered.
+    track, _ = B.evaluate(track, edited, dataset.pyramids, render_bitmap=False)
     rows = _in_rows(track)
     return {
         "track": track,

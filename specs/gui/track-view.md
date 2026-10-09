@@ -678,10 +678,26 @@ would store before committing. At the cluster stage it is the template every
 member registers onto, once an evaluation has cut one. With neither -- a point
 that stores no patch, a track with no bitmap rendered yet, or a cluster with no template --
 the slot is an empty frame of the same size, so the controls beside it do not
-move when a step fills it. Its hover text says which it is, or what would fill
-it; for a track-stage bitmap, that it is the render of the reference
-observation, the row the *Reference* column marks, or the mean of the views
-where there is none. The bitmap is converted by `patch::stored_patch_image`: one channel repeated
+move when a step fills it. Its hover text (`track_patch_hover`) says which it
+is, or what would fill it; for a track-stage bitmap, that it is the render of
+the reference observation, the row the *Reference* column marks, or the mean
+of the views where there is none. Two bitmaps a bench track can hold are not
+that (`patch::BitmapKind`):
+
+- **A bitmap for judging** (`TrackPayload::bitmap_for_judging`), which the
+  live evaluation renders where fewer than two `in` rows carry a keypoint, is
+  drawn at a third of its brightness, in the slot and in the track's chip in
+  the recent items strip alike (`patch::track_patch_image`). Its hover says it
+  is not the track's patch: it was rendered from the rows with a keypoint, `in`
+  or `out`, only for the bars to score the rows against, no row is its
+  reference, a commit does not write it, and the first evaluation after two
+  `in` rows carry a keypoint renders the patch.
+- **A patch an unpin left pending its render** (`EditableTrack::bitmap_pending`)
+  is drawn as it is, and its hover says it is kept only until the next render
+  replaces it, that no row is scored against it meanwhile, and that a commit
+  before that render writes it.
+
+The bitmap is converted by `patch::stored_patch_image`: one channel repeated
 across RGB, three as RGB, and a fourth, the confidence, dropped for an opaque
 alpha, and an all-zero bitmap, which is how a point with no stored patch is
 written, is not drawn. The upload is kept against the track's `Arc` and dropped
@@ -1073,7 +1089,7 @@ that is not there prints a bare `-`, with no unit.
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
 | Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row the test that turned it away, `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less` or `less sharp`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the reason and every reading |
-| Status | the kernel's `member_status` | `walked 19 grid px (leave-one-out ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the leave-one-out one the fit scored at the walked peak (left out where it scored none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
+| Status | the kernel's `member_status` | `walked 19 grid px (leave-one-out ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the leave-one-out one the fit scored at the walked peak (left out where it scored none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`, or `the bitmap is to be rendered again before the row is scored` while an unpin leaves it pending its render); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
 
@@ -1343,7 +1359,10 @@ from (`TrackPayload::reference`, where the track has a bitmap;
 reference-view rule picks from the current readings
 (`crate::bench::reference_view_pick`). While the reference's row is pinned
 every render keeps it, so the two can differ ([`bench.md`](bench.md) § "The
-reference"). The marks (`reference::ReferenceRows`, `ReferenceMark`):
+reference"); they also differ on an unpinned reference row between an unpin
+that hands the reference on and the render, and where the live evaluation's
+pick alternated between rows. The marks (`reference::ReferenceRows`,
+`ReferenceMark`):
 
 - **The reference is the rule's pick:** its cell reads `reference` on a green
   fill.
@@ -1354,9 +1373,15 @@ reference"). The marks (`reference::ReferenceRows`, `ReferenceMark`):
   pick's own cell reads `pick` on a grey fill. Unpinning the reference's row,
   or *Set as reference* on the pick, makes the pick the reference, and the
   hover of each of the two cells says so, naming the other row by its image.
+  Where the reference's row is already unpinned, the hovers say instead that
+  the pick becomes the reference at the next render that reads the track, and
+  the reference's hover that pinning its row keeps it.
 - **No reference:** where the bitmap is the fused mean of the `in` rows, the
-  render of no row, or the track has no bitmap yet, only the pick is marked,
-  `pick` on a grey fill.
+  render of no row, is a bitmap for judging, or the track has no bitmap yet,
+  only the pick is marked, `pick` on a grey fill. The pick's hover says which:
+  for a bitmap for judging, that fewer than two `in` rows carry a keypoint and
+  the bitmap is rendered from the rows with one, in or out, and never
+  committed.
 
 A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a
@@ -1405,14 +1430,17 @@ sharpness (the bitmap sharper than the row's tile along every direction by the
 ratio of 1.25) and the blur-matched score prints differently, the first line
 carries it after an arrow, `50% ⏵ 53% whole`; otherwise it is one number. The
 reference's own row reads `100%`, which is not computed. The bars judge the
-plain score, and the cell and the grid are coloured by them, since an
-out-of-focus view, which the bars are there to catch, scores as well
-blur-matched as a sharp one. Hovering the numbers (`reference::zncc_hover`)
+plain score, and the cell and the grid are coloured by them. The bars are not
+there to catch focus: a blurred view of the right place is one to keep, and
+the plain score is the one the bar was measured on
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "Parameters"). Hovering the numbers (`reference::zncc_hover`)
 gives the score whole and middle, the blur-matched score with the blur's width
 in grid px, or for a row sharper than the bitmap along every direction the note
 that it could replace the reference, or why the pair was read plain; for a row
 with no score the reason (`there is no bitmap to score it against` before the
-first render); and the localizer's leave-one-out ZNCC (`loo_zncc`), the row
+first render, `the bitmap is to be rendered again before the row is scored`
+between an unpin that hands the reference on and the render); and the localizer's leave-one-out ZNCC (`loo_zncc`), the row
 against the consensus of the other rows at the correlation peak the shift is
 measured to, which no bar judges. A row with no score prints `-`, its Status
 cell says why, and the bars leave its verdict where it is. At the cluster
