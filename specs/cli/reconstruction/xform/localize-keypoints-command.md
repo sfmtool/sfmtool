@@ -24,8 +24,8 @@ Views that drift too far, leave the frame, graze the patch plane
 (`max_member_zncc_self_similarity_radius`, 2.5 by default), or stop agreeing
 — absolutely (`min_absolute_zncc`) or relative to their peers (`min_relative_zncc`) — are
 **dropped**.
-Seeds are each point's own projection (`project_i(X_p)`); the search basin is
-`±search` patch-grid px around it.
+Seeds are each point's own projection (`project_i(X_p)`); a view's total drift
+from its seed is limited to `search` patch-grid px.
 
 It is therefore a **structural** operation — the search counterpart of the
 in-place `--refine-keypoints`, with a fundamentally different shape:
@@ -54,27 +54,26 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).
   There is no `bitmaps` key on this op.
 
-The write-back is `compact_to_embedded_patches`
-(`src/sfmtool/_patch_compaction.py`) — the **same helper the `embed-patches`
-pipeline uses** to turn localizer output into a valid `embedded_patches`
-reconstruction (survivor selection, dense renumbering, track rebuild, per-image
-in-frame f32 keypoint clamp, culled patch frames). The op hand-rolls none of
-it; `image_file_hashes` come from the recon itself (recomputed from the source
-images only if absent). If **no** point survives the cull, the operation fails
-with a `ValueError` (surfaced as a CLI error) rather than writing an empty
+The output is built by the same compaction step the `embed-patches` pipeline
+uses after its own localization, so both produce `embedded_patches` files by
+the same rules: the cull, the dense renumbering, the track rebuild and the
+culled patch frames. Each stored keypoint is clamped to lie inside its image
+after rounding to `float32`, because a keypoint just inside the image edge in
+`f64` can round up to exactly the width or height, which the writer rejects.
+The output keeps the input's image file hashes. If **no** point survives the
+cull, the operation fails with a CLI error rather than writing an empty
 reconstruction.
 
-Unlike the `embed-patches` pipeline's localize step, this op passes
-`view_sets=None`: it localizes over each point's **full track**, exposing only
-the localizer's own in-loop view dropping (no `select_views` pre-selection).
+Unlike the `embed-patches` pipeline's localize step, this op localizes over
+each point's **full track**: it does no view pre-selection, so the only views
+dropped are the ones the localizer drops during its search.
 
 **Precondition:** requires an `embedded_patches` reconstruction and rejects
-`sift_files` with a `UsageError` pointing at `sfm xform --to-embedded-patches`
-(enforced per-step in `xform/_apply.py` via the
-`LocalizeKeypointsTransform.required_feature_source` attribute, so a
-`--to-embedded-patches --localize-keypoints` chain converts first and passes).
-The localizer searches over the stored per-point patch frame
-(`recon.patches`), which only that source carries; the frame is never rebuilt.
+`sift_files` with a `UsageError` pointing at `sfm xform --to-embedded-patches`.
+The check is made against the reconstruction as it stands when this step runs,
+so a `--to-embedded-patches --localize-keypoints` chain converts first and
+passes. The localizer searches over the patch frame stored for each point,
+which only that source carries; the frame is never rebuilt.
 
 Because the search is photometric it reads the workspace source images
 (`workspace_dir / image_name`), exactly like `--refine-keypoints` /
@@ -89,7 +88,10 @@ wired through `parse_localize_keypoints_params` in
 [_arg_parser.py](../../../../src/sfmtool/xform/_arg_parser.py) and the
 `--localize-keypoints` Click option in
 [xform.py](../../../../src/sfmtool/_commands/xform.py); the localization itself
-is the `PatchCloud.localize_keypoints` PyO3 binding.
+is the `PatchCloud.localize_keypoints` PyO3 binding, and the write-back is
+`compact_to_embedded_patches` in
+[_patch_compaction.py](../../../../src/sfmtool/_patch_compaction.py), which
+the `embed-patches` pipeline also calls.
 
 ```
 sfm xform <input.sfmr> [<output.sfmr>] --localize-keypoints [<params>] [...]
@@ -131,7 +133,7 @@ the binding's own default. The "Default" column lists those binding defaults.
 | `max_shift_px`                 | `3.0`           | `localize_keypoints` (drop a view whose keypoint sits further than this from the point's projection, source-image px) |
 | `min_relative_zncc`            | `0.7`           | `localize_keypoints` (drop a view whose leave-one-out ZNCC falls below this fraction of the median — the one gate the two-view floor can undo) |
 | `min_absolute_zncc`            | `0.5`           | `localize_keypoints` (drop a view whose leave-one-out ZNCC is finite and below this absolute floor, whatever the view count; `0` disables) |
-| `max_member_zncc_self_similarity_radius` | `2.5` | `localize_keypoints` (drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px — see [`specs/core/patch/patch-keypoint-localization.md`](../../../core/patch/patch-keypoint-localization.md#the-member-self-similarity-gate); `0` disables, `3` or more turns nothing out) |
+| `max_member_zncc_self_similarity_radius` | `2.5` | `localize_keypoints` (drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px — see [`specs/core/patch/patch-keypoint-localization.md`](../../../core/patch/patch-keypoint-localization.md#the-member-self-similarity-gate); `0` disables, `3` or more rejects nothing) |
 | `min_grazing_cos`              | `0.1`           | `localize_keypoints` (drop a view whose ray grazes the patch plane) |
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |
 | `window`                       | `gaussian_disk` | `localize_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
@@ -144,9 +146,8 @@ the binding's own default. The "Default" column lists those binding defaults.
 | `basis_max_views`              | `8`             | `localize_keypoints` (consensus-basis cap `K`; `0` congeals all views — the cleanest error metrics. A track of `≤ K` views takes the uncapped path either way. This surface runs over each point's own track and supplies no per-view appearance scores, so a biting cap ranks the basis by grazing angle — see [`specs/core/patch/keypoint-localization-consensus-basis.md`](../../../core/patch/keypoint-localization-consensus-basis.md)) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), duplicate keys,
-or unparseable values raise `click.UsageError`; range/enum validation lives in
-the `LocalizeKeypointsTransform` constructor (surfacing as `UsageError` through
-the CLI), consistent with the other parsers in `xform/_arg_parser.py`.
+or unparseable values raise `click.UsageError`, and so does a value out of its
+key's range or not among its key's choices.
 
 The transform prints a structural summary in the established `xform` style:
 
@@ -157,11 +158,12 @@ The transform prints a structural summary in the established `xform` style:
 
 ## Ordering and interactions
 
-- **Pairs naturally with `--refine-keypoints`.** The localizer is the discrete
-  *search* that puts each view in the right photometric basin (and drops the
-  ones that have none); the refiner is the *local* sub-pixel solve that needs a
-  seed already near the optimum. `--localize-keypoints --refine-keypoints`
-  (search, then sharpen) is the chain the `embed-patches` pipeline itself runs.
+- **Pairs with `--refine-keypoints`.** The localizer is the discrete *search*
+  that moves each view's keypoint to the shift where its tile best matches the
+  other views (and drops the views it cannot place); the refiner is the *local*
+  sub-pixel solve, which needs a starting keypoint already near that shift. `--localize-keypoints --refine-keypoints` (search,
+  then sub-pixel refinement) is the chain the `embed-patches` pipeline itself
+  runs.
   Either op is also useful alone.
 - **`--refine-normals` is an option on either side.** Refining normals first
   gives the localizer a better patch plane to search over; localizing first
