@@ -265,24 +265,18 @@ keypoint-localization spec).
 
 ## Scope
 
-**v1:** for each point, build a patch frame (initialize + refine the normal),
-select its view set (track + photometrically-vetted views), refine each
-view's keypoint from its projection (the refiner drops views that won't
-co-register), cull points left below `min_views`, and compact the result into a
-valid `embedded_patches` reconstruction. The observation set starts from the
+For each point, the conversion builds a patch frame (initializes and refines
+the normal), selects its view set (track and photometrically vetted views),
+refines each view's keypoint from its projection (the refiner drops views that
+do not co-register), culls points left below `min_views`, and compacts the
+result into a valid `embedded_patches` reconstruction. The observation set starts from the
 input track, then is expanded with vetted views and filtered by drops.
 
-**Future work (not v1):**
-- **Per-pixel robustness** and other normal/template refinements feeding a better
-  consensus.
-- **Re-centring** — the *common* in-plane shift across a point's views indicates
-  a mis-located 3D point; re-triangulating from it is point QC, likely a separate
-  `xform` step rather than part of this conversion.
-- **Per-observation quality output** — v1 *uses* each observation's LOO / shift
-  to prune (above) but then discards the numbers; persisting them as an ancillary
-  per-observation field, so downstream tools can read each kept keypoint's
-  quality, waits on the format growing optional per-observation fields (out of v4
-  scope today).
+The conversion does not move 3D points: where all of a point's views shift by
+the same in-plane offset, which indicates a mis-located point, the point is
+not re-triangulated. It uses each
+observation's leave-one-out score and shift to prune and then discards them;
+the `.sfmr` format has no column to store them.
 
 Every patch is sized at `patch_size` times its SIFT feature scale; the
 embedding does not choose a size per track. Choosing each track's size from a

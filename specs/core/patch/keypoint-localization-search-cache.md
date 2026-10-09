@@ -52,8 +52,8 @@ Two compounding changes:
    reads from — both the leave-one-out consensus build *and* every round's
    search — instead of re-warping per round.
 2. **Hand-roll the search as a register-blocked AVX2 kernel** over that cache,
-   in centered `f32` (stage 1), with an integer `i16` variant evaluated as a
-   follow-up (stage 2).
+   in centered `f32` (an integer `i16` form was measured and is slower; see
+   [Why the correlation stays `f32`](#why-the-correlation-stays-f32)).
 
 ### Why render-once is exact, not an approximation
 
@@ -108,7 +108,7 @@ Per view, render once at the seed (`acc = 0`, i.e. centered on `project_i(X_p)`)
 - **Rendering.** The same `WarpMap::from_patch` + `remap_*` path
   `render_context` uses, just over the expanded grid and once per view. The
   source pyramid is touched **once per view** (today: once per view per round).
-- **Format / layout (stage 1).** Planar **per channel**, **centered** `f32`:
+- **Format / layout.** Planar **per channel**, **centered** `f32`:
   `plane[c][row·istride + col]`, value `I − c̄_c` where `c̄_c` is that channel's
   mean over the cache. Centering is load-bearing (next section). The row stride
   is padded so a 16-wide aligned load from any support column is in bounds:
@@ -171,7 +171,7 @@ cache is `cacheW²·channels·4 B ≈ 27 KB` at `cacheW = 48`, ~15 KB at 36). Th
 Building the consensus from integer-aligned cores (vs the reference's
 fractionally-rendered cores) is a sub-px behaviour change — see Validation.
 
-## Search kernel (stage 1: centered f32, register-blocked AVX2)
+## Search kernel (centered f32, register-blocked AVX2)
 
 Windowed ZNCC over the shift grid, per kept channel `c`, as three correlation
 maps (already implemented scalar; this is the AVX2 form):
@@ -229,6 +229,32 @@ which buys the 8-lane width over 4-lane `f64`. The numerator is recovered
 exactly: `Ncross = Ncross' + c̄·Σkern`. Centering is the layout decision that
 makes the `f32` kernel both fast and correct.
 
+### Why the correlation stays `f32`
+
+The source is `u8`, so the cache could be `u8`/`i16` and the accumulation could
+use integer SIMD. `Ncross` (`Σ kern_q·I`) and `S1` (`Σ I`) convert to integers
+cleanly, but `S2 = Σ w·I²` does not: `I²` is 16-bit, the per-pixel Gaussian
+weight does not fuse into `_mm256_madd_epi16`, and an `i32` accumulator can
+overflow over about 450 pixels. The integer form that avoids this normalizes
+with an unweighted box window, which approximates the ZNCC denominator rather
+than reproducing it.
+
+A prototype of that form (scalar reference plus AVX2 `vpmulld`/`vpaddd` over
+`i32` lanes, with a `u8` cache plane) was measured against the `f32` kernel on
+dino (18 961 points) and was not merged:
+
+- It was about 5 % slower (98.7 µs per `search_shift` call against 93.6 µs).
+  `vpmulld` costs more than FMA, and `i32` lanes hold no more cells per register
+  than `f32` lanes. Gathering cache samples, not the multiplies, takes about
+  88 % of `search_shift`, so a `madd_epi16` lane-packing design would not remove
+  the main cost either.
+- Its argmax differed from the `f32` kernel's on 14.7 % of calls, although the
+  kept point count was the same.
+
+The `search_acc`, `search_combine` and `search_argmax` sub-phase timers in
+`keypoint_localize::prof`, which located the gather cost, come from that
+measurement.
+
 ## Sub-pixel hand-off
 
 This spec covers **integer refinement only**: the discrete cross-view search,
@@ -242,8 +268,7 @@ photometric (ECC / Lucas–Kanade) solve that optimizes the image objective with
 gradients, run once after this converges, seeded by `iacc + residual`. It is
 specified in
 [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md). Keeping it
-separate is what lets the integer search stay integer-exact (and lets stage 2's
-`i16` path work — it never has to resample fractionally).
+separate is what lets the integer search stay integer-exact.
 
 > _The sub-pixel refiner now has its own render-once tile (`RefineTile`,
 > 2026-07): the same "render one expanded frame-oriented tile per view" idea,
@@ -385,52 +410,6 @@ unchanged. A future revisit could split this into per-round strategy (e.g.
 refine cheaply) but it would require a new params field and call-site
 plumbing.
 
-## Stage 2 (follow-up): integer `i16` correlation — investigated, dropped
-
-The source is `u8`, so in principle the cache can be `u8`/`i16` and the hot
-accumulation can use integer SIMD (`_mm256_madd_epi16` fuses mul+add at 16 `i16`
-lanes; `_mm256_sad_epu8` sums `u8` nearly free) — potentially 2× the f32 lanes.
-`Ncross` (`Σ kern_q·I`) and `S1` (`Σ I`) integerize cleanly.
-
-**The snag is `S2 = Σ w·I²`**: `I²` is 16-bit and the per-pixel weight does not
-fuse into `madd`, and an `i32` accumulator can overflow over ~450 pixels. The
-clean integer route normalizes with a **box window** (`Σ I`, `Σ I²` unweighted
-via `sad`/`madd`) while keeping the Gaussian weights only in the numerator
-kernel — an *approximation* of the ZNCC denominator. It is no longer
-bit-equivalent to the reference, so stage 2 is gated on **argmax agreement**
-(does it pick the same shifts?) and a real speedup over stage 1, not a tolerance.
-
-> _**Investigated 2026-06-27 (branch `keypoint-localize-i16`, not merged).**_
-> A prototype implementation (scalar reference + AVX2 with `vpmulld`/`vpaddd`
-> over i32 lanes, plus a u8 cache plane and an `SFMTOOL_LOCALIZE_KERNEL`
-> dispatcher in `f32` / `i16` / `compare` modes) was benchmarked head-to-head
-> against stage 1 on dino (18 961 points). **Both gates failed:**
->
-> - **No speedup.** `search_shift` i16: **98.7 µs/call** vs stage-1 f32 **93.6
->   µs/call** (~5% slower). Root cause: `vpmulld` is 5c/2c vs FMA at 4c/0.5c,
->   and the i32-lane design (8 cells/half, same lane count as f32) doesn't
->   recover throughput against the FMA-saturated f32 inner loop. The "2× lane
->   count" potential needs the trickier `_mm256_madd_epi16` horizontal-pair-sum
->   design, which the prototype didn't attempt because the surrounding gather
->   pattern (now ~88% of `search_shift` per the new `search_acc` sub-phase
->   timer) is already the bottleneck and the multiplies aren't the dominant
->   cost.
-> - **14.67% argmax disagreement** in compare mode (1 410 766 agree /
->   242 472 disagree out of 1 653 238 calls). The kept point count is
->   nevertheless identical to f32 (18 961) — the multi-round congealing
->   loop absorbs per-call disagreements via parabolic residuals and view-
->   selection gates. Acceptable in isolation but no speedup to trade for it.
->
-> The investigation's permanent residue in the codebase is just the
-> `search_acc` / `search_combine` / `search_argmax` sub-phase timers in
-> `keypoint_localize::prof`, which proved valuable in isolating where time
-> goes inside `search_shift` and would inform any future revisit. The i16
-> kernel itself, the u8 cache plane, the dispatcher, and the compare-mode
-> agreement counters were not committed — they would have bloated the f32 hot
-> path (the u8 plane is built every render at ~20 KB/view extra) for no
-> measured benefit. Future revisit should start from the `madd_epi16` lane-
-> packing design or take a different angle (e.g. attack the gather pattern).
-
 ## Numerical fidelity & validation
 
 Two levels — the **search kernel** is provably equivalent; the **congealing loop**
@@ -471,8 +450,8 @@ is a deliberate sub-px behaviour change:
   register FMA with the image streamed once — the structural fix for the ~25%
   ALU utilization the profile shows.
 - **Integer-only search; sub-pixel is a separate algorithm.** Tracking integer
-  reads keeps every cache access exact and lets the `i16` path avoid fractional
-  resampling entirely; the parabolic estimate stays inside the loop only to seed
+  reads keeps every cache access exact and avoids fractional resampling
+  entirely; the parabolic estimate stays inside the loop only to seed
   and detect convergence. Accuracy is owned by the continuous solve
   ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)). No
   supersampling — it would inflate the bottleneck for sub-pixel produced better
@@ -489,8 +468,6 @@ is a deliberate sub-px behaviour change:
   `127.5` (cheaper). Measure whether the fixed constant is accurate enough.
 - Combine step: scalar vs AVX2 `rsqrt` — only worth vectorizing if it shows up
   after the accumulation is sped up.
-- Stage 2 box-window normalization: does the argmax track the Gaussian-window
-  reference closely enough on the datasets to justify the integer speedup?
 - Search resolution multiplier `m < 1`: only relevant if the full-resolution SIMD
   grid is too slow. If it comes to that, where is the speed/quality knee — how low
   can `m` go before the grid lands the wrong cell often enough that the fine tune

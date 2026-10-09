@@ -210,22 +210,6 @@ giving ~1.6px at 10 frames — well within the 10px candidate radius. The descri
 filter catches any advection errors that survive the radius by keeping only the
 best-matching candidate.
 
-## Future Directions: Wide-Baseline Pair Selection
-
-The current implementation uses a fixed-size sliding window. Potential improvements:
-
-### Accumulated displacement trigger
-
-Track the cumulative flow magnitude along the sequence. When the accumulated median
-displacement since the last wide-baseline computation exceeds a threshold (e.g., 50px),
-trigger additional wide-baseline pairs. This adapts to camera speed.
-
-### Covisibility-driven
-
-After initial matching, build a covisibility graph from shared tracks. Compute
-additional wide-baseline flows only between pairs with sufficient but incomplete
-overlap.
-
 ## Cost Analysis
 
 ### Per-pair costs

@@ -30,6 +30,7 @@ across views, and everything refined on top of it. Implemented in
 |----------|-------------|
 | [patch-keypoint-localization.md](patch-keypoint-localization.md) | Congealing: refining a point's keypoint position across all its views jointly. |
 | [keypoint-localization-consensus-basis.md](keypoint-localization-consensus-basis.md) | The consensus-basis cap — basis congealing, then tail registration against it. |
+| [keypoint-localization-consensus-basis-measurements.md](keypoint-localization-consensus-basis-measurements.md) | The runs behind the cap's default of eight views on a high-`V` capture: localizer cost, per-observation agreement with the uncapped path, and the downstream size cull and bundle adjustment. |
 | [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) | The per-view render cache and the AVX2 search kernels that make the search affordable. |
 | [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) | Forward-additive ECC Gauss-Newton subpixel refinement, with an analytic Jacobian. |
 

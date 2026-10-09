@@ -246,7 +246,11 @@ sensor-to-rig poses, multi-camera frames, and per-sensor intrinsics are all
 defined together in `rig_config.json`. `camera_config.json` then handles the
 remainder — images that don't belong to any rig.
 
-A future spec change may unify the two files. See *Future Unification* below.
+The two files describe intrinsics differently: `camera_config.json` uses the
+named-parameter `camera_intrinsics` block defined here, while `rig_config.json`
+gives each sensor a COLMAP `camera_model_name` and positional `camera_params`.
+`camera_config.json` describes single-camera intrinsics only, with no sensors
+or sensor-from-rig poses.
 
 ## Workflows
 
@@ -378,25 +382,6 @@ Some candidate approaches:
 None of these are committed to in this spec. Once we have practical
 experience with the basic closest-ancestor flow, we can pick the
 organization that matches how A/B testing actually shows up.
-
-## Future Unification
-
-`rig_config.json` and `camera_config.json` overlap in their treatment of
-intrinsics, but express them differently: `camera_config.json` uses the
-named-parameter `camera_intrinsics` block defined here, while
-`rig_config.json` uses COLMAP-native per-sensor `camera_model_name` +
-positional `camera_params`. A future revision may unify them by:
-
-1. Allowing `camera_config.json` entries to also describe rig topology
-   (sensors, sensor-from-rig poses), or
-2. Treating a directory-local `camera_config.json` as a degenerate
-   single-sensor rig, or
-3. Replacing both files with a more general `cameras.json` keyed by either
-   `image_prefix` or directory containment.
-
-This spec stays narrowly scoped to single-camera intrinsics so that we can
-deploy the closest-ancestor resolution rule and the workflows above without
-blocking on the larger unification design.
 
 ## Design Principles
 

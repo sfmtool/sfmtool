@@ -321,13 +321,14 @@ moved the view or the caller fixed that sampler. A point whose valid track-view 
 robust-consensus primitives are shared with `normal_refine` (`pub(super)`), not
 duplicated.
 
-## Future work (not v1)
+## Limitations
 
-- **Occlusion-aware candidacy** — a geometric occlusion pre-filter (depth vs. the
-  cloud) to bootstrap the vetting, hardening the non-convex / cluttered case.
-- **Principled "insufficient data" gate** — a direct minimum windowed patch
-  contrast / variance (SNR) test on the reference, rather than inferring
-  "not enough signal" from the self-agreement threshold. Self-agreement conflates
-  a textureless patch (low signal, untrustworthy) with a genuinely disagreeing
-  track (real signal, real disagreement); an explicit contrast floor would
-  separate the two and let the trust gate focus on disagreement.
+- **No occlusion test.** Candidacy is geometric (front-facing, cheirality and
+  footprint) and photometric; nothing compares a candidate's depth against the
+  cloud, so on a non-convex or cluttered surface an occluded view is rejected
+  only when its render disagrees with the reference.
+- **No contrast floor.** "Not enough signal" is inferred from the
+  self-agreement threshold. Self-agreement does not separate a textureless
+  patch (little signal, untrustworthy) from a track whose views genuinely
+  disagree (real signal, real disagreement); both fall below
+  `min_self_agreement` and are admitted verbatim.

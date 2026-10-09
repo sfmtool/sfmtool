@@ -1411,6 +1411,11 @@ rules are checked on the flags alone.
 
 Tracks link 2D feature observations to 3D points. Each observation has three components stored in separate columnar files.
 
+The tracks section stores no per-observation ZNCC self-similarity radius, and
+`points3d/` stores no blur assessment of a point's bitmap. Storing both is
+proposed in [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) §
+"Part 7".
+
 #### `tracks/metadata.json.zst`
 
 ```json
@@ -2096,33 +2101,6 @@ both scales it and sets the field.
 
 **Display:** The GUI and CLI inspection tools can use this field to display coordinates with
 appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numbers).
-
-## Future Extensions
-
-Potential additions while maintaining backward compatibility:
-
-1. **Optional fields**:
-   - Covariance matrices: `points3d/covariances.{N}.3.3.float64.zst`
-   - Per-observation ZNCC self-similarity radii of each observation's own patch
-     render, with their reach along the patch's axes, whether each value is
-     only a lower bound, and the view angle and zoom of the render they were
-     read on, proposed in
-     [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) § "Part 7"
-
-2. **Metadata extensions**:
-   - GPS coordinates per image
-   - Depth maps or dense reconstruction references
-   - Semantic labels for points
-
-3. **Multi-reconstruction support**:
-   - Store multiple disconnected components
-   - Hierarchical reconstructions (coarse-to-fine)
-
-All extensions should:
-- Be optional (readers can skip unknown fields)
-- Follow naming conventions
-- Include metadata describing new fields
-- Update content hashes appropriately
 
 ## Versioning and Migration
 

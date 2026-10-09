@@ -1413,30 +1413,6 @@ bundle from `retain_nodes` on the next frame.
 
 ---
 
-## Future Directions
-
-- **Transform tooling beyond `Align to…` and the patch menu**: a numeric
-  transform editor (inspect/tweak the fitted `Se3Transform`; the wire's
-  `set_reconstruction_transform` is the only way to set one by number today),
-  and multi-way alignment (align every node to one reference in a single action,
-  mirroring `sfm align`'s multi-way mode). A one-shot "Save Aligned Copy…" is
-  not among them: `Bake Transform` then `File > Save As` is two clicks and
-  leaves the intermediate state visible and undoable.
-- **Cross-reconstruction correspondence**: images with the same name/path in
-  two nodes are "the same photo" — hover/selection echo across nodes
-  (highlight the sibling frustum), side-by-side pose deltas, per-camera
-  distance overlays.
-- **Difference visualization**: per-point nearest-neighbor distance coloring
-  between two aligned nodes; per-camera pose-error glyphs.
-- **Deeper hierarchy**: rig groups under Camera Images, user grouping/reordering,
-  per-node point-size overrides.
-- **Session persistence**: save/restore the scene (paths, transforms, tints,
-  visibility) as a small project file.
-- **Filtered point views**: query-driven point listings in the Scene panel
-  (worst error, longest tracks) in place of the impossible full listing.
-
----
-
 ## Open Questions
 
 - Should the Image Browser optionally show *all* reconstructions as grouped

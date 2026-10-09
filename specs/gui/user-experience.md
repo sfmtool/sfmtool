@@ -259,9 +259,3 @@ Selecting a camera or point in any panel updates all others — clicking a
 frustum in the 3D viewer highlights it in the browser and loads the image in
 the detail panel, and vice versa; clicking a point exposes its track across
 the panels.
-
-## Future Directions
-
-- **Point coloring modes**: Color by reprojection error, track length, or
-  triangulation angle
-- **Image browser grid mode**: Multi-row thumbnail layout
