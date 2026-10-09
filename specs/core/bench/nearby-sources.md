@@ -201,9 +201,12 @@ reference, marking each kept or rejected. The clusters with a member within
 `radius_px` (48) of the pixel in the queried image, nearest first, up to
 `max_clusters` (16), are vetted as candidates. The member in the queried image
 is the cluster's nearest there, and must be one the `members` policy admits:
-`any` (the default) admits the reference, the kept, the rejected for a low
-ZNCC or a large shift, and the unevaluated, letting the triangulation drop the
-bad ones; `kept` admits only the reference and the kept. In every other image
+`any` (the default) admits the reference, the kept, every member rejected
+after it was measured (for a low ZNCC, a large shift, or by either gate at the
+refined shape, `rejected_unlocalizable_refined` and
+`rejected_unlocalizable_cells`), and the unevaluated, letting the
+triangulation drop the bad ones; `kept` admits only the reference and the
+kept. In every other image
 the cluster contributes one admitted member, the reference or a kept one
 first, then the one whose ZNCC against the reference is highest, in the order
 the images are first met in the cluster. The members are then triangulated,

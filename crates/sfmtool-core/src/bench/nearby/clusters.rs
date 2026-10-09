@@ -8,7 +8,8 @@
 
 use crate::bench::track_at_pixel::{
     MatchesClusters, ViewCamera, STATUS_KEPT, STATUS_NOT_EVALUATED, STATUS_REFERENCE,
-    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT,
+    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT, STATUS_REJECTED_UNLOCALIZABLE_CELLS,
+    STATUS_REJECTED_UNLOCALIZABLE_REFINED,
 };
 use crate::patch::normal_refine::ProjectedImage;
 
@@ -20,10 +21,13 @@ use super::triangulate::meet_dropping_worst;
 pub enum ClusterMembers {
     /// The reference and the members the cluster-patches refinement kept.
     Kept,
-    /// Every member in a reconstruction image that the refinement did not
-    /// reject as a duplicate or as unlocalizable, letting the triangulation
-    /// drop the bad ones: the reference, the kept, the rejected for a low ZNCC
-    /// or a large shift, and the unevaluated.
+    /// Every member in a reconstruction image that carries a measurement or
+    /// was never evaluated, letting the triangulation drop the bad ones: the
+    /// reference, the kept, the rejected for a low ZNCC, a large shift, or
+    /// either gate at the refined shape (`rejected_unlocalizable_refined`,
+    /// `rejected_unlocalizable_cells`), which were measured before they were
+    /// refused, and the unevaluated. A duplicate, and a member refused as
+    /// unlocalizable at its detection, are left out.
     Any,
 }
 
@@ -46,6 +50,8 @@ impl ClusterMembers {
                     | STATUS_KEPT
                     | STATUS_REJECTED_LOW_ZNCC
                     | STATUS_REJECTED_SHIFT
+                    | STATUS_REJECTED_UNLOCALIZABLE_REFINED
+                    | STATUS_REJECTED_UNLOCALIZABLE_CELLS
                     | STATUS_NOT_EVALUATED
             ),
         }

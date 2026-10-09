@@ -874,7 +874,8 @@ The matched counts are those of the section above: 27 clusters on 23 ground-trut
   - 20 **controls**, five per entry: a kept member that did not move, shown as the cascade's shape against the piecewise file's identical shape. A preference on a control is a false preference.
   - 10 **sanity** pairs, two or three per entry: a kept member that did not move, shown as the cascade's shape against the same shape rotated by 5° and shifted by 1.5 grid px in a random direction, which moves its corners 2.8 to 3.0 grid px.
 - **Renderer.** For each case the page showed the reference member's patch and the two candidate patches, each rendered as the kernel renders it: the template's 25 × 25 grid, at 4 display px per grid px, through the same pyramid-level rule, pixel-centre convention and bilinear sampling. Beside each patch was a crop of its photograph with the footprint outlined, and a crop of the member's photograph with both footprints outlined, one orange (A) and one blue (B).
-- **Blind A/B.** Which side was A was drawn at random per case, and the cases were shown in a random order with nothing on the page naming the sides. The reviewer, the maintainer, chose A, B, *same* or *both wrong*, with an optional note, and could place a corrected footprint by hand on a full-resolution crop. The key was revealed only after a choice; no choice was changed after the reveal.
+- **Blind A/B.** Which side was A was drawn at random per case, and the cases were shown in a random order with nothing on the page naming the sides. The reviewer, the maintainer, chose A, B, *same* or *both wrong*, with an optional note, and could place a corrected footprint by hand on a full-resolution crop. The key was revealed once, behind a confirmation, after every case had been answered; no choice was changed after the reveal.
+- **Limits of the review.** One reviewer judged every case, and the reviewer is the maintainer. The controls were recognisable as controls, since their two footprints coincide on the member's photograph, though which side was the cascade's stayed hidden.
 
 **Result: the reviewer preferred the moved shape, and more strongly the further it moved.**
 
@@ -995,7 +996,7 @@ With the acceptance-rule section's file, which moved 55 members of `KerryPark480
 - **The loop holds its contract as the default.** The whole-member ZNCC never falls, no member reaches the cap or oscillates, and the CPU cost is 1.11× to 1.25× the refinement's.
 - **The seed's pick on `KerryPark480` passes, and the set of candidates changes.** This is not a regression of the stage: the pick is better than with the cascade file, and the human review says the moved shapes are better. It is a seed-brittleness finding. Sub-percent changes in member shapes change which hypotheses the seed commits and which of them pass, and the pick turns pass or fail on them. A photometric score of the seed's candidates is what would have to make the pick robust to it.
 
-## Gates at the refined shape (2026-10-08)
+## Gates at the refined shape (2026-10-09)
 
 **Question.** The [human review](#human-review-of-moved-shapes-2026-10-09) found four spurious members, wrong correspondences the cluster kept. Two gates read each member's own patch again after the refinement, at its refined shape ([the member gate at the refined shape](cluster-patch-refinement.md#the-member-gate-at-the-refined-shape)): the whole grid against the up-front bar, and the count of its nine cells that read the largest radius, 3 (*capped*). How many kept members does each refuse, how often are those members wrong, which bar for the cell count do the data support, and does either refuse many right members?
 
@@ -1003,8 +1004,8 @@ With the acceptance-rule section's file, which moved 55 members of `KerryPark480
 
 - **Code.** Branch `bootstrap-core-migration` at `589ce099`, with the changes of the commit that adds this section, the extension rebuilt with `pixi run maturin develop --release`.
 - **Readings.** On the five entries of the [subset](#subset-with-the-loop-as-the-default-2026-10-09), the binding was run twice with `piecewise=True`, `radius=6` and the other settings at their defaults: with both gates off, and with the whole grid's gate on and the cell gate off (`max_capped_cells=9`), so that every member passing the ZNCC and shift gates carries both readings. With both gates off, every status, ZNCC and stored position is identical to the piecewise files of the [previous section](#subset-with-the-loop-as-the-default-2026-10-09). The tables count over the members those files keep.
-- **Ground truth.** Each entry's ground-truth reconstruction gives the poses of its images. A kept member is *wrong* when its refined position lies further than `max(3, 5·m)` px of its own photograph from the epipolar half-line of its reference's detection (the directions from the member's camera to the points of the reference's ray in front of the reference's camera), with `m` the entry's median of that distance over kept members, and *right* otherwise. The median is 0.21 px on `SeoulBull`, 0.22 on `KerryPark480`, 1.74 on `MurdoSmallAntiqueCat` and 0.94 on `DnDTabletop`. On `fleetws` it is 6.9 px: its reconstruction does not describe these images closely enough, and the entry is left out of every right and wrong count. A wrong correspondence along the epipolar line counts as right, so the wrong counts are lower bounds.
-- **Files.** `sfm cluster-patches --piecewise --patch-size 12` at the chosen defaults wrote one file per entry. Every file verifies at format version 10, and every member it keeps the ungated file kept. No image lost its kept member to a refusal: the gates run before the per-image dedupe, and the whole grid's gate refused no member after a piecewise move that it passed at the cascade's shape.
+- **Ground truth.** Each entry's ground-truth reconstruction gives the poses of its images. A kept member is judged when its own image and its reference's image both have a ground-truth pose: all kept members on `SeoulBull` (2,953), `KerryPark480` (15,986), `fleetws` (68,722) and `DnDTabletop` (1,375,116), and 585,707 of the 625,198 on `MurdoSmallAntiqueCat`, whose ground truth poses 349 of the file's 373 images, so 6.3% of its kept members are not judged. A kept member is *wrong* when its refined position lies further than `max(3, 5·m)` px of its own photograph from the epipolar half-line of its reference's detection (the directions from the member's camera to the points of the reference's ray in front of the reference's camera), with `m` the entry's median of that distance over kept members, and *right* otherwise. The median is 0.21 px on `SeoulBull`, 0.22 on `KerryPark480`, 1.74 on `MurdoSmallAntiqueCat` and 0.94 on `DnDTabletop`. On `fleetws` it is 6.9 px: its reconstruction does not describe these images closely enough, and the entry is left out of every right and wrong count. A wrong correspondence along the epipolar line counts as right, so the wrong counts are lower bounds.
+- **Files.** `sfm cluster-patches --piecewise --patch-size 12` at the chosen defaults wrote one file per entry. Every file verifies at format version 10, and every member it keeps the ungated file kept. The gates run before the per-image dedupe, so a refusal at the cascade's shape costs its image no member that would have passed. In the code measured here, a member whose moved shape failed a gate was refused after the dedupe: the whole grid's gate refused 0, 0, 1, 3 and 3 members after a piecewise move on the five entries in table order, each passed at its cascade shape, and each left its image with no member of the cluster; the cell rule refused none after a move. The stage now reverts such a move to the cascade's shape and keeps the member ([the member gate at the refined shape](cluster-patch-refinement.md#the-member-gate-at-the-refined-shape)), so at the defaults the whole grid's refusals below are smaller by those seven.
 - **Seed.** As under [Seed stage on the ground-truth entries](#seed-stage-on-the-ground-truth-entries), with the same environment, scoring and pass rule, on `SeoulBull` and `KerryPark480` with the gated files, against the previous section's piecewise results.
 
 **Result: the radius at the refined shape and the capped-cell count both separate wrong members, the cell count only at its top.**
@@ -1023,22 +1024,24 @@ Wrong share of kept members by radius at the refined shape, `SeoulBull` and `Ker
 | 2.9 to under 3 | 36 | 69.4% |
 | 3 | 260 | 86.2% |
 
-Wrong share of kept members by capped cells, with the number of kept members in brackets:
+Wrong share of judged kept members by capped cells, with the number of kept members in brackets, and on `MurdoSmallAntiqueCat` the number judged after it:
 
 | capped cells | SeoulBull | KerryPark480 | MurdoSmallAntiqueCat | DnDTabletop |
 |---|---|---|---|---|
-| 0 | 2.2% (1,931) | 9.7% (9,126) | 8.4% (461,809) | 8.5% (945,266) |
-| 2 | 10.8% (231) | 27.6% (1,626) | 18.1% (37,879) | 11.1% (98,835) |
-| 4 | 30.5% (59) | 33.4% (686) | 29.3% (14,282) | 14.6% (37,807) |
-| 5 | 38.9% (36) | 38.6% (404) | 35.3% (8,284) | 17.1% (22,296) |
-| 6 | 50.0% (20) | 35.2% (193) | 40.6% (4,356) | 21.1% (12,251) |
-| 7 | 55.6% (9) | 48.8% (82) | 49.3% (1,930) | 23.1% (5,820) |
-| 8 | 83.3% (12) | 70.6% (34) | 64.4% (727) | 30.4% (1,913) |
-| 9 | 96.3% (27) | 92.5% (53) | 95.1% (453) | 72.6% (241) |
+| 0 | 2.2% (1,931) | 9.7% (9,126) | 8.4% (461,809; 433,208) | 8.5% (945,266) |
+| 1 | 6.1% (506) | 20.5% (2,596) | 13.7% (69,805; 65,127) | 9.7% (186,626) |
+| 2 | 10.8% (231) | 27.6% (1,626) | 18.1% (37,879; 35,525) | 11.1% (98,835) |
+| 3 | 12.3% (122) | 29.7% (1,186) | 22.8% (25,673; 24,024) | 12.4% (64,061) |
+| 4 | 30.5% (59) | 33.4% (686) | 29.3% (14,282; 13,331) | 14.6% (37,807) |
+| 5 | 38.9% (36) | 38.6% (404) | 35.3% (8,284; 7,671) | 17.1% (22,296) |
+| 6 | 50.0% (20) | 35.2% (193) | 40.6% (4,356; 4,023) | 21.1% (12,251) |
+| 7 | 55.6% (9) | 48.8% (82) | 49.3% (1,930; 1,746) | 23.1% (5,820) |
+| 8 | 83.3% (12) | 70.6% (34) | 64.4% (727; 663) | 30.4% (1,913) |
+| 9 | 96.3% (27) | 92.5% (53) | 95.1% (453; 389) | 72.6% (241) |
 
-Every entry's wrong share rises with the count, and only nine capped cells is a majority wrong on all four. A bar of `2`, refusing three or more capped cells, would refuse 9.7%, 16.5%, 27.0%, 8.9% and 10.5% of the kept members of the five entries in table order, more right members than wrong on each of the four judged.
+The wrong share rises with the count on every entry except one step, `KerryPark480` from five capped cells to six (38.6% to 35.2%), and only nine capped cells is a majority wrong on all four. A bar of `2`, refusing three or more capped cells, would refuse 9.7%, 16.5%, 27.0%, 8.9% and 10.5% of the kept members of the five entries in table order, more right members than wrong on each of the four judged.
 
-**Defaults.** The whole grid's gate shares the up-front bar, `2.5`; in the pooled bands above, the wrong share passes one half between 2.5 and 2.9, so the data put no other bar there. The cell bar is the largest count above which members are more often wrong than right on every judged entry: `8`.
+**Defaults.** The whole grid's gate shares the up-front bar, `2.5`; in the pooled bands above, the wrong share passes one half between 2.5 and 2.9, so the data put no other bar there. The cell bar is the smallest bar above which members are more often wrong than right on every judged entry: `8`.
 
 **Refusals at the defaults.**
 

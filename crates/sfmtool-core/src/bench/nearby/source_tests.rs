@@ -20,7 +20,7 @@ use crate::bench::tests::scene::{edited as scene_edited, fixture_points, Scene, 
 use crate::bench::track_at_pixel::tests::matches_file;
 use crate::bench::track_at_pixel::{
     MatchesClusters, SiftIndexSource, ViewCamera, STATUS_KEPT, STATUS_REFERENCE,
-    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT,
+    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT, STATUS_REJECTED_UNLOCALIZABLE_CELLS,
 };
 use crate::features::kdforest::{
     FeatureGeometry, FeatureOrigin, ImageKeypoints, KdForestParams, KdForestU8, KdfOpenOptions,
@@ -290,12 +290,20 @@ fn the_member_policy_decides_which_members_are_used() {
     let scene = Scene::from_centers(&FOUR, PLANE_Z);
     let views = scene.views();
     // Image 1 holds a kept member at the point and a rejected one 30 px away;
-    // image 2's only member was rejected for its ZNCC.
+    // image 2's only member was rejected for its ZNCC, and image 3's by the
+    // capped-cell gate at its refined shape.
     let clusters = clusters_of(&[vec![
         member(&scene, 0, ON_PLANE, 0.0, STATUS_REFERENCE),
         member(&scene, 1, ON_PLANE, 30.0, STATUS_REJECTED_SHIFT),
         member(&scene, 1, ON_PLANE, 0.0, STATUS_KEPT),
         member(&scene, 2, ON_PLANE, 0.0, STATUS_REJECTED_LOW_ZNCC),
+        member(
+            &scene,
+            3,
+            ON_PLANE,
+            0.0,
+            STATUS_REJECTED_UNLOCALIZABLE_CELLS,
+        ),
     ]]);
     let pixel = scene.project(0, ON_PLANE);
     let images = |members: ClusterMembers| -> Vec<u32> {
@@ -307,8 +315,8 @@ fn the_member_policy_decides_which_members_are_used() {
         found[0].sightings.iter().map(|s| s.0).collect()
     };
     // Any member: the kept one in image 1 is preferred to the rejected one,
-    // and image 2's rejected member is used.
-    assert_eq!(images(ClusterMembers::Any), vec![0, 1, 2]);
+    // and the rejected members of images 2 and 3 are used.
+    assert_eq!(images(ClusterMembers::Any), vec![0, 1, 2, 3]);
     // Only the reference and the kept.
     assert_eq!(images(ClusterMembers::Kept), vec![0, 1]);
 

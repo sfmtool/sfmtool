@@ -409,10 +409,12 @@ pub fn clusters_to_pair_matches(
 ///         (specs/core/patch/zncc-self-similarity-radius.md).
 ///     regate_at_refined_shape: Read the member gate again, with the same
 ///         bar, on the member's own grid at its refined shape and position,
-///         for every member that passes the ZNCC and shift gates (and again
-///         at the piecewise stage's shape where that moved it). A member over
-///         the bar there is marked rejected_unlocalizable_refined. None takes
-///         the Rust default (True); off when the bar is 0.
+///         for every member that passes the ZNCC and shift gates. A member
+///         over the bar there is marked rejected_unlocalizable_refined. Where
+///         the piecewise stage moves a kept member, both gates are read again
+///         at the moved shape, and a moved shape that fails either is reverted
+///         to the cascade's; the member stays kept. None takes the Rust
+///         default (True); off when the bar is 0.
 ///     max_capped_cells: The most of the nine cells of that same reading
 ///         that may read the largest radius, 3 ("3 or further"); a member with
 ///         more is marked rejected_unlocalizable_cells. 9 or more turns
@@ -475,7 +477,9 @@ pub fn clusters_to_pair_matches(
 ///     for every other member and throughout when both gates are off; not
 ///     stored in the ``.matches`` section. ``regate_at_refined_shape`` (bool)
 ///     and ``max_capped_cells`` (int) are the two gates' settings the run
-///     used, the Rust defaults where the arguments were None. With
+///     used, the Rust defaults where the arguments were None;
+///     ``regate_at_refined_shape`` is False when the member gate's bar is 0,
+///     since the whole grid's gate shares that bar and does not run. With
 ///     ``piecewise`` the dict also
 ///     carries the per-cell columns of
 ///     the ``cluster_patches/`` section, cells ``[m, row, col]`` from the
@@ -707,7 +711,8 @@ pub fn refine_cluster_patches<'py>(
         "member_refined_zncc_self_similarity_radius_grid",
         refined_grid.into_pyarray(py),
     )?;
-    dict.set_item("regate_at_refined_shape", params.regate_at_refined_shape)?;
+    // Whether the whole grid's gate ran, so a bar of 0 records it off.
+    dict.set_item("regate_at_refined_shape", params.refined_shape_gate_is_on())?;
     dict.set_item("max_capped_cells", params.max_capped_cells)?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;

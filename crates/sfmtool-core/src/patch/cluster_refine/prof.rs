@@ -64,8 +64,10 @@ pub static N_GATE_REJECTED: AtomicU64 = AtomicU64::new(0);
 /// Members read by the gates at the refined shape, after the cascade or
 /// after a piecewise move.
 pub static N_REFINED_GATED: AtomicU64 = AtomicU64::new(0);
-/// Members those gates rejected.
+/// Members those gates rejected at the cascade's shape.
 pub static N_REFINED_GATE_REJECTED: AtomicU64 = AtomicU64::new(0);
+/// Piecewise moves those gates refused, so the member kept its cascade shape.
+pub static N_REFINED_GATE_REVERTED: AtomicU64 = AtomicU64::new(0);
 /// `refine_member` cascades run.
 pub static N_REFINES: AtomicU64 = AtomicU64::new(0);
 /// Objective evaluations (calls of `eval_zncc`, all cascade stages).
@@ -105,6 +107,7 @@ pub fn reset() {
             &N_GATE_REJECTED,
             &N_REFINED_GATED,
             &N_REFINED_GATE_REJECTED,
+            &N_REFINED_GATE_REVERTED,
             &N_REFINES,
             &N_EVALS,
             &N_EVALS_SHIFT,
@@ -180,9 +183,11 @@ pub fn report(clusters: usize, wall_secs: f64) {
          sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)",
     );
     eprintln!(
-        "[sfmtool-profile]   refined-shape gates read {} (rejected {})  piecewise members {}",
+        "[sfmtool-profile]   refined-shape gates read {} (rejected {}, moves reverted {})  \
+         piecewise members {}",
         N_REFINED_GATED.load(Ordering::Relaxed),
         N_REFINED_GATE_REJECTED.load(Ordering::Relaxed),
+        N_REFINED_GATE_REVERTED.load(Ordering::Relaxed),
         N_PIECEWISE.load(Ordering::Relaxed),
     );
 }

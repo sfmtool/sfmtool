@@ -1543,3 +1543,124 @@ fn cell_layout_centres_are_the_shared_cell_centres() {
         }
     }
 }
+
+/// [`perturbed_start`] at a shape 5% larger and 0.4 px higher: a start from
+/// which the cascade stops at a member grid that reads sharper, under the
+/// whole-grid gate at the refined shape, than the grid at the shape the
+/// piecewise stage moves it to.
+fn sharper_cascade_start() -> (Mat2, [f64; 2]) {
+    let (s0, p0) = perturbed_start();
+    (
+        [[s0[0][0] * 1.05, s0[0][1]], [s0[1][0], s0[1][1] * 1.05]],
+        [p0[0], p0[1] - 0.4],
+    )
+}
+
+/// One cluster over the two images of [`run_clusters`] whose second image
+/// holds two features at the same seed `start`, so both members are refined
+/// alike and the per-image dedupe keeps the first.
+fn run_duplicate_pair(
+    params: &ClusterRefineParams,
+    start: (Mat2, [f64; 2]),
+) -> ClusterRefineResult {
+    let img1 = make_image(128, 128, texture);
+    let img2 = member_image(a_true(), [0.0, 0.0], None);
+    let mut pos = Array2::<f32>::zeros((1, 2));
+    let mut aff = Array3::<f32>::zeros((1, 2, 2));
+    let mut pos2 = Array2::<f32>::zeros((2, 2));
+    let mut aff2 = Array3::<f32>::zeros((2, 2, 2));
+    let (s, p) = start;
+    for i in 0..2 {
+        pos[[0, i]] = C[i] as f32;
+        for k in 0..2 {
+            pos2[[k, i]] = p[i] as f32;
+        }
+        for j in 0..2 {
+            aff[[0, i, j]] = A_REF[i][j] as f32;
+            for k in 0..2 {
+                aff2[[k, i, j]] = s[i][j] as f32;
+            }
+        }
+    }
+    let features = [
+        FeatureGeometry {
+            positions_xy: pos.view(),
+            affine_shapes: aff.view(),
+        },
+        FeatureGeometry {
+            positions_xy: pos2.view(),
+            affine_shapes: aff2.view(),
+        },
+    ];
+    let pyramids = [
+        ImageU8Pyramid::build(&img1, 6),
+        ImageU8Pyramid::build(&img2, 6),
+    ];
+    refine_cluster_patches(
+        &pyramids,
+        &features,
+        &[0, 3],
+        &[0, 1, 1],
+        &[0, 0, 1],
+        params,
+        None,
+    )
+}
+
+#[test]
+fn a_dedupe_winner_whose_moved_shape_fails_the_refined_shape_gate_is_reverted() {
+    let fx = fixture();
+    let start = sharper_cascade_start();
+    let cascade_only = ClusterRefineParams {
+        piecewise: None,
+        ..fx.params.clone()
+    };
+    // With the default bar the stage moves the winner, and the grid at the
+    // moved shape reads less sharp than the grid at the cascade's shape.
+    let cascade = run_duplicate_pair(&cascade_only, start);
+    let moved = run_duplicate_pair(&fx.params, start);
+    let statuses = [
+        MemberStatus::Reference,
+        MemberStatus::Kept,
+        MemberStatus::DuplicateImage,
+    ];
+    assert_eq!(cascade.member_status, statuses);
+    assert_eq!(moved.member_status, statuses);
+    assert_ne!(moved.member_affine_shapes, cascade.member_affine_shapes);
+    let at_cascade = cascade.refined_zncc_self_similarity_radius[1];
+    let at_moved = moved.refined_zncc_self_similarity_radius[1];
+    assert!(at_moved > at_cascade + 1e-3, "{at_cascade} {at_moved}");
+
+    // A bar between the two: the member passes at the cascade's shape and so
+    // wins its image, and its moved shape fails. The move is reverted rather
+    // than refused, so its image keeps its member.
+    let bar = ClusterRefineParams {
+        max_member_zncc_self_similarity_radius: 0.5 * (at_cascade + at_moved) as f64,
+        ..fx.params.clone()
+    };
+    let bar_cascade = ClusterRefineParams {
+        piecewise: None,
+        ..bar.clone()
+    };
+    let expected = run_duplicate_pair(&bar_cascade, start);
+    assert_eq!(expected.member_status, statuses);
+    let out = run_duplicate_pair(&bar, start);
+    assert_eq!(out.member_status, statuses, "the winner stays kept");
+    assert_eq!(out.member_affine_shapes, expected.member_affine_shapes);
+    assert_eq!(out.member_positions, expected.member_positions);
+    for (got, want) in [
+        (&out.member_zncc, &expected.member_zncc),
+        (&out.member_zncc_middle, &expected.member_zncc_middle),
+        (&out.member_shift_px, &expected.member_shift_px),
+        (
+            &out.refined_zncc_self_similarity_radius,
+            &expected.refined_zncc_self_similarity_radius,
+        ),
+    ] {
+        let bits = |v: &Vec<f32>| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(got), bits(want));
+    }
+    let cells = out.cells[1].expect("the kept member has cells");
+    assert_eq!(cells.status, [[CellStatus::NotAttempted; 3]; 3]);
+    assert!(cells.iterations >= 1);
+}

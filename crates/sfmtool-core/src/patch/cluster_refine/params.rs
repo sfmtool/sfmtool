@@ -43,8 +43,8 @@ pub enum MemberStatus {
     /// (excluded before reference selection and refinement).
     RejectedUnlocalizable = 6,
     /// Rejected: the member passed the ZNCC and shift gates, but its own patch
-    /// read at its refined shape and position (the piecewise stage's, when
-    /// that moved it) does not pin a position: its ZNCC self-similarity radius
+    /// read at the shape and position the cascade returned does not pin a
+    /// position: its ZNCC self-similarity radius
     /// there is above
     /// [`ClusterRefineParams::max_member_zncc_self_similarity_radius`]. Only
     /// with [`ClusterRefineParams::regate_at_refined_shape`].
@@ -140,12 +140,14 @@ pub struct ClusterRefineParams {
     pub max_member_zncc_self_similarity_radius: f64,
     /// Read the member gate again at the member's refined shape and position,
     /// for every member that passes the ZNCC and shift gates: the member's own
-    /// `R×R` grid is sampled at the shape the cascade returned (and again at
-    /// the piecewise stage's shape, where that moved it), its ZNCC
+    /// `R×R` grid is sampled at the shape the cascade returned, its ZNCC
     /// self-similarity radius is read as the up-front gate reads it, and a
     /// member whose radius is above
     /// [`Self::max_member_zncc_self_similarity_radius`] becomes
-    /// [`MemberStatus::RejectedUnlocalizableRefined`]. The up-front gate reads
+    /// [`MemberStatus::RejectedUnlocalizableRefined`]. Where the piecewise
+    /// stage moves a kept member it is read again at the moved shape, and a
+    /// moved shape over the bar is reverted to the cascade's rather than
+    /// refused. The up-front gate reads
     /// the SIFT detection's shape, which can sample a different stretch of the
     /// photograph than the shape the member is matched at. Off when the bar
     /// itself is off. See [`Self::refined_shape_verdict`].
@@ -369,8 +371,12 @@ pub struct ClusterRefineResult {
     ///
     /// Where the stage moved a kept member, which it does only with
     /// [`PiecewiseParams::move_shape`], that member's shape and position
-    /// are the stage's, and its ZNCC, middle ZNCC, ZNCC grid and shift are
-    /// read again at that shape and position; its status stays the cascade's.
+    /// are the stage's, and its ZNCC, middle ZNCC, ZNCC grid, shift and
+    /// readings at the refined shape are read again at that shape and
+    /// position. A move whose shape fails a gate the cascade's shape passed is
+    /// not stored: the member keeps the cascade's shape and readings and its
+    /// cells are all [`CellStatus::NotAttempted`](super::CellStatus::NotAttempted). The
+    /// stage never changes a member's status.
     pub cells: Vec<Option<CellRefinement>>,
     /// `(M,)` the ZNCC self-similarity radius of the member's own grid at its
     /// refined shape and position, the reading

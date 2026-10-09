@@ -51,7 +51,8 @@ pub use neighbourhood::{
 pub(crate) use finish::{seed_cluster_with, upgrade_sightings};
 pub(crate) use neighbourhood::{
     ObservationIndex, ViewCamera, STATUS_KEPT, STATUS_NOT_EVALUATED, STATUS_REFERENCE,
-    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT,
+    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT, STATUS_REJECTED_UNLOCALIZABLE_CELLS,
+    STATUS_REJECTED_UNLOCALIZABLE_REFINED,
 };
 
 /// One way of finding the pixel's sightings in the other photographs.

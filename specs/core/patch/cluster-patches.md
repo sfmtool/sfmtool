@@ -270,9 +270,10 @@ members unless a caller asks otherwise:
 - The clusters source of the [matching sources near a
   pixel](../bench/nearby-sources.md#the-clusters) triangulates the members of
   the clusters near a pixel into candidate points. It is the exception to the
-  rule above: by default it also admits the members rejected for a low ZNCC or
-  a large shift and the unevaluated ones, and lets the triangulation drop the
-  bad ones; its `kept` policy admits only the reference and the kept.
+  rule above: by default it also admits the members rejected after they were
+  measured (for a low ZNCC, a large shift, or by either gate at the refined
+  shape) and the unevaluated ones, and lets the triangulation drop the bad
+  ones; its `kept` policy admits only the reference and the kept.
 - [Source clusters](../analysis/source-clusters.md) takes a cluster selection
   drawn from the file and bands its clusters by feature radius, read off the
   members' affine shapes against the refine radius recorded in the

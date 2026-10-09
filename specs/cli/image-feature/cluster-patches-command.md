@@ -73,7 +73,7 @@ judges the whole patch by the same bar, the second counts the cells of the
 patch's three-by-three split that read `3`
 ([gates at the refined shape](../../core/patch/cluster-patch-refinement.md#the-member-gate-at-the-refined-shape)).
 Their defaults were chosen on five captures, four with ground-truth poses
-([measurements](../../core/patch/cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-08)).
+([measurements](../../core/patch/cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-09)).
 `--piecewise` runs the piecewise refinement of
 [cluster-patch-refinement.md](../../core/patch/cluster-patch-refinement.md#piecewise-refinement)
 with its default parameters (`move_shape` true): it measures the cells, and
@@ -120,9 +120,10 @@ consumer reads the cells.
    robust affine map to their shifts, and applies that map as an update of
    the member's shape and position while the whole-patch ZNCC does not fall,
    re-reading the member's scores at the moved shape. It returns each cell's
-   displacement, ZNCC and status and the member's pass count; the member's
-   status stays the cascade's unless the gates at the refined shape, read
-   again at a moved shape, refuse it there.
+   displacement, ZNCC and status and the member's pass count. The member's
+   status stays the cascade's: a moved shape that fails a gate the cascade's
+   shape passed, the gates at the refined shape included, is reverted to the
+   cascade's shape.
 4. **Write.** A new `.matches` file at the current format version: the images
    and clusters sections carried over, with the backbone's geometry advanced
    to this file's stage. For every member the cascade **measured** — status
@@ -139,7 +140,9 @@ consumer reads the cells.
    stored signal computed in the same kernel call, no CLI knobs) —
    `refine_options` = the CLI parameters (`patch_size`, `resolution`,
    `min_zncc`, `max_shift_px`, `max_member_zncc_self_similarity_radius`,
-   `regate_at_refined_shape`, `max_capped_cells`, `piecewise`; a
+   `regate_at_refined_shape`, `max_capped_cells`, `piecewise`, with
+   `regate_at_refined_shape` false when the bar is `0` and the gate does not
+   run; a
    file written before the gate read the radius carries
    `max_keypoint_uncertainty` in place of the radius bar, and nothing reads
    either back). With `--piecewise`, `refine_options` also records the

@@ -342,6 +342,12 @@ pub(crate) const STATUS_REJECTED_SHIFT: u8 = 3;
 /// The member-status legend: a member nothing evaluated, which is what every
 /// member of a file with no cluster-patches section is.
 pub(crate) const STATUS_NOT_EVALUATED: u8 = 5;
+/// The member-status legend: a member whose own patch does not pin a position
+/// at its refined shape, measured and then refused.
+pub(crate) const STATUS_REJECTED_UNLOCALIZABLE_REFINED: u8 = 7;
+/// The member-status legend: a member with too many capped cells at its
+/// refined shape, measured and then refused.
+pub(crate) const STATUS_REJECTED_UNLOCALIZABLE_CELLS: u8 = 8;
 
 /// Why a `.matches` file cannot serve as the clusters a track-at-pixel query
 /// reads.

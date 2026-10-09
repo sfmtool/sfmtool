@@ -520,19 +520,28 @@ The whole grid is judged first, so a member failing both is
 `RejectedUnlocalizableRefined`. A refused member keeps its measurement, as a
 ZNCC- or shift-rejected member does, and `refined_zncc_self_similarity_radius`
 and `refined_zncc_self_similarity_radius_grid` carry both readings for every
-member that reached them, refused or not, whenever either gate is on. The
-reference is not read again: it is not refined, and its detection passed the
-up-front gate.
+member that reached them, refused or not, whenever either gate is on.
+
+The reference is not read again, and its cells are deliberately not counted.
+It is not refined, and its detection passed the up-front gate. The reference
+defines the template every member is matched against, so a capped cell on it
+is a property of the template that every member shares: a member matched to
+that stretch of surface shows it in its own grid, and the cell gate reads it
+there. Refusing the reference would not remove one member but the cluster's
+anchor, and every member measured against it with it.
 
 The gates run before the per-image dedupe, so a refused member cannot cost its
 image a member that would have passed. When the piecewise stage moves a kept
-member, both are read again at the moved shape, and a member that fails there
-takes the refusing status with the moved shape and its readings; that is the
-one way the stage changes a status. The dedupe has run by then, so that image
-keeps no member of the cluster.
+member, both are read again at the moved shape, and a moved shape that fails
+either is reverted like one that fails the ZNCC or shift gate
+([Revert](#piecewise-refinement)): the member keeps its cascade shape and
+readings, those at the refined shape included, and its status. The stage never
+changes a status. The member passed both gates at its cascade shape, and the
+dedupe has run by then, so refusing it would leave its image with no member of
+the cluster.
 
 **What the defaults rest on.** Both were measured on five captures
-([measurements](cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-08)),
+([measurements](cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-09)),
 four of which have ground-truth poses good enough to judge a kept member: a
 member is counted *wrong* when its refined position lies further from the
 epipolar half-line of its reference's detection, under the ground-truth poses,
@@ -542,14 +551,15 @@ epipolar line counts as right, so the wrong counts are lower bounds.
 
 - The whole grid's bar is the up-front bar by construction. On the two
   captures with the tightest ground truths, pooled, kept members whose radius
-  at the refined shape is at most 2.5 are wrong at most 38% of the time per
-  0.25-px band, and those above 2.75 at least 53%; the band between reads 49%.
+  at the refined shape is at most 2.5 are wrong at most 38% of the time in
+  every band of the measurements' table, and those above 2.75 at least 52.8%;
+  the band between reads 49%.
   The gate refuses 0.3% to 4.5% of kept members; 35% to 74% of them are wrong,
   against 7% to 17% of all kept members, and it refuses 0.24% to 2.1% of the
   members counted right. It is on by default.
-- The cell bar is the largest count of capped cells such that, on every
-  capture with usable ground truth, the members with more capped cells are more
-  often wrong than right. Only members with all nine capped are (73% to 97%
+- The cell bar is the smallest bar such that, on every capture with usable
+  ground truth, the members with more capped cells than the bar are more
+  often wrong than right. Only members with all nine capped are (73% to 96%
   wrong); members with eight are 30% wrong on one capture, so the bar is `8`.
   There the cell rule refuses 0.02% to 0.9% of kept members, and on the two
   tightest captures every member it refuses is also over the whole grid's bar.
@@ -820,9 +830,10 @@ happens when any iteration fails: a failed render, no surviving cell, or a
 fitted map that reflects (`det A ≤ 0`) or is not finite. What earlier iterations
 fitted is discarded, because it was read at a shape that would not be the one
 returned. A rejected update is not a failure: the member keeps the shape the last
-render was made at, with that render's readings. The member's status is the
-cascade's, except that a moved member is read again by [the member gate at the
-refined shape](#the-member-gate-at-the-refined-shape) at its moved shape.
+render was made at, with that render's readings. A moved member is also read
+again by [the gates at the refined shape](#the-member-gate-at-the-refined-shape)
+at its moved shape, and one that fails either is reverted in the same way. The
+member's status is always the cascade's.
 
 #### What the fleet measurements decide
 
@@ -866,10 +877,12 @@ The measurements are in
   1.25×. The seed's `KerryPark480` pick passes, better than with the cascade
   file, while the candidates it commits change.
 - **The gates at the refined shape** ([subset
-  run](cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-08)):
+  run](cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-09)):
   the whole grid's gate refuses 0.3% to 4.5% of the kept members, a third to
-  three quarters of them wrong by the ground truths, and refuses no moved member
-  that it passed at the cascade's shape; the cell gate at `8` adds 0 to 53.
+  three quarters of them wrong by the ground truths; the cell gate at `8` adds
+  0 to 53. Seven members on three entries passed at their cascade shape and
+  failed at their moved shape, and refusing them after the dedupe left their
+  images with no member, which is why such a move is now reverted.
 - **The cell gates.** Neither the cell ZNCC distribution nor the curvature's has
   a valley or a knee to place a bar in
   ([gate sweep](cluster-patch-refinement-measurements.md#gate-sweep)); `0.8`
@@ -995,8 +1008,8 @@ kerry_park, and the recovery at the ground-truth pose is unchanged.
 Each member that passes the ZNCC and shift gates costs one more sample of its
 `R×R` grid, one whole reading and one parts reading, and a moved member the same
 again. Through the binding with the piecewise stage on, the CPU time of the
-whole call rose by 2.5% to 12% on the five subset entries, most on the smallest,
-where the refinement itself is cheapest per member.
+whole call rose by 2.5% to 12.0% on the five subset entries, most on
+`KerryPark480` (+12.0%) and least on the largest, `DnDTabletop` (+2.5%).
 
 ### Piecewise stage internals
 
@@ -1215,6 +1228,10 @@ second plane, the three cells over it are refused and the update follows the
 first plane. An update that lowers the whole-member ZNCC, or whose support
 leaves the frame, is rejected; alternating updates stop at the second iteration
 with the better shape; a refined shape that fails a cascade gate is reverted;
+a dedupe winner whose moved shape fails the whole grid's gate at the refined
+shape, at a bar between its readings at the cascade's and the moved shape, is
+reverted and stays kept, with every output the cascade-only run's and its
+cells not attempted, so its image keeps its member;
 a flat member keeps its cascade shape with nine cells not attempted. Further
 tests pin the model fallbacks (similarity for three or four survivors, for five
 in one row, and for a singular affine; a shift for one or two), the

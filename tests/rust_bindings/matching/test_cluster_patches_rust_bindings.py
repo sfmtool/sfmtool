@@ -373,6 +373,19 @@ class TestRefineClusterPatches:
         )
         assert off["regate_at_refined_shape"] is False
         assert off["member_status"][1] == STATUS_KEPT
+        # The whole grid's gate shares the member gate's bar, so a bar of 0
+        # records it off.
+        no_bar = refine_cluster_patches(
+            images,
+            pos,
+            aff,
+            starts,
+            m_img,
+            m_feat,
+            max_member_zncc_self_similarity_radius=0.0,
+        )
+        assert no_bar["regate_at_refined_shape"] is False
+        assert no_bar["member_status"][1] == STATUS_KEPT
 
     def test_progress_counter_ticks(self):
         from sfmtool import ProgressCounter

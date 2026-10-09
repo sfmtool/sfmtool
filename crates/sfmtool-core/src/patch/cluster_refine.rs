@@ -1125,19 +1125,22 @@ fn refine_cluster(
 /// shape never moves, so only the cells are stored and every other reading of
 /// the member is left untouched.
 ///
-/// A moved member is read by the gates at the refined shape again, at the new
-/// shape ([`ClusterRefineParams::reads_refined_shape`]), and one that fails
-/// them takes that status, with the moved shape and its readings. That is the
-/// one way the stage changes a member's status.
-///
 /// The member was kept on the cascade's readings, so the stage's shape must
 /// pass the same gates to replace it: the ZNCC read again at the new map must
 /// be at least [`ClusterRefineParams::min_zncc`] and at least the cascade's own
-/// stored ZNCC, and the new position's shift from the seed at most
-/// [`ClusterRefineParams::max_shift_px`]. When any fails, or when the new map's support leaves the frame so nothing
-/// can be read, the member keeps its cascade shape, position and readings,
-/// and every cell is stored as [`CellStatus::NotAttempted`] with the loop's
-/// iteration count.
+/// stored ZNCC, the new position's shift from the seed at most
+/// [`ClusterRefineParams::max_shift_px`], and, when either gate at the refined
+/// shape is on ([`ClusterRefineParams::reads_refined_shape`]), the member's
+/// own grid read at the new shape must pass both. When any fails, or when the
+/// new map's support leaves the frame so nothing can be read, the member
+/// keeps its cascade shape, position and readings, the readings at the
+/// refined shape included, and every cell is stored as
+/// [`CellStatus::NotAttempted`] with the loop's iteration count.
+///
+/// The stage never changes a member's status. The member passed every gate
+/// at its cascade shape, and the per-image dedupe has already run, so a
+/// refusal here could leave its image with no member, where reverting keeps
+/// the member that passed.
 #[allow(clippy::too_many_arguments)]
 fn refine_kept_member_cells(
     member: &mut MemberOutcome,
@@ -1195,17 +1198,20 @@ fn refine_kept_member_cells(
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
         return;
     };
+    let cascade = member.clone();
     member.affine = [[sh[0][0], sh[0][1], ps[0]], [sh[1][0], sh[1][1], ps[1]]];
     member.zncc = zncc as f32;
     member.set_parts(parts);
     member.shift = shift as f32;
-    member.cells = Some(out.cells);
-    if params.reads_refined_shape() {
-        if let Some(refused) = member.read_refined_shape(pyramid, params) {
-            prof::count(&prof::N_REFINED_GATE_REJECTED, 1);
-            member.status = refused;
-        }
+    if params.reads_refined_shape() && member.read_refined_shape(pyramid, params).is_some() {
+        // The moved shape fails a gate the cascade shape passed: keep the
+        // cascade shape and its readings.
+        prof::count(&prof::N_REFINED_GATE_REVERTED, 1);
+        *member = cascade;
+        member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
+        return;
     }
+    member.cells = Some(out.cells);
 }
 
 /// The whole-patch windowed ZNCC and its part readings of a member at

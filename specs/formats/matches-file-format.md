@@ -655,7 +655,10 @@ refinement measured and which members stand.
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place),
   `regate_at_refined_shape` and `max_capped_cells`, the settings of the two
-  gates read at the refined shape (absent from a file written before them),
+  gates read at the refined shape (absent from a file written before them;
+  `regate_at_refined_shape` is false whenever the whole-patch gate did not
+  run, including when `max_member_zncc_self_similarity_radius` is `0`, the bar
+  that gate shares),
   and `piecewise`, whether the per-cell refinement ran. When it ran, the
   piecewise refinement's settings sit beside it as flat keys: `move_shape`
   (whether the refinement was allowed to change the member's shape),

@@ -255,7 +255,12 @@ def triangulate(ctx, sightings):
 def vet_cluster(ctx, image, cluster, max_reproj_px: float, policy: str = "kept"):
     """The cluster's usable members when they triangulate cleanly, else ``None``.
 
-    The queried image's member must be the reference or kept. The reference
+    The queried image's member must be the reference or kept. With
+    ``policy="any"`` every member that carries a measurement is usable too:
+    those rejected for a low ZNCC, a large shift or by either gate at the
+    refined shape (``rejected_unlocalizable_refined``,
+    ``rejected_unlocalizable_cells``), which were measured before they were
+    refused, and the unevaluated. The reference
     and kept members (the best-reading one per image) must meet in front of
     every camera with every reprojection error within ``max_reproj_px``; the
     worst member is dropped and the rest tried again while three or more
@@ -263,7 +268,14 @@ def vet_cluster(ctx, image, cluster, max_reproj_px: float, policy: str = "kept")
     """
     usable = ("reference", "kept")
     if policy == "any":
-        usable = (*usable, "rejected_low_zncc", "rejected_shift", "not_evaluated")
+        usable = (
+            *usable,
+            "rejected_low_zncc",
+            "rejected_shift",
+            "rejected_unlocalizable_refined",
+            "rejected_unlocalizable_cells",
+            "not_evaluated",
+        )
     if cluster["member"]["status"] not in usable:
         return None
     best: dict[int, dict] = {}
