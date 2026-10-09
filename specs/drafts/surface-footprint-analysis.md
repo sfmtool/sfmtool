@@ -20,7 +20,7 @@ The two checked-in ground truths carry patch half-extents that the maintainer se
 
 [patch-footprint-selection.md](patch-footprint-selection.md) therefore reduces the per-point question to the anchor floor: the smallest footprint at which all nine cells of a patch localise, which is where an anchor can resolve a normal and an affine shape. The hand-set size lies above that floor on most points, by a median factor of about 1.4. This draft proposes the step that chooses how far above: group the anchors that lie on one surface, and give the group one footprint.
 
-The anchors' cells and their cell plane normals are readings of the anchor, taken at the floor. The maintainer's measurements found them nearly independent of the footprint; those measurements are not yet recorded in a spec. If they hold, the step can group anchors by their floor-level normals and change the footprint afterwards without reading the normals again.
+The anchors' cells and their cell plane normals are readings of the anchor, taken at the floor. Whether they depend on the footprint has not been measured: the cell plane normals were measured at one patch size only ([cluster-patch-refinement-measurements.md](../core/patch/cluster-patch-refinement-measurements.md)). If they prove independent of it, the step can group anchors by their floor-level normals and change the footprint afterwards without reading the normals again.
 
 ## Proposal
 
