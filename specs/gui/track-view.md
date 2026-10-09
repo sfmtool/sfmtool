@@ -127,6 +127,10 @@ impl AppState {
     /// (focusing the item already from it), or with no point selected focuses
     /// the most recent item; `false` unfocuses.
     pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String>;
+    /// The selected point's index on `id` when the version at the cursor holds
+    /// it: the selection the box and `set_editing` both read, so a deleted or
+    /// out-of-range point counts as no point selected.
+    pub(crate) fn selected_point_held_in(&self, id: ReconId) -> Option<usize>;
     /// The item Track View edits, one for the viewer, and its node and origin
     /// selected; no version, one `Selection` row ([`bench.md`](bench.md)
     /// § "The focused item").

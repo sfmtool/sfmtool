@@ -483,6 +483,28 @@ fn a_busy_node_does_not_refuse_focusing_or_unfocusing() {
     state.finish_background_task();
 }
 
+/// A selected point the version at the cursor no longer holds is no selection
+/// to a tick of *Edit*, as it is to the box: the tick goes back to the most
+/// recent item rather than trying to put a missing point on the bench.
+#[test]
+fn ticking_edit_over_a_point_the_version_no_longer_holds_goes_back_to_the_item() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.unfocus_bench_item();
+    let other = PointRef::new(id, 0);
+    state.select_point(other);
+    state.delete_point(other).expect("a live point");
+    for stale in [other, PointRef::new(id, 999)] {
+        state.unfocus_bench_item();
+        state.selected_point = Some(stale);
+        assert_eq!(state.selected_point_held_in(id), None);
+        let before = versions(&state, id);
+        state.set_editing(id, true).expect("an item to go back to");
+        assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+        assert_eq!(versions(&state, id), before, "a focus is no version");
+    }
+}
+
 // ── The selection rules ─────────────────────────────────────────────────
 //
 // While an item is focused, the selected node is its node and the selected

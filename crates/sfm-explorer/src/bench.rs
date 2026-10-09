@@ -1578,7 +1578,9 @@ impl AppState {
     /// Ticked (`true`), the selected point is put on the bench and focused, or
     /// the item already there is focused when one came from that point
     /// ([`Self::put_point_on_bench`]). The first is a bench step and the
-    /// second is not. With no point selected on `id`, the tick focuses the
+    /// second is not. With no point selected on `id`, or a selected point the
+    /// version at the cursor no longer holds
+    /// ([`Self::selected_point_held_in`]), the tick focuses the
     /// most recently focused item still on a bench ([`Self::most_recent_item`]),
     /// which may be on another node and selects it, and is refused with the
     /// ways in when there is none. Cleared (`false`), nothing is focused and
@@ -1589,8 +1591,10 @@ impl AppState {
             self.unfocus_bench_item();
             return Ok(());
         }
-        match self.selected_point.filter(|point| point.recon == id) {
-            Some(point) => self.put_point_on_bench(point, None).map(|_| ()),
+        match self.selected_point_held_in(id) {
+            Some(index) => self
+                .put_point_on_bench(PointRef::new(id, index), None)
+                .map(|_| ()),
             None => {
                 let (node, label) = self
                     .most_recent_item()
@@ -1598,6 +1602,20 @@ impl AppState {
                 self.focus_bench_item(node, &label)
             }
         }
+    }
+
+    /// The selected point's local index on `id` when the version at `id`'s
+    /// cursor holds that point, and `None` otherwise.
+    ///
+    /// A selection the version no longer holds (a deleted point, or an index
+    /// past the end of the points) is no selection to Track View: its *Edit*
+    /// box and [`Self::set_editing`] both read the selection through this, so
+    /// a tick the box offers as a return to the most recent item does that,
+    /// rather than trying to put a missing point on the bench.
+    pub(crate) fn selected_point_held_in(&self, id: ReconId) -> Option<usize> {
+        let index = self.selected_point_in(id)?;
+        let node = self.scene.iter().find(|node| node.id == id)?;
+        node.edited().point(index as u32).is_some().then_some(index)
     }
 
     /// *Start cluster on the bench here*, chosen in the Image Detail panel at

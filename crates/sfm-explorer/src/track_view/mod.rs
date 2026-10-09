@@ -137,9 +137,7 @@ impl TrackView {
         let editing = focused.is_some();
         // A selection the version no longer holds is no selection, so the box
         // and the body agree.
-        let selected_point = state
-            .selected_point_in(id)
-            .filter(|&index| node.edited().point(index as u32).is_some());
+        let selected_point = state.selected_point_held_in(id);
 
         // The box. Only a tick over a point not yet on the bench is a bench
         // step, so only that is greyed by a task holding the node, with the
