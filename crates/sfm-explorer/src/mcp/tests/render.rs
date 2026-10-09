@@ -654,6 +654,10 @@ fn a_bench_observation_target_selects_its_own_camera_image() {
     let image = track["observations"][1]["camera_image"]
         .as_u64()
         .expect("an image index");
+    assert_ne!(
+        image, 0,
+        "the sighting is in photograph 0, so nothing below tests a move"
+    );
     // The panel is standing on some *other* photograph, so the target has to
     // move the selection for the view to mean anything.
     let first = crate::scene::ImageRef::new(state.scene[0].id, 0);

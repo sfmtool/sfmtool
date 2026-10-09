@@ -343,11 +343,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           bench_observation centres one sighting of a bench track (and selects \
                           the camera image it is in, unless camera_image names another), and \
                           fit shows the whole photograph. zoom is absolute, 1.0 being the fit, \
-                          and applies to every target but rect and fit, which settle their own; it is clamped to the panel's range \
-                          and the reply says where it landed. The panel is opened if it was \
-                          closed, and a call that arrives before it has drawn a photograph is \
-                          answered once it has. The reply is get_image_detail_view's document \
-                          for the view the panel applies.",
+                          and applies to every target but rect and fit, which settle their \
+                          own; it is clamped to the panel's range and the reply says where it \
+                          landed. The panel is opened if it was closed, and a call that arrives \
+                          before it has drawn a photograph is answered once it has. The reply \
+                          is get_image_detail_view's document for the view the panel applies.",
             kind: Write,
             schema: object(
                 &[
