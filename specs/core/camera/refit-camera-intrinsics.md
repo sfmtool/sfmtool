@@ -460,7 +460,9 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
   focal and coefficients.
 - The `kerry_park` first lens: the default `θ_fit` is its trusted bound, short
   of its fold at about 101.6°; the fitted spline is monotone, its domain ends
-  near 150°, and the aspect is reported as dropped.
+  near 150°, and the aspect is reported as dropped. The test holds the focal,
+  `θ_fit` and errors quoted under "What the report measures" to the precision
+  quoted there.
 - A polynomial fitted to a spline over 80°.
 - `refit_spline`: the `kerry_park` first lens as an eight-coefficient spline
   refitted to twelve and to five coefficients over its whole domain, the domain
@@ -470,7 +472,8 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
   domain end past 180°.
 - The monotonicity constraint: a folded source fitted to a spline whose
   smallest slope is the floor; the `tk107` first camera refitted to twelve and
-  sixteen coefficients, monotone with the constraint reported active; a
+  sixteen coefficients, monotone, with the constraint binding at one grid angle
+  and the angle, rms and max error quoted above; a
   nearly-flat source lifted to the floor in its flat stretch only; and an
   unconstrained refit equal bit for bit to the plain least-squares solve.
   `constrained_lsq.rs` tests the solver on hand-solved problems and an

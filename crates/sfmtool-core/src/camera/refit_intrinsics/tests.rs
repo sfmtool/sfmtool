@@ -153,8 +153,14 @@ fn kerry_default_fit_stops_at_the_trusted_bound_short_of_the_fold() {
     assert!((fold - 101.6).abs() < 0.5, "fold {fold}");
     assert!(refit.theta_fit_deg < 90.0 && refit.theta_fit_deg < fold);
 
+    // The figures the spec quotes for this fit, to the precision it quotes them.
+    assert!(
+        (refit.theta_fit_deg - 84.5).abs() < 0.05,
+        "{}",
+        refit.theta_fit_deg
+    );
     let (f, domain, coeffs) = spline_of(&refit.camera);
-    assert!((f - 129.56).abs() < 0.1, "focal {f}");
+    assert!((f - 129.52).abs() < 0.005, "focal {f}");
     // The far corner at 339 px over a 129.6 focal: about 150°.
     assert!(
         (domain.to_degrees() - 150.0).abs() < 1.0,
@@ -162,9 +168,13 @@ fn kerry_default_fit_stops_at_the_trusted_bound_short_of_the_fold() {
         domain.to_degrees()
     );
     assert!(bspline_is_monotone(&coeffs, domain, domain));
-    assert!(refit.radial_rms_px < 0.05, "radial {}", refit.radial_rms_px);
-    assert!(refit.rms_px < 0.2, "rms {}", refit.rms_px);
-    assert!(refit.max_px < 0.5, "max {}", refit.max_px);
+    assert!(
+        (refit.radial_rms_px - 0.013).abs() < 0.0005,
+        "radial {}",
+        refit.radial_rms_px
+    );
+    assert!((refit.rms_px - 0.13).abs() < 0.005, "rms {}", refit.rms_px);
+    assert!((refit.max_px - 0.29).abs() < 0.005, "max {}", refit.max_px);
     assert_eq!(refit.dropped.len(), 1);
     match refit.dropped[0] {
         DroppedTerm::FocalAspect { fy_over_fx } => {
@@ -316,7 +326,9 @@ fn a_dipped_spline_refits_to_more_coefficients_under_the_constraint() {
         source_d_max,
         source_d_max
     ));
-    for count in [12, 16] {
+    // The rms and max pixel error and the angle where the floor binds, as the
+    // spec quotes them.
+    for (count, rms, max, angle) in [(12, 0.49, 1.52, 113.2), (16, 0.18, 0.56, 113.3)] {
         let refit = refit_spline(&source, count, None).expect("a constrained refit");
         let (_, d_max, coeffs) = spline_of(&refit.camera);
         assert_eq!(coeffs.len(), count);
@@ -329,7 +341,18 @@ fn a_dipped_spline_refits_to_more_coefficients_under_the_constraint() {
             from <= to && to <= d_max.to_degrees() + 1e-9,
             "{from}..{to}"
         );
-        assert!(refit.max_px < 5.0, "{count}: max {} px", refit.max_px);
+        assert_eq!(constraint.active_angles, 1, "{count}: {constraint:?}");
+        assert!((from - angle).abs() < 0.05, "{count}: {from}");
+        assert!(
+            (refit.rms_px - rms).abs() < 0.005,
+            "{count}: rms {}",
+            refit.rms_px
+        );
+        assert!(
+            (refit.max_px - max).abs() < 0.005,
+            "{count}: max {}",
+            refit.max_px
+        );
     }
 }
 
