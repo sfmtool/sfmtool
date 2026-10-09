@@ -12,11 +12,13 @@
 //! else: no point, no frame, no bitmap, no camera. Nothing is re-triangulated or
 //! adjusted.
 //!
-//! The kernels are the localizer's: the point's existing observations are
-//! rendered where their keypoints put them and combined into a robust
-//! consensus ([`ReferenceConsensus`]), the image is searched once against it,
-//! optionally refined to sub-pixel against the same references
-//! ([`refine_view_against_reference`]), and scored. See
+//! The kernels are the localizer's, and like every kernel that places a view
+//! they align the image to the point's reference render: the point's stored
+//! bitmap, or the render of its reference observation at its keypoint
+//! ([`TrackReferences`]). The image is searched once against it, optionally
+//! refined to sub-pixel against the same template
+//! ([`refine_view_against_reference`]), and scored; the existing observations'
+//! scores against the same template set the bars it is judged by. See
 //! `specs/core/reconstruction/add-image-to-tracks.md` for the design, and
 //! `scripts/add_image_to_tracks/README.md` for the evaluation that chose the
 //! default rule.
@@ -35,11 +37,9 @@ use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
-    project_unclipped, KeypointLocalizeParams, ReferenceConsensus,
+    project_unclipped, KeypointLocalizeParams, TemplateKind, TrackReferences,
 };
-use crate::patch::keypoint_subpixel::{
-    refine_view_against_reference, KeypointSubpixelParams, ReferenceTemplate,
-};
+use crate::patch::keypoint_subpixel::{refine_view_against_reference, KeypointSubpixelParams};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
@@ -50,7 +50,8 @@ use crate::reconstruction::data::{ObservationSource, SfmrReconstruction, TrackOb
 /// deviation.
 const MAD_TO_SIGMA: f64 = 1.4826;
 
-/// Which statistic of a set of reference ZNCCs sets a bar.
+/// Which statistic of a set of references' ZNCCs against the template sets a
+/// bar.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BasisStatistic {
     /// The smallest: the new view must agree at least as well as the worst
@@ -117,17 +118,19 @@ pub enum AcceptRule {
     /// else.
     FixedZncc,
     /// The point's own references set the bar: with three or more, a statistic
-    /// of their leave-one-out ZNCCs; with two, the pair rule.
+    /// of their ZNCCs against the template, the reference observation's left
+    /// out ([`CandidateReport::bar_zncc`]); with two, the pair rule.
     TrackBasis {
-        /// The statistic over three or more references' leave-one-out ZNCCs.
+        /// The statistic over the references' ZNCCs against the template.
         statistic: BasisStatistic,
         /// The rule for exactly two references.
         pair: PairRule,
     },
-    /// One bar for the whole call: the statistic over the leave-one-out ZNCCs
-    /// of every reference of every candidate point that reached the verdict.
+    /// One bar for the whole call: the statistic over the ZNCCs against the
+    /// template of every reference but the reference observation, of every
+    /// candidate point that reached the verdict.
     PooledBasis {
-        /// The statistic over the pooled leave-one-out ZNCCs.
+        /// The statistic over the pooled references' ZNCCs.
         statistic: BasisStatistic,
     },
     /// Accept a candidate that reaches either bar: the pooled one, or the one
@@ -136,9 +139,9 @@ pub enum AcceptRule {
     /// own, and a sighting as good as its references is not refused for being
     /// on a harder surface than the rest.
     PooledOrTrack {
-        /// The statistic over the pooled leave-one-out ZNCCs.
+        /// The statistic over the pooled references' ZNCCs.
         pooled: BasisStatistic,
-        /// The statistic over three or more references' leave-one-out ZNCCs.
+        /// The statistic over three or more references' ZNCCs.
         track: BasisStatistic,
         /// The rule for exactly two references.
         pair: PairRule,
@@ -167,10 +170,13 @@ pub enum PositionGate {
 /// What the new view is searched against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateSource {
-    /// The robust consensus of the references, rendered at their keypoints.
+    /// The bitmap the point would store, rendered from its references at their
+    /// keypoints: its reference observation's render (the stored
+    /// `reference_observations` entry, or the reference-view rule's pick where
+    /// it has none), or the fused mean where the rule would store that.
     Rendered,
     /// The point's stored patch bitmap, where the value has one for it; the
-    /// rendered consensus where it does not.
+    /// rendered template where it does not.
     StoredBitmap,
 }
 
@@ -180,7 +186,7 @@ pub struct AddImageToTracksOptions {
     /// The photometric rule.
     pub rule: AcceptRule,
     /// A ZNCC floor every rule applies to the new view's ZNCC against the
-    /// consensus, and the whole of [`AcceptRule::FixedZncc`]. `0` or below
+    /// template, and the whole of [`AcceptRule::FixedZncc`]. `0` or below
     /// disables it for the other rules.
     pub min_zncc: f64,
     /// The positional gate.
@@ -190,11 +196,11 @@ pub struct AddImageToTracksOptions {
     /// Refuse a finite point whose patch plane has the new camera on the other
     /// side from the majority of the cameras that observe it.
     pub require_facing: bool,
-    /// Refine the searched keypoint to sub-pixel against the references.
+    /// Refine the searched keypoint to sub-pixel against the template.
     pub subpixel: bool,
     /// Where the search window's highest peak is on its edge, take the local
     /// maximum an ascent from the projection reaches instead, when that one is
-    /// inside the window. See [`ReferenceConsensus::search`].
+    /// inside the window. See [`TrackReferences::search`].
     pub ascend_on_edge: bool,
     /// Two keypoints in the new image closer than this, in source pixels, are
     /// one place: of two accepted candidates the one with the lower ZNCC is
@@ -214,7 +220,7 @@ pub struct AddImageToTracksOptions {
 /// The defaults are the rule and gate the leave-one-image-out evaluation chose
 /// (see the spec, "Why the default is what it is"): a candidate passes when it
 /// reaches either the image's pooled bar (the median minus three scaled
-/// deviations of every candidate's references' leave-one-out ZNCCs) or its own
+/// deviations of every candidate's references' ZNCCs against the template) or its own
 /// track's bar (0.9 of its references' median, or the pair rule at 0.9 for two
 /// references); and its keypoint must lie within the median plus three scaled
 /// deviations of the accepted keypoints' distances from their projections,
@@ -258,7 +264,8 @@ pub enum Refusal {
     /// The new camera is on the other side of the patch plane from the cameras
     /// that observe the point.
     BackFacing,
-    /// Fewer than two existing observations render in frame in a decoded image.
+    /// Fewer than two existing observations render in frame in a decoded image,
+    /// or no template renders from them.
     TooFewReferences,
     /// The new view's own core pins no 2D position: its ZNCC self-similarity
     /// radius is over the localizer's member bar.
@@ -310,10 +317,19 @@ pub struct CandidateReport {
     pub refusal: Option<Refusal>,
     /// The point's projection into the image, source px.
     pub projection: Option<[f64; 2]>,
-    /// The images of the references that rendered.
+    /// The images of the references (the point's existing observations) that
+    /// rendered.
     pub references: Vec<u32>,
-    /// Per reference, its ZNCC against the consensus of the others.
-    pub reference_loo_zncc: Vec<f64>,
+    /// What the new view was aligned to and scored against. `None` before the
+    /// template was settled.
+    pub template: Option<TemplateKind>,
+    /// The position in [`Self::references`] of the point's reference
+    /// observation (see [`TrackReferences::reference`]), whose score no bar
+    /// reads.
+    pub reference_observation: Option<usize>,
+    /// Per reference, its plain ZNCC against the template at its own keypoint;
+    /// `1.0` for the reference observation where the template is its render.
+    pub reference_zncc: Vec<f64>,
     /// The references' pairwise ZNCCs, row-major `n × n`.
     pub reference_pair_zncc: Vec<f64>,
     /// The keypoint the search found, before any sub-pixel step.
@@ -327,7 +343,7 @@ pub struct CandidateReport {
     pub zncc_self_similarity_radius: f64,
     /// The ZNCC at the search's integer peak.
     pub peak_zncc: f64,
-    /// The new view's ZNCC against the consensus, at the final keypoint.
+    /// The new view's plain ZNCC against the template, at the final keypoint.
     pub zncc: f64,
     /// The new view's ZNCC against each reference, at the final keypoint.
     pub pair_zncc: Vec<f64>,
@@ -340,13 +356,17 @@ pub struct CandidateReport {
 }
 
 impl CandidateReport {
-    fn new(point: u32) -> Self {
+    /// A report for `point` with nothing measured yet: no refusal, empty
+    /// lists and `NaN` numbers.
+    pub fn new(point: u32) -> Self {
         Self {
             point,
             refusal: None,
             projection: None,
             references: Vec::new(),
-            reference_loo_zncc: Vec::new(),
+            template: None,
+            reference_observation: None,
+            reference_zncc: Vec::new(),
             reference_pair_zncc: Vec::new(),
             search_keypoint: None,
             keypoint: None,
@@ -358,6 +378,17 @@ impl CandidateReport {
             judged: f64::NAN,
             bar: f64::NAN,
         }
+    }
+
+    /// The references' ZNCCs a bar reads: [`Self::reference_zncc`] without
+    /// the reference observation's, which is the template or what it was
+    /// rendered from.
+    pub fn bar_zncc(&self) -> impl Iterator<Item = f64> + '_ {
+        self.reference_zncc
+            .iter()
+            .enumerate()
+            .filter(|&(v, _)| Some(v) != self.reference_observation)
+            .map(|(_, &z)| z)
     }
 }
 
@@ -655,7 +686,7 @@ pub fn add_image_to_tracks(
             let pool: Vec<f64> = candidates
                 .iter()
                 .filter(|c| c.refusal.is_none())
-                .flat_map(|c| c.reference_loo_zncc.iter().copied())
+                .flat_map(|c| c.bar_zncc())
                 .collect();
             Some(statistic.bar(&pool))
         }
@@ -747,7 +778,7 @@ struct Context<'a, 'v> {
 
 impl Context<'_, '_> {
     /// Everything up to the verdict for point `p`: the visibility gates, the
-    /// reference consensus, the search, the sub-pixel step and the score.
+    /// references and their template, the search, the sub-pixel step and the score.
     fn measure(&self, p: u32) -> CandidateReport {
         let mut out = CandidateReport::new(p);
         let pi = p as usize;
@@ -815,12 +846,21 @@ impl Context<'_, '_> {
 
         // The references: every existing observation in a decoded, posed image.
         // Local view 0 is the target; the references follow.
-        let start = self.recon.point_set.observation_offsets[pi];
+        let set = &self.recon.point_set;
+        let start = set.observation_offsets[pi];
+        let stored_reference = set
+            .reference_observations
+            .as_ref()
+            .and_then(|r| usize::try_from(r[pi]).ok());
         let mut local: Vec<ProjectedImage<'_>> = vec![target];
         let mut local_images: Vec<u32> = Vec::new();
         let mut ref_keypoints: Vec<[f64; 2]> = Vec::new();
+        let mut reference = None;
         for (k, o) in observations.iter().enumerate() {
             if let Some(view) = self.views[o.image_index as usize] {
+                if stored_reference == Some(k) {
+                    reference = Some(local_images.len());
+                }
                 local.push(view);
                 local_images.push(o.image_index);
                 let row = start + k;
@@ -831,30 +871,34 @@ impl Context<'_, '_> {
             }
         }
         let local_refs: Vec<u32> = (1..local.len() as u32).collect();
-        let Some(mut consensus) =
-            ReferenceConsensus::build(&patch, &local, &local_refs, &ref_keypoints, self.localize)
-        else {
+        // The stored bitmap's row, where it is the template. A row with no
+        // texture (a point the file stores no bitmap for) leaves the rendered
+        // template in its place.
+        let bitmap_row = self.bitmaps.map(|b| b.index_axis(ndarray::Axis(0), pi));
+        let Some(references) = TrackReferences::build(
+            &patch,
+            &local,
+            &local_refs,
+            &ref_keypoints,
+            reference,
+            bitmap_row.as_ref().and_then(|r| r.as_slice()),
+            self.localize,
+        ) else {
             out.refusal = Some(Refusal::TooFewReferences);
             return out;
         };
-        out.references = consensus
+        out.references = references
             .references
             .iter()
             .map(|&l| local_images[l as usize - 1])
             .collect();
-        out.reference_loo_zncc = consensus.loo_zncc.clone();
-        out.reference_pair_zncc = consensus.pair_zncc.clone();
-        if let Some(bitmaps) = self.bitmaps {
-            let row = bitmaps.index_axis(ndarray::Axis(0), pi);
-            if let Some(slice) = row.as_slice() {
-                // A row with no texture (a point the file stores no bitmap
-                // for) leaves the rendered consensus in place.
-                consensus.use_bitmap_template(slice, bitmaps.shape()[3]);
-            }
-        }
+        out.template = Some(references.template_kind);
+        out.reference_observation = references.reference;
+        out.reference_zncc = references.zncc.clone();
+        out.reference_pair_zncc = references.pair_zncc.clone();
 
         // The search, from the projection.
-        let search = match consensus.search(
+        let search = match references.search(
             &patch,
             &target,
             None,
@@ -886,26 +930,20 @@ impl Context<'_, '_> {
             return out;
         }
         if self.options.subpixel {
-            let row = self.bitmaps.map(|b| b.index_axis(ndarray::Axis(0), pi));
-            let template = match row.as_ref().and_then(|r| r.as_slice()) {
-                Some(slice) => ReferenceTemplate::Bitmap(slice),
-                None => {
-                    let l = consensus.references[0];
-                    ReferenceTemplate::Observation {
-                        image: l,
-                        keypoint: ref_keypoints[l as usize - 1],
-                    }
-                }
-            };
-            if let Some((refined, _)) =
-                refine_view_against_reference(&patch, &local, template, 0, keypoint, self.refine)
-            {
+            if let Some((refined, _)) = refine_view_against_reference(
+                &patch,
+                &local,
+                references.refine_template(),
+                0,
+                keypoint,
+                self.refine,
+            ) {
                 keypoint = refined;
             }
         }
         out.keypoint = Some(keypoint);
         out.offset_px = (keypoint[0] - proj[0]).hypot(keypoint[1] - proj[1]);
-        let Some(score) = consensus.score(&patch, &target, keypoint, self.localize) else {
+        let Some(score) = references.score(&patch, &target, keypoint, self.localize) else {
             out.refusal = Some(Refusal::Unscorable);
             return out;
         };
@@ -942,11 +980,12 @@ fn judge(c: &mut CandidateReport, options: &AddImageToTracksOptions, pooled_bar:
 }
 
 /// The number a track's own references judge and the bar they set: a
-/// statistic of their leave-one-out ZNCCs with three or more, the pair rule
-/// with two.
+/// statistic of their ZNCCs against the template with three or more (the
+/// reference observation's left out), the pair rule with two.
 fn track_judgement(c: &CandidateReport, statistic: BasisStatistic, pair: PairRule) -> (f64, f64) {
     if c.references.len() >= 3 {
-        return (c.zncc, statistic.bar(&c.reference_loo_zncc));
+        let values: Vec<f64> = c.bar_zncc().collect();
+        return (c.zncc, statistic.bar(&values));
     }
     let values = &c.pair_zncc;
     let judged = match pair.statistic {

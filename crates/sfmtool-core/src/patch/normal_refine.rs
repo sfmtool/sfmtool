@@ -51,9 +51,7 @@ pub use params::{
 // Patch-internal helpers consumed by sibling `patch` modules (keypoint_localize,
 // keypoint_subpixel, view_selection) at their historical
 // `crate::patch::normal_refine::<name>` paths.
-pub(in crate::patch) use consensus::{
-    irls_view_weights, weighted_unit_template_into, ConsensusScratch,
-};
+pub(in crate::patch) use consensus::{irls_view_weights, ConsensusScratch};
 pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::{FLAT_NORM_SQ_EPS, MIN_MASK_PIXELS};
 pub(in crate::patch) use support::{

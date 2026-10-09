@@ -238,8 +238,8 @@ pub(crate) fn show(
         .on_disabled_hover_text(refusal.unwrap_or_default())
         .on_hover_text(
             "Look for every point this image does not observe in its photograph, and add \
-             the observations whose appearance agrees with the point's other observations, \
-             as a version of this reconstruction. Nothing else moves. Runs in the \
+             the observations whose appearance agrees with the point's patch as well as its \
+             other observations do, as a version of this reconstruction. Nothing else moves. Runs in the \
              background; Undo (Ctrl+Z) takes the observations back out.",
         );
     mark(ADD_TO_TRACKS, &add);

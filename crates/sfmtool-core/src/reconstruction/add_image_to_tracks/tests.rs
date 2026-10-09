@@ -178,7 +178,9 @@ fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
             kps.push(xy[1] as f32);
         }
         us.extend_from_slice(&[HALF_EXTENT as f32, 0.0, 0.0]);
-        vs.extend_from_slice(&[0.0, HALF_EXTENT as f32, 0.0]);
+        // `u × v` is `-z`: the patch faces the cameras, as its normal says,
+        // so the reference-view rule has candidates.
+        vs.extend_from_slice(&[0.0, -HALF_EXTENT as f32, 0.0]);
     }
     let set = &mut cap.recon.point_set;
     set.points = points
@@ -528,14 +530,9 @@ fn basis_statistics_read_as_documented() {
     assert!(BasisStatistic::Min.bar(&[]).is_nan());
 }
 
-#[test]
-fn a_stored_bitmap_template_finds_the_same_keypoint() {
-    use crate::patch::keypoint_subpixel::fuse_patch_bitmap;
-    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
-    let mut cap = capture(&points);
-    let r = 24usize;
-    let poses: Vec<RigidTransform> = cap
-        .recon
+/// The poses of the capture's images, for building [`ProjectedImage`]s.
+fn poses_of(cap: &Capture) -> Vec<RigidTransform> {
+    cap.recon
         .image_table
         .images
         .iter()
@@ -543,7 +540,26 @@ fn a_stored_bitmap_template_finds_the_same_keypoint() {
             let (q, t) = (im.quaternion_wxyz, im.translation_xyz);
             RigidTransform::from_wxyz_translation([q.w, q.i, q.j, q.k], [t.x, t.y, t.z])
         })
-        .collect();
+        .collect()
+}
+
+/// Point `world`'s patch as [`capture`] frames it.
+fn patch_at(world: Point3<f64>) -> OrientedPatch {
+    let mut patch = OrientedPatch::new(world, Vector3::x(), -Vector3::y(), [HALF_EXTENT; 2]);
+    patch.w = 1.0;
+    patch
+}
+
+/// A stored bitmap column for `points`, each the fused mean of its observing
+/// views at the projections of its position moved by `shift`, on a 24 px grid.
+fn fused_bitmaps(
+    cap: &Capture,
+    points: &[(Point3<f64>, &[u32])],
+    shift: Vector3<f64>,
+) -> ndarray::Array4<u8> {
+    use crate::patch::keypoint_subpixel::fuse_patch_bitmap;
+    let r = 24usize;
+    let poses = poses_of(cap);
     let camera = pinhole();
     let views: Vec<ProjectedImage<'_>> = (0..CENTERS.len())
         .map(|i| ProjectedImage {
@@ -554,29 +570,30 @@ fn a_stored_bitmap_template_finds_the_same_keypoint() {
         .collect();
     let mut column = ndarray::Array4::<u8>::zeros((points.len(), r, r, 4));
     for (p, (world, observing)) in points.iter().enumerate() {
-        let mut patch = OrientedPatch::new(
-            *world,
-            Vector3::x(),
-            Vector3::y(),
-            [HALF_EXTENT, HALF_EXTENT],
-        );
-        patch.w = 1.0;
         let kps: Vec<[f64; 2]> = observing
             .iter()
-            .map(|&i| cap.project(i as usize, *world))
+            .map(|&i| cap.project(i as usize, world + shift))
             .collect();
         let params = KeypointSubpixelParams {
             resolution: r as u32,
             ..KeypointSubpixelParams::default()
         };
-        let bitmap = fuse_patch_bitmap(&patch, &views, observing, &kps, &params).unwrap();
+        let bitmap =
+            fuse_patch_bitmap(&patch_at(*world), &views, observing, &kps, &params).unwrap();
         column
             .index_axis_mut(ndarray::Axis(0), p)
             .as_slice_mut()
             .unwrap()
             .copy_from_slice(&bitmap);
     }
-    drop(views);
+    column
+}
+
+#[test]
+fn a_stored_bitmap_template_finds_the_same_keypoint() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    let column = fused_bitmaps(&cap, &points, Vector3::zeros());
     cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column));
     let options = AddImageToTracksOptions {
         template: TemplateSource::StoredBitmap,
@@ -592,6 +609,7 @@ fn a_stored_bitmap_template_finds_the_same_keypoint() {
     );
     for (p, (world, _)) in points.iter().enumerate() {
         let c = &report.candidates[p];
+        assert_eq!(c.template, Some(TemplateKind::StoredBitmap));
         let expected = cap.project(TARGET, *world);
         let kp = c.keypoint.unwrap();
         let err = (kp[0] - expected[0]).hypot(kp[1] - expected[1]);
@@ -600,12 +618,248 @@ fn a_stored_bitmap_template_finds_the_same_keypoint() {
     }
 }
 
+/// The template is the stored bitmap where the value stores one: a bitmap
+/// rendered a little way along the plane from the point puts the new keypoint
+/// at that place, where a template rendered from the observations would put it
+/// at the point's projection.
+#[test]
+fn the_template_is_the_stored_bitmap_where_there_is_one() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    // Four grid px along the patch's u axis.
+    let shift = Vector3::new(0.04, 0.0, 0.0);
+    let column = fused_bitmaps(&cap, &points, shift);
+    cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column));
+    for (template, moved) in [
+        (TemplateSource::StoredBitmap, shift),
+        (TemplateSource::Rendered, Vector3::zeros()),
+    ] {
+        let options = AddImageToTracksOptions {
+            template,
+            position_gate: PositionGate::Off,
+            ..fixed()
+        };
+        let (_, report) = run(&cap, &options);
+        assert_eq!(
+            report.accepted,
+            points.len(),
+            "{template:?}: {:?}",
+            report.refusal_counts()
+        );
+        for (p, (world, _)) in points.iter().enumerate() {
+            let c = &report.candidates[p];
+            let expected_kind = match template {
+                TemplateSource::StoredBitmap => TemplateKind::StoredBitmap,
+                TemplateSource::Rendered => TemplateKind::ReferenceObservation,
+            };
+            assert_eq!(c.template, Some(expected_kind));
+            let expected = cap.project(TARGET, world + moved);
+            let kp = c.keypoint.unwrap();
+            let err = (kp[0] - expected[0]).hypot(kp[1] - expected[1]);
+            assert!(err < 0.25, "{template:?} point {p}: {err} px");
+        }
+    }
+}
+
+/// Without bitmaps, the template is the point's stored reference observation
+/// rendered at its keypoint: moving that keypoint moves where the new view is
+/// placed by as much, the reference reads `1.0`, and neither its keypoint nor
+/// the point's reference index is changed by the new observation.
+#[test]
+fn without_bitmaps_the_stored_reference_observation_is_the_template() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    // Image 1's observation (index 1 in each track) is the reference, its
+    // keypoint one source px to the right of the projection. The cameras are
+    // parallel at one depth, so one px there is one px in the target.
+    let n = points.len();
+    cap.recon.point_set.reference_observations = Some(vec![1; n]);
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+        &mut cap.recon.point_set.observations
+    else {
+        unreachable!()
+    };
+    for p in 0..n {
+        let row = cap.recon.point_set.observation_offsets[p] + 1;
+        keypoints_xy[[row, 0]] += 1.0;
+    }
+    let before = cap.recon.keypoints_xy().unwrap().clone();
+    let options = AddImageToTracksOptions {
+        position_gate: PositionGate::Off,
+        ..fixed()
+    };
+    let (next, report) = run(&cap, &options);
+    assert_eq!(report.accepted, n, "{:?}", report.refusal_counts());
+    let after = next.keypoints_xy().unwrap();
+    for (p, (world, _)) in points.iter().enumerate() {
+        let c = &report.candidates[p];
+        assert_eq!(c.template, Some(TemplateKind::ReferenceObservation));
+        assert_eq!(c.reference_observation, Some(1));
+        assert_eq!(c.references[1], 1);
+        assert_eq!(c.reference_zncc[1], 1.0);
+        let proj = cap.project(TARGET, *world);
+        let kp = c.keypoint.unwrap();
+        let err = (kp[0] - (proj[0] + 1.0)).hypot(kp[1] - proj[1]);
+        assert!(err < 0.25, "point {p}: {err} px from the moved place");
+        // The reference's keypoint, and every other, is as it was.
+        for k in 0..4 {
+            let old = cap.recon.point_set.observation_offsets[p] + k;
+            let new = next.point_set.observation_offsets[p] + k;
+            assert_eq!(before.row(old), after.row(new));
+        }
+    }
+    // Image 4 lands after image 1 in every track, so the index stands.
+    assert_eq!(next.point_set.reference_observations, Some(vec![1; n]));
+}
+
+/// Without a stored reference observation (no column, or `-1`), the
+/// reference-view rule picks one from the existing observations' renders at
+/// their keypoints, and its render is the template.
+#[test]
+fn without_a_stored_reference_the_rule_picks_one() {
+    use crate::patch::stored_bitmap::{render_reference, stored_view};
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    let options = fixed();
+    let poses = poses_of(&cap);
+    let camera = pinhole();
+    let picks: Vec<Option<usize>> = {
+        let views: Vec<ProjectedImage<'_>> = (0..CENTERS.len())
+            .map(|i| ProjectedImage {
+                camera: &camera,
+                cam_from_world: &poses[i],
+                pyramid: &cap.pyramids[i],
+            })
+            .collect();
+        points
+            .iter()
+            .map(|(world, observing)| {
+                let kps: Vec<Option<[f64; 2]>> = observing
+                    .iter()
+                    .map(|&i| Some(cap.project(i as usize, *world)))
+                    .collect();
+                let render = render_reference(
+                    &patch_at(*world),
+                    &views,
+                    observing,
+                    &kps,
+                    options.localize.resolution,
+                    options.localize.sampler,
+                    &Progress::none(),
+                );
+                stored_view(&render.reading.choice)
+            })
+            .collect()
+    };
+    assert!(
+        picks.iter().all(Option::is_some),
+        "the rule picks a view: {picks:?}"
+    );
+    for column in [None, Some(vec![-1; points.len()])] {
+        cap.recon.point_set.reference_observations = column.clone();
+        let (next, report) = run(&cap, &options);
+        assert_eq!(report.accepted, points.len());
+        for (p, c) in report.candidates.iter().enumerate() {
+            assert_eq!(c.template, Some(TemplateKind::ReferenceObservation));
+            assert_eq!(c.reference_observation, picks[p], "point {p}");
+            assert_eq!(c.reference_zncc[picks[p].unwrap()], 1.0);
+        }
+        // The pick is not written as the point's reference observation.
+        assert_eq!(next.point_set.reference_observations, column);
+    }
+}
+
+/// Where the rule picks no view it would store (here every camera sees the
+/// patch from behind its frame, so no view is a candidate), the template is the
+/// fused mean of the references, as the stored bitmap would be, and no
+/// reference is left out of the bars.
+#[test]
+fn where_the_rule_picks_none_the_template_is_the_fused_mean() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    let n = points.len();
+    let v = Array2::from_shape_fn(
+        (n, 3),
+        |(_, k)| if k == 1 { HALF_EXTENT as f32 } else { 0.0 },
+    );
+    cap.recon.point_set.patch_v_halfvec_xyz = Some(v);
+    let (_, report) = run(&cap, &fixed());
+    assert_eq!(report.accepted, n, "{:?}", report.refusal_counts());
+    for (p, (world, _)) in points.iter().enumerate() {
+        let c = &report.candidates[p];
+        assert_eq!(c.template, Some(TemplateKind::FusedMean));
+        assert_eq!(c.reference_observation, None);
+        assert_eq!(c.bar_zncc().count(), 4);
+        let expected = cap.project(TARGET, *world);
+        let kp = c.keypoint.unwrap();
+        let err = (kp[0] - expected[0]).hypot(kp[1] - expected[1]);
+        assert!(err < 0.1, "point {p}: {err} px");
+    }
+}
+
+/// The bars read the existing observations' plain ZNCCs against the template,
+/// the reference observation's left out.
+#[test]
+fn the_bars_read_the_references_scores_against_the_template() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    cap.recon.point_set.reference_observations = Some(vec![2; points.len()]);
+    // Pooled: the bar is the smallest score of any reference but the
+    // reference observation, over the candidates that reached the verdict.
+    let pooled = AddImageToTracksOptions {
+        rule: AcceptRule::PooledBasis {
+            statistic: BasisStatistic::Min,
+        },
+        min_zncc: 0.0,
+        ..gate_off()
+    };
+    let (_, report) = run(&cap, &pooled);
+    let mut want = f64::INFINITY;
+    for c in &report.candidates {
+        assert_eq!(c.reference_observation, Some(2));
+        assert_eq!(c.reference_zncc.len(), 4);
+        assert_eq!(c.reference_zncc[2], 1.0);
+        let scores: Vec<f64> = c.bar_zncc().collect();
+        assert_eq!(scores.len(), 3);
+        assert!(scores.iter().all(|&z| z < 1.0 && z > 0.5), "{scores:?}");
+        want = scores.iter().copied().fold(want, f64::min);
+    }
+    assert_eq!(report.pooled_bar, Some(want));
+    // A track's own: the statistic over its three other references' scores.
+    let track = AddImageToTracksOptions {
+        rule: AcceptRule::TrackBasis {
+            statistic: BasisStatistic::FractionOfMedian { fraction: 0.9 },
+            pair: PairRule {
+                statistic: PairStatistic::Mean,
+                factor: 0.9,
+            },
+        },
+        min_zncc: 0.0,
+        ..gate_off()
+    };
+    let (_, report) = run(&cap, &track);
+    for c in &report.candidates {
+        let scores: Vec<f64> = c.bar_zncc().collect();
+        let want = BasisStatistic::FractionOfMedian { fraction: 0.9 }.bar(&scores);
+        assert_eq!(c.bar, want);
+    }
+    // And on a hand-built candidate: a reference observation's `1.0` would
+    // raise the median from 0.62 to 0.63.
+    let mut c = CandidateReport::new(0);
+    c.references = vec![0, 1, 2, 3];
+    c.reference_observation = Some(0);
+    c.reference_zncc = vec![1.0, 0.6, 0.62, 0.64];
+    c.zncc = 0.58;
+    judge(&mut c, &track, None);
+    assert!((c.bar - 0.9 * 0.62).abs() < 1e-12, "{}", c.bar);
+}
+
 #[test]
 fn pooled_or_track_accepts_what_either_bar_accepts() {
     let options = AddImageToTracksOptions::default();
     let mut c = CandidateReport::new(0);
     c.references = vec![0, 1, 2];
-    c.reference_loo_zncc = vec![0.6, 0.62, 0.64];
+    c.reference_zncc = vec![0.6, 0.62, 0.64];
     // Below the pooled bar, above 0.9 of its own track's median.
     c.zncc = 0.58;
     judge(&mut c, &options, Some(0.7));
@@ -615,7 +869,7 @@ fn pooled_or_track_accepts_what_either_bar_accepts() {
     let mut c2 = c.clone();
     c2.refusal = None;
     c2.zncc = 0.5;
-    c2.reference_loo_zncc = vec![0.8, 0.85, 0.9];
+    c2.reference_zncc = vec![0.8, 0.85, 0.9];
     judge(&mut c2, &options, Some(0.7));
     assert_eq!(c2.refusal, Some(Refusal::BelowBar));
     // Above the pooled bar, whatever the track says.

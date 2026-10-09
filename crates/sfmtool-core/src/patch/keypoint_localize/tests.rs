@@ -1079,12 +1079,20 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
     let patch = plane_patch();
     let p = params();
     let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
-    let consensus = ReferenceConsensus::build(&patch, &views, &[0, 1], &[[cx, cy], [cx, cy]], &p)
-        .expect("two textured references");
-    let textured = consensus
+    let references = TrackReferences::build(
+        &patch,
+        &views,
+        &[0, 1],
+        &[[cx, cy], [cx, cy]],
+        None,
+        None,
+        &p,
+    )
+    .expect("two textured references");
+    let textured = references
         .search(&patch, &views[2], None, false, &p)
         .expect("a search");
-    let edge = consensus
+    let edge = references
         .search(&patch, &views[3], None, false, &p)
         .expect("a search");
     assert!(

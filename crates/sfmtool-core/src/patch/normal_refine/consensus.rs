@@ -315,48 +315,6 @@ pub(in crate::patch) fn tukey_reweight_from_residuals(
     false
 }
 
-/// Build the unit-norm-per-channel template of a z-normalized stack `xs`
-/// (`xs[(v*channels + c)*n + k]`) weighted by `weights` into `out` (resized and
-/// overwritten). The result is directly dot-able against another z-normalized core
-/// to yield a per-channel ZNCC. `out` is a reused scratch buffer, mirroring the
-/// scratch-reuse discipline of [`ConsensusScratch`]. The natural follow-on to
-/// [`irls_view_weights`] (which fills the per-view weights this consumes).
-pub(in crate::patch) fn weighted_unit_template_into(
-    xs: &[f32],
-    weights: &[f64],
-    views: usize,
-    channels: usize,
-    n: usize,
-    out: &mut Vec<f32>,
-) {
-    out.clear();
-    out.resize(channels * n, 0.0);
-    for (v, &w) in weights.iter().enumerate().take(views) {
-        let wv = w as f32;
-        for c in 0..channels {
-            let src = &xs[(v * channels + c) * n..][..n];
-            let dst = &mut out[c * n..][..n];
-            for (d, &s) in dst.iter_mut().zip(src) {
-                *d += wv * s;
-            }
-        }
-    }
-    for c in 0..channels {
-        let col = &mut out[c * n..][..n];
-        let norm = col
-            .iter()
-            .map(|&x| (x as f64) * (x as f64))
-            .sum::<f64>()
-            .sqrt();
-        if norm > 1e-12 {
-            let inv = (1.0 / norm) as f32;
-            for x in col.iter_mut() {
-                *x *= inv;
-            }
-        }
-    }
-}
-
 /// Consensus photoconsistency `Φ` over the normalized stack, per the
 /// objective. `None` when fewer than 2 views, or when the robust effective
 /// view count `1/Σwᵢ²` drops below [`MIN_EFFECTIVE_VIEWS`] (weights collapsed

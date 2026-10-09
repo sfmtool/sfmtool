@@ -61,7 +61,7 @@ pub use params::{
     KeypointLocalization, KeypointLocalizeParams, SearchStrategy,
     DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
 };
-pub use reference::{ReferenceConsensus, ViewScore, ViewSearch};
+pub use reference::{TemplateKind, TrackReferences, ViewScore, ViewSearch};
 pub use seed::keypoint_grid_offset;
 
 pub(super) use align::{resolve_reference, ResolvedReference};

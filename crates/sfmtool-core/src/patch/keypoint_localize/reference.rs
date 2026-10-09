@@ -1,33 +1,34 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Registering one view against the consensus of a point's existing
-//! observations, without moving them.
+//! Aligning one new view of a point to the point's reference render, without
+//! moving its existing observations.
 //!
-//! The consensus-basis tail registration ([`super::tail`]) searches a view once
-//! against a finished template the view did not help build. This is the same
-//! search with the basis supplied rather than congealed: the point's existing
-//! observations are rendered where their keypoints already put them, their
-//! robust consensus is the template, and one other view is searched and scored
-//! against it. Nothing about the references moves. See
-//! `specs/core/reconstruction/add-image-to-tracks.md`, which is the operation built on it.
+//! Every kernel that places a view aligns it to the point's reference render,
+//! and this is that alignment for a view the point does not have yet. The
+//! template is the point's stored bitmap where the caller supplies one, else
+//! the bitmap the point would store: its reference observation rendered at its
+//! own keypoint, or, where it has none, the reference-view rule's pick from the
+//! existing observations rendered at theirs, or the fused mean where the rule
+//! would store that. The new view is searched once against the template and
+//! scored. Nothing about the existing observations moves. See
+//! `specs/core/reconstruction/add-image-to-tracks.md`, which is the operation
+//! built on it.
 //!
 //! The numbers it reports are all one kind of measurement: the windowed ZNCC of
-//! a core rendered on the patch grid at a given keypoint, against a template or
-//! another core. A reference's leave-one-out ZNCC and a searched view's ZNCC are
-//! therefore comparable, because the searched view never contributed to the
-//! consensus it is scored against.
+//! a core rendered on the patch grid at a given keypoint, against the template
+//! or another core. An existing observation's score and the new view's are
+//! therefore comparable: each is one view's plain ZNCC against the template.
 
+use super::align::Template;
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
-    extract_core, member_self_similarity_radius, project, render_context, seed_offset,
-    shifted_center, KeypointLocalizeParams, LocalizeError,
+    extract_core, member_self_similarity_radius, project, render_context, resolve_reference,
+    seed_offset, shifted_center, KeypointLocalizeParams, LocalizeError,
 };
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::normal_refine::{
-    build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
-    ConsensusScratch, ProjectedImage, Support,
-};
+use crate::patch::keypoint_subpixel::ReferenceTemplate;
+use crate::patch::normal_refine::{build_support, znormalize_into_kept, ProjectedImage, Support};
 use crate::progress::Progress;
 
 /// Below this windowed norm² a channel of one core is flat and contributes `0`
@@ -35,20 +36,44 @@ use crate::progress::Progress;
 /// own z-normalisation drops a channel at.
 const FLAT_NORM_SQ: f64 = 1e-6;
 
-/// The consensus of a point's existing observations, each rendered on the patch
-/// grid at its own keypoint, with the scores the references give each other.
+/// What the template of a [`TrackReferences`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateKind {
+    /// The point's stored patch bitmap, as the caller supplied it.
+    StoredBitmap,
+    /// One reference, the point's reference observation, rendered at its own
+    /// keypoint: the point's stored reference observation, or the
+    /// reference-view rule's pick where it has none.
+    ReferenceObservation,
+    /// The fused mean of the references at their keypoints, where the point
+    /// has no reference observation and the rule picks none it would store.
+    FusedMean,
+}
+
+/// A point's existing observations (its references), each rendered on the
+/// patch grid at its own keypoint, and the template a new view is aligned to
+/// and judged against, with each reference's plain ZNCC against it.
 ///
-/// Built by [`ReferenceConsensus::build`]. The template is what a searched view
-/// is registered against; the per-reference cores are kept so that the searched
-/// view can also be scored against each reference on its own.
-pub struct ReferenceConsensus {
+/// Built by [`TrackReferences::build`]. The per-reference cores are kept so
+/// that a new view can also be scored against each reference on its own.
+pub struct TrackReferences {
     /// The image index of each reference that rendered in frame, in the order
     /// given (a reference whose core leaves its frame is left out).
     pub references: Vec<u32>,
-    /// Per reference, its ZNCC against the robust consensus of the **other**
-    /// references, parallel to [`Self::references`]. With two references this
-    /// is their pairwise ZNCC, twice.
-    pub loo_zncc: Vec<f64>,
+    /// What the template is.
+    pub template_kind: TemplateKind,
+    /// The position in [`Self::references`] of the point's reference
+    /// observation: the one whose render is the template under
+    /// [`TemplateKind::ReferenceObservation`], or under
+    /// [`TemplateKind::StoredBitmap`] the caller's reference observation where
+    /// it rendered. `None` otherwise. A bar judging a new view leaves its
+    /// score out, since it is the template or what the template was rendered
+    /// from.
+    pub reference: Option<usize>,
+    /// Per reference, its plain ZNCC against the template at its own keypoint,
+    /// parallel to [`Self::references`]. The reference observation reads
+    /// exactly `1.0` where the template is its render.
+    pub zncc: Vec<f64>,
     /// The pairwise ZNCC between references, row-major `n × n` with `1.0` on the
     /// diagonal.
     pub pair_zncc: Vec<f64>,
@@ -60,10 +85,14 @@ pub struct ReferenceConsensus {
     /// The z-normalised reference cores over the kept channels, one per
     /// reference, each `kept · n` long with `√w` folded in.
     cores: Vec<Vec<f32>>,
-    /// Which original channels the template scores on.
-    template_mask: Vec<bool>,
-    /// The unit-norm-per-channel template over the template's kept channels.
-    template: Vec<f32>,
+    /// The template, never blurred.
+    template: Template,
+    /// The `R×R` RGBA bitmap the template was read from, where it is a stored
+    /// bitmap or the fused mean.
+    bitmap: Option<Vec<u8>>,
+    /// The reference observation's image index and keypoint, where the
+    /// template is its render.
+    anchor: Option<(u32, [f64; 2])>,
 }
 
 /// One searched view: where its correlation peak put the keypoint.
@@ -83,7 +112,7 @@ pub struct ViewSearch {
     pub at_edge: bool,
     /// Whether the window's highest peak was on its edge and the keypoint is
     /// instead the local maximum an ascent from the start reached (see
-    /// [`ReferenceConsensus::search`]'s `ascend_on_edge`).
+    /// [`TrackReferences::search`]'s `ascend_on_edge`).
     pub ascended: bool,
     /// The ZNCC self-similarity radius of the view's own core at the search's
     /// start, in patch-grid px: the number the member gate
@@ -95,22 +124,30 @@ pub struct ViewSearch {
 /// One view scored at a given keypoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewScore {
-    /// ZNCC against the template.
+    /// Plain ZNCC against the template.
     pub zncc: f64,
     /// ZNCC against each reference on its own, parallel to
-    /// [`ReferenceConsensus::references`].
+    /// [`TrackReferences::references`].
     pub pair_zncc: Vec<f64>,
 }
 
-impl ReferenceConsensus {
-    /// Render each of `references` at its keypoint and build their consensus.
+impl TrackReferences {
+    /// Render each of `references` at its keypoint and settle the template.
     ///
     /// `views` is indexed by image index; `keypoints` is parallel to
-    /// `references`, in source px. Of `params`, `resolution`, `window`,
-    /// `sampler` and `robust_iters` shape the renders and the consensus; the
-    /// search resolution multiplier is not read (the grid is `resolution`).
-    /// `None` when fewer than two references render in frame or no channel is
-    /// textured in all of them.
+    /// `references`, in source px. `reference` is the position in `references`
+    /// of the point's stored reference observation, `None` where it has none.
+    /// `bitmap` is the point's stored `R×R` RGBA bitmap on the grid of
+    /// `params.resolution`, row-major as a `.sfmr` stores it; where it is given
+    /// and textured it is the template. Otherwise the template is the bitmap
+    /// the point would store ([`TemplateKind`]): the reference observation's
+    /// render at its keypoint where it rendered, else the reference-view rule's
+    /// pick from the references' renders at their keypoints, or their fused
+    /// mean where the rule would store that. Of `params`, `resolution`,
+    /// `window`, `sampler` and `robust_iters` (the fused mean's) are read.
+    ///
+    /// `None` when fewer than two references render in frame, no channel is
+    /// textured in all of them, or no template renders.
     ///
     /// # Panics
     ///
@@ -121,6 +158,8 @@ impl ReferenceConsensus {
         views: &[ProjectedImage<'_>],
         references: &[u32],
         keypoints: &[[f64; 2]],
+        reference: Option<usize>,
+        bitmap: Option<&[u8]>,
         params: &KeypointLocalizeParams,
     ) -> Option<Self> {
         assert_eq!(
@@ -138,8 +177,10 @@ impl ReferenceConsensus {
         let n = support.pixels.len();
 
         let mut kept_refs = Vec::with_capacity(references.len());
+        let mut kept_keypoints = Vec::with_capacity(references.len());
+        let mut given = None;
         let mut raws: Vec<(usize, Vec<f32>)> = Vec::with_capacity(references.len());
-        for (&image, &kp) in references.iter().zip(keypoints) {
+        for (k, (&image, &kp)) in references.iter().zip(keypoints).enumerate() {
             let view = &views[image as usize];
             let Some(off) = seed_offset(patch, view, kp, wpp[0], wpp[1]) else {
                 continue;
@@ -166,7 +207,11 @@ impl ReferenceConsensus {
             };
             let mut raw = vec![0f32; tile.channels * n];
             if extract_core(&tile, &support, r, 0, 0, &mut raw) {
+                if reference == Some(k) {
+                    given = Some(kept_refs.len());
+                }
                 kept_refs.push(image);
+                kept_keypoints.push(kp);
                 raws.push((tile.channels, raw));
             }
         }
@@ -193,34 +238,56 @@ impl ReferenceConsensus {
         let cn = kept * n;
         let cores: Vec<Vec<f32>> = (0..views_n).map(|v| xs[v * cn..][..cn].to_vec()).collect();
 
-        let mut sc = ConsensusScratch::default();
-        let mut template = Vec::new();
-        irls_view_weights(&xs, views_n, kept, n, params.robust_iters, None, &mut sc);
-        weighted_unit_template_into(&xs, &sc.w, views_n, kept, n, &mut template);
-
-        // Leave-one-out: the consensus of the others, by the same IRLS.
-        let mut loo_zncc = Vec::with_capacity(views_n);
-        let mut others = Vec::with_capacity((views_n - 1) * cn);
-        let mut loo_template = Vec::new();
-        for v in 0..views_n {
-            others.clear();
-            for (u, core) in cores.iter().enumerate() {
-                if u != v {
-                    others.extend_from_slice(core);
+        // The template: the stored bitmap, else the bitmap the point would
+        // store, rendered from the references at their keypoints.
+        let stored =
+            bitmap.and_then(|b| Template::from_bitmap(b, 4, r, &support).map(|t| (t, b.to_vec())));
+        let (template, template_kind, reference, bitmap) = match stored {
+            Some((template, b)) => (template, TemplateKind::StoredBitmap, given, Some(b)),
+            None => {
+                let seeds: Vec<Option<[f64; 2]>> =
+                    kept_keypoints.iter().copied().map(Some).collect();
+                let resolved = resolve_reference(
+                    patch,
+                    views,
+                    &kept_refs,
+                    &seeds,
+                    given,
+                    resolution,
+                    params.window,
+                    params.sampler,
+                    params.robust_iters,
+                    &Progress::none(),
+                );
+                match (resolved.anchor, resolved.fused) {
+                    (Some(a), _) => {
+                        let (ch, raw) = &raws[a];
+                        let template = Template::from_raw(raw, *ch, &support)?;
+                        (template, TemplateKind::ReferenceObservation, Some(a), None)
+                    }
+                    (None, Some(fused)) => {
+                        let template = Template::from_bitmap(&fused, 4, r, &support)?;
+                        (template, TemplateKind::FusedMean, None, Some(fused))
+                    }
+                    (None, None) => return None,
                 }
             }
-            irls_view_weights(
-                &others,
-                views_n - 1,
-                kept,
-                n,
-                params.robust_iters,
-                None,
-                &mut sc,
-            );
-            weighted_unit_template_into(&others, &sc.w, views_n - 1, kept, n, &mut loo_template);
-            loo_zncc.push(dot(&cores[v], &loo_template) / kept as f64);
-        }
+        };
+        let rendered_from =
+            |v: usize| template_kind == TemplateKind::ReferenceObservation && reference == Some(v);
+
+        let zncc = raws
+            .iter()
+            .enumerate()
+            .map(|(v, (ch, raw))| {
+                if rendered_from(v) {
+                    1.0
+                } else {
+                    let core = znorm_masked(raw, *ch, &template.mask, &support);
+                    masked_zncc(&core, &template.values, n)
+                }
+            })
+            .collect();
         let mut pair_zncc = vec![1.0; views_n * views_n];
         for a in 0..views_n {
             for b in (a + 1)..views_n {
@@ -229,55 +296,36 @@ impl ReferenceConsensus {
                 pair_zncc[b * views_n + a] = z;
             }
         }
+        let anchor = reference
+            .filter(|&a| rendered_from(a))
+            .map(|a| (kept_refs[a], kept_keypoints[a]));
         Some(Self {
             references: kept_refs,
-            loo_zncc,
+            template_kind,
+            reference,
+            zncc,
             pair_zncc,
             resolution,
             support,
             wpp,
-            template_mask: core_mask.clone(),
             core_mask,
             cores,
             template,
+            bitmap,
+            anchor,
         })
     }
 
-    /// Replace the template by a stored bitmap of the point: `R × R` pixels of
-    /// `channels` interleaved `u8` values in the patch grid's row-major order,
-    /// the layout of a `.sfmr` patch bitmap. Only the leading three channels
-    /// are read, so an RGBA bitmap's alpha (a confidence, not a colour) is not
-    /// scored. Returns `false`, leaving the rendered template in place, when
-    /// the bitmap is not on this consensus's grid or has no textured channel.
-    pub fn use_bitmap_template(&mut self, bitmap: &[u8], channels: usize) -> bool {
-        let r = self.resolution as usize;
-        if channels == 0 || bitmap.len() != r * r * channels {
-            return false;
+    /// The template as the sub-pixel refiner
+    /// ([`refine_view_against_reference`](crate::patch::keypoint_subpixel::refine_view_against_reference))
+    /// takes it: the bitmap the template was read from, or the reference
+    /// observation at its keypoint.
+    pub fn refine_template(&self) -> ReferenceTemplate<'_> {
+        match (&self.bitmap, self.anchor) {
+            (Some(bitmap), _) => ReferenceTemplate::Bitmap(bitmap),
+            (None, Some((image, keypoint))) => ReferenceTemplate::Observation { image, keypoint },
+            (None, None) => unreachable!("a template is a bitmap or an observation's render"),
         }
-        let colour = channels.min(3);
-        let n = self.support.pixels.len();
-        let mut raw = vec![0f32; colour * n];
-        for (k, &p) in self.support.pixels.iter().enumerate() {
-            for c in 0..colour {
-                raw[c * n + k] = f32::from(bitmap[p * channels + c]);
-            }
-        }
-        let mut xs = Vec::new();
-        let Some((_, mask)) = znormalize_into_kept(
-            &raw,
-            1,
-            colour,
-            n,
-            &self.support.weights,
-            self.support.total_weight,
-            &self.support.sqrt_weights,
-            &mut xs,
-        ) else {
-            return false;
-        };
-        self.template = xs;
-        self.template_mask = mask;
-        true
     }
 
     /// The number of references.
@@ -285,7 +333,7 @@ impl ReferenceConsensus {
         self.references.len()
     }
 
-    /// Whether there are no references (never true of a built consensus).
+    /// Whether there are no references (never true of a built value).
     pub fn is_empty(&self) -> bool {
         self.references.is_empty()
     }
@@ -294,13 +342,13 @@ impl ReferenceConsensus {
     /// `±params.search` patch-grid px around `seed` (source px; `None` starts
     /// at the point's projection).
     ///
-    /// The tail registration's search, run exhaustively: the view's context
-    /// tile is rendered once centred on the start, its own core's ZNCC
-    /// self-similarity radius is read there, and every shift of the window is
-    /// correlated with the template. No gate is applied; the caller reads
-    /// [`ViewSearch::zncc_self_similarity_radius`], [`ViewSearch::at_edge`] and the peak and
-    /// decides. `Ok` with no keypoint when the point does not project into the
-    /// view's frame.
+    /// The view's context tile is rendered once centred on the start, its own
+    /// core's ZNCC self-similarity radius is read there, and every shift of the
+    /// window is correlated with the template. It is run exhaustively because
+    /// it is one view per point. No gate is applied; the caller reads
+    /// [`ViewSearch::zncc_self_similarity_radius`], [`ViewSearch::at_edge`] and
+    /// the peak and decides. `Ok` with no keypoint when the point does not
+    /// project into the view's frame.
     ///
     /// With `ascend_on_edge`, a window whose highest peak sits on its edge is
     /// searched again by the "+"-descent from the start, which climbs to the
@@ -355,7 +403,7 @@ impl ReferenceConsensus {
         out.zncc_self_similarity_radius =
             member_self_similarity_radius(&tile, r, c0, c0, &mut Vec::new());
 
-        let mask = &self.template_mask[..self.template_mask.len().min(tile.channels)];
+        let mask = &self.template.mask[..self.template.mask.len().min(tile.channels)];
         let kept = mask.iter().filter(|&&k| k).count();
         if kept == 0 {
             return Ok(out);
@@ -365,7 +413,7 @@ impl ReferenceConsensus {
         scratch.tmpl.clear();
         scratch
             .tmpl
-            .extend_from_slice(&self.template[..kept * self.support.pixels.len()]);
+            .extend_from_slice(&self.template.values[..kept * self.support.pixels.len()]);
         let Some(mut sh) = search_shift(
             &tile,
             &mut scratch,
@@ -412,12 +460,12 @@ impl ReferenceConsensus {
     }
 
     /// Score `view` at `keypoint` (source px): render its core there and take
-    /// its ZNCC against the template and against each reference.
+    /// its plain ZNCC against the template and against each reference.
     ///
     /// The same measurement [`Self::build`] took of each reference, so the
-    /// numbers are comparable with [`Self::loo_zncc`] and
-    /// [`Self::pair_zncc`]. `None` when the keypoint does not unproject onto
-    /// the patch or the core leaves the frame.
+    /// numbers are comparable with [`Self::zncc`] and [`Self::pair_zncc`].
+    /// `None` when the keypoint does not unproject onto the patch or the core
+    /// leaves the frame.
     pub fn score(
         &self,
         patch: &OrientedPatch,
@@ -452,8 +500,8 @@ impl ReferenceConsensus {
             return None;
         }
         let against_template =
-            znorm_masked(&raw, tile.channels, &self.template_mask, &self.support);
-        let zncc = masked_zncc(&against_template, &self.template, n);
+            znorm_masked(&raw, tile.channels, &self.template.mask, &self.support);
+        let zncc = masked_zncc(&against_template, &self.template.values, n);
         let against_cores = znorm_masked(&raw, tile.channels, &self.core_mask, &self.support);
         let pair_zncc = self
             .cores

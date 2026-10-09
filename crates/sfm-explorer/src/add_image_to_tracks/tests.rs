@@ -235,24 +235,8 @@ fn a_node_with_an_operation_running_refuses_with_the_busy_sentence() {
 fn the_outcome_names_the_refusals_most_first() {
     use sfmtool_core::reconstruction::add_image_to_tracks::{CandidateReport, Refusal};
     let candidate = |point: u32, refusal: Option<Refusal>| {
-        let mut c = CandidateReport {
-            point,
-            refusal,
-            projection: None,
-            references: Vec::new(),
-            reference_loo_zncc: Vec::new(),
-            reference_pair_zncc: Vec::new(),
-            search_keypoint: None,
-            keypoint: None,
-            offset_px: f64::NAN,
-            zncc_self_similarity_radius: f64::NAN,
-            peak_zncc: f64::NAN,
-            zncc: f64::NAN,
-            pair_zncc: Vec::new(),
-            judged: f64::NAN,
-            bar: f64::NAN,
-        };
-        c.point = point;
+        let mut c = CandidateReport::new(point);
+        c.refusal = refusal;
         c
     };
     let report = AddImageToTracksReport {
