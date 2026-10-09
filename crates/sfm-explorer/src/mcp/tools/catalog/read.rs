@@ -110,8 +110,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           its rows in get_bench_track's shape, its state (current, evaluating, \
                           refused, failed) and reason, the read-only bars Track View's \
                           threshold boxes hold, and each row's verdict_by_bars (in, out, or \
-                          null where unmeasured), has_bitmap, whether the point has a \
-                          stored bitmap its rows are scored against, reference_observation, \
+                          null where unmeasured, and for the pinned row holding the \
+                          reference where unpinning it would render the bitmap again from \
+                          another row, which the bars cannot judge until then), has_bitmap, \
+                          whether the point has a stored bitmap its rows are scored against, \
+                          bitmap_for_judging, whether that bitmap was rendered only for the \
+                          bars because no in row could hold the reference, reference_observation, \
                           the row that bitmap is rendered from (the reference in use), or null, \
                           and reference_view_observation, the row the reference-view rule \
                           picked, which can differ from it, or null. While evaluating, the measurements are the \
@@ -420,7 +424,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           for a track with no bitmap or a bitmap that is the render of no row \
                           (a mean of the rows, one stored before the reference was recorded, or \
                           the render of an observation since removed from the point); \
-                          has_bitmap says whether there is a bitmap. \
+                          has_bitmap says whether there is a bitmap, and bitmap_for_judging \
+                          whether it was rendered only so the bars can score the rows of a \
+                          track no in row of which can hold the reference: from the rule's \
+                          pick among every row with a keypoint, naming no row, never \
+                          committed, and replaced by the next evaluation once a row is in. \
                           stage_data.reference_view_observation is the index of the row the \
                           rule picked from the current readings, or null. While the reference's \
                           row is pinned every render renders from it, whichever row the rule \

@@ -666,6 +666,7 @@ looking at is the one at the cursor, and this block reports it.
                     "max_projection_error_px": 3.0,
                     "geometry_search_min_relative_zncc": 0.7 },
     "has_bitmap": true,              // the track has a stored bitmap
+    "bitmap_for_judging": false,     // the bitmap was rendered only for the bars
     "reference_observation": 0,      // the row the bitmap is rendered from, or null
     "reference_view_observation": 0, // the row the reference-view rule picked
     "observations": [ { "observation": 0, "camera_image": 3,
@@ -693,10 +694,13 @@ the evaluation is on a worker now. While the state is `evaluating` the
 measurements are the last ones landed, or the stored readings a put carries
 when none has landed. `thresholds` are the read-only bars Track View's threshold
 boxes hold, and `verdict_by_bars` is each row's verdict by them -- `in`, `out`,
-or `null` where nothing has measured the row -- computed with core's
+or `null` where nothing has measured the row, and for the pinned row holding the
+reference where unpinning it would render the bitmap again from another row,
+which the bars cannot judge until that render -- computed with core's
 `verdicts_if_unpinned` over a copy of the track carrying those bars, the same
 computation the panel colours by. `has_bitmap` says whether the track has a
-stored patch bitmap, which the rows' `zncc` scores are read against;
+stored patch bitmap, which the rows' `zncc` scores are read against, and
+`bitmap_for_judging` whether that bitmap is one for judging only (below);
 `reference_observation` is the reference in use, the row the bitmap is rendered
 from, null for a bitmap that is the render of no row (a mean of the rows, one
 stored before the reference was recorded, or the render of an observation since
@@ -3877,7 +3881,14 @@ them.
 
 **`stage_data.reference_observation` is the reference in use**, the row the
 track's stored bitmap is rendered from, and `stage_data.has_bitmap` says whether
-there is a bitmap. It is null where the track has no bitmap and for a bitmap
+there is a bitmap. `stage_data.bitmap_for_judging` says whether that bitmap is
+one rendered only so the bars can score the rows of a track no `in` row of
+which can hold the reference: from the rule's pick among every row with a
+keypoint, `in` or `out`, so that loosening a bar can bring rows back. It names
+no row, a commit does not write it, and the next evaluation after a row is
+`in` again replaces it
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+stored bitmap's reference"). It is null where the track has no bitmap and for a bitmap
 that is the render of no row: a fused mean of the `in` rows, where the rule
 reached its pick only through its last fallback, one stored before the
 reference was recorded, or the render of an observation an edit has since
@@ -3889,10 +3900,11 @@ renders from it, whichever row the rule picks, so `reference_observation` and
 `reference_view_observation` can differ; a track put on the bench from a point
 has every row pinned, so the point's stored reference stays until the person
 unpins its row. Unpinning the row hands the reference to the rule's pick at
-the next render. Where the rule picks another row, the unpin drops the bitmap
-and clears every row's score against it, so until the live evaluation renders
-the new bitmap `has_bitmap` is false, `reference_observation` is null and the
-bars have judged nothing; the evaluation then renders from the pick, scores
+the next render. Where the rule picks another row, the unpin clears every
+row's score against the bitmap and keeps the bitmap until the render replaces
+it, so until the live evaluation renders the new bitmap `reference_observation`
+still names the old row (a commit in between writes that bitmap and that row)
+and the bars have judged nothing; the evaluation then renders from the pick, scores
 the rows and judges them, and its Action Log row says what the bars moved.
 While the row stays unpinned the reference follows the pick at every
 evaluation. `set_bench_track_reference` makes a row the reference and pins it.
@@ -3924,7 +3936,7 @@ writes `loo_zncc` as the observation's confidence. Where the localizer could
 not read the row they are null and `reason` names its refusal, whether or not
 the row has a score, and the bars leave its verdict where it is. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars,
-eight in all: at the track stage `min_zncc`, `0.60` on a new track, and
+eight in all: at the track stage `min_zncc`, `0.65` on a new track, and
 `min_zncc_middle`, `0` (off) on a new track; at the cluster stage
 `cluster_min_zncc` and `cluster_min_zncc_middle`, `0.7` each, which judge the
 achieved template ZNCC and its middle; a middle bar is off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a

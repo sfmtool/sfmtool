@@ -237,8 +237,14 @@ pub struct TrackBody {
     /// What the boxes say about each observation of the track drawn, which is
     /// what its readings and its *Keep* or *Verdict* cell are coloured by:
     /// `None` for an observation nothing at the track's stage has measured,
-    /// which the bars do not judge.
+    /// which the bars do not judge, and for the row holding the reference
+    /// where unpinning it would move the bitmap ([`TrackBody::reference_waits`]).
     judged: Vec<Option<Judgement>>,
+    /// The pinned row that holds the reference where unpinning it would render
+    /// the bitmap again from the rule's pick, so the bars cannot judge it
+    /// until that render: its [`TrackBody::judged`] entry is `None` although
+    /// the row is measured. Computed with [`TrackBody::judged`].
+    reference_waits: Option<usize>,
     /// The mode, the track's label, the address of its `Arc` and the bars
     /// [`TrackBody::judged`] was computed from. A step on the track, or an
     /// evaluation of the viewed track landing, gives it a new `Arc`, which is
@@ -365,6 +371,7 @@ impl TrackBody {
             thresholds: Thresholds::default(),
             sliding: false,
             judged: Vec::new(),
+            reference_waits: None,
             judged_for: None,
             commit_refusal: None,
             commit_refusal_for: None,
@@ -449,6 +456,7 @@ impl TrackBody {
         self.build_refusal = None;
         self.sliding = false;
         self.judged.clear();
+        self.reference_waits = None;
         self.rows.clear();
     }
 
@@ -907,7 +915,12 @@ impl TrackBody {
         let mut with_bars = (**track).clone();
         with_bars.thresholds = self.thresholds.clone();
         let stage = track.stage_kind();
-        self.judged = verdicts_if_unpinned(&with_bars)
+        let proposals = verdicts_if_unpinned(&with_bars);
+        self.reference_waits = with_bars.held_reference().filter(|&r| {
+            proposals.get(r).is_some_and(|p| p.is_none())
+                && bar_checks(&with_bars.observations[r], stage, &self.thresholds).is_some()
+        });
+        self.judged = proposals
             .into_iter()
             .zip(&with_bars.observations)
             .map(|(proposal, observation)| {

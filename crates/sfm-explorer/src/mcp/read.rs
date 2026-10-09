@@ -569,6 +569,7 @@ fn viewed_evaluation(state: &AppState, point: crate::scene::PointRef) -> Option<
         // reference-view rule picked, or null; as `get_bench_track`'s
         // `stage_data` has them.
         "has_bitmap": viewed.track.track().is_some_and(|p| p.bitmap.is_some()),
+        "bitmap_for_judging": viewed.track.track().is_some_and(|p| p.bitmap_for_judging),
         "reference_observation": crate::bench::reference_in_use(&viewed.track),
         "reference_view_observation": crate::bench::reference_view_pick(&viewed.track),
         "observations": rows,

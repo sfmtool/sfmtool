@@ -601,6 +601,19 @@ impl PyEditableTrack {
         payload.bitmap.as_ref().and(payload.reference)
     }
 
+    /// Whether the track's patch bitmap is one for judging only: rendered by
+    /// an evaluation where no ``in`` row could hold the reference (every row
+    /// is ``out``, or fewer than two ``in`` rows carry a keypoint), from the
+    /// reference-view rule's pick among every row with a keypoint, so that the
+    /// bars still score the rows and a loosened bar can turn them back ``in``.
+    /// It names no reference and a commit does not write it; the next
+    /// evaluation after a row is ``in`` again renders the bitmap by the usual
+    /// rule. ``False`` at the cluster stage and where the track has no bitmap.
+    #[getter]
+    fn bitmap_for_judging(&self) -> bool {
+        self.inner.track().is_some_and(|p| p.bitmap_for_judging)
+    }
+
     /// The row the last evaluation's reference-view rule picked, as an index
     /// into :attr:`observations` (the row whose ``reference_view`` has
     /// ``is_reference``), or ``None``: at the cluster stage, before an
@@ -1454,6 +1467,13 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 /// it is: there is no proposal to apply. One ``in`` per image survives the
 /// painting -- where several would pass, the best-scoring takes the image.
 ///
+/// ``min_zncc`` and ``min_zncc_middle`` are the track stage's bars, on each
+/// row's plain score against the stored patch bitmap (``zncc``,
+/// ``zncc_middle``); ``cluster_min_zncc`` and ``cluster_min_zncc_middle`` are
+/// the cluster stage's, on the achieved template ZNCC. Each stage judges only
+/// its own pair. A track-stage row with no score against a bitmap is not
+/// judged.
+///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
 #[pyo3(signature = (
@@ -1702,11 +1722,16 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// ``blur_matched_zncc`` beside it; a track with no bitmap scores no row, and
 /// the bars then leave every verdict where it is.
 ///
-/// With ``render_bitmap=True`` the reading is the viewer's live evaluation:
-/// a track with a patch and no bitmap, or whose reference row is unpinned and
-/// is not the rule's pick, has its bitmap rendered where the patch stands,
-/// moving nothing, every row is scored against it, and the repaint judges
-/// those scores.
+/// By default (``render_bitmap=True``) the reading is the viewer's live
+/// evaluation: a track with a patch and no bitmap, or whose reference row is
+/// unpinned and is not the rule's pick, has its bitmap rendered where the
+/// patch stands, moving nothing, every row is scored against it, and the
+/// repaint judges those scores. A track with no row ``in`` that can hold the
+/// reference gets a bitmap for judging (``bitmap_for_judging``), so the bars
+/// still score its rows. The render reuses the reading's tile, so it costs
+/// about what the reading does. ``render_bitmap=False`` renders nothing: after
+/// a step that leaves the bitmap to be rendered it scores no row, and the bars
+/// judge nothing.
 ///
 /// The peak is looked for within the track's ``max_shift_px`` of each
 /// observation, in patch-grid px, the bar the shift is judged by; both shifts
@@ -1735,7 +1760,7 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
     *,
     max_seed_offset_px = None,
     max_cache_bytes = None,
-    render_bitmap = false,
+    render_bitmap = true,
 ))]
 fn evaluate(
     py: Python<'_>,

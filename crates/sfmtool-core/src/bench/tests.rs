@@ -966,6 +966,101 @@ fn a_row_the_localizer_refused_is_not_judged_on_its_bitmap_score() {
     assert_eq!(report.unmeasured, 1);
 }
 
+/// A render for [`settle`](super::evaluate::settle) that installs a blank
+/// bitmap naming `from` and scores the row rendered from `1` and every other
+/// row `0.1`, as the render of one view against another reads where the two
+/// differ.
+fn render_alternating(
+    track: &EditableTrack,
+    from: Option<usize>,
+    renders: &std::cell::Cell<usize>,
+) -> Result<EditableTrack, super::evaluate::EvaluateError> {
+    renders.set(renders.get() + 1);
+    let mut next = track.clone();
+    let payload = payload_of(&mut next);
+    payload.bitmap = Some(Array3::zeros((4, 4, 4)));
+    payload.bitmap_for_judging = false;
+    payload.reference = from;
+    for (i, observation) in next.observations.iter_mut().enumerate() {
+        let m = observation.track.as_mut().expect("a track slot");
+        m.zncc = Some(if Some(i) == from { 1.0 } else { 0.1 });
+    }
+    Ok(next)
+}
+
+/// A target that always moves the bitmap to the other of rows 0 and 1, as a
+/// reference-view rule whose pick flips with the `in` set would.
+fn alternating_target(track: &EditableTrack) -> Option<Option<usize>> {
+    match track.track()?.reference {
+        Some(0) => Some(Some(1)),
+        _ => Some(Some(0)),
+    }
+}
+
+/// Where the rule's pick alternates between two rows, the loop renders from
+/// each once and stops when the pick returns to a row already rendered from:
+/// the bitmap stays on the second row, the pick names the first, and every
+/// verdict is the bars' on the scores against the bitmap returned.
+#[test]
+fn the_rendering_loop_stops_when_the_pick_returns_to_a_row_it_rendered_from() {
+    let track = scored_track([0.95, 0.95]);
+    let renders = std::cell::Cell::new(0);
+    let settled = super::evaluate::settle(track, Vec::new(), true, alternating_target, |t, f| {
+        render_alternating(t, f, &renders)
+    })
+    .expect("no render fails");
+    assert_eq!(renders.get(), 2, "one render from each row");
+    assert_eq!(settled.rendered_from, vec![Some(0), Some(1)]);
+    assert!(settled.repainted);
+    let track = &settled.track;
+    assert_eq!(track.track().unwrap().reference, Some(1));
+    assert_eq!(
+        alternating_target(track),
+        Some(Some(0)),
+        "the pick is another row than the reference"
+    );
+    assert_eq!(track.observations[1].verdict, Verdict::In);
+    assert!(!apply_thresholds(track).1.changed, "judged on this bitmap");
+
+    // A marked evaluation of it carries both rows: the pick names one
+    // rendered from already, so nothing is rendered and nothing judged.
+    let mark = super::track::RepaintMark::after_renders(track, settled.rendered_from.clone());
+    assert_eq!(mark.rendered_from(), &[Some(0), Some(1)]);
+    let again = super::evaluate::settle(
+        track.clone(),
+        mark.rendered_from().to_vec(),
+        false,
+        alternating_target,
+        |t, f| render_alternating(t, f, &renders),
+    )
+    .expect("no render fails");
+    assert_eq!(renders.get(), 2, "the carried rows stop the render");
+    assert!(!again.repainted);
+    assert_eq!(again.track.track().unwrap().reference, Some(1));
+}
+
+/// A marked evaluation whose pick moves to a row not rendered from since the
+/// step renders from it and judges, and the rows it hands on to the next mark
+/// are the carried ones followed by its own.
+#[test]
+fn a_marked_evaluation_that_renders_carries_its_row_into_the_mark() {
+    let renders = std::cell::Cell::new(0);
+    let first = render_alternating(&scored_track([0.95, 0.95]), Some(0), &renders)
+        .expect("no render fails");
+    let (first, _) = apply_thresholds(&first);
+    assert_eq!(first.observations[0].verdict, Verdict::In);
+    let settled =
+        super::evaluate::settle(first, vec![Some(0)], false, alternating_target, |t, f| {
+            render_alternating(t, f, &renders)
+        })
+        .expect("no render fails");
+    assert_eq!(renders.get(), 2);
+    assert_eq!(settled.rendered_from, vec![Some(0), Some(1)]);
+    assert!(settled.repainted, "the new scores were judged");
+    assert_eq!(settled.track.observations[1].verdict, Verdict::In);
+    assert_eq!(settled.track.observations[0].verdict, Verdict::Out);
+}
+
 /// The cluster stage judges its own ZNCC bars, not the track stage's.
 #[test]
 fn the_cluster_stage_judges_its_own_zncc_bars() {
@@ -4161,8 +4256,19 @@ fn moving_a_sighting_writes_its_keypoint_pins_it_and_drops_what_was_read_at_the_
     let measurement = moved.track.as_ref().expect("a track slot");
     assert_eq!(measurement.zncc, None);
     assert_eq!(measurement.seed_shift_px, None);
-    // Nothing else moved: the other sighting, the patch and the position stand.
-    assert_eq!(next.observations[0], track.observations[0]);
+    // The bitmap was this row's render at its old keypoint, so it goes, and
+    // with it every score read against it.
+    if track
+        .track()
+        .is_some_and(|p| p.reference == Some(1) && p.bitmap.is_some())
+    {
+        assert!(next.track().unwrap().bitmap.is_none());
+        assert_eq!(next.observations[0].track.as_ref().unwrap().zncc, None);
+    }
+    // Nothing else moved: the other sighting, its verdict, the patch and the
+    // position stand.
+    assert_eq!(next.observations[0].site(), track.observations[0].site());
+    assert_eq!(next.observations[0].verdict, track.observations[0].verdict);
     assert_eq!(
         next.track().map(|p| p.position),
         track.track().map(|p| p.position)

@@ -371,7 +371,7 @@ class TestTheEditableTrack:
         # evaluation searches and how far a fit may move a sighting.
         _, track = create_track(Bench(), edited, long_track_point)
         assert track.thresholds == {
-            "min_zncc": 0.6,
+            "min_zncc": 0.65,
             "min_zncc_middle": 0.0,
             "cluster_min_zncc": 0.7,
             "cluster_min_zncc_middle": 0.7,
@@ -613,7 +613,7 @@ class TestEvaluating:
         _, track = create_track(Bench(), edited, long_track_point)
         # Moving the patch drops the bitmap, which no longer shows it.
         moved, _ = translate_patch(track, edited, (0.0, 0.0, 0.05))
-        read, _ = evaluate(moved, edited, images)
+        read, _ = evaluate(moved, edited, images, render_bitmap=False)
         assert read.reference_observation is None
         assert any("loo_zncc" in o["track"] for o in read.observations)
         for o in read.observations:
@@ -621,10 +621,67 @@ class TestEvaluating:
             assert "zncc" not in entry
             if "loo_zncc" in entry:
                 assert entry["reason"] == "there is no bitmap to score it against"
-        # The viewer's live evaluation renders one and scores every row.
-        rendered, _ = evaluate(moved, edited, images, render_bitmap=True)
+        # The viewer's live evaluation, the default, renders one and scores
+        # every row.
+        rendered, _ = evaluate(moved, edited, images)
         assert rendered.reference_observation is not None
         assert any("zncc" in o["track"] for o in rendered.observations)
+
+    def test_unpinning_the_held_reference_leaves_the_bitmap_pending(
+        self, edited, images, long_track_point
+    ):
+        """Unpinning the row that holds the reference, where the rule picks
+        another row, clears every score and reports the render as pending; the
+        evaluation that follows renders from the pick and judges the rows."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        read, _ = evaluate(track, edited, images)
+        pick = read.reference_view_observation
+        other = next(
+            i
+            for i, o in enumerate(read.observations)
+            if i != pick and o["verdict"] == "in"
+        )
+        chosen, _ = set_reference(read, other)
+        held, _ = evaluate(chosen, edited, images)
+        assert held.reference_observation == other
+        assert held.reference_view_observation == pick
+
+        unpinned, report = unpin_verdict(held, other)
+        assert report["bitmap_pending"] is True
+        assert (report["turned_in"], report["turned_out"]) == (0, 0)
+        assert all("zncc" not in o["track"] for o in unpinned.observations)
+        rendered, _ = evaluate(unpinned, edited, images)
+        assert rendered.reference_observation == pick
+        assert rendered.observation(pick)["track"]["zncc"] == 1.0
+
+    def test_a_track_with_every_row_out_is_judged_against_a_bitmap_for_judging(
+        self, edited, images, long_track_point
+    ):
+        """Unpinning every row under a bar none clears turns them all out and
+        the bitmap goes with the reference row. The next evaluation renders a
+        bitmap for judging from every row with a keypoint, so loosening the bar
+        turns rows back in, and the render after that is by the usual rule."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        read, _ = evaluate(track, edited, images)
+        read, _ = apply_thresholds(read, max_projection_error_px=1e-9)
+        everything_out, report = unpin_verdict(read, "all")
+        assert everything_out.verdict_counts[0] == 0
+        assert report["bitmap_pending"] is True
+
+        judged, report = evaluate(everything_out, edited, images)
+        assert judged.bitmap_for_judging
+        assert judged.reference_observation is None
+        assert report["scored"] > 0
+        assert judged.verdict_counts[0] == 0
+
+        back, report = apply_thresholds(judged, max_projection_error_px=3.0)
+        assert report["turned_in"] >= 2
+        for _ in range(back.observation_count):
+            back, _ = evaluate(back, edited, images)
+            if not back.repainted:
+                break
+        assert not back.bitmap_for_judging
+        assert back.verdict_counts[0] >= 2
 
     def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
         self, edited, images, long_track_point
@@ -716,10 +773,15 @@ class TestEvaluating:
         read, report = evaluate(track, edited, images)
         assert report["measured"] + report["unmeasured"] == track.observation_count
         # Every row carries a track-stage slot, and every one that carries no
-        # score says why in a sentence rather than coming back blank.
+        # score says why in a sentence rather than coming back blank. A row the
+        # localizer refused keeps its refusal beside a score against the
+        # bitmap, which the render of a new bitmap reads for every row with a
+        # keypoint.
         for observation in read.observations:
             entry = observation["track"]
-            assert ("zncc" in entry) != ("reason" in entry)
+            assert "zncc" in entry or "reason" in entry
+            if "reason" in entry and "zncc" in entry:
+                assert "loo_zncc" not in entry
             if "reason" in entry:
                 assert entry["reason"]
         out_row = read.observation(1)["track"]

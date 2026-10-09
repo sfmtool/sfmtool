@@ -510,6 +510,48 @@ fn rendered_in_place(
     next
 }
 
+/// `track` with a bitmap for judging
+/// ([`TrackPayload::bitmap_for_judging`]) rendered where its patch stands: the
+/// render of the reference-view rule's pick among every row that carries a
+/// keypoint, `in` or `out`, or their fused mean where the rule picks none. It
+/// names no reference and leaves the track's colour alone. The track comes
+/// back unchanged where it has no placement or the render gives no bitmap.
+pub(super) fn render_bitmap_for_judging(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FitOptions,
+) -> EditableTrack {
+    let Stage::Track(payload) = &track.stage else {
+        return track.clone();
+    };
+    let Some(placement) = &payload.placement else {
+        return track.clone();
+    };
+    let keyed: Vec<usize> = (0..track.observations.len()).collect();
+    let (bitmap, _, _) = render_bitmap(
+        track,
+        edited,
+        images,
+        placement,
+        &keyed,
+        options,
+        None,
+        &Progress::none(),
+    );
+    let Some(bitmap) = bitmap else {
+        return track.clone();
+    };
+    let mut next = track.clone();
+    if let Stage::Track(payload) = &mut next.stage {
+        payload.bitmap = Some(bitmap);
+        payload.reference = None;
+        payload.bitmap_for_judging = true;
+    }
+    next.repaint = track.repaint.carried();
+    next
+}
+
 /// Write a rendered bitmap, the row it is the render of, and the colour at its
 /// centre into `track`'s track-stage payload.
 pub(super) fn install_bitmap(
@@ -520,6 +562,7 @@ pub(super) fn install_bitmap(
 ) {
     if let Stage::Track(payload) = &mut track.stage {
         payload.bitmap = Some(bitmap);
+        payload.bitmap_for_judging = false;
         payload.reference = reference;
         if let Some(color) = color {
             payload.color = color;
@@ -952,6 +995,7 @@ pub(super) fn fit_track(
             .unwrap_or([0; 3]),
         bitmap,
         reference,
+        bitmap_for_judging: false,
         normal_confidence: previous.and_then(|p| p.normal_confidence),
         condition_number: finite(triangulation.condition_number),
     });

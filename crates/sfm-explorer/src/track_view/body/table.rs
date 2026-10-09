@@ -843,8 +843,9 @@ fn keep_switch(
 
 /// A row's *Verdict* cell, in Viewed mode: the word `in` or `out` for the
 /// verdict the read-only bars give the row, with how many bars an `out` row
-/// fails, or `-` where nothing has measured it, in the cell the caller has
-/// tinted. The cell takes the pointer for its
+/// fails, or `-` where nothing has measured it or where the row holds a
+/// reference the bars cannot judge until the bitmap is rendered again
+/// (`waits`), in the cell the caller has tinted. The cell takes the pointer for its
 /// hover text and no click, so a click on it is still the row's. Returns the
 /// hover text and the word.
 fn draw_verdict(
@@ -854,6 +855,7 @@ fn draw_verdict(
     observation: usize,
     judged: Option<&Judgement>,
     image: u32,
+    waits: bool,
 ) -> (String, String) {
     let cell = egui::Rect::from_min_max(
         egui::pos2(rect.min.x + cols.keep, rect.min.y),
@@ -867,7 +869,7 @@ fn draw_verdict(
         egui::TextStyle::Body.resolve(ui.style()),
         ui.visuals().text_color(),
     );
-    let hover = proposal_reason(judged, image);
+    let hover = proposal_reason(judged, image, waits);
     ui.interact(
         cell,
         ui.id().with(("track_view_verdict", observation)),
@@ -954,7 +956,13 @@ fn paint_pushpin(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32, s
 
 /// The switch's hover text: what the switch says now, how to change it, and
 /// why the bars propose what they do for the row.
-fn keep_hover(kept: bool, pinned: bool, judged: Option<&Judgement>, image: u32) -> String {
+fn keep_hover(
+    kept: bool,
+    pinned: bool,
+    judged: Option<&Judgement>,
+    image: u32,
+    waits: bool,
+) -> String {
     let state = match (kept, pinned) {
         (true, true) => "Kept, set by hand.",
         (true, false) => "Kept, as the thresholds propose.",
@@ -965,7 +973,7 @@ fn keep_hover(kept: bool, pinned: bool, judged: Option<&Judgement>, image: u32) 
     };
     format!(
         "{state} Click to switch it, which pins it.\n\n{}",
-        proposal_reason(judged, image)
+        proposal_reason(judged, image, waits)
     )
 }
 
@@ -973,8 +981,12 @@ fn keep_hover(kept: bool, pinned: bool, judged: Option<&Judgement>, image: u32) 
 /// fails, named as the column headings name the readings, or, for a row that
 /// clears every bar and is still proposed `out`, that another sighting of its
 /// image keeps the image's one `in`.
-fn proposal_reason(judged: Option<&Judgement>, image: u32) -> String {
+pub(super) fn proposal_reason(judged: Option<&Judgement>, image: u32, waits: bool) -> String {
     let Some(judged) = judged else {
+        if waits {
+            return "The reference: the patch bitmap is this row's render, so it scores 1 \n                    against it, which says nothing. Unpinning it would render the bitmap \n                    again from the reference-view rule's pick first, so the bars cannot say \n                    yet what they would propose."
+                .to_string();
+        }
         return "Nothing at this stage has measured it, so the bars propose nothing.".to_string();
     };
     if judged.proposal == Verdict::In {
@@ -1603,7 +1615,13 @@ impl TrackBody {
             row.pinned,
             enabled,
         );
-        let hover = keep_hover(kept, row.pinned, judged, row.image);
+        let hover = keep_hover(
+            kept,
+            row.pinned,
+            judged,
+            row.image,
+            self.reference_waits == Some(observation),
+        );
         if let Some(why) = refusal {
             pin.on_hover_text(why);
             keep.on_hover_text(why);
@@ -1761,8 +1779,15 @@ impl TrackBody {
                 None,
             )
         } else {
-            let (hover, text) =
-                draw_verdict(ui, rect, cols, observation, judged.as_ref(), row.image);
+            let (hover, text) = draw_verdict(
+                ui,
+                rect,
+                cols,
+                observation,
+                judged.as_ref(),
+                row.image,
+                self.reference_waits == Some(observation),
+            );
             (hover, Some(text))
         };
 
@@ -2497,7 +2522,7 @@ fn paint_sort_triangle(
 
 /// The threshold row under the headings: each bar's box in the column whose
 /// readings it judges, followed by the unit and the name those readings print
-/// with, so `[60]% whole` stands over `93% whole`. The two ZNCC bars stack as
+/// with, so `[65]% whole` stands over `93% whole`. The two ZNCC bars stack as
 /// the ZNCC cell stacks its two readings. The columns no bar judges are empty,
 /// so the word *Thresholds* takes the left of the row. Drawn the same in both
 /// modes, and greyed when `hover` is a refusal. The ZNCC boxes edit the bars of

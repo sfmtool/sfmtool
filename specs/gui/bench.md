@@ -494,12 +494,12 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207`; a put of the viewed point that carries Track View's read-only bars names the bars that differ from the defaults: `Put point 1207 on the bench as pt3d_a1b2c3d4_1207, with min ZNCC 80%` (§ "Live evaluation") |
 | Put a point on the bench again, once it has a patch frame its item lacks (§ "A view-only bench") | `Rebuilt pt3d_a1b2c3d4_1207 from point 1207, which now carries a patch frame` |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
-| Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member` |
+| Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member: 9 observations in, median leave-one-out ZNCC 91% / 88%` (the version's own label stops before the colon; `, after constellation refused` follows where earlier members were refused) |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
 | Unpin one verdict | `Handed image_012.jpg back to the thresholds in pt3d_a1b2c3d4_1207: in` |
 | Unpin several, or all | `Handed 4 verdicts back to the thresholds in pt3d_a1b2c3d4_1207: 1 turned in and 2 turned out, leaving 5 in, 3 out` (what moved, then the track's totals; `none moved` when the bars kept every verdict) |
-| Unpin the held reference's row where the rule picks another row | `Handed image_012.jpg back to the thresholds in pt3d_a1b2c3d4_1207: waiting for the bitmap to be rendered from image_015.jpg`; for several rows, the sentence above followed by `; waiting for the bitmap to be rendered from image_015.jpg`. The bars judge nothing in this step (§ "The reference") |
+| Unpin the held reference's row where the rule picks another row, or an unpin whose repaint turns the reference row `out` (`bitmap_pending`) | `Handed image_012.jpg back to the thresholds in pt3d_a1b2c3d4_1207: waiting for the bitmap to be rendered from image_015.jpg`; for several rows, the sentence above followed by `; waiting for the bitmap to be rendered from image_015.jpg`. The bars judge nothing in this step (§ "The reference") |
 | Slide the patch | `Moved pt3d_a1b2c3d4_1207 by 0.123 units to (1.204, -0.318, 4.006)` |
 | Place one sighting | `Moved observation 3 of pt3d_a1b2c3d4_1207 to (1041.6, 1702.9) in IMG_0042.jpg (2.3 px)` |
 | Resize the patch | `Resized pt3d_a1b2c3d4_1207 to 7.4 px in IMG_0042.jpg` |
@@ -904,12 +904,14 @@ the reference is on:
   (`AppState::unpin_bench_verdicts`, Track View's pin or *Unpin*, the wire's
   `set_bench_track_verdict` with `unpin`) moves the reference to the rule's
   pick at the next evaluation. Where the rule picks another row, the unpin
-  drops the bitmap and clears every row's score against it, so the bars judge
-  nothing in that step, and its Action Log row says so: `Handed IMG_0040.jpg
+  clears every row's score against the bitmap and keeps the bitmap until the
+  render replaces it, so the bars judge nothing in that step, and its Action Log row says so: `Handed IMG_0040.jpg
   back to the thresholds in 7f3a: waiting for the bitmap to be rendered from
   IMG_0042.jpg` (for several rows, the usual sentence followed by `; waiting
-  for the bitmap to be rendered from IMG_0042.jpg`; `the mean of the views`
-  in place of an image name where the rule picks no row). The live evaluation then
+  for the bitmap to be rendered from IMG_0042.jpg`; the row named is the one
+  the render will take, core's `bitmap_target`, and `the rule's pick at the
+  render, or the mean of the views` stands in its place where that names no
+  row). The live evaluation then
   renders the bitmap from the pick, scores every row against it and judges
   them; where its repaint moves verdicts it logs `Evaluated 7f3a: the bars
   turned 2 in and 1 out` (`Kind::Bench`, no version). While the row stays

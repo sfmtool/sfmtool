@@ -219,6 +219,7 @@ pub fn create_track(
         // column names the observation the bitmap is, or is to be, rendered
         // from -- for a column rendered for display, the observation that
         // render rendered it from.
+        bitmap_for_judging: false,
         reference: view
             .reference_observation()
             .and_then(|r| usize::try_from(r).ok()),
@@ -861,13 +862,17 @@ pub struct UnpinReport {
     pub turned_in: usize,
     /// How many they turned `out`.
     pub turned_out: usize,
-    /// Whether the unpin handed the reference to the reference-view rule's
-    /// pick on another row, so the bitmap is to be rendered again from it. The
-    /// bitmap is then dropped and every row's score against it cleared, so the
-    /// bars judge nothing here; the evaluation that follows
+    /// Whether the bitmap is to be rendered again, from the reference-view
+    /// rule's pick, before the bars can judge the rows: the unpin handed the
+    /// reference to a pick on another row, or its repaint turned the reference
+    /// row `out` and the bitmap went with it. Where the unpin handed the
+    /// reference on, every row's score against the bitmap was cleared, so the
+    /// bars judged nothing here; the bitmap itself stays until the render
+    /// replaces it. The evaluation that follows
     /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
     /// renders it, scores the rows and judges them, and its report says what
-    /// the bars moved.
+    /// the bars moved. False while a pinned row still holds the reference,
+    /// whichever row was unpinned.
     pub bitmap_pending: bool,
     /// Whether anything changed. False exactly when none of the named
     /// observations was pinned, and then the track comes back as it was.
@@ -898,10 +903,12 @@ pub struct UnpinReport {
 /// renders the bitmap from the rule's pick, and from then on the reference
 /// follows the pick at every render until a row holding it is pinned again or
 /// [`set_reference`] names one. Where the pick is another row, every score was
-/// read against the bitmap that render replaces, so the bitmap is dropped and
-/// the scores cleared here: the bars judge none of them, and the report says
-/// [`UnpinReport::bitmap_pending`]. The evaluation that follows renders the
-/// new bitmap, scores the rows against it and judges them.
+/// read against the bitmap that render replaces, so the scores are cleared
+/// here and the bitmap kept until the render replaces it: the bars judge none
+/// of the rows, and the report says [`UnpinReport::bitmap_pending`]. A commit
+/// before that render writes the old bitmap with the reference it is the
+/// render of. The evaluation that follows renders the new bitmap, scores the
+/// rows against it and judges them.
 ///
 /// When none of `observations` is pinned nothing changes: the report says
 /// `changed: false` and a caller pushes no version for it. An index past the
@@ -952,15 +959,22 @@ pub fn unpin_verdicts(
     }
     // An unpinned reference row hands the reference to the rule: where the
     // rule picks another row, the scores were read against a bitmap that is
-    // about to be replaced, so the bars wait for the new one.
-    let bitmap_pending = track.held_reference().is_some() && bitmap_target(&next).is_some();
-    if bitmap_pending {
-        if let Stage::Track(payload) = &mut next.stage {
-            payload.drop_stale_bitmap();
-        }
+    // about to be replaced, so the bars wait for the new one. The bitmap
+    // itself stays, the render of an `in` row, until that render replaces it.
+    let released = track.held_reference().is_some() && next.held_reference().is_none();
+    let moving = released && bitmap_target(&next).is_some();
+    if moving {
         clear_bitmap_scores(&mut next);
     }
     let (painted, report) = apply_thresholds(&next);
+    // Judged after the repaint, which can turn the reference row `out` and
+    // drop the bitmap with it.
+    let committable =
+        |t: &EditableTrack| t.track().is_some_and(|p| p.committable_bitmap().is_some());
+    let dropped = committable(track) && !committable(&painted);
+    let bitmap_pending = (moving || dropped)
+        && painted.held_reference().is_none()
+        && bitmap_target(&painted).is_some();
     Ok((
         painted,
         UnpinReport {
@@ -1061,7 +1075,8 @@ pub struct ReferenceReport {
 /// unpinned ([`unpin_verdicts`]), deleted, split off or turned `out`. The
 /// bitmap the track carries is no longer that row's render unless the row was
 /// the reference already, so it is dropped and the reference kept
-/// ([`TrackPayload::drop_stale_bitmap`]); the next render
+/// ([`TrackPayload::drop_stale_bitmap`]), with every row's score against it, so
+/// the bars judge nothing until the next render
 /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap),
 /// which SfM Explorer's live evaluation runs after every step, or a fit)
 /// renders the bitmap from the row and scores every row against it. Pinning a
@@ -1114,6 +1129,7 @@ pub fn set_reference(
             payload.drop_stale_bitmap();
             payload.reference = Some(observation);
         }
+        clear_bitmap_scores(&mut next);
     }
     Ok((
         next,
@@ -1274,11 +1290,17 @@ pub fn sight_observation(
     let mut next = track.clone();
     // The bitmap of a track whose reference observation is sighted elsewhere
     // is that observation's render at its old keypoint, so it goes; the
-    // observation stays on the track, and so does the reference.
+    // observation stays on the track, and so does the reference. Every score
+    // read against that bitmap goes with it.
+    let mut stale = false;
     if let Stage::Track(payload) = &mut next.stage {
-        if payload.reference == Some(observation) {
+        if payload.reference == Some(observation) && payload.bitmap.is_some() {
             payload.drop_stale_bitmap();
+            stale = true;
         }
+    }
+    if stale {
+        clear_bitmap_scores(&mut next);
     }
     let target = &mut next.observations[observation];
     match track.stage {
@@ -3126,15 +3148,20 @@ pub fn split(
     // The bitmap stays with the first track, and the row it is the tile of
     // moves up past the rows taken from before it. A bitmap whose row was
     // taken is the tile of a sighting the first track no longer has, so it
-    // goes with its reference.
+    // goes with its reference, and with every score read against it.
+    let mut dropped = false;
     if let Stage::Track(payload) = &mut first.stage {
         if let Some(r) = payload.reference {
             if taken.binary_search(&r).is_ok() {
                 payload.drop_bitmap();
+                dropped = true;
             } else {
                 payload.reference = Some(r - taken.partition_point(|&t| t < r));
             }
         }
+    }
+    if dropped {
+        clear_bitmap_scores(&mut first);
     }
     reseat_reference(&mut first);
     let mut second = (**track).clone();

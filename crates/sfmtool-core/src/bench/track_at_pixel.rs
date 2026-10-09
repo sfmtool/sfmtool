@@ -605,7 +605,8 @@ pub enum StageRecord {
         at_infinity: bool,
         /// Why the classification came out as it did.
         reason: Option<ClassificationReason>,
-        /// The median ZNCC after it.
+        /// The median leave-one-out ZNCC (`TrackMeasurement::loo_zncc`) over
+        /// the `in` views after it.
         zncc_median: f64,
     },
     /// The constellation member's tilt toward its local prior's normal.
@@ -614,7 +615,8 @@ pub enum StageRecord {
     Anchor {
         /// How many views are `in` after it.
         in_views: usize,
-        /// The median ZNCC after it.
+        /// The median leave-one-out ZNCC (`TrackMeasurement::loo_zncc`) over
+        /// them after it.
         zncc_median: f64,
     },
     /// The finish's tilt toward the neighbours' normal.

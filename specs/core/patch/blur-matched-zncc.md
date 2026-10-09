@@ -432,9 +432,12 @@ same pair over the middle square and each ninth, plain) and
 `blur_matched_zncc`, with `bitmap_blur_sigma` and `sharper_than_bitmap`
 ([editable-track.md](../bench/editable-track.md)), and Track View shows them
 in its *ZNCC* column, plain and blur-matched. The bench's `min_zncc` bars,
-whole and middle, judge the **plain** score: it falls for a view that is
-out of focus, which the bars are there to catch, where the blur-matched score
-would not. Member coherence decides on its own matrix, and the
+whole and middle, judge the **plain** score, which reads lower for a view that
+is out of focus than the blur-matched score does. A blurred view of the right
+place is a view to keep, and the bars are not there to catch focus; the
+measured default loses 5.6% of the blurred true members that clear the
+geometry bars, against 3.5% of the sharp ones
+([editable-track.md](../bench/editable-track.md) § "Parameters"). Member coherence decides on its own matrix, and the
 per-observation covariance's `1 − ZNCC` is the localizer's peak; whether
 either should read the blur-matched score against the bitmap is an open
 question of

@@ -99,7 +99,9 @@ impl ReferenceRows {
             reference_image: image(reference),
             pick,
             pick_image: image(pick),
-            has_bitmap: track.track().is_some_and(|p| p.bitmap.is_some()),
+            has_bitmap: track
+                .track()
+                .is_some_and(|p| p.committable_bitmap().is_some()),
         }
     }
 

@@ -821,16 +821,18 @@ cannot say which of two tracks it belongs to.
 
 #### The thresholds
 
-Six boxes, so no bar of `Thresholds` is one only the wire can move. The two
-ZNCC boxes edit the bars of the stage the track is in (`Thresholds::zncc_bars`): `min_zncc` and `min_zncc_middle` at
-the track stage, `cluster_min_zncc` and `cluster_min_zncc_middle` at the
-cluster stage, which judges another score. Five of them judge the table's readings, and they stand in **a threshold
+Six boxes for the eight bars of `Thresholds`, so every bar the stage the
+track is in judges has a box. The two ZNCC boxes edit the bars of that stage
+(`Thresholds::zncc_bars`): `min_zncc` and `min_zncc_middle` at the track
+stage, `cluster_min_zncc` and `cluster_min_zncc_middle` at the cluster stage,
+which judges another score; the other stage's pair has no box while the
+track is not at that stage, and only the wire moves it then. Five of them judge the table's readings, and they stand in **a threshold
 row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
 Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Zoom  Reference  Status  ...  Name
-Thresholds              [60]% whole         [2.5] px whole      [3.0] px   [6.0] px
+Thresholds              [65]% whole         [2.5] px whole      [3.0] px   [6.0] px
                         [0]% mid
 ```
 
@@ -839,8 +841,8 @@ the heading of what it judges however far the table is scrolled, and the
 columns no bar judges leave room for the word *Thresholds* at its left. The
 minimum ZNCC and minimum middle ZNCC boxes stack in the *ZNCC* column, whole
 over mid, as its cell stacks the two readings. They read and take percent in
-whole steps, as that column reads, so on a new track they show 60 and 0 at
-the track stage while the track and the wire hold 0.60 and 0, and 70 and 70
+whole steps, as that column reads, so on a new track they show 65 and 0 at
+the track stage while the track and the wire hold 0.65 and 0, and 70 and 70
 at the cluster stage; a typed value may end in `%`. At the track stage both
 judge the plain score against the stored bitmap, and at the cluster stage the
 achieved template ZNCC. A middle bar of 0 turns it off, and a row with no
@@ -1063,7 +1065,7 @@ that is not there prints a bare `-`, with no unit.
 | Crop | the photograph around the observation's parallelogram, with the parallelogram over it; hovering it shows it in context, with the patch's two axes in pixels | the photograph around the patch's outline as Image Detail draws it, with the outline over it; hovering it shows it in context, with the projection and the patch's two axes in pixels |
 | Patch (the tile) | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through `patch::patch_color_image`; hovering it shows it in context, with the projection |
 | Keep (Edited) | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
-| Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, with the number of bars an `out` row fails in brackets (`out (2)`), in a cell tinted green or red by it; `-` untinted where nothing has measured the row |
+| Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, with the number of bars an `out` row fails in brackets (`out (2)`), in a cell tinted green or red by it; `-` untinted where nothing has measured the row, or on the pinned reference row the bars cannot judge until the bitmap is rendered again |
 | Img | the image's index; hovering it shows the file name whole, as hovering *Name* does | the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | against the stored patch bitmap, read plain, with the blur-matched score after an arrow where the bitmap was blurred and the two print differently (`50% ⏵ 53% whole`), over the middle ZNCC, then the ZNCC grid; the reference's own row reads `100%`; `-` where the row has no score, the Status cell saying why; hovering the numbers gives the scores, the blur's width or the `sharper` note, and the leave-one-out ZNCC |
 | Self-similarity | the surface plot, then the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid | the same |
@@ -1607,7 +1609,11 @@ not read as judged. The colours follow the boxes live during a drag.
 **The *Keep* cell's colour is what the bars say, and the switch is what the
 person decided.** The switch-and-pin cell, the full height of the row, is
 tinted green where the bars propose `in` and red where they propose `out`, and
-left untinted for a row nothing has measured; the rest of the row carries only
+left untinted for a row nothing has measured, and for the pinned row holding
+the reference where unpinning it would render the bitmap again from another
+row: that row scores 1 against its own render, which says nothing, and the
+bars can judge it only against the bitmap the unpin leads to, so its hover
+says that rather than that nothing has measured it; the rest of the row carries only
 the selection and hover highlights. For an unpinned row the proposal is what
 applying the bars makes it. For a pinned row it is what unpinning it would
 make it: its bars, and whether its image is free -- not already held by a
@@ -1628,8 +1634,10 @@ say the same thing on every row, and nothing in Viewed mode could change it.
 The column shows instead what the read-only bars say about each observation:
 the word `in` in a green cell where the row clears every bar and holds its
 image, `out` in a red cell where it does not, and an untinted `-` where nothing
-has measured the row yet, or where the viewed track's evaluation was refused or
-failed. It is the proposal the *Keep* cell is tinted by, in the same green and
+has measured the row yet, where the viewed track's evaluation was refused or
+failed, or on the pinned row holding the reference where unpinning it would
+render the bitmap again from another row (its hover says the bars cannot judge
+it until that render). It is the proposal the *Keep* cell is tinted by, in the same green and
 red, which for the viewed track's pinned rows is the verdict the bench's own
 evaluation would give each row once the point is on the bench and the row
 unpinned. Its hover text is the *Keep* switch's second half: that the row

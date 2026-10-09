@@ -111,7 +111,11 @@ pub enum CommitError {
     /// none.
     NoFrame,
     /// The reconstruction carries a patch bitmap per point and the track has
-    /// none.
+    /// none to commit: it has no bitmap, or only one for judging
+    /// ([`TrackPayload::bitmap_for_judging`]). The next evaluation that
+    /// renders the bitmap
+    /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
+    /// makes one where at least two `in` rows carry a keypoint.
     NoBitmap,
     /// An `in` observation carries no keypoint, so there is no pixel to store
     /// for it.
@@ -156,7 +160,9 @@ impl std::fmt::Display for CommitError {
             ),
             CommitError::NoBitmap => write!(
                 f,
-                "the reconstruction stores a patch bitmap per point and the track has none"
+                "the reconstruction stores a patch bitmap per point and the track has none to \
+                 commit; an evaluation that renders the bitmap (SfM Explorer's live \
+                 evaluation does) makes one once two in rows carry a keypoint"
             ),
             CommitError::NoKeypoint { observation, image } => write!(
                 f,
@@ -262,7 +268,7 @@ pub fn commit(
     if edited.has_patch_frames() && payload.placement.is_none() {
         return Err(CommitError::NoFrame);
     }
-    if edited.has_patch_bitmaps() && payload.bitmap.is_none() {
+    if edited.has_patch_bitmaps() && payload.committable_bitmap().is_none() {
         return Err(CommitError::NoBitmap);
     }
     let image_count = edited.image_count();
@@ -341,9 +347,12 @@ pub fn commit(
         patch_v_halfvec: frame
             .filter(|_| edited.has_patch_frames())
             .map(|patch| halfvec(patch.v_axis * patch.half_extent[1])),
-        patch_bitmap: edited
-            .has_patch_bitmaps()
-            .then(|| payload.bitmap.clone().expect("checked above")),
+        patch_bitmap: edited.has_patch_bitmaps().then(|| {
+            payload
+                .committable_bitmap()
+                .cloned()
+                .expect("checked above")
+        }),
         normal_confidence: edited.has_normal_confidence().then(|| {
             if at_infinity {
                 0
@@ -360,11 +369,14 @@ pub fn commit(
         )),
         // The track's reference observation: its place in the sorted track.
         // With a bitmap it is the observation the bitmap is the render of (a
-        // fused mean names none); without one, the reference the track
-        // carries, which a later render renders from. A reference whose
-        // observation is not `in` was dropped by the step that turned it out,
-        // so `rows` holds it; a reference set by hand on a row that is not
-        // `in` is written as none.
+        // fused mean names none, and so does a bitmap for judging); without
+        // one, the reference the track carries: the row a held reference
+        // names, or one a step made stale. After an unpin that hands the
+        // reference to the rule, the bitmap stays until the next render, so
+        // the reference written is still the row it is the render of. A
+        // reference whose observation is not `in` was dropped by the step that
+        // turned it out, so `rows` holds it; a reference set by hand on a row
+        // that is not `in` is written as none.
         reference_observation: edited.has_reference_observations().then(|| {
             payload
                 .reference
@@ -472,7 +484,7 @@ pub fn commit(
 /// one photograph (or that mean) shows at the point, and the point's colour
 /// agrees with its own bitmap.
 fn bitmap_color(payload: &TrackPayload) -> [u8; 3] {
-    let Some(bitmap) = &payload.bitmap else {
+    let Some(bitmap) = payload.committable_bitmap() else {
         return payload.color;
     };
     let shape = bitmap.shape();

@@ -467,7 +467,9 @@ impl std::fmt::Display for EvaluateReport {
 /// reads the rows under the new set and leaves every verdict where it is. That
 /// bounds the flipping a repaint could otherwise start, a row turned in
 /// dropping another below a bar and that one's turn moving the first back,
-/// to one extra reading. [`EvaluateReport::turned_in`] and
+/// to one extra reading. [`evaluate_rendering_bitmap`] is the exception: it
+/// repaints a marked track when the bitmap moves, as its own documentation
+/// says. [`EvaluateReport::turned_in`] and
 /// [`EvaluateReport::turned_out`] say what the repaint moved.
 ///
 /// The reference-view rule is run over the rows that are `in` when the track
@@ -598,8 +600,14 @@ fn evaluate_keeping_tiles(
 ///    ([`EditableTrack::held_reference`]) where it holds one, and otherwise
 ///    the rule's pick, so the reference and the pick are one row on an
 ///    unpinned track; where the rule picks none, or reaches its pick only
-///    through its last fallback, the bitmap is the fused mean. Every row is
-///    scored against the new bitmap ([`score_bitmap`]).
+///    through its last fallback, the bitmap is the fused mean. Where that
+///    render gives no bitmap (no row is `in`, or fewer than two `in` rows
+///    carry a keypoint), a **bitmap for judging** is rendered instead
+///    ([`TrackPayload::bitmap_for_judging`]), from the rule's pick among every
+///    row with a keypoint, `in` or `out`, so the bars still have scores to
+///    judge and a loosened bar can turn rows back `in`; once a row is `in`,
+///    the next pass renders by the usual rule. Every row is scored against
+///    the new bitmap ([`score_bitmap`]).
 /// 2. **Repaint.** The bars judge those scores ([`apply_thresholds`]).
 /// 3. When the repaint moved a verdict, the rule has been run again over the
 ///    rows still `in`, and when its pick is now another row the bitmap moves
@@ -654,27 +662,82 @@ pub fn evaluate_rendering_bitmap(
     let marked = track.repainted();
     // The rows the bitmap has been rendered from since the last step: carried
     // by the mark of the evaluations that follow it, and empty after a step.
-    let mut rendered_from: Vec<Option<usize>> = if marked {
+    let rendered_from: Vec<Option<usize>> = if marked {
         track.repaint.rendered_from().to_vec()
     } else {
         Vec::new()
     };
-    let mut current = read;
-    let mut judge = !marked;
+    let settled = settle(
+        read,
+        rendered_from,
+        !marked,
+        bitmap_target,
+        |current, from| {
+            progress.check_cancel()?;
+            render_and_score(current, from, &kept, edited, images, options, fit, progress)
+        },
+    )?;
+    let mut current = settled.track;
+    if settled.repainted {
+        current.repaint = RepaintMark::after_renders(&current, settled.rendered_from);
+    }
+    let (turned_in, turned_out) = verdicts_moved(track, &current);
+    report.turned_in = turned_in;
+    report.turned_out = turned_out;
+    report.scored = judged_count(&current);
+    Ok((current, report))
+}
+
+/// What [`settle`] ends with.
+pub(super) struct Settled {
+    /// The track, its bitmap where the loop left it and its verdicts judged
+    /// against that bitmap.
+    pub(super) track: EditableTrack,
+    /// The rows the bitmap has been rendered from since the last step, the
+    /// ones the loop was given followed by its own renders.
+    pub(super) rendered_from: Vec<Option<usize>>,
+    /// Whether a repaint moved a verdict.
+    pub(super) repainted: bool,
+}
+
+/// [`evaluate_rendering_bitmap`]'s loop over `current`, a reading: render
+/// where `target` ([`bitmap_target`]) says, with `render` (`render_and_score`),
+/// then repaint, until a repaint moves nothing, the bitmap needs no move, or
+/// `target` names a row in `rendered_from` while the track has a bitmap to
+/// keep. `judge` says whether the reading's scores are to be judged when no
+/// render runs: false for a marked reading, which only re-reads. Kept apart
+/// from the render so that the loop's exits can be tested with a render and
+/// a target that a test controls.
+pub(super) fn settle(
+    mut current: EditableTrack,
+    mut rendered_from: Vec<Option<usize>>,
+    mut judge: bool,
+    target: impl Fn(&EditableTrack) -> Option<Option<usize>>,
+    mut render: impl FnMut(&EditableTrack, Option<usize>) -> Result<EditableTrack, EvaluateError>,
+) -> Result<Settled, EvaluateError> {
     let mut repainted = false;
+    // The `in` rows when the loop last rendered a bitmap for judging: such a
+    // bitmap counts as one to keep only while they are the same rows, so a
+    // repaint that turns rows `in` gets a render by the usual rule.
+    let mut judged_with: Option<Vec<usize>> = None;
     // Each pass renders from a row not rendered from before, or stops; the
     // bound only guards a bitmap that each repaint drops again.
     for _ in 0..current.observations.len() + 2 {
-        if let Some(from) = bitmap_target(&current) {
-            let has_bitmap = current.track().is_some_and(|p| p.bitmap.is_some());
+        if let Some(from) = target(&current) {
+            let has_bitmap = current.track().is_some_and(|p| {
+                p.bitmap.is_some()
+                    && (!p.bitmap_for_judging
+                        || judged_with.as_ref() == Some(&current.in_observations()))
+            });
             if has_bitmap && rendered_from.contains(&from) {
                 break;
             }
-            progress.check_cancel()?;
-            current = render_and_score(
-                &current, from, &kept, edited, images, options, fit, progress,
-            )?;
+            current = render(&current, from)?;
             rendered_from.push(from);
+            judged_with = current
+                .track()
+                .is_some_and(|p| p.bitmap_for_judging)
+                .then(|| current.in_observations());
             judge = true;
         }
         if !judge {
@@ -688,14 +751,11 @@ pub fn evaluate_rendering_bitmap(
         }
         repainted = true;
     }
-    if repainted {
-        current.repaint = RepaintMark::after_renders(&current, rendered_from);
-    }
-    let (turned_in, turned_out) = verdicts_moved(track, &current);
-    report.turned_in = turned_in;
-    report.turned_out = turned_out;
-    report.scored = judged_count(&current);
-    Ok((current, report))
+    Ok(Settled {
+        track: current,
+        rendered_from,
+        repainted,
+    })
 }
 
 /// The row `track`'s bitmap is to be rendered from, when it is to be
@@ -705,7 +765,10 @@ pub fn evaluate_rendering_bitmap(
 /// bitmap stands.
 ///
 /// A track with no placement has nothing to render. One with no bitmap is
-/// rendered, from the reference it holds or the rule's pick. A bitmap that
+/// rendered, from the reference it holds or the rule's pick, and so is one
+/// whose bitmap is for judging only
+/// ([`TrackPayload::bitmap_for_judging`]) once a row is `in`; while none is,
+/// that bitmap stands. A bitmap that
 /// names no row (a fused mean, or one stored before the reference was
 /// recorded) stands, and so does one whose reference its pinned row holds,
 /// whatever the rule picks. So does one the rule has not read yet: no row
@@ -713,13 +776,18 @@ pub fn evaluate_rendering_bitmap(
 /// when that is another row; where the rule's pick is one only its last
 /// fallback reached, it moves to the fused mean unless it is that row's tile
 /// already, which is what the render gives where no fused mean renders.
-pub(super) fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
+pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     let payload = track.track()?;
     payload.placement.as_ref()?;
     let held = track.held_reference();
     let stored = stored_pick(track);
     if payload.bitmap.is_none() {
         return Some(held.or(stored));
+    }
+    // A bitmap for judging stands only while no row is `in`.
+    if payload.bitmap_for_judging {
+        let any_in = track.observations.iter().any(|o| o.verdict == Verdict::In);
+        return any_in.then_some(held.or(stored));
     }
     let reference = payload.reference?;
     // A track the rule has not read yet has no pick to move to.
@@ -782,7 +850,17 @@ fn render_and_score(
     }
     let mut cleared = track.clone();
     clear_bitmap_scores(&mut cleared);
-    let rendered = super::fit::render_bitmap_in_place_from(&cleared, edited, images, fit, from);
+    if let Stage::Track(payload) = &mut cleared.stage {
+        if payload.bitmap_for_judging {
+            payload.drop_bitmap();
+        }
+    }
+    let mut rendered = super::fit::render_bitmap_in_place_from(&cleared, edited, images, fit, from);
+    // No `in` row could hold the reference: the bars judge against a bitmap
+    // rendered from every row with a keypoint, so a row can come back `in`.
+    if rendered.track().is_some_and(|p| p.bitmap.is_none()) {
+        rendered = super::fit::render_bitmap_for_judging(&rendered, edited, images, fit);
+    }
     score_bitmap(&rendered, edited, images, options, progress)
 }
 
@@ -2180,11 +2258,19 @@ pub fn score_bitmap(
 /// always an `in` row, and there is at most one. The bitmap scores stay: they
 /// are read against the bitmap, which a verdict does not change -- except
 /// where the observation the bitmap is the render of turned `out`, when the
-/// bitmap is dropped with its reference ([`TrackPayload::reference`]) and the
-/// next evaluation renders one from the rows that are `in`.
+/// bitmap is dropped with its reference ([`TrackPayload::reference`]), every
+/// row's score against it is cleared, and the next evaluation renders one from
+/// the rows that are `in` (or, where none can hold it, a bitmap for judging,
+/// [`TrackPayload::bitmap_for_judging`], which this leaves in place).
 pub(super) fn restate_reference_view(track: &mut EditableTrack) {
+    let mut dropped = false;
     if let Stage::Track(payload) = &mut track.stage {
+        let had = payload.bitmap.is_some();
         payload.drop_bitmap_unless_in(&track.observations);
+        dropped = had && payload.bitmap.is_none();
+    }
+    if dropped {
+        clear_bitmap_scores(track);
     }
     let mut rows = Vec::new();
     for (i, observation) in track.observations.iter_mut().enumerate() {

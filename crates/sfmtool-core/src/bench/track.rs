@@ -736,6 +736,21 @@ pub struct TrackPayload {
     /// writes this reference as the point's reference observation, beside the
     /// bitmap it is the render of where the reconstruction stores bitmaps.
     pub reference: Option<usize>,
+    /// Whether [`Self::bitmap`] is a **bitmap for judging**: a render made
+    /// only so that the bars have something to score the rows against,
+    /// because no `in` row could hold the reference. The live evaluation
+    /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
+    /// makes one where the render from the `in` rows gives no bitmap (every
+    /// row is `out`, or fewer than two `in` rows carry a keypoint), from the
+    /// reference-view rule's pick among every row that carries a keypoint,
+    /// `in` or `out`. Without it, a track whose `in` set emptied could never
+    /// be scored again, and loosening a bar could bring no row back.
+    ///
+    /// It names no reference ([`Self::reference`] is `None`), a step that
+    /// turns rows `out` leaves it in place, and a commit treats it as no
+    /// bitmap ([`Self::committable_bitmap`]). Once a row is `in` again, the
+    /// next render replaces it with a bitmap rendered by the usual rule.
+    pub bitmap_for_judging: bool,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
     pub color: [u8; 3],
@@ -751,6 +766,7 @@ impl TrackPayload {
     /// keeps `in`.
     pub(crate) fn drop_bitmap(&mut self) {
         self.bitmap = None;
+        self.bitmap_for_judging = false;
         self.reference = None;
     }
 
@@ -759,11 +775,19 @@ impl TrackPayload {
     /// but that observation is still on the track.
     pub fn drop_stale_bitmap(&mut self) {
         self.bitmap = None;
+        self.bitmap_for_judging = false;
+    }
+
+    /// The bitmap a commit writes: [`Self::bitmap`], or `None` where the track
+    /// has none or its bitmap is one for judging only
+    /// ([`Self::bitmap_for_judging`]).
+    pub fn committable_bitmap(&self) -> Option<&Array3<u8>> {
+        self.bitmap.as_ref().filter(|_| !self.bitmap_for_judging)
     }
 
     /// Drop the bitmap with its reference observation when that observation
     /// is not one of `observations`' `in` rows: a reference is an observation
-    /// the track keeps.
+    /// the track keeps. A bitmap for judging names no reference, so it stays.
     pub fn drop_bitmap_unless_in(&mut self, observations: &[Observation]) {
         if let Some(r) = self.reference {
             if observations.get(r).is_none_or(|o| o.verdict != Verdict::In) {
@@ -854,8 +878,7 @@ pub struct Thresholds {
     /// than its middle.
     ///
     /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`], which
-    /// is `0`: the measurement behind it found that the middle bar turns out
-    /// no more wrong views than the whole bar does alone. An
+    /// is `0`, off; its doc gives what the measurement found. An
     /// observation with no middle reading, because its middle is flat or it
     /// was read back from a committed point, has nothing to judge and clears
     /// the bar, as a row with no self-similarity reading clears
@@ -939,36 +962,36 @@ pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 
 /// The bench's default [`Thresholds::min_zncc`], the track stage's bar on the
-/// plain score against the stored bitmap.
+/// plain score against the stored bitmap: `0.65`.
 ///
 /// Below the cluster refinement's own `min_zncc` (0.85), which stays the batch
 /// pass's bar: a correct sighting's tile reads lower against one view's render
-/// than a fitted template does. Chosen by leave-one-reconstruction-out on
-/// eight reconstructions (two ground truths, six solves whose members are
-/// taken as correct), 150 tracks each, with wrong views planted where the
-/// geometry bars cannot see them: at the point's projection, with the
-/// photograph's pixels there replaced by another place's, the most similar
-/// one found or a random one, in images the track observes and images it
-/// does not; and with true members blurred, which are to be kept. The
-/// objective was the mean over tracks of the share of members kept and the
-/// share of wrong views turned out, every bar applied. Held out, the pick
-/// (`0.60` on seven of the eight folds) scores 86.1% against 83.5% for a
-/// `0.7` bar on the same score; `0.65` scores within 0.1 point of it. Of the
-/// wrong views that clear every geometry bar, `0.60` turns out 97% of those
-/// less than 0.5 similar to the true content and fewer of the more similar
-/// ones. The spec of the editable track (specs/core/bench/editable-track.md)
-/// gives the tables.
-pub const BENCH_MIN_ZNCC: f64 = 0.60;
+/// than a fitted template does. Measured on 150 tracks from each of eight
+/// reconstructions (two ground truths, six solves whose members are taken as
+/// correct). Wrong views were planted by pasting an unwarped square of another
+/// place's pixels over a row's keypoint, and true members were blurred, which
+/// are views to keep. About 60% of the planted views fail a geometry bar and
+/// are out whatever this bar is, so the objective counts only rows that clear
+/// every geometry bar: the mean over tracks of the share of members kept and
+/// the share of wrong views in images the track observes turned out. Held out
+/// by reconstruction, the whole bar alone picks `0.65` on seven folds of eight
+/// and `0.70` on one, and `0.65` scores 93.6 against 92.6 for `0.60` and 93.5
+/// for a `0.7` bar alone. At `0.65` the bar loses 3.5% of the members that
+/// clear the geometry bars and turns out 92.8% of the wrong views that do:
+/// 82.8% of those 0.5 to 0.7 similar to the true content and 55.9% of those
+/// 0.7 to 0.85 similar. Which wrong views the objective counts moves the pick
+/// between `0.60` and `0.75`. The spec of the editable track
+/// (specs/core/bench/editable-track.md) gives the tables.
+pub const BENCH_MIN_ZNCC: f64 = 0.65;
 
 /// The bench's default [`Thresholds::min_zncc_middle`]: `0`, off.
 ///
-/// In the measurement behind [`BENCH_MIN_ZNCC`], adding a middle bar to the
-/// whole bar improved the held-out score on one fold of eight and lowered it
-/// on two; bars from 0.30 to 0.45 changed the overall score by at most 0.1
-/// point, and from 0.50 up lowered it. The middle reading covers a quarter of
-/// the samples, so on a correct sighting it scatters more and reads lower
-/// than the whole-patch one, and a middle bar costs members the whole bar
-/// keeps. The bar stays for a person to set.
+/// In the measurement behind [`BENCH_MIN_ZNCC`], a middle bar from 0.30 to
+/// 0.55 beside the whole bar of `0.65` raises the score over all the data by
+/// 0.1 to 0.3 point (93.8 to at most 94.2), and from 0.60 up lowers it. The
+/// middle reading covers a quarter of the samples, so on a correct sighting
+/// it scatters more and reads lower than the whole-patch one, and a middle
+/// bar costs members the whole bar keeps. The bar stays for a person to set.
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.0;
 
 /// The bench's default [`Thresholds::cluster_min_zncc`], the cluster stage's
@@ -1077,6 +1100,14 @@ pub struct EditableTrack {
 /// an evaluation of a track carrying it reads without repainting. The table
 /// then settles after one more evaluation, and a row left out of step with the
 /// bars shows as a verdict the bars disagree with until the next edit.
+///
+/// [`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap)
+/// is the one exception: it repaints a marked track when its bitmap moves,
+/// because the new bitmap gives new scores for the bars to judge. A chain of
+/// such evaluations can run more than one extra evaluation; it is bounded
+/// because each one that renders does so from a row the mark does not already
+/// record (`rendered_from` below), so the chain is no longer than the number
+/// of distinct rows the bitmap can be rendered from.
 ///
 /// **The mark belongs to the one value the evaluation returned.** Every step
 /// makes its new track by cloning the old one, and a clone does not carry the
@@ -1265,6 +1296,7 @@ impl EditableTrack {
             map.push(Some(next.observations.len()));
             next.observations.push(kept);
         }
+        let mut dropped = false;
         match &mut next.stage {
             Stage::Cluster(payload) => match map.get(payload.reference).copied().flatten() {
                 Some(reference) => payload.reference = reference,
@@ -1275,16 +1307,23 @@ impl EditableTrack {
             },
             // The row the bitmap is the tile of follows its observation. A
             // bitmap whose observation was dropped is the tile of a sighting
-            // the track no longer has, so it goes with its reference, and the
-            // live evaluation renders one from the rows that remain.
+            // the track no longer has, so it goes with its reference and every
+            // score read against it, and the live evaluation renders one from
+            // the rows that remain.
             Stage::Track(payload) => {
                 if let Some(r) = payload.reference {
                     match map.get(r).copied().flatten() {
                         Some(kept) => payload.reference = Some(kept),
-                        None => payload.drop_bitmap(),
+                        None => {
+                            payload.drop_bitmap();
+                            dropped = true;
+                        }
                     }
                 }
             }
+        }
+        if dropped {
+            super::evaluate::clear_bitmap_scores(&mut next);
         }
         Some((next, map))
     }

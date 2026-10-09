@@ -192,7 +192,7 @@ impl Thresholds {
 // projection error bar in source-image px.
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
-pub const BENCH_MIN_ZNCC: f64 = 0.60;                // measured (§ "Parameters")
+pub const BENCH_MIN_ZNCC: f64 = 0.65;                // measured (§ "Parameters")
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.0;          // off
 pub const BENCH_CLUSTER_MIN_ZNCC: f64 = 0.7;         // not measured
 pub const BENCH_CLUSTER_MIN_ZNCC_MIDDLE: f64 = 0.7;  // not measured
@@ -237,8 +237,9 @@ pub struct UnpinReport {
     pub unpinned: usize,     // pins cleared
     pub turned_in: usize,    // by the bars, deciding the rows together
     pub turned_out: usize,
-    pub bitmap_pending: bool, // the held reference's row was unpinned and the rule picks
-                              // another row: bitmap dropped, scores cleared, bars judge nothing
+    pub bitmap_pending: bool, // the next render moves the bitmap to the rule's pick: the held
+                              // reference was handed on (scores cleared, bars judge nothing),
+                              // or the repaint turned the reference row out and dropped it
     pub changed: bool,       // false exactly when none of the rows was pinned
 }
 
@@ -639,8 +640,11 @@ pub fn score_bitmap(
 // row has a keypoint and the evaluation's tiles are on the bitmap's grid with
 // the render's sampler, the bitmap is taken from the evaluation's own tile of
 // the held reference or the rule's pick and the rows are scored on the
-// evaluation's tiles, so nothing is rendered twice. The viewer's live
-// evaluation and `fit_normal` / `finite_difference_normal` end with it.
+// evaluation's tiles, so nothing is rendered twice. Where no `in` row can hold
+// the reference, the render is a bitmap for judging
+// (`TrackPayload::bitmap_for_judging`, § "The stored bitmap's reference"). The
+// viewer's live evaluation and `fit_normal` / `finite_difference_normal` end
+// with it.
 pub fn evaluate_rendering_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -649,6 +653,12 @@ pub fn evaluate_rendering_bitmap(
     fit: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError>;
+
+// Where the next `evaluate_rendering_bitmap` renders the bitmap from:
+// `Some(Some(row))`, `Some(None)` for the render's own rule, or `None` when
+// the bitmap stands. SfM Explorer names that row in its log after an unpin
+// that reports `bitmap_pending`.
+pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>>;
 
 pub fn set_stage(
     track: &EditableTrack,
@@ -1528,9 +1538,12 @@ judge and the painting ranks rows by:
 The row the bitmap is the tile of (`TrackPayload::reference`) reads `1` for
 the whole, the middle and every cell, `1` blur-matched and `0` for the blur,
 with no `sharper_than_bitmap`, and is not computed. **The bars judge the plain
-score.** It falls for a view that is out of focus, where the blur-matched
-score would not; the measured bars (§ "Parameters") keep most blurred true
-members that clear the geometry bars. A row the track has no
+score.** It reads lower for a view that is out of focus than the blur-matched
+score does. A blurred view of the right place is a view to keep, and the ZNCC
+bars are not there to catch focus: of the blurred true members in the
+measurement (§ "Parameters") that clear the geometry bars, the default bar
+turns out 5.6%, against 3.5% of the sharp ones. The self-similarity bar is
+another matter: it turns out 55% of the blurred members. A row the track has no
 bitmap to read against, before its first render or after a step dropped the
 bitmap, has no score: its `reason` is `NoBitmap` where the localizer read it,
 and the bars leave its verdict where it is (`bar_checks` is `None` for it). A
@@ -1636,11 +1649,12 @@ row the reference is on says which of the two decides:
   the reference together. `evaluate_rendering_bitmap` renders the bitmap
   again not only where the track has none but also where the reference row is
   unpinned and the rule picks another row. Unpinning the held reference's row
-  (`unpin_verdicts`) where the rule picks another row drops the bitmap, keeps
-  `TrackPayload::reference`, and clears every row's scores against the
-  bitmap, since they were read against a bitmap that is about to be replaced:
-  the bars judge nothing in that step, its report says
-  `UnpinReport::bitmap_pending`, and `verdicts_if_unpinned` proposes nothing
+  (`unpin_verdicts`) where the rule picks another row keeps the bitmap and
+  `TrackPayload::reference` until the render replaces them, and clears every
+  row's scores against the bitmap, since they were read against a bitmap that
+  is about to be replaced: the bars judge nothing in that step, its report
+  says `UnpinReport::bitmap_pending`, a commit before the render writes the
+  old bitmap with the row it is the render of, and `verdicts_if_unpinned` proposes nothing
   for the held reference's row, whose `1` against its own render says nothing.
   The next evaluation renders the bitmap from the rule's pick, scores every
   row against it and judges them. While the reference row is unpinned the
@@ -1660,6 +1674,25 @@ row the reference is on says which of the two decides:
   cannot move it back and forth. `EvaluateReport::turned_in` and `turned_out`
   count the call's net change, from the track it was given to the one it
   returns.
+- **A track no `in` row can hold the reference is judged against a bitmap
+  for judging.** The bars judge one comparison, each row's score against a
+  bitmap, and a render needs two `in` rows with a keypoint. So where a step
+  turns every row `out` (a bar no row clears, or an unpin of every row under
+  such a bar), the bitmap goes with its reference row, and without more no
+  row could be scored again and loosening a bar could bring none back. Where
+  the render from the `in` rows gives no bitmap, `evaluate_rendering_bitmap`
+  renders a **bitmap for judging** instead (`TrackPayload::bitmap_for_judging`):
+  the render of the rule's pick among every row that carries a keypoint, `in`
+  or `out`, or their fused mean where the rule picks none. Every row is scored
+  against it and the bars judge those scores as any others. It is a judging
+  aid, not a reference: it names no row (`TrackPayload::reference` is
+  `None`), a step that turns rows `out` leaves it in place, and a commit
+  treats it as no bitmap (`TrackPayload::committable_bitmap`), so a commit is
+  refused with `TooFewObservations` while no row is `in` and with `NoBitmap`
+  where rows are `in` again but no render has replaced it yet. While no row
+  is `in` it stands; once a row is `in`, the next render (in the same call,
+  where the repaint turned the row `in`) replaces it with a bitmap rendered by
+  the usual rule.
 - **Tracks built on the bench start with pinned rows.** A track built on the
   bench starts with no reference and takes the rule's pick at its first
   render. The row a cluster starts from (`create_cluster`), the rows Track at
@@ -1672,8 +1705,12 @@ row the reference is on says which of the two decides:
   § "Part 8: the reference on the bench").
 - **Set as reference.** `set_reference` makes a row that is `in` and has a
   keypoint the reference and pins it. A bitmap that is not that row's render
-  is dropped with the reference kept (`drop_stale_bitmap`), and the next
-  render renders it from the row and scores every row against it. It is
+  is dropped with the reference kept (`drop_stale_bitmap`), every row's score
+  against it is cleared, and the next render renders it from the row and
+  scores every row against it. Every step that drops the bitmap clears the
+  scores read against it the same way: sighting the reference row elsewhere,
+  a repaint that turns the reference row `out`, a split that takes it off and
+  deleting its image. It is
   refused at the cluster stage, for an `out` row (`TrackEditError::NotIn`) and
   for a row with no keypoint (`NoPlace`). Pinning a row by itself
   (`pin_verdicts`) does not make it the reference.
@@ -1797,9 +1834,12 @@ an index past the end and counts a repeated index once.
 The pin of the row that holds the track's reference also holds the reference
 (§ "The stored bitmap's reference"): unpinning that row hands the reference to
 the reference-view rule at the next render. Where the rule picks another row,
-the unpin drops the bitmap and clears every row's scores against it, so the
-bars judge nothing in that step (`UnpinReport::bitmap_pending`) and the
-evaluation that follows renders, scores and judges. `set_reference` makes a row
+the unpin clears every row's scores against the bitmap and keeps the bitmap
+until the render replaces it, so the bars judge nothing in that step
+(`UnpinReport::bitmap_pending`) and the evaluation that follows renders,
+scores and judges. The report also says `bitmap_pending` where the unpin's
+repaint turns the reference row `out`, which drops the bitmap; it does not
+while a pinned row still holds the reference, whichever row was unpinned. `set_reference` makes a row
 the reference and pins it. Pinning a row with `pin_verdicts` does not make it
 the reference.
 
@@ -2837,7 +2877,7 @@ it is also the radius a reading searches and the bound on a fit's walk
 (§ "The fit's walk is bounded by the person's bar"). The two stages judge
 different scores and have their own ZNCC bars (`Thresholds::zncc_bars`).
 `min_zncc` and `min_zncc_middle` are the track stage's, `BENCH_MIN_ZNCC`
-(`0.60`) and `BENCH_MIN_ZNCC_MIDDLE` (`0`, off), measured as below; a tile
+(`0.65`) and `BENCH_MIN_ZNCC_MIDDLE` (`0`, off), measured as below; a tile
 read against one view's render reads lower on a correct sighting than the
 cluster refinement's score after it has fitted a whole affine warp, and the
 batch pass keeps its `0.85`. `cluster_min_zncc` and `cluster_min_zncc_middle`
@@ -2857,85 +2897,152 @@ tracks of at least four observations from each of eight reconstructions: the
 seoul_bull and kerry_park ground truths, whose members are correct, and six
 solves (kerry480, a badlands panorama, a mossy railing, a gallery sculpture,
 the dino toy and a Christmas tree), whose members are assumed correct. 1,169
-of the 1,200 tracks receive planted views. A wrong view is planted where the
-geometry bars cannot see it: at the point's projection or keypoint in an
-image, the photograph's pixels are replaced by the square of another place,
-either the most similar one found (in images the track observes and in images
-it does not) or a random other point's. Planted rows are pinned `out`, so they
-do not change the other rows' readings. True members blurred with a Gaussian
-of sigma 1.5 or 3 px count as members to keep.
+of the 1,200 tracks have a reference row and receive planted views. A wrong
+view is a substitution: a square of another place in the same photograph,
+either the most similar one found or a random other point's keypoint, is
+pasted unwarped over the row's keypoint in an image the track observes, or
+over the point's projection in an image it does not. The square's half-width
+is the footprint's radius plus 10 px, so it covers the footprint with a
+margin; the footprint's radius is 20 source px at the median, from 8 at the
+10th percentile to 49 at the 90th. A substitution's similarity is the ZNCC of
+the pasted content with the true content over the footprint. True members
+blurred with a Gaussian of sigma 1.5 or 3 source px, the same width whatever
+the footprint, count as members to keep: a blurred view of the right place is
+a view to keep, and the bars are not there to catch focus. Planted rows are
+pinned `out`, so they do not change the other rows' readings.
 
-The geometry bars alone see few of these views. The projection bar turns out
-1.4% of the similar substitutions in observed images and none in unobserved
-ones; with the shift and self-similarity bars, 58% and 75% fail some geometry
-bar, and 59% of the random ones. Of the 1,404 wrong views that clear every
-geometry bar, the ZNCC bars turn out:
+**Most planted views fail a geometry bar.** 62% of the judged substitutions
+fail some geometry bar (59% of those in observed images), against 12% of the
+members. The projection bar turns out at most 1.4% of them. The shift bar
+turns out 24% to 54% of them, by kind and image, against 0.5% of the members,
+and the self-similarity bar 47% to 62% of the similar ones, against 10.6% of
+the members. Part of this is likely the planting: the pasted square's edge
+lies inside the tile. A row that fails a geometry bar is out whatever the ZNCC
+bars are, so the measure of the ZNCC bars counts only the rows, members and
+substitutions, that clear every geometry bar. Substitutions in images the
+track does not observe are left out of it too: there the unmodified true
+pixels at the projection fail the `0.65` bar in 67.4% of the cases that clear
+the geometry bars (occlusion, the viewing angle), so turning out a
+substitution there says little about the bar. They are reported apart.
 
-| Similarity of the substituted square to the true content | n | `0.7` / `0.7`, leave-one-out reading | `0.7` / `0.7`, score against the bitmap | `0.65` / `0.5`, score | `0.65` alone, score |
+Of the judged rows that clear every geometry bar, the ZNCC bars alone turn out
+(substitutions) or lose (true rows), with `n` the rows each share is over, the
+`0.7` / `0.7` column reading the leave-one-out ZNCC and the others the score
+against the bitmap:
+
+| Rows that clear every geometry bar | n | `0.7` / `0.7`, leave-one-out reading | `0.7` alone | `0.65` alone, the default | `0.60` alone |
 |---|---|---|---|---|---|
-| below 0.5 | 1,150 | 96.7% | 99.3% | 98.1% | 97.8% |
-| 0.5 to 0.7 | 193 | 76.3% | 93.7% | 87.4% | 85.3% |
-| 0.7 to 0.85 | 50 | 57.1% | 85.7% | 69.4% | 65.3% |
-| 0.85 and above | 11 | 33.3% | 55.6% | 44.4% | 33.3% |
-| members that clear every geometry bar, lost | 7,191 | 4.4% | 11.5% | 4.4% | 3.5% |
+| Substitutions in observed images, similarity below 0.5 | 703 | 96.6% | 99.0% | 97.2% | 95.4% |
+| … similarity 0.5 to 0.7 | 134 | 73.1% | 88.8% | 82.8% | 71.6% |
+| … similarity 0.7 to 0.85 | 34 | 52.9% | 70.6% | 55.9% | 41.2% |
+| … similarity 0.85 and above | 6 | 33.3% | 16.7% | 16.7% | 16.7% |
+| … all, turned out | 877 | 90.9% | 95.8% | 92.8% | 89.2% |
+| Substitutions in observed and unobserved images (all plants), turned out | 1,378 | 92.1% | 96.8% | 94.5% | 91.7% |
+| Members, lost | 7,021 | 4.4% | 6.4% | 3.5% | 2.2% |
+| Blurred members, lost | 916 | 14.3% | 9.4% | 5.6% | 2.7% |
+| True pixels at the projection in unobserved images, lost | 528 | 46.2% | 72.5% | 67.4% | 62.3% |
 
-The objective, stated before the results were read, is the mean over tracks of
-the average of two shares: the members kept (blurred ones included) and the
-wrong views (similar and random substitutions) turned out, every bar applied.
-The grid is the whole bar from 0.50 to 0.85 in steps of 0.05, with the middle
-bar off or from 0.30 up to the whole bar. With every bar applied, per-track
-means of members kept / wrong views turned out:
+The objective is the mean over tracks of the average of two shares, over the
+rows that clear every geometry bar: the members kept (blurred ones included)
+and the substitutions in observed images turned out. The grid is the whole bar
+from 0.50 to 0.85 in steps of 0.05, with the middle bar off or from 0.30 up to
+the whole bar. Per-track means of members kept / substitutions turned out, on
+the objective's rows, and beside them with every bar applied to every member
+and every substitution in every image (all plants):
 
-| Reconstruction | `0.7` / `0.7`, leave-one-out | `0.7` / `0.7`, score | `0.65` / `0.5`, score | `0.60` / `0.30`, score |
-|---|---|---|---|---|
-| seoul_bull ground truth | 62.6 / 97.7 | 55.5 / 100 | 63.8 / 100 | 66.5 / 99.4 |
-| kerry_park ground truth | 67.2 / 98.0 | 59.8 / 99.8 | 68.6 / 99.1 | 71.4 / 98.5 |
-| kerry480 | 79.1 / 97.6 | 74.2 / 99.2 | 79.2 / 98.3 | 80.6 / 97.4 |
-| badlands | 86.3 / 95.1 | 86.3 / 95.9 | 86.3 / 94.8 | 86.3 / 92.3 |
-| mossy railing | 88.6 / 98.3 | 87.4 / 100 | 89.9 / 99.1 | 90.4 / 97.9 |
-| gallery sculpture | 74.9 / 96.0 | 74.5 / 98.2 | 79.8 / 96.3 | 81.8 / 94.6 |
-| dino toy | 42.0 / 98.3 | 30.7 / 100 | 43.0 / 99.1 | 47.9 / 98.1 |
-| Christmas tree | 80.0 / 94.8 | 77.2 / 98.0 | 81.8 / 96.9 | 82.6 / 95.0 |
-| mean over tracks | 72.4 / 97.1 | 67.9 / 99.0 | 73.9 / 98.1 | 75.8 / 96.9 |
-| pooled over rows | 74.5 / 97.0 | 69.5 / 99.2 | 75.2 / 98.2 | 77.0 / 97.0 |
+| Reconstruction | `0.7` / `0.7`, leave-one-out | `0.7` alone | `0.65` alone, the default | `0.60` alone | All plants, every bar: `0.7` / `0.7`, leave-one-out | All plants, every bar: `0.65` alone |
+|---|---|---|---|---|---|---|
+| seoul_bull ground truth | 87.9 / 91.7 | 85.5 / 100 | 90.9 / 100 | 93.4 / 97.2 | 62.6 / 97.7 | 64.6 / 100 |
+| kerry_park ground truth | 92.2 / 86.1 | 90.9 / 96.7 | 94.9 / 93.4 | 97.3 / 91.0 | 67.2 / 98.0 | 69.6 / 99.1 |
+| kerry480 | 96.3 / 92.2 | 93.8 / 94.2 | 97.5 / 92.9 | 98.7 / 90.3 | 79.1 / 97.6 | 79.5 / 98.3 |
+| badlands | 100 / 91.3 | 100 / 91.3 | 100 / 88.4 | 100 / 83.3 | 86.3 / 95.1 | 86.3 / 93.9 |
+| mossy railing | 97.8 / 97.3 | 97.7 / 100 | 99.3 / 98.5 | 99.9 / 96.9 | 88.6 / 98.3 | 89.9 / 99.1 |
+| gallery sculpture | 91.1 / 90.3 | 93.6 / 94.2 | 96.7 / 90.3 | 98.7 / 88.1 | 74.9 / 96.0 | 80.0 / 95.8 |
+| dino toy | 73.8 / 91.9 | 78.8 / 95.3 | 84.6 / 88.5 | 89.8 / 82.4 | 42.0 / 98.3 | 45.7 / 98.1 |
+| Christmas tree | 95.4 / 77.0 | 93.8 / 89.5 | 97.4 / 84.9 | 98.3 / 76.3 | 80.0 / 94.8 | 81.8 / 96.9 |
+| mean over tracks | 91.8 / 90.4 | 91.7 / 95.5 | 95.2 / 92.5 | 97.0 / 88.9 | 72.4 / 97.1 | 74.5 / 97.8 |
+| objective (average of the two) | 91.1 | 93.6 | 93.8 | 92.9 | | |
 
-`0.60` with the middle bar off reads the same as `0.60` / `0.30` to 0.1
-point. Against `0.7` / `0.7` on the leave-one-out reading, the defaults keep
-more members on every reconstruction but the badlands, where they keep the
-same, and turn out slightly fewer wrong views on most.
+Against `0.7` / `0.7` on the leave-one-out reading, the bars on `main` before
+this measurement, the default keeps more of the objective's members on seven
+reconstructions and the same on the badlands; it turns out more of the
+objective's substitutions on five, the same on the gallery sculpture and fewer
+on the badlands (88.4 against 91.3) and the dino toy (88.5 against 91.9).
 
-The defaults are picked by leave-one-reconstruction-out: the grid's best on
-seven reconstructions is scored on the eighth. The pick is `0.60` / `0.30` on
-six folds, `0.60` with the middle bar off on the badlands fold and `0.65` /
-`0.30` on the dino fold. Held out, it scores 86.1 on average, against 83.5
-for `0.7` / `0.7` on the score and 86.0 for `0.65` / `0.5`; it beats `0.7` /
-`0.7` on seven folds of eight and is level with `0.65` / `0.5`. Over all the
-data the whole bar alone scores 86.3 at `0.60`, 86.2 at `0.65` and 85.3 at
-`0.70`. A higher whole bar turns out more of the rare substitutions that are
-very similar to the true content (in the 0.7 to 0.85 band, 69% at `0.65` /
-`0.5` against 86% at `0.7` / `0.7`), at the cost of members.
+The default is picked by leave-one-reconstruction-out: the grid's best on
+seven reconstructions is scored on the eighth. Held out:
 
-The middle bar is off by default. Added to the best whole bar alone, it
-raises the held-out score on one fold of eight and lowers it on two; from
-0.30 to 0.45 it changes the overall score by at most 0.1 point, and from 0.50
-up it lowers it. The bar stays for a person to set.
+| Held out | Pick on the other seven | Pick | `0.65` alone, the default | `0.60` alone | `0.7` alone | `0.7` / `0.7` |
+|---|---|---|---|---|---|---|
+| seoul_bull ground truth | `0.65` / `0.40` | 95.2 | 95.4 | 95.3 | 92.8 | 89.3 |
+| kerry_park ground truth | `0.65` / `0.40` | 94.0 | 94.2 | 94.1 | 93.8 | 90.5 |
+| kerry480 | `0.65` / `0.30` | 95.2 | 95.2 | 94.5 | 94.0 | 94.3 |
+| badlands | `0.65` / `0.30` | 95.7 | 94.2 | 91.7 | 95.7 | 96.4 |
+| mossy railing | `0.65` / `0.30` | 98.9 | 98.9 | 98.4 | 98.9 | 98.2 |
+| gallery sculpture | `0.65` / `0.30` | 93.5 | 93.5 | 93.4 | 93.9 | 92.9 |
+| dino toy | `0.65` / `0.40` | 88.1 | 86.6 | 86.1 | 87.0 | 77.7 |
+| Christmas tree | `0.65` / `0.30` | 91.1 | 91.1 | 87.3 | 91.6 | 91.0 |
+| mean | | 94.0 | 93.6 | 92.6 | 93.5 | 91.3 |
 
-Member keep is low on some reconstructions for a reason apart from the ZNCC
-bars: the self-similarity bar (`2.5`) turns out 10.6% of the members and 55%
-of the blurred members by itself. Near misses, the true pixels with the
-keypoint moved 2 to 6 px, are a separate check of the geometry bars: the
-projection bar turns out 18.5% of those 2 to 3 px off, 88% of those 3 to 4 px
-off and 99% of those 4 to 6 px off.
+Every fold picks a whole bar of `0.65`, with a middle bar of 0.30 or 0.40.
+With the middle bar off, the whole bar alone picks `0.65` on seven folds and
+`0.70` on the seoul_bull fold. `0.65` beats `0.60` on every fold, and beats
+`0.7` alone, the same score with the middle bar off, on four folds of eight:
+93.6 against 93.5 on average, 93.8 against 93.6 over all the data. A higher
+whole bar turns out more of the rare substitutions that are very similar to
+the true content (in the 0.7 to 0.85 band, 55.9% at `0.65` against 70.6% at
+`0.7`), at the cost of members.
 
-The measurement has limits. The substituted squares are pasted unwarped. Few
-substitutions are very similar to the true content (76 at 0.85 or above, 11
-of them clearing the geometry bars). Planted rows are pinned `out`, so a wrong
-row that turns `in` and changes the other rows' leave-one-out readings is not
-tested. The cluster stage is not measured.
+The badlands reconstruction cannot inform the ZNCC bar: every member there
+that clears the geometry bars reads at least 0.855, so no whole bar up to 0.85
+loses one, and its fold prefers whichever bar turns out the most substitutions.
+
+Which rows the objective counts moves the pick between `0.60` and `0.75`, and
+`0.65` lies inside that range. With the keep half over every member and every
+bar applied, so that the members the geometry bars lose dilute how the keep
+half answers the ZNCC bar, the whole bar alone picks `0.70` on all eight folds. With substitutions
+in unobserved images counted too, it picks `0.65` on all eight. With every
+member, every substitution and every bar, the first analysis of this data, it
+picks `0.60` on seven folds and `0.65` on one. With the similar substitutions
+alone, it picks `0.70` on six folds and `0.75` on two.
+
+The middle bar is off by default. Beside a whole bar of `0.65`, a middle bar
+from 0.30 to 0.55 raises the score over all the data by 0.1 to 0.3 point, and
+from 0.60 up lowers it; held out, the per-fold pick with its middle bar scores
+94.0 against 93.6 for `0.65` alone. The bar stays for a person to set.
+
+Member keep with every bar applied is low on some reconstructions for a reason
+apart from the ZNCC bars: the self-similarity bar (`2.5`) turns out 10.6% of
+the members and 55% of the blurred members by itself. Near misses, the true
+pixels with the keypoint moved 2 to 6 px, are a separate check of the
+geometry bars: the projection bar turns out 18.5% of those 2 to 3 px off, 88%
+of those 3 to 4 px off and 99% of those 4 to 6 px off.
+
+The measurement has limits. The substituted squares are pasted unwarped, with
+a hard edge. Few substitutions that clear the geometry bars are very similar
+to the true content (34 at 0.7 to 0.85 and 6 at 0.85 or above in observed
+images), so the shares in those bands rest on few rows. The blur is a fixed
+width in source px, so it blurs a small footprint more than a large one.
+Planted rows are pinned `out`, so a wrong row that turns `in` and changes the
+other rows' leave-one-out readings is not tested. The cluster stage is not
+measured.
+
+**Where the figures come from.** Every figure above is printed by
+`analyze2.py`, run on the eight per-reconstruction `.jsonl` files that
+`measure.py` wrote; its output, `analysis2.txt`, records each file's hash. The
+two scripts, the data and the six solves are not in the repository, so the
+figures cannot be re-derived from it. Each file holds 150 tracks, 141 to 150
+of them with planted views. `measure.py` changed twice during the runs. The
+first change gave blurred plants near the image edge a wider margin, which had
+made those plants fail; every file in use was written after it, the
+seoul_bull, kerry_park and kerry480 files by a re-run. The second change, made
+before the Christmas tree's re-run (its first run failed an allocation after
+50 tracks), freed memory only and changes no reading. Re-read on a build of
+this branch, the members' scores matched the files exactly.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `min_zncc` | `0.60` | The ZNCC an observation has to reach at the track stage: the plain score of its tile against the stored bitmap. `BENCH_MIN_ZNCC`, measured; not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
+| `min_zncc` | `0.65` | The ZNCC an observation has to reach at the track stage: the plain score of its tile against the stored bitmap. `BENCH_MIN_ZNCC`, measured; not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
 | `min_zncc_middle` | `0` | The `zncc_middle` an observation has to reach at the track stage. `BENCH_MIN_ZNCC_MIDDLE`, off; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
 | `cluster_min_zncc` | `0.7` | The achieved template ZNCC an observation has to reach at the cluster stage. `BENCH_CLUSTER_MIN_ZNCC`, not measured. |
 | `cluster_min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach at the cluster stage. `BENCH_CLUSTER_MIN_ZNCC_MIDDLE`, not measured; `0` turns it off, and a row with no middle reading clears it. |
@@ -3050,9 +3157,14 @@ is the track's `max_shift_px`. `fit` and `set_stage` take the
 classification's two knobs as well, `sigma_px` (default `None`, the measured
 level) and `depth_likelihood_ratio_threshold` (default 25);
 `evaluate` also takes
-`render_bitmap` (default `False`); `True` runs `evaluate_rendering_bitmap`,
-the viewer's live evaluation, which renders the bitmap where it is missing or
-moves to the rule's pick and scores every row against it before the repaint.
+`render_bitmap` (default `True`), which runs `evaluate_rendering_bitmap`, the
+viewer's live evaluation: it renders the bitmap where it is missing or moves
+to the rule's pick and scores every row against it before the repaint, so a
+script that evaluates after a step judges what the viewer would. It costs
+about what a plain reading does, because the render reuses the reading's
+tile. `False` runs `evaluate`, which renders nothing: after a step that
+leaves the bitmap to be rendered (an unpin that reports `bitmap_pending`,
+`set_reference`, a patch move) it scores no row and the bars judge nothing.
 `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured`, `unmeasured` and `scored`, with `reference` at the cluster stage and
@@ -3081,6 +3193,8 @@ by name (`"coverage"`, `"clipped"`, `"angle"`, `"cells"`, `"agreement"`,
 `EditableTrack.reference_observation` is the reference in use, the row the
 stored bitmap is the tile of, or `None`; `EditableTrack.reference_view_observation`
 is the row the last evaluation's reference-view rule picked, or `None`.
+`EditableTrack.bitmap_for_judging` says whether the bitmap is one for judging
+only (§ "The stored bitmap's reference").
 `set_reference(track, observation)` is *Set as reference*, returning
 `(track, {"observation", "was", "changed"})`. Both stages' dicts carry
 `zncc_middle`, `zncc_self_similarity_radius` and
@@ -3271,7 +3385,11 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   repainting it.
 - A repaint that turns the picked row `out`, whether by the painting or by
   `set_verdict`, clears that row's standing and pair readings and leaves
-  another `in` row picked; one that turns every row `out` leaves no row picked.
+  another `in` row picked; one that turns every row `out` leaves no row picked,
+  drops the bitmap with its reference row and clears every score; the next
+  render is a bitmap for judging, the rows are scored against it, and
+  loosening the bar turns rows back `in`, after which a render by the usual
+  rule replaces it.
 - A point's pinned rows stay `in` whatever the bars say, rows pinned with
   `pin_verdicts` stay where they stood under bars no reading clears, and a
   pinned `out` is scored and left `out`.
@@ -3526,11 +3644,19 @@ unit-tested in `normal.rs` itself.
 - Unpinning the reference row moves the reference to the rule's pick at the
   next render, which renders the bitmap from it and scores the old reference
   against it.
-- Unpinning the held reference's row where the rule picks another row drops
-  the bitmap, keeps the reference, clears every row's score and moves no
-  verdict (`bitmap_pending`); `verdicts_if_unpinned` proposes nothing for the
+- Unpinning the held reference's row where the rule picks another row keeps
+  the bitmap and the reference until the render, clears every row's score
+  and moves no verdict (`bitmap_pending`); `verdicts_if_unpinned` proposes nothing for the
   held row beforehand. The next evaluation renders from the pick and its
-  verdicts agree with the bars. Unpinning another row leaves the bitmap.
+  verdicts agree with the bars. Unpinning another row leaves the bitmap, and
+  unpinning another row while a held reference waits for its render does not
+  report `bitmap_pending`. *Set as reference* clears every score with the
+  stale bitmap.
+- Where the rule alternates between two rows, the rendering loop renders
+  from each once and stops with the reference on one and the pick on the
+  other, every verdict the bars' on the bitmap returned; a marked evaluation
+  carries the rows rendered from, renders only from a row not among them, and
+  adds it to the next mark.
 - A repaint inside one evaluation that turns the reference row `out` moves the
   bitmap to the rule's new pick in the same call and judges the rows against
   it; the evaluation that reads the marked track again moves nothing.

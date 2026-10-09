@@ -279,11 +279,13 @@ impl AppState {
     }
 }
 
-/// The bars in `bars` that differ from the defaults, named as Track View's
-/// boxes name them, for the label of a put that carried them: `min ZNCC 80%`,
-/// `max shift 4.0 px`. The three ZNCC bars read in percent, the projection
-/// error bar in source-image px and the other two in patch-grid px, as the
-/// boxes show them.
+/// The bars in `bars` that differ from the defaults, for the label of a put
+/// that carried them: `min ZNCC 80%`, `max shift 4.0 px`. Each is named in
+/// words rather than by its box's short label (`% whole`, `% mid`), which
+/// reads only beside its column. The five ZNCC bars (the track stage's two,
+/// the cluster stage's two and the geometry search's relative bar) read in
+/// percent, the projection error bar in source-image px and the other two in
+/// patch-grid px, as the boxes show them.
 pub(super) fn bars_phrase(bars: &Thresholds) -> String {
     let defaults = Thresholds::default();
     let percent = |name: &str, value: f64| format!("{name} {:.0}%", 100.0 * value);

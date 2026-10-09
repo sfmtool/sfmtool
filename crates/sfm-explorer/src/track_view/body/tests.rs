@@ -878,8 +878,13 @@ fn unpinning_the_held_reference_logs_that_the_verdicts_wait_for_the_render() {
         logged.contains("waiting for the bitmap to be rendered from"),
         "{logged}"
     );
+    // The old bitmap stays until the render replaces it; no row has a score.
     let pending = state.bench_track(id, &label).expect("on the bench").clone();
-    assert!(pending.track().is_some_and(|p| p.bitmap.is_none()));
+    assert_eq!(crate::bench::reference_in_use(&pending), Some(other));
+    assert!(pending
+        .observations
+        .iter()
+        .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none())));
 
     state.settle_bench_evaluation();
     let after = state.bench_track(id, &label).expect("on the bench").clone();
@@ -6031,4 +6036,16 @@ fn an_evaluated_row_hovers_the_ellipses_its_measurement_carries_at_both_stages()
             && (line.starts_with("world") || line.starts_with("scene units"))),
         "{hover}"
     );
+}
+
+/// The row that holds the reference where unpinning it would move the bitmap
+/// is measured, and the bars still propose nothing for it: its hover says why
+/// rather than that nothing has measured it.
+#[test]
+fn the_held_reference_s_verdict_hover_says_the_bars_wait_for_the_render() {
+    let waits = super::table::proposal_reason(None, 3, true);
+    assert!(waits.contains("cannot say"), "{waits}");
+    assert!(!waits.contains("Nothing at this stage"), "{waits}");
+    let unmeasured = super::table::proposal_reason(None, 3, false);
+    assert!(unmeasured.contains("Nothing at this stage has measured it"));
 }
