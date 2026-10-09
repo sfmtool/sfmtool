@@ -424,6 +424,61 @@ fn with_no_clusters_the_cascade_falls_through_to_the_neighbours_transfer() {
     assert_rebuilt(&scene, &track, &report);
 }
 
+/// The median gate reads the plain score against the stored bitmap over the
+/// `in` rows, leaving out the reference observation, which scores `1` against
+/// its own render; the blur-matched score plays no part.
+#[test]
+fn the_median_gate_reads_the_plain_score_against_the_bitmap() {
+    let scene = Scene::new();
+    let edited = held_out(&scene);
+    let views = scene.views();
+    let (track, report) = build_track_at_pixel(
+        &edited,
+        &views,
+        &TrackAtPixelSources::default(),
+        0,
+        held_out_pixel(&scene),
+        &TrackAtPixelOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the transfer builds a track");
+    let reference = track
+        .track()
+        .and_then(|p| p.reference)
+        .expect("the returned track holds a reference");
+    let mut others: Vec<f64> = track
+        .observations
+        .iter()
+        .enumerate()
+        .filter(|&(i, o)| o.verdict == Verdict::In && i != reference)
+        .map(|(_, o)| o.track.as_ref().and_then(|m| m.zncc).expect("scored"))
+        .collect();
+    let expected = crate::numeric::median_in_place(&mut others);
+    let Some(StageRecord::Final { zncc_median, .. }) = report.stages.last() else {
+        panic!("the gates judged the track")
+    };
+    assert_eq!(*zncc_median, expected);
+    assert_eq!(finish::median_zncc(&track), expected);
+
+    // Another blur-matched score, or another score on the reference's own
+    // row, moves nothing; another plain score on an `in` row does.
+    let mut changed = track.clone();
+    for (i, o) in changed.observations.iter_mut().enumerate() {
+        let m = o.track.as_mut().expect("a slot");
+        m.blur_matched_zncc = Some(0.0);
+        if i == reference {
+            m.zncc = Some(0.0);
+        }
+    }
+    assert_eq!(finish::median_zncc(&changed), expected);
+    for (i, o) in changed.observations.iter_mut().enumerate() {
+        if i != reference && o.verdict == Verdict::In {
+            o.track.as_mut().expect("a slot").zncc = Some(0.25);
+        }
+    }
+    assert_eq!(finish::median_zncc(&changed), 0.25);
+}
+
 #[test]
 fn the_sweep_builds_the_track_from_the_neighbours_plane() {
     let scene = Scene::new();

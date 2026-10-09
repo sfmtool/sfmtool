@@ -2623,22 +2623,22 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
                 // there is no score. An evaluation drops nothing, so a missing
                 // reading always has one of those answers behind it, and a row
                 // that has never been read says that instead. "localized" is
-                // the localizer's reading (`loo_zncc`), not the score.
+                // the localizer's reading (`seed_shift_px`), not the score.
                 //
                 // The walk comes first among the answers a scored row can give:
                 // it says the sighting did *not* move where the correlation
                 // wanted it, which is the one thing about the row a person
                 // reading "localized" would get wrong.
-                // With the leave-one-out ZNCC the walk would have bought where
-                // the fit scored one; *Accept walk*'s hover sets it beside the
-                // row's own leave-one-out ZNCC at the seed.
+                // With the score against the bitmap the walk would have bought
+                // where there is one; *Accept walk*'s hover sets it beside the
+                // row's own score at the seed.
                 match m {
                     Some(m) if m.walked_px.is_some() => format!(
                         "walked {:.0} grid px{}, kept at seed",
                         m.walked_px.expect("just matched"),
                         match m.walked_zncc {
                             Some(z) if z.is_finite() => format!(
-                                " (leave-one-out ZNCC {} there)",
+                                " (ZNCC {} there)",
                                 zncc_sentence(Some(z), m.walked_zncc_middle)
                             ),
                             _ => String::new(),
@@ -2646,7 +2646,9 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
                     ),
                     Some(m) => match m.reason {
                         Some(reason) => reason.to_string(),
-                        None if m.loo_zncc.is_some() || m.zncc.is_some() => "localized".to_string(),
+                        None if m.seed_shift_px.is_some() || m.zncc.is_some() => {
+                            "localized".to_string()
+                        }
                         None => "not evaluated".to_string(),
                     },
                     None => "not evaluated".to_string(),

@@ -2847,9 +2847,12 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
     );
     let row = &track["observations"][at]["track"];
     assert!(
-        row["loo_zncc"].is_null(),
+        row["seed_shift_px"].is_null(),
         "nothing was searched for it: {track}"
     );
+    // The leave-one-out reading is gone from the wire; the row's scores are
+    // its plain and blur-matched scores against the bitmap.
+    assert!(row.get("loo_zncc").is_none() && row.get("loo_zncc_middle").is_none());
     let reason = row["reason"]
         .as_str()
         .expect("a row without a score says why");
@@ -2863,7 +2866,7 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
         .as_array()
         .expect("a list")
         .iter()
-        .filter(|row| row["track"]["loo_zncc"].is_number())
+        .filter(|row| row["track"]["seed_shift_px"].is_number())
         .count();
     assert!(measured >= 2, "{track}");
 }

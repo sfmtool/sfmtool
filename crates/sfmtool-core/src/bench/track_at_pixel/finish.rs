@@ -6,9 +6,12 @@
 //! not found in, turn out the views that disagree with its geometry, and gate
 //! it.
 //!
-//! **Anchoring.** A track-stage fit localizes every sighting, the queried one
-//! included, against the consensus of the others. Beside a stronger feature the
-//! whole patch slides toward it in every photograph at once. [`anchor`] slides
+//! **Anchoring.** A track-stage fit aligns every sighting other than the
+//! reference observation to the reference's render, the queried one included
+//! where it is not the reference, and triangulates the patch again from where
+//! they land. Where the reference's render is centred off the pixel, as beside
+//! a stronger feature, the whole patch moves off it in every photograph at
+//! once. [`anchor`] slides
 //! it back across its own plane until its centre in the queried photograph is
 //! the pixel again and reads the track there, so every sighting moves by the
 //! same in-plane displacement and the reading scores them where they now sit.
@@ -34,15 +37,28 @@ use crate::reconstruction::edited::EditedReconstruction;
 
 use super::{Ctx, FinishOptions, Refusal, RefusalStage, StageRecord, TiltRecord};
 
-/// The median leave-one-out ZNCC over the `in` observations that carry one, or
-/// negative infinity when none does.
-pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
-    let mut z: Vec<f64> = track
+/// One reading of each `in` observation that carries it, leaving out the row
+/// the stored bitmap is the render of ([`TrackPayload::reference`]), which
+/// scores `1` against its own render and says nothing about agreement.
+///
+/// [`TrackPayload::reference`]: crate::bench::track::TrackPayload::reference
+fn in_readings(track: &EditableTrack, key: fn(&TrackMeasurement) -> Option<f64>) -> Vec<f64> {
+    let reference = track.track().and_then(|p| p.reference);
+    track
         .observations
         .iter()
-        .filter(|o| o.verdict == Verdict::In)
-        .filter_map(|o| o.track.as_ref()?.loo_zncc)
-        .collect();
+        .enumerate()
+        .filter(|&(i, o)| o.verdict == Verdict::In && Some(i) != reference)
+        .filter_map(|(_, o)| key(o.track.as_ref()?))
+        .collect()
+}
+
+/// The median plain score against the stored bitmap
+/// ([`TrackMeasurement::zncc`]) over the `in` observations that carry one,
+/// the reference observation left out, or negative infinity when none does.
+/// The reading [`FinishOptions::min_zncc_median`] gates on.
+pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
+    let mut z = in_readings(track, |m| m.zncc);
     if z.is_empty() {
         f64::NEG_INFINITY
     } else {
@@ -50,16 +66,12 @@ pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
     }
 }
 
-/// The median middle ZNCC over the `in` observations that carry one, or `NaN`
-/// when none does: the figure to set beside [`median_zncc`], which the gates
-/// judge.
+/// The median plain middle score against the stored bitmap
+/// ([`TrackMeasurement::zncc_middle`]) over the same observations as
+/// [`median_zncc`], or `NaN` when none carries one: the figure to set beside
+/// it.
 pub(super) fn median_zncc_middle(track: &EditableTrack) -> f64 {
-    let mut z: Vec<f64> = track
-        .observations
-        .iter()
-        .filter(|o| o.verdict == Verdict::In)
-        .filter_map(|o| o.track.as_ref()?.loo_zncc_middle)
-        .collect();
+    let mut z = in_readings(track, |m| m.zncc_middle);
     if z.is_empty() {
         f64::NAN
     } else {

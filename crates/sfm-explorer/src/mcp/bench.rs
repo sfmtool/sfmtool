@@ -1778,11 +1778,10 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "blur_matched_zncc": finite(measured.blur_matched_zncc),
         "bitmap_blur_sigma": finite(measured.bitmap_blur_sigma),
         "sharper_than_bitmap": measured.sharper_than_bitmap,
-        // The localizer's leave-one-out reading: the row against the
-        // consensus of the other rows at the correlation peak that
-        // `seed_shift_px` is measured to, whole and middle. No bar judges it.
-        "loo_zncc": finite(measured.loo_zncc),
-        "loo_zncc_middle": finite(measured.loo_zncc_middle),
+        // How far the peak of the row's correlation with the reference's
+        // render sits from the row's keypoint, in grid px: 0 on the
+        // reference's own row, null with `reason` where the localizer could
+        // not read the row.
         "seed_shift_px": finite(measured.seed_shift_px),
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
@@ -1824,9 +1823,9 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         })),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
-        // and the leave-one-out ZNCC the localizer scored there, to set
-        // beside `loo_zncc`. Accepting the walk is
-        // `sight_bench_observation` with `walked_to` as its pixel.
+        // and the plain score of the tile there against the stored bitmap,
+        // whole, middle and per ninth, to set beside `zncc`. Accepting the
+        // walk is `sight_bench_observation` with `walked_to` as its pixel.
         "walked_px": finite(measured.walked_px),
         "walked_to": measured.walked_to,
         "walked_zncc": finite(measured.walked_zncc),

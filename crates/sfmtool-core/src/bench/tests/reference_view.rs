@@ -1227,7 +1227,7 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
     assert!(unpinned.bitmap_pending());
     for o in &unpinned.observations {
         let m = o.track.as_ref().unwrap();
-        if m.loo_zncc.is_some() {
+        if m.seed_shift_px.is_some() {
             assert_eq!(m.reason, Some(Unmeasured::BitmapPending));
         }
     }
@@ -1664,8 +1664,109 @@ fn a_fit_renders_from_the_held_reference_rather_than_the_pick() {
     assert_eq!(fitted.held_reference(), Some(other));
     assert_eq!(fitted.track().unwrap().reference, Some(other));
     let read = render_with(&fitted, &edited, &views);
-    assert_eq!(rule_pick(&read), Some(picked));
+    // The fit aligned the other rows to the held reference, which moves them
+    // by tenths of a pixel and can move the rule's pick among them; the pick
+    // is still another row than the one the bitmap is rendered from.
+    let pick = rule_pick(&read).expect("the rule picks one");
+    assert_ne!(pick, other, "the rule still picks {picked} or another row");
     assert_rendered_from(&read, &views, &edited, other, "after a fit");
+}
+
+/// The rows' keypoints after a fit of `track` with the default options.
+fn fitted(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    views: &[ProjectedImage<'_>],
+) -> EditableTrack {
+    fit(
+        track,
+        edited,
+        views,
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track fits")
+    .0
+}
+
+/// Whether row `i` of `a` and `b` sits at the same keypoint, to the `f32`
+/// the column stores.
+fn same_keypoint(a: &EditableTrack, b: &EditableTrack, i: usize) -> bool {
+    let k = |t: &EditableTrack| t.observations[i].track.as_ref().and_then(|m| m.keypoint);
+    k(a) == k(b)
+}
+
+/// A fit aligns every other row to the render of the reference the track
+/// holds and leaves the reference row's keypoint where it was: the reading
+/// after it finds each other row at its correlation peak against that render.
+#[test]
+fn a_fit_aligns_the_rows_to_the_held_reference_and_leaves_it_unmoved() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, _, other) = track_with_another_reference(&truth);
+    let first = render_with(&track, &edited, &views);
+    let fit_once = fitted(&first, &edited, &views);
+    assert!(
+        same_keypoint(&first, &fit_once, other),
+        "the reference is the anchor"
+    );
+    let m = fit_once.observations[other].track.as_ref().unwrap();
+    assert_eq!(m.seed_shift_px, Some(0.0), "aligned to its own render");
+    assert_eq!(m.zncc, Some(1.0));
+    let ins: Vec<usize> = (0..fit_once.observations.len())
+        .filter(|&i| i != other && fit_once.observations[i].verdict == Verdict::In)
+        .collect();
+    assert!(ins.len() >= 2);
+    assert!(
+        ins.iter().any(|&i| !same_keypoint(&first, &fit_once, i)),
+        "the other rows are aligned"
+    );
+    for &i in &ins {
+        let m = fit_once.observations[i].track.as_ref().unwrap();
+        let shift = m.seed_shift_px.expect("read");
+        assert!(shift < 0.5, "row {i} sits {shift} grid px off its peak");
+    }
+    // Fitting again aligns to the same reference; only the patch the first
+    // fit placed again differs, so no row moves by more than a fraction of a
+    // pixel.
+    let twice = fitted(&fit_once, &edited, &views);
+    assert!(same_keypoint(&fit_once, &twice, other));
+    for &i in &ins {
+        let [a, b] = [keypoint_of(&fit_once, i), keypoint_of(&twice, i)];
+        let moved = (a[0] - b[0]).hypot(a[1] - b[1]);
+        assert!(moved < 0.25, "row {i} moved {moved} px on a second fit");
+    }
+}
+
+/// After *Set as reference* on another row, the next fit aligns the rows to
+/// that row's render: it is the one left unmoved, and the others move.
+#[test]
+fn a_fit_after_set_as_reference_aligns_to_the_new_reference() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, picked, other) = track_with_another_reference(&truth);
+    let first = render_with(&track, &edited, &views);
+    let fit_once = fitted(&first, &edited, &views);
+    let (set, _) = set_reference(&fit_once, picked).expect("an in row with a keypoint");
+    let set = render_with(&set, &edited, &views);
+    assert_eq!(set.held_reference(), Some(picked));
+    let fit_again = fitted(&set, &edited, &views);
+    assert_eq!(fit_again.held_reference(), Some(picked));
+    assert!(
+        same_keypoint(&set, &fit_again, picked),
+        "the new anchor stays"
+    );
+    assert!(
+        !same_keypoint(&set, &fit_again, other),
+        "the old reference is aligned to the new one"
+    );
+    let m = fit_again.observations[other].track.as_ref().unwrap();
+    assert!(
+        m.seed_shift_px.is_some_and(|s| s < 0.5),
+        "{:?}",
+        m.seed_shift_px
+    );
+    assert_rendered_from(&fit_again, &views, &edited, picked, "after the second fit");
 }
 
 /// Splitting the held reference's row off drops the first track's bitmap with

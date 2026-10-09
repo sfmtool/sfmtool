@@ -139,7 +139,7 @@ pub enum FitError {
         image: u32,
     },
     /// Fewer than two observations are `in`, so the track stage has no
-    /// consensus to register against and nothing to triangulate.
+    /// view to align to a reference and nothing to triangulate.
     TooFewObservations(usize),
     /// The track carries no patch, so there is nothing the localizer can
     /// register a view against.
@@ -341,11 +341,24 @@ impl std::fmt::Display for FitReport {
 /// re-triangulation a place the person never pointed at. Such a row says so in
 /// [`TrackMeasurement::walked_px`](super::track::TrackMeasurement::walked_px)
 /// and still casts its ray from the seed. The pixel the walk would have reached
-/// and the ZNCC the localizer scored there are kept beside it
-/// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to),
-/// [`TrackMeasurement::walked_zncc`](super::track::TrackMeasurement::walked_zncc)),
+/// is kept beside it
+/// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to)),
+/// with the tile there scored against the new bitmap by the evaluation the fit
+/// ends with
+/// ([`TrackMeasurement::walked_zncc`](super::track::TrackMeasurement::walked_zncc)),
 /// so a person can accept the walk with
 /// [`sight_observation`](super::steps::sight_observation).
+///
+/// **Every view is aligned to the reference render.** The localizer and the
+/// sub-pixel refiner both align each sighting to the render of the track's
+/// reference observation at its own keypoint, in one pass: the reference the
+/// track holds ([`TrackPayload::reference`]) where its row is `in` and carries
+/// a keypoint, and otherwise the reference-view rule's pick from the renders
+/// at the sightings' keypoints. The reference's own keypoint is not moved.
+/// When the reference changes, as by
+/// [`set_reference`](super::steps::set_reference) or by unpinning its row, the
+/// next fit aligns the sightings to the new one; a score is not a reason to
+/// align them again.
 ///
 /// **At the cluster stage** a fit is the refinement, which is also what a
 /// reading is: a cluster has no geometry behind it to move, so the one kernel
@@ -614,13 +627,13 @@ pub(super) fn column_bitmap(
 ///
 /// The half of [`fit`]'s validation that reads no photograph: whether the track
 /// stage has a patch to register against, and whether enough observations are
-/// `in` for the consensus it registers against to exist. A caller that runs the
+/// `in` for one to be aligned to the reference of another. A caller that runs the
 /// fit somewhere expensive -- on a worker, after decoding a dozen images -- asks
 /// this first and refuses in front of the decode.
 ///
 /// The two-in rule is a fit's and not a reading's: fitting one sighting against
 /// nothing would move it to wherever a template of itself sits, while *reading*
-/// one sighting is a report that it has nothing to correlate against. That is
+/// one sighting is a report that it has nothing to be aligned to. That is
 /// why [`evaluate_preconditions`](super::evaluate::evaluate_preconditions) has
 /// no such bar.
 ///
@@ -910,13 +923,11 @@ pub(super) fn fit_track(
                     seed.map(|s| grid_distance(frame, view, s, fit.keypoint, &options.localize));
                 match (walked, seed) {
                     (Some(walked), Some(seed)) if walked.is_finite() && walked > bound => {
-                        // Where the walk would have gone and what it scored
-                        // there, so a person can overrule the bar.
+                        // Where the walk would have gone, so a person can
+                        // overrule the bar. The evaluation that ends the fit
+                        // scores the tile there against the new bitmap.
                         measurement.walked_px = Some(walked);
                         measurement.walked_to = Some(fit.keypoint);
-                        measurement.walked_zncc = fit.zncc;
-                        measurement.walked_zncc_middle = fit.zncc_middle;
-                        measurement.walked_zncc_grid = fit.zncc_grid;
                         kept_at_seed += 1;
                         Some([seed[0] as f32, seed[1] as f32])
                     }
@@ -948,7 +959,7 @@ pub(super) fn fit_track(
     let classification = classify(&rays, held, edited, options)?;
     let position = classification.coordinate;
 
-    // ── The frame at the coordinate the fit found, and the consensus it shows ──
+    // ── The frame at the coordinate the fit found, and the bitmap it shows ──
     let in_images: Vec<usize> = ins
         .iter()
         .map(|&i| next.observations[i].image as usize)
@@ -1022,13 +1033,6 @@ pub(super) fn fit_track(
 struct Fit {
     /// Where the sub-pixel stage left the keypoint, in source-image px.
     keypoint: [f64; 2],
-    /// The localizer's leave-one-out ZNCC for this view against the round's
-    /// consensus, at the peak it registered to, when it scored one.
-    zncc: Option<f64>,
-    /// The same reading over the middle of the tile, when there is one.
-    zncc_middle: Option<f64>,
-    /// The same reading over each cell of the ZNCC grid, when `zncc` is there.
-    zncc_grid: Option<[[f64; 3]; 3]>,
 }
 
 /// Localize and refine one round's observations against `frame`, and record
@@ -1106,18 +1110,7 @@ fn fit_round(
         };
         let at = refined.views.iter().position(|&v| v == image);
         let keypoint = at.map_or(localized.keypoints[slot], |k| refined.keypoints[k]);
-        let zncc = localized.zncc.get(slot).copied().filter(|z| z.is_finite());
-        let zncc_middle: Option<f64> = None;
-        let zncc_grid: Option<[[f64; 3]; 3]> = None;
-        fits.insert(
-            i,
-            Fit {
-                keypoint,
-                zncc,
-                zncc_middle,
-                zncc_grid,
-            },
-        );
+        fits.insert(i, Fit { keypoint });
     }
     Ok(())
 }

@@ -179,8 +179,8 @@ pub(crate) struct RowSummary {
     /// rule picks the row.
     pub(crate) reference: ReferenceCell,
     /// The *ZNCC* cell's hover text at the track stage: the score against
-    /// the stored bitmap, the blur-matched score and the leave-one-out
-    /// reading ([`zncc_hover`]). `None` where the cell has no hover.
+    /// the stored bitmap and the blur-matched score ([`zncc_hover`]). `None`
+    /// where the cell has no hover.
     pub(crate) zncc_hover: Option<String>,
 }
 
@@ -654,9 +654,10 @@ pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where
     observation sits, in patch-grid pixels, the unit of the self-similarity radius: the \
     observation's own evidence of where it belongs.\n\n\
     At the track stage the evaluation looks for the peak within the shift bar of the \
-    sighting, against the consensus of the others, and moves nothing. A shift inside the \
-    self-similarity radius is within what the patch cannot tell apart; one beyond it says the \
-    other photographs want the sighting moved. A fit moves it, up to the bar.\n\n\
+    sighting, against the render of the track's reference, and moves nothing. The reference's \
+    own row reads 0. A shift inside the self-similarity radius is within what the patch \
+    cannot tell apart; one beyond it says the reference wants the sighting moved. A fit \
+    moves it, up to the bar.\n\n\
     At the cluster stage it is how far the refinement moved the member off its seed.\n\n\
     The box under this heading is the shift bar, which judges it.";
 
@@ -2052,8 +2053,7 @@ impl TrackBody {
         }
 
         // The ZNCC cell's hover, at the track stage: the row's score against
-        // the stored bitmap, plain and blur-matched, and the localizer's
-        // leave-one-out reading beside it.
+        // the stored bitmap, plain and blur-matched.
         let zncc_hover = (stage == StageKind::Track && !refused)
             .then(|| {
                 row.track
@@ -2316,11 +2316,10 @@ pub(super) fn set_reference_offer(
 /// What *Accept walk* would do to `row`, as its hover text, or `None` for a row
 /// the last fit did not keep at its seed.
 ///
-/// The numbers a person decides by: how far, to where, and the leave-one-out
-/// ZNCC at each end -- the row's own `loo_zncc`, which the reading after the
-/// fit took at the seed, and the one the fit's localizer scored at the walked
-/// peak. Both are read against the consensus of the other rows, so they
-/// compare; the row's score against the bitmap is not read at the walked peak.
+/// The numbers a person decides by: how far, to where, and the plain ZNCC
+/// against the stored bitmap at each end -- the row's own `zncc`, read at the
+/// seed, and `walked_zncc`, read at the walked peak. Every reading scores both
+/// against the same bitmap, so they compare.
 pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<String> {
     let m = row.track.as_ref()?;
     let to = m.walked_to?;
@@ -2330,12 +2329,12 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
     };
     Some(format!(
         "Move this sighting {:.1} grid px, to ({:.1}, {:.1}), where the last fit's walk \
-         would have put it. Leave-one-out ZNCC {} at the seed, {} at the walked peak. \
-         Pins it, as a hand placement does.",
+         would have put it. ZNCC with the stored patch bitmap {} at the seed, {} at the \
+         walked peak. Pins it, as a hand placement does.",
         m.walked_px.unwrap_or(f64::NAN),
         to[0],
         to[1],
-        zncc(m.loo_zncc, m.loo_zncc_middle),
+        zncc(m.zncc, m.zncc_middle),
         zncc(m.walked_zncc, m.walked_zncc_middle),
     ))
 }

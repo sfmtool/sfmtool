@@ -215,9 +215,8 @@ impl ClusterMeasurement {
 
 /// Why an observation carries no measurement at the track stage.
 ///
-/// An evaluation drops nothing: it turns off the localizer's own gates and its
-/// consensus-basis cap, so every observation it can read comes back with a
-/// number. What is left is the observation it cannot read at all, and this says
+/// An evaluation drops nothing: it turns off the localizer's own gates, so
+/// every observation it can read comes back with a number. What is left is the observation it cannot read at all, and this says
 /// which of those it was, in one short sentence, so a row without a ZNCC never
 /// reads as an unexplained refusal.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,9 +251,10 @@ pub enum Unmeasured {
         /// The bound it passed, in the same units.
         bound_px: f64,
     },
-    /// Fewer than two observations of its round could be read together, so
-    /// there was no consensus to correlate this one against.
-    NoConsensus,
+    /// Its round had no reference render to align it to: the round held no
+    /// other observation that could be read, or the reference observation's
+    /// own tile left its photograph or carried no texture.
+    NoReference,
     /// The correlation could not be scored: the tile around the observation
     /// runs off the photograph, or no channel of it carries texture.
     Unscorable,
@@ -282,7 +282,7 @@ impl std::fmt::Display for Unmeasured {
                 "its seed sits {offset_px:.0} px from the projection, beyond the \
                  {bound_px:.0} px bound"
             ),
-            Unmeasured::NoConsensus => write!(f, "nothing to correlate against"),
+            Unmeasured::NoReference => write!(f, "there is no reference render to align it to"),
             Unmeasured::Unscorable => write!(f, "its tile could not be scored"),
             Unmeasured::NoBitmap => write!(f, "there is no bitmap to score it against"),
             Unmeasured::BitmapPending => write!(
@@ -296,14 +296,16 @@ impl std::fmt::Display for Unmeasured {
 /// What the track stage has measured about one observation.
 ///
 /// A track put on the bench from a committed point arrives with
-/// [`Self::keypoint`] and [`Self::loo_zncc`] read off the stored columns; the
+/// [`Self::keypoint`] and [`Self::zncc`] read off the stored columns; the
 /// rest is what an evaluation computes.
 ///
 /// The row's **score** is its tile's ZNCC with the track's stored patch
 /// bitmap ([`Self::zncc`], with [`Self::zncc_middle`] and [`Self::zncc_grid`]
-/// beside it), which the bars judge. The localizer's leave-one-out reading
-/// against the consensus of the other rows, which places the row, is kept
-/// beside it as [`Self::loo_zncc`].
+/// beside it, plain, and [`Self::blur_matched_zncc`]), which the bars judge.
+/// The bitmap is the render of the track's reference observation, which is
+/// also the template the localizer aligns every other row to, so the score
+/// and the alignment read one comparison. The localizer's own reading of the
+/// row is the distance to its correlation peak, [`Self::seed_shift_px`].
 ///
 /// The two distances are different questions, and both are here because a
 /// person reading a row has to tell them apart: [`Self::seed_shift_px`] is
@@ -327,9 +329,13 @@ pub struct TrackMeasurement {
     /// ([`BitmapScorer`](crate::patch::stored_bitmap::BitmapScorer)). `1` for
     /// the observation the bitmap is the render of
     /// ([`TrackPayload::reference`]), which is not computed. This is the
-    /// reading [`Thresholds::min_zncc`] judges and the painting ranks rows by.
-    /// `None` where the track has no bitmap, the tile could not be rendered,
-    /// or the pair could not be read, and then [`Self::reason`] says which.
+    /// reading [`Thresholds::min_zncc`] judges and the painting ranks rows by,
+    /// the one Track at Pixel's median gate reads, and the one a commit writes
+    /// as the observation's `observation_confidence`. A track put on the
+    /// bench from a committed point carries that column read back here until
+    /// its first evaluation. `None` where the track has no bitmap, the tile
+    /// could not be rendered, or the pair could not be read, and then
+    /// [`Self::reason`] says which.
     pub zncc: Option<f64>,
     /// The **middle ZNCC** beside [`Self::zncc`]: the same tile against the
     /// same bitmap, read over only the middle square of the tile (the rows and
@@ -348,26 +354,19 @@ pub struct TrackMeasurement {
     /// is. Every cell `1` on the bitmap's own row. `None` wherever `zncc` is;
     /// a single cell is `NaN` where it cannot be read.
     pub zncc_grid: Option<[[f64; 3]; 3]>,
-    /// The **leave-one-out ZNCC**: the localizer's score against the
-    /// consensus of the round's other observations, at the correlation peak
-    /// within the search radius of this observation's own keypoint, which
-    /// [`Self::seed_shift_px`] is measured to. With that shift near zero it is
-    /// the agreement at the keypoint itself. No bar judges it; Track at Pixel's
-    /// own gates read it, and a commit writes it as the observation's
-    /// `observation_confidence`. `None` where the localizer could not read the
-    /// observation.
-    pub loo_zncc: Option<f64>,
-    /// The middle ZNCC beside [`Self::loo_zncc`]: the same samples at the
-    /// same peak against the same consensus, over the middle square. `None`
-    /// wherever `loo_zncc` is, where the consensus's middle is flat, and on a
-    /// track read back from a committed point, which stores the whole-tile
-    /// score alone.
-    pub loo_zncc_middle: Option<f64>,
-    /// How far that correlation peak sits from the observation's own keypoint,
-    /// in **patch-grid px** on the patch's plane: the observation's own
-    /// evidence, and what [`Thresholds::max_shift_px`] paints on. In the unit of
-    /// the self-similarity radius, so the two compare directly: a shift inside
-    /// the radius is within what the patch cannot tell apart.
+    /// How far the localizer's correlation peak sits from the observation's
+    /// own keypoint, in **patch-grid px** on the patch's plane: the
+    /// observation's own evidence, and what [`Thresholds::max_shift_px`] paints
+    /// on. The peak is the shift, within the search radius of the keypoint, at
+    /// which the observation's tile best matches the render of the track's
+    /// reference observation, so `0` on the reference's own row. In the unit
+    /// of the self-similarity radius, so the two compare directly: a shift
+    /// inside the radius is within what the patch cannot tell apart.
+    ///
+    /// Present is also the statement that the localizer read the row: `None`
+    /// where it could not ([`Self::reason`] says why), and such a row is
+    /// unmeasured to the bars ([`bar_checks`](super::steps::bar_checks)) even
+    /// where it has a score against the bitmap.
     pub seed_shift_px: Option<f64>,
     /// How far the observation's keypoint sits from the point's projection, in
     /// source-image px: the number that says how far the **point** is off,
@@ -518,22 +517,24 @@ pub struct TrackMeasurement {
     /// pins it and drops this measurement like any hand placement. Set and
     /// cleared with [`Self::walked_px`], and only by a fit.
     pub walked_to: Option<[f64; 2]>,
-    /// The leave-one-out ZNCC the fit's localizer scored at [`Self::walked_to`]
-    /// against the round's consensus, when it scored one: the agreement the walk
-    /// would have bought, to set beside [`Self::loo_zncc`], which the reading
-    /// after the fit took with the sighting kept at its seed. Set and cleared with
-    /// [`Self::walked_px`].
+    /// The plain score against the stored bitmap of the tile rendered at
+    /// [`Self::walked_to`], read the way [`Self::zncc`] is read at the
+    /// keypoint: the agreement the walk would have bought, to set beside
+    /// [`Self::zncc`], which is read with the sighting kept at its seed. Every
+    /// reading that scores the rows against the bitmap reads it where
+    /// [`Self::walked_to`] is set, so the two scores are always against the
+    /// same bitmap; `None` where `walked_to` is not set, where the track has
+    /// no bitmap to score against, and where the tile could not be read.
     pub walked_zncc: Option<f64>,
     /// The middle ZNCC beside [`Self::walked_zncc`], read the way
-    /// [`Self::loo_zncc_middle`] is. Set and cleared with [`Self::walked_px`].
+    /// [`Self::zncc_middle`] is.
     pub walked_zncc_middle: Option<f64>,
-    /// The leave-one-out ZNCC grid beside [`Self::walked_zncc`], against the same
-    /// consensus, cut into ninths of the patch as [`Self::zncc_grid`] cuts the
-    /// score against the bitmap. Set and cleared with [`Self::walked_px`].
+    /// The ZNCC grid beside [`Self::walked_zncc`], read the way
+    /// [`Self::zncc_grid`] is.
     pub walked_zncc_grid: Option<[[f64; 3]; 3]>,
     /// Why a reading is missing, when an evaluation has read the row: where
-    /// the localizer could not read the observation ([`Self::loo_zncc`] is
-    /// `None`), which of its refusals it was, whether or not the row has a
+    /// the localizer could not read the observation ([`Self::seed_shift_px`]
+    /// is `None`), which of its refusals it was, whether or not the row has a
     /// score against the bitmap; otherwise why there is no score
     /// ([`Self::zncc`]), and `None` where there is one. So a row without a
     /// score never reads as an unexplained blank.

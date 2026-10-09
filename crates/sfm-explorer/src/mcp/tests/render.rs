@@ -796,8 +796,8 @@ fn a_stage_change_the_track_rules_out_is_refused_before_the_worker() {
 
 /// The same for a fit of a track-stage track with nothing to register against
 /// -- and, beside it, the evaluation of that very track, which is **not**
-/// refused: one sighting is something to report, and only moving it needs a
-/// consensus.
+/// refused: one sighting is something to report, and only moving it needs
+/// another sighting to align it to.
 #[test]
 fn a_fit_the_track_rules_out_is_refused_before_the_worker() {
     let (mut state, mut viewer) = benchable();

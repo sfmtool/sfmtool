@@ -657,7 +657,8 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
 /// At the track stage the *ZNCC* cell prints the plain score against the
 /// stored bitmap, with the blur-matched one after an arrow where the bitmap was
 /// blurred and the two print differently, and its hover gives the blur, the
-/// sharper note, the reason for a missing score and the leave-one-out reading.
+/// sharper note, the reason for a missing score and a note where the localizer
+/// could not read the row.
 #[test]
 fn the_zncc_cell_prints_the_score_against_the_bitmap() {
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement, Unmeasured};
@@ -675,8 +676,7 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
             blur_matched_zncc: Some(matched),
             bitmap_blur_sigma: Some(sigma),
             sharper_than_bitmap: Some(sharper),
-            loo_zncc: Some(0.88),
-            loo_zncc_middle: Some(0.7),
+            seed_shift_px: Some(0.4),
             ..TrackMeasurement::default()
         }),
     };
@@ -693,8 +693,12 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
         "{said}"
     );
     assert!(said.contains("blurred by 0.83 grid px"), "{said}");
+    assert!(!said.contains("could not align"), "{said}");
+    let mut unread = blurred.clone();
+    unread.track.as_mut().unwrap().seed_shift_px = None;
+    let said = hover(&unread, false);
     assert!(
-        said.contains("Leave-one-out ZNCC 88.0% whole, 70.0% middle"),
+        said.contains("could not align this row to the reference's render"),
         "{said}"
     );
 
@@ -2540,14 +2544,14 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     let current = crate::bench::live::Evaluation::Current;
     let cells = super::measurements(&walked, StageKind::Track, &current);
     assert_eq!(cells[4], "walked 19 grid px, kept at seed");
-    // With the ZNCC the fit scored at the walked peak, where it scored one.
+    // With the score against the bitmap at the walked peak, where there is one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
     slot.walked_zncc = Some(0.873);
     slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
         super::measurements(&scored, StageKind::Track, &current)[4],
-        "walked 19 grid px (leave-one-out ZNCC 87% / 41% there), kept at seed"
+        "walked 19 grid px (ZNCC 87% / 41% there), kept at seed"
     );
 
     // The same row without the flag is the ordinary scored row.
@@ -3772,7 +3776,7 @@ fn readings_no_bar_judges_are_drawn_plain() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            loo_zncc: Some(0.95),
+            seed_shift_px: Some(0.5),
             zncc: Some(0.95),
             ..TrackMeasurement::default()
         }),
@@ -3784,7 +3788,7 @@ fn readings_no_bar_judges_are_drawn_plain() {
     let current = crate::bench::live::Evaluation::Current;
     let checks = super::table::cell_checks(Some(&judged), &current);
     assert_eq!(checks[0], [BarCheck::Pass, BarCheck::NotJudged]);
-    assert_eq!(checks[1][0], BarCheck::NotJudged, "no shift reading");
+    assert_eq!(checks[1][0], BarCheck::Pass, "the shift is read");
     assert_eq!(checks[3][0], BarCheck::NotJudged, "no radius reading");
 
     // A row nothing has measured, and a row whose cells print no numbers.

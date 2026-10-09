@@ -294,7 +294,7 @@ pub(super) fn blur_matched_shown(m: &TrackMeasurement) -> Option<f64> {
 /// The *ZNCC* cell's hover text at the track stage: the row's score against
 /// the stored patch bitmap, the blur-matched score and the blur's width or
 /// the note that the row is sharper than the bitmap, the reason where there is
-/// no score, and the localizer's leave-one-out reading beside them.
+/// no score, and a note where the localizer could not read the row.
 /// `is_reference` says the bitmap is this row's own render.
 pub(super) fn zncc_hover(m: &TrackMeasurement, is_reference: bool) -> String {
     let percent = |v: f64| {
@@ -343,16 +343,13 @@ pub(super) fn zncc_hover(m: &TrackMeasurement, is_reference: bool) -> String {
             None => "No score against the stored patch bitmap.".to_string(),
         }),
     }
-    lines.push(match m.loo_zncc {
-        Some(loo) => format!(
-            "Leave-one-out ZNCC {} whole, {} middle: the localizer's reading against the \
-             consensus of the other rows, at the correlation peak the shift is measured to. \
-             No bar judges it.",
-            percent(loo),
-            m.loo_zncc_middle.map_or_else(|| "-".to_string(), percent)
-        ),
-        None => "No leave-one-out ZNCC: the localizer could not read this row.".to_string(),
-    });
+    if m.seed_shift_px.is_none() {
+        lines.push(
+            "The localizer could not align this row to the reference's render, so the bars \
+             do not judge it."
+                .to_string(),
+        );
+    }
     lines.join("\n")
 }
 

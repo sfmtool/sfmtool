@@ -137,8 +137,8 @@ fn refusal_line(refusal: &MemberRefusal) -> String {
     )
 }
 
-/// The in count, the median leave-one-out ZNCC the final gates judged and the median middle
-/// ZNCC beside it, when the member got that far.
+/// The in count, the median ZNCC with the stored bitmap the final gates judged and the
+/// median middle ZNCC beside it, when the member got that far.
 fn final_reading(stages: &[StageRecord]) -> Option<(usize, f64, f64)> {
     stages.iter().rev().find_map(|stage| match stage {
         StageRecord::Final {
@@ -431,7 +431,7 @@ impl AppState {
                 if let Some((in_views, zncc, middle)) = final_reading(&report.stages) {
                     let middle = Some(middle).filter(|m| m.is_finite());
                     text.push_str(&format!(
-                        ": {in_views} observations in, median leave-one-out ZNCC {}",
+                        ": {in_views} observations in, median ZNCC {}",
                         crate::track_view::body::zncc_sentence(Some(zncc), middle)
                     ));
                 }

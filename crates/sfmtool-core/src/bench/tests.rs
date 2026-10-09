@@ -367,19 +367,21 @@ fn a_point_put_on_the_bench_is_a_track_with_every_observation_in() {
     );
 }
 
+/// `observation_confidence` is the plain score against the stored bitmap, so
+/// putting a point on the bench carries it into `zncc`; with no localizer
+/// reading the bars judge no row until the first evaluation.
 #[test]
-fn the_stored_confidence_is_carried_as_the_leave_one_out_score() {
+fn the_stored_confidence_is_carried_as_the_score_against_the_bitmap() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let track = bench.track(&label).expect("just put on");
     for observation in &track.observations {
-        let zncc = observation
-            .track
-            .as_ref()
-            .and_then(|m| m.loo_zncc)
-            .expect("the column is carried");
+        let m = observation.track.as_ref().expect("a track slot");
+        let zncc = m.zncc.expect("the column is carried");
         assert!((zncc - 200.0 / 255.0).abs() < 1e-9);
+        assert_eq!(m.seed_shift_px, None);
+        assert!(bar_checks(observation, StageKind::Track, &track.thresholds).is_none());
     }
 }
 
@@ -941,8 +943,8 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
         observation.verdict = Verdict::Out;
         observation.pinned = false;
         let measurement = observation.track.as_mut().expect("a track slot");
-        // The localizer read the row: a row it refused is not judged.
-        measurement.loo_zncc = Some(score);
+        // The localizer read the row (`seed_shift_px`, below): a row it
+        // refused is not judged.
         measurement.zncc = Some(score);
         measurement.seed_shift_px = Some(0.5);
         measurement.zncc_self_similarity_radius = Some(0.5);
@@ -950,13 +952,13 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
     track
 }
 
-/// A row the keypoint localizer refused carries no leave-one-out reading; a
-/// score against the bitmap alone does not let the bars turn it in, and they
-/// leave it where it is.
+/// A row the keypoint localizer refused carries no shift to its correlation
+/// peak; a score against the bitmap alone does not let the bars turn it in,
+/// and they leave it where it is.
 #[test]
 fn a_row_the_localizer_refused_is_not_judged_on_its_bitmap_score() {
     let mut track = scored_track([0.95, 0.95]);
-    slot(&mut track, 1).loo_zncc = None;
+    slot(&mut track, 1).seed_shift_px = None;
     slot(&mut track, 1).reason = Some(Unmeasured::Grazing { cosine: 0.05 });
     let stage = track.stage_kind();
     assert!(bar_checks(&track.observations[1], stage, &track.thresholds).is_none());
@@ -1156,14 +1158,12 @@ fn the_painting_proposes_verdicts_from_the_stored_measurements() {
 
 /// The bars judge the plain score against the bitmap: a row whose
 /// blur-matched score clears `min_zncc` and whose plain score does not, as a
-/// view out of focus reads, is turned out, and the leave-one-out reading
-/// beside it plays no part.
+/// view out of focus reads, is turned out.
 #[test]
 fn the_bars_judge_the_plain_score_against_the_bitmap() {
     let mut track = scored_track([0.95, 0.55]);
     let m = track.observations[1].track.as_mut().expect("a slot");
     m.blur_matched_zncc = Some(0.92);
-    m.loo_zncc = Some(0.93);
     let (painted, _) = apply_thresholds(&track);
     assert_eq!(painted.observations[0].verdict, Verdict::In);
     assert_eq!(
@@ -1193,7 +1193,7 @@ fn a_row_with_no_bitmap_to_read_against_is_unscored_and_left_alone() {
         assert_eq!(m.zncc_middle, None, "row {i}");
         assert_eq!(m.zncc_grid, None, "row {i}");
         assert_eq!(m.blur_matched_zncc, None, "row {i}");
-        assert!(m.loo_zncc.is_some(), "row {i}: the localizer read it");
+        assert!(m.seed_shift_px.is_some(), "row {i}: the localizer read it");
         assert_eq!(m.reason, Some(Unmeasured::NoBitmap), "row {i}");
         assert!(bar_checks(observation, StageKind::Track, &read.thresholds).is_none());
     }
@@ -1596,13 +1596,14 @@ fn projection_bar_judges_the_reprojection_error_before_the_projection_offset() {
 }
 
 /// A missing reading is not judged and clears its bar, the middle bar at `0`
-/// judges nothing, and a row with no whole-patch ZNCC has no checks at all.
+/// judges nothing, and a row with no whole-patch ZNCC, or with no shift to
+/// its correlation peak (one the localizer could not read), has no checks at
+/// all.
 #[test]
 fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
     let mut track = scored_track([0.95, 0.40]);
     track.thresholds.min_zncc_middle = 0.6;
     slot(&mut track, 0).zncc_middle = None;
-    slot(&mut track, 0).seed_shift_px = None;
     slot(&mut track, 0).zncc_self_similarity_radius = None;
     slot(&mut track, 0).reprojection_error = None;
     slot(&mut track, 0).projection_offset_px = None;
@@ -1613,7 +1614,7 @@ fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
         BarChecks {
             min_zncc: BarCheck::Pass,
             min_zncc_middle: BarCheck::NotJudged,
-            max_shift_px: BarCheck::NotJudged,
+            max_shift_px: BarCheck::Pass,
             max_zncc_self_similarity_radius: BarCheck::NotJudged,
             max_projection_error_px: BarCheck::NotJudged,
         }
@@ -1628,6 +1629,14 @@ fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
     track.thresholds.min_zncc_middle = 0.0;
     let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
     assert_eq!(checks.min_zncc_middle, BarCheck::NotJudged);
+
+    let mut unread = track.clone();
+    slot(&mut unread, 0).seed_shift_px = None;
+    assert_eq!(
+        bar_checks(&unread.observations[0], stage, &unread.thresholds),
+        None,
+        "a row the localizer could not read is unmeasured"
+    );
 
     slot(&mut track, 0).zncc = None;
     assert_eq!(
@@ -2030,7 +2039,7 @@ fn a_commit_with_no_origin_appends_the_in_observations_keypoints() {
         assert_eq!(written.observations()[k].image_index, k as u32);
         assert_eq!(written.keypoint_xy(k), stored.keypoint_xy(k));
     }
-    // The confidence column round-trips through the leave-one-out score.
+    // The confidence column round-trips through the score against the bitmap.
     assert_eq!(
         written.observation_confidence().expect("the column"),
         [200, 200]
@@ -2039,6 +2048,30 @@ fn a_commit_with_no_origin_appends_the_in_observations_keypoints() {
         report.label("bull"),
         "Committed track: 2 observations in bull"
     );
+}
+
+/// A commit fills `observation_confidence` from each row's plain score
+/// against the stored bitmap, clamped and scaled to a byte: `255` for the
+/// reference observation, whose render the bitmap is, and the blur-matched
+/// score plays no part.
+#[test]
+fn a_commit_writes_the_plain_score_against_the_bitmap_as_the_confidence() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (read, _) = evaluate_over(&scene, &edited, &track_of(&bench, &label)).expect("two in");
+    let reference = read.track().and_then(|p| p.reference).expect("a reference");
+    let mut track = read.clone();
+    let other = 1 - reference;
+    let m = track.observations[other].track.as_mut().expect("a slot");
+    m.zncc = Some(0.6);
+    m.blur_matched_zncc = Some(0.9);
+    let (next, report) = commit(&edited, &track).expect("two in, with a position");
+    let written = next.point(report.point).expect("just written");
+    let confidence = written.observation_confidence().expect("the column");
+    // The stored track is in image order, and here row k sees image k.
+    assert_eq!(confidence[reference], u8::MAX);
+    assert_eq!(confidence[other], (0.6f64 * 255.0).round() as u8);
 }
 
 #[test]
@@ -2347,11 +2380,7 @@ fn a_column_the_commit_writes_is_a_column_it_compares() {
         measurement.keypoint = Some([keypoint[0] + 0.001, keypoint[1]]);
     });
     moved("an observation's confidence", &|t| {
-        t.observations[0]
-            .track
-            .as_mut()
-            .expect("a track slot")
-            .loo_zncc = Some(0.5);
+        t.observations[0].track.as_mut().expect("a track slot").zncc = Some(0.5);
     });
     moved("the error", &|t| {
         t.observations[0]
@@ -2601,8 +2630,14 @@ fn fit_directly(
 ) -> (KeypointLocalization, KeypointRefinement) {
     let views = scene.views();
     let options = FitOptions::default();
-    let localized =
-        localize_patch_keypoints(frame, &views, view_set, Some(seeds), None, &options.localize);
+    let localized = localize_patch_keypoints(
+        frame,
+        &views,
+        view_set,
+        Some(seeds),
+        None,
+        &options.localize,
+    );
     let refined = refine_patch_keypoints(
         frame,
         &views,
@@ -3083,21 +3118,33 @@ fn an_evaluation_turns_an_unpinned_row_out_past_a_bar_and_in_after_a_fit_brings_
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (track, added) = three_rows_the_bars_decide(&scene);
-    let (read, _) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    let (mut read, _) = evaluate_over(&scene, &edited, &track).expect("two observations in");
     assert_eq!(read.verdict_counts(), (3, 0));
+    // The plane's texture is smooth: two pixels off still scores 0.75 against
+    // the bitmap, so the ZNCC bar is raised to where that is a miss.
+    read.thresholds.min_zncc = 0.9;
 
-    // Moved three pixels off the plane's sighting, and handed back to the bars:
-    // the correlation peak now sits further from it than the shift bar.
+    // Moved two pixels off the plane's sighting, and handed back to the bars:
+    // its tile there no longer matches the bitmap. The move stays inside the
+    // shift bar, which also bounds how far a fit may walk a sighting: a row
+    // moved past it reads past the bar and is one the fit keeps at its seed.
     let was = read.observations[added].site().expect("a sighting");
-    let (moved, _) = sight_observation(&read, &edited, added, [was[0] + 3.0, was[1]])
+    let (moved, _) = sight_observation(&read, &edited, added, [was[0] + 2.0, was[1]])
         .expect("a pixel on the sensor");
     let (moved, _) = unpin_verdicts(&moved, &[added]).expect("a live row");
     let (off, report) = evaluate_over(&scene, &edited, &moved).expect("a framed track");
     let row = &off.observations[added];
-    let shift = row.track.as_ref().and_then(|m| m.seed_shift_px);
+    let m = row.track.as_ref().expect("a track slot");
     assert!(
-        shift.is_some_and(|s| s > off.thresholds.max_shift_px),
-        "the row reads past the shift bar: {shift:?}"
+        m.zncc.is_some_and(|z| z < off.thresholds.min_zncc),
+        "the row reads under the ZNCC bar: {:?}",
+        m.zncc
+    );
+    assert!(
+        m.seed_shift_px
+            .is_some_and(|s| s > 1.0 && s <= off.thresholds.max_shift_px),
+        "the correlation peak sits back on the plane, within the shift bar: {:?}",
+        m.seed_shift_px
     );
     assert_eq!(row.verdict, Verdict::Out, "the bars turned it out");
     assert!(!row.pinned);
@@ -3107,12 +3154,17 @@ fn an_evaluation_turns_an_unpinned_row_out_past_a_bar_and_in_after_a_fit_brings_
     // fit takes it in again.
     let (fitted, report) = fit_over(&scene, &edited, &off).expect("two rows in");
     let row = &fitted.observations[added];
+    let m = row.track.as_ref().expect("a track slot");
+    assert_eq!(m.walked_px, None, "a walk inside the bar is taken");
     assert!(
-        row.track
-            .as_ref()
-            .and_then(|m| m.seed_shift_px)
-            .is_some_and(|s| s <= fitted.thresholds.max_shift_px),
-        "the fit put it back within the bar"
+        m.seed_shift_px.is_some_and(|s| s < 0.5),
+        "the fit put it back on the plane: {:?}",
+        m.seed_shift_px
+    );
+    assert!(
+        m.zncc.is_some_and(|z| z >= fitted.thresholds.min_zncc),
+        "{:?}",
+        m.zncc
     );
     assert_eq!(row.verdict, Verdict::In);
     assert_eq!(
@@ -3302,7 +3354,7 @@ fn an_evaluation_leaves_rows_pinned_as_they_stood_alone() {
 }
 
 /// A reading has no minimum: one sighting alone is read as one sighting with
-/// nothing to correlate against, which is a measurement rather than a refusal.
+/// nothing to align it to, which is a measurement rather than a refusal.
 #[test]
 fn an_evaluation_of_one_sighting_reports_it_rather_than_refusing() {
     let scene = Scene::new();
@@ -3326,7 +3378,7 @@ fn an_evaluation_of_one_sighting_reports_it_rather_than_refusing() {
             .as_ref()
             .expect("a track slot")
             .reason,
-        Some(Unmeasured::NoConsensus)
+        Some(Unmeasured::NoReference)
     );
 }
 
@@ -3929,7 +3981,7 @@ fn a_seed_far_from_the_projection_is_named_rather_than_searched_for() {
         .track
         .as_ref()
         .expect("every row is written, measured or not");
-    assert!(row.loo_zncc.is_none(), "nothing was searched for it");
+    assert!(row.seed_shift_px.is_none(), "nothing was searched for it");
     let Some(Unmeasured::SeedTooFar {
         offset_px,
         bound_px,
@@ -6029,14 +6081,26 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
     // What a reading of the track as it stands makes of each sighting: the fit
     // has to agree with this, because a fit that promoted the frame to a
     // provisional depth would re-warp every view and walk the sightings.
-    let (read, _) = evaluate_over(&scene, &edited, &track).expect("eight sightings in");
+    // The fixture's stored bitmap is blank, so the reading renders its own
+    // before it scores the rows against it.
+    let mut blank = track.clone();
+    payload_of(&mut blank).bitmap = None;
+    let (read, _) = evaluate_rendering_bitmap(
+        &blank,
+        &edited,
+        &scene.views(),
+        &EvaluateOptions::default(),
+        &test_fit_options(),
+        &Progress::none(),
+    )
+    .expect("eight sightings in");
     let seen: Vec<f64> = read
         .observations
         .iter()
         .map(|o| {
             o.track
                 .as_ref()
-                .and_then(|m| m.loo_zncc)
+                .and_then(|m| m.zncc)
                 .expect("a bearing's tangent frame registers in every view")
         })
         .collect();
@@ -6098,7 +6162,7 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
         let now = m.keypoint.expect("a keypoint");
         let moved = f64::from(now[0] - was[0]).hypot(f64::from(now[1] - was[1]));
         assert!(moved < 1.0, "sighting {k} moved {moved} px");
-        let zncc = m.loo_zncc.expect("a score");
+        let zncc = m.zncc.expect("a score");
         assert!(zncc > 0.5, "sighting {k} scored {zncc}");
         assert!(
             (zncc - seen[k]).abs() < 0.2,
@@ -6414,8 +6478,8 @@ fn a_placement_with_nothing_to_measure_falls_back_to_the_observing_distance() {
 
 #[test]
 fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
-    // Eight sightings, so the seven that agree hold the consensus still and the
-    // one moved off it is the only row with anywhere to walk back to. A bar of
+    // Eight sightings aligned to the reference render, and the one moved off
+    // it is the only row with anywhere to walk back to. A bar of
     // two grid px, and that one put four image px off the truth: the correlation
     // will want it back, and that is further than the person said a sighting may
     // be moved.
@@ -6470,8 +6534,21 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
         from_seed > 3.0 && walked.is_finite(),
         "the walk went {from_seed} image px, {walked} grid px"
     );
-    let scored = held.walked_zncc.expect("the localizer scored the peak");
-    assert!(scored.is_finite(), "{scored}");
+    // The walked pixel's tile is scored against the bitmap the fit rendered,
+    // as the row's own tile is at its seed, so the two compare: the walk
+    // would have bought the better score.
+    let scored = held
+        .walked_zncc
+        .expect("the tile at the walked pixel is scored");
+    let at_seed = held.zncc.expect("scored at the seed");
+    assert!(scored > at_seed, "walked {scored}, at the seed {at_seed}");
+    assert!(held.walked_zncc_middle.is_some());
+    assert!(held.walked_zncc_grid.is_some());
+    // A reading after the fit scores it again against the bitmap it reads.
+    let (read, _) = evaluate_over(&scene, &edited, &fitted).expect("eight sightings in");
+    let again = read.observations[0].track.as_ref().expect("a track slot");
+    assert_eq!(again.walked_to, held.walked_to, "a reading moves no walk");
+    assert_eq!(again.walked_zncc, held.walked_zncc);
     // The other sighting was inside the bar, so it moved and carries no flag.
     let other = fitted.observations[1].track.as_ref().expect("a track slot");
     assert_eq!(other.walked_px, None);

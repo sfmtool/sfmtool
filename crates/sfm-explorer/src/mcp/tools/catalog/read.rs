@@ -392,8 +392,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           observation the last \
                           fit kept at its seed carries walked_px (how far the fit wanted to move \
                           it), walked_to (the pixel it would have reached), walked_zncc (the \
-                          leave-one-out ZNCC scored there, beside the row's own loo_zncc read at \
-                          the seed) and \
+                          plain ZNCC of the tile there with the stored bitmap, beside the row's \
+                          own zncc read at the seed) and \
                           walked_zncc_middle and walked_zncc_grid (the parts' readings there); \
                           sight_bench_observation with walked_to as the pixel accepts the walk. \
                           A track-stage observation also carries the reference view's readings: \
@@ -454,12 +454,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           sharper_than_bitmap, true where the row's tile is sharper than the \
                           bitmap along every direction (read plain; a candidate to replace the \
                           reference). The bitmap's own row reads 1 and is not computed. No bar \
-                          judges blur_matched_zncc. Every track-stage observation the localizer \
-                          could read also carries loo_zncc, its leave-one-out ZNCC against the \
-                          consensus of the other observations at the correlation peak \
-                          seed_shift_px is measured to, and loo_zncc_middle, the same over the \
-                          middle square; no bar judges them, and a commit writes loo_zncc as \
-                          the observation's confidence.",
+                          judges blur_matched_zncc. A commit writes zncc as the observation's \
+                          confidence, and a track put on the bench from a point carries that \
+                          confidence as its zncc until the first evaluation. The keypoint \
+                          localizer aligns every observation to the render of the track's \
+                          reference observation, and seed_shift_px is how far the peak of that \
+                          alignment sits from the observation's keypoint, 0 on the reference's \
+                          own row; an observation with no seed_shift_px is one the localizer \
+                          could not read, and its reason says why.",
             kind: Read,
             schema: object(
                 &[("track", bench_track_schema())],

@@ -184,7 +184,14 @@ pub struct FinishOptions {
     pub clean_rounds: usize,
     /// Gate: the fewest `in` views.
     pub min_in_views: usize,
-    /// Gate: the lowest median leave-one-out ZNCC over the `in` views.
+    /// Gate: the lowest median plain score against the stored bitmap
+    /// ([`TrackMeasurement::zncc`](super::track::TrackMeasurement::zncc)) over
+    /// the `in` views other than the reference observation, which scores `1`
+    /// against its own render. The default `0.7` refuses about as many
+    /// ground-truth tracks after a fit (5.1% of 450 from seoul_bull,
+    /// kerry_park and a dino_dog_toy reconstruction) as `0.8` on the
+    /// leave-one-out score it replaced (5.8%), and passes 0.7% of the same
+    /// tracks with every keypoint moved 15 to 30 px off.
     pub min_zncc_median: f64,
     /// Gate: how far the queried sighting's keypoint may sit from the pixel, in
     /// px.
@@ -208,7 +215,7 @@ impl Default for FinishOptions {
             clean_max_projection_px: 1.5,
             clean_rounds: 2,
             min_in_views: 3,
-            min_zncc_median: 0.8,
+            min_zncc_median: 0.7,
             max_query_offset_px: 2.0,
             max_projection_offset_px: 1.5,
         }
@@ -605,8 +612,9 @@ pub enum StageRecord {
         at_infinity: bool,
         /// Why the classification came out as it did.
         reason: Option<ClassificationReason>,
-        /// The median leave-one-out ZNCC (`TrackMeasurement::loo_zncc`) over
-        /// the `in` views after it.
+        /// The median plain score against the stored bitmap
+        /// (`TrackMeasurement::zncc`) over the `in` views after it, the
+        /// reference observation left out.
         zncc_median: f64,
     },
     /// The constellation member's tilt toward its local prior's normal.
@@ -615,8 +623,9 @@ pub enum StageRecord {
     Anchor {
         /// How many views are `in` after it.
         in_views: usize,
-        /// The median leave-one-out ZNCC (`TrackMeasurement::loo_zncc`) over
-        /// them after it.
+        /// The median plain score against the stored bitmap
+        /// (`TrackMeasurement::zncc`) over them after it, the reference
+        /// observation left out.
         zncc_median: f64,
     },
     /// The finish's tilt toward the neighbours' normal.
@@ -632,12 +641,13 @@ pub enum StageRecord {
     Final {
         /// How many views are `in`.
         in_views: usize,
-        /// The median leave-one-out ZNCC over them (`TrackMeasurement::loo_zncc`),
+        /// The median plain score against the stored bitmap over them
+        /// (`TrackMeasurement::zncc`), the reference observation left out:
         /// the reading the median gate judges.
         zncc_median: f64,
-        /// The median leave-one-out middle ZNCC over them (`TrackMeasurement::loo_zncc_middle`),
-        /// `NaN` when none carries one. Shown beside `zncc_median`; no gate
-        /// reads it.
+        /// The median plain middle score against the stored bitmap over the
+        /// same views (`TrackMeasurement::zncc_middle`), `NaN` when none
+        /// carries one. Shown beside `zncc_median`; no gate reads it.
         zncc_middle_median: f64,
         /// How far the queried sighting's keypoint sits from the pixel, in px.
         query_offset_px: Option<f64>,

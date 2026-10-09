@@ -143,10 +143,11 @@ impl std::error::Error for CreateTrackError {}
 /// they stand until a person hands them to the bars ([`unpin_verdicts`]), and
 /// the evaluations that read the track leave them where they are. The
 /// measurements are carried from what the record stores and nothing is
-/// recomputed: the leave-one-out ZNCC (`loo_zncc`) is `observation_confidence`
-/// read back out of its byte scale where the column exists, and everything an
-/// evaluation would compute, the score against the bitmap among it, is left
-/// unmeasured. The point's stored reference observation comes on as the
+/// recomputed: the score against the bitmap (`zncc`) is
+/// `observation_confidence` read back out of its byte scale where the column
+/// exists, which is what a commit writes there, and everything else an
+/// evaluation would compute is left unmeasured. With no localizer reading
+/// (`seed_shift_px`) the bars judge no row until the first evaluation. The point's stored reference observation comes on as the
 /// track's reference, and with every row pinned it is held until a person
 /// unpins its row. So putting a track on the bench and doing
 /// nothing shows the numbers the reconstruction already holds, plus the verdict
@@ -195,10 +196,11 @@ pub fn create_track(
             cluster: None,
             track: Some(TrackMeasurement {
                 keypoint: view.keypoint_xy(k),
-                // The stored column is the fit's own leave-one-out score in a
-                // byte scale; reading it back is carrying a measurement, not
-                // making one.
-                loo_zncc: view
+                // The stored column is the row's plain score against the
+                // stored bitmap in a byte scale; reading it back is carrying a
+                // measurement, not making one, and a commit of the untouched
+                // track writes the same byte again.
+                zncc: view
                     .observation_confidence()
                     .map(|c| f64::from(c[k]) / f64::from(u8::MAX)),
                 ..TrackMeasurement::default()
@@ -1266,7 +1268,7 @@ pub struct SightReport {
 /// - At the **track stage** it writes the observation's keypoint, which is the
 ///   pixel a commit writes and the place every reading is anchored at, and
 ///   drops the rest of that measurement. Everything else in a
-///   [`TrackMeasurement`] -- the leave-one-out ZNCC, both distances, the
+///   [`TrackMeasurement`] -- the scores against the bitmap, both distances, the
 ///   reprojection residual, the self-similarity radii, the reason -- was computed
 ///   *for the old keypoint* and says nothing about the new one, and an
 ///   evaluation recomputes all of it from the track as it stands, so clearing
@@ -2250,7 +2252,7 @@ pub struct SpinReport {
 /// Image Detail panel is saying.
 ///
 /// The centre is untouched, so a turn moves no sighting: a corner drag spins
-/// the square in place while every keypoint stays where it is. The consensus
+/// the square in place while every keypoint stays where it is. The stored
 /// bitmap and the track measurements are dropped for the reason a resize drops
 /// them -- both were read over the square as it stood, and the square has
 /// turned under them.
@@ -2870,8 +2872,9 @@ impl BarChecks {
 /// `None` when nothing at that stage has measured it, which is when it carries
 /// no whole-patch ZNCC. At the track stage a row the keypoint localizer could
 /// not read (no
-/// [`loo_zncc`](super::track::TrackMeasurement::loo_zncc): its seed too far
-/// from the projection, a grazing view, or nothing to score) is unmeasured as
+/// [`seed_shift_px`](super::track::TrackMeasurement::seed_shift_px): its seed
+/// too far from the projection, a grazing view, no reference render to align
+/// it to, or nothing to score) is unmeasured as
 /// well, even where it has a score against the bitmap: its status cell shows
 /// the localizer's refusal, and a bitmap score alone does not turn it `in`.
 ///
@@ -2910,7 +2913,7 @@ pub fn bar_checks(
         }
         StageKind::Track => {
             let m = observation.track.as_ref()?;
-            m.loo_zncc?;
+            m.seed_shift_px?;
             (
                 m.zncc?,
                 m.zncc_middle,

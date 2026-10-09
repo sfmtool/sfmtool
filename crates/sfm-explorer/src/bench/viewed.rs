@@ -8,8 +8,8 @@
 //! selected point on the selected node while no item is focused on that node
 //! ([`AppState::viewed_point`]). Its track is built with core's `create_track`
 //! exactly as a put builds a bench track, under the same label (the point's
-//! portable ID), so its rows arrive `in` and pinned and the leave-one-out ZNCC
-//! is read back from the stored column. It is never written anywhere: it is in
+//! portable ID), so its rows arrive `in` and pinned and the score against the
+//! bitmap is read back from the stored confidence column. It is never written anywhere: it is in
 //! no version, no step accepts it, and no bench layer draws it.
 //!
 //! **Keyed by `(node, point, document serial)`.** A point's content at a given

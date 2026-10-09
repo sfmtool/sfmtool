@@ -13,7 +13,7 @@
 //! reading of its result can never disagree about a number.
 //!
 //! **Nothing is dropped.** The kernels are run with their per-view gates off
-//! and their consensus-basis cap lifted ([`EvaluateOptions::default`]), because
+//! ([`EvaluateOptions::default`]), because
 //! a gate is a decision and this step makes none: an observation the pipeline
 //! would have thrown away is exactly the one the person is looking at. An
 //! observation that genuinely cannot be read comes back with a
@@ -23,10 +23,10 @@
 //! an in-memory cluster, whose `member_status` is its own account of every
 //! member; at the **track stage** it is one round of
 //! [`try_localize_patch_keypoints`] over the observations where they sit, which
-//! scores each one against the leave-one-out consensus of the others and finds
-//! its correlation peak without moving it there. Each row's score, the reading
-//! the bars judge, is then its tile at its keypoint against the track's stored
-//! patch bitmap.
+//! aligns each one to the render of the track's reference observation and
+//! finds its correlation peak without moving it there. Each row's score, the
+//! reading the bars judge, is then its tile at its keypoint against the
+//! track's stored patch bitmap, the render of that same reference.
 
 use std::collections::HashMap;
 
@@ -67,8 +67,8 @@ use super::track::{
     TrackPayload, Unmeasured, Verdict,
 };
 
-/// The localizer with every per-view gate off and the consensus-basis cap
-/// lifted: what both an evaluation and a fit run.
+/// The localizer with every per-view gate off: what both an evaluation and a
+/// fit run.
 ///
 /// Of the four gates the kernel applies per view,
 /// [`min_absolute_zncc`](KeypointLocalizeParams::min_absolute_zncc),
@@ -76,7 +76,8 @@ use super::track::{
 /// [`max_member_zncc_self_similarity_radius`](KeypointLocalizeParams::max_member_zncc_self_similarity_radius)
 /// are off, and [`max_shift_px`](KeypointLocalizeParams::max_shift_px) is a
 /// large finite bar so that the infinite shift the kernel reports for a
-/// keypoint that left the photograph still lands. `basis_max_views` is `0`.
+/// keypoint that left the photograph still lands. The grazing pre-filter
+/// stays, and the evaluation states it per row ([`Unmeasured::Grazing`]).
 /// Why the bench drops no sighting in the kernel is in
 /// `specs/core/bench/editable-track.md` § "Why it is shaped this way".
 pub fn open_localizer() -> KeypointLocalizeParams {
@@ -331,8 +332,8 @@ pub struct EvaluateReport {
     pub stage: StageKind,
     /// How many observations came back with a reading: at the track stage,
     /// the ones the keypoint localizer read (a
-    /// [`loo_zncc`](super::track::TrackMeasurement::loo_zncc)), whether or
-    /// not they have a score against the bitmap.
+    /// [`seed_shift_px`](super::track::TrackMeasurement::seed_shift_px)),
+    /// whether or not they have a score against the bitmap.
     pub measured: usize,
     /// How many came back with an [`Unmeasured`] reason instead.
     pub unmeasured: usize,
@@ -427,20 +428,24 @@ impl std::fmt::Display for EvaluateReport {
 /// seeds were written against. No pose is read.
 ///
 /// **At the track stage** the track's patch is read in every view, at the pixel
-/// that view's observation already sits at: one round of the localizer scores
-/// each against the leave-one-out consensus of the round's others and finds the
-/// correlation peak within the track's
-/// [`max_shift_px`](super::track::Thresholds::max_shift_px) of it. What lands in
-/// each slot is that leave-one-out ZNCC
-/// ([`loo_zncc`](super::track::TrackMeasurement::loo_zncc)), how far the peak
-/// sits from the observation's own keypoint, how far that keypoint sits from
-/// the point's projection, the reprojection error, the ray angle and the tile
-/// self-similarity -- and, for an observation no round could read, the
-/// [`Unmeasured`] reason instead of a score. Every row's tile is then scored
-/// against the stored bitmap the track holds, into
+/// that view's observation already sits at: one round of the localizer aligns
+/// each to the render of the track's reference observation (the reference the
+/// track holds where its row is in the round, and otherwise the
+/// reference-view rule's pick) and finds the correlation peak within the
+/// track's [`max_shift_px`](super::track::Thresholds::max_shift_px) of it.
+/// What lands in each slot is how far the peak sits from the observation's
+/// own keypoint
+/// ([`seed_shift_px`](super::track::TrackMeasurement::seed_shift_px)), how far
+/// that keypoint sits from the point's projection, the reprojection error, the
+/// ray angle and the tile self-similarity -- and, for an observation no round
+/// could read, the [`Unmeasured`] reason instead. Every row's tile is then
+/// scored against the stored bitmap the track holds, into
 /// [`zncc`](super::track::TrackMeasurement::zncc) and the readings beside it,
-/// which the bars judge; a track with no bitmap gets no such score, and its
-/// rows say [`Unmeasured::NoBitmap`]. This call does not render the bitmap;
+/// which the bars judge, and so is the tile at the pixel a fit refused to walk
+/// a row to, where one is recorded
+/// ([`walked_zncc`](super::track::TrackMeasurement::walked_zncc)); a track
+/// with no bitmap gets no such score, and its rows say
+/// [`Unmeasured::NoBitmap`]. This call does not render the bitmap;
 /// [`evaluate_rendering_bitmap`] does. **The keypoint itself is not written**, nor the position, the frame or
 /// the bitmap: what a reading gives back is the same track with its own account
 /// of itself.
@@ -519,6 +524,10 @@ pub fn evaluate(
 struct KeptTiles {
     /// Per observation that had a pixel to render at: its row and its tile.
     tiles: Vec<(usize, ViewTile)>,
+    /// Per observation a fit refused to walk: its row and its tile at the
+    /// pixel the walk would have reached
+    /// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to)).
+    walked: Vec<(usize, ViewTile)>,
     /// The resolution the tiles were rendered at.
     resolution: usize,
 }
@@ -911,14 +920,15 @@ fn bitmap_from_tile_of(
     let (bitmap, color) = super::fit::column_bitmap(&bitmap_from_tile(tile), resolution, channels);
     let mut next = track.clone();
     super::fit::install_bitmap(&mut next, bitmap, Some(row), Some(color));
-    score_against_bitmap(&mut next, &kept.tiles, progress);
+    score_against_bitmap(&mut next, &kept.tiles, &kept.walked, progress);
     Some(next)
 }
 
 /// Clear every row's scores against the stored bitmap, as a track whose
 /// bitmap is about to be replaced holds them, so the bars leave each row
 /// alone until it is scored against the new one
-/// ([`bar_checks`](super::steps::bar_checks)). A row the localizer read says
+/// ([`bar_checks`](super::steps::bar_checks)). The score of a refused walk's
+/// pixel goes with them. A row the localizer read says
 /// `reason`: [`Unmeasured::NoBitmap`] where the bitmap was dropped,
 /// [`Unmeasured::BitmapPending`] where it is kept until the render.
 pub(super) fn clear_bitmap_scores(track: &mut EditableTrack, reason: Unmeasured) {
@@ -930,7 +940,10 @@ pub(super) fn clear_bitmap_scores(track: &mut EditableTrack, reason: Unmeasured)
             m.blur_matched_zncc = None;
             m.bitmap_blur_sigma = None;
             m.sharper_than_bitmap = None;
-            if m.loo_zncc.is_some() {
+            m.walked_zncc = None;
+            m.walked_zncc_middle = None;
+            m.walked_zncc_grid = None;
+            if m.seed_shift_px.is_some() {
                 m.reason = Some(reason);
             }
         }
@@ -1381,8 +1394,10 @@ fn tile_self_similarity(
 /// plus every other observation in an image none of them holds, which is the
 /// shape the localizer is meant to run over; an
 /// observation in an image that is already spoken for gets a round of its own,
-/// against the `in` observations minus the one whose image it wants, which is
-/// the same leave-one-out question asked about the other hypothesis.
+/// with the `in` observations minus the one whose image it wants, which is
+/// the same question asked about the other hypothesis. Where the one left out
+/// is the reference row, that round's reference is the rule's pick among the
+/// rest.
 pub(super) struct Rounds {
     /// The first round, `in` observations first.
     pub first: Vec<usize>,
@@ -1524,12 +1539,10 @@ pub(super) fn plan_rounds(
 /// What one round's localizer said about one observation, read at the pixel the
 /// observation already sits at.
 struct Reading {
-    /// The leave-one-out ZNCC at the correlation peak.
-    zncc: f64,
-    /// The same reading over the middle of the tile.
-    zncc_middle: f64,
-    /// How far that peak sits from the observation's own keypoint, in
-    /// source-image px.
+    /// How far the correlation peak against the reference render sits from
+    /// the observation's own keypoint, in patch-grid px; `NaN` where the
+    /// localizer had no reference render to align the observation to or
+    /// could not score its tile.
     seed_shift_px: f64,
 }
 
@@ -1605,21 +1618,20 @@ fn evaluate_track(
             let view = &images[observation.image as usize];
             let mut measurement = observation.track.clone().unwrap_or_default();
             let reading = readings.get(&i);
-            measurement.loo_zncc = reading.and_then(|r| finite(r.zncc));
-            measurement.loo_zncc_middle = measurement
-                .loo_zncc
-                .and(reading.and_then(|r| finite(r.zncc_middle)));
             measurement.seed_shift_px = reading.and_then(|r| finite(r.seed_shift_px));
             // The localizer's refusal. Where the localizer read the row, the
             // reason is settled with its score against the bitmap
             // (`score_against_bitmap`).
-            measurement.reason = match measurement.loo_zncc {
+            measurement.reason = match measurement.seed_shift_px {
                 Some(_) => None,
                 None => Some(reasons.get(&i).copied().unwrap_or(Unmeasured::Unscorable)),
             };
             measurement.zncc = None;
             measurement.zncc_middle = None;
             measurement.zncc_grid = None;
+            measurement.walked_zncc = None;
+            measurement.walked_zncc_middle = None;
+            measurement.walked_zncc_grid = None;
             measurement.projection_offset_px = None;
             measurement.reprojection_error = None;
             measurement.ray_angle_deg = None;
@@ -1681,7 +1693,7 @@ fn evaluate_track(
                 measurement.clipped_share = tile.clipped_share;
                 kept_tiles.push((i, tile));
             }
-            if measurement.loo_zncc.is_some() {
+            if measurement.seed_shift_px.is_some() {
                 measured += 1;
             } else {
                 unmeasured += 1;
@@ -1691,15 +1703,17 @@ fn evaluate_track(
         progress_note!(phase, "{} observations", track.observations.len());
     }
     progress.check_cancel()?;
+    let walked = walked_tiles(track, images, &frame, options, progress)?;
     let in_tiles: Vec<(usize, &ViewTile)> = kept_tiles
         .iter()
         .filter(|(i, _)| next.observations[*i].verdict == Verdict::In)
         .map(|(i, tile)| (*i, tile))
         .collect();
     read_reference_view(&mut next, images, &frame, &in_tiles, options, progress);
-    score_against_bitmap(&mut next, &kept_tiles, progress);
+    score_against_bitmap(&mut next, &kept_tiles, &walked, progress);
     let kept = KeptTiles {
         tiles: kept_tiles,
+        walked,
         resolution,
     };
 
@@ -1724,13 +1738,14 @@ fn evaluate_track(
     ))
 }
 
-/// Score one round's observations against each other, where they sit.
+/// Align one round's observations to the reference render, where they sit.
 ///
-/// One round of the localizer: the cores are read at the observations' own
-/// keypoints, each is scored against the leave-one-out consensus of the others,
-/// and the peak of its shift search is where the correlation says it would
-/// rather be. Nothing is written back to the track here -- the peak is reported
-/// as a distance, not taken.
+/// One round of the localizer: the reference is the one [`track_reference`]
+/// names, or the reference-view rule's pick from the renders at the round's
+/// keypoints, its render at its own keypoint is the template, and the peak of
+/// each other observation's shift search against it is where the correlation
+/// says that observation would rather be. Nothing is written back to the track
+/// here -- the peak is reported as a distance, not taken.
 #[allow(clippy::too_many_arguments)]
 fn read_round(
     track: &EditableTrack,
@@ -1744,7 +1759,7 @@ fn read_round(
 ) -> Result<(), EvaluateError> {
     if round.len() < 2 {
         for &i in round {
-            reasons.entry(i).or_insert(Unmeasured::NoConsensus);
+            reasons.entry(i).or_insert(Unmeasured::NoReference);
         }
         return Ok(());
     }
@@ -1790,8 +1805,8 @@ fn read_round(
             continue;
         };
         // The first round's numbers are the ones a row keeps: a contested round
-        // re-reads the `in` observations against a consensus one of them was
-        // left out of, which answers a question about the *other* hypothesis.
+        // re-reads the `in` observations with one of them left out, which
+        // answers a question about the *other* hypothesis.
         if readings.contains_key(&i) {
             continue;
         }
@@ -1804,22 +1819,17 @@ fn read_round(
             Some(seed) => grid_distance(frame, view, seed, peak, &params),
             None => f64::NAN,
         };
-        let zncc = localized.zncc[slot];
-        if !zncc.is_finite() {
-            // The kernel gave the view back without ever scoring it, which is
-            // what it does when too few of the round's views could be read
-            // together for a consensus to exist. The row keeps its distances
-            // and says that, rather than reading as an unexplained blank.
-            reasons.entry(i).or_insert(Unmeasured::NoConsensus);
-        }
-        readings.insert(
-            i,
-            Reading {
-                zncc,
-                zncc_middle: f64::NAN,
-                seed_shift_px: shift,
-            },
-        );
+        let seed_shift_px = if localized.zncc[slot].is_finite() {
+            shift
+        } else {
+            // The kernel gave the view back without scoring it, which is what
+            // it does when there is no reference render to align it to. The
+            // row keeps its other distances and says that, rather than reading
+            // as an unexplained blank.
+            reasons.entry(i).or_insert(Unmeasured::NoReference);
+            f64::NAN
+        };
+        readings.insert(i, Reading { seed_shift_px });
     }
     for &i in round {
         if !readings.contains_key(&i) {
@@ -1829,10 +1839,29 @@ fn read_round(
     Ok(())
 }
 
-/// The position in `round` of the track's reference row, where the round holds
-/// it: the reference the localizer aligns the round's views to.
+/// The position in `round` of the reference the localizer and the sub-pixel
+/// refiner align the round's views to, or `None` for the reference-view rule
+/// to pick one from the renders at the round's keypoints.
+///
+/// It is the reference the track holds ([`TrackPayload::reference`]) where
+/// that row is in the round, `in` and carries a keypoint, and the track's
+/// bitmap is not waiting for the render that hands the reference to the rule
+/// ([`EditableTrack::bitmap_pending`]). So a pinned reference row is the
+/// anchor of every fit and reading, an unpinned one stays the anchor while
+/// the rule's renders keep it, and a reference the person moves with
+/// [`set_reference`](super::steps::set_reference) is the anchor from the next
+/// fit on. A bitmap for judging names no reference
+/// ([`TrackPayload::bitmap_for_judging`]), and neither does this.
 pub(super) fn track_reference(track: &EditableTrack, round: &[usize]) -> Option<usize> {
     let r = track.track()?.reference?;
+    if track.bitmap_pending() {
+        return None;
+    }
+    let row = track.observations.get(r)?;
+    let keyed = row.track.as_ref().is_some_and(|m| m.keypoint.is_some());
+    if row.verdict != Verdict::In || !keyed {
+        return None;
+    }
     round.iter().position(|&i| i == r)
 }
 
@@ -2085,12 +2114,15 @@ fn read_reference_view(
 /// bitmap is the render of ([`TrackPayload::reference`]) scores `1` and is not
 /// computed. A track with no bitmap, or one whose bitmap is not on the tiles'
 /// grid, scores nothing. Every row in `tiles` then has its reason settled
-/// ([`settle_reason`]). Timed as the `bitmap scores` phase of `progress`,
-/// with a note of how many observations had the bitmap blurred and how many
-/// are sharper than it.
+/// ([`settle_reason`]). `walked` holds the tiles at the pixels a fit refused
+/// to walk rows to ([`walked_tiles`]), scored the same way into each row's
+/// `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid`. Timed as the
+/// `bitmap scores` phase of `progress`, with a note of how many observations
+/// had the bitmap blurred and how many are sharper than it.
 fn score_against_bitmap(
     next: &mut EditableTrack,
     tiles: &[(usize, ViewTile)],
+    walked: &[(usize, ViewTile)],
     progress: &Progress<'_>,
 ) {
     let Stage::Track(payload) = &next.stage else {
@@ -2169,6 +2201,17 @@ fn score_against_bitmap(
         blurred += usize::from(score.blur_sigma > 0.0);
         sharper += usize::from(score.sharper_than_bitmap);
     }
+    for (i, tile) in walked {
+        let Some(measurement) = next.observations[*i].track.as_mut() else {
+            continue;
+        };
+        // Only the plain readings are kept: the walk is judged beside the
+        // row's own plain score, the one the bars read.
+        let score = scorer.score(&tile.planes(), None);
+        measurement.walked_zncc = finite(score.zncc);
+        measurement.walked_zncc_middle = measurement.walked_zncc.and(finite(score.zncc_middle));
+        measurement.walked_zncc_grid = measurement.walked_zncc.map(|_| score.zncc_grid);
+    }
     progress_note!(
         phase,
         "{} observations, bitmap blurred for {blurred}, {sharper} sharper than it",
@@ -2184,7 +2227,7 @@ fn score_against_bitmap(
 /// tile's grid, [`Unmeasured::BitmapPending`] where the one it holds waits
 /// for the next render), and [`Unmeasured::Unscorable`] where it had one.
 fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Option<Unmeasured>) {
-    measurement.reason = if measurement.loo_zncc.is_none() {
+    measurement.reason = if measurement.seed_shift_px.is_none() {
         measurement.reason.or(Some(Unmeasured::Unscorable))
     } else if measurement.zncc.is_some() {
         None
@@ -2277,8 +2320,43 @@ pub fn score_bitmap(
             tiles.push((i, tile));
         }
     }
-    score_against_bitmap(&mut next, &tiles, progress);
+    let walked = walked_tiles(track, images, frame, &options, progress)?;
+    score_against_bitmap(&mut next, &tiles, &walked, progress);
     Ok(next)
+}
+
+/// Render the tile at the pixel a fit refused to walk each row to
+/// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to)),
+/// on the grid and with the sampler a reading renders each row's own tile
+/// with, so the two are scored against the bitmap alike. Rows a fit did not
+/// refuse have none; the list is usually empty.
+fn walked_tiles(
+    track: &EditableTrack,
+    images: &[ProjectedImage<'_>],
+    frame: &OrientedPatch,
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) -> Result<Vec<(usize, ViewTile)>, EvaluateError> {
+    let resolution = options.localize.resolution.max(2) as usize;
+    let mut walked = Vec::new();
+    for i in evaluated(track) {
+        let observation = &track.observations[i];
+        let Some(to) = observation.track.as_ref().and_then(|m| m.walked_to) else {
+            continue;
+        };
+        progress.check_cancel()?;
+        let view = &images[observation.image as usize];
+        let tile = render_view_tile(
+            frame,
+            view,
+            Some(to),
+            resolution,
+            options.localize.sampler,
+            progress,
+        );
+        walked.push((i, tile));
+    }
+    Ok(walked)
 }
 
 /// Bring the reference-view readings into line with verdicts that a step has
