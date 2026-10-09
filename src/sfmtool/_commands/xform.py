@@ -3,11 +3,10 @@
 
 """Transform reconstruction command."""
 
-from pathlib import Path
-
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..xform import apply_transforms
 from ..xform._arg_parser import (
     OrderedArgsCommand,
@@ -449,18 +448,11 @@ def xform(ctx, input_path, output_path, **kwargs):
     from .._sfmtool.reconstruction import SfmrReconstruction
 
     raw_input_path, raw_output_path = input_path, output_path
-    input_path = Path(input_path)
+    input_path = check_sfmr_path(input_path, "Input path")
     output_path_provided = output_path is not None
 
-    if input_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(f"Input path must be a .sfmr file, got: {input_path}")
-
     if output_path_provided:
-        output_path = Path(output_path)
-        if output_path.suffix.lower() != ".sfmr":
-            raise click.UsageError(
-                f"Output path must be a .sfmr file, got: {output_path}"
-            )
+        output_path = check_sfmr_path(output_path, "Output path")
     else:
         output_path = auto_output_path(input_path)
 

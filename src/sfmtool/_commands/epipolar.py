@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..visualization._epipolar_display import draw_epipolar_visualization
 from .._filenames import number_from_filename
 from .._sfmr_naming import get_image_hint_message
@@ -193,12 +194,7 @@ def epipolar(
 
         sfm epipolar reconstruction.sfmr --pairs-dir output_dir/
     """
-    reconstruction_path = Path(reconstruction_path)
-
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
 
     pairs_mode = pairs_dir is not None
     single_mode = image1 is not None or image2 is not None or output_path is not None

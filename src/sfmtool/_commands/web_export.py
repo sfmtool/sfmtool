@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 
 
 def _size(n: int) -> str:
@@ -117,10 +118,7 @@ def web_export(
 
     reconstruction_path = Path(reconstruction_path)
     output_dir = Path(output_dir)
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
 
     click.echo(f"Loading reconstruction: {reconstruction_path}")
     try:

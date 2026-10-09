@@ -10,6 +10,7 @@ import click
 import numpy as np
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..sift.file import SiftReader, get_sift_path_for_image
 from ..visualization import render_heatmap_overlay
 from ..visualization._heatmap_renderer import compute_triangulation_angles
@@ -131,10 +132,7 @@ def heatmap(
     output_dir = Path(output_dir)
 
     # Validate .sfmr extension
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
 
     # Determine which metrics to generate
     if metric == "all":

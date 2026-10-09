@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from .._feature_source import require_embedded_patches
 from ..visualization._patch_renderer import MODES, PatchRenderError, render_patches
 
@@ -143,10 +144,7 @@ def render_patches_command(
     reconstruction_path = Path(reconstruction_path)
     output_dir = Path(output_dir)
 
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
 
     if opaque_threshold is not None and not 0.0 <= opaque_threshold <= 1.0:
         raise click.UsageError("--opaque threshold must be between 0 and 1")

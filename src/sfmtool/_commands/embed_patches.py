@@ -5,11 +5,11 @@
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 
 
 @click.command("embed-patches")
@@ -330,16 +330,10 @@ def embed_patches_command(
     from .._workspace_image import read_workspace_image
     from ..xform._arg_parser import auto_output_path
 
-    input_path = Path(input_path)
-    if input_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(f"Input path must be a .sfmr file, got: {input_path}")
+    input_path = check_sfmr_path(input_path, "Input path")
 
     if output_path is not None:
-        output_path = Path(output_path)
-        if output_path.suffix.lower() != ".sfmr":
-            raise click.UsageError(
-                f"Output path must be a .sfmr file, got: {output_path}"
-            )
+        output_path = check_sfmr_path(output_path, "Output path")
     else:
         output_path = auto_output_path(input_path, suffix="embedded")
 

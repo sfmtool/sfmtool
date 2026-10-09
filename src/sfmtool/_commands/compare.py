@@ -3,11 +3,10 @@
 
 """Compare reconstructions command."""
 
-from pathlib import Path
-
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..compare import compare_reconstructions
 from .._sfmtool.reconstruction import SfmrReconstruction
 
@@ -195,17 +194,8 @@ def compare(
 
         sfm compare reconstruction1.sfmr reconstruction2.sfmr
     """
-    recon1_path = Path(reconstruction1)
-    recon2_path = Path(reconstruction2)
-
-    if recon1_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"First reconstruction must be a .sfmr file: {reconstruction1}"
-        )
-    if recon2_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Second reconstruction must be a .sfmr file: {reconstruction2}"
-        )
+    recon1_path = check_sfmr_path(reconstruction1, "First reconstruction path")
+    recon2_path = check_sfmr_path(reconstruction2, "Second reconstruction path")
 
     try:
         recon1 = SfmrReconstruction.load(recon1_path)

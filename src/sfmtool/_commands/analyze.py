@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..analyze.graphs import print_covisibility_graph, print_frustum_intersection_graph
 from ..analyze.depth import print_depth_reliability, print_z_range
 from ..analyze.images import print_images_table
@@ -233,10 +234,7 @@ def analyze(
             f"--far-percentile ({far_percentile})."
         )
 
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
 
     try:
         recon_name = reconstruction_path.name

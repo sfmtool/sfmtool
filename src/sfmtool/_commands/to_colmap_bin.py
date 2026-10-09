@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ._range_options import apply_range_filter, range_options, validate_range_options
 
 
@@ -49,11 +50,8 @@ def to_colmap_bin(
     from ..colmap.io import save_colmap_binary
     from .._sfmtool.reconstruction import SfmrReconstruction
 
-    input_path = Path(input_sfmr)
+    input_path = check_sfmr_path(input_sfmr, "Input path")
     output_path = Path(output_dir)
-
-    if input_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(f"Input must be a .sfmr file: {input_path}")
 
     validate_range_options(range_expr, filter_points)
 

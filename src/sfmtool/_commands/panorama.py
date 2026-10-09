@@ -9,6 +9,7 @@ import click
 from click.core import ParameterSource
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 
 
 @click.command("panorama")
@@ -190,10 +191,7 @@ def panorama(
     if camrig_path is not None:
         camrig_path = Path(camrig_path)
 
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
     if camrig_path is not None:
         if camrig_path.suffix.lower() != ".camrig":
             raise click.UsageError(

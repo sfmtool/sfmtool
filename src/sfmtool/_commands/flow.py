@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..visualization._flow_display import draw_flow_visualization
 
 
@@ -141,11 +142,9 @@ def flow(
     # Load reconstruction if provided
     recon = None
     if reconstruction_path is not None:
-        reconstruction_path = Path(reconstruction_path)
-        if reconstruction_path.suffix.lower() != ".sfmr":
-            raise click.UsageError(
-                f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-            )
+        reconstruction_path = check_sfmr_path(
+            reconstruction_path, "Reconstruction path"
+        )
         from .._sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(reconstruction_path)

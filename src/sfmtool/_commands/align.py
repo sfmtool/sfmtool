@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..align.multi import align_command
 
 
@@ -102,18 +103,9 @@ def align(
             "can only be used with --method points"
         )
 
-    reference_path = Path(reference_sfmr)
-    if reference_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reference reconstruction must be a .sfmr file: {reference_sfmr}"
-        )
+    reference_path = check_sfmr_path(reference_sfmr, "Reference path")
 
-    align_paths = []
-    for p in align_sfmr_paths:
-        path = Path(p)
-        if path.suffix.lower() != ".sfmr":
-            raise click.UsageError(f"Reconstruction path must be a .sfmr file: {p}")
-        align_paths.append(path)
+    align_paths = [check_sfmr_path(p, "Reconstruction path") for p in align_sfmr_paths]
 
     output_dir = Path(output_dir)
 

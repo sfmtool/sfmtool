@@ -3,11 +3,10 @@
 
 """Merge reconstructions command."""
 
-from pathlib import Path
-
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from ..merge.reconstructions import merge_reconstructions
 from .._sfmtool.reconstruction import SfmrReconstruction
 
@@ -56,16 +55,10 @@ def merge(reconstruction_paths, output_path, merge_percentile):
     if len(reconstruction_paths) < 2:
         raise click.UsageError("Need at least 2 reconstructions to merge")
 
-    input_paths = []
-    for p in reconstruction_paths:
-        path = Path(p)
-        if path.suffix.lower() != ".sfmr":
-            raise click.UsageError(f"Reconstruction path must be a .sfmr file: {p}")
-        input_paths.append(path)
-
-    output_path_obj = Path(output_path)
-    if output_path_obj.suffix.lower() != ".sfmr":
-        raise click.UsageError(f"Output path must be a .sfmr file: {output_path}")
+    input_paths = [
+        check_sfmr_path(p, "Reconstruction path") for p in reconstruction_paths
+    ]
+    output_path_obj = check_sfmr_path(output_path, "Output path")
 
     try:
         click.echo("\nLoading reconstructions...")

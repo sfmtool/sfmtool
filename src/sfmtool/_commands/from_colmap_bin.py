@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 
 
 @click.command("from-colmap-bin")
@@ -79,12 +80,7 @@ def from_colmap_bin(
 
     colmap_reconstruction_path = Path(colmap_reconstruction_path)
     image_dir = Path(image_dir)
-    output_sfmr_file = Path(output_sfmr_file)
-
-    if output_sfmr_file.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Output file must have .sfmr extension, got: {output_sfmr_file}"
-        )
+    output_sfmr_file = check_sfmr_path(output_sfmr_file, "Output path")
 
     try:
         click.echo(f"Loading COLMAP reconstruction from: {colmap_reconstruction_path}")

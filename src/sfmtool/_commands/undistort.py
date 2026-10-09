@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._sfmr_path import check_sfmr_path
 from .._undistort_images import undistort_reconstruction_images
 
 
@@ -73,10 +74,7 @@ def undistort(
     reconstruction_path = Path(reconstruction_path)
 
     # Validate .sfmr extension
-    if reconstruction_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(
-            f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
-        )
+    reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
 
     try:
         from .._sfmtool.reconstruction import SfmrReconstruction
