@@ -281,7 +281,7 @@ def test_cluster_patches_piecewise_writes_the_cells(cluster_matches_file: Path):
     import zipfile
     from compression import zstd
 
-    from sfmtool._sfmtool.io import MatchesFile, read_matches, verify_matches
+    from sfmtool.fileio import MatchesFile, read_matches, verify_matches
 
     out_path = cluster_matches_file.with_name("clusters-piecewise.matches")
     result = CliRunner().invoke(

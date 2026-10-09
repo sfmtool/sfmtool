@@ -46,7 +46,7 @@ normatively in
 ## Rust API
 
 The kernel lives in
-[cluster_refine](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs),
+[cluster_refine](../../../crates/sfmtool-core/src/patch/cluster_refine.rs),
 with its parameters and result in
 [params.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/params.rs) and
 the piecewise stage in

@@ -3,7 +3,7 @@
 
 """Rust analysis kernels: reconstruction alignment, point correspondence,
 batch triangulation, image-pair graphs, keypoint reach, observation adjacency
-and coverage, source clusters and the cluster census.
+and coverage, source clusters, the cluster census and cell plane normals.
 
 This module is the public home of the `sfmtool._sfmtool.analysis` bindings.
 It is not the `sfmtool.analyze` subpackage, the Python reconstruction

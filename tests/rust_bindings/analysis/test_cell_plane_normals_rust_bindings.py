@@ -1,13 +1,13 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shapes, dtypes and argument checks of `_sfmtool.analysis.cell_plane_normals`."""
+"""Shapes, dtypes and argument checks of `sfmtool.analysis.cell_plane_normals`."""
 
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import cell_plane_normals
-from sfmtool._sfmtool.geometry import CameraIntrinsics
+from sfmtool.analysis import cell_plane_normals
+from sfmtool.geometry import CameraIntrinsics
 
 _F = 800.0
 _CX, _CY = 320.0, 240.0
