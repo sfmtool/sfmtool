@@ -15,7 +15,7 @@ library or its types.
 
 The index lives in
 [spatial.rs](../../../crates/sfmtool-core/src/spatial.rs), and is exposed to
-Python as `sfmtool._sfmtool.spatial.KdTree2d` / `KdTree3d` (see
+Python as `sfmtool.spatial.KdTree2d` / `KdTree3d` (see
 [Python bindings](#python-bindings)).
 
 ```rust
@@ -166,7 +166,7 @@ a few tens of millions of points.
 
 `KdTree2d` and `KdTree3d`, in
 [spatial/kdtree.rs](../../../crates/sfmtool-py/src/spatial/kdtree.rs) and
-imported from `sfmtool._sfmtool.spatial`. Each is constructed from an
+imported from `sfmtool.spatial`. Each is constructed from an
 `(N, DIM)` numpy array and dispatches on its dtype, holding an `f32` or an
 `f64` cloud accordingly; queries take an `(M, DIM)` array of the same dtype.
 `nearest` returns `(M,) uint32`, `nearest_k` and `nearest_k_within_radius`
@@ -177,7 +177,7 @@ and `dtype()` report what was built.
 
 ```python
 import numpy as np
-from sfmtool._sfmtool.spatial import KdTree3d
+from sfmtool.spatial import KdTree3d
 
 tree = KdTree3d(np.asarray(points, dtype=np.float32))
 offsets, indices = tree.within_radius(queries, radius=0.05)

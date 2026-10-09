@@ -2,7 +2,7 @@
 
 The bench beside a reconstruction, and the things put on it to be worked on.
 Implemented in `crates/sfmtool-core/src/bench/`, bound as
-`sfmtool._sfmtool.bench`.
+`sfmtool.bench`.
 
 | Document | Description |
 |----------|-------------|

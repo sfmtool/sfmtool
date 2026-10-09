@@ -75,8 +75,8 @@ def _angle_deg(a, b) -> float | None:
 
 def ground_truth_reading(dataset, point: int) -> dict:
     """The ground-truth track, put on the bench and evaluated (moves nothing)."""
-    from sfmtool._sfmtool import bench as B
-    from sfmtool._sfmtool.reconstruction import EditedReconstruction
+    from sfmtool import bench as B
+    from sfmtool.reconstruction import EditedReconstruction
 
     edited = EditedReconstruction(dataset.recon)
     _, track = B.create_track(B.Bench(), edited, int(point))

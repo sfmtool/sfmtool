@@ -12,7 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool import web_export as web_export_module
-from sfmtool._sfmtool.io import read_sfmr
+from sfmtool.io import read_sfmr
 from sfmtool.cli import main
 
 from .conftest import SEOUL_BULL_GROUND_TRUTH

@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 from sfmtool._undistort_images import (
     _features_in_frame,

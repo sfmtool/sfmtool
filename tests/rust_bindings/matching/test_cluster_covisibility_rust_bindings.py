@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the cluster-covisibility Rust bindings
-(``sfmtool._sfmtool.matching.ClusterCovisibility``; see
+(``sfmtool.matching.ClusterCovisibility``; see
 ``specs/core/features/cluster-covisibility.md`` and, for the selection queries —
 pair displacement, banded thinning, reach —
 ``specs/core/features/covisibility-selection.md``)."""
@@ -11,8 +11,8 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.io import MatchesFile, write_matches
-from sfmtool._sfmtool.matching import ClusterCovisibility
+from sfmtool.io import MatchesFile, write_matches
+from sfmtool.matching import ClusterCovisibility
 
 
 # ── Fixture data ──────────────────────────────────────────────────────────

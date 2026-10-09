@@ -21,7 +21,7 @@ import pickle
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics
+from sfmtool.geometry import CameraIntrinsics
 
 F = 130.0
 W = H = 480

@@ -36,7 +36,7 @@ import os
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool.flow import compute_optical_flow
+from sfmtool.flow import compute_optical_flow
 
 # Border excluded from every metric: patches that run off the image have no
 # meaningful flow, and including them measures the boundary policy, not the flow.

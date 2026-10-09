@@ -14,7 +14,7 @@ import time
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
 
 @pytest.fixture
@@ -485,7 +485,7 @@ class TestSwitchCameraModel:
         )
 
     def test_a_dipped_spline_is_refitted_under_the_monotone_constraint(self, embedded):
-        from sfmtool._sfmtool.geometry import CameraIntrinsics
+        from sfmtool.geometry import CameraIntrinsics
 
         # A spline whose slope dips close to zero near 113°: monotone, but a
         # twelve-coefficient least-squares refit rings through the dip and
@@ -632,7 +632,7 @@ class TestCameraIntrinsicsRefit:
 
     @staticmethod
     def kerry_cam0():
-        from sfmtool._sfmtool.geometry import CameraIntrinsics
+        from sfmtool.geometry import CameraIntrinsics
 
         return CameraIntrinsics(
             "OPENCV_FISHEYE",

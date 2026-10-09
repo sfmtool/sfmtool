@@ -192,8 +192,8 @@ def pose_error(gt, recon, image: int) -> dict:
 
 
 def evaluate_image(ctx, image: int, strategies, measurements, out):
-    from sfmtool._sfmtool.geometry import resect_images
-    from sfmtool._sfmtool.reconstruction import EditedReconstruction
+    from sfmtool.geometry import resect_images
+    from sfmtool.reconstruction import EditedReconstruction
 
     gt = ctx["gt"]
     name = ctx["names"][image]
@@ -362,8 +362,8 @@ def main():
     ap.add_argument("--strategies", default="all")
     args = ap.parse_args()
 
-    from sfmtool._sfmtool.patches import ImagePyramidSet
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.patches import ImagePyramidSet
+    from sfmtool.reconstruction import SfmrReconstruction
     from sfmtool._workspace_image import read_workspace_image
 
     ds = prepare(args.dataset, args.cache)

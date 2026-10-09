@@ -12,9 +12,9 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool import RangeExpr
-from sfmtool._sfmtool.io import read_sfmr, write_sfmr
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import RangeExpr
+from sfmtool.io import read_sfmr, write_sfmr
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 from sfmtool.xform import IncludeRangeFilter, apply_transforms
 

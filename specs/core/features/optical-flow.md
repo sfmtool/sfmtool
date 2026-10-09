@@ -20,7 +20,7 @@ The flow itself is computed in Rust, in `sfmtool-core`, by an implementation of 
 (Dense Inverse Search) with variational refinement. It runs in parallel on the CPU
 with rayon, and can also run as wgpu compute shaders on a GPU
 ([gpu-optical-flow.md](gpu-optical-flow.md)). Python reaches it through the
-`sfmtool._sfmtool.flow` bindings in `sfmtool-py`.
+`sfmtool.flow` bindings in `sfmtool-py`.
 
 ## Public Rust Interface
 
@@ -258,7 +258,7 @@ densification from sparse patch results.
 
 ### Python Bindings
 
-The Python submodule `sfmtool._sfmtool.flow` exposes:
+The Python submodule `sfmtool.flow` exposes:
 
 - `compute_optical_flow(img_a, img_b, preset, use_gpu)` — returns `(flow_u, flow_v)`
   as two `(H, W)` float32 arrays

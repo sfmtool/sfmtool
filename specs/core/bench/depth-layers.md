@@ -29,7 +29,7 @@ the far-field sweep's `read_patch_along_ray`.
 
 In [`bench/nearby/layers.rs`](../../../crates/sfmtool-core/src/bench/nearby/layers.rs),
 re-exported from `sfmtool_core::bench`, and bound as
-`sfmtool._sfmtool.bench.depth_layers`.
+`sfmtool.bench.depth_layers`.
 
 ```rust
 pub fn depth_layers(

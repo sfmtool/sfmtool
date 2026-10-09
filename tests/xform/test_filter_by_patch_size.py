@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import FilterByPatchSizeTransform
 
 

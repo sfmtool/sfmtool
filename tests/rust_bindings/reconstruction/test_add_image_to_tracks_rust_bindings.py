@@ -13,8 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.patches import ImagePyramidSet
-from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from sfmtool.patches import ImagePyramidSet
+from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 from sfmtool._workspace_image import read_workspace_image
 
 GROUND_TRUTH = (

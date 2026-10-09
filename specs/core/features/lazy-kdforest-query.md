@@ -613,7 +613,7 @@ in-memory `KdForest` it is measured against. Only `uint8` is bound: the Python
 raises `ValueError`, because the file's scalar type does not match.
 
 ```python
-from sfmtool._sfmtool.spatial import (
+from sfmtool.spatial import (
     KdForest, LazyKdForest, write_kdf, kdf_file_summary,
     verify_kdf, verify_sift_sources,
 )

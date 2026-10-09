@@ -13,8 +13,8 @@ from sfmtool.visualization._epipolar_display import (
     _draw_epipolar_line,
     _draw_polyline,
 )
-from sfmtool._sfmtool.analysis import epipolar_curves
-from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion
+from sfmtool.analysis import epipolar_curves
+from sfmtool.geometry import CameraIntrinsics, RotQuaternion
 
 
 # ===== Color Palette Tests =====
@@ -547,7 +547,7 @@ class TestEpipolarE2E:
         import cv2
 
         from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
         sfmr_path = seoul_bull_workspace
@@ -580,7 +580,7 @@ class TestEpipolarE2E:
         import cv2
 
         from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
         sfmr_path = seoul_bull_workspace
@@ -617,7 +617,7 @@ class TestEpipolarE2E:
         import pycolmap
 
         from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
         sfmr_path = seoul_bull_workspace

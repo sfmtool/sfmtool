@@ -17,7 +17,7 @@ every stage.
 
 The kernels live in
 [pose_verification.rs](../../../crates/sfmtool-core/src/geometry/pose_verification.rs),
-bound under `sfmtool._sfmtool.geometry` as `verify_poses` and
+bound under `sfmtool.geometry` as `verify_poses` and
 `repair_poses`; the displacement-neighborhood substrate they read is
 [displacement.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/displacement.rs),
 whose queries and compact array serialization hang off the
@@ -62,8 +62,8 @@ with `posed_indexes`. Both kernels are read-only on the observation data;
 images are independent in both screens and run in parallel.
 
 ```python
-from sfmtool._sfmtool.geometry import verify_poses
-from sfmtool._sfmtool.matching import ClusterCovisibility
+from sfmtool.geometry import verify_poses
+from sfmtool.matching import ClusterCovisibility
 
 cov = ClusterCovisibility.from_arrays(
     cluster_starts, member_images, num_images, positions_xy=member_xy

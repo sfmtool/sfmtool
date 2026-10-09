@@ -108,7 +108,7 @@ class Workload:
     def __init__(self, sfmr_path: str, n_points: int, seed: int):
         import cv2
 
-        from sfmtool._sfmtool import patches, reconstruction
+        from sfmtool import patches, reconstruction
 
         self._patches = patches
         self.recon = reconstruction.SfmrReconstruction.load(sfmr_path)

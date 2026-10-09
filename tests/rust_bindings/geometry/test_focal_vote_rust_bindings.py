@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the structure-free focal-vote Rust bindings
-(``sfmtool._sfmtool.geometry.focal_vote`` and ``estimate_homography``; see
+(``sfmtool.geometry.focal_vote`` and ``estimate_homography``; see
 ``specs/core/geometry/focal-vote.md``).
 
 Synthetic scenes are built in the OpenCV/optical pixel convention (a point in
@@ -20,7 +20,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import estimate_homography, focal_vote
+from sfmtool.geometry import estimate_homography, focal_vote
 
 W, H = 1000, 1000
 F_TRUE = 800.0

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.io import verify_sfmr
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.io import verify_sfmr
 
 from .conftest import load_images
 

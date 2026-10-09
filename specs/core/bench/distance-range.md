@@ -22,7 +22,7 @@ finder moved into core (combined in [nearby-tracks.md](nearby-tracks.md)).
 
 In [`bench/nearby/range.rs`](../../../crates/sfmtool-core/src/bench/nearby/range.rs),
 re-exported from `sfmtool_core::bench`, and bound as
-`sfmtool._sfmtool.bench.distance_range`, `camera_spread` and `classify_range`.
+`sfmtool.bench.distance_range`, `camera_spread` and `classify_range`.
 
 ```rust
 pub fn distance_range(
@@ -138,7 +138,7 @@ for the reference).
 ## Python bindings
 
 ```python
-from sfmtool._sfmtool import bench
+from sfmtool import bench
 
 near, far = bench.distance_range(edited, images, image, (x, y),
                                  [(i, (u, v)), ...], t, tolerance_px=1.0)

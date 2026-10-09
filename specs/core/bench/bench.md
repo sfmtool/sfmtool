@@ -35,7 +35,7 @@ step is pushed as, the Scene tree group and the row each writes), and
 
 The bench lives in
 [bench/mod.rs](../../../crates/sfmtool-core/src/bench/mod.rs), bound as
-`sfmtool._sfmtool.bench.Bench`.
+`sfmtool.bench.Bench`.
 
 ```rust
 pub struct Bench { /* … */ }
@@ -259,7 +259,7 @@ label it already holds is allowed, because the label it collides with is itself;
 
 ## Python bindings
 
-`sfmtool._sfmtool.bench.Bench`. Construct one with `Bench()`; read it with
+`sfmtool.bench.Bench`. Construct one with `Bench()`; read it with
 `len(bench)`, `bench.labels`, `bench.track(label)`, `bench.id(label)` (the
 item's ID as an `int`, or `None` when nothing has that label); change it with
 `bench.discard`, `bench.rename` and `bench.replace`, each of which returns the next bench and
@@ -273,7 +273,7 @@ surface already spends on other things. Import the module and read the calls
 through it.
 
 ```python
-from sfmtool._sfmtool import bench as bench_module
+from sfmtool import bench as bench_module
 
 bench = bench_module.Bench()
 bench, track = bench_module.create_cluster(

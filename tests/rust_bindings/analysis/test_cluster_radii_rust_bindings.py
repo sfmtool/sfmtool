@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the cluster-radius Rust bindings
-(``sfmtool._sfmtool.analysis.cluster_radii`` / ``coarsest_cluster_ids``; see
+(``sfmtool.analysis.cluster_radii`` / ``coarsest_cluster_ids``; see
 ``specs/core/analysis/source-clusters.md``)."""
 
 import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.analysis import cluster_radii, coarsest_cluster_ids
-from sfmtool._sfmtool.io import MatchesFile, write_matches
+from sfmtool.analysis import cluster_radii, coarsest_cluster_ids
+from sfmtool.io import MatchesFile, write_matches
 
 # ── Fixture data ──────────────────────────────────────────────────────────
 

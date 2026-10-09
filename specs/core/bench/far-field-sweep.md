@@ -37,9 +37,9 @@ re-exported from `sfmtool_core::bench`. The direction projection is
 `ViewCamera::project_direction` in
 [`track_at_pixel/neighbourhood.rs`](../../../crates/sfmtool-core/src/bench/track_at_pixel/neighbourhood.rs),
 crate-internal, shared with the track-at-pixel members. The sweep is bound as
-`sfmtool._sfmtool.bench.far_field_sweep` and the patch read, in
+`sfmtool.bench.far_field_sweep` and the patch read, in
 [`patch_read.rs`](../../../crates/sfmtool-py/src/bench/patch_read.rs), as
-`sfmtool._sfmtool.bench.read_patch_along_ray`.
+`sfmtool.bench.read_patch_along_ray`.
 
 ```rust
 pub fn far_field_sweep(
@@ -270,7 +270,7 @@ harness names in brackets.
 ## Python bindings
 
 ```python
-from sfmtool._sfmtool import bench
+from sfmtool import bench
 
 readings = bench.far_field_sweep(edited, images, image, (x, y),
                                  options={"wide": 0.4, "refit": False})

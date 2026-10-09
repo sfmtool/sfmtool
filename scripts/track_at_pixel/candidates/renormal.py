@@ -208,7 +208,7 @@ def nb3d_normal(ctx, xyz, half, to_cam, opts):
 
 
 def camera_views(ctx):
-    from sfmtool._sfmtool import patches
+    from sfmtool import patches
 
     ds = ctx.dataset
     views = getattr(ds, "_camera_views", None)
@@ -240,7 +240,7 @@ def photo_normal(ctx, track, init, to_cam, opts, **kw):
 
 
 def _photo_normal_at(ctx, track, init, to_cam, opts, **kw):
-    from sfmtool._sfmtool import patches
+    from sfmtool import patches
 
     placement = track.placement
     half = float(np.linalg.norm(placement["u_halfvec"])) * opts["photo_scale"]
@@ -341,7 +341,7 @@ def depth_probe(ctx, track, q, pixel, opts, info):
     The one that passes the gates with the highest ``score_track`` wins,
     the track as it stood included.
     """
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     cam = ctx.camera(int(track.observations[q]["image"]))
     best, best_score = track, score_track(track)
@@ -395,7 +395,7 @@ def passes_gates(track, q, pixel, opts) -> bool:
 
 
 def build_track(ctx, image: int, pixel, options: dict | None = None):
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     opts = {**DEFAULTS, **(options or {})}
     try:

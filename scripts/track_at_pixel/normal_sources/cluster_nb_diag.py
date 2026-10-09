@@ -55,7 +55,7 @@ def ang(a, b):
 
 
 def main():
-    from sfmtool._sfmtool import patches
+    from sfmtool import patches
 
     prepared = prepare(sys.argv[1], None, quiet=True)
     ds = DatasetContext(prepared)

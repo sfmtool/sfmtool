@@ -10,7 +10,7 @@ import pycolmap
 
 from sfmtool.feature_match import GeometricFilterConfig, match_image_pair
 from sfmtool.colmap.convention import flip_camera_pose_matrix_s
-from sfmtool._sfmtool.matching import (
+from sfmtool.matching import (
     mutual_best_match_sweep as _rust_mutual_best_match_sweep,
     mutual_best_match_sweep_geometric as _rust_mutual_best_match_sweep_geometric,
     polar_mutual_best_match as _rust_polar_mutual_best_match,
@@ -85,7 +85,7 @@ def _geometric_args(geometric):
     S-flipped (S-only, D3) — the same conversion ``match_registered_images``
     performs at the Rust boundary. Note it is *that* path this mirrors, not
     ``match_image_pair``, which passes its canonical poses to
-    the ``_sfmtool.matching`` binding unflipped and lets Rust convert.
+    the ``sfmtool.matching`` binding unflipped and lets Rust convert.
     """
     aff1, aff2, K1, K2, pose1, pose2, _R_2d, config = geometric
     R1, t1 = flip_camera_pose_matrix_s(pose1.rotation.matrix(), pose1.translation)

@@ -35,7 +35,7 @@ them uncommitted on the bench when `false`
 
 In [`bench/nearby/find.rs`](../../../crates/sfmtool-core/src/bench/nearby/find.rs),
 re-exported from `sfmtool_core::bench`, and bound as
-`sfmtool._sfmtool.bench.find_nearby_tracks`
+`sfmtool.bench.find_nearby_tracks`
 ([`nearby_tracks.rs`](../../../crates/sfmtool-py/src/bench/nearby_tracks.rs)).
 
 ```rust

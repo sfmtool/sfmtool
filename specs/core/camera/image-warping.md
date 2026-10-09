@@ -945,8 +945,8 @@ works out its sampler. Storing `a` beside per-observation readings in the
 Expose the warp map and resampling through `sfmtool-py`:
 
 ```python
-from sfmtool._sfmtool.geometry import CameraIntrinsics
-from sfmtool._sfmtool.flow import WarpMap
+from sfmtool.geometry import CameraIntrinsics
+from sfmtool.flow import WarpMap
 
 # Build a warp map from camera intrinsics
 camera = reconstruction.cameras[0]
@@ -1152,8 +1152,8 @@ a `RigidTransform` built from the same `(quaternion_wxyz, translation_xyz)`
 tuple already stored on reconstruction images:
 
 ```python
-from sfmtool._sfmtool.geometry import RigidTransform
-from sfmtool._sfmtool.flow import WarpMap
+from sfmtool.geometry import RigidTransform
+from sfmtool.flow import WarpMap
 
 src_from_world = RigidTransform.from_wxyz_translation(
     recon.quaternions_wxyz[src_idx].tolist(),

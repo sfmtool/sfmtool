@@ -7,7 +7,7 @@ import click
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import SwitchCameraModelTransform
 from sfmtool.xform._arg_parser import parse_camera_model_params
 
@@ -125,7 +125,7 @@ def test_switch_without_pixels_is_refused(seoul_bull_sfmr_only):
 def test_switch_from_equidistant_fisheye_source(seoul_bull_ground_truth_sfmr, tmp_path):
     """An ``EQUIDISTANT_FISHEYE`` switched to ``SIMPLE_RADIAL_FISHEYE`` fits to
     the same focal with a zero coefficient: the carrier's identical map."""
-    from sfmtool._sfmtool.geometry import CameraIntrinsics
+    from sfmtool.geometry import CameraIntrinsics
 
     source = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
     equidistant = [

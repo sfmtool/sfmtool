@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the pose-verification Rust bindings
-(``sfmtool._sfmtool.geometry.verify_poses`` / ``repair_poses``; see
+(``sfmtool.geometry.verify_poses`` / ``repair_poses``; see
 ``specs/core/geometry/pose-verification.md``).
 
 Synthetic *station* scenes in the canonical camera frame (the camera looks
@@ -18,12 +18,12 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     CameraIntrinsics,
     repair_poses,
     verify_poses,
 )
-from sfmtool._sfmtool.matching import ClusterCovisibility
+from sfmtool.matching import ClusterCovisibility
 
 W, H = 800, 800
 F0 = 700.0

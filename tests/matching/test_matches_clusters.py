@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Round-trip tests for cluster-bearing `.matches` files through the
-`sfmtool._sfmtool.io` bindings (format version 6: `clusters/` +
+`sfmtool.io` bindings (format version 6: `clusters/` +
 `cluster_patches/` sections, pairs-or-clusters backbone, per-image dims, and
 the backbone's own per-member geometry -- one position and one shape per
 member, whose content is the file's stage)."""
@@ -10,7 +10,7 @@ member, whose content is the file's stage)."""
 import numpy as np
 import numpy.testing as npt
 
-from sfmtool._sfmtool.io import read_matches, verify_matches, write_matches
+from sfmtool.io import read_matches, verify_matches, write_matches
 
 
 def _base_metadata() -> dict:

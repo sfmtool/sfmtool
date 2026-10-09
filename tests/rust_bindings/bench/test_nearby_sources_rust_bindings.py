@@ -16,9 +16,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import bench
-from sfmtool._sfmtool.patches import ImagePyramidSet
-from sfmtool._sfmtool.reconstruction import EditedReconstruction
+from sfmtool import bench
+from sfmtool.patches import ImagePyramidSet
+from sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)
     descriptor_index,
@@ -103,7 +103,7 @@ def sift_paths(embedded):  # noqa: F811
 
 @pytest.fixture(scope="module")
 def sources(embedded, descriptor_index):  # noqa: F811
-    from sfmtool._sfmtool.io import MatchesFile
+    from sfmtool.io import MatchesFile
 
     forest, _ = descriptor_index
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))

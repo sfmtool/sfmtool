@@ -35,8 +35,8 @@ def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
     pose break between frame 10 and frame 11.
     """
     from sfmtool._filenames import number_from_filename
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-    from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
+    from sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.geometry import RotQuaternion, Se3Transform
 
     recon = SfmrReconstruction.load(sfmr_path)
     image_names = recon.image_names
@@ -120,7 +120,7 @@ def test_recon_with_no_discontinuity_emits_single_full_length_segment(
 ):
     """An unmodified, smooth reconstruction has no discontinuities and one
     segment covering the whole sequence."""
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
@@ -140,7 +140,7 @@ def test_recon_thresholds_block_matches_module_constants(
     """The top-level thresholds block echoes the analyzer's module-level
     constants and the resolved per-sequence threshold is derived from
     median_trans."""
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
@@ -186,7 +186,7 @@ def test_recon_json_flags_cov_on_infinite_overlap_drop():
     needs 3*OVERLAP_WINDOW (48) frames before overlap-drop is computed at all,
     which the checked-in datasets don't reach.
     """
-    from sfmtool._sfmtool.geometry import RotQuaternion
+    from sfmtool.geometry import RotQuaternion
     from sfmtool.motion.report import reconstruction_results_to_json
 
     identity = RotQuaternion(1.0, 0.0, 0.0, 0.0)

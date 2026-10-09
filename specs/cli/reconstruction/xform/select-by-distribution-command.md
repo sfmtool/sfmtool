@@ -260,7 +260,7 @@ the observer-thinning gate should be one knob or two.
   `src/sfmtool/_pose_math.py`. A unit's viewing ray toward point `p` is `(positions[p] − center)`
   normalized; the angle between two rays is `arccos` of their clamped dot product.
 - The "nearest well-covered point" queries use `KdTree3d` from the `sfmtool-core` spatial index
-  (exposed as `sfmtool._sfmtool.spatial`). The tree over `Cov(S)` is rebuilt from scratch on each
+  (exposed as `sfmtool.spatial`). The tree over `Cov(S)` is rebuilt from scratch on each
   farthest-point step, and every candidate target is queried against it in one batch.
 - Comfortable at hundreds of thousands of images: the per-unit/per-point incremental state is small;
   the one big structure is the static observation adjacency.

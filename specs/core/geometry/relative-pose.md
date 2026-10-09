@@ -41,7 +41,7 @@ never `z > 0`.
 
 The estimators live in
 [relative_pose.rs](../../../crates/sfmtool-core/src/geometry/relative_pose.rs),
-bound as `sfmtool._sfmtool.geometry.estimate_essential_rays` and
+bound as `sfmtool.geometry.estimate_essential_rays` and
 `fit_ray_rotation` by
 [relative_pose.rs](../../../crates/sfmtool-py/src/geometry/relative_pose.rs).
 

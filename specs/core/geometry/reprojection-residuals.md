@@ -87,7 +87,7 @@ helpers.
 
 `reprojection_residuals` and `inlier_fraction` live in
 [reprojection.rs](../../../crates/sfmtool-core/src/geometry/reprojection.rs),
-bound under `sfmtool._sfmtool.geometry` by
+bound under `sfmtool.geometry` by
 [reprojection.rs](../../../crates/sfmtool-py/src/geometry/reprojection.rs).
 
 ```python

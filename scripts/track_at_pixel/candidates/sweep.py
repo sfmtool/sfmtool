@@ -120,7 +120,7 @@ def surface_hypotheses(ctx, image: int, pixel, opts: dict) -> list[dict]:
 
 
 def build_track(ctx, image: int, pixel, options: dict | None = None):
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     opts = {**DEFAULTS, **(options or {})}
     pixel = (float(pixel[0]), float(pixel[1]))

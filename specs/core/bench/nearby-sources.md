@@ -36,7 +36,7 @@ guided matching in
 [`guided.rs`](../../../crates/sfmtool-core/src/bench/nearby/guided.rs) and the
 constellation in
 [`constellation.rs`](../../../crates/sfmtool-core/src/bench/nearby/constellation.rs),
-bound as `sfmtool._sfmtool.bench.nearby_points`, `nearby_cluster_tracks`,
+bound as `sfmtool.bench.nearby_points`, `nearby_cluster_tracks`,
 `guided_matches` and `constellation_seeds`.
 The triangulation the sources share is
 [`triangulate.rs`](../../../crates/sfmtool-core/src/bench/nearby/triangulate.rs),
@@ -355,7 +355,7 @@ Each source's options are a struct whose defaults are the harness's
 ## Python bindings
 
 ```python
-from sfmtool._sfmtool import bench
+from sfmtool import bench
 
 anchors = bench.nearby_points(edited, images, image, (x, y),
                               options={"radius_px": 40.0, "max_points": 8})

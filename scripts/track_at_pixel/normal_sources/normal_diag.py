@@ -72,7 +72,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--photo", default="1,2,3")
     args = ap.parse_args()
-    from sfmtool._sfmtool import patches
+    from sfmtool import patches
 
     prepared = prepare(args.dataset, None, quiet=True)
     ds = DatasetContext(prepared)

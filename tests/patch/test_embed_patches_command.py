@@ -24,8 +24,8 @@ from sfmtool._patch_compaction import (
     image_file_hashes_from_images,
     image_file_hashes_from_sift,
 )
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.io import verify_sfmr
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.io import verify_sfmr
 from sfmtool.cli import main
 
 from ..conftest import assert_references_name_track_observations
@@ -204,7 +204,7 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
     Spy on PatchCloud.refine_normals to capture the flag the pipeline passes."""
     import cv2
 
-    from sfmtool._sfmtool.patches import PatchCloud
+    from sfmtool.patches import PatchCloud
 
     captured: dict = {}
     orig = PatchCloud.refine_normals

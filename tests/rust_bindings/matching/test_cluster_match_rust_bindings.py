@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.matching import (
+from sfmtool.matching import (
     background_floor_clusters,
     clusters_to_pair_matches,
 )

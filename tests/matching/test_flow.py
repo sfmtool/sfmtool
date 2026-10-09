@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.flow import compute_optical_flow as _rust_compute_optical_flow
+from sfmtool.flow import compute_optical_flow as _rust_compute_optical_flow
 from sfmtool.feature_match._flow_matching import _flow_match_pair, flow_match_sequential
 from sfmtool.visualization._common import get_color_palette
 from sfmtool.visualization._flow_display import (
@@ -188,7 +188,7 @@ class TestResolveReconImageIndex:
             _resolve_recon_image_index(self.RIG_NAMES, workspace, outside)
 
     def test_kerry_park_rig_sensors(self):
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
 
         workspace = (
             Path(__file__).resolve().parents[2] / "test-data" / "images" / "kerry_park"

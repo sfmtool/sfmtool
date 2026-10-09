@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cross-validate the sfmtool Rust SIFT against a reference detector (COLMAP or OpenCV).
 
-The sfmtool detector is the Rust `sfmtool._sfmtool.extract_sift` binding; the
+The sfmtool detector is the Rust `sfmtool.sift.extract_sift` binding; the
 reference is one of the project's existing extraction backends
 (`sfmtool.sift.extract_colmap` / `extract_opencv`). Both report keypoints in the
 same conventions — COLMAP pixel-center coordinates and a 2x2 affine-shape matrix
@@ -69,7 +69,7 @@ def extract_rust(image_path: Path):
     """Run the sfmtool Rust SIFT on an RGB image; returns (positions, affine, desc)."""
     import cv2
 
-    from sfmtool._sfmtool.sift import extract_sift as rust_extract_sift
+    from sfmtool.sift import extract_sift as rust_extract_sift
 
     bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if bgr is None:

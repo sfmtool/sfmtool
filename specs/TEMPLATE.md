@@ -109,7 +109,7 @@ right, `{ /* … */ }` is noise.
 **This section leads with the code pointer** — one sentence saying where the
 thing lives and what it is bound as, e.g. "The kernels live in
 [foo.rs](../../../crates/sfmtool-core/src/geometry/foo.rs), bound as
-`sfmtool._sfmtool.geometry.foo`." Not a stamp at the top of the file: a reader
+`sfmtool.geometry.foo`." Not a stamp at the top of the file: a reader
 who has not decided to call anything does not need it yet. Write every repo path
 as a relative Markdown link, so it is clickable on GitHub and in an editor and so
 a moved file shows up as a broken link; binding names are code spans, not links,

@@ -433,7 +433,7 @@ pipelining](../../cli/image-feature/sift-command.md#extraction-orchestration-pip
 
 The detector and descriptor live in
 [features/sift/](../../../crates/sfmtool-core/src/features/sift), bound as
-`sfmtool._sfmtool.sift` by
+`sfmtool.sift` by
 [extract.rs](../../../crates/sfmtool-py/src/sift/extract.rs) and driven by the
 `sfmtool` backend of `sfm sift` and `ws init --feature-tool sfmtool`; the
 implementation is CPU-only, SIMD and rayon rather than compute shaders, and it

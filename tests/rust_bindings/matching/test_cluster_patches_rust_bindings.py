@@ -7,7 +7,7 @@ end-to-end, dict schema/dtypes, and input validation."""
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.matching import refine_cluster_patches
+from sfmtool.matching import refine_cluster_patches
 
 # sfmtool_matches_format::ClusterMemberStatus discriminants.
 STATUS_REFERENCE = 0
@@ -166,7 +166,7 @@ class TestRefineClusterPatches:
         assert result["member_status"][1] == STATUS_REJECTED_LOW_ZNCC
 
     def test_progress_counter_ticks(self):
-        from sfmtool._sfmtool import ProgressCounter
+        from sfmtool import ProgressCounter
 
         images, pos, aff, starts, m_img, m_feat = _inputs()
         counter = ProgressCounter()

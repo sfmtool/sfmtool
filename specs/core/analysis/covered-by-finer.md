@@ -26,7 +26,7 @@ the neighbourhood enumeration underneath it is
 
 The rule lives in
 [covered_by_finer.rs](../../../crates/sfmtool-core/src/analysis/covered_by_finer.rs),
-bound as `sfmtool._sfmtool.analysis.covered_by_finer`.
+bound as `sfmtool.analysis.covered_by_finer`.
 
 ```rust
 /// One row per observation, over whatever set of them the caller tracks.
@@ -213,7 +213,7 @@ Defined by `CoveredOptions::default()` in
 
 ## Python bindings
 
-`sfmtool._sfmtool.analysis.covered_by_finer(image_of_row, owner_of_row, xy_px,
+`sfmtool.analysis.covered_by_finer(image_of_row, owner_of_row, xy_px,
 reach_px, radius_px, n_owners, *, ratio=2.0, min_fine_radius_px=0.0,
 min_observations=2, protected=None)`.
 
@@ -227,7 +227,7 @@ Returns a dict with `flagged`, `keep_row` and `keep_owner` as `bool` arrays and
 surrounding NumPy code already uses for that quantity.
 
 ```python
-from sfmtool._sfmtool.analysis import covered_by_finer
+from sfmtool.analysis import covered_by_finer
 
 out = covered_by_finer(image_of_row, owner_of_row, xy_px, reach_px, radius_px,
                        n_owners, min_fine_radius_px=1.0)

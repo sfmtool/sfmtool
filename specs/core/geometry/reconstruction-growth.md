@@ -197,7 +197,7 @@ the staged bundle adjustment ([bundle-adjustment.md](bundle-adjustment.md)),
 and cluster covisibility
 ([cluster-covisibility.md](../features/cluster-covisibility.md)).
 
-`sfmtool._sfmtool.geometry.grow_reconstruction(cluster_indexes,
+`sfmtool.geometry.grow_reconstruction(cluster_indexes,
 image_indexes, positions_xy, camera, quaternions_wxyz, translations,
 posed_indexes, *, ba_window=0, anchor_every=0, ba_cluster_cap=0,
 min_obs=8, accept_gate=0.35, seed=0, free_points_cross=True)` (its dict

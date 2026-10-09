@@ -12,7 +12,7 @@ directions around a point are still open. See specs/core/analysis/observation-co
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import ObservationCoverage
+from sfmtool.analysis import ObservationCoverage
 
 # A query point on a 21x21-cell grid at 1 px cells, offset from every cell
 # center so no displacement to a center is axis-aligned: with four sectors the

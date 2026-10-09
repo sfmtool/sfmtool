@@ -18,8 +18,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.patches import CameraViews, PatchCloud
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import CameraViews, PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
 
 from .conftest import load_images, sample_point_ids
 

@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 from sfmtool import resample_atlas_to_equirect
-from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion, Se3Transform
-from sfmtool._sfmtool.spherical import SphericalTileRig
+from sfmtool.geometry import CameraIntrinsics, RotQuaternion, Se3Transform
+from sfmtool.spherical import SphericalTileRig
 
 
 def _equirect(width: int, height: int) -> CameraIntrinsics:

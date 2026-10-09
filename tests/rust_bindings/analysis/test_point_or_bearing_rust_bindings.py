@@ -13,7 +13,7 @@ specs/core/reconstruction/batch-triangulation-api.md § "Point or bearing".
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import (
+from sfmtool.analysis import (
     DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
     DEFAULT_POINT_FIT_MAX_ITERATIONS,
     DEFAULT_SOFT_L1_SCALE,
@@ -21,8 +21,8 @@ from sfmtool._sfmtool.analysis import (
     fit_point_and_bearing_batch,
     observed_rays,
 )
-from sfmtool._sfmtool.geometry import CameraIntrinsics
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import CameraIntrinsics
+from sfmtool.reconstruction import SfmrReconstruction
 
 SCORE_KEYS = {
     "scored",

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from sfmtool._pose_math import camera_centers
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
     BundleAdjustTransform,
     RemoveShortTracksFilter,

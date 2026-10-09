@@ -57,7 +57,7 @@ estimation from data; that one is derivation from poses.
 
 The solvers and the robust estimator live in
 [epipolar_estimation.rs](../../../crates/sfmtool-core/src/geometry/epipolar_estimation.rs),
-bound as `sfmtool._sfmtool.geometry.estimate_fundamental` and
+bound as `sfmtool.geometry.estimate_fundamental` and
 `focal_from_fundamental`.
 
 ```rust
@@ -235,7 +235,7 @@ refinement.
 
 ## Bindings
 
-`sfmtool._sfmtool.geometry.estimate_fundamental`:
+`sfmtool.geometry.estimate_fundamental`:
 
 ```python
 estimate_fundamental(
@@ -252,7 +252,7 @@ estimate_fundamental(
 # {"f_matrix": (3, 3) float64, "inliers": (N,) bool, "iterations": int}
 ```
 
-`sfmtool._sfmtool.geometry.focal_from_fundamental`:
+`sfmtool.geometry.focal_from_fundamental`:
 
 ```python
 focal_from_fundamental(

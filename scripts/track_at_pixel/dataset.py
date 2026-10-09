@@ -60,7 +60,7 @@ def prepare(
     quiet: bool = False,
 ) -> PreparedDataset:
     """Copy the ground truth into a writable workspace, extract SIFT, build the index."""
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     gt = Path(DATASETS.get(name_or_path, name_or_path)).resolve()
     if not gt.is_file():
@@ -148,7 +148,7 @@ def read_keypoints(workspace: Path, image_name: str):
 
 def _build_kdf(workspace: Path, names: list[str], config: dict, out: Path) -> None:
     """One corpus image per reconstruction image, in the reconstruction's order."""
-    from sfmtool._sfmtool.spatial import KdForest, write_kdf
+    from sfmtool.spatial import KdForest, write_kdf
     from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 
     descriptors, positions, shapes, image_of, feature_of = [], [], [], [], []
@@ -216,8 +216,8 @@ def _build_cluster_patches(
     from types import SimpleNamespace
 
     from sfmtool._cluster_patches import _run_cluster_patches
-    from sfmtool._sfmtool.io import read_sift_metadata
-    from sfmtool._sfmtool.matching import background_floor_clusters_kdf
+    from sfmtool.io import read_sift_metadata
+    from sfmtool.matching import background_floor_clusters_kdf
     from sfmtool.feature_match._run import _write_clusters_matches
     from sfmtool.sift.file import get_sift_path_for_image
 

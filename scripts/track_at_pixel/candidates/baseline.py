@@ -114,7 +114,7 @@ def _size_by_sampling_ratio(ctx, track, opts: dict, diag: dict):
     re-reads every view at the new size, and the change is kept only if the
     refit succeeds.
     """
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     scales = ctx.texel_scales(track)
     if not scales:
@@ -152,8 +152,8 @@ def _size_by_sampling_ratio(ctx, track, opts: dict, diag: dict):
 def build_track(
     ctx, image: int, pixel, options: dict | None = None
 ) -> TrackAtPixelResult:
-    from sfmtool._sfmtool import bench as B
-    from sfmtool._sfmtool.spatial import radius_for_feature_count
+    from sfmtool import bench as B
+    from sfmtool.spatial import radius_for_feature_count
 
     opts = {**DEFAULTS, **(options or {})}
     pixel = (float(pixel[0]), float(pixel[1]))

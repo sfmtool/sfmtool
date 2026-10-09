@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the ray-space two-view Rust bindings
-(``sfmtool._sfmtool.geometry.estimate_essential_rays`` / ``fit_ray_rotation``).
+(``sfmtool.geometry.estimate_essential_rays`` / ``fit_ray_rotation``).
 
 The estimators consume unit rays, so a field of view past 180 degrees is
 ordinary input: every fixture here plants a substantial share of its
@@ -14,7 +14,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import estimate_essential_rays, fit_ray_rotation
+from sfmtool.geometry import estimate_essential_rays, fit_ray_rotation
 
 
 def rodrigues(rotvec):

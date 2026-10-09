@@ -15,15 +15,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.io import (
+from sfmtool.io import (
     POINT_CONSTRAINT_NAMES,
     read_sfmr,
     read_sfmr_metadata,
     verify_sfmr,
     write_sfmr,
 )
-from sfmtool._sfmtool.patches import PatchCloud
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
 
 # Every numpy-array key `read_sfmr` emits. Optional columns are `None` when the
 # file does not carry them.

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the affine-factorization Rust bindings
-(``sfmtool._sfmtool.geometry.factorize_affine``; see
+(``sfmtool.geometry.factorize_affine``; see
 ``specs/core/geometry/affine-factorization.md``).
 
 The parity tests compare the bindings against a numpy reference
@@ -22,7 +22,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     AffineFactorization,
     MetricHypothesis,
     factorize_affine,

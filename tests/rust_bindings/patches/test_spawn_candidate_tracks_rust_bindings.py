@@ -14,8 +14,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics
-from sfmtool._sfmtool.patches import (
+from sfmtool.geometry import CameraIntrinsics
+from sfmtool.patches import (
     CameraViews,
     ImagePyramidSet,
     PatchCloud,

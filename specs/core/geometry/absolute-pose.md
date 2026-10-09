@@ -63,7 +63,7 @@ pycolmap's `estimate_and_refine_absolute_pose`
 
 The solver and estimator live in
 [absolute_pose.rs](../../../crates/sfmtool-core/src/geometry/absolute_pose.rs),
-bound as `sfmtool._sfmtool.geometry.p3p_solve` and `estimate_absolute_pose`;
+bound as `sfmtool.geometry.p3p_solve` and `estimate_absolute_pose`;
 the pixel-reprojection refiner is
 [pose_refine.rs](../../../crates/sfmtool-core/src/geometry/pose_refine.rs),
 bound as `refine_absolute_pose`.
@@ -254,7 +254,7 @@ attraction and improves it.
 
 ## Bindings
 
-`sfmtool._sfmtool.geometry.estimate_absolute_pose`:
+`sfmtool.geometry.estimate_absolute_pose`:
 
 ```python
 estimate_absolute_pose(
@@ -281,7 +281,7 @@ derives the angular threshold from the camera's mean focal length. With
 `camera`; with neither, the binding raises `ValueError`. The returned pose
 is canonical world-to-camera, matching `.sfmr` reconstructions.
 
-`sfmtool._sfmtool.geometry.refine_absolute_pose`:
+`sfmtool.geometry.refine_absolute_pose`:
 
 ```python
 refine_absolute_pose(

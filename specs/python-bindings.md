@@ -26,7 +26,7 @@ text name the public location. Only three names are registered at the root:
 [`sfmtool/__init__.py`](../src/sfmtool/__init__.py) imports the three root names
 and re-exports every submodule except `bench` with `from
 sfmtool._sfmtool.<sub> import *`, so most bindings are also reachable as
-`sfmtool.<name>`. `bench` is imported as `sfmtool._sfmtool.bench` and read as
+`sfmtool.<name>`. `bench` is imported as `sfmtool.bench` and read as
 `bench.commit(…)`, because its function names (`commit`, `split`, `fit`) name
 steps on a track and would read as something else on the flat surface.
 

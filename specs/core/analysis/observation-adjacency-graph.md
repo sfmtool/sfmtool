@@ -89,7 +89,7 @@ deterministic.
 
 The builder lives in
 [observation_adjacency.rs](../../../crates/sfmtool-core/src/analysis/observation_adjacency.rs),
-bound as `sfmtool._sfmtool.analysis.build_observation_adjacency`.
+bound as `sfmtool.analysis.build_observation_adjacency`.
 
 ```rust
 pub struct ObservationAdjacencyParams {

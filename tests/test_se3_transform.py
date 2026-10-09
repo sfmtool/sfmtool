@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
+from sfmtool.geometry import RotQuaternion, Se3Transform
 
 
 class TestFromAxisAngle:

@@ -19,8 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
 
 from ..conftest import points_with_past_90_candidate
 from .conftest import load_images, rotation_matrices, sample_point_ids
@@ -51,7 +51,7 @@ def _geometric_candidate_set(recon, pid: int, patch, point_xyz: np.ndarray) -> s
     rejected. It is only an approximation of the Rust gate — this Python recompute
     can disagree at sub-pixel frame/cheirality boundaries — so it must not be used
     for a strict per-point subset assertion."""
-    from sfmtool._sfmtool.geometry import RigidTransform
+    from sfmtool.geometry import RigidTransform
 
     cams = recon.cameras
     cam_idx = np.asarray(recon.camera_indexes)

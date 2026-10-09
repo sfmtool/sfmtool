@@ -21,7 +21,7 @@ import zipfile
 
 import numpy as np
 
-from sfmtool._sfmtool.io import verify_matches, write_matches
+from sfmtool.io import verify_matches, write_matches
 
 
 def _pairwise_data(

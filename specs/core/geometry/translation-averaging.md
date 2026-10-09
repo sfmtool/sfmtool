@@ -199,7 +199,7 @@ the same bytes.
 The operations live in
 [translation_averaging.rs](../../../crates/sfmtool-core/src/geometry/translation_averaging.rs)
 and are bound in the geometry module of the bindings, under
-`sfmtool._sfmtool.geometry`, as four functions taking NumPy arrays and
+`sfmtool.geometry`, as four functions taking NumPy arrays and
 returning NumPy arrays and a census dict:
 
 - `average_translations(edges, directions, weights, lengths=None,

@@ -9,7 +9,7 @@ bitmap alone blurred. See ``specs/core/patch/blur-matched-zncc.md``."""
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.patches import (
+from sfmtool.patches import (
     assess_blur,
     blur_sigma_to_reach,
     blur_to_length,

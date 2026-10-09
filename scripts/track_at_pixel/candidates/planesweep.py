@@ -186,7 +186,7 @@ def sweep(ctx, image: int, pixel, radius_px: float, opts: dict, depths=None):
 
 
 def build_track(ctx, image: int, pixel, options: dict | None = None):
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     opts = {**DEFAULTS, **(options or {})}
     pixel = (float(pixel[0]), float(pixel[1]))

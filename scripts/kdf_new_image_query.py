@@ -34,8 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool import build_profile
-from sfmtool._sfmtool.spatial import KdForest, LazyKdForest, read_kdf, write_kdf
+from sfmtool import build_profile
+from sfmtool.spatial import KdForest, LazyKdForest, read_kdf, write_kdf
 from sfmtool.sift.file import SiftReader
 
 KIB = 1 << 10

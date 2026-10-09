@@ -48,7 +48,7 @@ the shared finish in
 [`track_at_pixel/finish.rs`](../../../crates/sfmtool-core/src/bench/track_at_pixel/finish.rs)
 and the neighbourhood queries in
 [`track_at_pixel/neighbourhood.rs`](../../../crates/sfmtool-core/src/bench/track_at_pixel/neighbourhood.rs).
-It is bound as `sfmtool._sfmtool.bench.build_track_at_pixel`.
+It is bound as `sfmtool.bench.build_track_at_pixel`.
 
 ```rust
 pub fn build_track_at_pixel(
@@ -370,7 +370,7 @@ decides which side; the harness found one such query in 1277.
 
 ## Python bindings
 
-`sfmtool._sfmtool.bench` holds the binding
+`sfmtool.bench` holds the binding
 ([`sfmtool-py/src/bench/track_at_pixel.rs`](../../../crates/sfmtool-py/src/bench/track_at_pixel.rs)):
 
 - `TrackAtPixelSources(edited, forest, keypoints, matches)` builds the sources
@@ -396,7 +396,7 @@ decides which side; the harness found one such query in 1277.
   `reason` and `diagnostics` (`{"refusals": [...]}` when every member refused).
 
 ```python
-from sfmtool._sfmtool import bench
+from sfmtool import bench
 
 sources = bench.TrackAtPixelSources(edited, forest, keypoints, matches)
 try:

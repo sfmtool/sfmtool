@@ -11,7 +11,7 @@ imaged surface. See specs/core/analysis/observation-adjacency-graph.md.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import build_observation_adjacency
+from sfmtool.analysis import build_observation_adjacency
 
 _KEYS = {
     "offsets",

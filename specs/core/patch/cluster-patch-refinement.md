@@ -551,7 +551,7 @@ float64, `member_zncc` `(M,)` float32, `member_zncc_middle` `(M,)` float32,
 computed inside the same call.
 
 ```python
-from sfmtool._sfmtool.matching import refine_cluster_patches
+from sfmtool.matching import refine_cluster_patches
 
 out = refine_cluster_patches(
     images, positions, affine_shapes,

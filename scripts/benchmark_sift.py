@@ -268,7 +268,7 @@ def main() -> None:
     )
     dataset_names = list(DATASETS) if args.dataset == "all" else [args.dataset]
 
-    from sfmtool._sfmtool import build_profile
+    from sfmtool import build_profile
 
     profile = build_profile()
     check_build_profile(profile, "sfmtool" in backends, allow_debug=args.allow_debug)

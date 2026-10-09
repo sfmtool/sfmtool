@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
 
 from .conftest import load_images, sample_point_ids
 
@@ -178,7 +178,7 @@ def test_stored_keypoints_at_reprojection_match_centered(
     # mis-keyed (point/image) binding map would anchor on the WRONG 3D point and
     # diverge sharply — something `differs_from_centered` (any nonzero offset
     # perturbs normals) cannot detect.
-    from sfmtool._sfmtool.geometry import RigidTransform
+    from sfmtool.geometry import RigidTransform
 
     sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)

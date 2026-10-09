@@ -239,7 +239,7 @@ images — is the recommended path for those cameras.
 
 ## PyO3 Binding
 
-Exposed as `sfmtool._sfmtool.epipolar_curves` by the
+Exposed as `sfmtool.analysis.epipolar_curves` by the
 [PyO3 binding](../../../crates/sfmtool-py/src/analysis/epipolar.rs):
 
 ```python

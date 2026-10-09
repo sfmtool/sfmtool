@@ -52,8 +52,7 @@ which count the clusters each image pair shares; they are specified in
 [cluster-covisibility.md](cluster-covisibility.md) and
 [covisibility-selection.md](covisibility-selection.md), not here. The bindings
 are in [`matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs),
-registered on `sfmtool._sfmtool.matching` and re-exported at the top level of
-the `sfmtool` package. The Python matcher layer is
+bound as `sfmtool.matching`. The Python matcher layer is
 [`_cluster_matching.py`](../../../src/sfmtool/feature_match/_cluster_matching.py),
 and the orchestration for `sfm match --cluster` is in
 [`_run.py`](../../../src/sfmtool/feature_match/_run.py).
@@ -125,7 +124,7 @@ let pairs = clusters_to_pair_matches(&clusters, corpus.view(), &image_starts);
 
 ### Python
 
-`sfmtool._sfmtool.matching` binds three functions, each returning numpy arrays:
+`sfmtool.matching` binds three functions, each returning numpy arrays:
 
 | Function | Returns |
 | -------- | ------- |

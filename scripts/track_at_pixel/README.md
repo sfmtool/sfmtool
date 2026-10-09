@@ -956,7 +956,7 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Sub-pixel refinement against the consensus | `PatchCloud.refine_keypoints` |
 | Normal refinement | `PatchCloud.refine_normals` |
 | Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |
-| ZNCC self-similarity radius | `sfmtool._sfmtool.patches.zncc_self_similarity_parts` (one bitmap), `zncc_self_similarity_parts_stack` (a stack) |
+| ZNCC self-similarity radius | `sfmtool.patches.zncc_self_similarity_parts` (one bitmap), `zncc_self_similarity_parts_stack` (a stack) |
 | Adjacency-surfel normals | `analysis.estimate_adjacency_surfel_normals` |
 | Cluster refinement | `matching.refine_cluster_patches` |
 

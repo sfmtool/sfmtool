@@ -6,15 +6,15 @@
 import numpy as np
 from click.testing import CliRunner
 
-from sfmtool import RangeExpr
+from sfmtool.reconstruction import RangeExpr
 from sfmtool.align.multi import (
     _build_connectivity_graph,
     _find_shared_images,
     _get_reconstruction_images,
     align_reconstructions,
 )
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.geometry import Se3Transform
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import Se3Transform
 from sfmtool.cli import main
 from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transforms
 

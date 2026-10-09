@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
 
 from .conftest import load_images, sample_point_ids
 
@@ -478,7 +478,7 @@ def test_refine_normals_image_pyramid_set_matches_list(
     output is identical, and both build-time and call-time validation fire."""
     import pytest
 
-    from sfmtool._sfmtool.patches import ImagePyramidSet
+    from sfmtool.patches import ImagePyramidSet
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)

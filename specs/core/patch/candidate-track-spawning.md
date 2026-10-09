@@ -83,7 +83,7 @@ underlying kernels are deterministic and candidates are independent.
 
 The primitive lives in
 [spawn.rs](../../../crates/sfmtool-core/src/patch/spawn.rs), bound as
-`sfmtool._sfmtool.patches.spawn_candidate_tracks`.
+`sfmtool.patches.spawn_candidate_tracks`.
 
 ```rust
 pub struct SpawnParams {

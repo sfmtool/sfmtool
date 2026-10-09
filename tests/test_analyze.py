@@ -9,7 +9,7 @@ import numpy as np
 
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 
 

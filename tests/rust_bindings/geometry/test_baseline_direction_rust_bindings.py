@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the baseline-direction binding
-(``sfmtool._sfmtool.geometry.baseline_directions``).
+(``sfmtool.geometry.baseline_directions``).
 
 With both frames' rotations held, the direction between their centres is the
 null space of the rows ``u_i x u_j``, one row per shared point. Rows whose
@@ -15,7 +15,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import baseline_directions
+from sfmtool.geometry import baseline_directions
 
 ROUNDS, KEEP = 5, 0.6
 TOL = np.radians(0.05)

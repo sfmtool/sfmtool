@@ -52,7 +52,7 @@ and the fundamental matrix and epipoles in
 bindings are in
 [`sfmtool-py/src/matching/`](../../../crates/sfmtool-py/src/matching/mod.rs)
 (`descriptor.rs`, `image.rs`, `sweep.rs`), registered on
-`sfmtool._sfmtool.matching`, and the Python entry point is
+`sfmtool.matching`, and the Python entry point is
 [`feature_match/_core.py`](../../../src/sfmtool/feature_match/_core.py).
 
 ### Whole-pair matching
@@ -292,7 +292,7 @@ The four filter defaults are `GeometricFilterConfig::default()` in
 
 ## Python bindings
 
-`sfmtool._sfmtool.matching` exposes `descriptor_distance`,
+`sfmtool.matching` exposes `descriptor_distance`,
 `find_best_descriptor_match`, `match_candidates_by_descriptor`,
 `match_image_pair`, `match_image_pairs_batch`, `match_one_way_sweep`,
 `match_one_way_sweep_geometric`, `mutual_best_match_sweep`,

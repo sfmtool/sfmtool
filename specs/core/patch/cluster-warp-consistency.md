@@ -57,7 +57,7 @@ exploits, with local affine frames in place of tracked points.
 The kernel is `warp_consistency_residuals` in
 [consistency.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/consistency.rs).
 It runs inside `refine_cluster_patches` (bound as
-`sfmtool._sfmtool.matching.refine_cluster_patches`), so `sfm cluster-patches`
+`sfmtool.matching.refine_cluster_patches`), so `sfm cluster-patches`
 produces the residuals as a post-pass after
 [cluster-patch refinement](cluster-patch-refinement.md):
 

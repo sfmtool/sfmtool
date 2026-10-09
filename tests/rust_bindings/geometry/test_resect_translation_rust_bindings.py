@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the rotation-locked resection Rust binding
-(``sfmtool._sfmtool.geometry.resect_translation``; see
+(``sfmtool.geometry.resect_translation``; see
 ``specs/core/geometry/rotation-locked-resection.md``).
 
 Canonical camera convention throughout: the camera looks along −Z, so an
@@ -16,7 +16,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics, resect_translation
+from sfmtool.geometry import CameraIntrinsics, resect_translation
 
 
 def _pinhole(f=500.0, w=640, h=480):

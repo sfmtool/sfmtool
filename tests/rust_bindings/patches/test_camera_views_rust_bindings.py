@@ -15,9 +15,9 @@ reconstruction"). The equivalence tests prove a reconstruction and an equivalent
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import CameraViews, ImagePyramidSet, PatchCloud
-from sfmtool._sfmtool.geometry import CameraIntrinsics
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import CameraViews, ImagePyramidSet, PatchCloud
+from sfmtool.geometry import CameraIntrinsics
 
 
 def _pinhole(width=16, height=16, f=20.0):

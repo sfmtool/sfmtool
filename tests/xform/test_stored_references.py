@@ -16,7 +16,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool._embed_patches import embed_patches
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import (
     AddPatchBitmapsTransform,

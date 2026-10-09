@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.sift.file import get_sift_path_for_image
 
 from .conftest import (

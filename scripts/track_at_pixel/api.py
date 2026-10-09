@@ -42,7 +42,7 @@ class TrackAtPixelError(Exception):
 class TrackAtPixelResult:
     """A built track, plus the trail of how it was built.
 
-    ``track`` is a track-stage ``sfmtool._sfmtool.bench.EditableTrack`` that has
+    ``track`` is a track-stage ``sfmtool.bench.EditableTrack`` that has
     been evaluated, so every ``in`` observation carries its leave-one-out
     ``zncc`` and friends. ``query_observation`` is the index of the observation
     that sits in the queried image (``None`` if the candidate moved off it).

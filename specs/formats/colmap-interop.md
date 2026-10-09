@@ -57,7 +57,7 @@ The only caller in the workspace is the Python binding layer,
 [`sfmtool-py/src/io/colmap_binary.rs`](../../crates/sfmtool-py/src/io/colmap_binary.rs)
 and [`sfmtool-py/src/io/colmap_db.rs`](../../crates/sfmtool-py/src/io/colmap_db.rs),
 which expose `read_colmap_binary`, `write_colmap_binary`, `write_colmap_db` and
-`read_colmap_db_matches` on `sfmtool._sfmtool.io`. From Python these back
+`read_colmap_db_matches` on `sfmtool.io`. From Python these back
 [`sfm from-colmap-bin`](../cli/colmap-interop/from-colmap-bin-command.md),
 [`sfm to-colmap-bin`](../cli/colmap-interop/to-colmap-bin-command.md),
 [`sfm to-colmap-db`](../cli/colmap-interop/to-colmap-db-command.md) and

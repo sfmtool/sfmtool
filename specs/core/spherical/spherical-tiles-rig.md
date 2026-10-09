@@ -177,7 +177,7 @@ about a 10% overdraw, which is the price of overlap.
 
 The rig lives in
 [tile_rig.rs](../../../crates/sfmtool-core/src/spherical/tile_rig.rs), bound as
-`sfmtool._sfmtool.spherical.SphericalTileRig`. Its `resample_atlas` method turns
+`sfmtool.spherical.SphericalTileRig`. Its `resample_atlas` method turns
 per-tile atlases into a destination image;
 [rig/spherical_tile.py](../../../src/sfmtool/rig/spherical_tile.py) wraps it as
 `resample_atlas_to_equirect`, which builds the equirectangular destination

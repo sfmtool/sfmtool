@@ -151,12 +151,12 @@ class DatasetContext:
     """Everything loaded once per dataset."""
 
     def __init__(self, prepared: PreparedDataset):
-        from sfmtool._sfmtool.patches import ImagePyramidSet
-        from sfmtool._sfmtool.reconstruction import (
+        from sfmtool.patches import ImagePyramidSet
+        from sfmtool.reconstruction import (
             EditedReconstruction,
             SfmrReconstruction,
         )
-        from sfmtool._sfmtool.spatial import KdTree2d, KdTree3d, LazyKdForest
+        from sfmtool.spatial import KdTree2d, KdTree3d, LazyKdForest
         from sfmtool._workspace_image import read_workspace_image
 
         self.prepared = prepared
@@ -238,9 +238,9 @@ class DatasetContext:
         positions, which are the refined ones for every status the refinement
         measured and the detections for the rest.
         """
-        from sfmtool._sfmtool.analysis import cluster_radii
-        from sfmtool._sfmtool.io import MatchesFile
-        from sfmtool._sfmtool.spatial import KdTree2d
+        from sfmtool.analysis import cluster_radii
+        from sfmtool.io import MatchesFile
+        from sfmtool.spatial import KdTree2d
 
         mf = MatchesFile(str(path))
         if not mf.has_clusters:
@@ -299,7 +299,7 @@ class HoldoutContext:
     ``empty``: what a candidate is handed."""
 
     def __init__(self, dataset: DatasetContext, point: int | None, *, empty=False):
-        from sfmtool._sfmtool.reconstruction import EditedReconstruction
+        from sfmtool.reconstruction import EditedReconstruction
 
         self.dataset = dataset
         self._excluded = point

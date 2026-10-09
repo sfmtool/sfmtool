@@ -32,7 +32,7 @@ DEFAULTS = {
 
 def _sources(ctx):
     """The dataset's ``TrackAtPixelSources``, built on first use and kept."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     ds = ctx.dataset
     sources = getattr(ds, "_core_track_at_pixel_sources", None)
@@ -44,7 +44,7 @@ def _sources(ctx):
 
 
 def build_track(ctx, image: int, pixel, options: dict | None = None):
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     opts = {**DEFAULTS, **(options or {})}
     try:

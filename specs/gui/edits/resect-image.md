@@ -77,7 +77,7 @@ Everything below `## Invocation` lives in `sfmtool-core` as one function,
 GUI wraps it in [resect.rs](../../../crates/sfm-explorer/src/resect.rs), which adds
 the refusal for a missing or stale file, the version and the status line. The
 same function is what an offline caller uses, with as many targets as it wants
-to hold out, through the `sfmtool._sfmtool.geometry.resect_images` binding.
+to hold out, through the `sfmtool.geometry.resect_images` binding.
 
 ```rust
 pub enum ResectSource<'a> {

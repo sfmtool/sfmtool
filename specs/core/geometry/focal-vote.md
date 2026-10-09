@@ -553,7 +553,7 @@ focal.
 
 ## Binding
 
-`sfmtool._sfmtool.geometry.focal_vote` takes its observations in either of
+`sfmtool.geometry.focal_vote` takes its observations in either of
 two forms and only these two, mirroring the two Rust entry points:
 
 - `focal_vote(matches_file, *, seed=0, epipolar_min_disp_frac=0.02,

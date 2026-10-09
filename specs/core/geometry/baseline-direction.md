@@ -24,7 +24,7 @@ per shared point. Every edge of a graph is one such solve.
 
 The solve lives in
 [baseline_direction.rs](../../../crates/sfmtool-core/src/geometry/baseline_direction.rs),
-bound as `sfmtool._sfmtool.geometry.baseline_directions`.
+bound as `sfmtool.geometry.baseline_directions`.
 
 ```rust
 pub struct BaselineTrim {

@@ -86,7 +86,7 @@ def query_offset(track, q: int, pixel) -> float | None:
 
 def anchor(ctx, track, q: int, pixel):
     """Slide the patch so its centre in observation ``q`` is ``pixel``, then read it."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     moved, _ = B.translate_patch_to_pixel(track, ctx.edited, q, list(pixel))
     moved, _ = B.evaluate(moved, ctx.edited, ctx.pyramids)
@@ -103,7 +103,7 @@ def unplaced(track) -> bool:
 
 def anchored_fit(ctx, track, q: int, pixel, refits: int):
     """``refits`` rounds of fit-then-anchor, then an anchor; keeps the best reading."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     best = anchor(ctx, track, q, pixel)
     for _ in range(refits):
@@ -183,7 +183,7 @@ def track_from_sightings(ctx, image: int, pixel, radius_px: float, sightings):
     reading: the upgrade triangulates the sightings as given and runs the
     track-stage fit over the frame it builds. Observation 0 is the query.
     """
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     _, track = B.create_cluster(
         B.Bench(), image, ctx.image_stem(image), tuple(pixel), radius_px=radius_px
@@ -200,7 +200,7 @@ def track_from_sightings(ctx, image: int, pixel, radius_px: float, sightings):
 
 def shape_track(ctx, track, q: int, pixel, normal=None, half=None):
     """Tilt toward ``normal`` and resize to ``half``, keeping the centre on ``pixel``."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     if track.at_infinity:
         return track
@@ -247,7 +247,7 @@ def search_normal(ctx, track, q: int, pixel, steps_deg=(20.0, 10.0, 5.0)):
     median ZNCC improves, and the step halves when none does. The sightings are
     read, not refit, at each trial, so the search costs one reading per trial.
     """
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     if track.at_infinity:
         return track
@@ -299,7 +299,7 @@ def max_projection_offset(track) -> float:
 
 def clean(ctx, track, q: int, pixel, opts: dict, diag: dict):
     """Turn out the views that disagree with the track's own geometry, and refit."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     removed = []
     for _ in range(opts["clean_rounds"]):
@@ -358,7 +358,7 @@ def ray_consensus(ctx, track, q: int, pixel, opts: dict, diag: dict):
     reads offsets from a point the wrong views may have pulled off the ray,
     this never lets the views that disagree decide where the point is.
     """
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     if track.at_infinity:
         return track
@@ -436,7 +436,7 @@ def neighbour_normal(ctx, image: int, pixel, depth: float, opts: dict):
 
 def finish(ctx, track, q: int, pixel, opts: dict, diag: dict) -> TrackAtPixelResult:
     """Anchor, grow by geometry search, threshold, gate. ``track`` is track-stage."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     def fail(stage: str, reason: str):
         raise TrackAtPixelError(stage, reason, diag)

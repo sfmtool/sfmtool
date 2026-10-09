@@ -33,7 +33,7 @@ sys.path.insert(0, str(HERE))
 
 
 def point_ids(dataset: str, cache_dir, min_track_length: int) -> list[int]:
-    from sfmtool._sfmtool.reconstruction import (
+    from sfmtool.reconstruction import (
         EditedReconstruction,
         SfmrReconstruction,
     )
@@ -57,8 +57,8 @@ def merge_tracks(out: Path, n_shards: int, pass_name: str, shard_rows) -> None:
     and committed, in shard order. The rows' ``output_point`` is renumbered to
     the merged file's indexes.
     """
-    from sfmtool._sfmtool import bench as B
-    from sfmtool._sfmtool.reconstruction import (
+    from sfmtool import bench as B
+    from sfmtool.reconstruction import (
         EditedReconstruction,
         SfmrReconstruction,
     )

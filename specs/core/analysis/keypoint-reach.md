@@ -84,7 +84,7 @@ caller today; see [Open questions](#open-questions).
 
 The enumeration lives in
 [keypoint_reach.rs](../../../crates/sfmtool-core/src/spatial/keypoint_reach.rs),
-bound as `sfmtool._sfmtool.analysis.keypoint_pairs_within_reach`.
+bound as `sfmtool.analysis.keypoint_pairs_within_reach`.
 
 The signature is `keypoint_pairs_within_reach(image_of_row, xy_px,
 reach_px)`: `image_of_row` an `(n,)` `int64` array, `xy_px` an

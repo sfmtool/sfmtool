@@ -99,7 +99,7 @@ unfitted points:
 
 The kernel lives in
 [adjacency_surfel_normals.rs](../../../crates/sfmtool-core/src/analysis/adjacency_surfel_normals.rs),
-bound as `sfmtool._sfmtool.analysis.estimate_adjacency_surfel_normals`.
+bound as `sfmtool.analysis.estimate_adjacency_surfel_normals`.
 
 ```rust
 pub struct AdjacencySurfelParams {

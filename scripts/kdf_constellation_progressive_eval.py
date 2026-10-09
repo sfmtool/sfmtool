@@ -79,9 +79,9 @@ from kdf_constellation_eval import (
     resolve_sift_paths,
 )
 
-from sfmtool._sfmtool import build_profile
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.spatial import LazyKdForest
+from sfmtool import build_profile
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.spatial import LazyKdForest
 from sfmtool.sift.file import SiftReader
 
 KIB = 1 << 10
@@ -1086,7 +1086,7 @@ def run_build_kdf(args) -> None:
     solve's own tracks still describe the subset, so the ground truth is the
     same trusted one seen through a sparser set of viewpoints.
     """
-    from sfmtool._sfmtool.spatial import KdForest, write_kdf
+    from sfmtool.spatial import KdForest, write_kdf
 
     workspace = Path(args.workspace).resolve()
     paths = []

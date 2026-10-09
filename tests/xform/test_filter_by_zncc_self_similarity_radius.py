@@ -7,11 +7,11 @@ shares with the embed-patches cull."""
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.patches import (
+from sfmtool.patches import (
     DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
     zncc_self_similarity_parts_stack,
 )
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
     FilterByZnccSelfSimilarityRadiusTransform,
     RefineKeypointsTransform,

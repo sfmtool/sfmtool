@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.spatial import KdForest
+from sfmtool.spatial import KdForest
 
 
 def _random_descriptors(n, dim, seed):

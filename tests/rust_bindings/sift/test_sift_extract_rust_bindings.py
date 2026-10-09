@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.sift import (
+from sfmtool.sift import (
     affine_shapes_from_similarity,
     describe_keypoints,
     detect_sift_keypoints,

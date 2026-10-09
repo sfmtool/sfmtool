@@ -41,9 +41,9 @@ def main():
     args = ap.parse_args()
     kwargs = json.loads(args.kwargs)
 
-    from sfmtool._sfmtool.geometry import resect_images
-    from sfmtool._sfmtool.patches import ImagePyramidSet
-    from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+    from sfmtool.geometry import resect_images
+    from sfmtool.patches import ImagePyramidSet
+    from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
     from sfmtool._workspace_image import read_workspace_image
 
     ds = prepare(args.dataset, args.cache)

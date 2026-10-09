@@ -13,13 +13,13 @@ from click.testing import CliRunner
 from sfmtool.camrig.resolver import (
     resolve_camrig_for_solve,
 )
-from sfmtool._sfmtool.io import (
+from sfmtool.io import (
     read_camrig,
     read_camrig_metadata,
     verify_camrig,
     write_camrig,
 )
-from sfmtool._sfmtool.spherical import SphericalTileRig
+from sfmtool.spherical import SphericalTileRig
 from sfmtool.cli import main
 
 from .conftest import _IMAGE_DATA, _copy_images, _pinhole_camera
@@ -438,7 +438,7 @@ def test_solve_uses_camrig(isolated_seoul_bull_17_images: list[Path]):
     assert "takes precedence over camera_config.json" in result.output
     assert output_path.exists()
 
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0

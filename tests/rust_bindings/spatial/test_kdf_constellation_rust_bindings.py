@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.spatial import (
+from sfmtool.spatial import (
     KdForest,
     LazyKdForest,
     radius_for_feature_count,

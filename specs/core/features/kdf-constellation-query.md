@@ -550,12 +550,12 @@ rather than a residual, which no round has measured.
 
 ## Python bindings
 
-Both forest classes carry the same two methods on `sfmtool._sfmtool.spatial`.
+Both forest classes carry the same two methods on `sfmtool.spatial`.
 `LazyKdForest` answers from its own file; `KdForest` takes a `sources` mapping,
 the same one `write_kdf` accepts, because it has no source tables of its own.
 
 ```python
-from sfmtool._sfmtool.spatial import LazyKdForest
+from sfmtool.spatial import LazyKdForest
 
 lazy = LazyKdForest("capture.kdf")
 found = lazy.constellation_at_pixel(

@@ -13,7 +13,7 @@ merged.
 
 The kernel lives in
 [point_correspondence.rs](../../../crates/sfmtool-core/src/reconstruction/point_correspondence.rs),
-bound as `sfmtool._sfmtool.analysis.find_point_correspondences` and
+bound as `sfmtool.analysis.find_point_correspondences` and
 `merge_points_and_tracks`
 ([analysis/core.rs](../../../crates/sfmtool-py/src/analysis/core.rs)). The Python
 side wraps it twice: [_point_correspondence.py](../../../src/sfmtool/_point_correspondence.py)
@@ -109,7 +109,7 @@ observations within an image.
 > Note: `merge/correspondences.py` still contains a pure-Python
 > `merge_points_and_tracks` — the superseded reference implementation of the
 > same algorithm. The live path (`merge/reconstructions.py`) calls the Rust
-> binding of the same name in `sfmtool._sfmtool.analysis`.
+> binding of the same name in `sfmtool.analysis`.
 
 ## Consumers
 

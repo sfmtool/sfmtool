@@ -23,8 +23,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool.patches import PatchCloud
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
 
 
 # ===== Command line and driver =====

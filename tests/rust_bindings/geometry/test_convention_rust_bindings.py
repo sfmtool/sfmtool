@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-import sfmtool._sfmtool.geometry as geometry
+import sfmtool.geometry as geometry
 from sfmtool.colmap import convention
 
 # Fixed non-trivial batch of world-to-camera poses (WXYZ quats, translations).

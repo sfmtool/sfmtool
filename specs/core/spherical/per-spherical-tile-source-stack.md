@@ -173,7 +173,7 @@ The CSR layout supports three access patterns naturally:
 
 The stack lives in
 [per_tile_source_stack.rs](../../../crates/sfmtool-core/src/spherical/per_tile_source_stack.rs),
-bound as `sfmtool._sfmtool.spherical.PerSphericalTileSourceStack`.
+bound as `sfmtool.spherical.PerSphericalTileSourceStack`.
 
 ```rust
 /// Pixel-element storage trait.
@@ -297,7 +297,7 @@ pub enum BuildError {
 ```
 
 The Python wrapper exposes the same shape behind a single class
-`sfmtool._sfmtool.spherical.PerSphericalTileSourceStack`, with pixel storage
+`sfmtool.spherical.PerSphericalTileSourceStack`, with pixel storage
 selected via a `dtype="uint8" | "float32"` kwarg on
 `build_rotation_only`. Per-tile and whole-level accessors return numpy
 arrays of the appropriate dtype; `tile_offsets()`, `tile_id()`, and

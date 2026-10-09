@@ -77,7 +77,7 @@ regime right, so they sit **alongside** the angle rather than replacing it.
 
 The solver lives in
 [triangulation.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation.rs),
-bound as `sfmtool._sfmtool.analysis.triangulate_batch` and, over a loaded
+bound as `sfmtool.analysis.triangulate_batch` and, over a loaded
 reconstruction, as `SfmrReconstruction.triangulation_diagnostics`. Tracks are flattened
 CSR-style (the same shape as the reconstruction's `observation_offsets`): track
 `t` owns `dirs[offsets[t]..offsets[t+1]]` and the matching `centers`.
@@ -893,12 +893,12 @@ diag = recon.triangulation_diagnostics(noise_px=1.0)  # dict of arrays incl.
 #   condition_number (M,), depth_sigma (M,), inverse_depth_z (M,)
 ```
 
-The point-or-bearing primitives are in `sfmtool._sfmtool.analysis`, bound in
+The point-or-bearing primitives are in `sfmtool.analysis`, bound in
 [analysis/point_or_bearing.rs](../../../crates/sfmtool-py/src/analysis/point_or_bearing.rs),
 with the CSR layout above and one `(2, 3)` weight per ray:
 
 ```python
-from sfmtool._sfmtool.analysis import (
+from sfmtool.analysis import (
     bearing_score_batch, fit_point_and_bearing_batch, observed_rays,
     DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD, DEFAULT_SOFT_L1_SCALE,
     DEFAULT_POINT_FIT_MAX_ITERATIONS,
@@ -938,7 +938,7 @@ found, summary = recon.find_points_at_infinity(eps_deg, desc_thresh=200.0,
 #   finite, bearing_behind_camera, unscored
 ```
 
-`OUTLIER_GATE` and `DEFAULT_MIN_DEPTH_FRACTION` are in `sfmtool._sfmtool.analysis`
+`OUTLIER_GATE` and `DEFAULT_MIN_DEPTH_FRACTION` are in `sfmtool.analysis`
 as `REPROJECTION_NOISE_OUTLIER_GATE` and `DEFAULT_MIN_DEPTH_FRACTION`.
 `classify_points_at_infinity` and `find_points_at_infinity` raise `ValueError`
 for a `sigma_px` that is not finite and positive and `OSError` when the pixels

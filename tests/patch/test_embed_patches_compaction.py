@@ -23,9 +23,9 @@ from sfmtool._patch_compaction import (
     image_file_hashes_from_images,
     reference_observations_from_images,
 )
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import PatchCloud
-from sfmtool._sfmtool.io import verify_sfmr
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
+from sfmtool.io import verify_sfmr
 
 from .conftest import load_images, rotation_matrices
 
@@ -463,7 +463,7 @@ def _project_direction(recon, d: np.ndarray, image_idx: int, margin: float = 0.0
     """Project a w = 0 direction into an image (translation-invariant): the pixel
     of ``R @ d``, or ``None`` when behind the camera or within ``margin`` px of
     (or beyond) the frame edge."""
-    from sfmtool._sfmtool.geometry import RigidTransform
+    from sfmtool.geometry import RigidTransform
 
     q = np.asarray(recon.quaternions_wxyz, np.float64)[image_idx]
     t = np.asarray(recon.translations, np.float64)[image_idx]
@@ -535,7 +535,7 @@ def test_drop_grazing_observations_skips_points_at_infinity():
     its frame alone. The grazing drop must therefore skip it entirely — keeping all
     its observations — while still pruning a genuinely grazing finite point."""
     from sfmtool._embed_patches import _drop_grazing_observations
-    from sfmtool._sfmtool.patches import PatchCloud
+    from sfmtool.patches import PatchCloud
 
     # Two dense points, both with normal u x v = +z (f32 half-vectors, f64
     # centers — the dtypes from_halfvec_arrays expects, as in compaction).

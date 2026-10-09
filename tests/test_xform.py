@@ -76,7 +76,7 @@ def test_xform_on_reconstruction(seoul_bull_workspace: Path):
     assert "Transformation complete" in result.output
 
     # Verify the scaled reconstruction
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     original = SfmrReconstruction.load(output_sfmr)
     scaled = SfmrReconstruction.load(scaled_sfmr)
@@ -97,7 +97,7 @@ def test_xform_remove_short_tracks(seoul_bull_workspace: Path):
     assert filtered_sfmr.exists()
     assert "Remove tracks with length <= 3" in result.output
 
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     original = SfmrReconstruction.load(output_sfmr)
     filtered = SfmrReconstruction.load(filtered_sfmr)
@@ -127,7 +127,7 @@ def test_xform_camera_model_with_bundle_adjust(
     assert switched_sfmr.exists()
     assert "Switch camera model to RADIAL" in result.output
 
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     switched = SfmrReconstruction.load(switched_sfmr)
     for camera in switched.cameras:
@@ -208,7 +208,7 @@ def test_xform_joined_negative_translation_translates(
     """`--translate=-1,2,3` moves every point and is recorded with the other steps."""
     import numpy as np
 
-    from sfmtool._sfmtool.io import read_sfmr
+    from sfmtool.io import read_sfmr
 
     output_sfmr = tmp_path / "translated.sfmr"
     args = [
@@ -240,7 +240,7 @@ def test_xform_separated_negative_value_matches_joined(
     seoul_bull_ground_truth_sfmr: Path, tmp_path: Path
 ):
     """`--translate -1,2,3` and `--translate=-1,2,3` write the same points."""
-    from sfmtool._sfmtool.io import read_sfmr
+    from sfmtool.io import read_sfmr
 
     outputs = []
     for spelling in (["--translate", "-1,2,3"], ["--translate=-1,2,3"]):

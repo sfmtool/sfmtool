@@ -12,8 +12,8 @@ check exactly that, plus the one step that crosses into the reconstruction.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import bench as bench_module
-from sfmtool._sfmtool.bench import (
+from sfmtool import bench as bench_module
+from sfmtool.bench import (
     Bench,
     add_observation,
     apply_thresholds,
@@ -37,7 +37,7 @@ from sfmtool._sfmtool.bench import (
     translate_patch_to_pixel,
     unpin_verdict,
 )
-from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
 
 @pytest.fixture(scope="module")
@@ -1008,7 +1008,7 @@ def descriptor_index(embedded, tmp_path_factory):
     import json
     from pathlib import Path
 
-    from sfmtool._sfmtool.spatial import KdForest, LazyKdForest, write_kdf
+    from sfmtool.spatial import KdForest, LazyKdForest, write_kdf
     from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 
     workspace = Path(embedded.workspace_dir)

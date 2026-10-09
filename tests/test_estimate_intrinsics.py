@@ -22,7 +22,7 @@ import numpy.testing as npt
 import pytest
 from click.testing import CliRunner
 
-import sfmtool._sfmtool.geometry as _geometry
+import sfmtool.geometry as _geometry
 from sfmtool.cli import main
 
 # The package re-exports the click command under the module's own name, so the
@@ -397,7 +397,7 @@ def camrig_root(tmp_path) -> Path:
 
 
 def test_write_camrig_writes_the_verdict_model(stub_estimate, camrig_root):
-    from sfmtool._sfmtool.io import read_camrig
+    from sfmtool.io import read_camrig
 
     result = _estimate(
         camera_model="EquidistantFisheye",
@@ -514,7 +514,7 @@ def test_the_vote_reads_the_backbones_positions(cluster_matches_file):
     """The file states its members' positions, so the vote reads them straight
     off the selection handle -- no `.sift` file is opened, and there is no
     other path to take."""
-    from sfmtool._sfmtool.io import MatchesFile
+    from sfmtool.io import MatchesFile
 
     assert not hasattr(ei, "_positions_from_sift"), (
         "the legacy .sift lookup is gone; version <= 5 cluster files are refused"
@@ -534,7 +534,7 @@ def test_the_object_form_is_the_array_form(cluster_matches_file):
     """The selection handle and its own arrays are two spellings of one call:
     the kernel reads the file's CSR index and widens its float32 positions, so
     a caller spelling that out gets bit-identical numbers."""
-    from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
+    from sfmtool.geometry import estimate_intrinsics as estimate
 
     selection, data = ei._load_selection(cluster_matches_file)
     object_form = estimate(selection, seed=0, columns="auto")
@@ -553,7 +553,7 @@ def test_the_object_form_is_the_array_form(cluster_matches_file):
 
 
 def test_the_object_form_takes_no_observation_arrays(cluster_matches_file):
-    from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
+    from sfmtool.geometry import estimate_intrinsics as estimate
 
     selection, data = ei._load_selection(cluster_matches_file)
     with pytest.raises(ValueError, match="takes no observation arrays"):
@@ -575,8 +575,8 @@ def test_a_pairwise_matches_file_is_refused(cluster_matches_file: Path):
     Reuses the cluster fixture's workspace, whose `.sift` files are already
     extracted, and only adds the pairwise match.
     """
-    from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
-    from sfmtool._sfmtool.io import MatchesFile
+    from sfmtool.geometry import estimate_intrinsics as estimate
+    from sfmtool.io import MatchesFile
 
     workspace_dir = cluster_matches_file.parent.parent
     out = cluster_matches_file.parent / "pairs.matches"
@@ -604,7 +604,7 @@ def test_an_unreadable_matches_file_is_a_clean_cli_error(tmp_path):
 
 def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
     """The seoul bull capture is a 270x480 pinhole one; the vote should say so."""
-    from sfmtool._sfmtool.io import read_camrig
+    from sfmtool.io import read_camrig
 
     runner = CliRunner()
     out = runner.invoke(main, ["estimate-intrinsics", "-i", str(cluster_matches_file)])

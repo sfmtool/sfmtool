@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the far-field rotation initialization Rust binding
-(``sfmtool._sfmtool.geometry.rotation_init``; see
+(``sfmtool.geometry.rotation_init``; see
 ``specs/core/geometry/rotation-init.md``).
 
 Synthetic scenes are built in the OpenCV/optical pixel convention (a point in
@@ -18,7 +18,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import rotation_init
+from sfmtool.geometry import rotation_init
 
 W, H = 1000, 1000
 F0 = 800.0

@@ -368,7 +368,7 @@ Flat row-major arrays at the boundary, mirroring `spatial.rs`:
 ### Python bindings
 
 `crates/sfmtool-py/src/spatial/kdforest.rs`, registered by the `spatial`
-binding module and imported as `from sfmtool._sfmtool.spatial import KdForest`,
+binding module and imported as `from sfmtool.spatial import KdForest`,
 following `flow/optical.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray`
 out, `py.detach(...)` around build and query):
 

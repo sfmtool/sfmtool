@@ -46,7 +46,7 @@ def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
 
 
 def test_cluster_patches_end_to_end(cluster_matches_file: Path):
-    from sfmtool._sfmtool.io import read_matches, verify_matches
+    from sfmtool.io import read_matches, verify_matches
 
     # --resolution 16 (vs the 25-per-axis default) samples a coarser template to
     # keep this end-to-end test cheap; the assertions below are structural
@@ -135,7 +135,7 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
 def test_matcher_output_states_the_detections(cluster_matches_file: Path):
     """The matcher's own file carries its members' detected geometry, copied
     bit-for-bit from the `.sift` rows their feature indexes name."""
-    from sfmtool._sfmtool.io import read_matches, read_sift_partial
+    from sfmtool.io import read_matches, read_sift_partial
 
     data = read_matches(cluster_matches_file)
     assert data["metadata"]["version"] == 7
@@ -176,8 +176,8 @@ def test_enriched_output_states_the_refinement(cluster_matches_file: Path):
     detection -- byte for byte -- for every member it never fitted."""
     import cv2
 
-    from sfmtool._sfmtool.io import read_matches
-    from sfmtool._sfmtool.matching import refine_cluster_patches
+    from sfmtool.io import read_matches
+    from sfmtool.matching import refine_cluster_patches
 
     result = CliRunner().invoke(
         main, ["cluster-patches", "-i", str(cluster_matches_file), "--resolution", "16"]
@@ -288,7 +288,7 @@ def test_cluster_patches_rejects_existing_output_and_enriched_input(
 
 def test_cluster_patches_rejects_pairwise_input(tmp_path: Path):
     """A pairwise .matches file (no clusters) is rejected with guidance."""
-    from sfmtool._sfmtool.io import write_matches
+    from sfmtool.io import write_matches
 
     path = tmp_path / "pairwise.matches"
     data = {

@@ -56,7 +56,7 @@ The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
 (`bundle_adjust`, `BaCameras`, `BaSchedule`, `BundleAdjustment`,
 `PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`,
-`FreePointDecision`), bound as `sfmtool._sfmtool.geometry.bundle_adjust`.
+`FreePointDecision`), bound as `sfmtool.geometry.bundle_adjust`.
 
 ```rust
 pub struct BaSchedule {
@@ -604,7 +604,7 @@ A reconstruction read from a `.sfmr` carries its constraints as the
 free, `1` ranged, `2` held) whatever legend the file stored, and `write_sfmr`
 takes it the same way; the file's legend never reaches the dict or
 `SfmrReconstruction.point_constraints`.
-`sfmtool._sfmtool.io.POINT_CONSTRAINT_NAMES` is that canonical numbering as a
+`sfmtool.io.POINT_CONSTRAINT_NAMES` is that canonical numbering as a
 tuple of names, so a consumer labels a code with
 `POINT_CONSTRAINT_NAMES[code]` rather than hard-coding the numbers, and a caller
 building `held=` and `distance=` from the column compares against those codes.

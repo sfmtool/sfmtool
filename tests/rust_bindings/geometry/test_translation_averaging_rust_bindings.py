@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the translation-averaging bindings
-(``sfmtool._sfmtool.geometry.average_translations`` and its three siblings).
+(``sfmtool.geometry.average_translations`` and its three siblings).
 
 With every rotation held, the camera centres of a graph of pairwise baseline
 directions are one linear problem: the true centres are what the objective
@@ -16,7 +16,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     average_translations,
     direction_reading,
     orientation_reading,

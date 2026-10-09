@@ -31,9 +31,9 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool.patches import OrientedPatch
-from sfmtool._sfmtool.geometry import RigidTransform
-from sfmtool._sfmtool.flow import WarpMap
+from sfmtool.patches import OrientedPatch
+from sfmtool.geometry import RigidTransform
+from sfmtool.flow import WarpMap
 
 from _viz_common import (
     chip,

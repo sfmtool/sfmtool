@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the reconstruction growth Rust bindings
-(``sfmtool._sfmtool.geometry.grow_reconstruction`` /
+(``sfmtool.geometry.grow_reconstruction`` /
 ``resect_images_batch``; see ``specs/core/geometry/reconstruction-growth.md``).
 
 Synthetic orbit scenes in the canonical camera frame (the camera looks along
@@ -15,7 +15,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     CameraIntrinsics,
     grow_reconstruction,
     resect_images_batch,

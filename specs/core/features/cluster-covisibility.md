@@ -136,7 +136,7 @@ The counts and the grouping queries live in
 [covisibility.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility.rs)
 — module `sfmtool_core::features::cluster_match::covisibility`, beside the
 matcher that produces the clusters — bound as
-`sfmtool._sfmtool.matching.ClusterCovisibility`. Core stays I/O-free: raw CSR
+`sfmtool.matching.ClusterCovisibility`. Core stays I/O-free: raw CSR
 slices in, following `refine_cluster_patches`, or an already-parsed
 `MatchesData`.
 
@@ -299,7 +299,7 @@ pairs.
 
 ## Bindings
 
-`sfmtool._sfmtool.matching.ClusterCovisibility` (PyO3 class in
+`sfmtool.matching.ClusterCovisibility` (PyO3 class in
 `crates/sfmtool-py/src/matching/covisibility.rs`); no Python wrapper layer.
 
 ```python
@@ -318,7 +318,7 @@ cov.rank_by_covisibility(image, candidates)   # numpy uint32
 `ClusterCovisibility` plus the excluded-image state), so
 `for group in cov.seed_image_groups(...):` consumes lazily and
 `list(cov.seed_image_groups(...))` recovers the eager behavior. Each step
-yields a `sfmtool._sfmtool.matching.SeedImageGroup`, a frozen object over the
+yields a `sfmtool.matching.SeedImageGroup`, a frozen object over the
 core struct whose getters carry the vectors as numpy arrays:
 
 ```python

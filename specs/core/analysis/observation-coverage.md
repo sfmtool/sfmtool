@@ -75,7 +75,7 @@ All queries are batch (parallel arrays in, array out) and read-only.
 
 The grids and their queries live in
 [observation_coverage.rs](../../../crates/sfmtool-core/src/analysis/observation_coverage.rs),
-bound as the `sfmtool._sfmtool.analysis.ObservationCoverage` class.
+bound as the `sfmtool.analysis.ObservationCoverage` class.
 
 Core: an `ObservationCoverage` struct owning the per-image grids, with the
 builder and the four queries as methods, plus read access to a grid

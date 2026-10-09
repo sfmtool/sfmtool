@@ -8,7 +8,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.io import MatchesFile, verify_matches, write_matches
+from sfmtool.io import MatchesFile, verify_matches, write_matches
 
 UNREFINABLE = np.iinfo(np.uint32).max
 

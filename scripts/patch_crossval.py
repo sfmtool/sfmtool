@@ -53,11 +53,11 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import OrientedPatch, PatchCloud
-from sfmtool._sfmtool.geometry import RigidTransform
-from sfmtool._sfmtool.flow import ImagePyramid, WarpMap
-from sfmtool._sfmtool.io import read_matches, read_sift
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import OrientedPatch, PatchCloud
+from sfmtool.geometry import RigidTransform
+from sfmtool.flow import ImagePyramid, WarpMap
+from sfmtool.io import read_matches, read_sift
 
 
 def find_sift_paths(workspace: str, names: list[str]) -> dict[str, str]:

@@ -793,7 +793,7 @@ the wire.
 
 ### In core
 
-The module `sfmtool_core::bench`, bound as `sfmtool._sfmtool.bench`. **The two
+The module `sfmtool_core::bench`, bound as `sfmtool.bench`. **The two
 values, every step over them, the evaluation at both stages and the transitions
 between them are built**, and are filed as
 [`../core/bench/bench.md`](../core/bench/bench.md) and
@@ -858,7 +858,7 @@ Every step answers `(next value, report)`, so the line that is not yet built
 reads exactly like the ones that are:
 
 ```python
-from sfmtool._sfmtool.bench import (
+from sfmtool.bench import (
     Bench, add_observation, apply_thresholds, commit, create_cluster, evaluate,
     set_stage, set_verdict, sweep_views,
 )
@@ -937,7 +937,7 @@ Two core pieces were built ahead of the bench, and one more is needed:
    computed by the kernel the extractor describes its own detections with; the
    octave and pyramid level follow from the size
    (`ScaleSpace::octave_layer_for_scale`). It is bound beside `extract_sift` as
-   `sfmtool._sfmtool.sift.describe_keypoints`, with
+   `sfmtool.sift.describe_keypoints`, with
    `affine_shapes_from_similarity` for the size-and-angle form. It was built
    for the search and turned out not to serve it (item 1); what remains useful
    is the shape, scale and orientation correspondence it defined once, which

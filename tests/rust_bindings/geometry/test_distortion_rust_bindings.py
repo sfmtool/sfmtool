@@ -15,7 +15,7 @@ import numpy as np
 import pycolmap
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics
+from sfmtool.geometry import CameraIntrinsics
 
 CAMERA_MODELS = [
     (

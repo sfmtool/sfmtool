@@ -103,7 +103,7 @@ pub fn resect_translation(
 ) -> Option<TranslationResection>;
 ```
 
-It is bound as `sfmtool._sfmtool.geometry.resect_translation` by
+It is bound as `sfmtool.geometry.resect_translation` by
 [resect_translation.rs](../../../crates/sfmtool-py/src/geometry/resect_translation.rs),
 which is where the two trim defaults live:
 

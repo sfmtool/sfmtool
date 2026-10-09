@@ -14,9 +14,9 @@ import math
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import bench
-from sfmtool._sfmtool.patches import ImagePyramidSet
-from sfmtool._sfmtool.reconstruction import EditedReconstruction
+from sfmtool import bench
+from sfmtool.patches import ImagePyramidSet
+from sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import embedded, images  # noqa: F401 (fixtures)
 

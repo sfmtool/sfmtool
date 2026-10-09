@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the cluster match census Rust binding
-(``sfmtool._sfmtool.analysis.cluster_census``; see
+(``sfmtool.analysis.cluster_census``; see
 ``specs/core/analysis/cluster-census.md``).
 
 Synthetic two-group captures in the canonical camera frame (the camera looks
@@ -22,8 +22,8 @@ produce the identical viewpoint-group partition.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import cluster_census
-from sfmtool._sfmtool.geometry import CameraIntrinsics
+from sfmtool.analysis import cluster_census
+from sfmtool.geometry import CameraIntrinsics
 
 W, H = 800, 800
 F0 = 700.0
@@ -354,8 +354,8 @@ def _proto_census(data, posed, R, C, f):
     """``scripts/seed_census.py``'s ``census_score``, extended to also return
     the per-image group labels, the per-pair counts, and ``sat_pct`` so the
     whole report can be compared."""
-    from sfmtool._sfmtool.analysis import triangulate_batch
-    from sfmtool._sfmtool.matching import ClusterCovisibility
+    from sfmtool.analysis import triangulate_batch
+    from sfmtool.matching import ClusterCovisibility
 
     oc, oi, ouv = data["obs_c"], data["obs_i"], data["obs_uv"]
     n_img, n_cl = data["n_img"], data["n_cl"]

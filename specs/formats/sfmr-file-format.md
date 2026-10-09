@@ -1840,10 +1840,10 @@ The code that reads, writes and verifies `.sfmr` files is:
 
 - Rust: `read_sfmr`, `read_sfmr_metadata`, `write_sfmr` and `verify_sfmr` in
   [`sfmtool-sfmr-format`](../../crates/sfmtool-sfmr-format/src/lib.rs).
-- Python: the same four functions in `sfmtool._sfmtool.io`, which take and
+- Python: the same four functions in `sfmtool.io`, which take and
   return a dict of NumPy arrays and metadata
   ([bindings](../../crates/sfmtool-py/src/io/sfmr.rs)), and
-  `sfmtool._sfmtool.reconstruction.SfmrReconstruction`, whose `load` and `save`
+  `sfmtool.reconstruction.SfmrReconstruction`, whose `load` and `save`
   most of the Python package uses
   ([bindings](../../crates/sfmtool-py/src/reconstruction/sfmr_reconstruction.rs)).
 
@@ -1912,7 +1912,7 @@ The conversions between the canonical convention and COLMAP's, given in
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary),
 are implemented once, in
 [`sfmtool-core/src/geometry/convention.rs`](../../crates/sfmtool-core/src/geometry/convention.rs),
-and bound for Python as `sfmtool._sfmtool.geometry`
+and bound for Python as `sfmtool.geometry`
 ([bindings](../../crates/sfmtool-py/src/geometry/convention.rs)), with wrappers in
 [`sfmtool.colmap.convention`](../../src/sfmtool/colmap/convention.py).
 

@@ -46,7 +46,7 @@ def _both_orders(a):
 class TestSpatialIndexes:
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     def test_kdtree2d_positions(self, dtype):
-        from sfmtool._sfmtool.spatial import KdTree2d
+        from sfmtool.spatial import KdTree2d
 
         rng = np.random.default_rng(0)
         pos, q = rng.random((16, 2)).astype(dtype), rng.random((5, 2)).astype(dtype)
@@ -55,7 +55,7 @@ class TestSpatialIndexes:
 
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     def test_kdtree3d_positions(self, dtype):
-        from sfmtool._sfmtool.spatial import KdTree3d
+        from sfmtool.spatial import KdTree3d
 
         rng = np.random.default_rng(1)
         pos, q = rng.random((16, 3)).astype(dtype), rng.random((5, 3)).astype(dtype)
@@ -65,7 +65,7 @@ class TestSpatialIndexes:
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     def test_kdtree2d_queries(self, dtype):
         """The query side too, not just the stored cloud."""
-        from sfmtool._sfmtool.spatial import KdTree2d
+        from sfmtool.spatial import KdTree2d
 
         rng = np.random.default_rng(8)
         pos = rng.random((16, 2)).astype(dtype)
@@ -78,7 +78,7 @@ class TestSpatialIndexes:
 
     def test_kdforest_descriptors_and_queries(self):
         """Regression: an F-ordered descriptor block silently destroyed matching."""
-        from sfmtool._sfmtool.spatial import KdForest
+        from sfmtool.spatial import KdForest
 
         rng = np.random.default_rng(2)
         desc = rng.integers(0, 256, (64, 8), np.uint8)
@@ -93,7 +93,7 @@ class TestSpatialIndexes:
 
 class TestOpticalFlow:
     def test_compute_optical_flow_images(self):
-        from sfmtool._sfmtool.flow import compute_optical_flow
+        from sfmtool.flow import compute_optical_flow
 
         rng = np.random.default_rng(3)
         a = rng.integers(0, 256, (48, 64), np.uint8)
@@ -107,7 +107,7 @@ class TestOpticalFlow:
         np.testing.assert_array_equal(v_got, v_exp)
 
     def test_remap_bilinear_image(self):
-        from sfmtool._sfmtool.flow import WarpMap
+        from sfmtool.flow import WarpMap
 
         rng = np.random.default_rng(4)
         h, w = 24, 32
@@ -125,7 +125,7 @@ class TestSiftExtraction:
     @pytest.mark.parametrize("shape", [(96, 128), (96, 128, 3)])
     def test_extract_sift_image(self, shape):
         """Regression: an F-ordered image yielded a different keypoint count."""
-        from sfmtool._sfmtool.sift import extract_sift
+        from sfmtool.sift import extract_sift
 
         rng = np.random.default_rng(5)
         img = rng.integers(0, 256, shape, np.uint8)
@@ -143,7 +143,7 @@ class TestSiftExtraction:
 
 class TestSe3Transform:
     def test_apply_to_points_and_matmul(self):
-        from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
+        from sfmtool.geometry import RotQuaternion, Se3Transform
 
         rng = np.random.default_rng(6)
         t = Se3Transform(RotQuaternion(0.5, 0.5, 0.5, 0.5), [1.0, 2.0, 3.0], 1.3)
@@ -164,7 +164,7 @@ class TestReconstructionCloneRoundTrip:
     """
 
     def test_fortran_thumbnails_round_trip(self, seoul_bull_workspace, tmp_path):
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         thumbs = np.asarray(recon.thumbnails_y_x_rgb)
@@ -181,7 +181,7 @@ class TestReconstructionCloneRoundTrip:
         )
 
     def test_fortran_keypoints_round_trip(self, seoul_bull_workspace, tmp_path):
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
 
         # `seoul_bull_workspace` is always feature_source="sift_files", whose
         # `keypoints_xy` is None — embedding patches is what materializes it.
@@ -207,7 +207,7 @@ class TestReconstructionCloneRoundTrip:
         source arrays is loose (1e-15) for the float fields; it still catches a
         bug that transposed both layouts alike.
         """
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         fields = {
@@ -255,7 +255,7 @@ class TestNegativeStride:
     """
 
     def test_reversed_1d_field_round_trips(self, seoul_bull_workspace, tmp_path):
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         errors = np.asarray(recon.errors)
@@ -271,7 +271,7 @@ class TestNegativeStride:
         )
 
     def test_reversed_2d_thumbnails_round_trip(self, seoul_bull_workspace, tmp_path):
-        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+        from sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         thumbs = np.asarray(recon.thumbnails_y_x_rgb)
@@ -290,7 +290,7 @@ class TestNegativeStride:
 class TestDescriptorMatching:
     def test_match_candidates_by_descriptor(self):
         """`matching/descriptor.rs` — 3 converted sites, previously untested."""
-        from sfmtool._sfmtool.matching import match_candidates_by_descriptor
+        from sfmtool.matching import match_candidates_by_descriptor
 
         rng = np.random.default_rng(9)
         n, k, m = 12, 4, 20
@@ -312,7 +312,7 @@ class TestDescriptorMatching:
 class TestSphericalAtlas:
     @pytest.mark.parametrize("channels", [1, 3])
     def test_resample_atlas(self, channels):
-        from sfmtool._sfmtool.spherical import SphericalTileRig
+        from sfmtool.spherical import SphericalTileRig
         from sfmtool import resample_atlas_to_equirect
 
         rng = np.random.default_rng(7)

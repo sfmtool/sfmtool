@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.geometry import Se3Transform
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import Se3Transform
 from sfmtool._workspace import find_sfmr_by_content_hash
 from sfmtool.xform import ToEmbeddedPatchesTransform
 from sfmtool.xform._scale_by_measurements import (

@@ -619,7 +619,7 @@ renders it, an `(R, R, C)` uint8 array (one channel grey, two grey and alpha,
 three RGB, four RGB and alpha; alpha 0 marks a sample without data), with its
 optional `(R, R)` bool `valid` flags:
 
-- `sfmtool._sfmtool.patches.assess_blur(samples, *, valid=None, ellipse=None)`
+- `sfmtool.patches.assess_blur(samples, *, valid=None, ellipse=None)`
   returns the tile's blur assessment as a dict, `semi_axes` `(2,)`, `growth`
   `(2, 2)` (one row of [major, minor] per probe), `probe_sigmas` `(2,)` and
   `ellipse_matrix` `(2, 2)`, or `None` where the ellipse or a probe's cannot be
@@ -638,7 +638,7 @@ assessment without `semi_axes` of 2 and `growth` of `(2, 2)`, and for a
 `length` that is negative or not finite.
 
 ```python
-from sfmtool._sfmtool.patches import assess_blur, blur_to_length
+from sfmtool.patches import assess_blur, blur_to_length
 
 sharp = patch.render_view_tile(camera_a, pose_a, image_a, keypoint=kp_a)
 blurry = patch.render_view_tile(camera_b, pose_b, image_b, keypoint=kp_b)
@@ -648,7 +648,7 @@ if a["semi_axes"][0] < b["semi_axes"][1]:  # sharper along every direction
     out = blur_to_length(sharp["samples"], a, min(b["semi_axes"][1], 2.0), valid=sharp["valid"])
 ```
 
-`sfmtool._sfmtool.patches.score_against_bitmap(bitmap, tiles, *, valid=None,
+`sfmtool.patches.score_against_bitmap(bitmap, tiles, *, valid=None,
 reference=None, window="gaussian_disk", window_sigma=0.6)` scores a
 `(k, R, R, C)` uint8 stack of observations' tiles against a point's `(R, R, 4)`
 stored bitmap (§ "Scores against the stored bitmap"). A tile's channels read
@@ -669,7 +669,7 @@ view's keypoint, at the evaluation's resolution and with its sampler, read with
 their `valid` flags against the track's bitmap and its reference:
 
 ```python
-from sfmtool._sfmtool.patches import score_against_bitmap
+from sfmtool.patches import score_against_bitmap
 
 rendered = [
     patch.render_view_tile(camera, pose, image, keypoint=kp)

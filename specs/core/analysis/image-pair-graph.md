@@ -29,7 +29,7 @@ Both builders live in
 [image_pair_graph.rs](../../../crates/sfmtool-core/src/analysis/image_pair_graph.rs),
 with the frustum geometry in
 [frustum.rs](../../../crates/sfmtool-core/src/camera/frustum.rs); they are
-bound as `sfmtool._sfmtool.analysis.build_covisibility_pairs` and
+bound as `sfmtool.analysis.build_covisibility_pairs` and
 `build_frustum_intersection_pairs`, and wrapped for Python callers by
 [_image_pair_graph.py](../../../src/sfmtool/_image_pair_graph.py).
 

@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""``sfmtool._sfmtool.geometry.resect_images`` — the held-out resection of an
+"""``sfmtool.geometry.resect_images`` — the held-out resection of an
 image set at the Python boundary.
 
 The fixtures mirror the core tests
@@ -19,9 +19,9 @@ import math
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion, resect_images
-from sfmtool._sfmtool.io import write_matches
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import CameraIntrinsics, RotQuaternion, resect_images
+from sfmtool.io import write_matches
+from sfmtool.reconstruction import SfmrReconstruction
 
 WIDTH, HEIGHT = 640, 480
 

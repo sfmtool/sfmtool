@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the absolute-pose Rust bindings
-(``sfmtool._sfmtool.geometry.p3p_solve`` and ``estimate_absolute_pose``;
+(``sfmtool.geometry.p3p_solve`` and ``estimate_absolute_pose``;
 see ``specs/core/geometry/absolute-pose.md``).
 
 Synthetic scenes are generated in the canonical camera convention: a camera
@@ -17,7 +17,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     CameraIntrinsics,
     estimate_absolute_pose,
     p3p_solve,

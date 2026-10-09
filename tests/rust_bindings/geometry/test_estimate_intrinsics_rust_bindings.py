@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the intrinsics-estimate Rust binding
-(``sfmtool._sfmtool.geometry.estimate_intrinsics``; see
+(``sfmtool.geometry.estimate_intrinsics``; see
 ``specs/core/geometry/estimate-intrinsics.md``).
 
 The estimate is the high-level face of the focal vote: it runs the same vote
@@ -18,7 +18,7 @@ against identical captures.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     CameraIntrinsics,
     estimate_intrinsics,
     focal_vote,

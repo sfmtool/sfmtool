@@ -49,7 +49,7 @@ cross-group evidence.
 The census lives in [cluster_census.rs](../../../crates/sfmtool-core/src/analysis/cluster_census.rs),
 with the § 6 companion in
 [group_consistency.rs](../../../crates/sfmtool-core/src/analysis/cluster_census/group_consistency.rs),
-and is bound as `sfmtool._sfmtool.analysis.cluster_census`.
+and is bound as `sfmtool.analysis.cluster_census`.
 
 - The raw patch clusters of the workspace (`.matches` clusters backbone):
   flat observation arrays `(cluster, image, uv)`, plus a per-cluster

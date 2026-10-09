@@ -42,7 +42,7 @@ both languages reach.
 
 The estimator lives in
 [estimate_intrinsics.rs](../../../crates/sfmtool-core/src/geometry/estimate_intrinsics.rs),
-bound as `sfmtool._sfmtool.geometry.estimate_intrinsics`; the
+bound as `sfmtool.geometry.estimate_intrinsics`; the
 `sfm estimate-intrinsics` command
 ([estimate-intrinsics-command.md](../../cli/reconstruction/estimate-intrinsics-command.md))
 is its caller.
@@ -286,7 +286,7 @@ policy pays for itself.
   between the columns is what the binding is called for;
   `escalation` comes back as the reasons' string names, `screening_vote`
   as a nested vote dict, and `camera` as a
-  `sfmtool._sfmtool.geometry.CameraIntrinsics` (or `None`).
+  `sfmtool.geometry.CameraIntrinsics` (or `None`).
 - The binding takes the same two forms as the Rust surface and only these
   two: `estimate_intrinsics(matches_file, ...)` with a `MatchesFile` handle
   (a selection included), which forwards to `estimate_intrinsics_from_matches`,

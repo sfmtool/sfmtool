@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the reprojection / pose-refinement Rust bindings
-(``sfmtool._sfmtool.geometry.reprojection_residuals``, ``inlier_fraction``,
+(``sfmtool.geometry.reprojection_residuals``, ``inlier_fraction``,
 ``refine_absolute_pose``).
 
 Canonical camera convention throughout: the camera looks along −Z, so an
@@ -15,7 +15,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     CameraIntrinsics,
     inlier_fraction,
     refine_absolute_pose,

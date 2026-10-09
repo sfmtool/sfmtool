@@ -18,7 +18,7 @@ pixel positions exactly, so containment is decided at distance zero.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import covered_by_finer
+from sfmtool.analysis import covered_by_finer
 
 
 def reference(

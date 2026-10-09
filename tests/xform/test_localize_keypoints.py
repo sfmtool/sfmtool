@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import LocalizeKeypointsTransform
 from sfmtool.xform._arg_parser import (
@@ -69,7 +69,7 @@ def test_parse_key_value_overrides():
 def _binding_defaults() -> dict[str, object]:
     import inspect
 
-    from sfmtool._sfmtool.patches import PatchCloud
+    from sfmtool.patches import PatchCloud
 
     params = inspect.signature(PatchCloud.localize_keypoints).parameters
     return {name: p.default for name, p in params.items()}
@@ -241,7 +241,7 @@ def test_localize_keypoints_structural_cull(seoul_bull_workspace, tmp_path):
     recon whose point/observation counts are <= the input's, with every
     surviving point keeping at least ``min_views`` observations. The track
     arrays are rebuilt, so no byte-identity is asserted."""
-    from sfmtool._sfmtool.io import verify_sfmr
+    from sfmtool.io import verify_sfmr
 
     recon = _embedded(seoul_bull_workspace)
     obs_before = len(np.asarray(recon.track_point_indexes))

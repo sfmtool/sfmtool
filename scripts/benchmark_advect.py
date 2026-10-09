@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-from sfmtool._sfmtool.flow import advect_points
+from sfmtool.flow import advect_points
 
 
 def main():

@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 
 from sfmtool._progress import _poll_progress, _progress_poll_loop
-from sfmtool._sfmtool import ProgressCounter
+from sfmtool import ProgressCounter
 
 
 def _run_poll_once(value: int, total: int) -> list[str]:

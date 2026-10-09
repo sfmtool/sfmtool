@@ -39,7 +39,7 @@ case-insensitively); any other extension is a usage error.
 `--filter-points` is only meaningful together with `--range`; supplying it without
 `--range` is an error. The range grammar matches `sfm sift -r`, `sfm match -r`,
 `sfm solve -r`, and `sfm xform --include-range` (parsed with
-`sfmtool.RangeExpr`, matched against file numbers recovered by
+`sfmtool.reconstruction.RangeExpr`, matched against file numbers recovered by
 `number_from_filename`).
 
 ## Output Files

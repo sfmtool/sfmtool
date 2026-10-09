@@ -10,8 +10,8 @@ patch bindings render is the tile of the observation they name. See
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics, RigidTransform
-from sfmtool._sfmtool.patches import OrientedPatch
+from sfmtool.geometry import CameraIntrinsics, RigidTransform
+from sfmtool.patches import OrientedPatch
 
 
 def _pinhole(w=64, h=48, f=60.0):
@@ -121,7 +121,7 @@ RESOLUTION = 16
 
 @pytest.fixture(scope="module")
 def ground_truth():
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     from ...conftest import SEOUL_BULL_GROUND_TRUTH
     from ...patch.conftest import load_images

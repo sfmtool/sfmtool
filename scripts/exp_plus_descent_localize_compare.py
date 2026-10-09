@@ -23,7 +23,7 @@ def main() -> None:
     ap.add_argument("variant_sfmr", help="plus_descent embed-patches output")
     args = ap.parse_args()
 
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     a = SfmrReconstruction.load(args.baseline_sfmr)
     b = SfmrReconstruction.load(args.variant_sfmr)

@@ -6,8 +6,8 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import RotQuaternion, Se3Transform
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
     RotateTransform,
     ScaleTransform,

@@ -19,10 +19,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import refine_photometric_ransac, render_consensus_atlas
-from sfmtool._sfmtool.geometry import RotQuaternion
-from sfmtool._sfmtool.spherical import (
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import refine_photometric_ransac, render_consensus_atlas
+from sfmtool.geometry import RotQuaternion
+from sfmtool.spherical import (
     PerSphericalTileSourceStack,
     SphericalTileRig,
 )

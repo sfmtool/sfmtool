@@ -5,7 +5,7 @@
 
 import numpy as np
 
-from sfmtool import RangeExpr
+from sfmtool.reconstruction import RangeExpr
 from sfmtool.xform import (
     BundleAdjustTransform,
     FilterByReprojectionErrorTransform,

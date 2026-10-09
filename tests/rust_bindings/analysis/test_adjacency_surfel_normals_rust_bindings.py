@@ -11,7 +11,7 @@ determined the result is. See specs/core/analysis/adjacency-surfel-normals.md.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.analysis import estimate_adjacency_surfel_normals
+from sfmtool.analysis import estimate_adjacency_surfel_normals
 
 _KEYS = {
     "normals",

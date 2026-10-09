@@ -25,8 +25,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.geometry import RigidTransform
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import RigidTransform
 from sfmtool.sift.file import get_sift_path_from_recon, read_sift_partial
 
 

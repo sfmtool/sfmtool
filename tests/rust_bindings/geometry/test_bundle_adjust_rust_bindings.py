@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the staged robust bundle adjustment Rust binding
-(``sfmtool._sfmtool.geometry.bundle_adjust``).
+(``sfmtool.geometry.bundle_adjust``).
 
 Canonical camera convention throughout: the camera looks along −Z, so an
 in-front point has ``z < 0`` in camera frame. Rotations are built with numpy
@@ -15,7 +15,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import CameraIntrinsics, bundle_adjust
+from sfmtool.geometry import CameraIntrinsics, bundle_adjust
 
 
 def _cam(f=500.0, w=640, h=480):

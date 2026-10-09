@@ -35,12 +35,12 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool import build_profile
-from sfmtool._sfmtool.matching import (
+from sfmtool import build_profile
+from sfmtool.matching import (
     background_floor_clusters,
     background_floor_clusters_kdf,
 )
-from sfmtool._sfmtool.spatial import KdForest, write_kdf
+from sfmtool.spatial import KdForest, write_kdf
 from sfmtool.sift.file import SiftReader
 
 KIB = 1 << 10

@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.spatial import (
+from sfmtool.spatial import (
     KdForest,
     LazyKdForest,
     kdf_file_summary,
@@ -665,7 +665,7 @@ def test_a_malformed_descriptor_order_is_refused(tmp_path):
 
 
 def test_kdf_matcher_validates_before_self_join(tmp_path):
-    from sfmtool._sfmtool.matching import background_floor_clusters_kdf
+    from sfmtool.matching import background_floor_clusters_kdf
 
     desc = _descriptors(n=16)
     path = _export(tmp_path, _forest(desc), "corpus", {"descriptor_block_bytes": 128})
@@ -681,7 +681,7 @@ def test_kdf_matcher_validates_before_self_join(tmp_path):
 
 
 def test_reloaded_forest_preserves_default_check_budget(tmp_path):
-    from sfmtool._sfmtool.spatial import read_kdf
+    from sfmtool.spatial import read_kdf
 
     desc = _descriptors()
     forest = KdForest(desc, num_trees=4, max_leaf_checks=32)

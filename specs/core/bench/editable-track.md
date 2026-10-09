@@ -61,7 +61,7 @@ descriptor search in
 geometry search in
 [bench/geometry_search.rs](../../../crates/sfmtool-core/src/bench/geometry_search.rs), and the
 commit in [bench/commit.rs](../../../crates/sfmtool-core/src/bench/commit.rs),
-bound as `sfmtool._sfmtool.bench`.
+bound as `sfmtool.bench`.
 
 ```rust
 pub struct EditableTrack {
@@ -2764,7 +2764,7 @@ rather than the commit.
 
 ## Python bindings
 
-`sfmtool._sfmtool.bench`. The steps are module-level functions with the same
+`sfmtool.bench`. The steps are module-level functions with the same
 names and the same shape as the Rust ones; `EditableTrack` is a read-only value
 class whose observations cross as dicts, with each stage's measurements under
 `"cluster"` and `"track"` and a key present exactly when something has measured
@@ -2873,7 +2873,7 @@ cluster stage or before anything has fitted one.
 `search_descriptors` takes the searched image's keypoints as the two arrays a
 `.sift` read gives -- an `(N, 2)` float32 of positions and an `(N, 2, 2)` of
 affine shapes, in that file's own row order -- and an open
-`sfmtool._sfmtool.spatial.LazyKdForest`. `radius_px` and `min_inliers` are
+`sfmtool.spatial.LazyKdForest`. `radius_px` and `min_inliers` are
 keywords beside the constellation query's own; its report is a dict carrying
 `observation`, `observation_count`, `image`, `center`, `constellation`, `added`,
 `already_in_track`, `sentence` and `matches`, one dict per found image with its
@@ -2891,8 +2891,8 @@ carrying `observation`, `observation_count`, `image`, `reference_views`,
 dict per admitted image with its `image`, `zncc`, `pixel` and `found`.
 
 ```python
-from sfmtool._sfmtool import bench as bench_module
-from sfmtool._sfmtool.reconstruction import EditedReconstruction
+from sfmtool import bench as bench_module
+from sfmtool.reconstruction import EditedReconstruction
 
 edited = EditedReconstruction(recon)
 bench = bench_module.Bench()

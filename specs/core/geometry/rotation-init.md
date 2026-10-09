@@ -128,7 +128,7 @@ The far-field mask the adjustment starts from is internal.
 
 `rotation_init` lives in
 [rotation_init.rs](../../../crates/sfmtool-core/src/geometry/rotation_init.rs),
-bound as `sfmtool._sfmtool.geometry.rotation_init` by
+bound as `sfmtool.geometry.rotation_init` by
 [rotation_init.rs](../../../crates/sfmtool-py/src/geometry/rotation_init.rs).
 It builds on `estimate_homography` ([focal-vote.md](focal-vote.md)),
 rotation-locked resection

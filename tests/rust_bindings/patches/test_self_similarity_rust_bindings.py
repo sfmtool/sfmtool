@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.patches import (
+from sfmtool.patches import (
     zncc_self_similarity_parts,
     zncc_self_similarity_parts_stack,
 )

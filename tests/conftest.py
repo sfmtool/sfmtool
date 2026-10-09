@@ -15,7 +15,7 @@ import pytest
 from sfmtool._workspace import init_workspace
 
 if TYPE_CHECKING:
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
 TEST_DATA_DIR = Path(__file__).parent.parent / "test-data"
 SEOUL_BULL_DIR = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
@@ -104,7 +104,7 @@ def _largest_recon(output_sfm_file: Path):
     returns only the first — which is not always the most complete one. Pick the
     one that registered the most images.
     """
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     candidates = sorted(output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"))
     best_path, best_count = None, -1
@@ -209,7 +209,7 @@ def _solve_with_retries(
     merely a reason to keep rolling. :func:`_canonicalize_best` finishes the job
     for a caller that is happy with what came back.
     """
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     best_path, best_key = None, None
     accepted = False
@@ -281,7 +281,7 @@ def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     it here keeps every fixture reconstruction clean. A no-op (no resave) for the
     usual case where no point is camera-coincident.
     """
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(sfmr_path)
     pos = np.asarray(recon.positions)
@@ -487,7 +487,7 @@ def _triangulate_clusters_at_poses(
     ``(P, 3)`` finite positions, then per-observation arrays sorted by point and
     then image, with image indexes into ``reference``'s image order.
     """
-    from sfmtool._sfmtool.reconstruction import VERDICT_CODES, triangulate_points
+    from sfmtool.reconstruction import VERDICT_CODES, triangulate_points
 
     cameras = reference.cameras
     camera_of_image = np.asarray(reference.camera_indexes, dtype=np.int64)
@@ -653,8 +653,8 @@ def build_reconstruction_at_poses(
     tests' time scales with the point count: with 794 points they take a third
     of what they took with 2486.
     """
-    from sfmtool._sfmtool.io import read_matches
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.io import read_matches
+    from sfmtool.reconstruction import SfmrReconstruction
     from sfmtool._workspace import load_workspace_config
     from sfmtool.colmap.io import (
         _build_sfmr_data_dict,
@@ -1115,7 +1115,7 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
     metres, and the fixture checks the ``MIN_*`` guarantees the patch tests
     depend on.
     """
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
     _copy_kerry_park_into(workspace_dir)
@@ -1158,7 +1158,7 @@ def kerry_park_solve_once(tmp_path_factory) -> Path:
     :func:`kerry_park_workspace`, which needs no solve. The fixture fails fast
     rather than handing a partial reconstruction to the tests.
     """
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool.reconstruction import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_solve")
     _copy_kerry_park_into(workspace_dir)

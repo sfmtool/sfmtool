@@ -22,7 +22,7 @@ The queries are methods of `ClusterCovisibility` in
 (construction and the displacement tables) and
 [covisibility/selection.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/selection.rs)
 (thinning and reach). Python reaches them as
-`sfmtool._sfmtool.matching.ClusterCovisibility`, bound in
+`sfmtool.matching.ClusterCovisibility`, bound in
 [matching/covisibility.rs](../../../crates/sfmtool-py/src/matching/covisibility.rs).
 
 ```rust

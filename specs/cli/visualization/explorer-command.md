@@ -147,8 +147,7 @@ it for `sfm explorer`, as for any other part of the extension.
 The viewer's command line also takes `--demo` (load generated demo data) and
 `-h` / `--help`. `sfm explorer` does not forward either: `sfm explorer --help`
 prints the Click help for this command, and `--demo` is refused as an unknown
-option. Run the `sfm-explorer` binary for those, or call
-`sfmtool._sfmtool.run_explorer(["--demo"])` from Python.
+option. Run the `sfm-explorer` binary for those.
 
 ## Usage Examples
 

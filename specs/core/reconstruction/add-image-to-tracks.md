@@ -29,7 +29,7 @@ Phase B), with the basis supplied rather than congealed.
 The operation lives in
 [add_image_to_tracks.rs](../../../crates/sfmtool-core/src/reconstruction/add_image_to_tracks.rs),
 bound as `EditedReconstruction.add_image_to_tracks` on
-`sfmtool._sfmtool.reconstruction`. Its per-point kernels are
+`sfmtool.reconstruction`. Its per-point kernels are
 `ReferenceConsensus` in
 [reference.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/reference.rs)
 (build the references' consensus, search one view against it, score one view at
@@ -268,7 +268,7 @@ arrays for the scalars and `(N, 2)` arrays for the keypoints, lists for the
 ragged fields. A refused call raises `ValueError`.
 
 ```python
-from sfmtool._sfmtool.reconstruction import EditedReconstruction
+from sfmtool.reconstruction import EditedReconstruction
 nxt, report = EditedReconstruction(recon).add_image_to_tracks(3, pyramids)
 print(report["accepted"], report["refusal_counts"])
 ```

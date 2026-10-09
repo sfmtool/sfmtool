@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the epipolar-estimation Rust bindings
-(``sfmtool._sfmtool.geometry.estimate_fundamental`` and
+(``sfmtool.geometry.estimate_fundamental`` and
 ``focal_from_fundamental``; see ``specs/core/geometry/epipolar-estimation.md``).
 
 Synthetic camera pairs are generated in the OpenCV/optical pixel convention
@@ -17,7 +17,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.geometry import (
+from sfmtool.geometry import (
     estimate_fundamental,
     focal_from_fundamental,
 )

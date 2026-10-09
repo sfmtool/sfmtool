@@ -398,8 +398,8 @@ def from_clusters(ctx, image, pixel, opts):
 
 
 def _constellation_at(ctx, image, at, pixel, opts):
-    from sfmtool._sfmtool import bench as B
-    from sfmtool._sfmtool.spatial import radius_for_feature_count
+    from sfmtool import bench as B
+    from sfmtool.spatial import radius_for_feature_count
 
     _, track = B.create_cluster(
         B.Bench(),
@@ -634,7 +634,7 @@ def from_sweep(ctx, image, pixel, opts):
 
 def _rust_tracks(ctx, image, pixel, opts):
     """:func:`from_tracks` by the core ``nearby_points``."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     return B.nearby_points(
         ctx.edited,
@@ -656,7 +656,7 @@ def _rust_inputs(ctx):
     cluster-patches clusters."""
     ds = ctx.dataset
     if getattr(ds, "_nearby_sources", None) is None:
-        from sfmtool._sfmtool import bench as B
+        from sfmtool import bench as B
         from sfmtool.sift.file import get_sift_path_for_image
 
         ds._nearby_sources = B.NearbyTrackSources(
@@ -674,7 +674,7 @@ def _rust_inputs(ctx):
 
 def _rust_clusters(ctx, image, pixel, opts):
     """:func:`from_clusters` by the core ``nearby_cluster_tracks``."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     return B.nearby_cluster_tracks(
         ctx.edited,
@@ -693,7 +693,7 @@ def _rust_clusters(ctx, image, pixel, opts):
 
 def _rust_guided(ctx, image, pixel, opts):
     """:func:`from_guided` by the core ``guided_matches``."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     return B.guided_matches(
         ctx.edited,
@@ -717,7 +717,7 @@ def _rust_guided(ctx, image, pixel, opts):
 
 def _rust_constellation(ctx, image, pixel, opts):
     """:func:`from_constellation` by the core ``constellation_seeds``."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     return B.constellation_seeds(
         ctx.edited,
@@ -867,7 +867,7 @@ class _Ranges:
         if self.impl == "python":
             self.spread = _camera_spread(ctx)
         else:
-            from sfmtool._sfmtool import bench as B
+            from sfmtool import bench as B
 
             self.B = B
             c = _cache(ctx)
@@ -1152,7 +1152,7 @@ def from_farfield(ctx, image, pixel, opts):
         return _from_farfield_python(ctx, image, pixel, opts)
     if opts["ff_impl"] != "rust":
         raise ValueError(f"unknown ff_impl {opts['ff_impl']!r} (expected rust|python)")
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     return B.far_field_sweep(
         ctx.edited,
@@ -1412,7 +1412,7 @@ def _ff_group(ctx, image, pixel, a, patches, middle, opts):
     images form a group either, nothing contradicts the sweep and the reading
     stands as it was.
     """
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     from candidates.common import in_frame, track_from_sightings
 
@@ -1690,7 +1690,7 @@ def _rust_finder_options(opts) -> dict:
 def _rust_finder(ctx, image, pixel, opts) -> dict:
     """:func:`find_anchors` by the core ``find_nearby_tracks``: its anchors
     (``found``), layers and stages, with the same keys."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     found = B.find_nearby_tracks(
         ctx.edited,
@@ -1744,7 +1744,7 @@ def _python_layers(ctx, image, pixel, anchors, opts) -> list[dict]:
 def _rust_layers(ctx, image, pixel, anchors, opts) -> list[dict]:
     """:func:`_python_layers` by the core ``depth_layers``, which sets each
     anchor's ``support`` from its result."""
-    from sfmtool._sfmtool import bench as B
+    from sfmtool import bench as B
 
     found = B.depth_layers(
         ctx.edited,

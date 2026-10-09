@@ -126,7 +126,7 @@ image groups against a few thousand clusters).
 The factorization and the metric upgrade live in
 [affine_factorization.rs](../../../crates/sfmtool-core/src/geometry/affine_factorization.rs)
 (module `sfmtool_core::geometry::affine_factorization`), bound as
-`sfmtool._sfmtool.geometry.factorize_affine`. Core stays I/O-free: raw
+`sfmtool.geometry.factorize_affine`. Core stays I/O-free: raw
 slices in, result structs out.
 
 ```rust
@@ -171,7 +171,7 @@ documented size bound.
 
 ## Bindings
 
-Functions in `sfmtool._sfmtool.geometry` returning result pyclasses with
+Functions in `sfmtool.geometry` returning result pyclasses with
 getters; no Python wrapper layer.
 
 ```python

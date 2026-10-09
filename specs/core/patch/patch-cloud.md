@@ -53,8 +53,8 @@ section live in [cloud.rs](../../../crates/sfmtool-core/src/patch/cloud.rs) —
 `WarpMap::from_patch`, which sits with the rest of the warp-map constructors in
 [warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs).
 `OrientedPatch`, `PatchCloud` and `WarpMap.from_patch` are all exposed to Python,
-as `sfmtool._sfmtool.patches.{OrientedPatch, PatchCloud}` and
-`sfmtool._sfmtool.flow.WarpMap.from_patch`
+as `sfmtool.patches.{OrientedPatch, PatchCloud}` and
+`sfmtool.flow.WarpMap.from_patch`
 ([patches/](../../../crates/sfmtool-py/src/patches/),
 [flow/warp.rs](../../../crates/sfmtool-py/src/flow/warp.rs)). The rendering
 machinery underneath — `WarpMap`, `remap_bilinear`, `remap_aniso`,

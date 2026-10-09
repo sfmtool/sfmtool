@@ -59,8 +59,8 @@ def cluster_match(
     Loads each image's descriptors (capped at max_feature_count to match the
     feature indices used downstream), concatenates them into one (N, 128) uint8
     corpus with a CSR image_starts array, and calls
-    sfmtool.background_floor_clusters followed by
-    sfmtool.clusters_to_pair_matches. Returns both: the clusters
+    sfmtool.matching.background_floor_clusters followed by
+    sfmtool.matching.clusters_to_pair_matches. Returns both: the clusters
     (cluster_starts, member_images, member_features — the primary artefact) and
     the four parallel pair arrays (image_index_pairs, match_counts,
     match_feature_indexes, match_descriptor_distances) for the .matches writer.

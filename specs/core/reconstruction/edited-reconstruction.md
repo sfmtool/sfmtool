@@ -31,7 +31,7 @@ The three types live in
 children [image_table.rs](../../../crates/sfmtool-core/src/reconstruction/data/image_table.rs)
 and [point_set.rs](../../../crates/sfmtool-core/src/reconstruction/data/point_set.rs),
 re-exported as `sfmtool_core::{SfmrReconstruction, ImageTable, PointSet}`. The
-reconstruction reaches Python as `sfmtool._sfmtool.reconstruction.SfmrReconstruction`,
+reconstruction reaches Python as `sfmtool.reconstruction.SfmrReconstruction`,
 which exposes columns and never the struct layout, so the split is invisible
 there.
 
@@ -283,7 +283,7 @@ The type lives in
 both are re-exported as
 `sfmtool_core::{EditedReconstruction, PointRecord, RecordObservation, PointView,
 RowMap, EditError}`. The type reaches Python as
-`sfmtool._sfmtool.reconstruction.EditedReconstruction`.
+`sfmtool.reconstruction.EditedReconstruction`.
 
 ```rust
 pub struct EditedReconstruction {

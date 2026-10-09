@@ -184,7 +184,7 @@ the current image:
 4. Deduplicate: if several source keypoints match the same target keypoint, keep the
    pair with the lowest descriptor distance.
 
-Steps 3 and 4 are `match_candidates_by_descriptor` in `sfmtool._sfmtool.matching`.
+Steps 3 and 4 are `match_candidates_by_descriptor` in `sfmtool.matching`.
 `_flow_match_pair` in the same Python module runs the same steps for one image pair
 from a full flow field; only the tests call it.
 
@@ -239,7 +239,7 @@ overlap.
 
 The flow timings are for the CPU path. The matcher calls `compute_optical_flow`
 without `use_gpu`, so it runs the flow on the GPU whenever one is available
-(`gpu_available()` in `sfmtool._sfmtool.flow`) and on the CPU otherwise; neither
+(`gpu_available()` in `sfmtool.flow`) and on the CPU otherwise; neither
 command has an option to choose. With a GPU, pyramid levels smaller than the
 preset's `gpu_min_pixels` still run on the CPU
 ([gpu-optical-flow.md](gpu-optical-flow.md)).

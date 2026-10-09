@@ -89,7 +89,7 @@ def _cluster_data_dict(
 
 def _canonical_expansion(clusters, sift_paths, feature_counts):
     """The expansion straight through `clusters_to_pair_matches`."""
-    from sfmtool._sfmtool.matching import clusters_to_pair_matches
+    from sfmtool.matching import clusters_to_pair_matches
 
     descriptors = []
     for sp, count in zip(sift_paths, feature_counts):

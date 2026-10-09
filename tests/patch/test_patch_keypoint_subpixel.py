@@ -21,8 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import PatchCloud
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.patches import PatchCloud
 
 from .conftest import load_images, rotation_matrices, sample_point_ids
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.geometry import RotQuaternion
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import RotQuaternion
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import apply_transforms as _apply_transforms
 
 

@@ -14,9 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.geometry import CameraIntrinsics, RigidTransform, RotQuaternion
-from sfmtool._sfmtool.flow import WarpMap
+from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.geometry import CameraIntrinsics, RigidTransform, RotQuaternion
+from sfmtool.flow import WarpMap
 
 
 # =============================================================================

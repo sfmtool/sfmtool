@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.strips import parse_point_specs
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 
 
@@ -188,7 +188,7 @@ def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
     import numpy as np
 
     from sfmtool.strips._solve import _SolveStrips
-    from sfmtool._sfmtool.patches import OrientedPatch
+    from sfmtool.patches import OrientedPatch
 
     recon = SfmrReconstruction.load(str(seoul_bull_workspace))
     emb = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)

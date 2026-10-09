@@ -56,7 +56,7 @@ def tangent(n):
 
 
 def main():
-    from sfmtool._sfmtool import patches
+    from sfmtool import patches
 
     prepared = prepare(sys.argv[1], None, quiet=True)
     scales = [1.0, 0.7, 1.5]

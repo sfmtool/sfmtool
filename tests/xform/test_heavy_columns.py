@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.io import read_sfmr, read_sfmr_metadata, verify_sfmr
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.io import read_sfmr, read_sfmr_metadata, verify_sfmr
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.sift.file import get_sift_path_from_recon
 from sfmtool.xform import (

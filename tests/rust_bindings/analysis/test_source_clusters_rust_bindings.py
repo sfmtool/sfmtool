@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the source-cluster join bindings
-(``sfmtool._sfmtool.analysis.source_clusters``, ``assign_bands``).
+(``sfmtool.analysis.source_clusters``, ``assign_bands``).
 
 The join names the clusters of a selection that a member's admission never held
 and that at least two of the member's placed frames still see, reads each one's
@@ -14,7 +14,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.analysis import assign_bands, source_clusters
+from sfmtool.analysis import assign_bands, source_clusters
 
 #: Bands one octave apart, anchored at the floor, with the top band open.
 EDGES = np.array([np.inf, 1.0, 0.5, 0.25])

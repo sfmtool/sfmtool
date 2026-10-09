@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the rule-carrying triangulation binding
-(``sfmtool._sfmtool.reconstruction.triangulate_points``, ``VERDICT_CODES``).
+(``sfmtool.reconstruction.triangulate_points``, ``VERDICT_CODES``).
 
 The operation reads every track from its own observations at one geometry
 and decides, per track, what those observations support. Two input forms, and
@@ -16,13 +16,13 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.analysis import (
+from sfmtool.analysis import (
     bearing_score_batch,
     observed_rays,
     triangulate_batch,
 )
-from sfmtool._sfmtool.geometry import CameraIntrinsics
-from sfmtool._sfmtool.reconstruction import VERDICT_CODES, triangulate_points
+from sfmtool.geometry import CameraIntrinsics
+from sfmtool.reconstruction import VERDICT_CODES, triangulate_points
 
 FINITE = VERDICT_CODES["finite"]
 MARKED = VERDICT_CODES["marked"]

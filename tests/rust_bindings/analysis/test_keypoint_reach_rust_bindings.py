@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the keypoint reach binding
-(``sfmtool._sfmtool.analysis.keypoint_pairs_within_reach``).
+(``sfmtool.analysis.keypoint_pairs_within_reach``).
 
 The enumeration answers, per image of a track set, which other keypoints lie
 inside this keypoint's own disk.  It is directed (the disk is the asking row's),
@@ -14,7 +14,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.analysis import keypoint_pairs_within_reach
+from sfmtool.analysis import keypoint_pairs_within_reach
 
 
 def _call(image, xy, reach):

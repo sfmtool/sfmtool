@@ -22,7 +22,7 @@ which knows nothing about a reconstruction; this is that rule asked of a value.
 The operation lives in
 [prune_covered.rs](../../../crates/sfmtool-core/src/reconstruction/prune_covered.rs),
 bound as `EditedReconstruction.prune_covered_observations` on
-`sfmtool._sfmtool.reconstruction`.
+`sfmtool.reconstruction`.
 
 ```rust
 /// The rules one prune judges each observation by.

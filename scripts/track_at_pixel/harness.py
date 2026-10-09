@@ -39,8 +39,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sfmtool._sfmtool import bench  # noqa: E402
-from sfmtool._sfmtool.reconstruction import EditedReconstruction  # noqa: E402
+from sfmtool import bench  # noqa: E402
+from sfmtool.reconstruction import EditedReconstruction  # noqa: E402
 
 from api import TrackAtPixelError  # noqa: E402
 from context import DatasetContext  # noqa: E402

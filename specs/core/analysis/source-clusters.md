@@ -108,10 +108,10 @@ band at a time, coarsest first.
 
 The kernel lives in
 [source_clusters.rs](../../../crates/sfmtool-core/src/analysis/source_clusters.rs),
-bound as `sfmtool._sfmtool.analysis.source_clusters` and `assign_bands`.
+bound as `sfmtool.analysis.source_clusters` and `assign_bands`.
 
 ```python
-from sfmtool._sfmtool.analysis import assign_bands, source_clusters
+from sfmtool.analysis import assign_bands, source_clusters
 
 out = source_clusters(
     cluster_starts,    # (n_cluster + 1,) uint32 CSR boundaries
@@ -145,14 +145,14 @@ caller is banding, and the caller passes the edges it decided on.
 The radius reading and the cut over it live in
 [cluster_radii.rs](../../../crates/sfmtool-core/src/analysis/cluster_radii.rs)
 (`member_radii`, `cluster_radii`, `coarsest_cluster_ids`, and the
-`*_from_matches` forms), bound as `sfmtool._sfmtool.analysis.cluster_radii` and
+`*_from_matches` forms), bound as `sfmtool.analysis.cluster_radii` and
 `coarsest_cluster_ids`. Both bindings take their input in either of two forms,
 the shape the intrinsics estimate uses: a `MatchesFile` -- a selection
 included -- which states the shapes and the refine radius itself, or those
 arrays spelled out.
 
 ```python
-from sfmtool._sfmtool.analysis import cluster_radii, coarsest_cluster_ids
+from sfmtool.analysis import cluster_radii, coarsest_cluster_ids
 
 radius = cluster_radii(matches)              # (n_clusters,) float32
 keep = coarsest_cluster_ids(matches, 3000)   # (<= 3000,) uint32, ascending
