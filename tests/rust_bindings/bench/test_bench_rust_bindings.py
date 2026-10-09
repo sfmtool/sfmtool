@@ -1184,7 +1184,7 @@ class TestCommitting:
 
 
 @pytest.fixture(scope="module")
-def descriptor_index(embedded, tmp_path_factory):
+def sift_index(embedded, tmp_path_factory):
     """A `.kdf` over the fixture's own `.sift` files, and those keypoints.
 
     One corpus image row per reconstruction image, in the reconstruction's own
@@ -1244,9 +1244,9 @@ class TestTheDescriptorSearch:
     """`search_descriptors` over a real index of the fixture's own capture."""
 
     def test_the_search_reports_the_images_it_found_and_seeds_each_one(
-        self, edited, descriptor_index, long_track_point
+        self, edited, sift_index, long_track_point
     ):
-        forest, keypoints = descriptor_index
+        forest, keypoints = sift_index
         _, track = create_track(Bench(), edited, long_track_point)
         image = track.observations[0]["image"]
         xy, affine = keypoints[image]
@@ -1307,9 +1307,9 @@ class TestTheDescriptorSearch:
                 )
 
     def test_a_bar_no_image_reaches_leaves_the_track_alone(
-        self, edited, descriptor_index, long_track_point
+        self, edited, sift_index, long_track_point
     ):
-        forest, keypoints = descriptor_index
+        forest, keypoints = sift_index
         _, track = create_track(Bench(), edited, long_track_point)
         xy, affine = keypoints[track.observations[0]["image"]]
         grown, report = bench_module.search_descriptors(
@@ -1320,9 +1320,9 @@ class TestTheDescriptorSearch:
         assert grown.observation_count == track.observation_count
 
     def test_an_observation_past_the_end_is_refused(
-        self, edited, descriptor_index, long_track_point
+        self, edited, sift_index, long_track_point
     ):
-        forest, keypoints = descriptor_index
+        forest, keypoints = sift_index
         _, track = create_track(Bench(), edited, long_track_point)
         xy, affine = keypoints[track.observations[0]["image"]]
         with pytest.raises(ValueError, match="past the"):
@@ -1504,7 +1504,8 @@ class TestPlacingSizingAndTurningByHand:
         with pytest.raises(ValueError, match="spans no area"):
             shape_observation(track, 0, [[1.0, 2.0], [2.0, 4.0]])
 
-        # And the two stages own different steps: a surfel is not a cluster's.
+        # And the two stages own different steps: shaping a sighting is a
+        # cluster-stage step, and spinning the patch a track-stage step.
         _, at_track = create_track(Bench(), edited, long_track_point)
         with pytest.raises(ValueError, match="cluster-stage step"):
             shape_observation(at_track, 0, turn)

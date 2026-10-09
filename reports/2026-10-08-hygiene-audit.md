@@ -616,6 +616,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - The bench-scope `surfel` comment at line 1310.
 - The core's "descriptor index" at `features/kdforest/constellation.rs:7`.
 
+> _Status (2026-10-09): **Partially done** — the `descriptor_index` fixture is renamed `sift_index` in the four bench test modules that use it; the bench-scope `surfel` comment (now line 1507) says shaping a sighting is a cluster-stage step and spinning the patch a track-stage step (the `"surfel"` at line 957 is left, as it is the unknown stage name the test passes on purpose); `constellation.rs:7` now says "a SIFT index (a `.kdf`)". **Needs decision** on the `refine_*` kwargs: they are constructor arguments of `BundleAdjustTransform`, which `sfmtool.xform` exports, so removing them or renaming them to *release* words is a public API change, and `specs/core/camera/refit-camera-intrinsics.md:494` names `BundleAdjustTransform(refine_principal_point=True)` as the one path that moves a principal point. The maintainer chooses between dropping all three, renaming the focal and distortion pair to `release_focal` / `release_distortion` and dropping the principal point, or keeping them. Branch `hygiene-fix-1009-17-minor-bundle`._
+
 ## Explicitly not flagged
 
 These figures were measured at `18b1f970` on 2026-10-08. They are not permanent verdicts: this repo has repeatedly grown a cleared file by 30–90% within a month.

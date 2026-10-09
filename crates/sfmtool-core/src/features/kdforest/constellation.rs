@@ -4,9 +4,9 @@
 //! Which other images hold the patch around a pixel, and where in them it sits.
 //!
 //! Given the SIFT features inside a small radius of one pixel in one image, the
-//! query looks each of them up in a descriptor index, groups the hits by the
-//! image they came from, and keeps the images whose correspondences agree on a
-//! single affine warp. The answer is per image: the warp, how many
+//! query looks each of them up in a SIFT index (a `.kdf`), groups the hits by
+//! the image they came from, and keeps the images whose correspondences agree
+//! on a single affine warp. The answer is per image: the warp, how many
 //! correspondences voted for it, and which ones they were.
 //!
 //! `specs/core/features/kdf-constellation-query.md` is the design, and holds the

@@ -20,7 +20,7 @@ from sfmtool import bench
 from sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)
-    descriptor_index,
+    sift_index,
     embedded,
     images,
     long_track_point,

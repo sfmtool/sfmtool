@@ -19,7 +19,7 @@ from sfmtool.fileio import MatchesFile
 from sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)
-    descriptor_index,
+    sift_index,
     embedded,
     images,
     long_track_point,
@@ -27,8 +27,8 @@ from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)
 
 
 @pytest.fixture(scope="module")
-def sources(embedded, descriptor_index):  # noqa: F811
-    forest, keypoints = descriptor_index
+def sources(embedded, sift_index):  # noqa: F811
+    forest, keypoints = sift_index
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))
     assert matches, "the fixture workspace holds a clusters .matches"
     return bench.TrackAtPixelSources(
@@ -168,9 +168,9 @@ def test_an_unknown_option_is_refused_by_name(
 
 def test_the_sources_need_one_keypoint_pair_per_image(
     embedded,  # noqa: F811
-    descriptor_index,  # noqa: F811
+    sift_index,  # noqa: F811
 ):
-    forest, keypoints = descriptor_index
+    forest, keypoints = sift_index
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))
     with pytest.raises(ValueError, match="keypoints has 1 entries"):
         bench.TrackAtPixelSources(

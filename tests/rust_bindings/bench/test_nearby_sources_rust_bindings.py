@@ -21,7 +21,7 @@ from sfmtool.patches import ImagePyramidSet
 from sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)
-    descriptor_index,
+    sift_index,
     embedded,
     images,
     long_track_point,
@@ -102,10 +102,10 @@ def sift_paths(embedded):  # noqa: F811
 
 
 @pytest.fixture(scope="module")
-def sources(embedded, descriptor_index):  # noqa: F811
+def sources(embedded, sift_index):  # noqa: F811
     from sfmtool.fileio import MatchesFile
 
-    forest, _ = descriptor_index
+    forest, _ = sift_index
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))
     assert matches, "the fixture workspace holds a clusters .matches"
     return bench.NearbyTrackSources(
