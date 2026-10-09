@@ -282,7 +282,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "get_bench_track",
             description: "One track on the bench, as its Track View table: the stage and its \
                           data (at the track stage, the patch placement in get_point's shape, \
-                          whose normal is the one tilt_bench_patch takes), the point \
+                          whose normal is the one tilt_bench_patch takes, and \
+                          stage_data.bitmap_pending, true while the bitmap waits to be \
+                          rendered again after its reference row was unpinned), the point \
                           it came from, the thresholds, the observations selected in Track \
                           View (selected_observations, which select_bench_observations sets; \
                           empty on a track that is not focused), and every observation with what put it \

@@ -1146,6 +1146,7 @@ pub fn set_reference(
         }
         clear_bitmap_scores(&mut next, Unmeasured::NoBitmap);
     }
+    next.end_pending_if_held();
     Ok((
         next,
         ReferenceReport {
