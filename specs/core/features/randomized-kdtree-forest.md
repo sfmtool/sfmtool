@@ -104,6 +104,8 @@ impl<S: ForestScalar> KdForest<S> {
         -> (Vec<u32>, Vec<f32>);
     pub fn locality_order(&self) -> &[u32];
     pub fn tree_leaves(&self, tree: usize) -> (&[u32], Vec<u32>);
+    // The `NeighborIndex` corpus read, as in lazy-kdforest-query.md.
+    pub fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
 
     pub fn calibrate_max_leaf_checks(&self, sample_queries: &[S], exact_nn: &[u32],
                                      target_precision: f64) -> usize;
