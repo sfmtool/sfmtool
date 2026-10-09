@@ -585,7 +585,7 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Proposed fix: a `_commands/_sfmr_path.py` helper or a Click `ParamType`.
 - Effort: low. Risk: low; 4 test assertions match the current strings.
 
-> _Status (2026-10-09): **Done** — added `check_sfmr_path(path, label)` in `_commands/_sfmr_path.py`, which raises `click.UsageError("<label> must be a .sfmr file, got: <path>")`, and used it at the 23 sites in 17 command modules that reject anything but `.sfmr`; `camrig cp`, `to-colmap-db` and `inspect` keep their own checks, since they accept `.camrig` or `.matches` too or dispatch on the extension. Branch `hygiene-fix-1009-13-sfmr-path-check`._
+> _Status (2026-10-09): **Done** — added `check_sfmr_path(path, label)` in `_commands/_sfmr_path.py`, which raises `click.UsageError("<label> must be a .sfmr file, got: <path>")`, and used it at the 23 sites in 17 command modules that reject anything but `.sfmr`; `camrig cp`, `to-colmap-db` and `inspect` keep their own checks, since they accept `.camrig` or `.matches` too or dispatch on the extension, `motion` dispatches on `.sfmr` rather than rejecting other paths, and `xform/_align_to.py` is library code that raises `ValueError`. Branch `hygiene-fix-1009-13-sfmr-path-check`._
 
 **Cut implementation and benchmark detail out of `embed-patches` and `cluster-patches` help**
 - Location: `src/sfmtool/_commands/embed_patches.py:224` (`--localize-search-strategy`: "AVX2 single-position vgather kernel", "~1.9× faster end-to-end on dino") and `:258` (`--sampler`), and `cluster_patches.py:39` (`--patch-size`: "passed to refine_cluster_patches").
