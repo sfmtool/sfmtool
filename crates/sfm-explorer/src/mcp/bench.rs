@@ -688,7 +688,7 @@ pub(super) fn add_bench_track_observation(
 /// carried by the same displacement, keeping its own offset from the centre's
 /// projection.
 ///
-/// `by` is `[u, v, n]` on the patch's own orthonormal axes, in world units. Its
+/// `by` is `[u, v, n]` on the patch's own orthonormal axes, in scene units. Its
 /// tangential part slides the patch across its own plane, which a pixel can
 /// also say; its normal part is the one no sighting can, a keypoint naming the
 /// ray the patch lies along and not how far down it the surface is. A track at

@@ -830,7 +830,7 @@ impl ThresholdChange {
 /// call carrying both would have no answer, so the wire takes exactly one.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TranslateTarget {
-    /// `[u, v, n]` on the patch's own orthonormal axes, in world units.
+    /// `[u, v, n]` on the patch's own orthonormal axes, in scene units.
     By([f64; 3]),
     /// A pixel of one photograph, which the centre of the square drawn there
     /// lands under.

@@ -139,7 +139,7 @@ impl std::fmt::Display for SearchError {
                 "no indexed keypoint sits within {radius_px:.0} px of the observation, \
                  out of {keypoint_count} in the image"
             ),
-            SearchError::Index(message) => write!(f, "the descriptor index refused: {message}"),
+            SearchError::Index(message) => write!(f, "the SIFT index refused: {message}"),
             SearchError::Cancelled => write!(f, "the search was cancelled"),
         }
     }

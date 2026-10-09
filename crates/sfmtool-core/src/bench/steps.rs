@@ -402,7 +402,7 @@ impl std::fmt::Display for CreateClusterError {
             }
             CreateClusterError::DegenerateShape(_) => write!(
                 f,
-                "the seed's affine shape spans no area, so it frames no patch"
+                "the seed's affine shape spans no area, so it places no patch"
             ),
             CreateClusterError::Label(e) => e.fmt(f),
         }
@@ -1362,7 +1362,7 @@ pub struct ResizeReport {
     pub observation: Option<usize>,
     /// The image the pixel was in, for [`resize_patch_to_pixel`].
     pub image: Option<u32>,
-    /// The patch's new half-length: world units at the track stage, and the
+    /// The patch's new half-length: scene units at the track stage, and the
     /// half-width along `u` in that image's own pixels at the cluster stage.
     pub half: f64,
     /// What it was, in the same unit.
@@ -1688,7 +1688,7 @@ pub struct TranslateToPixelReport {
     pub pixel: [f64; 2],
     /// Where the centre now stands. A unit bearing for a direction patch.
     pub center: Point3<f64>,
-    /// How far it moved, in world units.
+    /// How far it moved, in scene units.
     pub moved: f64,
     /// How many sightings the moved centre projects into, and so how many
     /// keypoints were written.
@@ -1790,7 +1790,7 @@ pub fn translate_patch_to_pixel(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TranslateReport {
     /// The displacement asked for, on the patch's own axes `[u, v, n]`, in
-    /// world units.
+    /// scene units.
     ///
     /// Reported as it was asked rather than as the unsigned length [`Self::moved`]
     /// is, because the **sign** of the normal part carries meaning: a patch
@@ -1800,7 +1800,7 @@ pub struct TranslateReport {
     pub by: Vector3<f64>,
     /// Where the centre now stands. A unit bearing for a direction patch.
     pub center: Point3<f64>,
-    /// How far it moved, in world units.
+    /// How far it moved, in scene units.
     pub moved: f64,
     /// How many sightings the moved centre projects into, and so how many
     /// keypoints were written.
@@ -1812,7 +1812,7 @@ pub struct TranslateReport {
 }
 
 /// Move the patch by `by`, read on its **own orthonormal axes** `[u, v, n]` in
-/// world units.
+/// scene units.
 ///
 /// The edit itself, and one step for the two directions a patch can be moved in.
 /// [`translate_patch_to_pixel`] reaches it by turning its pixel into an in-plane

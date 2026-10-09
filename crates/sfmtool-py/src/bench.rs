@@ -523,8 +523,8 @@ impl PyEditableTrack {
     /// Whether the track's coordinate is a bearing (``w == 0``) rather than a
     /// point.
     ///
-    /// The track's own flag and not its frame's ``w``: a track put on the bench
-    /// from a reconstruction with no patch frames carries no patch at all, and a
+    /// The track's own flag and not its placement's ``w``: a track put on the
+    /// bench from a reconstruction with no patches carries no patch at all, and a
     /// bearing it came from is still a bearing. ``False`` at the cluster stage,
     /// which states no direction.
     #[getter]
@@ -808,7 +808,7 @@ impl PyBench {
 
 /// Put the point at `point` on the bench as a track-stage editable track.
 ///
-/// The track arrives with the point's own frame, bitmap and keypoints, its
+/// The track arrives with the point's own placement, bitmap and keypoints, its
 /// origin set to that point, and every observation ``in`` and pinned, so an
 /// :func:`evaluate` leaves those verdicts alone until :func:`unpin_verdict`
 /// hands them to the bars. The measurements are
@@ -1125,7 +1125,7 @@ fn set_reference(
 /// longer projects into is left with no keypoint and ``NoProjection`` as its
 /// reason.
 ///
-/// The pointer is read against the outline as drawn: the frame re-anchored on
+/// The pointer is read against the outline as drawn: the patch re-anchored on
 /// that observation's own sighting. :func:`sight_observation` is the step
 /// for **one** keypoint.
 ///
@@ -1175,7 +1175,7 @@ fn translate_patch_to_pixel(
 }
 
 /// Move the patch of a track-stage `track` by ``by``, read on the patch's
-/// **own orthonormal axes** ``[u, v, n]`` in world units.
+/// **own orthonormal axes** ``[u, v, n]`` in scene units.
 ///
 /// ``u`` and ``v`` slide it across its own plane and ``n`` moves it along its
 /// outward normal, the one direction no photograph can name; a mixed ``by``
@@ -1323,7 +1323,7 @@ fn sight_observation(
 /// Resize the track's patch to ``half_length`` on both of its axes, about its
 /// own centre.
 ///
-/// One scalar, because a patch frame is square: the stored half-vector pair has
+/// One scalar, because a patch is square: the stored half-vector pair has
 /// ``|u| == |v|`` and the tile grid is square with it, so a resize that moved
 /// one axis alone would stretch the template rather than enlarge it. The centre,
 /// the axes' directions and the normal are untouched. The patch bitmap and
@@ -1701,7 +1701,7 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// Read `track` as it stands: fill the measurement slots of every observation,
 /// whatever its verdict, at the stage it is in, then let the bars decide every
 /// unpinned verdict from those readings, and **move nothing else**. The
-/// position, the frame, the bitmap and every keypoint come back exactly as they
+/// position, the placement, the bitmap and every keypoint come back exactly as they
 /// went in; each unpinned observation takes the verdict :func:`apply_thresholds`
 /// would give it, best score first and one ``in`` per image, and a pinned one
 /// keeps its own. An ``out`` observation is scored the way an ``in`` one is.
@@ -1823,9 +1823,9 @@ fn evaluate(
 /// Fit `track` at the stage it is in: the step that **moves** it.
 ///
 /// At the **track stage** the patch is localized into every view, refined to
-/// sub-pixel, the ``in`` results are re-triangulated, the frame is placed at
+/// sub-pixel, the ``in`` results are re-triangulated, the patch is placed at
 /// what they resolve to and the patch bitmap is rendered over them; the
-/// keypoints, the coordinate, the frame and the bitmap are written. At the
+/// keypoints, the coordinate, the placement and the bitmap are written. At the
 /// **cluster stage** a fit is the refinement, which is what a reading is too: a
 /// cluster has no geometry behind it to move.
 ///
@@ -1907,7 +1907,7 @@ fn fit(
 /// Put `track` into `stage`, which is ``"cluster"`` or ``"track"``.
 ///
 /// **Up**, cluster to track: the ``in`` observations' refined cluster positions
-/// are triangulated, the patch is framed at that position from the reference
+/// are triangulated, the patch is placed at that position from the reference
 /// observation's affine shape at the triangulated depth, and the track-stage
 /// fit then runs over it. The cluster-stage measurements are dropped with the
 /// stage.
@@ -1915,7 +1915,7 @@ fn fit(
 /// **Down**, track to cluster: always possible and lossy on purpose. The
 /// reference becomes the ``in`` observation with the largest projected patch
 /// scale, every observation is re-seeded at its keypoint with the shape the
-/// frame projects to there, and the position, the frame, the bitmap and the
+/// patch projects to there, and the position, the placement, the bitmap and the
 /// track-stage measurements are dropped.
 ///
 /// Setting the stage a track is already at gives the track back unchanged, with
@@ -1996,7 +1996,7 @@ fn set_stage(
 /// sightings that agree with each other and not with a 3D hypothesis fitted to
 /// both, so a track-stage half is put down to the cluster stage through the
 /// same downgrade :func:`set_stage` runs -- which is why `edited` is needed:
-/// the downgrade projects the frame through each observation's camera.
+/// the downgrade projects the patch through each observation's camera.
 ///
 /// Returns ``(Bench, report)``; the report's ``label`` names the second track.
 #[pyfunction]
@@ -2083,7 +2083,7 @@ fn commit(
     Ok((PyEditedReconstruction { inner: next }, d.unbind()))
 }
 
-/// Ask a descriptor index which other images hold the patch around one
+/// Ask a SIFT index which other images hold the patch around one
 /// observation, and add each as a candidate.
 ///
 /// This is a **constellation query**, not a lookup of one descriptor: the
@@ -2269,7 +2269,7 @@ fn search_report_dict<'py>(py: Python<'py>, report: &SearchReport) -> PyResult<B
 ///
 /// This is the single-point form of the view expansion ``sfm embed-patches``
 /// runs. An admitted image arrives at the patch centre's projection, seeded
-/// with the projected frame as its shape, and ``out`` and unpinned: the next
+/// with the projected patch as its shape, and ``out`` and unpinned: the next
 /// :func:`evaluate` or :func:`fit` judges it. The admission bar is the track's
 /// own ``geometry_search_min_relative_zncc`` threshold, as it is in the viewer.
 /// The keywords are

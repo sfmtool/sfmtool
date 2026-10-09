@@ -280,7 +280,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           that same displacement, keeping its own offset from the centre's \
                           projection, which is what the tiles are cut on. Name where it goes in \
                           exactly one of two ways. `by` is [u, v, n] on the patch's OWN \
-                          orthonormal axes, in the reconstruction's world units: u and v slide it \
+                          orthonormal axes, in the reconstruction's scene units: u and v slide it \
                           across its own plane, n moves it along its outward normal, and both \
                           together are allowed. The n part is a statement no sighting can make \
                           -- a sighting says which ray the patch lies along and nothing about how \
@@ -315,7 +315,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "maxItems": 3,
                             "description":
                                 "[u, v, n] on the patch's own orthonormal axes, in the \
-                                 reconstruction's world units. Give this or a pixel with \
+                                 reconstruction's scene units. Give this or a pixel with \
                                  its observation or camera_image, not both.",
                         }),
                     ),
@@ -408,7 +408,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "exclusiveMinimum": 0,
                             "description":
                                 "The patch's new half-length along both axes, in the \
-                                 reconstruction's world units. Give this or an edge and a \
+                                 reconstruction's scene units. Give this or an edge and a \
                                  pixel with its observation or camera_image, not both.",
                         }),
                     ),
@@ -808,7 +808,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
                           the track stage it localizes every sighting against the patch, \
                           refines each to sub-pixel, re-triangulates the in ones, re-centres \
-                          the frame there and renders the patch bitmap again, the reference \
+                          the patch there and renders the patch bitmap again, the reference \
                           view's tile; at the cluster \
                           stage it is the refinement, which is what a reading is too. Nothing \
                           is dropped by a gate: a sighting that does not belong is turned out \

@@ -270,7 +270,7 @@ impl std::fmt::Display for EvaluateError {
             ),
             EvaluateError::NoFrame => write!(
                 f,
-                "the track carries no patch frame to read against, as a point put on \
+                "the track carries no patch to read against, as a point put on \
                  the bench from a sift_files reconstruction has none; convert the \
                  reconstruction to embedded patches and put the point on the bench again"
             ),

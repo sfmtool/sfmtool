@@ -737,7 +737,7 @@ evaluation of the track as it stands; a spinner and *Evaluating…* while an
 evaluation of the current inputs is running or waiting to start; and, when core's
 `evaluate_preconditions` refuses the track or the evaluation failed, that
 sentence in the warning colour -- *"Cannot evaluate bull-nose: the track carries
-no patch frame to read against, as a point put on the bench from a sift_files
+no patch to read against, as a point put on the bench from a sift_files
 reconstruction has none; convert the reconstruction to embedded patches and put
 the point on the bench again"* -- in place of any state.
 
@@ -1817,7 +1817,7 @@ a `sift_files` reconstruction imported from COLMAP, is drawn as any other, and
 what that shows is less than the rest of this section describes. `create_track`
 builds a track-stage track with no frame, and core's `evaluate_preconditions`
 refuses it, so the toolbar shows the refusal sentence (*"Cannot evaluate
-pt3d_…: the track carries no patch frame to read against; …"*) and every
+pt3d_…: the track carries no patch to read against; …"*) and every
 number cell reads `-`, the reprojection error and ray angle included, and every
 *Verdict* cell `-`. The *Crop* and *Patch* cells are empty frames, and there is
 no crop hover view to carry the pixel and the feature index. The header still

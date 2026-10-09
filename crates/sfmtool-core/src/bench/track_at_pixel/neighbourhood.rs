@@ -158,7 +158,7 @@ pub struct NearbyObservation {
     /// The point's unit outward normal, the cross product of its patch
     /// half-vectors; zero when the point carries no patch.
     pub normal: Vector3<f64>,
-    /// The length of the patch's `u` half-vector, in world units.
+    /// The length of the patch's `u` half-vector, in scene units.
     pub half_extent: f64,
     /// That half-extent's apparent size in the queried image, in px; `NaN` for
     /// a point at infinity or one behind the camera.

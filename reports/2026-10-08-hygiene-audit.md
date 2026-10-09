@@ -285,6 +285,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Add a direction-of-travel note to the `placement` entry, so local variables convert when their file is touched.
 - Effort: medium. Risk: low; update the error-message tests.
 
+> _Status (2026-10-09): **Partially done** — reworded the messages and docs, with no identifier renamed. The four "no patch frame" refusals in core's `commit`, `evaluate`, `fit` and `stage` now say "no patch" (commit's says "patch placement"), along with stage's "its frame stands nowhere" and `CreateClusterError`'s "frames no patch". `SearchError::Index` says "the SIFT index refused". The three wire descriptions in `catalog/bench.rs`, the `translate_bench_patch` refusal in `mcp/tools.rs`, and the Python bench docstrings say "scene units" and "patch"/"placement" instead of "world units" and "frame". The bench doc comments and the spec quotes in `track-view.md`, `bench.md`, `editable-track.md` and `mcp-server.md` are updated to match. Branch `hygiene-fix-1009-16-bench-placement-words`. Left for a decision: renaming the seven `NoFrame` variants to `NoPatch` (and sharing one precondition error), the `frame: &OrientedPatch` parameters and identifiers such as `anchored_frame` and `has_patch_frames`, `SplitSettings` → `PieceSettings`, and the direction-of-travel note on the glossary's `placement` entry._
+
 **Disambiguate the bench's flat re-exports**
 - Location: `crates/sfmtool-core/src/bench/mod.rs:61-121`, `features/kdforest/constellation.rs:73`, `bench/search.rs`.
 - Problem: about 180 names are re-exported flat into `bench::`. They include:

@@ -333,13 +333,13 @@ pub fn translate_patch_to_pixel(
 ) -> Result<(EditableTrack, TranslateToPixelReport), TrackEditError>;
 
 /// The move itself: `by` is read on the patch's **own orthonormal axes**
-/// `[u, v, n]`, in world units. `u` and `v` slide it across its own plane and
+/// `[u, v, n]`, in scene units. `u` and `v` slide it across its own plane and
 /// `n` along its outward normal, which is the one direction a pixel cannot
 /// name; a mixed `by` does both at once.
 pub fn translate_patch(
     track: &EditableTrack,
     edited: &EditedReconstruction,
-    by: Vector3<f64>,                    // [u, v, n], world units
+    by: Vector3<f64>,                    // [u, v, n], scene units
 ) -> Result<(EditableTrack, TranslateReport), TrackEditError>;
 
 pub fn sight_observation(
@@ -419,7 +419,7 @@ pub struct TranslateToPixelReport {
     pub image: u32,
     pub pixel: [f64; 2],                 // where the centre now projects in it
     pub center: Point3<f64>,
-    pub moved: f64,                      // world units
+    pub moved: f64,                      // scene units
     pub placed: usize,                   // keypoints written
     pub changed: bool,
     pub clamped_from: Option<[f64; 2]>,  // the pixel asked for, when off the picture
@@ -432,7 +432,7 @@ pub struct TranslateToPixelReport {
 pub struct TranslateReport {
     pub by: Vector3<f64>,                // [u, v, n], as it was asked for
     pub center: Point3<f64>,
-    pub moved: f64,                      // world units
+    pub moved: f64,                      // scene units
     pub placed: usize,                   // keypoints written
     pub changed: bool,
 }
@@ -2025,7 +2025,7 @@ a single step would have to choose a single rule and would be wrong for the
 other axis.
 
 **`translate_patch` moves the patch by `by`**, read on the patch's **own
-orthonormal axes** `[u, v, n]` in world units. `u` and `v` slide it across its
+orthonormal axes** `[u, v, n]` in scene units. `u` and `v` slide it across its
 own plane and `n` moves it along its outward normal -- the one direction no
 photograph can name, a sighting saying which ray the patch lies along and
 nothing about how far down it the surface is -- and a **mixed** `by` does both
@@ -2253,7 +2253,7 @@ not show it. `clamp_to_photograph` is the rule, public so a caller that holds a
 candidates by the warp it found and a warp may put the patch off the edge of an
 image that only half holds it, which the reading refuses as `OffSensor` rather
 than the step inventing a sighting inside the frame. `translate_patch` and
-`resize_patch` take a displacement and a half-length in world units rather than
+`resize_patch` take a displacement and a half-length in scene units rather than
 a pixel, so they have no photograph to bring anything inside and clamp nothing.
 
 ### Searching the descriptor index

@@ -119,10 +119,10 @@ pub struct TrackClassification {
     /// bearing verdict whose bearing is in front of every camera).
     pub depth_likelihood_ratio: f64,
     /// The distance from the observing cameras' centroid to the coordinate the
-    /// track takes, in world units; `NaN` for a bearing.
+    /// track takes, in scene units; `NaN` for a bearing.
     pub distance: f64,
     /// The minimum depth a placed point keeps from every observing camera's
-    /// centre, in world units.
+    /// centre, in scene units.
     pub min_depth: f64,
     /// How many rays the test read.
     pub num_views: usize,

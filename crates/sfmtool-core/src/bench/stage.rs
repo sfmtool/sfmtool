@@ -33,10 +33,10 @@ use super::track::{
 pub enum StageError {
     /// The upgrade's own work, or the reading that follows it, was refused.
     Fit(FitError),
-    /// A downgrade needs the frame it projects into each observation's camera,
+    /// A downgrade needs the patch it projects into each observation's camera,
     /// and the track carries none.
     NoFrame,
-    /// A downgrade needs the position the frame stands at, and the track
+    /// A downgrade needs the position the patch stands at, and the track
     /// carries none.
     NoPosition,
     /// No observation could anchor the cluster: none carries a seed, or none
@@ -50,14 +50,14 @@ impl std::fmt::Display for StageError {
             StageError::Fit(e) => write!(f, "{e}"),
             StageError::NoFrame => write!(
                 f,
-                "the track carries no patch frame, so there is nothing to project \
+                "the track carries no patch, so there is nothing to project \
                  into each observation's image; a point put on the bench from a \
                  sift_files reconstruction has none, so convert the reconstruction to \
                  embedded patches and put the point on the bench again"
             ),
             StageError::NoPosition => write!(
                 f,
-                "the track carries no position, so its frame stands nowhere"
+                "the track carries no position, so its patch stands nowhere"
             ),
             StageError::NoReference => write!(
                 f,

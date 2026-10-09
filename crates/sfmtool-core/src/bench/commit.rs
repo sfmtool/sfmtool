@@ -107,8 +107,8 @@ pub enum CommitError {
     TooFewObservations(usize),
     /// The track carries no position, so nothing has triangulated it yet.
     NoPosition,
-    /// The reconstruction carries a patch frame per point and the track has
-    /// none.
+    /// The reconstruction carries a patch placement per point and the track
+    /// has none.
     NoFrame,
     /// The reconstruction carries a patch bitmap per point and the track has
     /// none to commit: it has no bitmap, or only one for judging
@@ -156,7 +156,7 @@ impl std::fmt::Display for CommitError {
             }
             CommitError::NoFrame => write!(
                 f,
-                "the reconstruction stores a patch frame per point and the track has none"
+                "the reconstruction stores a patch placement per point and the track has none"
             ),
             CommitError::NoBitmap => write!(
                 f,

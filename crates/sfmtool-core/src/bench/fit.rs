@@ -198,7 +198,7 @@ impl std::fmt::Display for FitError {
             ),
             FitError::NoFrame => write!(
                 f,
-                "the track carries no patch frame to register against, as a point put \
+                "the track carries no patch to register against, as a point put \
                  on the bench from a sift_files reconstruction has none; convert the \
                  reconstruction to embedded patches and put the point on the bench again"
             ),
