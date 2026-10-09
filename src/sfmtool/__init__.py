@@ -3,34 +3,32 @@
 
 """SfM Tool: Structure from Motion on a Rust core.
 
-The names on this package come from two places. The names of the compiled
-``sfmtool._sfmtool`` extension are bound when the package is imported, since
-loading the extension takes about 10 ms. The names defined in the Python
-submodules are bound on first use, through the module ``__getattr__`` below
-(PEP 562): those submodules import numpy, OpenCV and pycolmap, which take
-hundreds of milliseconds on a warm disk cache and seconds on a cold one, and a
-program that imports one part of the package, such as ``sfm explorer`` or
-``sfm --help``, should not pay for the rest. ``from sfmtool import X``,
-``sfmtool.X``, ``from sfmtool import *`` and ``dir(sfmtool)`` all see the same
-names either way.
+The Rust bindings live in the compiled ``sfmtool._sfmtool`` extension, which is
+internal; each of its submodules has a public home, a module of the same name
+on this package: ``sfmtool.geometry``, ``sfmtool.io``, ``sfmtool.reconstruction``
+and so on, and ``sfmtool.sift`` for the SIFT bindings. Read a binding from its
+module (``from sfmtool.io import read_sfmr``). The package root binds only the
+three root-level names of the extension, ``THUMBNAIL_SIZE``, ``ProgressCounter``
+and ``build_profile``, when it is imported, since loading the extension takes
+about 10 ms.
+
+The names defined in the Python submodules are bound on first use, through the
+module ``__getattr__`` below (PEP 562): those submodules import numpy, OpenCV
+and pycolmap, which take hundreds of milliseconds on a warm disk cache and
+seconds on a cold one, and a program that imports one part of the package, such
+as ``sfm explorer`` or ``sfm --help``, should not pay for the rest. The
+submodules in ``_LAZY_SUBPACKAGES``, which include the binding modules, are
+bound the same way, so ``sfmtool.io`` works after ``import sfmtool`` alone.
+``from sfmtool import X``, ``sfmtool.X``, ``from sfmtool import *`` and
+``dir(sfmtool)`` all see the same names either way.
 """
 
 from importlib import import_module as _import_module
 from typing import TYPE_CHECKING
 
-# The root-level `_sfmtool` names; everything else lives on a submodule.
+# The root-level `_sfmtool` names; every other binding is read from its module.
 # `run_explorer`, also root-level, is left out: `sfm explorer` calls it.
 from sfmtool._sfmtool import THUMBNAIL_SIZE, ProgressCounter, build_profile  # noqa: F401
-from sfmtool._sfmtool.reconstruction import *  # noqa: F401, F403
-from sfmtool._sfmtool.patches import *  # noqa: F401, F403
-from sfmtool._sfmtool.geometry import *  # noqa: F401, F403
-from sfmtool._sfmtool.io import *  # noqa: F401, F403
-from sfmtool._sfmtool.sift import *  # noqa: F401, F403
-from sfmtool._sfmtool.matching import *  # noqa: F401, F403
-from sfmtool._sfmtool.analysis import *  # noqa: F401, F403
-from sfmtool._sfmtool.flow import *  # noqa: F401, F403
-from sfmtool._sfmtool.spatial import *  # noqa: F401, F403
-from sfmtool._sfmtool.spherical import *  # noqa: F401, F403
 
 # Each name bound on first use, and the submodule it is read from.
 _LAZY_NAMES = {
@@ -75,24 +73,42 @@ _LAZY_NAMES = {
 }
 _LAZY = {name: module for module, names in _LAZY_NAMES.items() for name in names}
 
-# Subpackages that are bound as attributes of the package root on first read,
-# as they also are once one of the names above has imported them.
-_LAZY_SUBPACKAGES = ("rig", "sift")
-
-# Where a Python submodule defines a name that an extension submodule also
-# exports, the package root gives the Python one: `sfmtool.write_sift` is the
-# function in `sfmtool.sift.file`, which validates its arguments before calling
-# the `_sfmtool.io` binding of the same name. Unbind each such extension name so
-# it goes through `__getattr__`.
-for _name in _LAZY.keys() & globals().keys():
-    del globals()[_name]
-del _name
+# Submodules that are bound as attributes of the package root on first read,
+# as they also are once one of the names above has imported them. All but `rig`
+# are the public modules of the extension's submodules.
+_LAZY_SUBPACKAGES = (
+    "analysis",
+    "bench",
+    "flow",
+    "geometry",
+    "io",
+    "matching",
+    "patches",
+    "reconstruction",
+    "rig",
+    "sift",
+    "spatial",
+    "spherical",
+)
 
 # Type checkers and editors do not run `__getattr__`, so they read the lazy
 # names from these imports, which never run. `tests/test_lazy_loading.py`
 # checks that they match `_LAZY_NAMES` and `_LAZY_SUBPACKAGES`.
 if TYPE_CHECKING:
-    from sfmtool import rig, sift  # noqa: F401
+    from sfmtool import (  # noqa: F401
+        analysis,
+        bench,
+        flow,
+        geometry,
+        io,
+        matching,
+        patches,
+        reconstruction,
+        rig,
+        sift,
+        spatial,
+        spherical,
+    )
     from sfmtool._filenames import (  # noqa: F401
         expand_paths,
         normalize_workspace_path,

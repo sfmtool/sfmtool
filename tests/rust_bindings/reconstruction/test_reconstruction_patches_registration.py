@@ -4,6 +4,9 @@
 """Registration coverage for `_sfmtool.reconstruction` and `_sfmtool.patches`,
 plus the deliberate root-level surface left after the submodule migration."""
 
+import importlib
+from types import ModuleType
+
 import sfmtool
 import sfmtool._sfmtool as _sfmtool
 import sfmtool._sfmtool.patches as patches
@@ -59,14 +62,16 @@ def test_root_surface_is_deliberate_and_minimal():
     """The `_sfmtool` root registers only its deliberate root-level names:
     `build_profile`, `ProgressCounter` and `THUMBNAIL_SIZE`, which the package
     root re-exports, and `run_explorer`, the viewer entry point that `sfm
-    explorer` calls and the package root does not re-export. The old
-    flat class registrations are gone, and the package root still re-exports
-    the public API explicitly."""
+    explorer` calls and the package root does not re-export. Every other
+    binding is registered on a submodule, and the package root does not
+    re-export it flat."""
     assert callable(_sfmtool.build_profile)
     assert isinstance(_sfmtool.ProgressCounter, type)
     assert isinstance(_sfmtool.THUMBNAIL_SIZE, int)
     assert callable(_sfmtool.run_explorer)
     assert not hasattr(sfmtool, "run_explorer")
+    for name in ("ProgressCounter", "build_profile", "THUMBNAIL_SIZE"):
+        assert getattr(sfmtool, name) is getattr(_sfmtool, name), name
     for stale in (
         "SfmrReconstruction",
         "RangeExpr",
@@ -80,23 +85,41 @@ def test_root_surface_is_deliberate_and_minimal():
         "image_dimensions",
     ):
         assert not hasattr(_sfmtool, stale), f"{stale} still registered flat"
-    # The public package-root surface is preserved via explicit re-exports.
-    for name in (
-        "SfmrReconstruction",
-        "RangeExpr",
-        "PatchCloud",
-        "OrientedPatch",
-        "ImagePyramidSet",
-        "CameraViews",
-        "ProgressCounter",
-        "build_profile",
-        "image_dimensions",
-    ):
-        assert hasattr(sfmtool, name), f"sfmtool.{name} re-export missing"
+        assert not hasattr(sfmtool, stale), f"sfmtool.{stale} still re-exported flat"
 
 
-def test_image_dimensions_lives_in_io():
-    """`image_dimensions` moved into the `io` submodule."""
-    import sfmtool._sfmtool.io as io_mod
+_SUBMODULES = (
+    "analysis",
+    "bench",
+    "flow",
+    "geometry",
+    "io",
+    "matching",
+    "patches",
+    "reconstruction",
+    "sift",
+    "spatial",
+    "spherical",
+)
 
-    assert callable(io_mod.image_dimensions)
+
+def test_each_submodule_has_a_public_module_with_the_same_names():
+    """Each `_sfmtool` submodule has a public module `sfmtool.<name>` that
+    exports exactly the submodule's `__all__`, as the same objects. `sfmtool.sift`
+    also holds the Python SIFT code, so only its binding names are compared."""
+    registered = {
+        name
+        for name in vars(_sfmtool)
+        if isinstance(getattr(_sfmtool, name), ModuleType)
+    }
+    assert registered == set(_SUBMODULES)
+    for name in _SUBMODULES:
+        extension = getattr(_sfmtool, name)
+        public = importlib.import_module(f"sfmtool.{name}")
+        if name != "sift":
+            assert list(public.__all__) == list(extension.__all__), name
+        for binding in extension.__all__:
+            assert getattr(public, binding) is getattr(extension, binding), (
+                name,
+                binding,
+            )

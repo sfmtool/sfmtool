@@ -76,11 +76,9 @@ def test_star_import_and_sample_public_names():
     namespace = {}
     exec("from sfmtool import *", namespace)
     for name in (
-        "SfmrReconstruction",
         "ProgressCounter",
         "THUMBNAIL_SIZE",
         "build_profile",
-        "image_dimensions",
         "expand_paths",
         "find_workspace_for_path",
         "SiftReader",
@@ -94,14 +92,51 @@ def test_star_import_and_sample_public_names():
     assert set(sfmtool.__all__) <= set(namespace)
 
 
+def test_root_binds_no_binding_flat():
+    """A binding is read from its module, not from the package root: once
+    imported, the root binds the three root-level extension names and nothing
+    else public, and `__all__` adds only the names of `_LAZY_NAMES` and the
+    submodules of `_LAZY_SUBPACKAGES`. Run in a fresh interpreter, since any
+    submodule imported earlier in this process is bound on the root too."""
+    script = (
+        "import sfmtool\n"
+        "print(sorted(n for n in vars(sfmtool) if not n.startswith('_')))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+    bound = eval(result.stdout.strip().splitlines()[-1])
+    assert bound == ["ProgressCounter", "THUMBNAIL_SIZE", "build_profile"]
+    assert set(sfmtool.__all__) == (
+        set(bound) | set(sfmtool._LAZY) | set(sfmtool._LAZY_SUBPACKAGES)
+    )
+    for name in ("SfmrReconstruction", "RangeExpr", "read_sfmr", "match_image_pair"):
+        assert not hasattr(sfmtool, name), name
+
+
+def test_binding_modules_are_package_attributes():
+    """Each public binding module is reachable as an attribute after `import
+    sfmtool`, in a fresh interpreter, without importing a heavy library."""
+    code = (
+        "import sfmtool\n"
+        "for name in ('analysis', 'bench', 'flow', 'geometry', 'io', 'matching',\n"
+        "             'patches', 'reconstruction', 'spatial', 'spherical'):\n"
+        "    assert getattr(sfmtool, name).__name__ == f'sfmtool.{name}', name\n"
+        "assert callable(sfmtool.io.read_sfmr)"
+    )
+    assert _imported_after(code) == []
+
+
 def test_lazy_names_resolve_to_their_submodules():
     from sfmtool.sift.file import SiftReader, write_sift
     from sfmtool._workspace import init_workspace
 
     assert sfmtool.SiftReader is SiftReader
     assert sfmtool.init_workspace is init_workspace
-    # The Python `write_sift`, not the `_sfmtool.io` binding it calls.
+    # The Python `write_sift`, not the `sfmtool.io` binding it calls.
     assert sfmtool.write_sift is write_sift
+    assert sfmtool.write_sift is not sfmtool.io.write_sift
     assert sfmtool.sift.__name__ == "sfmtool.sift"
     assert sfmtool.rig.__name__ == "sfmtool.rig"
 
@@ -109,7 +144,7 @@ def test_lazy_names_resolve_to_their_submodules():
 def test_dir_lists_every_public_name():
     listed = set(dir(sfmtool))
     assert set(sfmtool.__all__) <= listed
-    assert {"SiftReader", "extract_sift_with_opencv", "sift", "rig"} <= listed
+    assert {"SiftReader", "extract_sift_with_opencv", "sift", "rig", "io"} <= listed
 
 
 def test_unknown_name_raises_attribute_error():
