@@ -14,9 +14,10 @@ use crate::geometry::RigidTransform;
 //
 // To exercise *registration*, each view can render the plane texture translated
 // in-plane by a per-view world offset `o_k`: the same patch then renders, in view
-// k, content shifted by `-o_k`, so the views disagree until congealing shifts each
-// by `o_k`. The shift the kernel must recover for view k is `acc_k = o_k / wpp`
-// patch-grid px (`wpp = 2·half_extent / R`).
+// k, content shifted by `-o_k`, so the views disagree until the localizer shifts
+// each to the reference's render. With view 0 as the reference at `o_0 = 0`, the
+// shift the kernel must recover for view k is `o_k / wpp` patch-grid px
+// (`wpp = 2·half_extent / R`).
 
 const PLANE_Z: f64 = 4.0;
 const IMG_W: u32 = 320;
@@ -184,9 +185,6 @@ fn infinity_patch() -> OrientedPatch {
 fn params() -> KeypointLocalizeParams {
     KeypointLocalizeParams {
         resolution: RES,
-        // The congealing-behavior tests are the uncapped reference; the cap
-        // (production default 8) is exercised by the basis tests' `capped(k)`.
-        basis_max_views: 0,
         ..KeypointLocalizeParams::default()
     }
 }
@@ -208,8 +206,9 @@ fn pos(res: &KeypointLocalization, i: u32) -> Option<usize> {
 
 #[test]
 fn aligned_views_keep_all_and_barely_shift() {
-    // Every view sees the same texture, perfectly aligned -> congealing should find
-    // no residual shift, keep all views, and land each keypoint on its projection.
+    // Every view sees the same texture, perfectly aligned -> the search should
+    // find no residual shift, keep all views, and land each keypoint on its
+    // projection.
     let centers = [
         [0.4, 0.0, 0.0],
         [-0.4, 0.0, 0.0],
@@ -222,146 +221,20 @@ fn aligned_views_keep_all_and_barely_shift() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
 
     assert_eq!(res.views, vec![0, 1, 2, 3], "all aligned views kept");
     for &o in &res.offsets_px {
         assert!(o < 0.6, "aligned view should barely move, got {o} px");
     }
-    for &z in &res.loo_zncc {
-        assert!(z > 0.8, "aligned views should co-register, LOO {z}");
-    }
-    // The middle agrees as well as the whole does.
-    assert_eq!(res.loo_zncc_middle.len(), res.views.len());
-    for &z in &res.loo_zncc_middle {
-        assert!(z > 0.8, "aligned views agree in the middle too, {z}");
-    }
-    // And in every cell of the ZNCC grid.
-    assert_eq!(res.loo_zncc_grid.len(), res.views.len());
-    for grid in &res.loo_zncc_grid {
-        for &z in grid.iter().flatten() {
-            assert!(z > 0.8, "aligned views agree in every cell, {grid:?}");
-        }
-    }
-}
-
-/// `texture` everywhere but the middle of the patch (`|x|, |y| < HALF_EXTENT /
-/// 2`, the middle square of the grid), where each view sees a pattern of its
-/// own.
-fn texture_with_own_middle(x: f64, y: f64, k: f64) -> f64 {
-    let m = HALF_EXTENT / 2.0;
-    if x.abs() < m && y.abs() < m {
-        127.5 + 70.0 * (x * (19.0 + 11.0 * k) + k).sin() * (y * (29.0 - 7.0 * k) - k).cos()
-    } else {
-        texture(x, y)
-    }
-}
-fn own_middle_0(x: f64, y: f64) -> f64 {
-    texture_with_own_middle(x, y, 0.0)
-}
-fn own_middle_1(x: f64, y: f64) -> f64 {
-    texture_with_own_middle(x, y, 1.0)
-}
-fn own_middle_2(x: f64, y: f64) -> f64 {
-    texture_with_own_middle(x, y, 2.0)
-}
-fn own_middle_3(x: f64, y: f64) -> f64 {
-    texture_with_own_middle(x, y, 3.0)
-}
-
-/// Views that agree only outside the middle of the patch: the middle ZNCC,
-/// read from the same samples, says so where the whole-patch one does not.
-#[test]
-fn the_middle_zncc_sees_an_agreement_carried_by_the_surroundings() {
-    let centers = [
-        [0.4, 0.0, 0.0],
-        [-0.4, 0.0, 0.0],
-        [0.0, 0.4, 0.0],
-        [0.0, -0.4, 0.0],
-    ];
-    let texs: Vec<fn(f64, f64) -> f64> =
-        vec![own_middle_0, own_middle_1, own_middle_2, own_middle_3];
-    let scene = Scene::new(&centers, &[[0.0; 2]; 4], &texs);
-    let views = scene.views();
-    let res = localize_patch_keypoints(&plane_patch(), &views, &[0, 1, 2, 3], None, &gates_off());
-
-    assert_eq!(res.views.len(), 4, "the gates are off");
-    for (k, (&whole, &middle)) in res.loo_zncc.iter().zip(&res.loo_zncc_middle).enumerate() {
+    assert_eq!(res.zncc.len(), res.views.len());
+    for &z in &res.zncc {
         assert!(
-            middle < 0.4 && middle < whole - 0.2,
-            "view {k}: whole {whole}, middle {middle}"
+            z > 0.8,
+            "aligned views should match the reference, ZNCC {z}"
         );
     }
-    // The ZNCC grid places the disagreement: its centre cell lies inside the
-    // views' own middles, and its corner cells lie outside them.
-    for (k, grid) in res.loo_zncc_grid.iter().enumerate() {
-        assert!(grid[1][1] < 0.4, "view {k}: {grid:?}");
-        for (row, col) in [(0, 0), (0, 2), (2, 0), (2, 2)] {
-            assert!(grid[row][col] > 0.8, "view {k}: {grid:?}");
-        }
-    }
-}
-
-/// `texture` inside the window's disk, and past it, in the corners of the
-/// square, a pattern each view has of its own.
-fn texture_with_own_corners(x: f64, y: f64, k: f64) -> f64 {
-    if x.hypot(y) > 1.05 * HALF_EXTENT {
-        127.5 + 70.0 * (x * (23.0 + 13.0 * k) + k).sin() * (y * (17.0 - 5.0 * k) - k).cos()
-    } else {
-        texture(x, y)
-    }
-}
-fn own_corners_0(x: f64, y: f64) -> f64 {
-    texture_with_own_corners(x, y, 0.0)
-}
-fn own_corners_1(x: f64, y: f64) -> f64 {
-    texture_with_own_corners(x, y, 1.0)
-}
-fn own_corners_2(x: f64, y: f64) -> f64 {
-    texture_with_own_corners(x, y, 2.0)
-}
-fn own_corners_3(x: f64, y: f64) -> f64 {
-    texture_with_own_corners(x, y, 3.0)
-}
-
-/// The ZNCC grid reads the whole square, not the window's disk: views that
-/// agree everywhere inside the disk and differ only in the corners past it
-/// have the whole-core ZNCC of an agreement, and corner cells that say where
-/// they differ.
-#[test]
-fn the_zncc_grid_reads_the_corners_the_window_leaves_out() {
-    let centers = [
-        [0.4, 0.0, 0.0],
-        [-0.4, 0.0, 0.0],
-        [0.0, 0.4, 0.0],
-        [0.0, -0.4, 0.0],
-    ];
-    let texs: Vec<fn(f64, f64) -> f64> =
-        vec![own_corners_0, own_corners_1, own_corners_2, own_corners_3];
-    let scene = Scene::new(&centers, &[[0.0; 2]; 4], &texs);
-    let views = scene.views();
-    let res = localize_patch_keypoints(&plane_patch(), &views, &[0, 1, 2, 3], None, &gates_off());
-
-    assert_eq!(res.views.len(), 4, "the gates are off");
-    for (k, (&whole, grid)) in res.loo_zncc.iter().zip(&res.loo_zncc_grid).enumerate() {
-        assert!(whole > 0.8, "view {k}: the disk agrees, whole {whole}");
-        assert!(grid[1][1] > 0.8, "view {k}: {grid:?}");
-        // About half of a corner cell lies past the disk, so the corners fall
-        // well below the centre; the edge cells, inside it, do not. Read over
-        // the disk alone, a corner would agree as fully as the centre.
-        let corners = [(0, 0), (0, 2), (2, 0), (2, 2)].map(|(row, col)| grid[row][col]);
-        for corner in corners {
-            assert!(
-                corner < 0.99,
-                "view {k}: the corner past the disk differs, {grid:?}"
-            );
-        }
-        let mean = corners.iter().sum::<f64>() / 4.0;
-        assert!(mean < grid[1][1] - 0.1, "view {k}: {grid:?}");
-        for (row, col) in [(0, 1), (1, 0), (1, 2), (2, 1)] {
-            assert!(grid[row][col] > 0.95, "view {k}: {grid:?}");
-        }
-    }
+    assert_eq!(res.reference, Some(0));
 }
 
 #[test]
@@ -383,7 +256,7 @@ fn infinity_point_views_co_register_independent_of_translation() {
     let views = scene.views();
     let patch = infinity_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
 
     assert_eq!(
         res.views,
@@ -402,24 +275,22 @@ fn infinity_point_views_co_register_independent_of_translation() {
             "aligned infinity view barely moves"
         );
     }
-    for &z in &res.loo_zncc {
-        assert!(z > 0.8, "infinity views co-register, LOO {z}");
+    for &z in &res.zncc {
+        assert!(z > 0.8, "infinity views match the reference, ZNCC {z}");
     }
 }
 
 #[test]
-fn infinity_point_seed_offsets_congeal_back() {
-    // Identical content across views; three views seeded at the projection pin the
-    // gauge, the fourth is seeded a few source px off. Congealing must pull the
-    // off view back to alignment — exercises the w == 0 branch of seed_offset
-    // (angular ray→offset inversion) and the w == 0 render/project path through
-    // the congealing loop. Pinned to `SearchStrategy::Exhaustive` because the
-    // 4-source-px seed shift puts view 3 ~3 grid steps from consensus through
-    // a multi-modal angular `dir_texture`; the default `PlusDescent` walks
-    // into a local maximum on the way home, which is the documented trade-off
-    // (`PlusDescent` keeps the ~1.9× wall win on real data at the cost of a
-    // long-walk accuracy tail). The capability tested here — congealing back
-    // from a non-trivial seed offset — is an `Exhaustive` guarantee.
+fn infinity_point_seed_offsets_align_back() {
+    // Identical content across views; the reference and two other views are
+    // seeded at the projection, the fourth a few source px off. The search must
+    // pull the off view back onto the reference's render — exercises the w == 0
+    // branch of seed_offset (angular ray→offset inversion) and the w == 0
+    // render/project path through the search. Pinned to
+    // `SearchStrategy::Exhaustive` because the 4-source-px seed shift puts view
+    // 3 ~3 grid steps from the reference through a multi-modal angular
+    // `dir_texture`; the default `PlusDescent` can walk into a local maximum on
+    // the way home, which is the documented trade-off.
     let scene = Scene::infinity(
         &[
             [0.0, 0.0, 0.0],
@@ -443,25 +314,32 @@ fn infinity_point_seed_offsets_congeal_back() {
         ..params()
     };
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), &exhaustive);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(0),
+        &exhaustive,
+    );
 
-    let p3 = pos(&res, 3).expect("the seeded-off view congeals back and is kept");
+    let p3 = pos(&res, 3).expect("the seeded-off view aligns back and is kept");
     assert!(
         (res.keypoints[p3][0] - cx).abs() < 1.0 && (res.keypoints[p3][1] - cy).abs() < 1.0,
-        "seeded-off infinity view should congeal back to the projection, got {:?}",
+        "seeded-off infinity view should align back to the projection, got {:?}",
         res.keypoints[p3]
     );
-    for &z in &res.loo_zncc {
-        assert!(z > 0.8, "post-congeal infinity LOO should be high, got {z}");
+    for &z in &res.zncc {
+        assert!(z > 0.8, "aligned infinity ZNCC should be high, got {z}");
     }
 }
 
 #[test]
-fn congeals_misregistered_view_into_alignment() {
-    // Views 0,1,2 are aligned (they pin the gauge); view 3 sees the texture shifted
-    // by +1 patch-grid px in x. Congealing should recover acc_3 ≈ +1, putting its
-    // keypoint ~1 grid px (in source px) off its projection while the aligned views
-    // stay put. All four co-register, so view 3 is kept (its shift < max_shift_px).
+fn aligns_misregistered_view_to_the_reference() {
+    // Views 0,1,2 are aligned and view 0 is the reference; view 3 sees the
+    // texture shifted by +1 patch-grid px in x. The search should recover +1,
+    // putting its keypoint ~1 grid px (in source px) off its projection while
+    // the aligned views stay put. View 3 is kept (its shift < max_shift_px).
     let shift_grid = 1.0;
     let ox = shift_grid * wpp();
     let centers = [
@@ -476,7 +354,7 @@ fn congeals_misregistered_view_into_alignment() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
 
     let p3 = pos(&res, 3).expect("the misregistered view co-registers and is kept");
     // The texture is shifted in world-x; for this patch the in-plane v-axis is
@@ -506,94 +384,16 @@ fn congeals_misregistered_view_into_alignment() {
             "aligned view {i} should barely move"
         );
     }
-    // After registration every view agrees well.
-    for &z in &res.loo_zncc {
-        assert!(z > 0.9, "post-congeal LOO should be high, got {z}");
-    }
-}
-
-#[test]
-fn search_resolution_multiplier_one_is_a_noop() {
-    // `search_resolution_multiplier = 1.0` (the explicit default) must produce
-    // byte-identical results to leaving the knob at its `Default`, on a scene that
-    // exercises both congealing (view 3 shifted) and the kept-view set.
-    let ox = 1.0 * wpp();
-    let centers = [
-        [0.4, 0.0, 0.0],
-        [-0.4, 0.0, 0.0],
-        [0.0, 0.4, 0.0],
-        [0.0, -0.4, 0.0],
-    ];
-    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
-    let texs = vec![texture as fn(f64, f64) -> f64; 4];
-    let scene = Scene::new(&centers, &offs, &texs);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let baseline = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
-    let explicit_one = KeypointLocalizeParams {
-        search_resolution_multiplier: 1.0,
-        ..params()
-    };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &explicit_one);
-
-    assert_eq!(res.views, baseline.views);
-    for (a, b) in res.keypoints.iter().zip(&baseline.keypoints) {
-        assert!(
-            (a[0] - b[0]).abs() < 1e-12 && (a[1] - b[1]).abs() < 1e-12,
-            "m = 1.0 must be a no-op: {a:?} vs {b:?}"
-        );
-    }
-}
-
-#[test]
-fn supersampled_search_resolution_still_congeals() {
-    // With `m = 2.0` the search runs at R_s = 2·R (a finer grid; one integer step
-    // is 1/2 patch-grid px). A 1-grid-px misregistration must still be recovered and
-    // the recovered keypoint scaled back to patch-grid px (the `1/m` factor folded
-    // into the R_s `wpp`), so the same +src_per_grid x-recovery as at m = 1.
-    let shift_grid = 1.0;
-    let ox = shift_grid * wpp();
-    let centers = [
-        [0.4, 0.0, 0.0],
-        [-0.4, 0.0, 0.0],
-        [0.0, 0.4, 0.0],
-        [0.0, -0.4, 0.0],
-    ];
-    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
-    let texs = vec![texture as fn(f64, f64) -> f64; 4];
-    let scene = Scene::new(&centers, &offs, &texs);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let p = KeypointLocalizeParams {
-        search_resolution_multiplier: 2.0,
-        ..params()
-    };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &p);
-
-    let p3 = pos(&res, 3).expect("the misregistered view co-registers and is kept");
-    let expected_px = shift_grid * src_per_grid();
-    let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
-    let dx = res.keypoints[p3][0] - proj3.0;
-    let dy = res.keypoints[p3][1] - proj3.1;
-    assert!(
-        (dx - expected_px).abs() < 0.4 * src_per_grid(),
-        "m = 2 should still recover +{expected_px:.2}px in x, got {dx:.2}px"
-    );
-    assert!(
-        dy.abs() < 0.4 * src_per_grid(),
-        "m = 2: view 3 should not move in y, got {dy:.2}px"
-    );
-    for &z in &res.loo_zncc {
-        assert!(z > 0.9, "m = 2 post-congeal LOO should be high, got {z}");
+    // After alignment every view matches the reference well.
+    for &z in &res.zncc {
+        assert!(z > 0.9, "aligned ZNCC should be high, got {z}");
     }
 }
 
 #[test]
 fn drops_disagreeing_surface_view() {
     // Three views see the same surface; view 3 shows a different surface. It cannot
-    // register, so its leave-one-out ZNCC falls below the relative bar and it is
+    // match the reference's render, so its ZNCC falls below the bars and it is
     // dropped, leaving the agreeing three.
     let centers = [
         [0.4, 0.0, 0.0],
@@ -607,7 +407,7 @@ fn drops_disagreeing_surface_view() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
 
     assert!(
         pos(&res, 3).is_none(),
@@ -623,7 +423,8 @@ fn drops_disagreeing_surface_view() {
 fn drops_view_shifted_beyond_max_shift_px() {
     // View 3's texture is shifted by 2 grid px (~2·src_per_grid source px); with
     // max_shift_px = 3 and src_per_grid ≈ 2.6, that is ~5.2px > 3, so even though it
-    // re-registers (high LOO), it is dropped for sitting too far from its projection.
+    // matches the reference (high ZNCC), it is dropped for sitting too far from its
+    // projection.
     let ox = 2.0 * wpp();
     let centers = [
         [0.4, 0.0, 0.0],
@@ -640,7 +441,7 @@ fn drops_view_shifted_beyond_max_shift_px() {
     // Sanity: 2 grid px maps above the 3px gate.
     assert!(2.0 * src_per_grid() > params().max_shift_px);
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
 
     assert!(
         pos(&res, 3).is_none(),
@@ -676,7 +477,7 @@ fn grazing_views_are_prefiltered() {
         min_grazing_cos: 0.95,
         ..params()
     };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &strict);
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &strict);
     assert!(
         pos(&res, 3).is_none(),
         "oblique view should be grazing-filtered: {:?}",
@@ -687,7 +488,7 @@ fn grazing_views_are_prefiltered() {
         min_grazing_cos: 0.1,
         ..params()
     };
-    let res2 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &permissive);
+    let res2 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &permissive);
     assert!(
         pos(&res2, 3).is_some(),
         "with a permissive cutoff the oblique view is kept: {:?}",
@@ -697,20 +498,23 @@ fn grazing_views_are_prefiltered() {
 
 #[test]
 fn fewer_than_two_views_returns_seed_projection() {
-    // A single-view set can't congeal; the view's keypoint is its projection.
+    // A single-view set has nothing to align: its one view is the reference,
+    // with or without the caller naming it, and keeps its projection.
     let centers = [[0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]];
     let texs = vec![texture as fn(f64, f64) -> f64];
     let scene = Scene::new(&centers, &offs, &texs);
     let views = scene.views();
     let patch = plane_patch();
-
-    let res = localize_patch_keypoints(&patch, &views, &[0], None, &params());
-    assert_eq!(res.views, vec![0]);
     let proj = project(&views[0], &patch.center, patch.w).unwrap();
-    assert!((res.keypoints[0][0] - proj.0).abs() < 1e-9);
-    assert!((res.keypoints[0][1] - proj.1).abs() < 1e-9);
-    assert!(res.loo_zncc[0].is_nan(), "no LOO consensus for a lone view");
+
+    for reference in [Some(0), None] {
+        let res = localize_patch_keypoints(&patch, &views, &[0], None, reference, &params());
+        assert_eq!(res.views, vec![0]);
+        assert_eq!(res.keypoints[0], [proj.0, proj.1]);
+        assert_eq!(res.zncc, vec![1.0], "the reference scores 1 against itself");
+        assert_eq!(res.reference, Some(0));
+    }
 }
 
 #[test]
@@ -723,7 +527,7 @@ fn duplicate_view_index_is_deduped() {
     let patch = plane_patch();
 
     // View 0 listed twice.
-    let res = localize_patch_keypoints(&patch, &views, &[0, 0, 1, 2], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 0, 1, 2], None, Some(0), &params());
     assert_eq!(res.views.iter().filter(|&&v| v == 0).count(), 1);
     let mut uniq = res.views.clone();
     uniq.sort_unstable();
@@ -762,12 +566,46 @@ fn batch_matches_per_patch() {
     .expect("Progress::none never cancels");
     assert_eq!(batch.len(), 2);
     for (i, res) in batch.iter().enumerate() {
-        let single =
-            localize_patch_keypoints(&cloud.patches[i], &views, &view_sets[i], None, &params());
+        let single = localize_patch_keypoints(
+            &cloud.patches[i],
+            &views,
+            &view_sets[i],
+            None,
+            None,
+            &params(),
+        );
         assert_eq!(res.views, single.views);
+        assert_eq!(res.reference, single.reference);
         for (a, b) in res.keypoints.iter().zip(&single.keypoints) {
             assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
         }
+    }
+
+    // Per-patch references are threaded through: patch 1 names view 2.
+    let references = [Some(0), Some(2)];
+    let batch = localize_patch_cloud_keypoints(
+        &cloud,
+        &views,
+        &view_sets,
+        None,
+        Some(&references),
+        &params(),
+        None,
+        &crate::progress::Progress::none(),
+    )
+    .expect("Progress::none never cancels");
+    for (i, res) in batch.iter().enumerate() {
+        let single = localize_patch_keypoints(
+            &cloud.patches[i],
+            &views,
+            &view_sets[i],
+            None,
+            references[i],
+            &params(),
+        );
+        assert_eq!(res.views, single.views);
+        assert_eq!(res.keypoints, single.keypoints);
+        assert_eq!(res.reference, Some(view_sets[i][references[i].unwrap()]));
     }
 }
 
@@ -788,7 +626,8 @@ fn seed_keypoint_offset_round_trips() {
             Some([x, y])
         })
         .collect();
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&seeds), &params());
+    let res =
+        localize_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&seeds), Some(0), &params());
     assert_eq!(res.views, vec![0, 1, 2]);
     for &o in &res.offsets_px {
         assert!(
@@ -799,13 +638,12 @@ fn seed_keypoint_offset_round_trips() {
 }
 
 #[test]
-fn seed_offset_unprojection_round_trips_on_lone_view() {
+fn seed_offset_unprojection_round_trips() {
     // A non-projection seed exercises `seed_offset`'s unprojection (rotation
-    // transpose, ray∩plane, /wpp). On a lone-view set the kernel returns the seed
-    // straight through (no congealing), so the emitted keypoint must equal the seed
-    // — i.e. seed_offset is the exact inverse of finalize's projection. (The
-    // projection-seeded round_trips test above only seeds at acc≈0, so this is the
-    // only check of a *non-zero* unprojected seed.)
+    // transpose, ray∩plane, /wpp): re-anchoring the patch at the offset it
+    // returns and projecting gives the seed back, so `seed_offset` is the exact
+    // inverse of the keypoint the localizer reports for an offset.
+    // `keypoint_grid_offset` asks the same question at a params' resolution.
     let centers = [[0.4, 0.2, 0.0]];
     let offs = [[0.0; 2]];
     let texs = vec![texture as fn(f64, f64) -> f64];
@@ -815,17 +653,20 @@ fn seed_offset_unprojection_round_trips_on_lone_view() {
 
     let proj = project(&views[0], &patch.center, patch.w).unwrap();
     let seed = [proj.0 + 5.0, proj.1 - 3.0]; // a few px off the projection
-    let res = localize_patch_keypoints(&patch, &views, &[0], Some(&[Some(seed)]), &params());
-    assert_eq!(res.views, vec![0]);
+    let off = seed_offset(&patch, &views[0], seed, wpp(), wpp()).expect("the seed hits the plane");
+    // A few source px is a couple of grid px.
+    assert!(off[0].hypot(off[1]) > 1.0, "{off:?}");
+    let center = shifted_center(&patch, off[0], off[1], wpp(), wpp());
+    let back = project(&views[0], &center, patch.w).unwrap();
     assert!(
-        (res.keypoints[0][0] - seed[0]).abs() < 1e-6
-            && (res.keypoints[0][1] - seed[1]).abs() < 1e-6,
-        "seed {seed:?} should round-trip through seed_offset, got {:?}",
-        res.keypoints[0]
+        (back.0 - seed[0]).abs() < 1e-6 && (back.1 - seed[1]).abs() < 1e-6,
+        "seed {seed:?} should round-trip through seed_offset, got {back:?}"
     );
-    // And the reported offset is the seed's distance from the projection.
-    let want = ((seed[0] - proj.0).powi(2) + (seed[1] - proj.1).powi(2)).sqrt();
-    assert!((res.offsets_px[0] - want).abs() < 1e-6);
+    let grid = keypoint_grid_offset(&patch, &views[0], seed, &params()).unwrap();
+    assert_eq!(grid, off, "the same offset at the params' resolution");
+    // The projection itself is the zero offset.
+    let zero = keypoint_grid_offset(&patch, &views[0], [proj.0, proj.1], &params()).unwrap();
+    assert!(zero[0].abs() < 1e-9 && zero[1].abs() < 1e-9, "{zero:?}");
 }
 
 #[test]
@@ -846,15 +687,22 @@ fn all_none_seeds_match_the_unseeded_run() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let unseeded = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
-    let all_none =
-        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&[None; 4]), &params());
+    let unseeded =
+        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let all_none = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1, 2, 3],
+        Some(&[None; 4]),
+        Some(0),
+        &params(),
+    );
 
     assert_eq!(all_none.views, unseeded.views);
     assert_eq!(all_none.keypoints, unseeded.keypoints);
     assert_eq!(all_none.offsets_px, unseeded.offsets_px);
-    assert_eq!(all_none.loo_zncc, unseeded.loo_zncc);
-    assert_eq!(all_none.is_basis, unseeded.is_basis);
+    assert_eq!(all_none.zncc, unseeded.zncc);
+    assert_eq!(all_none.reference, unseeded.reference);
 }
 
 #[test]
@@ -862,11 +710,11 @@ fn mixed_seeds_apply_per_view() {
     // The mixed table: views 0-2 carry no seed (`None` — they anchor at their
     // projections, as an expansion candidate with no observation does), view 3
     // carries an explicit seed a few source px off the aligned content. The
-    // unseeded views pin the gauge and congealing pulls the seeded one home, so
-    // the run matches the equivalent all-`Some` table where 0-2 are seeded at
-    // their own projections. Pinned to `Exhaustive` for the same reason
-    // `infinity_point_seed_offsets_congeal_back` is: the long walk home from a
-    // multi-px seed is an `Exhaustive` guarantee.
+    // unseeded reference (view 0) fixes the template and the search pulls the
+    // seeded one home, so the run matches the equivalent all-`Some` table where
+    // 0-2 are seeded at their own projections. Pinned to `Exhaustive` for the
+    // same reason `infinity_point_seed_offsets_align_back` is: the long walk
+    // home from a multi-px seed is an `Exhaustive` guarantee.
     let centers = [
         [0.4, 0.0, 0.0],
         [-0.4, 0.0, 0.0],
@@ -900,9 +748,22 @@ fn mixed_seeds_apply_per_view() {
         Some(off_seed),
     ];
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&mixed), &exhaustive);
-    let ref_res =
-        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&all_some), &exhaustive);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1, 2, 3],
+        Some(&mixed),
+        Some(0),
+        &exhaustive,
+    );
+    let ref_res = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1, 2, 3],
+        Some(&all_some),
+        Some(0),
+        &exhaustive,
+    );
 
     assert_eq!(res.views, vec![0, 1, 2, 3], "every view is kept");
     assert_eq!(res.views, ref_res.views);
@@ -913,7 +774,7 @@ fn mixed_seeds_apply_per_view() {
         );
     }
     // The unseeded views started (and stay) at their projections; the seeded one
-    // congeals back onto the same aligned content.
+    // aligns back onto the same content.
     for i in 0..3 {
         let k = pos(&res, i).unwrap();
         assert!(
@@ -925,7 +786,7 @@ fn mixed_seeds_apply_per_view() {
     let k3 = pos(&res, 3).unwrap();
     assert!(
         res.offsets_px[k3] < 0.6,
-        "the seeded view should congeal back onto the aligned content, got {}",
+        "the seeded view should align back onto the reference's content, got {}",
         res.offsets_px[k3]
     );
 }
@@ -969,10 +830,17 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
         &views,
         &view_sets[0],
         Some(&seeds[0]),
+        None,
         &params(),
     );
-    let single1 =
-        localize_patch_keypoints(&cloud.patches[1], &views, &view_sets[1], None, &params());
+    let single1 = localize_patch_keypoints(
+        &cloud.patches[1],
+        &views,
+        &view_sets[1],
+        None,
+        None,
+        &params(),
+    );
     assert_eq!(batch[0].views, single0.views);
     assert_eq!(batch[0].keypoints, single0.keypoints);
     assert_eq!(batch[1].views, single1.views);
@@ -981,9 +849,10 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
 
 #[test]
 fn drops_low_relative_zncc_view_in_isolation() {
-    // Isolate the relative-LOO drop gate: three aligned views plus an occluder, but
-    // with `max_shift_px` set so high that only a low leave-one-out ZNCC can drop
-    // a view. The occluder cannot register, so it (and only it) is dropped.
+    // Isolate the relative drop gate: three aligned views plus an occluder, with
+    // `max_shift_px` set so high and the absolute floor off, so only the
+    // relative bar can drop a view. The occluder cannot match the reference, so
+    // it (and only it) is dropped.
     let centers = [
         [0.4, 0.0, 0.0],
         [-0.4, 0.0, 0.0],
@@ -997,55 +866,17 @@ fn drops_low_relative_zncc_view_in_isolation() {
     let patch = plane_patch();
 
     let p = KeypointLocalizeParams {
-        max_shift_px: 1e6, // disable the shift gate so only the LOO bar can drop
+        max_shift_px: 1e6, // disable the shift gate so only the relative bar can drop
+        min_absolute_zncc: 0.0,
         ..params()
     };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &p);
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &p);
     assert!(
         pos(&res, 3).is_none(),
-        "occluder must be dropped by the relative-LOO bar: {:?}",
+        "occluder must be dropped by the relative bar: {:?}",
         res.views
     );
     assert_eq!(res.views, vec![0, 1, 2]);
-}
-
-#[test]
-fn two_view_floor_keeps_exactly_two_when_all_fail() {
-    // With `min_relative_zncc > 1` the bar `min_relative_zncc × median` is
-    // unsatisfiable (every LOO ZNCC is below it), so the gates would drop every
-    // view. The two-view leave-one-out floor must instead retain exactly two (the
-    // best-agreeing), never zero and never all three.
-    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]];
-    let offs = [[0.0; 2]; 3];
-    let texs = vec![texture as fn(f64, f64) -> f64; 3];
-    let scene = Scene::new(&centers, &offs, &texs);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let p = KeypointLocalizeParams {
-        min_relative_zncc: 1.5,
-        ..params()
-    };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
-    assert_eq!(
-        res.views.len(),
-        2,
-        "floor keeps exactly two: {:?}",
-        res.views
-    );
-    // …and the floor is a *relative*-bar remedy only: raise the absolute floor
-    // above what these views actually score and nothing is restored.
-    let strict = KeypointLocalizeParams {
-        min_absolute_zncc: 1.5,
-        ..p
-    };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &strict);
-    assert!(
-        res.views.len() < 2,
-        "the absolute floor is never undone by the two-view floor: {:?} {:?}",
-        res.views,
-        res.loo_zncc
-    );
 }
 
 /// [`params`] with the member self-similarity gate at `bar`.
@@ -1067,11 +898,10 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
     // A two-view point whose second member is a textureless tile (flat sky /
     // water). It matches itself at every shift, so its ZNCC self-similarity
     // radius reads the largest shift searched and the member gate refuses it
-    // before any ZNCC is computed — leaving the point with one view, which the
-    // caller's `min_views` cull removes. With the gate off both views survive,
-    // because on a two-view point the relative bar is `min_relative_zncc ×` the
-    // very correlation it is testing and the two-view floor would restore the
-    // pair regardless.
+    // before it is searched — leaving the point with its reference alone, which
+    // the caller's `min_views` cull removes. With the gates off it survives:
+    // on a two-view point the relative bar is `min_relative_zncc ×` the very
+    // correlation it is testing.
     let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]; 2];
     let texs: Vec<fn(f64, f64) -> f64> = vec![texture, flat_texture];
@@ -1079,7 +909,14 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, &self_similarity_bar(2.0));
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1],
+        None,
+        Some(0),
+        &self_similarity_bar(2.0),
+    );
     assert!(
         pos(&res, 1).is_none(),
         "the flat member must be dropped as unlocalizable: {:?}",
@@ -1091,7 +928,7 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
         res.views
     );
 
-    let off_gates = localize_patch_keypoints(&patch, &views, &[0, 1], None, &gates_off());
+    let off_gates = localize_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &gates_off());
     assert_eq!(
         off_gates.views,
         vec![0, 1],
@@ -1117,13 +954,16 @@ fn the_member_gate_judges_the_self_similarity_radius() {
     let views = scene.views();
     let patch = plane_patch();
     let loose = |bar: f64| KeypointLocalizeParams {
-        // Only the member gate decides here.
+        // Only the member gate decides here: an edge view searched against a
+        // textured reference can slide along the edge, so the shift gate is
+        // opened too.
+        max_shift_px: 1e6,
         min_absolute_zncc: 0.0,
         min_relative_zncc: 0.0,
         ..self_similarity_bar(bar)
     };
 
-    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &loose(2.0));
+    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &loose(2.0));
     assert_eq!(
         gated.views,
         vec![0, 1],
@@ -1133,7 +973,8 @@ fn the_member_gate_judges_the_self_similarity_radius() {
     // `0` turns the gate off, and a bar at the largest radius read turns
     // nothing out.
     for bar in [0.0, 3.0] {
-        let open = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &loose(bar));
+        let open =
+            localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &loose(bar));
         assert_eq!(open.views, vec![0, 1, 2, 3], "bar {bar} keeps every member");
     }
 }
@@ -1156,7 +997,7 @@ fn the_member_gate_reads_the_same_radius_at_any_search() {
             min_relative_zncc: 0.0,
             ..self_similarity_bar(2.0)
         };
-        let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
+        let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &p);
         assert_eq!(res.views, vec![0, 1], "search {search}");
     }
 }
@@ -1258,10 +1099,10 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
 fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
     // Two views of *different* surfaces. Both tiles are perfectly localizable on
     // their own, so only the correlation between them can refuse the pair — and
-    // the relative bar cannot: each view's leave-one-out template IS the other
-    // view, so both score the same pairwise ZNCC and each clears
-    // `min_relative_zncc ×` itself. The absolute floor is what sees the pair for
-    // what it is.
+    // the relative bar cannot: the only view it reads besides the reference is
+    // the one it tests, which clears `min_relative_zncc ×` itself. The absolute
+    // floor is what sees the pair for what it is, and it drops the view that is
+    // not the reference.
     let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]; 2];
     let texs: Vec<fn(f64, f64) -> f64> = vec![texture, occluder_texture];
@@ -1280,6 +1121,7 @@ fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
         &views,
         &[0, 1],
         None,
+        Some(0),
         &KeypointLocalizeParams {
             max_shift_px: 1e6,
             ..gates_off()
@@ -1288,20 +1130,20 @@ fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
     assert_eq!(
         off_gates.views,
         vec![0, 1],
-        "without the floor the mismatched pair survives (the old behaviour)"
+        "without the floor the mismatched pair survives"
     );
     assert!(
-        off_gates.loo_zncc.iter().all(|&z| z < 0.5),
-        "the pair's mutual ZNCC is well under the 0.5 floor: {:?}",
-        off_gates.loo_zncc
+        off_gates.zncc[1] < 0.5,
+        "the view's ZNCC against the reference is well under the 0.5 floor: {:?}",
+        off_gates.zncc
     );
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, &loose);
-    assert!(
-        res.views.len() < 2,
-        "the absolute floor must break the mismatched pair: {:?} {:?}",
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &loose);
+    assert_eq!(
         res.views,
-        res.loo_zncc
+        vec![0],
+        "the absolute floor must break the mismatched pair, keeping the reference: {:?}",
+        res.zncc
     );
 }
 
@@ -1322,145 +1164,15 @@ fn absolute_gates_at_zero_reproduce_the_ungated_run() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
-    let ungated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &gates_off());
+    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let ungated =
+        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &gates_off());
 
     assert_eq!(gated.views, ungated.views);
     assert_eq!(gated.keypoints, ungated.keypoints);
     assert_eq!(gated.offsets_px, ungated.offsets_px);
-    assert_eq!(gated.loo_zncc, ungated.loo_zncc);
-    assert_eq!(gated.is_basis, ungated.is_basis);
-    assert_eq!(gated.rounds, ungated.rounds);
-}
-
-#[test]
-fn converges_early_and_extra_rounds_are_idempotent() {
-    // One round already recovers a 1-grid misregistration (the integer search range
-    // spans it), and once converged extra rounds change nothing.
-    let ox = 1.0 * wpp();
-    let centers = [
-        [0.4, 0.0, 0.0],
-        [-0.4, 0.0, 0.0],
-        [0.0, 0.4, 0.0],
-        [0.0, -0.4, 0.0],
-    ];
-    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
-    let texs = vec![texture as fn(f64, f64) -> f64; 4];
-    let scene = Scene::new(&centers, &offs, &texs);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let one = KeypointLocalizeParams {
-        max_iters: 1,
-        ..params()
-    };
-    let res1 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &one);
-    let p3 = pos(&res1, 3).expect("one round keeps the misregistered view");
-    let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
-    let dx = res1.keypoints[p3][0] - proj3.0;
-    // ox = 1 grid px, so the expected source-px recovery is src_per_grid().
-    assert!(
-        (dx - src_per_grid()).abs() < 0.5 * src_per_grid(),
-        "a single round should already recover most of the shift, got {dx:.2}px"
-    );
-
-    // Converged result is stable: 5 vs 50 rounds give identical keypoints.
-    let many = KeypointLocalizeParams {
-        max_iters: 50,
-        ..params()
-    };
-    let res5 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
-    let res50 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &many);
-    assert_eq!(res5.views, res50.views);
-    for (a, b) in res5.keypoints.iter().zip(&res50.keypoints) {
-        assert!(
-            (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9,
-            "extra rounds past convergence changed the result"
-        );
-    }
-
-    // Directly observe the `convergence_px` early-exit: a huge threshold forces the
-    // loop to stop after round 1, so 50 rounds must equal 1 round exactly. A kernel
-    // that ignored `convergence_px` (always ran `max_iters`) would diverge here.
-    let early = KeypointLocalizeParams {
-        max_iters: 50,
-        convergence_px: 1e9,
-        ..params()
-    };
-    let res_early = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &early);
-    assert_eq!(
-        res_early.views, res1.views,
-        "early-exit must match a single round"
-    );
-    for (a, b) in res_early.keypoints.iter().zip(&res1.keypoints) {
-        assert!(
-            (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9,
-            "convergence_px early-exit did not stop after round 1"
-        );
-    }
-}
-
-#[test]
-fn stable_scene_converges_before_max_iters() {
-    // A perfectly aligned scene reaches positional stationarity almost
-    // immediately, so at the DEFAULT `convergence_px` the loop must exit well
-    // before a generous `max_iters` — pinning the round-over-round-change
-    // convergence metric. (Under the old absolute-offset metric the freshly
-    // recomputed parabolic residual kept `mean_shift` above the threshold and
-    // every point ran all `max_iters` rounds; this test would fail with
-    // `rounds == 40`.)
-    let centers = [
-        [0.4, 0.0, 0.0],
-        [-0.4, 0.0, 0.0],
-        [0.0, 0.4, 0.0],
-        [0.0, -0.4, 0.0],
-    ];
-    let offs = [[0.0; 2]; 4];
-    let texs = vec![texture as fn(f64, f64) -> f64; 4];
-    let scene = Scene::new(&centers, &offs, &texs);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let p = KeypointLocalizeParams {
-        max_iters: 40,
-        ..params()
-    };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &p);
-    assert_eq!(res.views.len(), 4, "aligned views must all be kept");
-    assert!(
-        (1..40).contains(&res.rounds),
-        "a stable scene must converge before max_iters at the default \
-         convergence_px, ran {} rounds",
-        res.rounds
-    );
-}
-
-#[test]
-fn no_convergence_in_a_round_that_dropped_views() {
-    // A round that drops a view changes the consensus the survivors registered
-    // against, so convergence must not fire in that same round — the survivors
-    // get at least one more round against the survivor-only template. With an
-    // unsatisfiable ZNCC bar the first round culls 3 views -> the two-view
-    // floor; positional stationarity is immediate (aligned scene), but the
-    // membership guard must still force a second round.
-    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]];
-    let offs = [[0.0; 2]; 3];
-    let texs = vec![texture as fn(f64, f64) -> f64; 3];
-    let scene = Scene::new(&centers, &offs, &texs);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let p = KeypointLocalizeParams {
-        min_relative_zncc: 1.5,
-        ..params()
-    };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
-    assert_eq!(res.views.len(), 2, "floor keeps exactly two");
-    assert!(
-        res.rounds >= 2,
-        "convergence fired in the same round that dropped views (rounds = {})",
-        res.rounds
-    );
+    assert_eq!(gated.zncc, ungated.zncc);
+    assert_eq!(gated.reference, ungated.reference);
 }
 
 #[test]
@@ -1473,11 +1185,14 @@ fn empty_view_set_returns_empty() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[], None, &params());
-    assert!(res.views.is_empty());
-    assert!(res.keypoints.is_empty());
-    assert!(res.offsets_px.is_empty());
-    assert!(res.loo_zncc.is_empty());
+    for reference in [None, Some(0)] {
+        let res = localize_patch_keypoints(&patch, &views, &[], None, reference, &params());
+        assert!(res.views.is_empty());
+        assert!(res.keypoints.is_empty());
+        assert!(res.offsets_px.is_empty());
+        assert!(res.zncc.is_empty());
+        assert_eq!(res.reference, None);
+    }
 }
 
 // ── Accumulation search_shift vs. the per-candidate reference ────────────────
@@ -2085,7 +1800,7 @@ fn search_shift_matches_reference_dropped_channel() {
 
 /// End-to-end equivalence: `PlusDescent` and `Exhaustive` must agree on the
 /// kept view set and converge to nearly-the-same per-view keypoints on a clean
-/// well-posed congealing scene (aligned plus one misregistered view). Locks
+/// well-posed scene (aligned plus one misregistered view). Locks
 /// the new default's behaviour against the original whole-grid path on a case
 /// where the ZNCC landscape is unimodal — the descent's local-optima failure
 /// mode (~9 % of observations on dino-full) is expected on multi-modal real
@@ -2115,8 +1830,8 @@ fn plus_descent_agrees_with_exhaustive_on_well_posed_scene() {
         ..params()
     };
 
-    let a = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &plus);
-    let b = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &exhaustive);
+    let a = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &plus);
+    let b = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &exhaustive);
 
     assert_eq!(
         a.views, b.views,
@@ -2142,349 +1857,6 @@ fn plus_descent_agrees_with_exhaustive_on_well_posed_scene() {
     }
 }
 
-#[test]
-fn incremental_loo_template_matches_reference() {
-    // The Gram-space incremental LOO consensus (`loo_consensus_template`) must
-    // reproduce the compacted-holdout-stack reference — copy the other views'
-    // rows, `irls_view_weights`, `weighted_unit_template_into` — for every
-    // holdout, within float-accumulation tolerance (f64 Gram algebra vs the
-    // f32 SAXPY/residual path). Includes an outlier view so the Tukey cutoff
-    // (weight → 0) actually fires on some holdout sets.
-    let (nv, kept_ch, n) = (6usize, 3usize, 40usize);
-    let cn = kept_ch * n;
-
-    // Deterministic pseudo-random stack (LCG), values in [-1, 1]; view 5 is a
-    // gross outlier (a different generator stream, amplified).
-    let mut state = 0x2545F4914F6CDD1Du64;
-    let mut next = move || {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0
-    };
-    let base: Vec<f32> = (0..cn).map(|_| next() as f32).collect();
-    let mut xs = vec![0f32; nv * cn];
-    for v in 0..nv {
-        for k in 0..cn {
-            let noise = next() as f32 * 0.05;
-            xs[v * cn + k] = if v == 5 {
-                // Outlier: unrelated content at 3x amplitude.
-                3.0 * next() as f32
-            } else {
-                base[k] + noise
-            };
-        }
-    }
-
-    let robust_iters = 3;
-    let mut loo = LooScratch::default();
-    build_loo_gram(&xs, nv, cn, &mut loo);
-
-    let mut sc = ConsensusScratch::default();
-    let mut loo_xs = vec![0f32; (nv - 1) * cn];
-    let mut got = Vec::new();
-    let mut want = Vec::new();
-    for v in 0..nv {
-        // Reference: compact the holdout stack, IRLS, unit template.
-        let mut w = 0;
-        for u in 0..nv {
-            if u == v {
-                continue;
-            }
-            loo_xs[w * cn..][..cn].copy_from_slice(&xs[u * cn..][..cn]);
-            w += 1;
-        }
-        irls_view_weights(&loo_xs, w, kept_ch, n, robust_iters, None, &mut sc);
-        weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut want);
-
-        // Production: Gram-space IRLS + skip-materialization.
-        loo_consensus_template(&xs, nv, v, kept_ch, n, robust_iters, &mut loo, &mut got);
-
-        assert_eq!(got.len(), want.len(), "holdout {v}: template length");
-        for (k, (&g, &r)) in got.iter().zip(&want).enumerate() {
-            assert!(
-                (g - r).abs() < 1e-4,
-                "holdout {v}, element {k}: incremental {g} vs reference {r}"
-            );
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Consensus-basis cap (specs/core/patch/keypoint-localization-consensus-basis.md)
-// ---------------------------------------------------------------------------
-
-/// A ring of `n` cameras around the patch, all seeing the same aligned texture
-/// except the entries named in `shifted` (which see it translated by that many
-/// patch-grid px in world-x) and those in `odd_tex` (a different surface).
-fn ring_scene(n: usize, shifted: &[(usize, f64)], odd_tex: &[usize]) -> (Scene, Vec<u32>) {
-    let mut centers = Vec::with_capacity(n);
-    for k in 0..n {
-        let a = std::f64::consts::TAU * k as f64 / n as f64;
-        centers.push([0.45 * a.cos(), 0.45 * a.sin(), 0.0]);
-    }
-    let mut offs = vec![[0.0, 0.0]; n];
-    for &(i, s) in shifted {
-        offs[i] = [s * wpp(), 0.0];
-    }
-    let mut texs = vec![texture as fn(f64, f64) -> f64; n];
-    for &i in odd_tex {
-        texs[i] = occluder_texture as fn(f64, f64) -> f64;
-    }
-    let scene = Scene::new(&centers, &offs, &texs);
-    let set: Vec<u32> = (0..n as u32).collect();
-    (scene, set)
-}
-
-fn capped(k: u32) -> KeypointLocalizeParams {
-    KeypointLocalizeParams {
-        basis_max_views: k,
-        ..params()
-    }
-}
-
-/// The kept views that congealed as consensus-basis members.
-fn basis_views(res: &KeypointLocalization) -> Vec<u32> {
-    res.views
-        .iter()
-        .zip(&res.is_basis)
-        .filter_map(|(&v, &b)| b.then_some(v))
-        .collect()
-}
-
-#[test]
-fn basis_cap_off_is_bit_identical_to_the_uncapped_path() {
-    let (scene, set) = ring_scene(10, &[(3, 1.0), (7, -1.0)], &[]);
-    let views = scene.views();
-    let patch = plane_patch();
-    let scores: Vec<f64> = (0..set.len()).map(|i| 0.9 - 0.01 * i as f64).collect();
-    let evidence = BasisEvidence {
-        view_scores: Some(&scores),
-        track_view_count: 3,
-    };
-
-    let base = localize_patch_keypoints(&patch, &views, &set, None, &params());
-    // K = 0 with evidence supplied must not consult it at all.
-    let off = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(0));
-    // A cap at or above the view count is likewise the uncapped path.
-    let wide =
-        localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(10));
-    let wider =
-        localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(64));
-
-    for other in [&off, &wide, &wider] {
-        assert_eq!(other.views, base.views);
-        assert_eq!(other.keypoints, base.keypoints, "keypoints bit-identical");
-        assert_eq!(other.offsets_px, base.offsets_px);
-        assert_eq!(other.loo_zncc, base.loo_zncc);
-        assert_eq!(other.rounds, base.rounds);
-        assert!(
-            other.is_basis.iter().all(|&b| b),
-            "every kept view is a basis member when the cap does not bite"
-        );
-    }
-}
-
-#[test]
-fn tail_views_recover_their_planted_shifts_against_the_basis_template() {
-    // 12 views; two of them (8 and 11) see the texture shifted by +1 / -1
-    // patch-grid px. With K = 4 both land in the tail (the basis takes the
-    // top-scoring views 0..3), so they must recover their planted shift from a
-    // single search against the finished basis template.
-    let (scene, set) = ring_scene(12, &[(8, 1.0), (11, -1.0)], &[]);
-    let views = scene.views();
-    let patch = plane_patch();
-    // Rank the aligned leading views highest so the basis is exactly 0..3.
-    let scores: Vec<f64> = (0..12).map(|i| 0.9 - 0.01 * i as f64).collect();
-    let evidence = BasisEvidence {
-        view_scores: Some(&scores),
-        track_view_count: 0,
-    };
-    let p = KeypointLocalizeParams {
-        search_strategy: SearchStrategy::Exhaustive,
-        ..capped(4)
-    };
-
-    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &p);
-
-    assert_eq!(basis_views(&res), vec![0, 1, 2, 3], "exactly K congealed");
-    for (want_sign, i) in [(1.0, 8u32), (-1.0, 11u32)] {
-        let pi = pos(&res, i).expect("planted-shift tail view is kept");
-        assert!(!res.is_basis[pi], "view {i} should be a tail view");
-        let proj = project(&views[i as usize], &patch.center, patch.w).unwrap();
-        let dx = res.keypoints[pi][0] - proj.0;
-        let dy = res.keypoints[pi][1] - proj.1;
-        let expected = want_sign * src_per_grid();
-        assert!(
-            (dx - expected).abs() < 0.35 * src_per_grid(),
-            "tail view {i} should recover dx {expected:.3}, got {dx:.3}"
-        );
-        assert!(dy.abs() < 0.35 * src_per_grid(), "tail view {i} dy {dy:.3}");
-    }
-}
-
-#[test]
-fn tail_gate_drops_a_mismatched_tail_view() {
-    // View 9 renders a different surface entirely; ranked last, it lands in the
-    // tail and must fail the relative-ZNCC gate against the basis template.
-    let (scene, set) = ring_scene(10, &[], &[9]);
-    let views = scene.views();
-    let patch = plane_patch();
-    let mut scores: Vec<f64> = vec![0.9; 10];
-    scores[9] = 0.1;
-    let evidence = BasisEvidence {
-        view_scores: Some(&scores),
-        track_view_count: 0,
-    };
-
-    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(4));
-
-    assert!(
-        pos(&res, 9).is_none(),
-        "the wrong-surface tail view must be dropped, kept {:?}",
-        res.views
-    );
-    assert_eq!(res.views, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(res.is_basis.len(), res.views.len());
-}
-
-#[test]
-fn capped_result_preserves_input_order_and_parallel_arrays() {
-    let (scene, set) = ring_scene(9, &[(5, 1.0)], &[]);
-    let views = scene.views();
-    let patch = plane_patch();
-    // Score the LAST views highest so the basis is not a prefix of the input —
-    // the merge must still report kept views in input order.
-    let scores: Vec<f64> = (0..9).map(|i| 0.1 + 0.05 * i as f64).collect();
-    let evidence = BasisEvidence {
-        view_scores: Some(&scores),
-        track_view_count: 0,
-    };
-
-    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(3));
-
-    assert!(
-        res.views.windows(2).all(|w| w[0] < w[1]),
-        "kept views must stay in input order, got {:?}",
-        res.views
-    );
-    assert_eq!(res.keypoints.len(), res.views.len());
-    assert_eq!(res.offsets_px.len(), res.views.len());
-    assert_eq!(res.loo_zncc.len(), res.views.len());
-    assert_eq!(res.is_basis.len(), res.views.len());
-    assert_eq!(basis_views(&res), vec![6, 7, 8]);
-}
-
-#[test]
-fn force_track_puts_the_track_views_in_the_basis() {
-    // The track views (the leading 3 entries) score worst; with the default
-    // `basis_force_track_views` they still claim the basis seats.
-    let (scene, set) = ring_scene(10, &[], &[]);
-    let views = scene.views();
-    let patch = plane_patch();
-    let mut scores: Vec<f64> = vec![0.9; 10];
-    scores[0] = 0.2;
-    scores[1] = 0.2;
-    scores[2] = 0.2;
-    let evidence = BasisEvidence {
-        view_scores: Some(&scores),
-        track_view_count: 3,
-    };
-
-    let forced =
-        localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(3));
-    assert_eq!(
-        basis_views(&forced),
-        vec![0, 1, 2],
-        "track views claim the basis seats"
-    );
-
-    let free = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        None,
-        evidence,
-        &KeypointLocalizeParams {
-            basis_force_track_views: false,
-            ..capped(3)
-        },
-    );
-    assert_eq!(
-        basis_views(&free),
-        vec![3, 4, 5],
-        "without the reservation, by score"
-    );
-}
-
-#[test]
-fn unscored_views_fall_back_to_the_grazing_rank() {
-    // No caller scores at all: the pick ranks by |dÂ·n| (most frontal first).
-    // The ring cameras are symmetric, so this only has to be deterministic and
-    // produce a well-formed capped result.
-    let (scene, set) = ring_scene(8, &[], &[]);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let a = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        None,
-        BasisEvidence::default(),
-        &capped(3),
-    );
-    let b = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        None,
-        BasisEvidence::default(),
-        &capped(3),
-    );
-    assert_eq!(a.views, b.views);
-    assert_eq!(a.keypoints, b.keypoints);
-    assert_eq!(a.is_basis, b.is_basis);
-    assert_eq!(a.is_basis.iter().filter(|&&x| x).count(), 3);
-}
-
-#[test]
-fn batch_threads_the_basis_inputs_per_patch() {
-    let (scene, set) = ring_scene(10, &[], &[]);
-    let views = scene.views();
-    let cloud = PatchCloud {
-        patches: vec![plane_patch(), plane_patch()],
-        point_indexes: vec![0, 1],
-    };
-    let view_sets = vec![set.clone(), set.clone()];
-    let scores = vec![
-        (0..10).map(|i| 0.9 - 0.01 * i as f64).collect::<Vec<f64>>(),
-        (0..10).map(|i| 0.1 + 0.05 * i as f64).collect::<Vec<f64>>(),
-    ];
-    let counts = vec![0u32, 0];
-    let inputs = BasisInputs {
-        view_scores: Some(&scores),
-        track_view_counts: Some(&counts),
-    };
-
-    let batch = localize_patch_cloud_keypoints(
-        &cloud,
-        &views,
-        &view_sets,
-        None,
-        Some(&inputs),
-        &capped(3),
-        None,
-        &crate::progress::Progress::none(),
-    )
-    .expect("Progress::none never cancels");
-
-    // Patch 0 ranks the leading views highest, patch 1 the trailing ones — so
-    // the per-patch scores really did reach the pick.
-    assert_eq!(basis_views(&batch[0]), vec![0, 1, 2]);
-    assert_eq!(basis_views(&batch[1]), vec![7, 8, 9]);
-}
-
 /// Widen a 1-channel image to `channels` by giving each channel its own gain —
 /// so every channel is textured (no flat-channel drop) but they are not
 /// bit-identical copies.
@@ -2504,7 +1876,7 @@ fn widen(img: &ImageU8, channels: u32) -> ImageU8 {
 }
 
 /// A ring scene whose views render `channels[k]`-channel imagery — the mixed
-/// grayscale/colour capture the phase-B tail search has to survive.
+/// grayscale/colour capture the search has to survive.
 fn ring_scene_mixed_channels(channels: &[u32]) -> (Scene, Vec<u32>) {
     let n = channels.len();
     let mut centers = Vec::with_capacity(n);
@@ -2531,146 +1903,47 @@ fn ring_scene_mixed_channels(channels: &[u32]) -> (Scene, Vec<u32>) {
 }
 
 #[test]
-fn tail_view_narrower_than_the_basis_template_is_scored_not_panicked() {
-    // Every third view is grayscale among 3-channel ones. The basis template is
-    // built over the colour views' 3 channels; a 1-channel tail tile has no
-    // plane for channels 1 and 2, which used to index `tile.planes` out of
-    // bounds inside the shift search.
+fn views_narrower_or_wider_than_the_reference_are_scored_not_panicked() {
+    // Every third view is grayscale among 3-channel ones. A 1-channel tile has
+    // no plane for a colour template's channels 1 and 2, and a 1-channel
+    // template scores only the leading channel of a colour tile; either way the
+    // view is searched on the channels both carry.
     let channels: Vec<u32> = (0..9).map(|k| if k % 3 == 0 { 1 } else { 3 }).collect();
     let (scene, set) = ring_scene_mixed_channels(&channels);
     let views = scene.views();
     let patch = plane_patch();
-    // Rank the colour views highest so the grayscale ones land in the tail.
-    let scores: Vec<f64> = channels
-        .iter()
-        .map(|&c| if c == 1 { 0.1 } else { 0.9 })
-        .collect();
-    let evidence = BasisEvidence {
-        view_scores: Some(&scores),
-        track_view_count: 0,
-    };
-
-    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(3));
-
-    // The basis is colour-only; the grayscale views are tail members.
-    for v in basis_views(&res) {
-        assert_eq!(
-            channels[v as usize], 3,
-            "view {v} should not be in the basis"
-        );
-    }
-    // Sensible output: parallel arrays, and the grayscale tail views that
-    // survive carry a finite ZNCC from the truncated (1-channel) score.
-    assert_eq!(res.keypoints.len(), res.views.len());
-    assert_eq!(res.loo_zncc.len(), res.views.len());
-    assert_eq!(res.is_basis.len(), res.views.len());
-    let mut scored_gray = 0;
-    for (k, &v) in res.views.iter().enumerate() {
-        if channels[v as usize] == 1 {
-            assert!(!res.is_basis[k]);
+    // A colour reference (view 1) and a grayscale one (view 0).
+    for reference in [1usize, 0] {
+        let res = localize_patch_keypoints(&patch, &views, &set, None, Some(reference), &params());
+        assert_eq!(res.reference, Some(reference as u32));
+        assert_eq!(res.keypoints.len(), res.views.len());
+        assert_eq!(res.zncc.len(), res.views.len());
+        assert_eq!(res.views, set, "every view matches the reference's surface");
+        for (k, &v) in res.views.iter().enumerate() {
             assert!(
-                res.loo_zncc[k].is_finite() && res.loo_zncc[k] > 0.5,
-                "grayscale tail view {v} scored {}",
-                res.loo_zncc[k]
+                res.zncc[k].is_finite() && res.zncc[k] > 0.5,
+                "reference {reference}: view {v} ({} channels) scored {}",
+                channels[v as usize],
+                res.zncc[k]
             );
-            scored_gray += 1;
         }
     }
-    assert!(
-        scored_gray > 0,
-        "no grayscale tail view survived to be checked"
-    );
-}
-
-#[test]
-fn mixed_channel_scene_is_unaffected_when_the_cap_is_off() {
-    // The same scene through the uncapped path: no tail, so no truncation —
-    // this pins that the blocker fix did not change the K = 0 behaviour.
-    let channels: Vec<u32> = (0..9).map(|k| if k % 3 == 0 { 1 } else { 3 }).collect();
-    let (scene, set) = ring_scene_mixed_channels(&channels);
-    let views = scene.views();
-    let patch = plane_patch();
-
-    let res = localize_patch_keypoints(&patch, &views, &set, None, &params());
-    assert!(res.is_basis.iter().all(|&b| b));
-    assert_eq!(res.keypoints.len(), res.views.len());
-}
-
-#[test]
-fn empty_view_scores_fall_back_to_the_grazing_rank() {
-    // The batch entry point says "this point is unscored" with an empty score
-    // list (it has no per-point Option). That must behave exactly like passing
-    // no scores at all — not like an all-NaN score vector, which would rank the
-    // candidates in input order instead.
-    let (scene, set) = ring_scene(8, &[], &[]);
-    let views = scene.views();
-    let patch = plane_patch();
-    let empty: Vec<f64> = Vec::new();
-
-    let none = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        None,
-        BasisEvidence::default(),
-        &capped(3),
-    );
-    let empty_slice = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        None,
-        BasisEvidence {
-            view_scores: Some(&empty),
-            track_view_count: 0,
-        },
-        &capped(3),
-    );
-
-    assert_eq!(none.views, empty_slice.views);
-    assert_eq!(none.keypoints, empty_slice.keypoints);
-    assert_eq!(none.is_basis, empty_slice.is_basis);
-    // And the batch form threads an empty per-patch entry the same way.
-    let cloud = PatchCloud {
-        patches: vec![plane_patch()],
-        point_indexes: vec![0],
-    };
-    let scores = vec![Vec::<f64>::new()];
-    let inputs = BasisInputs {
-        view_scores: Some(&scores),
-        track_view_counts: None,
-    };
-    let batch = localize_patch_cloud_keypoints(
-        &cloud,
-        &views,
-        std::slice::from_ref(&set),
-        None,
-        Some(&inputs),
-        &capped(3),
-        None,
-        &crate::progress::Progress::none(),
-    )
-    .expect("Progress::none never cancels");
-    assert_eq!(batch[0].views, none.views);
-    assert_eq!(batch[0].is_basis, none.is_basis);
 }
 
 /// A textureless surface — flat sky or water. Every channel is flat, so the
-/// z-normalization finds no channel to score on and no consensus template can be
-/// built; a member rendering this reads the largest ZNCC self-similarity radius
-/// (it pins no 2D position, and its ZNCC to anything is noise).
+/// z-normalization finds no channel to score on and no template can be built;
+/// a member rendering this reads the largest ZNCC self-similarity radius (it
+/// pins no 2D position, and its ZNCC to anything is noise).
 fn flat_texture(_x: f64, _y: f64) -> f64 {
     128.0
 }
 
 #[test]
-fn tail_without_a_basis_template_still_faces_the_shift_gate() {
-    // A flat scene gives the z-normalization no textured channel, so the round
-    // loop bails before building any consensus and `basis_template` returns
-    // `None` — the "no usable basis" path. The tail then keeps its seed
-    // offsets, and a seed further than `max_shift_px` from the projection must
-    // still be dropped: nothing downstream re-checks it, and the early return
-    // used to skip the gate entirely.
+fn views_with_no_template_stay_at_their_starts_and_face_the_shift_gate() {
+    // A flat reference gives the z-normalization no textured channel, so there
+    // is no template to align to: every view keeps its starting keypoint,
+    // unscored, and no view is anchored. A start further than `max_shift_px`
+    // from the projection is still dropped.
     let centers: Vec<[f64; 3]> = (0..8)
         .map(|k| {
             let a = std::f64::consts::TAU * k as f64 / 8.0;
@@ -2686,54 +1959,37 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
     // Seed every view well off its projection.
     let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
     let seeds: Vec<Option<[f64; 2]>> = (0..8).map(|_| Some([cx + 12.0, cy])).collect();
+    let open = |max_shift_px: f64| KeypointLocalizeParams {
+        max_shift_px,
+        // Hold the member self-similarity gate off: it would refuse these flat
+        // tiles outright, and the path under test is the one the
+        // z-normalization reaches.
+        max_member_zncc_self_similarity_radius: 0.0,
+        ..params()
+    };
 
-    // Loose gate: the un-registered tail views survive, which is what proves
-    // this scene really exercises the no-basis path.
-    let loose = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        Some(&seeds),
-        BasisEvidence::default(),
-        &KeypointLocalizeParams {
-            max_shift_px: 1e6,
-            // Hold the member self-similarity gate off: it would refuse these
-            // flat tiles outright, and the path under test is the one the
-            // *z-normalization* bail reaches.
-            max_member_zncc_self_similarity_radius: 0.0,
-            ..capped(3)
-        },
-    );
+    let loose = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(0), &open(1e6));
+    assert_eq!(loose.views, set, "a loose shift gate keeps every view");
+    assert_eq!(loose.reference, None, "there is nothing to anchor to");
     assert!(
-        loose.is_basis.iter().any(|&b| !b),
-        "expected un-registered tail views to be reported under a loose gate"
+        loose.zncc.iter().all(|z| z.is_nan()),
+        "no template was built, so every ZNCC is unknown: {:?}",
+        loose.zncc
     );
-    assert!(
-        loose.loo_zncc.iter().all(|z| z.is_nan()),
-        "no template was built, so every ZNCC should be unknown"
-    );
-
-    // Tight gate: those same tail views sit far past `max_shift_px` and must go.
-    let tight = localize_patch_keypoints_with_basis(
-        &patch,
-        &views,
-        &set,
-        Some(&seeds),
-        BasisEvidence::default(),
-        &KeypointLocalizeParams {
-            max_shift_px: 0.5,
-            max_member_zncc_self_similarity_radius: 0.0,
-            ..capped(3)
-        },
-    );
-    for (k, &v) in tight.views.iter().enumerate() {
+    for (k, kp) in loose.keypoints.iter().enumerate() {
         assert!(
-            tight.is_basis[k],
-            "tail view {v} was emitted {} px from its projection despite the \
-             0.5 px gate",
-            tight.offsets_px[k]
+            (kp[0] - cx - 12.0).abs() < 1e-6 && (kp[1] - cy).abs() < 1e-6,
+            "view {k} keeps its start, got {kp:?}"
         );
     }
+
+    let tight = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(0), &open(0.5));
+    assert!(
+        tight.views.is_empty(),
+        "every start sits 12 px from its projection: {:?} {:?}",
+        tight.views,
+        tight.offsets_px
+    );
 }
 
 /// `project_unclipped` is the only world→pixel entry in this module and the
@@ -2875,4 +2131,461 @@ fn the_shift_grids_are_reserved_before_the_search_uses_them() {
         scratch.try_reserve_grids(1 << 24).is_err(),
         "a 16-million-cell span is 2 TB of grids"
     );
+}
+
+// ── Aligning every view to the reference render ─────────────────────────────
+
+/// The four fronto cameras most tests use, each rendering `texs[k]` translated
+/// in-plane by `offs_grid[k]` patch-grid px.
+fn four_view_scene(offs_grid: [[f64; 2]; 4], texs: [fn(f64, f64) -> f64; 4]) -> Scene {
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = offs_grid.map(|[u, v]| [u * wpp(), v * wpp()]);
+    Scene::new(&centers, &offs, &texs)
+}
+
+/// Where view `view` sees the content the reference (offset 0) sees at the
+/// patch centre, when its texture is translated by `off_grid` patch-grid px:
+/// the projection of the centre moved by the same world offset.
+fn true_keypoint(views: &[ProjectedImage<'_>], view: usize, off_grid: [f64; 2]) -> [f64; 2] {
+    let patch = plane_patch();
+    let moved = patch.center + Vector3::new(off_grid[0] * wpp(), off_grid[1] * wpp(), 0.0);
+    let (x, y) = project(&views[view], &moved, patch.w).unwrap();
+    [x, y]
+}
+
+fn projection(views: &[ProjectedImage<'_>], view: usize) -> [f64; 2] {
+    let patch = plane_patch();
+    let (x, y) = project(&views[view], &patch.center, patch.w).unwrap();
+    [x, y]
+}
+
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+const STRATEGIES: [SearchStrategy; 2] = [SearchStrategy::PlusDescent, SearchStrategy::Exhaustive];
+
+fn with_strategy(search_strategy: SearchStrategy) -> KeypointLocalizeParams {
+    KeypointLocalizeParams {
+        search_strategy,
+        ..params()
+    }
+}
+
+#[test]
+fn the_reference_is_not_moved_and_the_others_follow_it() {
+    // An aligned planar scene, with the reference's starting keypoint
+    // deliberately displaced from the truth by `d`. The reference keeps exactly
+    // the keypoint it was given, scores 1, and the other views follow it: its
+    // render at the displaced keypoint shows the plane moved by `d`, and every
+    // camera here sees the plane at the same depth, so each other view moves
+    // by about `d` too.
+    //
+    // A whole grid px of displacement is recovered to a few hundredths of a
+    // source px. A fractional one is recovered to within about a quarter of a
+    // grid px (2.6 source px here): the parabola through the integer peak and
+    // its neighbours is biased toward the integer shift on this texture, and
+    // removing that is the sub-pixel refiner's job.
+    let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    for (d, tolerance) in [([src_per_grid(), 0.0], 0.05), ([1.5, -1.0], 0.7)] {
+        let p0 = projection(&views, 0);
+        let start = [p0[0] + d[0], p0[1] + d[1]];
+        let seeds = [Some(start), None, None, None];
+        for strategy in STRATEGIES {
+            let res = localize_patch_keypoints(
+                &patch,
+                &views,
+                &[0, 1, 2, 3],
+                Some(&seeds),
+                Some(0),
+                &with_strategy(strategy),
+            );
+            assert_eq!(res.views, vec![0, 1, 2, 3], "{strategy:?}");
+            assert_eq!(res.reference, Some(0));
+            assert_eq!(
+                res.keypoints[0].map(f64::to_bits),
+                start.map(f64::to_bits),
+                "{strategy:?}: the reference's keypoint is returned bit for bit"
+            );
+            assert_eq!(res.zncc[0], 1.0);
+            for k in 1..4 {
+                let want = projection(&views, k);
+                let want = [want[0] + d[0], want[1] + d[1]];
+                let err = dist(res.keypoints[k], want);
+                assert!(
+                    err < tolerance,
+                    "{strategy:?}: view {k} should follow the reference by {d:?}, \
+                 off by {err:.3} px ({:?} vs {want:?})",
+                    res.keypoints[k]
+                );
+                assert!(res.zncc[k] > 0.9, "{strategy:?}: view {k} {}", res.zncc[k]);
+            }
+        }
+    }
+}
+
+#[test]
+fn planted_offsets_are_recovered_relative_to_the_reference() {
+    // Views 1-3 see the texture translated by known sub-grid offsets, and each
+    // starts 1-2 px away from where it truly sees the reference's content. The
+    // search recovers each view's offset relative to the reference to
+    // sub-pixel accuracy (within about a quarter of a grid px, the parabola's
+    // bias; see `the_reference_is_not_moved_and_the_others_follow_it`).
+    let offs = [[0.0, 0.0], [0.6, 0.0], [0.0, -0.7], [0.4, 0.5]];
+    let scene = four_view_scene(offs, [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let displacement = [[0.0, 0.0], [1.5, 0.5], [-1.0, 1.5], [1.2, -1.2]];
+    let truth: Vec<[f64; 2]> = (0..4).map(|k| true_keypoint(&views, k, offs[k])).collect();
+    let seeds: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| {
+            Some([
+                truth[k][0] + displacement[k][0],
+                truth[k][1] + displacement[k][1],
+            ])
+        })
+        .collect();
+    for strategy in STRATEGIES {
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            &[0, 1, 2, 3],
+            Some(&seeds),
+            Some(0),
+            &with_strategy(strategy),
+        );
+        assert_eq!(res.views, vec![0, 1, 2, 3], "{strategy:?}");
+        for k in 1..4 {
+            let err = dist(res.keypoints[k], truth[k]);
+            assert!(
+                err < 0.7,
+                "{strategy:?}: view {k} off its planted offset by {err:.3} px \
+                 ({:?} vs {:?}, started {:?} px away)",
+                res.keypoints[k],
+                truth[k],
+                displacement[k]
+            );
+        }
+    }
+}
+
+#[test]
+fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
+    // No reference: the reference-view rule reads the views' renders at their
+    // starting keypoints and its pick is the reference. The result names it,
+    // and its keypoint is the one it started at.
+    let offs = [[0.0, 0.0], [0.5, 0.0], [0.0, 0.4], [-0.3, 0.3]];
+    let scene = four_view_scene(offs, [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let set = [0u32, 1, 2, 3];
+    let seeds: Vec<Option<[f64; 2]>> = (0..4).map(|k| Some(projection(&views, k))).collect();
+    let p = params();
+    let rule = crate::patch::stored_bitmap::render_reference(
+        &patch,
+        &views,
+        &set,
+        &seeds,
+        p.resolution,
+        p.sampler,
+        &Progress::none(),
+    );
+    let pick = rule
+        .stored_reference()
+        .expect("the rule picks a view it would store on this scene");
+
+    for strategy in STRATEGIES {
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            &set,
+            Some(&seeds),
+            None,
+            &with_strategy(strategy),
+        );
+        assert_eq!(res.reference, Some(set[pick]), "{strategy:?}");
+        let k = pos(&res, set[pick]).unwrap();
+        assert_eq!(res.keypoints[k], seeds[pick].unwrap(), "{strategy:?}");
+        assert_eq!(res.zncc[k], 1.0);
+        // And the result is the one the same reference given explicitly gives.
+        let given = localize_patch_keypoints(
+            &patch,
+            &views,
+            &set,
+            Some(&seeds),
+            Some(pick),
+            &with_strategy(strategy),
+        );
+        assert_eq!(res.views, given.views);
+        assert_eq!(res.keypoints, given.keypoints);
+        assert_eq!(res.zncc, given.zncc);
+    }
+}
+
+#[test]
+fn a_changed_reference_realigns_the_views_to_its_render() {
+    // Localize with reference A (view 0), then hand the result to a second
+    // localization whose reference is B (view 1), with B's start displaced by
+    // `e`. The views are aligned again, to B's render: the others move by
+    // about `e`, while with A kept as the reference the same starts are pulled
+    // back to A's alignment. Which reference is given decides the result.
+    //
+    // The first localization starts every view where it truly sees A's
+    // content, and `e` is a whole grid px, so every shift the search makes is
+    // a whole number of grid px and is recovered without the parabola's bias
+    // on fractional shifts. The shift gate is opened: it is not the subject.
+    let offs = [[0.0, 0.0], [0.8, 0.0], [0.0, 0.0], [0.0, 0.6]];
+    let scene = four_view_scene(offs, [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let set = [0u32, 1, 2, 3];
+    let e = [0.0, -src_per_grid()];
+    let truth: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| Some(true_keypoint(&views, k, offs[k])))
+        .collect();
+    for strategy in STRATEGIES {
+        let p = KeypointLocalizeParams {
+            max_shift_px: 1e6,
+            ..with_strategy(strategy)
+        };
+        let a = localize_patch_keypoints(&patch, &views, &set, Some(&truth), Some(0), &p);
+        assert_eq!(a.views, set, "{strategy:?}");
+        let mut seeds: Vec<Option<[f64; 2]>> = a.keypoints.iter().map(|&kp| Some(kp)).collect();
+        let b_start = [a.keypoints[1][0] + e[0], a.keypoints[1][1] + e[1]];
+        seeds[1] = Some(b_start);
+
+        let b = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(1), &p);
+        assert_eq!(b.views, set, "{strategy:?}");
+        assert_eq!(b.reference, Some(1));
+        assert_eq!(b.keypoints[1], b_start, "{strategy:?}: B is not moved");
+        for k in [0, 2, 3] {
+            let want = [a.keypoints[k][0] + e[0], a.keypoints[k][1] + e[1]];
+            let err = dist(b.keypoints[k], want);
+            assert!(
+                err < 0.1,
+                "{strategy:?}: view {k} should agree with B's render, off by {err:.3} px"
+            );
+        }
+
+        let kept = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(0), &p);
+        assert_eq!(kept.reference, Some(0));
+        for k in 0..4 {
+            let err = dist(kept.keypoints[k], a.keypoints[k]);
+            assert!(
+                err < 0.1,
+                "{strategy:?}: with A as the reference view {k} stays aligned to A, \
+                 off by {err:.3} px"
+            );
+        }
+        assert!(
+            dist(kept.keypoints[0], b.keypoints[0]) > 1.0,
+            "{strategy:?}: the two references place view 0 apart"
+        );
+    }
+}
+
+/// Half `texture`, half `occluder_texture`: a view that only partly matches.
+fn half_occluded_texture(x: f64, y: f64) -> f64 {
+    0.5 * texture(x, y) + 0.5 * occluder_texture(x, y)
+}
+
+/// [`params`] with no gate but the ZNCC bars: the shift gate opened, and the
+/// absolute floor and relative bar at the values given.
+fn only_zncc_gates(min_absolute_zncc: f64, min_relative_zncc: f64) -> KeypointLocalizeParams {
+    KeypointLocalizeParams {
+        max_shift_px: 1e6,
+        min_absolute_zncc,
+        min_relative_zncc,
+        ..params()
+    }
+}
+
+#[test]
+fn the_absolute_floor_drops_a_view_of_an_unrelated_texture() {
+    let scene = four_view_scene([[0.0; 2]; 4], [texture, texture, texture, occluder_texture]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let set = [0u32, 1, 2, 3];
+    let run = |abs: f64| {
+        localize_patch_keypoints(
+            &patch,
+            &views,
+            &set,
+            None,
+            Some(0),
+            &only_zncc_gates(abs, 0.0),
+        )
+    };
+
+    let open = run(0.0);
+    assert_eq!(open.views, set, "0.0 turns both bars off");
+    assert!(open.zncc[3] < 0.5, "{:?}", open.zncc);
+    assert_eq!(run(0.5).views, vec![0, 1, 2], "{:?}", open.zncc);
+}
+
+#[test]
+fn the_gates_read_the_plain_score_against_the_reference() {
+    // View 3 sees a half-occluded surface, so it matches the reference only
+    // partly. Each bar, set just above its score, drops it and nothing else;
+    // set just below, keeps it.
+    let scene = four_view_scene(
+        [[0.0; 2]; 4],
+        [texture, texture, texture, half_occluded_texture],
+    );
+    let views = scene.views();
+    let patch = plane_patch();
+    let set = [0u32, 1, 2, 3];
+    let run = |abs: f64, rel: f64| {
+        localize_patch_keypoints(
+            &patch,
+            &views,
+            &set,
+            None,
+            Some(0),
+            &only_zncc_gates(abs, rel),
+        )
+    };
+    let open = run(0.0, 0.0);
+    assert_eq!(open.views, set);
+    let z3 = open.zncc[3];
+    // The relative bar reads the median over the views other than the
+    // reference: views 1, 2 and 3.
+    let mut others = open.zncc[1..].to_vec();
+    others.sort_by(f64::total_cmp);
+    let median = others[1];
+    assert!(
+        z3 > 0.1 && z3 < median - 0.1,
+        "the fixture scores view 3 partly: {:?}",
+        open.zncc
+    );
+
+    assert_eq!(
+        run(z3 + 0.01, 0.0).views,
+        vec![0, 1, 2],
+        "floor above view 3"
+    );
+    assert_eq!(run(z3 - 0.01, 0.0).views, set, "floor below view 3");
+    let ratio = z3 / median;
+    assert_eq!(
+        run(0.0, ratio + 0.02).views,
+        vec![0, 1, 2],
+        "bar above view 3"
+    );
+    assert_eq!(run(0.0, ratio - 0.02).views, set, "bar below view 3");
+}
+
+#[test]
+fn the_reference_faces_no_gate() {
+    // The reference is view 3, of a surface no other view shows, and its start
+    // sits further from its projection than `max_shift_px`. Every other view
+    // fails both bars against it; the reference stays, as given.
+    let scene = four_view_scene([[0.0; 2]; 4], [texture, texture, texture, occluder_texture]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let p3 = projection(&views, 3);
+    let start = [p3[0] + 5.0, p3[1]];
+    let seeds = [None, None, None, Some(start)];
+    let strict = KeypointLocalizeParams {
+        min_relative_zncc: 2.0,
+        ..params()
+    };
+    assert!(5.0 > strict.max_shift_px);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(3),
+        &strict,
+    );
+    assert_eq!(res.views, vec![3]);
+    assert_eq!(res.reference, Some(3));
+    assert_eq!(res.keypoints[0], start);
+    assert_eq!(res.zncc[0], 1.0);
+    assert!((res.offsets_px[0] - 5.0).abs() < 1e-9);
+}
+
+#[test]
+fn view_cache_bytes_counts_a_tile_of_side_r_plus_twice_the_margin() {
+    // At the defaults (R = 24, search 6) the tile is 36 px on a side, its rows
+    // padded to 56 lanes: four planes of `f32` (three channels and the
+    // invalidity plane) and a `bool` validity map, plus the render scratch of
+    // ten `f32` lanes and three `u8` channels per pixel.
+    let p = KeypointLocalizeParams::default();
+    let tile = 56 * 36 * 4 * 4 + 36 * 36;
+    let render = 36 * 36 * 10 * 4 + 36 * 36 * 3;
+    assert_eq!(view_cache_bytes(&p, 3), tile + render);
+    // It grows as the square of the search radius.
+    let wide = KeypointLocalizeParams {
+        search: 60.0,
+        ..p.clone()
+    };
+    let ratio = view_cache_bytes(&wide, 3) as f64 / view_cache_bytes(&p, 3) as f64;
+    assert!(ratio > 10.0, "{ratio}");
+}
+
+#[test]
+fn a_search_past_the_machine_s_memory_is_refused() {
+    let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
+    let views = scene.views();
+    let p = KeypointLocalizeParams {
+        search: 1e7,
+        ..params()
+    };
+    let refused = try_localize_patch_keypoints(
+        &plane_patch(),
+        &views,
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &p,
+        &Progress::none(),
+    )
+    .expect_err("petabytes of search buffers are not available");
+    assert!(
+        matches!(refused, LocalizeError::OutOfMemory { .. }),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_cancelled_progress_stops_the_localization() {
+    let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
+    let views = scene.views();
+    let flag = std::sync::atomic::AtomicBool::new(true);
+    let progress = Progress::none().cancelled_by(&flag);
+    for reference in [Some(0), None] {
+        let stopped = try_localize_patch_keypoints(
+            &plane_patch(),
+            &views,
+            &[0, 1, 2, 3],
+            None,
+            reference,
+            &params(),
+            &progress,
+        );
+        assert_eq!(stopped.err(), Some(LocalizeError::Cancelled));
+    }
+    let cloud = PatchCloud {
+        patches: vec![plane_patch(); 3],
+        point_indexes: vec![0, 1, 2],
+    };
+    let stopped = localize_patch_cloud_keypoints(
+        &cloud,
+        &views,
+        &vec![vec![0u32, 1, 2, 3]; 3],
+        None,
+        None,
+        &params(),
+        None,
+        &progress,
+    );
+    assert!(stopped.is_err());
 }

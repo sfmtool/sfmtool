@@ -215,6 +215,7 @@ enum BitmapKind {
 /// Untimed body of [`refine_patch_keypoints`] (split so the enclosing
 /// [`prof::TOTAL`] phase is a single wrap covering both batch entries — the
 /// Rust [`refine_patch_cloud_keypoints`] and the PyO3 binding's inlined loop).
+#[allow(clippy::too_many_arguments)]
 fn refine_patch_keypoints_impl(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -1017,5 +1018,5 @@ pub fn fuse_patch_bitmap_reporting(
         .representative
 }
 
-#[cfg(any())]
+#[cfg(test)]
 mod tests;

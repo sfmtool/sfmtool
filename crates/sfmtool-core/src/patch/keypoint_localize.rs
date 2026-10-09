@@ -51,9 +51,7 @@ use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper.
 #[cfg(test)]
-use crate::patch::normal_refine::{
-    build_support, weighted_moments_pub, znormalize_into_kept, PatchWindow,
-};
+use crate::patch::normal_refine::{build_support, weighted_moments_pub, PatchWindow};
 use crate::reconstruction::SfmrReconstruction;
 use nalgebra::Point3;
 use rayon::prelude::*;
@@ -72,7 +70,7 @@ pub(super) use seed::seed_offset;
 // Search machinery, re-exported into this module's namespace for the sibling
 // test module's `use super::*`.
 #[cfg(test)]
-use search::{search_shift, SearchScratch, ShiftResult};
+use search::{search_shift, search_shift_plus_descent, SearchScratch, ShiftResult};
 
 // Correlation kernels re-exported into this module's namespace only for the
 // sibling test module's `use super::*`; production callers reach them through
@@ -924,5 +922,5 @@ fn search_shift_ref(
     })
 }
 
-#[cfg(any())]
+#[cfg(test)]
 mod tests;
