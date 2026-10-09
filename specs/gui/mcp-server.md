@@ -2124,8 +2124,9 @@ every frame but the one that opened it. That row is written when the call is
 applied, before the frame it waits for has been drawn, so a refusal only that
 frame can reach (a surface that cannot be read back or is in a format the
 viewer cannot encode, a 3D viewport that has not rendered, a panel that was not
-laid out, a crop outside the picture taken, a listing with no widgets read) is
-recorded at readback as a second row:
+laid out, a crop outside the picture taken, a listing with no widgets read, a
+picture that could not be encoded as PNG) is recorded at readback as a second
+row:
 a failed `screenshot failed: {message}`, as the agent's, with the message the
 agent receives (`record_late_refusal` in
 [frame.rs](../../crates/sfm-explorer/src/mcp/frame.rs)). The refusal is still
