@@ -301,6 +301,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
+            "set_bench_track_reference",
+            json!({ "reconstruction_label": "alpha", "observation": 2 }),
+        ),
+        (
             "apply_bench_track_thresholds",
             json!({ "reconstruction_label": "alpha", "min_zncc": 0.8 }),
         ),
@@ -878,15 +882,15 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Sixteen JSON reads, the one read that hands back a picture, sixty-six
+    // Sixteen JSON reads, the one read that hands back a picture, sixty-seven
     // writes, four input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 88, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 89, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        66
+        67
     );
     // One tool can overwrite a file by name, and four can press what a person
     // can press, File ▸ Save included; those five are the ones annotated

@@ -2577,7 +2577,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     // against it, plain and blur-matched, and the row it is the render of
     // reads 1.
     assert_eq!(track["stage_data"]["has_bitmap"], json!(true), "{track}");
-    let bitmap_row = track["stage_data"]["bitmap_observation"].as_u64();
+    let bitmap_row = track["stage_data"]["reference_observation"].as_u64();
     let mut picked = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let measured = &row["track"];
@@ -2587,11 +2587,17 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
                 "{key} is not on the wire: {track}"
             );
         }
-        assert!(measured["bitmap_zncc"].is_number(), "{track}");
-        assert!(measured["blur_matched_bitmap_zncc"].is_number(), "{track}");
+        assert!(measured["zncc"].is_number(), "{track}");
+        assert!(measured["blur_matched_zncc"].is_number(), "{track}");
         assert!(measured["bitmap_blur_sigma"].is_number(), "{track}");
+        for gone in ["bitmap_zncc", "blur_matched_bitmap_zncc"] {
+            assert!(
+                measured.get(gone).is_none(),
+                "{gone} is on the wire: {track}"
+            );
+        }
         if bitmap_row == Some(i as u64) {
-            assert_eq!(measured["bitmap_zncc"], json!(1.0), "{track}");
+            assert_eq!(measured["zncc"], json!(1.0), "{track}");
         }
         // An `out` row is not considered by the rule.
         if row["verdict"] != json!("in") {
@@ -2617,8 +2623,12 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     }
     assert_eq!(picked.len(), 1, "{track}");
     assert_eq!(
-        track["stage_data"]["reference_observation"],
+        track["stage_data"]["reference_view_observation"],
         json!(picked[0]),
+        "{track}"
+    );
+    assert!(
+        track["stage_data"].get("bitmap_observation").is_none(),
         "{track}"
     );
 }
@@ -2652,23 +2662,103 @@ fn a_tilt_scores_the_rows_against_the_bitmap_rendered_after_it() {
     );
     assert_eq!(track["evaluation"]["state"], json!("current"), "{track}");
     assert_eq!(track["stage_data"]["has_bitmap"], json!(true), "{track}");
-    let bitmap_row = track["stage_data"]["bitmap_observation"].as_u64();
+    let bitmap_row = track["stage_data"]["reference_observation"].as_u64();
     let rows = track["observations"].as_array().expect("rows");
     let mut scored = 0;
     for (i, row) in rows.iter().enumerate() {
         let measured = &row["track"];
         if bitmap_row == Some(i as u64) {
-            assert_eq!(measured["bitmap_zncc"], json!(1.0), "{track}");
+            assert_eq!(measured["zncc"], json!(1.0), "{track}");
             continue;
         }
-        assert!(measured["bitmap_zncc"].is_number(), "row {i}: {track}");
+        assert!(measured["zncc"].is_number(), "row {i}: {track}");
         assert!(
-            measured["blur_matched_bitmap_zncc"].is_number(),
+            measured["blur_matched_zncc"].is_number(),
             "row {i}: {track}"
         );
         scored += 1;
     }
     assert!(scored > 0, "{track}");
+}
+
+/// `set_bench_track_reference` makes a row the reference and pins it as one
+/// version; the evaluation after it renders the bitmap from the row, which
+/// `stage_data.reference_observation` then names and whose `zncc` reads 1. A
+/// second call on the same row pushes nothing, and an `out` row is refused.
+#[test]
+fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    state.settle_bench_evaluation();
+    let read = |state: &mut AppState, viewer: &mut Viewer3D| {
+        call(
+            state,
+            viewer,
+            "get_bench_track",
+            json!({ "reconstruction_label": "run_a", "track": item }),
+        )
+    };
+    let track = read(&mut state, &mut viewer);
+    let held = track["stage_data"]["reference_observation"].as_u64();
+    let rows = track["observations"].as_array().expect("rows").len() as u64;
+    let other = (0..rows).find(|&i| Some(i) != held).expect("a second row");
+    let before = version_count(&state);
+
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_reference",
+        json!({ "reconstruction_label": "run_a", "observation": other }),
+    );
+    assert_eq!(set["observation"], json!(other), "{set}");
+    assert_eq!(set["was"], json!(held), "{set}");
+    assert_eq!(version_count(&state), before + 1);
+    state.settle_bench_evaluation();
+    let track = read(&mut state, &mut viewer);
+    assert_eq!(track["evaluation"]["state"], json!("current"), "{track}");
+    assert_eq!(
+        track["stage_data"]["reference_observation"],
+        json!(other),
+        "{track}"
+    );
+    let row = &track["observations"][other as usize];
+    assert_eq!(row["pinned"], json!(true), "{track}");
+    assert_eq!(row["track"]["zncc"], json!(1.0), "{track}");
+    assert!(
+        track["stage_data"]
+            .get("reference_view_observation")
+            .is_some(),
+        "{track}"
+    );
+
+    // The reference the track holds on a pinned row: no effect, no version.
+    let again = version_count(&state);
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_reference",
+        json!({ "reconstruction_label": "run_a", "observation": other }),
+    );
+    assert_eq!(version_count(&state), again);
+
+    // An out row cannot be the reference.
+    let out = (0..rows).find(|&i| i != other).expect("a third row");
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": out, "verdict": "out" }),
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_reference",
+        json!({ "reconstruction_label": "run_a", "observation": out }),
+    );
+    assert!(
+        error.to_string().contains("Cannot set that reference"),
+        "{error}"
+    );
 }
 
 /// An observation seeded a long way from the point's projection is **named** on
@@ -2709,7 +2799,7 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
     );
     let row = &track["observations"][at]["track"];
     assert!(
-        row["zncc"].is_null(),
+        row["loo_zncc"].is_null(),
         "nothing was searched for it: {track}"
     );
     let reason = row["reason"]
@@ -2725,7 +2815,7 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
         .as_array()
         .expect("a list")
         .iter()
-        .filter(|row| row["track"]["zncc"].is_number())
+        .filter(|row| row["track"]["loo_zncc"].is_number())
         .count();
     assert!(measured >= 2, "{track}");
 }
@@ -3872,7 +3962,7 @@ fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
     );
     assert!(rows.iter().all(|row| row["verdict"] == json!("in")));
     // The row the reference-view rule picked, which no bar moves.
-    let reference = evaluation["reference_observation"]
+    let reference = evaluation["reference_view_observation"]
         .as_u64()
         .expect("a reference row") as usize;
     assert_eq!(
@@ -3892,12 +3982,13 @@ fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
         "{point}"
     );
     assert_eq!(
-        evaluation["bitmap_observation"],
+        evaluation["reference_observation"],
         json!(payload.bitmap.as_ref().and(payload.reference)),
         "{point}"
     );
-    if let Some(row) = evaluation["bitmap_observation"].as_u64() {
-        assert_eq!(rows[row as usize]["track"]["bitmap_zncc"], json!(1.0));
+    assert!(evaluation.get("bitmap_observation").is_none(), "{point}");
+    if let Some(row) = evaluation["reference_observation"].as_u64() {
+        assert_eq!(rows[row as usize]["track"]["zncc"], json!(1.0));
     }
 
     let other = (0..state.scene[0].edited().point_count() as u32)

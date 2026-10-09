@@ -326,15 +326,18 @@ fn a_drag_of_each_box_recolours_and_changes_no_verdict() {
         );
         assert!(panel.rows().iter().all(|row| row.verdict == Verdict::In));
 
-        // The ZNCC bars dragged to the top turn every measured row out.
+        // The ZNCC bars dragged to the top turn every measured row out but
+        // the reference's own, which reads 100% against the bitmap rendered
+        // from it.
+        let scored = |row: &&super::super::table::RowSummary| !row.cells[0].starts_with("100%");
         if label == MIN_ZNCC_LABEL {
-            for row in panel.rows() {
+            for row in panel.rows().iter().filter(scored) {
                 assert_eq!(row.checks[0][0], BarCheck::Fail, "{row:?}");
                 assert!(out(row), "{row:?}");
             }
         }
         if label == MIN_ZNCC_MIDDLE_LABEL {
-            for row in panel.rows() {
+            for row in panel.rows().iter().filter(scored) {
                 assert_eq!(row.checks[0][1], BarCheck::Fail, "{row:?}");
                 assert!(out(row), "{row:?}");
             }

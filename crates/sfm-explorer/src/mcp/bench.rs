@@ -1096,6 +1096,28 @@ pub(super) fn set_bench_track_verdict(
     Ok(reply)
 }
 
+/// `set_bench_track_reference`: Track View's *Set as reference*, one row made
+/// the track's reference and pinned. The reply names the row and the reference
+/// the track held before, `was`, or null.
+pub(super) fn set_bench_track_reference(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+) -> JsonReply {
+    let (id, item) = edit_target(state, label, named)?;
+    let was = state
+        .bench_track(id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.reference));
+    let reply = edit::edited(state, id, |state| {
+        state.set_bench_reference(id, &item, observation)
+    })?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "observation", json!(observation));
+    insert(&mut reply, "was", json!(was));
+    Ok(reply)
+}
+
 /// `apply_bench_track_thresholds`: the bars, and the painting they produce, as
 /// one step.
 ///
@@ -1644,28 +1666,19 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "normal_confidence": payload.normal_confidence,
                 "placement": super::render::placement(payload.placement.as_ref()),
                 "has_bitmap": payload.bitmap.is_some(),
-                // The row whose tile the stored bitmap is -- the reference in
-                // use, which can differ from the rule's pick below -- as an
-                // index into `observations`, or null for a bitmap that names
-                // none.
-                "bitmap_observation": payload.bitmap.as_ref().and(payload.reference),
+                // The reference in use: the row the stored bitmap is rendered
+                // from, as an index into `observations`, or null for a track
+                // with no bitmap or one whose bitmap is the render of no row,
+                // a fused mean. While its row is pinned it can differ from the
+                // rule's pick below.
+                "reference_observation": crate::bench::reference_in_use(track),
                 "patch_resolution": recon.map(crate::bench::patch_resolution),
                 // The row the reference-view rule picked at the last
                 // evaluation, as an index into `observations`, or null.
-                "reference_observation": reference_observation(track),
+                "reference_view_observation": crate::bench::reference_view_pick(track),
             })
         }
     }
-}
-
-/// The observation the reference-view rule picked, by its index, or `None`.
-pub(super) fn reference_observation(track: &EditableTrack) -> Option<usize> {
-    track.observations.iter().position(|o| {
-        o.track
-            .as_ref()
-            .and_then(|m| m.reference_view)
-            .is_some_and(|standing| standing.is_reference())
-    })
 }
 
 /// What put an observation on the track, in the words the panel's *From* column
@@ -1751,11 +1764,25 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
     };
     json!({
         "keypoint": measured.keypoint,
+        // The row's score against the stored patch bitmap, plain: 1 on the
+        // row the bitmap is rendered from, null with `reason` where there is
+        // no bitmap or the pair could not be read. The bars judge it.
         "zncc": finite(measured.zncc),
-        // The same samples read over the middle of the tile only.
+        // The same pair read over the middle of the tile only.
         "zncc_middle": finite(measured.zncc_middle),
         // And over each ninth of the tile, rows from the top.
         "zncc_grid": grid(measured.zncc_grid),
+        // The same score with the bitmap alone blurred to the row's
+        // sharpness, the blur's width in grid px (0 when read plain), and
+        // whether the row is sharper than the bitmap.
+        "blur_matched_zncc": finite(measured.blur_matched_zncc),
+        "bitmap_blur_sigma": finite(measured.bitmap_blur_sigma),
+        "sharper_than_bitmap": measured.sharper_than_bitmap,
+        // The localizer's leave-one-out reading: the row against the
+        // consensus of the other rows at the correlation peak that
+        // `seed_shift_px` is measured to, whole and middle. No bar judges it.
+        "loo_zncc": finite(measured.loo_zncc),
+        "loo_zncc_middle": finite(measured.loo_zncc_middle),
         "seed_shift_px": finite(measured.seed_shift_px),
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
@@ -1795,17 +1822,10 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
             "rejected_by": standing.rejected_by.map(|test| test.name()),
             "fallback": standing.fallback.name(),
         })),
-        // The row's ZNCC with the stored patch bitmap, plain and with the
-        // bitmap alone blurred to the row's sharpness, the blur's width in
-        // grid px (0 when read plain), and whether the row is sharper than
-        // the bitmap. The row the bitmap is the tile of reads 1.
-        "bitmap_zncc": finite(measured.zncc),
-        "blur_matched_bitmap_zncc": finite(measured.blur_matched_zncc),
-        "bitmap_blur_sigma": finite(measured.bitmap_blur_sigma),
-        "sharper_than_bitmap": measured.sharper_than_bitmap,
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
-        // and the ZNCC the localizer scored there. Accepting the walk is
+        // and the leave-one-out ZNCC the localizer scored there, to set
+        // beside `loo_zncc`. Accepting the walk is
         // `sight_bench_observation` with `walked_to` as its pixel.
         "walked_px": finite(measured.walked_px),
         "walked_to": measured.walked_to,

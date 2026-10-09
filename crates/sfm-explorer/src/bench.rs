@@ -1462,6 +1462,50 @@ impl AppState {
         Ok(())
     }
 
+    /// Make `observation` the track's reference, the row its patch bitmap is
+    /// rendered from, and pin it (`sfmtool_core::bench::set_reference`): Track
+    /// View's *Set as reference* and the wire's `set_bench_track_reference`.
+    ///
+    /// One version. The step drops the bitmap unless the row held the
+    /// reference already, and the live evaluation that follows every step
+    /// renders it from the row and scores every row against it. A call on the
+    /// reference the track holds on a pinned row is a no-effect row instead.
+    pub(crate) fn set_bench_reference(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Result<(), String> {
+        let (index, bench, track) = self.bench_step_target(id, label)?;
+        let (next, report) = bench::set_reference(&track, observation)
+            .map_err(|e| format!("Cannot set that reference: {e}"))?;
+        let name = self.image_name(ImageRef::new(
+            id,
+            track.observations[observation].image as usize,
+        ));
+        if !report.changed {
+            self.no_effect(format!(
+                "Set {name} as the reference of {label}: no effect, it is the reference already"
+            ));
+            return Ok(());
+        }
+        let text = match report.was {
+            Some(was) if was != observation => {
+                let before = track
+                    .observations
+                    .get(was)
+                    .map(|o| self.image_name(ImageRef::new(id, o.image as usize)))
+                    .unwrap_or_else(|| format!("observation {was}"));
+                format!("Set {name} as the reference of {label}, in place of {before}")
+            }
+            Some(_) => format!("Set {name} as the reference of {label}, and pinned it"),
+            None => format!("Set {name} as the reference of {label}"),
+        };
+        let bench = install(&bench, label, next)?;
+        self.push_bench_step(index, bench, text);
+        Ok(())
+    }
+
     /// Accept the walk the last fit refused for one sighting: put it at the
     /// pixel the fit's kernels would have taken it to
     /// ([`sfmtool_core::bench::TrackMeasurement::walked_to`]).
@@ -2491,6 +2535,31 @@ impl SplitSettings {
 /// tile is rendered at its own resolution, which no number depends on.
 pub(crate) fn patch_resolution(recon: &sfmtool_core::SfmrReconstruction) -> u32 {
     EvaluateOptions::default().patch_resolution(recon)
+}
+
+/// The reference in use on a track-stage track: the row its stored bitmap is
+/// rendered from, or `None` where it has no bitmap, where the bitmap is the
+/// render of no row (a fused mean), and at the cluster stage. Track View's
+/// *Reference* column marks it, and the wire's `stage_data` names it
+/// `reference_observation`.
+pub(crate) fn reference_in_use(track: &EditableTrack) -> Option<usize> {
+    track
+        .track()
+        .and_then(|payload| payload.bitmap.as_ref().and(payload.reference))
+}
+
+/// The row the reference-view rule picked at the track's last evaluation, or
+/// `None` where it picked none or nothing has evaluated the track. While the
+/// reference's row is pinned this can differ from [`reference_in_use`];
+/// unpinning that row, or *Set as reference* on this one, makes the two agree.
+/// The wire names it `reference_view_observation`.
+pub(crate) fn reference_view_pick(track: &EditableTrack) -> Option<usize> {
+    track.observations.iter().position(|o| {
+        o.track
+            .as_ref()
+            .and_then(|m| m.reference_view)
+            .is_some_and(|standing| standing.is_reference())
+    })
 }
 
 /// The sampler choice the bench's evaluation renders each view's tile with

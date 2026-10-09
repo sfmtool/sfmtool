@@ -163,6 +163,9 @@ pub struct TrackBodyResponse {
     /// A kept-at-seed row's *Accept walk*, carrying the observation: put its
     /// sighting where the last fit's walk would have taken it.
     pub accept_walk: Option<usize>,
+    /// A track-stage row's *Set as reference*, carrying the observation: make
+    /// it the track's reference and pin it.
+    pub set_reference: Option<usize>,
     /// *Split off selected rows*, carrying the rows.
     pub split: Option<Vec<usize>>,
     /// A row was clicked: the observation, and whether Ctrl or Shift was held
@@ -1203,6 +1206,28 @@ pub(crate) fn zncc_text(whole: Option<f64>, middle: Option<f64>) -> String {
     stacked(whole, middle, |value| format!("{:.0}%", 100.0 * value))
 }
 
+/// The track stage's *ZNCC* cell: the row's plain score against the stored
+/// patch bitmap over its middle reading, as [`zncc_text`] prints them, with
+/// the blur-matched score after an arrow where the bitmap was blurred and the
+/// two print differently (`50% ⏵ 53% whole` over `61% mid`). The reference's
+/// own row reads 100%.
+fn bitmap_zncc_text(m: Option<&sfmtool_core::bench::TrackMeasurement>) -> String {
+    let Some(m) = m else {
+        return "-".to_string();
+    };
+    let text = zncc_text(m.zncc, m.zncc_middle);
+    match reference::blur_matched_shown(m) {
+        // The arrow is U+23F5, which egui's bundled fonts draw; U+2192 draws
+        // as a box.
+        Some(matched) => text.replacen(
+            " whole",
+            &format!(" \u{23f5} {:.0}% whole", 100.0 * matched),
+            1,
+        ),
+        None => text,
+    }
+}
+
 /// [`zncc_text`] for a sentence, on one line (`92% / 61%`).
 pub(crate) fn zncc_sentence(whole: Option<f64>, middle: Option<f64>) -> String {
     let number = |value: f64| finite_or_nan(value, |v| format!("{:.0}%", 100.0 * v));
@@ -1879,6 +1904,10 @@ const MAX_PROJECTION_ERROR_TIP: &str = "The largest reprojection error a sightin
 /// walk would have taken it.
 pub(crate) const ACCEPT_WALK_LABEL: &str = "Accept walk";
 
+/// A track-stage row's menu entry, which makes the row the track's reference,
+/// the row its patch bitmap is rendered from, and pins it.
+pub(crate) const SET_REFERENCE_LABEL: &str = "Set as reference";
+
 /// The toolbar entry that turns the patch to its photometric normal, in one
 /// constant so the tests aim at the label drawn.
 pub(crate) const FIT_NORMAL_LABEL: &str = "Fit Normal";
@@ -2537,7 +2566,7 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
         StageKind::Track => {
             let m = observation.track.as_ref();
             [
-                zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
+                bitmap_zncc_text(m),
                 px(m.and_then(|m| m.seed_shift_px)),
                 // One column for the reprojection error: in px to the
                 // triangulated point, or before there is one to the patch's
@@ -2552,18 +2581,22 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
                     m.and_then(|m| m.zncc_self_similarity_radius),
                     m.and_then(|m| m.zncc_self_similarity_radius_middle),
                 ),
-                // A row without a score says which of the reading's refusals it
-                // was, in the evaluation's own sentence. An evaluation drops
-                // nothing, so "no ZNCC" always has one of those answers behind
-                // it, and a row that has never been read says that instead.
+                // A row the localizer could not read, or that has no score
+                // against the bitmap, says why, in the evaluation's own
+                // sentence (`reason`): the localizer's refusal where there was
+                // one, whether or not the row has a score, and otherwise why
+                // there is no score. An evaluation drops nothing, so a missing
+                // reading always has one of those answers behind it, and a row
+                // that has never been read says that instead. "localized" is
+                // the localizer's reading (`loo_zncc`), not the score.
                 //
                 // The walk comes first among the answers a scored row can give:
                 // it says the sighting did *not* move where the correlation
                 // wanted it, which is the one thing about the row a person
                 // reading "localized" would get wrong.
-                // With the ZNCC the walk would have bought where the fit
-                // scored one, beside the row's own ZNCC read at the seed: the
-                // two numbers a person accepting the walk or not decides by.
+                // With the leave-one-out ZNCC the walk would have bought where
+                // the fit scored one; *Accept walk*'s hover sets it beside the
+                // row's own leave-one-out ZNCC at the seed.
                 match m {
                     Some(m) if m.walked_px.is_some() => format!(
                         "walked {:.0} grid px{}, kept at seed",
@@ -2576,9 +2609,9 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
                             _ => String::new(),
                         }
                     ),
-                    Some(m) if m.zncc.is_some() => "localized".to_string(),
                     Some(m) => match m.reason {
                         Some(reason) => reason.to_string(),
+                        None if m.loo_zncc.is_some() || m.zncc.is_some() => "localized".to_string(),
                         None => "not evaluated".to_string(),
                     },
                     None => "not evaluated".to_string(),

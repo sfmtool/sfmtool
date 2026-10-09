@@ -524,6 +524,11 @@ pub(crate) fn parse(
                 verdict,
             }
         }
+        "set_bench_track_reference" => Command::SetBenchTrackReference {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+        },
         "apply_bench_track_thresholds" => Command::ApplyBenchTrackThresholds {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,

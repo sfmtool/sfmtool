@@ -226,25 +226,42 @@ fn with_nothing_active_the_body_draws_no_rows_and_no_text() {
     assert!(texts.is_empty(), "{texts:?}");
 }
 
-/// Once the track is evaluated, the *Reference* column marks the one row the
-/// reference-view rule picks, and every row prints its viewing angle and pair
-/// ZNCC with every reading on hover.
+/// Once the track is evaluated, the *Reference* column marks the reference
+/// and the row the reference-view rule picks, and every row prints its
+/// viewing angle and pair ZNCC with every reading on hover.
 #[test]
 fn the_reference_column_marks_the_row_the_rule_picks() {
-    let (mut state, _id, _label, mut panel, ctx) = on_the_bench();
+    use super::reference::ReferenceMark;
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
     assert!(
         panel.rows().iter().all(|row| row.reference.text == "-"),
         "nothing has measured the track yet"
     );
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let pick = crate::bench::reference_view_pick(&track).expect("the rule picks a row");
+    let reference = crate::bench::reference_in_use(&track);
     let rows = panel.rows();
-    let picked: Vec<_> = rows.iter().filter(|r| r.reference.is_reference).collect();
-    assert_eq!(picked.len(), 1, "{rows:?}");
+    for row in rows {
+        let expected = match (reference == Some(row.observation), pick == row.observation) {
+            (true, true) => ReferenceMark::Reference,
+            (true, false) => ReferenceMark::ReferenceNotPick,
+            (false, true) => ReferenceMark::Pick,
+            (false, false) => ReferenceMark::None,
+        };
+        assert_eq!(row.reference.mark, expected, "{rows:?}");
+    }
+    let picked = &rows[pick];
+    let word = if reference == Some(pick) {
+        "reference\n"
+    } else {
+        "pick\n"
+    };
     assert!(
-        picked[0].reference.text.starts_with("reference\n"),
+        picked.reference.text.starts_with(word),
         "{}",
-        picked[0].reference.text
+        picked.reference.text
     );
     for row in rows {
         let (_, second) = row
@@ -307,13 +324,27 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
         }),
     };
     let current = crate::bench::live::Evaluation::Current;
-    let cell = |o: &Observation| super::reference::reference_cell(o, StageKind::Track, &current);
+    // The row is row 0 of a track with no reference, which the rule picks
+    // where its standing says so.
+    let rows_of = |o: &Observation| super::reference::ReferenceRows {
+        pick: o
+            .track
+            .as_ref()
+            .and_then(|m| m.reference_view)
+            .filter(|s| s.is_reference())
+            .map(|_| 0),
+        ..Default::default()
+    };
+    let cell = |o: &Observation| {
+        super::reference::reference_cell(0, o, StageKind::Track, &current, &rows_of(o))
+    };
 
     let picked = cell(&row(None, ReferenceFallback::None));
-    assert!(picked.is_reference);
-    assert_eq!(picked.text, "reference\n72\u{b0}, 83%");
+    assert_eq!(picked.mark, super::reference::ReferenceMark::Pick);
+    assert_eq!(picked.text, "pick\n72\u{b0}, 83%");
     let hover = picked.hover.expect("a hover");
-    assert!(hover.starts_with("The reference view"), "{hover}");
+    assert!(hover.contains("The reference view"), "{hover}");
+    assert!(hover.contains("no patch bitmap yet"), "{hover}");
     assert!(
         hover.contains("Viewing angle 71.6\u{b0}, leaning -35\u{b0}"),
         "{hover}"
@@ -350,7 +381,7 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
         ),
     ] {
         let rejected = cell(&row(Some(test), ReferenceFallback::None));
-        assert!(!rejected.is_reference);
+        assert_eq!(rejected.mark, super::reference::ReferenceMark::None);
         assert!(
             rejected.text.starts_with(&format!("{word}\n")),
             "{}",
@@ -410,22 +441,162 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
     // Nothing at the cluster stage or for a track that could not be evaluated.
     let refused = crate::bench::live::Evaluation::Refused("no frame".to_string());
     let picked = row(None, ReferenceFallback::None);
+    let rows = rows_of(&picked);
     assert_eq!(
-        super::reference::reference_cell(&picked, StageKind::Track, &refused).text,
+        super::reference::reference_cell(0, &picked, StageKind::Track, &refused, &rows).text,
         "-"
     );
     assert_eq!(
-        super::reference::reference_cell(&picked, StageKind::Cluster, &current).text,
+        super::reference::reference_cell(0, &picked, StageKind::Cluster, &current, &rows).text,
         "-"
     );
 }
 
-/// The *Bitmap* cell marks the row the stored bitmap is the tile of, prints
-/// each other row's plain score over its blur-matched one where the bitmap
-/// was blurred, and says `sharper` for a row sharper than the bitmap.
+/// The *Reference* column's marks: green for a reference the rule picks too,
+/// red for one it does not with the pick marked grey in its own cell, and only
+/// the pick where the track has no reference, whether its bitmap is a fused
+/// mean or it has none yet.
 #[test]
-fn the_bitmap_cell_marks_the_bitmap_s_row_and_prints_the_scores() {
+fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
+    use super::reference::{reference_cell, ReferenceMark, ReferenceRows};
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
+    use sfmtool_core::patch::reference_view::{
+        ReferenceFallback, ReferenceStanding, ReferenceTest,
+    };
+
+    let row = |image: u32, rejected_by: Option<ReferenceTest>| Observation {
+        image,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: true,
+        cluster: None,
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            viewing_angle_deg: Some(20.0),
+            pair_zncc: Some(0.9),
+            reference_view: Some(ReferenceStanding {
+                rejected_by,
+                fallback: ReferenceFallback::None,
+            }),
+            ..TrackMeasurement::default()
+        }),
+    };
+    let current = crate::bench::live::Evaluation::Current;
+    let rows = [
+        row(10, Some(ReferenceTest::Sharpness)),
+        row(11, Some(ReferenceTest::Agreement)),
+        row(12, None),
+    ];
+    let cells = |marks: &ReferenceRows| {
+        rows.iter()
+            .enumerate()
+            .map(|(i, o)| reference_cell(i, o, StageKind::Track, &current, marks))
+            .collect::<Vec<_>>()
+    };
+
+    // The reference is the pick: one green cell.
+    let agreed = ReferenceRows {
+        reference: Some(2),
+        reference_image: Some(12),
+        pick: Some(2),
+        pick_image: Some(12),
+        has_bitmap: true,
+    };
+    let drawn = cells(&agreed);
+    assert_eq!(drawn[2].mark, ReferenceMark::Reference);
+    assert!(
+        drawn[2].text.starts_with("reference\n"),
+        "{}",
+        drawn[2].text
+    );
+    assert_eq!(drawn[0].mark, ReferenceMark::None);
+    assert!(
+        drawn[0].text.starts_with("less sharp\n"),
+        "{}",
+        drawn[0].text
+    );
+    assert_eq!(
+        super::table::reference_fill(drawn[2].mark),
+        Some(super::table::KEEP_ON_FILL)
+    );
+
+    // It is not: the reference is red and the pick grey in its own cell, and
+    // each hover says how to accept the pick.
+    let held = ReferenceRows {
+        reference: Some(0),
+        reference_image: Some(10),
+        ..agreed
+    };
+    let drawn = cells(&held);
+    assert_eq!(drawn[0].mark, ReferenceMark::ReferenceNotPick);
+    assert!(
+        drawn[0].text.starts_with("reference\n"),
+        "{}",
+        drawn[0].text
+    );
+    let hover = drawn[0].hover.as_deref().expect("a hover");
+    assert!(hover.contains("held by the row's pin"), "{hover}");
+    assert!(hover.contains("the row of image 12 instead"), "{hover}");
+    assert!(
+        hover.contains("Unpinning this row, or Set as reference"),
+        "{hover}"
+    );
+    assert_eq!(drawn[2].mark, ReferenceMark::Pick);
+    assert!(drawn[2].text.starts_with("pick\n"), "{}", drawn[2].text);
+    let hover = drawn[2].hover.as_deref().expect("a hover");
+    assert!(
+        hover.contains("reference is the row of image 10"),
+        "{hover}"
+    );
+    assert_eq!(drawn[1].mark, ReferenceMark::None);
+    assert_ne!(
+        super::table::reference_fill(ReferenceMark::ReferenceNotPick),
+        super::table::reference_fill(ReferenceMark::Pick)
+    );
+
+    // No reference: a fused mean, or no bitmap yet, marks only the pick.
+    for has_bitmap in [true, false] {
+        let none = ReferenceRows {
+            reference: None,
+            reference_image: None,
+            has_bitmap,
+            ..agreed
+        };
+        let drawn = cells(&none);
+        let marks: Vec<_> = drawn.iter().map(|c| c.mark).collect();
+        assert_eq!(
+            marks,
+            [
+                ReferenceMark::None,
+                ReferenceMark::None,
+                ReferenceMark::Pick
+            ]
+        );
+        let hover = drawn[2].hover.as_deref().expect("a hover");
+        let says = if has_bitmap {
+            "mean of the rows"
+        } else {
+            "no patch bitmap yet"
+        };
+        assert!(hover.contains(says), "{hover}");
+    }
+
+    // Sorting by the column puts the reference first, then the pick.
+    let rank = |i: usize| super::reference::reference_rank(i, &rows[i], &held);
+    assert!(
+        rank(0) < rank(2) && rank(2) < rank(1),
+        "{:?}",
+        [rank(0), rank(1), rank(2)]
+    );
+}
+
+/// At the track stage the *ZNCC* cell prints the plain score against the
+/// stored bitmap, with the blur-matched one after an arrow where the bitmap was
+/// blurred and the two print differently, and its hover gives the blur, the
+/// sharper note, the reason for a missing score and the leave-one-out reading.
+#[test]
+fn the_zncc_cell_prints_the_score_against_the_bitmap() {
+    use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement, Unmeasured};
 
     let row = |plain: f64, matched: f64, sigma: f64, sharper: bool| Observation {
         image: 0,
@@ -435,57 +606,74 @@ fn the_bitmap_cell_marks_the_bitmap_s_row_and_prints_the_scores() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            bitmap_zncc: Some(plain),
-            blur_matched_bitmap_zncc: Some(matched),
+            zncc: Some(plain),
+            zncc_middle: Some(0.61),
+            blur_matched_zncc: Some(matched),
             bitmap_blur_sigma: Some(sigma),
             sharper_than_bitmap: Some(sharper),
+            loo_zncc: Some(0.88),
+            loo_zncc_middle: Some(0.7),
             ..TrackMeasurement::default()
         }),
     };
     let current = crate::bench::live::Evaluation::Current;
-    let cell = |i: usize, o: &Observation, bitmap_row: Option<usize>| {
-        super::reference::bitmap_cell(i, o, bitmap_row, StageKind::Track, &current)
-    };
+    let text = |o: &Observation| super::measurements(o, StageKind::Track, &current)[0].clone();
+    let hover =
+        |o: &Observation, own: bool| super::reference::zncc_hover(o.track.as_ref().unwrap(), own);
 
-    let source = cell(2, &row(1.0, 1.0, 0.0, false), Some(2));
-    assert!(source.is_bitmap);
-    assert_eq!(source.text, "bitmap\n100%");
-
-    let blurred = cell(0, &row(0.712, 0.861, 0.83, false), Some(2));
-    assert!(!blurred.is_bitmap);
-    assert_eq!(blurred.text, "71%\n\u{23f5} 86%");
-    let hover = blurred.hover.expect("a hover");
-    assert!(hover.contains("blurred by 0.83 grid px"), "{hover}");
-
-    let sharper = cell(1, &row(0.64, 0.64, 0.0, true), Some(2));
-    assert_eq!(sharper.text, "64%\nsharper");
-    assert!(sharper
-        .hover
-        .expect("a hover")
-        .contains("could replace the reference"));
-
-    let plain = cell(1, &row(0.9, 0.9, 0.0, false), None);
-    assert_eq!(plain.text, "90%\n");
-
-    // Nothing at the cluster stage, nor for a row with no score.
-    let none = super::reference::bitmap_cell(
-        0,
-        &row(0.5, 0.5, 0.0, false),
-        None,
-        StageKind::Cluster,
-        &current,
+    let blurred = row(0.504, 0.531, 0.83, false);
+    assert_eq!(text(&blurred), "50% \u{23f5} 53% whole\n61% mid");
+    let said = hover(&blurred, false);
+    assert!(
+        said.contains("ZNCC with the stored patch bitmap 50.4% whole"),
+        "{said}"
     );
-    assert_eq!(none.text, "-");
+    assert!(said.contains("blurred by 0.83 grid px"), "{said}");
+    assert!(
+        said.contains("Leave-one-out ZNCC 88.0% whole, 70.0% middle"),
+        "{said}"
+    );
+
+    // One number where the blur leaves the printed score as it was, and where
+    // the pair was read plain.
+    assert_eq!(text(&row(0.5, 0.502, 0.4, false)), "50% whole\n61% mid");
+    let sharper = row(0.64, 0.64, 0.0, true);
+    assert_eq!(text(&sharper), "64% whole\n61% mid");
+    assert!(hover(&sharper, false).contains("could replace the reference"));
+
+    // The reference's own row reads 100%.
+    let mut own = row(1.0, 1.0, 0.0, false);
+    own.track.as_mut().unwrap().zncc_middle = Some(1.0);
+    assert_eq!(text(&own), "100% whole\n100% mid");
+    assert!(hover(&own, true).contains("track's reference"));
+
+    // A row with no score says why, in the hover and the status cell.
     let mut unscored = row(0.5, 0.5, 0.0, false);
-    unscored.track.as_mut().unwrap().bitmap_zncc = None;
-    assert_eq!(cell(0, &unscored, None).text, "-");
+    let slot = unscored.track.as_mut().unwrap();
+    slot.zncc = None;
+    slot.zncc_middle = None;
+    slot.reason = Some(Unmeasured::NoBitmap);
+    assert_eq!(text(&unscored), "-");
+    let reason = Unmeasured::NoBitmap.to_string();
+    assert!(hover(&unscored, false).contains(&reason));
+    assert_eq!(
+        super::measurements(&unscored, StageKind::Track, &current)[4],
+        reason
+    );
+    // A row the localizer read and the bitmap scored is localized.
+    assert_eq!(
+        super::measurements(&blurred, StageKind::Track, &current)[4],
+        "localized"
+    );
 }
 
-/// After a fit stores a bitmap, exactly one row of the drawn table is marked
-/// as the bitmap's, and it is the row the stored bitmap names; every other
-/// measured row prints its score against it.
+/// After a fit stores a bitmap, the row it is rendered from reads 100% in the
+/// *ZNCC* column and is the one row the *Reference* column marks as the
+/// reference; every other measured row prints its score against it. There is
+/// no *Bitmap* column.
 #[test]
-fn a_fitted_track_marks_the_one_row_its_bitmap_is_the_tile_of() {
+fn a_fitted_track_marks_the_one_row_its_bitmap_is_rendered_from() {
+    use super::reference::ReferenceMark;
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     state.settle_bench_evaluation();
     state
@@ -497,21 +685,87 @@ fn a_fitted_track_marks_the_one_row_its_bitmap_is_the_tile_of() {
     let payload = track.track().expect("the track stage");
     assert!(payload.bitmap.is_some(), "the fit stored no bitmap");
     let texts = painted(&mut panel, &ctx, &state, Vec::new());
-    let marked = texts.iter().filter(|t| *t == "bitmap\n100%").count();
+    assert!(!texts.iter().any(|t| t == "Bitmap"), "{texts:?}");
+    let rows = panel.rows();
+    let marked: Vec<usize> = rows
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.reference.mark,
+                ReferenceMark::Reference | ReferenceMark::ReferenceNotPick
+            )
+        })
+        .map(|r| r.observation)
+        .collect();
     match payload.reference {
         Some(r) => {
-            assert_eq!(marked, 1, "{texts:?}");
+            assert_eq!(marked, [r], "{rows:?}");
             for (i, observation) in track.observations.iter().enumerate() {
                 let m = observation.track.as_ref().expect("measured");
                 if i == r {
-                    assert_eq!(m.bitmap_zncc, Some(1.0));
+                    assert_eq!(m.zncc, Some(1.0));
+                    assert!(rows[i].cells[0].starts_with("100% whole"), "{rows:?}");
                 } else {
-                    assert!(m.bitmap_zncc.is_some(), "row {i} has no score");
+                    assert!(m.zncc.is_some(), "row {i} has no score");
                 }
             }
         }
-        None => assert_eq!(marked, 0, "{texts:?}"),
+        None => assert!(marked.is_empty(), "{rows:?}"),
     }
+}
+
+/// *Set as reference* is offered on a track-stage row that is `in` and has a
+/// keypoint, greyed on the reference its pin holds, and the step makes the
+/// row the reference: the live evaluation renders the bitmap from it.
+#[test]
+fn set_as_reference_is_offered_on_an_in_row_with_a_keypoint() {
+    use super::table::set_reference_offer;
+    let (mut state, id, label, _panel, _ctx) = on_the_bench();
+    state.settle_bench_evaluation();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let held = track.track().and_then(|p| p.reference);
+    let other = (0..track.observations.len())
+        .find(|&i| Some(i) != held)
+        .expect("a second row");
+    assert_eq!(set_reference_offer(&track, other), Some(Ok(())));
+    if let Some(held) = held {
+        assert!(matches!(set_reference_offer(&track, held), Some(Err(_))));
+    }
+
+    // Not on an out row, nor on one with no keypoint.
+    let mut out = sfmtool_core::bench::EditableTrack::clone(&track);
+    out.observations[other].verdict = Verdict::Out;
+    assert_eq!(set_reference_offer(&out, other), None);
+    let mut unplaced = sfmtool_core::bench::EditableTrack::clone(&track);
+    unplaced.observations[other]
+        .track
+        .as_mut()
+        .unwrap()
+        .keypoint = None;
+    assert_eq!(set_reference_offer(&unplaced, other), None);
+
+    // The step: one version, the row pinned and held as the reference, and
+    // after the live evaluation the bitmap is rendered from it.
+    state
+        .set_bench_reference(id, &label, other)
+        .expect("an in row with a keypoint can be the reference");
+    let after = state.bench_track(id, &label).expect("on the bench").clone();
+    assert_eq!(after.held_reference(), Some(other));
+    assert!(after.observations[other].pinned);
+    state.settle_bench_evaluation();
+    let after = state.bench_track(id, &label).expect("on the bench").clone();
+    assert_eq!(crate::bench::reference_in_use(&after), Some(other));
+    assert_eq!(
+        after.observations[other]
+            .track
+            .as_ref()
+            .and_then(|m| m.zncc),
+        Some(1.0)
+    );
+    assert_eq!(
+        set_reference_offer(&after, other).map(|o| o.is_ok()),
+        Some(false)
+    );
 }
 
 #[test]
@@ -4455,7 +4709,6 @@ fn a_heading_click_starts_worst_first_and_a_second_reverses() {
         (SortColumn::Shift, true),
         (SortColumn::Zoom, false),
         (SortColumn::Reference, false),
-        (SortColumn::Bitmap, false),
         (SortColumn::Status, false),
         (SortColumn::Name, false),
     ] {

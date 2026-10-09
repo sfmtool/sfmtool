@@ -552,7 +552,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           leaves it alone when the thresholds are applied and when the track is \
                           evaluated. pin pins each named row at the verdict it has now and moves \
                           none. unpin clears the pins and lets the bars decide the rows together \
-                          from their measurements, best score first and one in per image. in and \
+                          from their measurements, best score first and one in per image. \
+                          Unpinning the row that holds the track's reference \
+                          (stage_data.reference_observation) also hands the reference to the \
+                          reference-view rule's pick at the next render. in and \
                           out name one observation; pin and unpin name one with observation, or \
                           several with observations, a list of indexes or \"all\", as one \
                           version. A track cannot see one image twice, so turning an observation \
@@ -603,6 +606,31 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "set_bench_track_reference",
+            description: "Make one observation of a track-stage bench track its reference, \
+                          the row its patch bitmap is rendered from, and pin it: Track View's \
+                          row entry Set as reference. While the row stays pinned every render \
+                          renders the bitmap from it, whichever row the reference-view rule \
+                          picks; unpinning it with set_bench_track_verdict hands the reference \
+                          back to the rule. The bitmap the track held is dropped unless the row \
+                          was the reference already, and the live evaluation that follows \
+                          renders the bitmap from the row and scores every row against it, so \
+                          read get_bench_track until evaluation.state is current. Pinning a row \
+                          by itself does not make it the reference. Refused at the cluster \
+                          stage, for an observation that is out and for one with no keypoint. \
+                          A call on the reference already held on a pinned row pushes no \
+                          version. The reply carries the observation and was, the reference \
+                          the track held before, or null.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "apply_bench_track_thresholds",
             description: "Set a bench track's bars and turn them into verdicts in one step: \
                           every unpinned observation is judged against them and takes the verdict \
@@ -619,8 +647,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "min_zncc",
                         threshold_schema(
                             "The ZNCC an observation has to reach: the achieved template ZNCC at \
-                             the cluster stage, the leave-one-out ZNCC at the track stage. The \
-                             bench's default is 0.7.",
+                             the cluster stage, the plain ZNCC with the stored patch bitmap at \
+                             the track stage. The bench's default is 0.65. An \
+                             observation with no zncc, as a track-stage one has before the \
+                             first render of the bitmap, is not judged and keeps its verdict.",
                         ),
                     ),
                     (
@@ -628,7 +658,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         threshold_schema(
                             "The zncc_middle an observation has to reach: the same samples as \
                              its zncc, read over only the middle square of the patch. The \
-                             bench's default is 0.7, and 0 turns the bar off. An observation \
+                             bench's default is 0.5, and 0 turns the bar off. An observation \
                              with no zncc_middle clears it.",
                         ),
                     ),

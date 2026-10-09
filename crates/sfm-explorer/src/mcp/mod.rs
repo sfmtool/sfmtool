@@ -495,6 +495,13 @@ pub(crate) enum Command {
         /// What the call does to them.
         verdict: VerdictAction,
     },
+    /// Make one observation the track's reference and pin it.
+    SetBenchTrackReference {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation's position in the track's list.
+        observation: usize,
+    },
     /// Set the track's bars and paint the proposed verdicts onto its unpinned
     /// observations, which is the one gesture the panel's button is.
     ApplyBenchTrackThresholds {
@@ -1694,6 +1701,16 @@ pub(crate) fn apply_with_window(
             track.as_deref(),
             rows,
             verdict,
+        )),
+        Command::SetBenchTrackReference {
+            reconstruction_label,
+            track,
+            observation,
+        } => done(bench::set_bench_track_reference(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
         )),
         Command::ApplyBenchTrackThresholds {
             reconstruction_label,

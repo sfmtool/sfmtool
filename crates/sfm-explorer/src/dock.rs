@@ -370,6 +370,10 @@ impl TabContext<'_> {
             let outcome = self.state.accept_bench_walk(id, &label, observation);
             refuse(self.state, outcome);
         }
+        if let Some(observation) = response.set_reference {
+            let outcome = self.state.set_bench_reference(id, &label, observation);
+            refuse(self.state, outcome);
+        }
         if let Some((observation, extend)) = response.pick_row {
             self.state
                 .pick_bench_observation(id, &label, observation, extend);

@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Eighty-eight tools. Seventeen read -- sixteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-six
+Eighty-nine tools. Seventeen read -- sixteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-seven
 write, four send input, and one writes a file. `get_widgets` and the four
 input tools, `click`, `hover`, `press_key` and `type_text`, read and press the
 viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
@@ -190,6 +190,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `spin_bench_patch` | write | Turn the patch about its own outward normal |
 | `spin_bench_shape` | write | Turn one cluster sighting's parallelogram in its image's pixels |
 | `set_bench_track_verdict` | write | Rule on one observation by hand, in or out, which pins it; `pin`, which pins one observation, a list of them or `"all"` at the verdicts they have; or `unpin`, which hands them back to the thresholds; each one version |
+| `set_bench_track_reference` | write | Make one observation the track's reference, the row its patch bitmap is rendered from, and pin it: Track View's *Set as reference* |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold boxes are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
@@ -211,7 +212,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the sixteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-six writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-seven writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -663,9 +664,9 @@ looking at is the one at the cursor, and this block reports it.
                     "max_zncc_self_similarity_radius": 2.5,
                     "max_projection_error_px": 3.0,
                     "geometry_search_min_relative_zncc": 0.7 },
-    "reference_observation": 0,      // the row the reference-view rule picked
     "has_bitmap": true,              // the track has a stored bitmap
-    "bitmap_observation": 0,         // the row the bitmap is the tile of, or null
+    "reference_observation": 0,      // the row the bitmap is rendered from, or null
+    "reference_view_observation": 0, // the row the reference-view rule picked
     "observations": [ { "observation": 0, "camera_image": 3,
                         "camera_image_name": "images/IMG_0042.jpg",
                         "provenance": { "kind": "origin" },
@@ -693,17 +694,17 @@ when none has landed. `thresholds` are the read-only bars Track View's threshold
 boxes hold, and `verdict_by_bars` is each row's verdict by them -- `in`, `out`,
 or `null` where nothing has measured the row -- computed with core's
 `verdicts_if_unpinned` over a copy of the track carrying those bars, the same
-computation the panel colours by. `reference_observation` is the row the
-reference-view rule picked, as `stage_data.reference_observation` reports it on
-the bench. `has_bitmap` says whether the track has a stored patch bitmap, which
-the rows' `bitmap_zncc` scores are read against, and `bitmap_observation` is
-the row the bitmap is the tile of, null for a bitmap that names none (a mean of
-the rows, one stored before the reference was recorded, or the render of an
-observation since removed from the point) or where there is no
-bitmap, as `stage_data.has_bitmap` and `stage_data.bitmap_observation` report
-them on the bench. On a file with patch frames but no stored bitmaps, the
-bitmap is the one the viewer rendered for display at open, and
-`bitmap_observation` is the observation it was rendered from: the file's
+computation the panel colours by. `has_bitmap` says whether the track has a
+stored patch bitmap, which the rows' `zncc` scores are read against;
+`reference_observation` is the reference in use, the row the bitmap is rendered
+from, null for a bitmap that is the render of no row (a mean of the rows, one
+stored before the reference was recorded, or the render of an observation since
+removed from the point) or where there is no bitmap; and
+`reference_view_observation` is the row the reference-view rule picked. All
+three are as `stage_data` reports them on the bench. On a file with patch
+frames but no stored bitmaps, the bitmap is the one the viewer rendered for
+display at open, and `reference_observation` is the observation it was
+rendered from: the file's
 reference observation, or the display render's own pick for a point the file
 stores at `-1`. For any other point the block is absent:
 there is no call that evaluates an arbitrary point on request, since that is a
@@ -3484,7 +3485,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-three tools that read and work the **bench** beside a node
+Thirty-four tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -3564,6 +3565,19 @@ pinned. The reply to either then carries `observations`, one
 carries `observation`, `verdict` and `pinned` as before. `in` and `out` rule on
 one observation at a time; `observations` with either is refused, as is a call
 carrying both `observation` and `observations`.
+
+**`set_bench_track_reference` makes one row the reference.** It takes
+`observation` and is Track View's *Set as reference* (`AppState::set_bench_reference`,
+core's `set_reference`): the row becomes the track's reference, the row its patch
+bitmap is rendered from, and is pinned, as one version. The bitmap the track held
+is dropped unless the row was the reference already, and the live evaluation
+that follows renders it from the row and scores every row against it, so
+`stage_data.reference_observation` names the row once `evaluation.state` reads
+`current`. The reply carries `observation` and `was`, the reference the track
+held before or null. It is refused at the cluster stage, for an `out` row and
+for a row with no keypoint; a call on the reference the track holds on a pinned
+row has no effect. Unpinning the reference's row with `set_bench_track_verdict`
+hands the reference back to the reference-view rule's pick at the next render.
 
 **A step that had no effect answers successfully, with `changed: false`.**
 Setting the verdict an observation already has, unpinning rows none of which is
@@ -3750,8 +3764,9 @@ unit direction as a point one unit from the world origin, which is the one thing
 a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat, with `walked_to`, the pixel the walk would have reached, and
-`walked_zncc`, the ZNCC the localizer scored there (null where it scored none),
-with `walked_zncc_middle` beside it. **Both the `cluster` and the `track` block
+`walked_zncc`, the leave-one-out ZNCC the localizer scored there (null where it
+scored none), to set beside the row's `loo_zncc` at its seed, with
+`walked_zncc_middle` beside it. **Both the `cluster` and the `track` block
 carry `zncc_middle` beside `zncc`**: the same samples correlated over only the
 middle square of the patch, half its width, so a high `zncc` with a low
 `zncc_middle` is an agreement carried by the patch's surroundings rather than
@@ -3846,41 +3861,56 @@ away (`coverage`, `clipped`, `angle`, `cells`, `agreement`, `sharpness`), and
 test drops its 65° limit only, and a row at 90° or more is turned away by
 `angle` under every fallback. These are null on an `out` row, which the rule
 does not consider, and `stage_data` reports the row the rule picked as
-`reference_observation`, null where it picked none; a step that turns a row
-`out` clears its standing and has the rule pick again among the rows still
-`in`, so `reference_observation` never names an `out` row. No bar judges them.
-`reference_observation` is the rule's pick from the current readings,
-reported as information. A render stores the tile of the track's reference
-where it is defined -- read from the file, or kept through steps that leave
-its row `in` -- and stores the picked row's tile only where the track has no
-reference, so `bitmap_observation`, the reference in use, can name another
-row than `reference_observation`. Where the rule sets the reference and
-reached its pick only through its last fallback, the bitmap is the fused
-mean of the `in` rows and `bitmap_observation` is null although
-`reference_observation` names a row
+`reference_view_observation`, null where it picked none; a step that turns a
+row `out` clears its standing and has the rule pick again among the rows still
+`in`, so `reference_view_observation` never names an `out` row. No bar judges
+them.
+
+**`stage_data.reference_observation` is the reference in use**, the row the
+track's stored bitmap is rendered from, and `stage_data.has_bitmap` says whether
+there is a bitmap. It is null where the track has no bitmap and for a bitmap
+that is the render of no row: a fused mean of the `in` rows, where the rule
+reached its pick only through its last fallback, one stored before the
+reference was recorded, or the render of an observation an edit has since
+removed from the point
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
-stored bitmap"): `stage_data.has_bitmap` says whether the track has a bitmap
-and `stage_data.bitmap_observation` names the row it is the tile of, null for
-a bitmap that names none (a mean of the rows, one stored before the reference
-was recorded, or the render of an observation an edit has since removed from
-the point). A step that sights that row elsewhere drops the bitmap and keeps
-the reference, and the live evaluation renders a new one from the same row;
-one that takes it off the track or turns it `out` drops both, and the live
+stored bitmap"). Which row it is follows the pin of the row that holds it
+([bench.md](bench.md) § "The reference"). While that row is pinned every render
+renders from it, whichever row the rule picks, so `reference_observation` and
+`reference_view_observation` can differ; a track put on the bench from a point
+has every row pinned, so the point's stored reference stays until it is let go.
+Unpinning the row hands the reference to the rule's pick at the next render,
+and while it stays unpinned the reference follows the pick at every
+evaluation. `set_bench_track_reference` makes a row the reference and pins it.
+A step that sights the reference's row elsewhere drops the bitmap and keeps the
+reference, and the live evaluation renders a new one from the same row; one
+that takes the row off the track or turns it `out` drops both, and the live
 evaluation renders a new one from the rule's pick. Either way it scores every
-row against the new bitmap. Every row of a track with a bitmap carries its score
-against it ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
-§ "Scores against the stored bitmap"): `bitmap_zncc`, the windowed ZNCC of its
-tile with the bitmap; `blur_matched_bitmap_zncc`, the same after the bitmap
-alone is blurred to the row's sharpness where it is sharper along every
-direction by the ratio of 1.25, `bitmap_zncc` where it is not;
-`bitmap_blur_sigma`, that blur's width in grid px, `0` where read plain; and
-`sharper_than_bitmap`, true where the row's tile is sharper than the bitmap
-along every direction. The bitmap's own row reads `1` for both scores, `0`
-for `bitmap_blur_sigma` and null for `sharper_than_bitmap`; every one of the
-four is null on a row of a track with no bitmap, and on a row whose score
-could not be read. No bar judges the scores. The
+row against the new bitmap.
+
+**A track-stage row's `zncc` is its score against the stored bitmap**
+([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
+§ "Scores against the stored bitmap"): the windowed ZNCC of its tile with the
+bitmap, read plain, over the samples both have, with `zncc_middle` and
+`zncc_grid` read from the same pair. The min ZNCC bars judge it. Beside it
+are `blur_matched_zncc`, the same after the bitmap alone is blurred to the
+row's sharpness where it is sharper along every direction by the ratio of 1.25,
+`zncc` where it is not; `bitmap_blur_sigma`, that blur's width in grid px, `0`
+where read plain; and `sharper_than_bitmap`, true where the row's tile is
+sharper than the bitmap along every direction. The reference's own row reads
+`1` for both scores and every ninth, `0` for `bitmap_blur_sigma` and null for
+`sharper_than_bitmap`. Each is null on a row of a track with no bitmap, before
+the first render, and on a row whose score could not be read, and `reason`
+then says why (`there is no bitmap to score it against`, for one); the bars
+leave such a row's verdict where it is. No bar judges `blur_matched_zncc`.
+The localizer's own reading is `loo_zncc`, the row's leave-one-out ZNCC against
+the consensus of the other rows at the correlation peak `seed_shift_px` is
+measured to, with `loo_zncc_middle` beside it; no bar judges them, and a commit
+writes `loo_zncc` as the observation's confidence. Where the localizer could
+not read the row they are null and `reason` names its refusal, whether or not
+the row has a score. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
-`min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
+`min_zncc_middle`, which is `0.5` on a new track, beside `min_zncc`'s `0.65`, and
 off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a
 new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
 further is painted `out`, a row with no reading clears it, and at `3`, the
@@ -3894,7 +3924,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-three are the patch a track is**, and they are the
+**Eight of the thirty-four are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -4006,7 +4036,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the thirty-three are about the index files**, the node's SIFT index and
+**Four of the thirty-four are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -5056,7 +5086,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty-eight tools**, seventeen of them reads, four of the
+- **The catalog is eighty-nine tools**, seventeen of them reads, four of the
   `Input` kind and one of the `Save` kind, those five carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

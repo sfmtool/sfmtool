@@ -563,17 +563,14 @@ fn viewed_evaluation(state: &AppState, point: crate::scene::PointRef) -> Option<
         "reason": viewed.evaluation.reason(),
         "running": state.viewed_evaluation_running(),
         "thresholds": super::bench::thresholds(&state.viewed_thresholds),
-        // The row the reference-view rule picked, as an index into
-        // `observations`, or null.
-        "reference_observation": super::bench::reference_observation(&viewed.track),
-        // Whether the point has a stored bitmap its rows are scored against,
-        // and the row that bitmap is the tile of (whose score is 1 and not
-        // computed), or null; as `get_bench_track`'s `stage_data` has them.
+        // Whether the point has a stored bitmap its rows are scored against;
+        // the reference in use, the row that bitmap is rendered from (whose
+        // score is 1 and not computed), or null; and the row the
+        // reference-view rule picked, or null; as `get_bench_track`'s
+        // `stage_data` has them.
         "has_bitmap": viewed.track.track().is_some_and(|p| p.bitmap.is_some()),
-        "bitmap_observation": viewed
-            .track
-            .track()
-            .and_then(|p| p.bitmap.as_ref().and(p.reference)),
+        "reference_observation": crate::bench::reference_in_use(&viewed.track),
+        "reference_view_observation": crate::bench::reference_view_pick(&viewed.track),
         "observations": rows,
     }))
 }

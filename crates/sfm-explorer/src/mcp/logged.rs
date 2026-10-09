@@ -96,6 +96,7 @@ impl Command {
             Command::SightBenchObservation { .. } => "sight_bench_observation",
             Command::ShapeBenchObservation { .. } => "shape_bench_observation",
             Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
+            Command::SetBenchTrackReference { .. } => "set_bench_track_reference",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
             Command::SplitBenchTrack { .. } => "split_bench_track",
             Command::SelectBenchObservations { .. } => "select_bench_observations",
@@ -340,6 +341,7 @@ impl Command {
             | Command::SightBenchObservation { .. }
             | Command::ShapeBenchObservation { .. }
             | Command::SetBenchTrackVerdict { .. }
+            | Command::SetBenchTrackReference { .. }
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }
             | Command::FitBenchTrack { .. }
