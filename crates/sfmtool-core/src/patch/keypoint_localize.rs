@@ -216,12 +216,10 @@ pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usi
 /// search can slide), plus per-pixel validity from the warp map (an invalid pixel
 /// is out of frame, rendered black, and must not be scored).
 ///
-/// In the cached congealing loop this is the **per-view render-once cache**: it
-/// is rendered a single time per view, frame-oriented at the seed (`acc = 0`,
-/// centred on `project_i(X_p)`), sized to cover the full search drift, and every
-/// round reads its core / scores its shift grid from it at the view's current
-/// **integer** offset. Because the patch frame is fixed during localization, an
-/// integer in-plane shift is an integer cache-index shift, so a read at an
+/// The localizer renders it **once per view**, centred on the view's starting
+/// keypoint and `2 · margin` wider than the core, and scores every shift of the
+/// search window from it. Because the patch frame is fixed during localization,
+/// an integer in-plane shift is an integer tile-index shift, so a read at an
 /// integer offset is bit-identical to re-warping the patch at that offset (see
 /// `specs/core/patch/keypoint-localization-search-cache.md`).
 ///
@@ -259,7 +257,7 @@ struct ContextTile {
     /// `0.0` valid). Drives the SIMD validity count pass that gates `−∞` shifts.
     invalid_plane: Vec<f32>,
     /// Per-pixel validity (`true` in frame), `[row · res + col]`. The `bool` form
-    /// is what the round-loop consensus-core read (`extract_core`) checks.
+    /// is what the core read (`extract_core`) checks.
     valid: Vec<bool>,
 }
 
@@ -321,13 +319,12 @@ pub(super) fn shifted_center(
 /// Render one view's context tile / cache with the patch centre at in-plane
 /// offset `(au, av)` (patch-grid px). The context patch spans `context_res / R`
 /// times the core extent, rendered at `context_res`, so each context pixel equals
-/// one core pixel in world units. In the cached loop this is called **once per
-/// view** with `(au, av) = (0, 0)` to build the per-view cache: the scored core
-/// at the view's accumulated integer offset `iacc` then sits at cache offset
-/// `(context_res − R) / 2 + iacc`.
+/// one core pixel in world units. The localizer calls it **once per view**
+/// with `(au, av)` at the view's starting keypoint: the core at shift `(0, 0)`
+/// then sits at tile offset `(context_res − R) / 2`.
 ///
 /// **The buffers are reserved before the render, and fallibly.** Their side is
-/// `R_s + 4 · margin`, so a caller that widens its search window asks for a tile
+/// `R + 2 · margin`, so a caller that widens its search window asks for a tile
 /// that grows as the square of the radius; an allocation the global allocator
 /// refuses aborts the process, and an abort takes the window with it. So the
 /// planes this will fill are reserved first, through
@@ -349,7 +346,7 @@ fn render_context(
     sampler: Sampler,
     progress: &Progress<'_>,
 ) -> Result<ContextTile, LocalizeError> {
-    // The tile the round loop will read, allocated **before** the render: the
+    // The tile the search will read, allocated **before** the render: the
     // warp map and the remapped image are of the same order, and asking for
     // this first means an impossible size is refused here rather than aborting
     // the process inside one of them. `try_zeroed_f32` asks for exactly what
@@ -493,8 +490,8 @@ fn extract_core(
     true
 }
 
-/// Whether a leave-one-out ZNCC fails the **absolute** floor: finite and below
-/// `floor`. A `NaN` (no round scored this view) has no verdict to fail, and a
+/// Whether a ZNCC against the template fails the **absolute** floor: finite and
+/// below `floor`. A `NaN` (the view was not scored) has no verdict to fail, and a
 /// `floor` of `0.0` or below disables the gate exactly — a negative correlation
 /// is only refused when the caller asks for a positive floor.
 #[inline]

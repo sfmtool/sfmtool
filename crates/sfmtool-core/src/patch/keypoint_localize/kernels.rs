@@ -363,9 +363,8 @@ pub(super) fn score_cell_one_channel_scalar(
 ///    `r_k = pixel/resolution`, `c_k = pixel%resolution`, the byte offset
 ///    `(win_y + r_k) * istride + (win_x + c_k)` must lie within
 ///    `plane[..]` — exactly the contract `compute_channel_grids_avx2` already
-///    relies on for one shift cell, and the same `cache_res = R + 4·margin`
-///    plus `|win_y - cache_c0|, |win_x - cache_c0| ≤ margin` invariants guard
-///    it.
+///    relies on for one shift cell, and the tile sizing (every shift of the
+///    `±margin` window around the base lies inside the tile) guards it.
 /// 3. **Kern / weight slices cover the support:** `kern.len() >=
 ///    support.pixels.len()`, `w.len() >= support.pixels.len()`.
 #[cfg(target_arch = "x86_64")]

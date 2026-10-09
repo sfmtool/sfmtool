@@ -21,7 +21,7 @@ use super::{parabolic, prof, ContextTile, LocalizeError};
 
 /// Reused per-call scratch for [`search_shift`], created once per
 /// [`localize_patch_keypoints`](super::localize_patch_keypoints) and shared
-/// across every view and round (the search then allocates nothing after
+/// across every view (the search then allocates nothing after
 /// warm-up), mirroring
 /// [`ConsensusScratch`](crate::patch::normal_refine::ConsensusScratch).
 ///
@@ -33,8 +33,8 @@ use super::{parabolic, prof, ContextTile, LocalizeError};
 // field visible); production only writes `tmpl`.
 #[derive(Default)]
 pub(super) struct SearchScratch {
-    /// The leave-one-out template the candidates score against (`kept_ch · n`),
-    /// laid out `[c · n + k]`; the caller writes it each round.
+    /// The template the candidates score against (`kept_ch · n`), laid out
+    /// `[c · n + k]`; the caller writes it before each search.
     pub(super) tmpl: Vec<f32>,
     /// Per-support-pixel kernel `√w · tmpl` for the channel being accumulated
     /// (`f32` — the AVX2 kernel broadcasts these as `f32` lanes).
@@ -123,8 +123,8 @@ impl SearchScratch {
     }
 }
 
-/// The result of a [`search_shift`] — the residual shift of one view relative to
-/// its current integer base offset, in `R_s`-grid steps.
+/// The result of a [`search_shift`] — the shift of one view relative to the
+/// core at its starting keypoint, in grid px.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ShiftResult {
     /// Sub-pixel-refined shift in the grid's x (column) axis: integer argmax plus
@@ -132,8 +132,8 @@ pub(super) struct ShiftResult {
     pub(super) dx: f64,
     /// Sub-pixel-refined shift in the grid's y (row) axis.
     pub(super) dy: f64,
-    /// The integer argmax shift in x — the part that moves the integer read
-    /// accumulator `iacc` (every cache read stays at an integer index).
+    /// The integer argmax shift in x (every tile read stays at an integer
+    /// index).
     pub(super) ix: i64,
     /// The integer argmax shift in y.
     pub(super) iy: i64,
@@ -145,12 +145,11 @@ pub(super) struct ShiftResult {
 /// `sc.tmpl`, refined to sub-pixel by a separable parabolic fit. Returns a
 /// [`ShiftResult`] — the integer argmax shift `(ix, iy)`, its sub-pixel-refined
 /// counterpart `(dx, dy)`, and the ZNCC `peak` at the integer peak — or `None` if
-/// no in-frame window position could be scored. The search centres on
-/// the view's current integer offset `iacc`: the `(dy, dx) = (0, 0)` shift scores
-/// the `R×R` core window whose top-left support pixel sits at cache index
-/// `(base_y, base_x) = ((cache_res − R) / 2 + iacc_y, … + iacc_x)`, and the search
-/// slides the window over `±margin` around it. Both `base ± margin` are guaranteed
-/// in-bounds by the cache sizing (`cache_res = R + 4·margin`, `|iacc| ≤ search`).
+/// no in-frame window position could be scored. The `(dy, dx) = (0, 0)` shift
+/// scores the `R×R` core window whose top-left support pixel sits at tile index
+/// `(base_y, base_x)`, and the search slides the window over `±margin` around it.
+/// Both `base ± margin` must be in bounds: the localizer renders the tile
+/// `R + 2·margin` wide and passes `base = margin`.
 ///
 /// Rather than re-extract + z-normalize + dot each of the `(2·margin+1)²`
 /// candidates (a strided gather and a horizontal reduction per candidate), the
