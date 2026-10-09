@@ -106,9 +106,11 @@ impl Observation {
 
 pub struct TrackMeasurement {
     pub keypoint: Option<[f32; 2]>,
-    pub zncc: Option<f64>,
-    pub zncc_middle: Option<f64>,            // the same samples over the middle square
+    pub zncc: Option<f64>,                   // the score: the tile against the stored bitmap, plain; 1 for its row
+    pub zncc_middle: Option<f64>,            // the same over the middle square
     pub zncc_grid: Option<[[f64; 3]; 3]>,    // and over each ninth of the tile
+    pub loo_zncc: Option<f64>,               // the localizer's leave-one-out ZNCC at its peak
+    pub loo_zncc_middle: Option<f64>,        // and its middle reading
     pub seed_shift_px: Option<f64>,          // the peak's move from the sighting, grid px
     pub projection_offset_px: Option<f64>,   // the sighting's distance from the point
     pub reprojection_error: Option<f64>,
@@ -129,8 +131,7 @@ pub struct TrackMeasurement {
     pub pair_zncc_grid: Option<[[f64; 3]; 3]>, // the same per ninth
     pub cell_deficit: Option<f64>,           // the worst ninth below the typical agreement
     pub reference_view: Option<ReferenceStanding>, // what the reference-view rule decided
-    pub bitmap_zncc: Option<f64>,            // ZNCC with the stored bitmap; 1 for its row
-    pub blur_matched_bitmap_zncc: Option<f64>, // the same with the bitmap blurred to this row
+    pub blur_matched_zncc: Option<f64>,      // the score with the bitmap blurred to this row
     pub bitmap_blur_sigma: Option<f64>,      // that blur's width, 0 where read plain
     pub sharper_than_bitmap: Option<bool>,   // this row sharper than the bitmap everywhere
     pub walked_px: Option<f64>,              // grid px, set when a fit refused the walk and kept the seed
@@ -138,7 +139,7 @@ pub struct TrackMeasurement {
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
     pub walked_zncc_middle: Option<f64>,     // and its middle reading
     pub walked_zncc_grid: Option<[[f64; 3]; 3]>, // and its ZNCC grid
-    pub reason: Option<Unmeasured>,          // present exactly when zncc is not
+    pub reason: Option<Unmeasured>,          // the localizer's refusal, or why there is no score
 }
 
 pub enum Unmeasured {
@@ -149,6 +150,7 @@ pub enum Unmeasured {
     SeedTooFar { offset_px: f64, bound_px: f64 },
     NoConsensus,
     Unscorable,
+    NoBitmap,                        // no bitmap on the tile's grid to score against
 }
 
 pub enum Verdict { In, Out }
@@ -237,6 +239,24 @@ pub fn pin_verdicts(
 pub struct PinReport {
     pub pinned: usize,       // pins set; no verdict moves
     pub changed: bool,       // false exactly when every row was pinned already
+}
+
+// Set as reference: the row becomes the reference and is pinned.
+pub fn set_reference(
+    track: &EditableTrack,
+    observation: usize,
+) -> Result<(EditableTrack, ReferenceReport), TrackEditError>;
+
+pub struct ReferenceReport {
+    pub observation: usize,  // the reference now
+    pub was: Option<usize>,  // the reference before
+    pub changed: bool,       // false when it was the reference on a pinned row
+}
+
+impl EditableTrack {
+    // The reference a render renders from whatever the rule picks: the
+    // payload's reference where its row is `in`, keyed and pinned.
+    pub fn held_reference(&self) -> Option<usize>;
 }
 
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport);
@@ -596,13 +616,14 @@ pub fn score_bitmap(
     progress: &Progress<'_>,
 ) -> Result<EditableTrack, EvaluateError>;
 
-// `evaluate`, then, for a track-stage track with a placement and no bitmap,
-// `render_bitmap_in_place` under `fit` and `score_bitmap`: the same answer as
-// the three calls in turn. Where the repaint left the `in` set as the rule
-// read it, every `in` row has a keypoint, and the evaluation's tiles are on the
-// bitmap's grid with the render's sampler, the bitmap is taken from the
-// evaluation's own tile of the row its rule picked and the rows are scored on
-// the evaluation's tiles, so nothing is rendered twice. The viewer's live
+// `evaluate`'s reading, then, for a track-stage track with a placement and
+// either no bitmap or an unpinned reference row the rule does not pick,
+// `render_bitmap_in_place` under `fit` and `score_bitmap`, and then the
+// repaint, which judges the scores against the new bitmap. Where every `in`
+// row has a keypoint and the evaluation's tiles are on the bitmap's grid with
+// the render's sampler, the bitmap is taken from the evaluation's own tile of
+// the held reference or the rule's pick and the rows are scored on the
+// evaluation's tiles, so nothing is rendered twice. The viewer's live
 // evaluation and `fit_normal` / `finite_difference_normal` end with it.
 pub fn evaluate_rendering_bitmap(
     track: &EditableTrack,
@@ -970,8 +991,9 @@ a bearing, an
 patch bitmap with the observation it is the render of
 (`TrackPayload::reference`, where it names one) and a colour, and per
 observation a keypoint with its
-leave-one-out ZNCC and that ZNCC's middle reading, its reprojection error, its ray angle and its tile
-self-similarity radius. It is what a track is when put on the bench from a committed
+score against the bitmap and that score's middle reading, its leave-one-out
+ZNCC, its reprojection error, its ray angle and its tile self-similarity
+radius. It is what a track is when put on the bench from a committed
 point.
 
 **`TrackPayload::at_infinity` is where that one bit lives, and not the frame's
@@ -1290,22 +1312,27 @@ neighbourhood or by its surroundings.
 No second render is made. At the cluster stage the refinement reads the
 member's samples once more at the map its winning evaluation used and
 correlates them with the reference's own samples (`ClusterRefineResult::
-member_zncc_middle`). At the track stage the localizer reads the core at the
-integer peak its search reported, from the tile it already cached, against the
-same leave-one-out template (`KeypointLocalization::loo_zncc_middle`). The fit
-keeps the walked peak's middle reading as `walked_zncc_middle`, beside
+member_zncc_middle`). At the track stage the row's score is its tile against
+the stored bitmap (§ "The reference view", "The scores against the stored
+bitmap"), and the middle is that tile and that bitmap read with the window's
+weights outside the middle square at zero (`BitmapScore::zncc_middle`); the
+bitmap's own row reads `1`. The localizer's leave-one-out reading has its own
+middle, read at the integer peak its search reported, from the tile it already
+cached, against the same leave-one-out template (`KeypointLocalization::
+loo_zncc_middle`), kept on the row as `loo_zncc_middle` beside `loo_zncc`. The
+fit keeps the walked peak's middle reading as `walked_zncc_middle`, beside
 `walked_zncc`.
 
-The whole-patch `zncc` keeps its meaning and its bar. The middle reading has a
-bar of its own, `min_zncc_middle`, which defaults to `BENCH_MIN_ZNCC_MIDDLE`
-(0.7) and is off at `0`. It sits no higher than the whole-patch bar: the middle
-covers a quarter of the samples, so on a correct sighting it scatters more and
-reads a little lower than the whole, and a higher middle bar would turn out
-correct sightings the whole bar keeps. `zncc_middle` is `None` wherever `zncc` is, where the
-reference's or consensus's middle is flat, and on a track read back from a
-committed point before it is evaluated, because `.sfmr` stores the whole-patch
-score alone. A row with no middle reading clears the middle bar, the way a row
-with no self-similarity reading clears `max_zncc_self_similarity_radius`.
+The whole-patch `zncc` has the bar `min_zncc`. The middle reading has a bar of
+its own, `min_zncc_middle`, which defaults to `BENCH_MIN_ZNCC_MIDDLE` and is
+off at `0`. It sits no higher than the whole-patch bar: the middle covers a
+quarter of the samples, so on a correct sighting it scatters more and reads a
+little lower than the whole, and a higher middle bar would turn out correct
+sightings the whole bar keeps. `zncc_middle` is `None` wherever `zncc` is and
+where the middle cannot be read (fewer than eight samples with data in both, or
+every channel flat). A row with no middle reading clears the middle bar, the
+way a row with no self-similarity reading clears
+`max_zncc_self_similarity_radius`.
 
 ### The ZNCC grid
 
@@ -1334,11 +1361,14 @@ neighbourhood. The grid says where in the patch an agreement or a disagreement
 is: a depth edge through one side of the patch, an occluder in one corner, a
 moving object across the bottom row. It is computed where the middle reading is
 and from the same samples, with no second render: `ClusterRefineResult::
-member_zncc_grid` at the cluster stage, `KeypointLocalization::loo_zncc_grid`
-at the track stage and `walked_zncc_grid` beside `walked_zncc`. No bar judges
-it. It is `None` wherever `zncc` is, and a single cell is `NaN` where the
-reference or the consensus is flat over it, or where a pixel of it falls out
-of the frame or off the image.
+member_zncc_grid` at the cluster stage; at the track stage the row's tile
+against the stored bitmap over each cell, every sample with data in both
+weighted equally (`BitmapScore::zncc_grid`, every cell `1` on the bitmap's own
+row); and `walked_zncc_grid` beside `walked_zncc`, against the fit's
+consensus. The localizer's own grid (`KeypointLocalization::loo_zncc_grid`) is
+not kept on the row. No bar judges it. It is `None` wherever `zncc` is, and a
+single cell is `NaN` where it cannot be read: the reference or the bitmap flat
+over it, or too few of its samples with data in both.
 
 ### The ZNCC self-similarity radius
 
@@ -1457,24 +1487,48 @@ proposes the same verdicts with or without them.
 **The scores against the stored bitmap.** Where the track carries a bitmap on
 the tiles' grid, every row with a tile, `in` or `out`, is then scored against
 it ([../patch/blur-matched-zncc.md](../patch/blur-matched-zncc.md) § "Scores
-against the stored bitmap"):
+against the stored bitmap"). This is the row's **score**, the reading the bars
+judge and the painting ranks rows by:
 
-- `bitmap_zncc`: the row's tile's windowed ZNCC with the bitmap as stored,
-  over the samples with data in both;
-- `blur_matched_bitmap_zncc`: the same after the bitmap, and only the bitmap,
-  is blurred to the row's sharpness, where the bitmap is sharper than the
-  row's tile along every direction by the ratio of 1.25; `bitmap_zncc` where
-  it is not;
+- `zncc`: the row's tile's windowed ZNCC with the bitmap as stored, over the
+  samples with data in both, plain;
+- `zncc_middle` and `zncc_grid`: the same tile and bitmap over the middle
+  square and over each ninth (§ "The middle ZNCC", "The ZNCC grid");
+- `blur_matched_zncc`: `zncc` after the bitmap, and only the bitmap, is
+  blurred to the row's sharpness, where the bitmap is sharper than the row's
+  tile along every direction by the ratio of 1.25; `zncc` where it is not;
 - `bitmap_blur_sigma`: that blur's width in grid px, `0` where the pair was
   read plain;
 - `sharper_than_bitmap`: whether the row's tile is sharper than the bitmap
   along every direction, a candidate to replace the reference.
 
-The row the bitmap is the tile of (`TrackPayload::reference`) reads `1`, `1`
-and `0`, with no `sharper_than_bitmap`, and is not computed. No bar judges the
-scores. A step that moves verdicts afterwards leaves them, since they are read
+The row the bitmap is the tile of (`TrackPayload::reference`) reads `1` for
+the whole, the middle and every cell, `1` blur-matched and `0` for the blur,
+with no `sharper_than_bitmap`, and is not computed. **The bars judge the plain
+score.** It falls for a view that is out of focus, which the bars are there
+to catch, where the blur-matched score would not. A row the track has no
+bitmap to read against, before its first render or after a step dropped the
+bitmap, has no score: its `reason` is `NoBitmap` where the localizer read it,
+and the bars leave its verdict where it is (`bar_checks` is `None` for it). A
+step that moves verdicts afterwards leaves the scores, since they are read
 against the bitmap, which a verdict does not change, except where it turns the
 bitmap's own row `out` (§ "The stored bitmap's reference").
+
+**Which readings switched to the bitmap.** The localizer's leave-one-out
+reading is still taken and still places the row: the localizer aligns each
+view to the leave-one-out consensus of the others, `seed_shift_px` is its
+peak's distance, and its own gates are off on the bench as before. The row
+keeps it as `loo_zncc` and `loo_zncc_middle`, beside the score. Each reader
+of a row's ZNCC reads one of the two:
+
+| Reader | Reads |
+|---|---|
+| The bars (`bar_checks`, `apply_thresholds`, `verdicts_if_unpinned`) and the painting's ranking | the score against the bitmap |
+| Track View's *ZNCC* column and grid, the wire's `zncc`, `zncc_middle`, `zncc_grid` | the score against the bitmap |
+| Track at Pixel's own gates (the median ZNCC its members and finish judge) | `loo_zncc`, `loo_zncc_middle`: its intermediate tracks have no bitmap, and its gates were tuned on that reading |
+| The commit's `observation_confidence`, and `create_track` reading it back | `loo_zncc`, the meaning the column has had and the one Add Image to Tracks writes |
+| The fit's walk (`walked_zncc`, `walked_zncc_middle`, `walked_zncc_grid`) | the fit's localizer, against its round's consensus |
+| Nearby tracks, the geometry search, cluster-stage rows | their own kernels' ZNCCs, unchanged |
 
 The standing always agrees with the verdicts. The rule decides over the rows
 that are `in` when the track is read, so a step that then moves a verdict --
@@ -1531,45 +1585,71 @@ drops the bitmap and the reference together (`drop_bitmap`):
 A bitmap with reference `None` is not one row's render, so the steps of the
 second list keep it.
 
-**A render keeps a defined reference.** Every render of a new bitmap on the
-bench -- the viewer's live evaluation (`evaluate_rendering_bitmap`, which
-renders the bitmap again with `render_bitmap_in_place` and scores every row
-against it with `score_bitmap`), a fit, and the normal steps -- renders from
-the track's reference where it is defined: `Some`, naming an `in` row with a
-keypoint. The bitmap is then that row's tile at its current keypoint, through
-the current patch, and the reference stays. The reference-view rule sets the
-reference, with the bitmap, only where it is undefined: the point stored
-`-1`, or a step of the second list above took the reference row off the
-track or turned it `out`. So a reference kept by a stale-making step is
-rendered from again at the next render, and a track opened from a file keeps
-the file's reference through every step that leaves that row `in`. This is
-the rule every other render follows
+**The pin of the reference row holds the reference.** On the bench only the
+reference-view rule or the person changes the reference, and the pin of the
+row the reference is on says which of the two decides:
+
+- **A pinned reference row keeps the reference.** Every render of a new
+  bitmap on the bench -- the viewer's live evaluation
+  (`evaluate_rendering_bitmap`, which renders the bitmap again with
+  `render_bitmap_in_place` and scores every row against it with
+  `score_bitmap`), a fit, and the normal steps -- renders from the track's
+  reference where its row is `in`, carries a keypoint and is pinned
+  (`EditableTrack::held_reference`), whichever row the rule would pick. The
+  bitmap is then that row's tile at its current keypoint, through the current
+  patch, and the reference stays. A track put on the bench from a point has
+  every row pinned, so the point's stored reference stays until the person
+  unpins its row; a reference kept by a stale-making step is rendered from
+  again at the next render.
+- **An unpinned reference row hands it to the rule.** Where the reference is
+  undefined (the point stored `-1`, or a step of the second list above took
+  the reference row off the track or turned it `out`), or its row is not
+  pinned, a render runs the rule over the `in` rows and sets the bitmap and
+  the reference together. `evaluate_rendering_bitmap` renders the bitmap
+  again not only where the track has none but also where the reference row is
+  unpinned and the rule picks another row, so unpinning the reference row
+  (`unpin_verdicts`) moves the reference to the rule's current pick at the
+  next evaluation: the bitmap is rendered from that row and every row is
+  scored against it. While the reference row is unpinned the reference
+  follows the rule's pick at every evaluation that renders, so the two differ
+  only on a pinned row. A track built on the bench starts with no reference
+  and takes the rule's pick at its first render; the rows Track at Pixel adds
+  and the row a cluster starts from are set `in` by hand, and so pinned, so a
+  pick that lands on one of them is held from then on.
+- **Set as reference.** `set_reference` makes a row that is `in` and has a
+  keypoint the reference and pins it. A bitmap that is not that row's render
+  is dropped with the reference kept (`drop_stale_bitmap`), and the next
+  render renders it from the row and scores every row against it. It is
+  refused at the cluster stage, for an `out` row (`TrackEditError::NotIn`) and
+  for a row with no keypoint (`NoPlace`). Pinning a row by itself
+  (`pin_verdicts`) does not make it the reference.
+
+This is the rule every other render follows for a defined reference
 ([../patch/reference-view.md](../patch/reference-view.md) § "The stored
-bitmap"). `evaluate_rendering_bitmap` takes the defined reference's tile from
-the evaluation's own tiles where it reuses them, so it gives what the separate
-calls give.
+bitmap"), with the pin as the bench's way to say whether it is still held.
+`evaluate_rendering_bitmap` takes the held reference's tile, or the rule's
+pick's, from the evaluation's own tiles where it reuses them, so it gives
+what the separate calls give, and it repaints after the scores against the
+new bitmap are read, so the bars judge the scores the track comes back with.
 
 A pick only the viewer's display render made (a point the file stores at
-`-1`) reaches the bench as the track's reference. It is the rule's pick on
-the file's track, so holding it is the same as the bench having set it from
-the rule; a commit saves it like any other reference the bench holds, which
-makes it the point's own, while a point that is not committed keeps saving
-`-1`.
+`-1`) reaches the bench as the track's reference and is held the same way. It
+is the rule's pick on the file's track, so holding it is the same as the bench
+having set it from the rule; a commit saves it like any other reference the
+bench holds, which makes it the point's own, while a point that is not
+committed keeps saving `-1`.
 
 **The rule's pick and the reference in use.** Every evaluation still runs the
 rule over the `in` rows and writes each row's standing
-(`TrackMeasurement::reference_view`). That is what the rule would pick from
-the current readings, reported as information; it does not move a defined
-reference. The reference in use is `TrackPayload::reference`, the row the
-bitmap is the render of. The two differ where a defined reference is no
-longer the row the rule picks; Track View's *Reference* column and the wire's
-`reference_observation` show the rule's pick, and Track View's *Bitmap*
-column and the wire's `bitmap_observation` show the reference in use.
-No operation replaces a defined reference with the rule's current pick.
-Replacing it on the bench, by unpinning the reference row or with *Set as
-reference*, is proposed in
-[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 8, "The reference on the bench".
+(`TrackMeasurement::reference_view`): what the rule would pick from the
+current readings. The reference in use is `TrackPayload::reference`, the row
+the bitmap is the render of. Track View's *Reference* column marks both: the
+reference row green where it is the rule's pick, red where it is not with the
+pick marked in its own cell, and only the pick where the track has no
+reference. The wire's `reference_observation` names the reference in use and
+`reference_view_observation` the rule's pick
+([../../gui/track-view.md](../../gui/track-view.md),
+[../../gui/mcp-server.md](../../gui/mcp-server.md)).
 
 A commit writes `TrackPayload::reference` as the point's reference
 observation, with or without a bitmap: with one, it is the row the bitmap is
@@ -1589,9 +1669,10 @@ observation (read with or without a bitmap), colour and keypoints, its
 origin set to that point, and every observation `in` and **pinned**. The
 point's observations are ones a reconstruction already decided on, so they stand
 as that decision until a person hands them to the bars with `unpin_verdicts`;
-an evaluation's repaint does not move them. **Nothing is recomputed.** The leave-one-out ZNCC is `observation_confidence` read back out
-of its byte scale where the column exists, and every measurement an evaluation
-would produce is left unmeasured, so putting a track on the bench and doing
+an evaluation's repaint does not move them. **Nothing is recomputed.** The
+leave-one-out ZNCC (`loo_zncc`) is `observation_confidence` read back out of
+its byte scale where the column exists, and every measurement an evaluation
+would produce, the score against the bitmap among them, is left unmeasured, so putting a track on the bench and doing
 nothing shows the numbers the reconstruction already holds plus the verdict
 column.
 
@@ -1658,6 +1739,12 @@ they stand and later evaluations and paintings leave them alone. Since no
 verdict moves, the track keeps its one `in` per image. A pin of rows all pinned
 already changes nothing and reports `changed: false`; like the unpin it refuses
 an index past the end and counts a repeated index once.
+
+The pin of the row that holds the track's reference also holds the reference
+(§ "The stored bitmap's reference"): unpinning that row hands the reference to
+the reference-view rule at the next render, and `set_reference` makes a row
+the reference and pins it. Pinning a row with `pin_verdicts` does not make it
+the reference.
 
 ```rust
 use sfmtool_core::bench::pin_verdicts;
@@ -1865,7 +1952,7 @@ place every reading is anchored at -- and at the cluster stage it re-seeds the
 observation at that pixel with the shape it is being read at, because a person
 moving a cluster's mark is saying where that patch is and not how large it is.
 Either way **every measurement read at the old pixel is dropped**: the
-leave-one-out ZNCC, both distances, the reprojection residual, the
+score against the bitmap, the leave-one-out ZNCC, both distances, the reprojection residual, the
 self-similarity readings and the reason were all computed for a pixel that is not this
 one, and an evaluation recomputes all of them from the track as it stands. **The
 observation is pinned**, at both stages: a sighting a person placed is a sighting
@@ -2172,10 +2259,15 @@ bars say about the latest reading: a row a search or a pixel gesture added joins
 the track when its first reading clears every bar, a row a step moved past a bar
 is turned out by the evaluation that follows, and one a fit moved back within
 the bars is turned in again. A pinned verdict is never moved, which is why a
-point's rows arrive pinned.
+point's rows arrive pinned. The bars judge the scores against the bitmap, so a
+row with no score, on a track with no bitmap, is left where it is;
+`evaluate_rendering_bitmap` renders the bitmap first where it is missing or
+moves to the rule's pick, and repaints after the scores against it are read.
 
 **An evaluation that only follows a repaint does not repaint again.** A
-track-stage reading is a leave-one-out score against the rows that are `in`, so
+track-stage reading depends on the rows that are `in`: the leave-one-out
+consensus and the reference-view rule read them, and a bitmap the rule renders
+is the tile of one of them, so
 a repaint that changes the `in` set leaves readings taken under the set before
 it. The next reading can then say something different about other rows, and were
 it to repaint too, a row turned `in` could drop another below a bar, that one's
@@ -2234,21 +2326,23 @@ observations *where they sit*: the cores are cut at the pixels the observations
 already carry, each is scored against the leave-one-out consensus of the round's
 others, and the peak of its shift search says where the correlation would rather
 be. The peak is reported as a distance and never taken, so a reading is a
-reading. What lands in each slot is:
+reading. Each row's tile is then rendered at its keypoint and read against the
+stored bitmap for its score. What lands in each slot is:
 
 | Slot | What it says |
 |------|--------------|
-| `zncc` | The leave-one-out agreement at the peak, within the track's `max_shift_px` of where the sighting is. With `seed_shift_px` near zero it is the agreement at the keypoint itself. |
-| `zncc_middle` | The same samples at the same peak against the same consensus, read over the middle square of the tile only (§ "The middle ZNCC"). |
-| `zncc_grid` | The same samples read over each ninth of the tile (§ "The ZNCC grid"). |
+| `zncc` | The **score**: the row's tile at its keypoint against the stored bitmap, plain; `1` on the bitmap's own row (§ "The reference view", "The scores against the stored bitmap"). What `min_zncc` paints on. `None` where the track has no bitmap on the tile's grid. |
+| `zncc_middle` | The same tile and bitmap over the middle square of the tile only (§ "The middle ZNCC"). What `min_zncc_middle` paints on. |
+| `zncc_grid` | The same tile and bitmap over each ninth of the tile (§ "The ZNCC grid"). |
+| `blur_matched_zncc`, `bitmap_blur_sigma`, `sharper_than_bitmap` | The score with the bitmap alone blurred to the row's sharpness, that blur's width, and whether the row is sharper than the bitmap. No bar judges them. |
+| `loo_zncc`, `loo_zncc_middle` | The localizer's leave-one-out agreement at the peak, within the track's `max_shift_px` of where the sighting is, and its middle. With `seed_shift_px` near zero it is the agreement at the keypoint itself. No bar judges it. |
 | `seed_shift_px` | How far that peak sits from the observation's own keypoint, in patch-grid px on the patch's plane, both ends through the unprojection the localizer seeds from. The **sighting's** own evidence, and what `max_shift_px` paints on. In the unit of the self-similarity radius, so a shift inside the radius is within what the patch cannot tell apart. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. What `max_projection_error_px` paints on before the track is triangulated. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. The px is what `max_projection_error_px` paints on once the track is triangulated. |
 | `zncc_self_similarity_radius` and its middle, grid, ellipses and surface | How far the observation's own tile, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
 | `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share` | The angle the view sees the patch at at the keypoint and the direction its ray leans in the patch's plane, the share of the tile on the photograph, and the share of the photograph under the tile that is clipped (§ "The reference view"). No bar judges them. |
 | `pair_zncc`, `pair_zncc_grid`, `cell_deficit`, `reference_view` | For an `in` row: its agreement with the other `in` rows over the whole tile and each ninth, how far it falls below the track's typical agreement in its worst ninth, and what the reference-view rule decided about it (§ "The reference view"). `None` on an `out` row. No bar judges them. |
-| `bitmap_zncc`, `blur_matched_bitmap_zncc`, `bitmap_blur_sigma`, `sharper_than_bitmap` | The row's score against the stored bitmap, plain and with the bitmap alone blurred to the row's sharpness, that blur's width, and whether the row is sharper than the bitmap (§ "The reference view"). `None` where the track has no bitmap. No bar judges them. |
-| `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
+| `reason` | The localizer's refusal where it could not read the row, whether or not the row has a score; otherwise why there is no score, and absent where there is one. |
 
 The projection offset, the residual and the self-similarity rows are filled for
 every observation that has a pixel at all,
@@ -2271,9 +2365,10 @@ off the photograph), `NoProjection` (the point misses this view), `Grazing` (its
 ray grazes the patch plane, with the cosine), `SeedTooFar` (its seed sits
 further from the projection than the reading will widen its window for, with the
 offset and the bound), `NoConsensus` (fewer than two observations of its round
-could be read together) and `Unscorable` (its tile could not be scored: it runs
-off the photograph, or no channel of it carries texture). The first five are
-decided before any correlation, from the observation and the geometry, which is
+could be read together), `Unscorable` (its tile could not be scored: it runs
+off the photograph, or no channel of it carries texture) and `NoBitmap` (the
+localizer read it, but the track has no bitmap on the tile's grid to score it
+against). The first five are decided before any correlation, from the observation and the geometry, which is
 what lets the row carry the reason instead of simply going missing from the
 kernel's answer.
 
@@ -2555,7 +2650,8 @@ frame states, the mean of what the last evaluation measured as each `in`
 sighting's reprojection error in the point's `error` column (zero where nothing
 was measured, which is what a point no observation could be scored for carries
 anywhere else), and one observation per `in` sighting with its keypoint and its
-leave-one-out ZNCC in `observation_confidence` where the column exists. The
+leave-one-out ZNCC (`loo_zncc`) in `observation_confidence` where the column
+exists. The
 observations are written in image order, which is the order a stored track is in
 and every reader of one relies on. Where the reconstruction carries reference
 observations (it does wherever it carries patch frames), the record's
@@ -2801,6 +2897,10 @@ defaulting to the reading's own; the radius the reading looks for each peak in
 is the track's `max_shift_px`. `fit` and `set_stage` take the
 classification's two knobs as well, `sigma_px` (default `None`, the measured
 level) and `depth_likelihood_ratio_threshold` (default 25);
+`evaluate` also takes
+`render_bitmap` (default `False`); `True` runs `evaluate_rendering_bitmap`,
+the viewer's live evaluation, which renders the bitmap where it is missing or
+moves to the rule's pick and scores every row against it before the repaint.
 `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured` and `unmeasured`, with `reference` at the cluster stage and
@@ -2810,21 +2910,27 @@ stage; `placed`, `kept_at_seed`, `at_infinity` with `position` or `direction`,
 a fit; and
 `from`, `to`, `changed`, the upgrade's `fit` report and the downgrade's
 `reference` for a stage change. An observation's `"track"` dict carries
-`reason`, the sentence, exactly when it carries no `zncc`, and `walked_px` and
+`zncc`, `zncc_middle` and `blur_matched_zncc`, its scores against the bitmap,
+`loo_zncc` and `loo_zncc_middle`, the localizer's leave-one-out reading, and
+`reason`, the sentence, where the localizer could not read the row or there is
+no `zncc`, and `walked_px` and
 `walked_to` (with `walked_zncc` and `walked_zncc_middle` where the localizer
 scored the peak) exactly when the last fit refused to walk that sighting and
 kept its seed, with `walked_zncc_grid` beside them. A track-stage dict also
 carries the reference view's readings where the row has them:
 `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share`,
-`pair_zncc`, `cell_deficit`, `bitmap_zncc`, `blur_matched_bitmap_zncc` and
-`bitmap_blur_sigma` as floats, `sharper_than_bitmap` as a bool,
+`pair_zncc`, `cell_deficit` and `bitmap_blur_sigma` as floats,
+`sharper_than_bitmap` as a bool,
 `pair_zncc_grid` as a `(3, 3)` float64 array, and `reference_view` as a dict
 `{"is_reference", "rejected_by", "fallback"}` with the test and the fallback
 by name (`"coverage"`, `"clipped"`, `"angle"`, `"cells"`, `"agreement"`,
 `"sharpness"` or `None`; `"none"`, `"without_angle"`,
 `"without_angle_or_cells"` or `"without_any"`).
-`EditableTrack.bitmap_observation` is the row the stored bitmap is the tile
-of, or `None`. Both stages' dicts carry
+`EditableTrack.reference_observation` is the reference in use, the row the
+stored bitmap is the tile of, or `None`; `EditableTrack.reference_view_observation`
+is the row the last evaluation's reference-view rule picked, or `None`.
+`set_reference(track, observation)` is *Set as reference*, returning
+`(track, {"observation", "was", "changed"})`. Both stages' dicts carry
 `zncc_middle`, `zncc_self_similarity_radius` and
 `zncc_self_similarity_radius_middle` as floats, as `(3, 3)` float64 arrays with
 `NaN` in a cell with no reading `zncc_grid` and
@@ -2916,7 +3022,9 @@ modules run over the synthetic textured-plane scene that
 [bench/tests/scene.rs](../../../crates/sfmtool-core/src/bench/tests/scene.rs)
 builds, wrapped as an `embedded_patches` reconstruction whose stored keypoints
 are the exact projections, so what a commit should have written is known to the
-pixel.
+pixel. Its bitmap column holds each point's reference view's render, with that
+observation recorded as the point's reference, as `sfm embed-patches` writes
+them, so a point put on the bench has a bitmap to score its rows against.
 
 ### [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs)
 
@@ -2953,6 +3061,11 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
 - `bar_checks` passes and fails each bar, fails a `NaN`, and judges neither a
   missing reading nor the middle bar at `0`; the projection bar reads the reprojection
   error before the projection offset.
+- The bars judge the plain score against the bitmap: a row whose blur-matched
+  score and leave-one-out reading clear `min_zncc` and whose plain score does
+  not is turned out.
+- On a track with no bitmap no row has a score, each row the localizer read
+  says `NoBitmap`, and the evaluation's repaint moves no verdict.
 - `verdicts_if_unpinned` gives an unpinned row the painting's verdict, and a
   pinned one, `in` or `out`, with and without a competing sighting in its
   image, exactly what unpinning it and applying the thresholds makes it.
@@ -3254,6 +3367,19 @@ unit-tested in `normal.rs` itself.
   saves that reference.
 - Turning the reference row `out`, or deleting its image, leaves the track
   with no reference, and the next render sets the rule's pick.
+- A point's track comes on with every row pinned and keeps its stored
+  reference against the rule's pick render after render; unpinning the pick
+  and pinning it again does not make it the reference.
+- Unpinning the reference row moves the reference to the rule's pick at the
+  next render, which renders the bitmap from it and scores the old reference
+  against it.
+- With every row unpinned the reference follows the rule's pick at every
+  render.
+- `set_reference` pins the row and drops the stale bitmap; the next render is
+  from the row, while the rule's pick is still reported; setting it again
+  changes nothing; it is refused on an `out` row and at the cluster stage.
+- Every render's reference row reads `1` for the whole, the middle, every cell
+  and blur-matched, and every other `in` row reads below `1`.
 
 ### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
 

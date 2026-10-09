@@ -37,7 +37,8 @@ Two consumers read it. Every observation of a point is scored against the
 point's stored bitmap, the reference view's render
 ([reference-view.md](reference-view.md) § "The stored bitmap"), plain and
 blur-matched, with only the bitmap assessed and blurred (§ "Scores against the
-stored bitmap"); the bench reports both scores for every row it evaluates.
+stored bitmap"); the bench reports both scores for every row it evaluates,
+and its `min_zncc` bars judge the plain one.
 Member-coherence validation can read it, and does not by default
 ([member-coherence-validation.md](member-coherence-validation.md) § "Blur
 matching"). The reference-view rule reads plain agreement: blur matching was
@@ -132,7 +133,10 @@ pub fn windowed_zncc(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> f64;
 // patch::stored_bitmap: each observation against the stored bitmap.
 pub fn bitmap_planes(rgba: &[u8], resolution: usize) -> TilePlanes; // alpha > 0 is data
 pub struct BitmapScore {
-    pub zncc: f64, pub blur_matched_zncc: f64,
+    pub zncc: f64,
+    pub zncc_middle: f64,           // the same pair over the middle square, window weights
+    pub zncc_grid: [[f64; 3]; 3],   // and over each ninth, samples weighted equally
+    pub blur_matched_zncc: f64,     // the whole tile, the bitmap blurred to the observation
     pub blur_sigma: f64,            // the bitmap's blur, 0 where read plain
     pub sharper_than_bitmap: bool,  // read plain; a candidate to replace the reference
 }
@@ -410,26 +414,30 @@ is always read on the tile the bench shows.
 
 **An observation sharper than the bitmap** is read plain, neither tile blurred,
 and flagged (`sharper_than_bitmap`): it is a candidate to replace the
-reference, not a score. No render replaces a defined reference: a render
-renders from it, and the rule picks only for a point with none. No operation replaces a defined reference with the rule's current pick.
-Replacing it on the bench, by unpinning the reference row or with *Set as
-reference*, is proposed in
-[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 8, "The reference on the bench".
+reference, not a score. A score replaces no reference: a render renders from
+a defined reference, and the rule picks only for a point with none. On the
+bench the person replaces it, by unpinning the reference row, which hands it
+to the rule's pick, or with *Set as reference*
+([editable-track.md](../bench/editable-track.md) § "The stored bitmap's
+reference").
 
 **The reference's own score is 1** and is not computed: the bitmap is its tile.
 A bitmap that names no reference (a fused mean, one stored before the
 reference was recorded, or the render of an observation since removed from
 the point) scores every observation.
 
-**What reads the scores.** The bench writes both for every row it evaluates
-(`bitmap_zncc`, `blur_matched_bitmap_zncc`, `bitmap_blur_sigma`,
-`sharper_than_bitmap`; [editable-track.md](../bench/editable-track.md)), and
-Track View shows them in its *Bitmap* column. Nothing decides on them yet: the
-bench's `min_zncc` bars read the localizer's leave-one-out ZNCC, member
-coherence decides on its own matrix, and the per-observation covariance's
-`1 − ZNCC` is the localizer's peak; whether any of them should read the
-blur-matched score against the bitmap is an open question of
+**What reads the scores.** The bench writes both for every row it evaluates,
+as the row's score (`zncc`, with `zncc_middle` and `zncc_grid` read from the
+same pair over the middle square and each ninth, plain) and
+`blur_matched_zncc`, with `bitmap_blur_sigma` and `sharper_than_bitmap`
+([editable-track.md](../bench/editable-track.md)), and Track View shows them
+in its *ZNCC* column, plain and blur-matched. The bench's `min_zncc` bars,
+whole and middle, judge the **plain** score: it still falls for a view that is
+out of focus, which the bars are there to catch, where the blur-matched score
+would not. Member coherence decides on its own matrix, and the
+per-observation covariance's `1 − ZNCC` is the localizer's peak; whether
+either should read the blur-matched score against the bitmap is an open
+question of
 [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
 Part 6. Alignment never reads them.
 
@@ -755,15 +763,13 @@ row reads 1. The Python tests are in
 - **Directional blur.** No tile is blurred along one direction more than
   another. A view blurry along one direction only is read plain against a view
   sharp along it (§ "Which tile is blurred, and to what length").
-- **The bench's ZNCC bars.** A row's `zncc` is the localizer's leave-one-out
-  ZNCC against the IRLS-fused consensus of the other rows, scored inside the
-  localizer's search at the correlation peak. Blur-matching it would need each
-  row's leave-one-out template and its self-similarity reading, which the
-  localizer builds per round and does not return, and the bars would need
-  measuring again; the localizer is also the alignment, which stays unblurred.
-  Whether the bars should switch at all is an open question of Part 6 of
-  [../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md):
-  blur-matched, they would stop reacting to views that are out of focus.
+- **The bench's ZNCC bars blur-matched.** The bars judge each row's plain
+  score against the stored bitmap; blur-matched, they would stop reacting to
+  views that are out of focus. The localizer's leave-one-out ZNCC, which
+  places each row and which the bars judged before, is not blur-matched
+  either: it would need each row's leave-one-out template and its
+  self-similarity reading, which the localizer builds per round and does not
+  return, and the localizer is also the alignment, which stays unblurred.
 - **The fused means' IRLS residuals.** The stored bitmap is the reference
   view's tile, not a mean ([reference-view.md](reference-view.md) § "The
   stored bitmap"). The kernels that still build a weighted mean as their
