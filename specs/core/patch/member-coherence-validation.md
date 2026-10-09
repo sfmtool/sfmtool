@@ -795,4 +795,3 @@ leaving every pair plain, and the refusals.
 
 The validation judges a track at the size its patch was built at; no caller
 compares its readings across several patch sizes to choose a track's size.
-That use is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).

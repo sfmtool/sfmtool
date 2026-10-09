@@ -783,5 +783,4 @@ row reads 1. The Python tests are in
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.
 - **Choosing a patch's size.** No caller reads the blur-matched readings of a
-  track's views to decide how large its patch is; that use is proposed in
-  [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
+  track's views to decide how large its patch is.

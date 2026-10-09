@@ -770,7 +770,8 @@ patch in a strip the same world surfel.
 - **Choosing a size per track.** Every patch in a build is sized by the one
   `PatchExtent` policy and factor the caller passes; the build does not try
   several sizes for a track and keep the smallest one its readings support.
-  Choosing each track's half-extent from a short ladder of sizes is proposed in
+  A per-track floor on the half-extent, the smallest footprint at which the
+  patch's nine cells localise, is proposed in
   [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
 - **Two resolutions.** A cloud is rendered at the one grid resolution its
   caller passes; it carries no coarse and fine resolution over the same

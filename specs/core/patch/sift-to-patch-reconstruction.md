@@ -290,8 +290,8 @@ then discards them; it does not write the format's optional
 `observation_confidence` column.
 
 Every patch is sized at `patch_size` times its SIFT feature scale; the
-embedding does not choose a size per track. Choosing each track's size from a
-short ladder of sizes is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
+embedding does not choose a size per track. A per-track floor on the size, from
+a ladder of footprints in reference-view pixels, is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
 
 ## Implementation notes
 

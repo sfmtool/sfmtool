@@ -10,6 +10,10 @@ leave-one-track-out harness
 extends the open question "Framing a track" in
 [track-at-pixel.md](track-at-pixel.md), which links back here, and proposes a
 second, related operation: filling a surface outward from a seed patch.
+Choosing one footprint for every patch of a surface, above the floor at which
+each anchor's cells localise, is proposed in
+[surface-footprint-analysis.md](surface-footprint-analysis.md), which amends
+"Patch size, and where a surface ends" below and draws on this draft's grouping.
 
 A patch on a surface has a depth along each camera's ray and a normal, and the
 two are hard to find separately. With the normal wrong, the patch is warped

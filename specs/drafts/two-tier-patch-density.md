@@ -2,10 +2,11 @@
 
 **Status:** Draft. Decided:
 - a patch is sampled at one of two densities: a coarse tier of `R = 12` grid pixels per edge and a fine tier of `R = 24`, over the same half-extent in the world, so that upgrading a patch changes how finely its surface is read and not which surface it reads;
-- the coarse tier is where variety is cheap: candidate evaluation, footprint selection and the relaxation stages run there;
+- the coarse tier is where variety is cheap: candidate evaluation, the anchor floor and the relaxation stages run there;
 - the fine tier is where precision is bought: a survivor is upgraded, its normal re-estimated, its keypoints re-localised and only then bundle-adjusted;
 - a track is upgraded only when its footprint in the reference view's photograph covers at least `R_fine` pixels and its reference view's sharpness supports the finer grid; otherwise it stays coarse and the file says so;
-- the upgrade is one ordered step, resample then normal then keypoints then adjustment, and no consumer reads a fine bitmap whose keypoints were localised on the coarse one.
+- the upgrade is one ordered step, resample then normal then keypoints then adjustment, and no consumer reads a fine bitmap whose keypoints were localised on the coarse one;
+- the footprint is fixed by the anchor floor of [patch-footprint-selection.md](patch-footprint-selection.md) and the surface step of [surface-footprint-analysis.md](surface-footprint-analysis.md), and the tier only chooses the density at which that footprint is read.
 
 Not decided: whether a reconstruction stores both tiers or replaces the coarse bitmap on upgrade; whether the cluster-patches file carries a second size; whether `R_fine` is always double or chosen from the footprint. See [Open questions](#open-questions).
 
@@ -15,7 +16,9 @@ Amends:
 - [core/patch/patch-cloud.md](../core/patch/patch-cloud.md): the resolution a cloud is rendered at
 - [cli/reconstruction/embed-patches-command.md](../cli/reconstruction/embed-patches-command.md): the rounds
 
-Related drafts: [sharper-patch-bitmap.md](sharper-patch-bitmap.md) decides what the stored bitmap is and how views are scored against it; this draft decides at what density and does not restate that. [patch-footprint-selection.md](patch-footprint-selection.md) supplies the footprint in photograph pixels. [piece-gated-grid-normal.md](piece-gated-grid-normal.md) is the normal step of the upgrade and needs the fine tier for its per-cell radii.
+Amended by [surface-footprint-analysis.md](surface-footprint-analysis.md), which chooses the footprint the two tiers share.
+
+Related drafts: [sharper-patch-bitmap.md](sharper-patch-bitmap.md) decides what the stored bitmap is and how views are scored against it; this draft decides at what density and does not restate that. [patch-footprint-selection.md](patch-footprint-selection.md) supplies each anchor's floor, and [surface-footprint-analysis.md](surface-footprint-analysis.md) the footprint above it, in reference-view photograph pixels. [piece-gated-grid-normal.md](piece-gated-grid-normal.md) is the normal step of the upgrade and needs the fine tier for its per-cell radii.
 
 ## Purpose
 
@@ -23,7 +26,7 @@ A patch's bitmap is a square of `R × R` samples of the surface the patch covers
 
 Those two numbers are not in tension. They serve different stages. Early in a reconstruction's life the question is which of many candidates is right, and a cheap reading over all of them beats a precise reading over one. Late in its life the question is how precisely the survivor can be placed, and a finer reading of its surfaces is where precision comes from. This draft makes that split explicit: a coarse tier for breadth and a fine tier for depth, with a defined step between them.
 
-Fixing the half-extent across the two tiers is what makes the step a resampling rather than a re-embedding. A finer grid over the same square reads the same surface in more detail. A larger square at the same grid would read a different surface, with the planarity hazards that [patch-footprint-selection.md](patch-footprint-selection.md) handles.
+Fixing the half-extent across the two tiers is what makes the step a resampling rather than a re-embedding. A finer grid over the same square reads the same surface in more detail. A larger square at the same grid would read a different surface, with the planarity hazards that choosing the footprint for a whole surface, in [surface-footprint-analysis.md](surface-footprint-analysis.md), handles.
 
 ### Why this matters for the seed
 
@@ -42,7 +45,7 @@ A caller that performs stages 1 and 2 and skips 3 produces a reconstruction whos
 
 ### Refusing the upgrade
 
-A track is upgraded only when the footprint-selection reading says its reference view covers at least `R_fine` photograph pixels across the patch, and the reference view's blur-matched sharpness is finer than the coarse grid's spacing. A distant or blurred patch fails both and stays at `R = 12`; rendering it at 24 would interpolate, and a comparison against an interpolated bitmap rewards views that are equally blurred. The track's tier is recorded so a consumer knows which bitmaps are data.
+A track is upgraded only when its footprint, as the surface step sets it, covers in its reference view at least `R_fine` photograph pixels across the patch, and the reference view's blur-matched sharpness is finer than the coarse grid's spacing. A distant or blurred patch fails both and stays at `R = 12`; rendering it at 24 would interpolate, and a comparison against an interpolated bitmap rewards views that are equally blurred. The track's tier is recorded so a consumer knows which bitmaps are data.
 
 ### The coarse normal as a prior with a weight
 
@@ -56,7 +59,7 @@ A render, a ZNCC and a self-similarity sweep are `O(R²)` per view. The search c
 
 ### Why the half-extent is fixed
 
-The patch-size sweep in the project's records placed the elbow of quality against size near twelve times the detector scale, and [patch-footprint-selection.md](patch-footprint-selection.md) chooses the size per track from the same elbow. That choice is about which surface the patch covers. Density is about how finely that surface is read. Coupling them, so that an upgrade also widens the square, would reintroduce the planarity failures the size choice avoided and make every fine-tier reading incomparable with the coarse one it replaced.
+The patch-size sweep in the project's records placed the elbow of quality against size near twelve times the detector scale, and the hand-set sizes of the ground truths sit near a 12 px half-extent in the reference photograph. [patch-footprint-selection.md](patch-footprint-selection.md) sets a floor on the size per anchor and [surface-footprint-analysis.md](surface-footprint-analysis.md) chooses the size above it per surface. That choice is about which surface the patch covers. Density is about how finely that surface is read. Coupling them, so that an upgrade also widens the square, would reintroduce the planarity failures the size choice avoided and make every fine-tier reading incomparable with the coarse one it replaced.
 
 ### Evaluating on fixed populations
 
@@ -94,7 +97,7 @@ A track upgraded and then downgraded by rendering at 12 again gives bitmaps equa
 
 More than two tiers. Two cover the breadth-then-depth split; a third would need a use the first two do not serve.
 
-Changing the half-extent on upgrade. A patch that needs a different size is re-embedded through footprint selection.
+Changing the half-extent on upgrade. A patch that needs a different size is re-embedded at the footprint the surface step chooses.
 
 ## Open questions
 

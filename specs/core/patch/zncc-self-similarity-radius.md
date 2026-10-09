@@ -484,8 +484,8 @@ The bench's track and cluster evaluations fill every field for each observation 
 - It does not read pixels outside the bitmap it judges, even where a caller could render them.
 - It does not measure sub-pixel precision, which the sub-pixel refinement covers.
 - It does not change any file format.
-- No caller reads a track's radii at several patch sizes to choose the size;
-  that use is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
+- No caller reads a track's nine cell radii at several patch sizes to set a
+  floor on its size; that use is proposed in [patch-footprint-selection.md](../../drafts/patch-footprint-selection.md).
 
 ## Open questions
 
