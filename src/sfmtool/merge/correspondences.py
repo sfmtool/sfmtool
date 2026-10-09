@@ -1,39 +1,14 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Find and merge corresponding 3D points across multiple reconstructions."""
-
-from collections import defaultdict
+"""Find and group corresponding 3D points across multiple reconstructions."""
 
 import click
 import numpy as np
 
 from .._histogram_utils import print_histogram
+from .._point_correspondence import _finite_point_pairs
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._sfmtool.analysis import (
-    find_point_correspondences as _rust_find_point_correspondences,
-)
-
-
-def _find_pairwise_correspondences(
-    recon_a: SfmrReconstruction,
-    recon_b: SfmrReconstruction,
-    shared_images: list[tuple[int, int]],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Find corresponding point IDs between two reconstructions using Rust backend."""
-    shared_a = np.array([s for s, _ in shared_images], dtype=np.uint32)
-    shared_b = np.array([t for _, t in shared_images], dtype=np.uint32)
-
-    return _rust_find_point_correspondences(
-        recon_a.track_image_indexes.astype(np.uint32),
-        recon_a.track_feature_indexes.astype(np.uint32),
-        recon_a.track_point_indexes.astype(np.uint32),
-        recon_b.track_image_indexes.astype(np.uint32),
-        recon_b.track_feature_indexes.astype(np.uint32),
-        recon_b.track_point_indexes.astype(np.uint32),
-        shared_a,
-        shared_b,
-    )
 
 
 def find_point_correspondences(
@@ -44,7 +19,9 @@ def find_point_correspondences(
     """Find corresponding 3D points across reconstructions.
 
     Uses the Rust-backed pairwise point correspondence finder for each pair of
-    reconstructions, then groups results transitively using union-find.
+    reconstructions, then groups results transitively using union-find. A pair
+    in which either point is at infinity is dropped, because its position is a
+    direction and would distort the distance statistics.
 
     Returns:
         List of correspondence groups, where each group is a list of (recon_idx, point_id)
@@ -66,7 +43,7 @@ def find_point_correspondences(
     potential_correspondences = {}
 
     for (recon_idx1, recon_idx2), shared_images in pair_shared_images.items():
-        ids_1, ids_2 = _find_pairwise_correspondences(
+        ids_1, ids_2, _ = _finite_point_pairs(
             reconstructions[recon_idx1],
             reconstructions[recon_idx2],
             shared_images,
@@ -175,155 +152,3 @@ def _compute_group_max_distance(
     distances = np.linalg.norm(positions - centroid, axis=1)
 
     return np.max(distances)
-
-
-def merge_points_and_tracks(
-    reconstructions: list[SfmrReconstruction],
-    point_correspondences: list[list[tuple[int, int]]],
-    image_mapping: dict[str, list[tuple[int, int]]],
-) -> tuple[dict, dict]:
-    """Merge 3D points and tracks from multiple reconstructions.
-
-    Points that correspond across reconstructions are merged by averaging their
-    positions. A union-find structure ensures transitive merging when multiple
-    points share observations.
-    """
-    # Build reverse image mapping: (recon_idx, old_img_idx) -> merged_img_idx
-    reverse_image_mapping = {}
-    for merged_idx, (img_name, occurrences) in enumerate(image_mapping.items()):
-        for recon_idx, old_idx in occurrences:
-            if (recon_idx, old_idx) not in reverse_image_mapping:
-                reverse_image_mapping[(recon_idx, old_idx)] = merged_idx
-
-    merged_positions = []
-    merged_colors = []
-    merged_errors = []
-    merged_track_image_indexes = []
-    merged_track_feature_indexes = []
-    merged_track_point_indexes = []
-
-    merged_points_set = set()
-    obs_to_points = defaultdict(list)
-    temp_points = []
-
-    # Step 1: Create temporary points from correspondence groups
-    for group in point_correspondences:
-        positions = []
-        colors = []
-        errors = []
-        observations = []
-
-        for recon_idx, point_id in group:
-            recon = reconstructions[recon_idx]
-            positions.append(recon.positions[point_id])
-            colors.append(recon.colors[point_id])
-            errors.append(recon.errors[point_id])
-            merged_points_set.add((recon_idx, point_id))
-
-            mask = recon.track_point_indexes == point_id
-            for img_idx, feat_idx in zip(
-                recon.track_image_indexes[mask],
-                recon.track_feature_indexes[mask],
-            ):
-                if (recon_idx, img_idx) in reverse_image_mapping:
-                    merged_img_idx = reverse_image_mapping[(recon_idx, img_idx)]
-                    observations.append((merged_img_idx, feat_idx))
-
-        temp_point_id = len(temp_points)
-        temp_points.append(
-            {
-                "position": np.mean(positions, axis=0),
-                "color": np.mean(colors, axis=0).astype(np.uint8),
-                "error": np.mean(errors),
-                "observations": set(observations),
-            }
-        )
-
-        for obs in temp_points[temp_point_id]["observations"]:
-            obs_to_points[obs].append(temp_point_id)
-
-    # Step 2: Add unique points (not in any correspondence group)
-    for recon_idx, recon in enumerate(reconstructions):
-        for point_id in range(recon.point_count):
-            if (recon_idx, point_id) in merged_points_set:
-                continue
-
-            observations = []
-            mask = recon.track_point_indexes == point_id
-            for img_idx, feat_idx in zip(
-                recon.track_image_indexes[mask],
-                recon.track_feature_indexes[mask],
-            ):
-                if (recon_idx, img_idx) in reverse_image_mapping:
-                    merged_img_idx = reverse_image_mapping[(recon_idx, img_idx)]
-                    observations.append((merged_img_idx, feat_idx))
-
-            temp_point_id = len(temp_points)
-            temp_points.append(
-                {
-                    "position": recon.positions[point_id],
-                    "color": recon.colors[point_id],
-                    "error": recon.errors[point_id],
-                    "observations": set(observations),
-                }
-            )
-
-            for obs in temp_points[temp_point_id]["observations"]:
-                obs_to_points[obs].append(temp_point_id)
-
-    # Step 3: Union-find to merge points that share observations
-    parent = list(range(len(temp_points)))
-
-    def find(x):
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-
-    def union(x, y):
-        px, py = find(x), find(y)
-        if px != py:
-            parent[py] = px
-
-    for obs, point_ids in obs_to_points.items():
-        if len(point_ids) > 1:
-            for i in range(1, len(point_ids)):
-                union(point_ids[0], point_ids[i])
-
-    # Step 4: Group points by their root
-    point_groups = defaultdict(list)
-    for i in range(len(temp_points)):
-        root = find(i)
-        point_groups[root].append(i)
-
-    # Step 5: Create final merged points
-    for root, point_ids in point_groups.items():
-        positions = [temp_points[i]["position"] for i in point_ids]
-        colors = [temp_points[i]["color"] for i in point_ids]
-        errors = [temp_points[i]["error"] for i in point_ids]
-        all_observations = set()
-        for i in point_ids:
-            all_observations.update(temp_points[i]["observations"])
-
-        merged_point_id = len(merged_positions)
-        merged_positions.append(np.mean(positions, axis=0))
-        merged_colors.append(np.mean(colors, axis=0).astype(np.uint8))
-        merged_errors.append(np.mean(errors))
-
-        for merged_img_idx, feat_idx in all_observations:
-            merged_track_image_indexes.append(merged_img_idx)
-            merged_track_feature_indexes.append(feat_idx)
-            merged_track_point_indexes.append(merged_point_id)
-
-    merged_points = {
-        "positions": np.array(merged_positions),
-        "colors": np.array(merged_colors, dtype=np.uint8),
-        "errors": np.array(merged_errors),
-    }
-
-    merged_tracks = {
-        "image_indexes": np.array(merged_track_image_indexes, dtype=np.int32),
-        "feature_indexes": np.array(merged_track_feature_indexes, dtype=np.int32),
-        "point_indexes": np.array(merged_track_point_indexes, dtype=np.int32),
-    }
-
-    return merged_points, merged_tracks

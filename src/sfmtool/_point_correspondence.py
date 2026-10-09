@@ -33,6 +33,42 @@ def _finite_pair_mask(
     return ~(src_inf[source_ids] | tgt_inf[target_ids])
 
 
+def _finite_point_pairs(
+    source_recon: SfmrReconstruction,
+    target_recon: SfmrReconstruction,
+    shared_images: list[tuple[int, int]],
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Pair the two reconstructions' 3D points that share a feature observation.
+
+    Calls the Rust feature-index finder on the shared image pairs, then drops
+    every pair whose source or target point is at infinity (see
+    :func:`_finite_pair_mask`).
+
+    Returns:
+        Tuple of the parallel ``source_ids`` and ``target_ids`` arrays of the
+        finite pairs, and the number of pairs found before the infinity filter.
+    """
+    shared_src = np.array([s for s, _ in shared_images], dtype=np.uint32)
+    shared_tgt = np.array([t for _, t in shared_images], dtype=np.uint32)
+
+    source_ids, target_ids = _rust_find_point_correspondences(
+        source_recon.track_image_indexes.astype(np.uint32),
+        source_recon.track_feature_indexes.astype(np.uint32),
+        source_recon.track_point_indexes.astype(np.uint32),
+        target_recon.track_image_indexes.astype(np.uint32),
+        target_recon.track_feature_indexes.astype(np.uint32),
+        target_recon.track_point_indexes.astype(np.uint32),
+        shared_src,
+        shared_tgt,
+    )
+    found_count = len(source_ids)
+    if found_count == 0:
+        return source_ids, target_ids, 0
+
+    finite = _finite_pair_mask(source_recon, source_ids, target_recon, target_ids)
+    return source_ids[finite], target_ids[finite], found_count
+
+
 def find_point_correspondences(
     source_recon: SfmrReconstruction,
     target_recon: SfmrReconstruction,
@@ -58,31 +94,18 @@ def find_point_correspondences(
     Raises:
         ValueError: If no point correspondences are found
     """
-    shared_src = np.array([s for s, _ in shared_images], dtype=np.uint32)
-    shared_tgt = np.array([t for _, t in shared_images], dtype=np.uint32)
-
-    source_ids, target_ids = _rust_find_point_correspondences(
-        source_recon.track_image_indexes.astype(np.uint32),
-        source_recon.track_feature_indexes.astype(np.uint32),
-        source_recon.track_point_indexes.astype(np.uint32),
-        target_recon.track_image_indexes.astype(np.uint32),
-        target_recon.track_feature_indexes.astype(np.uint32),
-        target_recon.track_point_indexes.astype(np.uint32),
-        shared_src,
-        shared_tgt,
+    # Pairs involving a point at infinity are dropped: its position is a
+    # direction, not a metric location, and would corrupt any positional or
+    # similarity use.
+    source_ids, target_ids, found_count = _finite_point_pairs(
+        source_recon, target_recon, shared_images
     )
 
-    if len(source_ids) == 0:
+    if found_count == 0:
         raise ValueError(
             "No point correspondences found. "
             "This may indicate no shared features or incompatible reconstructions."
         )
-
-    # Drop pairs involving a point at infinity: its position is a direction, not
-    # a metric location, and would corrupt any positional/similarity use.
-    finite = _finite_pair_mask(source_recon, source_ids, target_recon, target_ids)
-    source_ids = source_ids[finite]
-    target_ids = target_ids[finite]
     if len(source_ids) == 0:
         raise ValueError(
             "No finite point correspondences found "

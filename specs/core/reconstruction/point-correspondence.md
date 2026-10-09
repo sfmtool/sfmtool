@@ -74,7 +74,10 @@ points-at-infinity filter applies.
 `sfm merge` generalizes pairwise correspondences to N reconstructions:
 
 1. For every reconstruction pair sharing images, run the Rust pairwise
-   finder.
+   finder through `_finite_point_pairs` in `_point_correspondence.py`, the
+   same helper the pairwise wrapper uses, which drops each pair with a point
+   at infinity. Such a point's position is a unit direction, so it would
+   distort the distance statistics in step 3.
 2. Union the pairwise results transitively into **correspondence groups** —
    sets of `(recon_idx, point_id)` representing one physical point.
 3. **Percentile-filter** the groups: for each multi-point group, compute the
@@ -106,10 +109,14 @@ Because the merge keys observations on `(image, feature_index)` identity,
 feature indexes, and substituting a placeholder would collapse distinct
 observations within an image.
 
-> Note: `merge/correspondences.py` still contains a pure-Python
-> `merge_points_and_tracks` — the superseded reference implementation of the
-> same algorithm. The live path (`merge/reconstructions.py`) calls the Rust
-> binding of the same name in `sfmtool.analysis`.
+The merged point set carries no `w`: positions are averaged as `[f64; 3]`
+and `merge/reconstructions.py` stores them as Euclidean, so a point at
+infinity comes out of `sfm merge` as a finite point at unit distance along its
+direction, and pose refinement uses it in PnP as one. Dropping its pairs in
+the grouping step does not prevent this, because step 3 above still merges
+the copies of a point that share an observation. `tests/test_merge.py`
+records this as a strict `xfail`
+(`test_merge_keeps_points_at_infinity`).
 
 ## Consumers
 

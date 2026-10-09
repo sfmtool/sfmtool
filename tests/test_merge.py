@@ -535,3 +535,126 @@ class TestMergeCLI:
         )
         assert result.exit_code == 0, result.output
         assert output_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Points at infinity
+# ---------------------------------------------------------------------------
+
+
+def _subsets_with_points_at_infinity(original_path, tmp_path):
+    """Split the reconstruction into images 1-10 and 6-17 after moving some
+    points seen in both halves to infinity.
+
+    Returns ``(original, subset_a, subset_b, infinite_ids)``, where
+    ``original`` is the reconstruction with the points at infinity and
+    ``infinite_ids`` are their point ids in it.
+    """
+    original = SfmrReconstruction.load(original_path)
+    image_indexes = np.asarray(original.track_image_indexes)
+    point_indexes = np.asarray(original.track_point_indexes)
+    # Points observed in at least two of images 6-10 (indexes 5-9) appear in
+    # both subsets with tracks long enough to survive the split.
+    in_overlap = (image_indexes >= 5) & (image_indexes <= 9)
+    overlap_counts = np.bincount(
+        point_indexes[in_overlap], minlength=original.point_count
+    )
+    infinite_ids = np.flatnonzero(overlap_counts >= 2)[:10]
+    assert len(infinite_ids) == 10
+
+    xyzw = np.array(original.positions_xyzw, dtype=np.float64)
+    directions = xyzw[infinite_ids, :3]
+    xyzw[infinite_ids, :3] = directions / np.linalg.norm(
+        directions, axis=1, keepdims=True
+    )
+    xyzw[infinite_ids, 3] = 0.0
+    original = original.clone_with_changes(positions=xyzw)
+    assert original.point_is_at_infinity.sum() == len(infinite_ids)
+
+    original_path = tmp_path / "with_infinity.sfmr"
+    original.save(original_path, operation="infinity_test")
+    subsets = []
+    for name, range_expr in (("subset_a", "1-10"), ("subset_b", "6-17")):
+        path = tmp_path / f"{name}.sfmr"
+        _apply_transforms_to_file(
+            original_path, path, [IncludeRangeFilter(RangeExpr(range_expr))]
+        )
+        subset = SfmrReconstruction.load(path)
+        assert subset.point_is_at_infinity.any()
+        subsets.append(subset)
+    return original, subsets[0], subsets[1], infinite_ids
+
+
+def _merged_point_ids(original, merged, point_ids):
+    """Map each original point id to the merged point that holds its
+    observations, keyed on (image name, feature index)."""
+    merged_by_obs = {
+        (Path(merged.image_names[i]).name, int(f)): int(p)
+        for i, f, p in zip(
+            merged.track_image_indexes,
+            merged.track_feature_indexes,
+            merged.track_point_indexes,
+        )
+    }
+    result = {}
+    for i, f, p in zip(
+        original.track_image_indexes,
+        original.track_feature_indexes,
+        original.track_point_indexes,
+    ):
+        if int(p) in point_ids and int(p) not in result:
+            result[int(p)] = merged_by_obs[(Path(original.image_names[i]).name, int(f))]
+    return result
+
+
+class TestMergePointsAtInfinity:
+    def test_correspondence_groups_exclude_points_at_infinity(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """The pairwise step drops pairs with a point at infinity, so no
+        correspondence group holds one."""
+        from sfmtool.merge.correspondences import find_point_correspondences
+
+        _, subset_a, subset_b, _ = _subsets_with_points_at_infinity(
+            seoul_bull_workspace, tmp_path
+        )
+        recons = [subset_a, subset_b]
+        image_mapping = {}
+        for recon_idx, recon in enumerate(recons):
+            for img_idx, name in enumerate(recon.image_names):
+                image_mapping.setdefault(Path(name).as_posix(), []).append(
+                    (recon_idx, img_idx)
+                )
+
+        groups = find_point_correspondences(recons, image_mapping, 100.0)
+
+        assert len(groups) > 0
+        for group in groups:
+            for recon_idx, point_id in group:
+                assert not recons[recon_idx].point_is_at_infinity[point_id]
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "merge_points_and_tracks in sfmtool-core averages positions as "
+            "[f64; 3] and drops w, so a point at infinity comes out as a finite "
+            "point at unit distance along its direction. Fixing it needs a rule "
+            "for merging a finite point with a point at infinity that shares "
+            "its observations, and pose refinement must leave points at "
+            "infinity out of PnP."
+        ),
+    )
+    def test_merge_keeps_points_at_infinity(self, seoul_bull_workspace, tmp_path):
+        original, subset_a, subset_b, infinite_ids = _subsets_with_points_at_infinity(
+            seoul_bull_workspace, tmp_path
+        )
+
+        merged = merge_reconstructions(reconstructions=[subset_a, subset_b])
+
+        mapping = _merged_point_ids(original, merged, set(infinite_ids.tolist()))
+        assert len(mapping) == len(infinite_ids)
+        for orig_id, merged_id in mapping.items():
+            assert merged.point_is_at_infinity[merged_id]
+            assert np.allclose(
+                merged.positions[merged_id], original.positions[orig_id], atol=1e-6
+            )
