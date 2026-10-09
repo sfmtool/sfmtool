@@ -173,11 +173,11 @@ camera for the same reason, so a caller offering the releases as choices can
 grey each choice on its own camera instead of taking it and refusing.
 
 **The distortion is released only with the focal, per camera.** The kernel has
-two distortion rungs, each exact on its own models: `opt_k1` frees `k1` on
+two distortion releases, each exact on its own models: `opt_k1` frees `k1` on
 `SIMPLE_RADIAL_FISHEYE`, and `opt_bspline` frees the spline on `SFMTOOL_FISHEYE`
 and `SFMTOOL_PINHOLE`. No model carries both, so a caller here asks one
 question per camera, whether its lens distortion moves, and
-`CameraRelease::distortion` reaches both rungs. Neither `k1` nor the spline can
+`CameraRelease::distortion` reaches both. Neither `k1` nor the spline can
 change the scale at the centre of the image, which is the focal's job:
 `θ·(1 + k1·θ²)` has slope one on the axis, and the spline's gauge pins its value
 and slope there. A distortion released against a held focal could only bend the
@@ -527,7 +527,7 @@ untouched -- and the no-keypoints refusal.
 ## Non-goals
 
 - Releasing the distortion of the multi-coefficient models (`RADIAL`,
-  `OPENCV`, `OPENCV_FISHEYE`, …). The kernel has no rung exact for them; switch
+  `OPENCV`, `OPENCV_FISHEYE`, …). The kernel has no release exact for them; switch
   the camera to a spline model first
   ([`switch-camera-model.md`](switch-camera-model.md)).
 - Finding new points at infinity. The storage decision re-decides the
