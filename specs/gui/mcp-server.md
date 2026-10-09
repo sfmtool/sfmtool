@@ -1804,6 +1804,41 @@ yet. What a stage is, what folds and what `elsewhere` means are
 The case it exists for is the second call: an agent reads the log, finds a slow
 row, and asks again with `detail` set and `since_revision` just below that row.
 
+**`actors` filters by who did it.** A set of the Action Log's three actors
+(`Actor::wire_name`: `user`, `mcp`, `viewer`), and an entry is returned when its
+actor is in the set. Omitted, it is all three, which is the whole log; an empty
+set is refused at the parse, since a call that can return nothing by
+construction has not asked a question. The read an agent makes most is
+`actors: ["user"]`: what the human did, with none of the agent's own rows in it
+— and since every query is the agent's, that filter is also what keeps a polling
+loop's `get_scene` rows out of the answer without a switch of their own.
+`actors: ["mcp"]` is the agent auditing itself, queries and refusals included,
+`tool` beside `kind` on the query rows. `viewer` is the small third set the log
+already keeps apart in its actor column: the session lines, and an animation
+running out of images ([action-log.md](action-log.md)).
+
+No `kinds` filter, for the same reason the panel has none: at one second of
+coalescing, a session's log is readable whole.
+
+**`oldest_revision`** is the revision of the oldest entry still held. An agent
+whose `since_revision` is older than it has missed entries — dropped past
+`CAPACITY`, or gone with the toolbar's Clear — and can say so rather than
+assuming the gap was quiet. The counter never resets, Clear included.
+
+**`get_action_log` is a read and is recorded as one**, a `Query` entry
+`get_action_log since 512`, coalescing per tool like every other read but
+`screenshot` — so a poll is one row, however often it asks — and out of its
+own reply under
+`actors: ["user"]`. A read of the log that the log did not record would be the
+one action the human could not see. The row is written after the reply is built,
+so a call never reports itself and always reports the one before it.
+
+**`get_scene` carries the revision.** One field, `action_log_revision`, beside
+`status_message`, so an agent that already reads `get_scene` knows whether
+anything happened since its last `get_action_log` without a second call.
+`status_message` stays: it is the status line, which is a different thing from
+the log.
+
 ### `get_background_task`
 
 What the viewer is busy with. One operation runs at a time, viewer-wide
@@ -1898,9 +1933,35 @@ know how many there are, and the whole block absent where it reports no count.
 `status`, `phase` and `progress` are all absent rather than null where the
 operation has said nothing.
 
+### `cancel_background_task`
+
+The Background Task panel's Cancel button. It takes no arguments, because one
+operation runs at a time.
+
+```jsonc
+// cancel_background_task {}
+{
+  "cancelling": "Bundle adjust",                  // the operation asked to stop
+  "reconstruction_label": "dino_dog_toy-embedded",
+  "operation_id": 2                               // the id its handle carried
+}
+```
+
+The reply says the request was made, not that the operation has stopped: the
+operation stops at its next poll of the cancel flag, writes a failed Action Log
+entry and pushes no version, and `get_background_task` reports it as finished
+with `failed: true` once it has. A run that finishes before it next polls the
+flag lands as it would have without the request. With nothing running it refuses with *"Nothing
+is running in the background."*, and for an operation that never polls the flag
+with *"{operation} cannot be cancelled: it never asks whether it should stop."*,
+the sentence the button's tooltip carries (`AppState::cancel_refusal` in
+[background/mod.rs](../../crates/sfm-explorer/src/background/mod.rs)).
+`get_background_task`'s `cancellable` says beforehand which of the two a call
+would get.
+
 ### `get_timing_detail`, `set_timing_detail`
 
-`detail` above asks for what was *recorded*. This pair decides what gets
+`get_action_log`'s `detail` asks for what was *recorded*. This pair decides what gets
 recorded: `set_timing_detail { "enabled": true }` turns on the stages too fine
 to carry always, and `get_timing_detail` reads the level back. Both answer
 `{ "timing_detail": { "enabled": false } }`.
@@ -1914,41 +1975,6 @@ nothing from a row that has it.
 Together they are how an agent investigates a slow operation without a restart
 and without an environment variable: turn detail on, run the operation, read the
 log with `detail`, turn it off.
-
-**`actors` filters by who did it.** A set of the Action Log's three actors
-(`Actor::wire_name`: `user`, `mcp`, `viewer`), and an entry is returned when its
-actor is in the set. Omitted, it is all three, which is the whole log; an empty
-set is refused at the parse, since a call that can return nothing by
-construction has not asked a question. The read an agent makes most is
-`actors: ["user"]`: what the human did, with none of the agent's own rows in it
-— and since every query is the agent's, that filter is also what keeps a polling
-loop's `get_scene` rows out of the answer without a switch of their own.
-`actors: ["mcp"]` is the agent auditing itself, queries and refusals included,
-`tool` beside `kind` on the query rows. `viewer` is the small third set the log
-already keeps apart in its actor column: the session lines, and an animation
-running out of images ([action-log.md](action-log.md)).
-
-No `kinds` filter, for the same reason the panel has none: at one second of
-coalescing, a session's log is readable whole.
-
-**`oldest_revision`** is the revision of the oldest entry still held. An agent
-whose `since_revision` is older than it has missed entries — dropped past
-`CAPACITY`, or gone with the toolbar's Clear — and can say so rather than
-assuming the gap was quiet. The counter never resets, Clear included.
-
-**`get_action_log` is a read and is recorded as one**, a `Query` entry
-`get_action_log since 512`, coalescing per tool like every other read but
-`screenshot` — so a poll is one row, however often it asks — and out of its
-own reply under
-`actors: ["user"]`. A read of the log that the log did not record would be the
-one action the human could not see. The row is written after the reply is built,
-so a call never reports itself and always reports the one before it.
-
-**`get_scene` carries the revision.** One field, `action_log_revision`, beside
-`status_message`, so an agent that already reads `get_scene` knows whether
-anything happened since its last `get_action_log` without a second call.
-`status_message` stays: it is the status line, which is a different thing from
-the log.
 
 ### `screenshot`
 
@@ -2861,8 +2887,18 @@ human's. Neither is special-cased anywhere.
   "cursor": "v7",                       // and it is what the node now shows
   "label": "Deleted point 1207 in seoul_bull",
   "dirty": true,                        // the cursor is off the version on disk
-  "report": "Deleted point 1207 in seoul_bull (v6 → v7)" }
+  "report": "Deleted point 1207 in seoul_bull (v6 → v7)",
+  "changed": true }                     // whether the cursor moved
 ```
+
+**`changed` is whether the call moved the history.** It is read off the cursor
+before and after the call, or, for an edit that runs on a worker, off whether
+the run pushed a version. An edit that was allowed to run and found nothing to
+do pushes no version and answers `changed: false`, with `serial` and `cursor`
+the version the node still stands at and `report` the edit's own no-effect
+sentence, so an agent tells the two cases apart without comparing serials
+across calls ([bench.md](bench.md) § "The wire"). The cursor moves below
+(`undo`, `redo`, `jump_to_version`) answer without it.
 
 **`report` is the sentence the edit recorded**, and it is where each family's own
 numbers are: the commit's account of the track it wrote, the
@@ -3115,7 +3151,8 @@ Log line, the same undo, with the pose sent rather than steered.
   "cursor": "v8",
   "label": "Moved camera IMG_0004.jpg (seoul_bull): 3.20 deg, 0.140 scene units",
   "dirty": true,
-  "report": "Moved camera IMG_0004.jpg (seoul_bull): 3.20 deg, 0.140 scene units, 214 points re-solved, residual 1.9 → 0.8 px (v7 → v8)"
+  "report": "Moved camera IMG_0004.jpg (seoul_bull): 3.20 deg, 0.140 scene units, 214 points re-solved, residual 1.9 → 0.8 px (v7 → v8)",
+  "changed": true
 }
 ```
 
@@ -3182,85 +3219,6 @@ Index Files (the Index Files row in the Scene tree) makes it."* -- and
 `build_index_files` is the call that makes it. The image menu itself is not on
 the wire: its four entries are the tools `resect_camera_image`,
 `add_camera_image_to_tracks`, `move_camera_image` and `delete_camera_image`.
-
-### `switch_camera_model`
-
-```jsonc
-// switch_camera_model { "reconstruction_label": "kerry_park",
-//                       "camera_intrinsics_index": 0,
-//                       "camera_model": "SFMTOOL_FISHEYE",
-//                       "coeff_count": 8 }
-// switch_camera_model { "reconstruction_label": "kerry_park",
-//                       "camera_intrinsics_index": 0, "coeff_count": 12,
-//                       "spline_domain_deg": 108.8 }
-```
-
-One camera switched to a model fitted to it, applied directly as the node's
-next version ([edits/switch-camera-model.md](edits/switch-camera-model.md)), by
-the reconstruction-level switch
-([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)).
-Poses, points, keypoints and tracks do not move, and nothing is renumbered
-unless a point edit is pending (§ "The editing family"); the
-stored errors of the points the camera's images observe are recomputed. It is
-the step the Camera Intrinsics panel's `Refit spline…` takes, with any target
-model.
-
-- `camera_intrinsics_index` names the camera, as `get_camera_intrinsics` takes
-  it.
-- `camera_model` is the target, case-insensitive. Omitted, it is the camera's own
-  model, and for an `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` camera the switch is
-  then a **refit of its spline**: fitted over the whole new domain and kept
-  monotone.
-- `coeff_count` is a spline target's coefficient count. Omitted, it is the
-  camera's own count when the target is its own spline model, and 8 otherwise.
-- `spline_domain_deg` is where a spline target's domain ends, as an incidence
-  angle. Omitted, a refit keeps the camera's own domain end exactly, and a
-  change of model puts it at the far image corner. `get_camera_intrinsics`
-  reports the outermost keypoint an agent sets it from.
-- `theta_fit_deg` is the largest angle the fit samples. Omitted, it is the
-  core switch's default; given, even a refit of a spline is fitted over that
-  angle alone.
-
-The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
-`fit` object beside it: `camera_intrinsics_index`, `camera_model_before`,
-`camera_model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
-refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
-distance from the old over the fit), `monotone_constraint` (`active`,
-`active_angles`, `range_deg`), and `observations` with
-`median_error_before_px` and `median_error_after_px` over them. The label reads
-`Refit spline of camera 0 of kerry_park: 8 → 12 coefficients, domain 150.2° →
-108.8°` for a refit, naming a part it kept as kept, and `Switched camera 0 of
-kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model. A
-camera the node does not have, a count on a model without a spline, and a
-domain end the model cannot have are refused naming the camera, and push
-nothing. It runs on the GUI thread: a fit takes milliseconds.
-
-### `add_camera_image_to_tracks`
-
-```jsonc
-// add_camera_image_to_tracks { "reconstruction_label": "kerry_park",
-//                              "camera_image": "fisheye_left/frame_23.jpg" }
-```
-
-The image menu's `Add Image to Tracks`
-([edits/add-image-to-tracks.md](edits/add-image-to-tracks.md)): every point the
-image does not observe is looked for in its photograph, and the sightings that
-agree with the point's other observations are added, as the node's next
-version. Nothing else moves and no index of its own moves, so image indexes
-read before the call still mean what they meant, and point indexes do too
-unless a point edit was pending, whose deleted slots close up first
-(§ "The editing family"). It is the call to make
-after `resect_camera_image`. It refuses, in the greyed entry's words, an unposed
-image, a node with no points, a `sift_files` node, a node with no patch frames
-and an image whose photograph cannot be found.
-
-**It runs on a worker thread** and replies the way `bundle_adjust` does (below):
-with the version and the Action Log sentence when it finishes within 200 ms,
-with a `running: true` handle otherwise, and `cancel_background_task` stops it.
-A call that adds nothing pushes no version and answers `changed: false` at the
-version the node still stands at. The Action Log row reads *"Added
-frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
-edge, 21 below bar, ...)"*.
 
 `bundle_adjust` is the node's own solver run over the value on screen
 ([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the decisions the
@@ -3343,6 +3301,85 @@ thread, and a reconstruction large enough to take more than the apply timeout
 will still time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_reconstruction_history` rather than
 retry, since the version may well have been pushed.
+
+### `switch_camera_model`
+
+```jsonc
+// switch_camera_model { "reconstruction_label": "kerry_park",
+//                       "camera_intrinsics_index": 0,
+//                       "camera_model": "SFMTOOL_FISHEYE",
+//                       "coeff_count": 8 }
+// switch_camera_model { "reconstruction_label": "kerry_park",
+//                       "camera_intrinsics_index": 0, "coeff_count": 12,
+//                       "spline_domain_deg": 108.8 }
+```
+
+One camera switched to a model fitted to it, applied directly as the node's
+next version ([edits/switch-camera-model.md](edits/switch-camera-model.md)), by
+the reconstruction-level switch
+([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)).
+Poses, points, keypoints and tracks do not move, and nothing is renumbered
+unless a point edit is pending (§ "The editing family"); the
+stored errors of the points the camera's images observe are recomputed. It is
+the step the Camera Intrinsics panel's `Refit spline…` takes, with any target
+model.
+
+- `camera_intrinsics_index` names the camera, as `get_camera_intrinsics` takes
+  it.
+- `camera_model` is the target, case-insensitive. Omitted, it is the camera's own
+  model, and for an `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` camera the switch is
+  then a **refit of its spline**: fitted over the whole new domain and kept
+  monotone.
+- `coeff_count` is a spline target's coefficient count. Omitted, it is the
+  camera's own count when the target is its own spline model, and 8 otherwise.
+- `spline_domain_deg` is where a spline target's domain ends, as an incidence
+  angle. Omitted, a refit keeps the camera's own domain end exactly, and a
+  change of model puts it at the far image corner. `get_camera_intrinsics`
+  reports the outermost keypoint an agent sets it from.
+- `theta_fit_deg` is the largest angle the fit samples. Omitted, it is the
+  core switch's default; given, even a refit of a spline is fitted over that
+  angle alone.
+
+The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
+`fit` object beside it: `camera_intrinsics_index`, `camera_model_before`,
+`camera_model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
+refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
+distance from the old over the fit), `monotone_constraint` (`active`,
+`active_angles`, `range_deg`), and `observations` with
+`median_error_before_px` and `median_error_after_px` over them. The label reads
+`Refit spline of camera 0 of kerry_park: 8 → 12 coefficients, domain 150.2° →
+108.8°` for a refit, naming a part it kept as kept, and `Switched camera 0 of
+kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model. A
+camera the node does not have, a count on a model without a spline, and a
+domain end the model cannot have are refused naming the camera, and push
+nothing. It runs on the GUI thread: a fit takes milliseconds.
+
+### `add_camera_image_to_tracks`
+
+```jsonc
+// add_camera_image_to_tracks { "reconstruction_label": "kerry_park",
+//                              "camera_image": "fisheye_left/frame_23.jpg" }
+```
+
+The image menu's `Add Image to Tracks`
+([edits/add-image-to-tracks.md](edits/add-image-to-tracks.md)): every point the
+image does not observe is looked for in its photograph, and the sightings that
+agree with the point's other observations are added, as the node's next
+version. Nothing else moves and no index of its own moves, so image indexes
+read before the call still mean what they meant, and point indexes do too
+unless a point edit was pending, whose deleted slots close up first
+(§ "The editing family"). It is the call to make
+after `resect_camera_image`. It refuses, in the greyed entry's words, an unposed
+image, a node with no points, a `sift_files` node, a node with no patch frames
+and an image whose photograph cannot be found.
+
+**It runs on a worker thread** and replies the way `bundle_adjust` does
+(§ "`resect_camera_image` / `bundle_adjust`"): with the version and the Action Log sentence when it finishes within 200 ms,
+with a `running: true` handle otherwise, and `cancel_background_task` stops it.
+A call that adds nothing pushes no version and answers `changed: false` at the
+version the node still stands at. The Action Log row reads *"Added
+frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
+edge, 21 below bar, ...)"*.
 
 ### `convert_to_embedded_patches`
 
@@ -3729,6 +3766,20 @@ same track is not. `fit_bench_track` and `set_bench_track_stage` take an optiona
 test weights the sightings at in place of the reconstruction's measured
 reprojection noise; a reconstruction holding no finite point measures none, and
 a fit or upgrade there without it fails, saying so.
+
+**`fit_bench_track_normal` turns the patch and keeps its centre.** It is Track
+View's *Fit Normal*, *Finite Diff Normal* and *Grid Plane Normal*, chosen by the
+required `method`: `photometric`, `finite_difference` or `grid_plane`. The two
+piece methods take `pieces` (default 2) and `overlap_percent` (default 0), and
+`photometric` refuses either. It is refused in the call, before a photograph is
+read, at the cluster stage, with no patch yet, at infinity and with fewer than
+two `in` observations, in a sentence that starts *"Cannot fit the normal of …"*, *"Cannot
+take the finite-difference normal of …"* or *"Cannot take the grid-plane normal
+of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
+does: inside the reply window, an edit's reply (`serial`, `cursor`, `label`,
+`dirty`, `report`, `changed`), and after it a `running: true` handle whose
+`operation` is `Fit normal`, `Finite difference normal` or `Grid plane normal`.
+Like the other bench steps that run on a worker, the reply carries no `item`.
 
 **A fit's sentence names the representation the rays earned.** Finite or at
 infinity is the decision a fit makes over a distant track
