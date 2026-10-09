@@ -460,6 +460,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Add a registration test that refuses the retired spellings.
 - Effort: medium. Risk: medium, because `bundle_adjust` and `CameraViews` have keyword callers.
 
+> _Status (2026-10-09): **Partially done** — `match_image_pairs_batch` now checks list lengths, pair image indexes and camera indexes (negative or out of range) and raises `ValueError` instead of `PanicException`; it still takes `int64` camera indexes, branch `hygiene-fix-1009-03-pair-index-range-check`; the keyword spellings (`camera_indexes`/`camera_indices`/`image_camera`, `quaternions_wxyz`/`quats_wxyz`, `translations`/`translations_xyz`, `obs_*`/`track_*_indexes`) and the switch to `uint32` still need a maintainer decision._
+
 **Map format errors to one Python exception table**
 - Location: `crates/sfmtool-py/src/io/{sfmr,sift,matches,camrig}.rs`, `spatial/kdf.rs:55`, and each format crate's `types.rs`.
 - Problem:

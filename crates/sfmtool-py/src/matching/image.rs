@@ -127,6 +127,14 @@ pub fn match_image_pair_py(
 ///
 /// This is the batch version of `match_image_pair` that processes all pairs
 /// concurrently, releasing the GIL so Rayon threads can run in parallel.
+///
+/// Raises:
+///     ValueError: The per-image lists (``rotations``, ``translations``,
+///         ``camera_indices``, ``positions_list``, ``descriptors_list`` and
+///         ``affines_list`` when given) differ in length, the per-camera lists
+///         (``intrinsics``, ``widths``, ``heights``) differ in length, a pair
+///         names an image index out of range, or a camera index is negative
+///         or out of range.
 #[pyfunction]
 #[pyo3(name = "match_image_pairs_batch")]
 #[pyo3(signature = (pairs, intrinsics, rotations, translations, camera_indices,
@@ -182,7 +190,25 @@ pub fn match_image_pairs_batch_py(
         .collect();
 
     let cam_idx_data = to_contiguous!(camera_indices);
-    let cam_idx: Vec<usize> = cam_idx_data.iter().map(|&x| x as usize).collect();
+    let mut per_image_lens = vec![
+        ("rotations", rotations.len()),
+        ("translations", translations.len()),
+        ("positions_list", positions_list.len()),
+        ("descriptors_list", descriptors_list.len()),
+    ];
+    if let Some(affines) = &affines_list {
+        per_image_lens.push(("affines_list", affines.len()));
+    }
+    let cam_idx = check_batch_indexes(
+        &pairs,
+        &cam_idx_data,
+        &per_image_lens,
+        &[
+            ("intrinsics", intrinsics.len()),
+            ("widths", widths.len()),
+            ("heights", heights.len()),
+        ],
+    )?;
 
     // Get contiguous data for positions and descriptors
     let pos_cows: Vec<Cow<[f64]>> = positions_list.iter().map(|p| to_contiguous!(p)).collect();
@@ -244,6 +270,56 @@ pub fn match_image_pairs_batch_py(
             geo_config.as_ref(),
         ))
     })
+}
+
+/// Checks the index arguments of `match_image_pairs_batch` before the core
+/// indexes with them, and returns the camera indexes as `usize`.
+///
+/// `per_image` and `per_camera` are `(argument name, length)` lists whose
+/// lengths must agree with `camera_indices` and with each other.
+fn check_batch_indexes(
+    pairs: &[(usize, usize)],
+    camera_indices: &[i64],
+    per_image: &[(&str, usize)],
+    per_camera: &[(&str, usize)],
+) -> PyResult<Vec<usize>> {
+    use pyo3::exceptions::PyValueError;
+
+    let n_images = camera_indices.len();
+    for &(name, len) in per_image {
+        if len != n_images {
+            return Err(PyValueError::new_err(format!(
+                "{name} has {len} entries but camera_indices has {n_images}"
+            )));
+        }
+    }
+    let n_cameras = per_camera.first().map_or(0, |&(_, len)| len);
+    for &(name, len) in per_camera {
+        if len != n_cameras {
+            return Err(PyValueError::new_err(format!(
+                "{name} has {len} entries but {} has {n_cameras}",
+                per_camera[0].0
+            )));
+        }
+    }
+    if let Some(&(i, j)) = pairs.iter().find(|&&(i, j)| i >= n_images || j >= n_images) {
+        return Err(PyValueError::new_err(format!(
+            "pair ({i}, {j}) has an image index out of range for {n_images} images"
+        )));
+    }
+    camera_indices
+        .iter()
+        .map(|&c| {
+            usize::try_from(c)
+                .ok()
+                .filter(|&c| c < n_cameras)
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "camera index {c} out of range for {n_cameras} cameras"
+                    ))
+                })
+        })
+        .collect()
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

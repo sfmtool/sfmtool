@@ -84,7 +84,11 @@ singular has no fundamental matrix and returns no matches. The geometric filter
 runs only when `affines1`, `affines2` and `geometric_config` are all `Some`.
 `match_image_pairs_batch` runs `match_image_pair` over a list of pairs in
 parallel with Rayon, taking per-camera intrinsics and image sizes and per-image
-poses and features, and returns one result per pair in input order.
+poses and features, and returns one result per pair in input order. The core
+function indexes its slices without checking, so its Python binding checks
+first: it raises `ValueError` when the per-image or per-camera lists differ in
+length, when a pair names an image index out of range, or when a camera index
+is negative or out of range.
 
 The poses are `cam_from_world` in the COLMAP/OpenCV camera convention (+Z
 forward, Y down), because everything here is pixel-space algebra on `K`, `R`
