@@ -293,8 +293,8 @@ pub fn blur_to_length<'py>(
 /// computed: its scores read 1.
 ///
 /// The bench scores every row of a track this way
-/// (``EditableTrack.observations``' ``bitmap_zncc`` and
-/// ``blur_matched_bitmap_zncc``), from the tiles
+/// (``EditableTrack.observations``' ``zncc`` and
+/// ``blur_matched_zncc``), from the tiles
 /// ``OrientedPatch.render_view_tile`` renders at the evaluation's resolution
 /// and with its sampler.
 ///

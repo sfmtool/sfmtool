@@ -1799,8 +1799,8 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         // bitmap alone blurred to the row's sharpness, the blur's width in
         // grid px (0 when read plain), and whether the row is sharper than
         // the bitmap. The row the bitmap is the tile of reads 1.
-        "bitmap_zncc": finite(measured.bitmap_zncc),
-        "blur_matched_bitmap_zncc": finite(measured.blur_matched_bitmap_zncc),
+        "bitmap_zncc": finite(measured.zncc),
+        "blur_matched_bitmap_zncc": finite(measured.blur_matched_zncc),
         "bitmap_blur_sigma": finite(measured.bitmap_blur_sigma),
         "sharper_than_bitmap": measured.sharper_than_bitmap,
         // Present only when the last fit refused the walk and left this sighting

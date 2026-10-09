@@ -26,10 +26,12 @@ use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
     create_track as core_create_track, duplicate as core_duplicate, evaluate as core_evaluate,
-    fit as core_fit, pin_verdicts as core_pin_verdicts, resize_patch as core_resize_patch,
+    evaluate_rendering_bitmap as core_evaluate_rendering_bitmap, fit as core_fit,
+    pin_verdicts as core_pin_verdicts, resize_patch as core_resize_patch,
     resize_patch_to_pixel as core_resize_patch_to_pixel,
     search_descriptors as core_search_descriptors, search_geometry as core_search_geometry,
-    set_stage as core_set_stage, set_verdict as core_set_verdict,
+    set_reference as core_set_reference, set_stage as core_set_stage,
+    set_verdict as core_set_verdict,
     shape_observation as core_shape_observation, sight_observation as core_sight_observation,
     spin_patch as core_spin_patch, split as core_split, tilt_patch as core_tilt_patch,
     translate_patch as core_translate_patch,
@@ -358,9 +360,20 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             t.set_item("keypoint", PyArray1::from_vec(py, k.to_vec()))?;
         }
         for (key, value) in [
+            // The row's score: its tile against the stored patch bitmap,
+            // plain, which the bars judge; 1 for the row the bitmap is the
+            // tile of.
             ("zncc", m.zncc),
-            // The same samples read over the middle of the tile only.
+            // The same tile read over the middle of the tile only.
             ("zncc_middle", m.zncc_middle),
+            // The score with the bitmap alone blurred to the row's sharpness,
+            // and the width of that blur in grid px (0 when read plain).
+            ("blur_matched_zncc", m.blur_matched_zncc),
+            ("bitmap_blur_sigma", m.bitmap_blur_sigma),
+            // The localizer's leave-one-out score against the consensus of
+            // the other rows, at its correlation peak, and its middle.
+            ("loo_zncc", m.loo_zncc),
+            ("loo_zncc_middle", m.loo_zncc_middle),
             ("seed_shift_px", m.seed_shift_px),
             ("projection_offset_px", m.projection_offset_px),
             ("reprojection_error", m.reprojection_error),
@@ -381,13 +394,6 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("clipped_share", m.clipped_share),
             ("pair_zncc", m.pair_zncc),
             ("cell_deficit", m.cell_deficit),
-            // The row's ZNCC with the stored patch bitmap, plain and with the
-            // bitmap alone blurred to the row's sharpness, and the width of
-            // that blur in grid px (0 when read plain); 1 for the row the
-            // bitmap is the tile of.
-            ("bitmap_zncc", m.bitmap_zncc),
-            ("blur_matched_bitmap_zncc", m.blur_matched_bitmap_zncc),
-            ("bitmap_blur_sigma", m.bitmap_blur_sigma),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
@@ -576,19 +582,38 @@ impl PyEditableTrack {
         Ok(Some(d))
     }
 
-    /// Which observation the track stage's stored bitmap is the tile of, as an
-    /// index into :attr:`observations`, or ``None``: at the cluster stage, for
-    /// a track with no bitmap, and for a bitmap that names no observation (a
-    /// mean of the views, one stored before the reference observation was
-    /// recorded, or the render of an observation since removed from the
-    /// point). This is the track's reference observation, the one in use:
-    /// every render renders from it while it is defined, so it can differ
-    /// from the row the last evaluation's reference-view rule picked
-    /// (``reference_view["is_reference"]``).
+    /// The track's reference observation, the one in use: which observation
+    /// the track stage's stored bitmap is the tile of, as an index into
+    /// :attr:`observations`, or ``None``: at the cluster stage, for a track
+    /// with no bitmap, and for a bitmap that names no observation (a mean of
+    /// the views, one stored before the reference observation was recorded,
+    /// or the render of an observation since removed from the point).
+    ///
+    /// The pin of its row holds it: while that row is pinned every render
+    /// renders from it, so it can differ from the row the last evaluation's
+    /// reference-view rule picked (:attr:`reference_view_observation`). While
+    /// the row is unpinned the next render (``evaluate(...,
+    /// render_bitmap=True)``, :func:`fit`) moves it to the rule's pick.
+    /// :func:`set_reference` makes a row the reference and pins it.
     #[getter]
-    fn bitmap_observation(&self) -> Option<usize> {
+    fn reference_observation(&self) -> Option<usize> {
         let payload = self.inner.track()?;
         payload.bitmap.as_ref().and(payload.reference)
+    }
+
+    /// The row the last evaluation's reference-view rule picked, as an index
+    /// into :attr:`observations` (the row whose ``reference_view`` has
+    /// ``is_reference``), or ``None``: at the cluster stage, before an
+    /// evaluation, and where the rule picked none.
+    #[getter]
+    fn reference_view_observation(&self) -> Option<usize> {
+        self.inner.track()?;
+        self.inner.observations.iter().position(|o| {
+            o.track
+                .as_ref()
+                .and_then(|m| m.reference_view)
+                .is_some_and(|s| s.is_reference())
+        })
     }
 
     /// Which observation the cluster stage cuts its template around, or
@@ -1014,6 +1039,41 @@ fn pin_verdict(
     let (next, report) = core_pin_verdicts(&track.inner, &targets).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("pinned", report.pinned)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Make ``observation`` the track's reference observation, the row its patch
+/// bitmap is rendered from, and pin it: *Set as reference* on a row of Track
+/// View.
+///
+/// The row's pin then holds the reference: every render renders the bitmap
+/// from it, whichever row the reference-view rule picks, until the row is
+/// unpinned, deleted, split off or turned ``out``. The bitmap the track
+/// carries is dropped unless the row was the reference already, and the next
+/// render (``evaluate(..., render_bitmap=True)`` or :func:`fit`) renders it
+/// from the row and scores every row against it. Pinning a row by itself
+/// (:func:`pin_verdict`) does not make it the reference.
+///
+/// Returns ``(EditableTrack, report)``. The report carries ``observation``,
+/// ``was`` (the reference before, or ``None``) and ``changed``. Raises
+/// ``ValueError`` at the cluster stage, for an index past the end, for an
+/// ``out`` row, and for a row with no keypoint.
+#[pyfunction]
+fn set_reference(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    observation: usize,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) = core_set_reference(&track.inner, observation).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("was", report.was)?;
     d.set_item("changed", report.changed)?;
     Ok((
         PyEditableTrack {
@@ -1626,11 +1686,21 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 ///
 /// At the **track stage** one round of the localizer scores every observation
 /// against the leave-one-out consensus of the others, at the pixel it already
-/// sits at: each gets that ZNCC, ``seed_shift_px`` (how far the correlation
-/// peak sits from the observation itself), ``projection_offset_px`` (how far
-/// the observation sits from the point's projection -- the number that says how
-/// far the *point* is off), the reprojection error, the ray angle, and its tile's
-/// ZNCC self-similarity radius.
+/// sits at: each gets that ZNCC (``loo_zncc``), ``seed_shift_px`` (how far the
+/// correlation peak sits from the observation itself), ``projection_offset_px``
+/// (how far the observation sits from the point's projection -- the number
+/// that says how far the *point* is off), the reprojection error, the ray
+/// angle, and its tile's ZNCC self-similarity radius. Each row's score
+/// (``zncc``, ``zncc_middle``, ``zncc_grid``), which the bars judge, is its
+/// tile against the track's stored patch bitmap, plain, with
+/// ``blur_matched_zncc`` beside it; a track with no bitmap scores no row, and
+/// the bars then leave every verdict where it is.
+///
+/// With ``render_bitmap=True`` the reading is the viewer's live evaluation:
+/// a track with a patch and no bitmap, or whose reference row is unpinned and
+/// is not the rule's pick, has its bitmap rendered where the patch stands,
+/// moving nothing, every row is scored against it, and the repaint judges
+/// those scores.
 ///
 /// The peak is looked for within the track's ``max_shift_px`` of each
 /// observation, in patch-grid px, the bar the shift is judged by; both shifts
@@ -1657,6 +1727,7 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
     *,
     max_seed_offset_px = None,
     max_cache_bytes = None,
+    render_bitmap = false,
 ))]
 fn evaluate(
     py: Python<'_>,
@@ -1665,17 +1736,30 @@ fn evaluate(
     images: &Bound<'_, PyAny>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
+    render_bitmap: bool,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
     let views = views_of(&posed, &pyramids);
-    let (next, report) = core_evaluate(
-        &track.inner,
-        &edited.inner,
-        &views,
-        &evaluate_options(max_seed_offset_px, max_cache_bytes),
-        &Progress::none(),
-    )
+    let options = evaluate_options(max_seed_offset_px, max_cache_bytes);
+    let (next, report) = if render_bitmap {
+        core_evaluate_rendering_bitmap(
+            &track.inner,
+            &edited.inner,
+            &views,
+            &options,
+            &FitOptions::default(),
+            &Progress::none(),
+        )
+    } else {
+        core_evaluate(
+            &track.inner,
+            &edited.inner,
+            &views,
+            &options,
+            &Progress::none(),
+        )
+    }
     .map_err(refused)?;
     let d = evaluate_report_dict(py, &report)?;
     Ok((
@@ -2253,6 +2337,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(unpin_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(pin_verdict, m)?)?;
+    m.add_function(wrap_pyfunction!(set_reference, m)?)?;
     m.add_function(wrap_pyfunction!(translate_patch_to_pixel, m)?)?;
     m.add_function(wrap_pyfunction!(translate_patch, m)?)?;
     m.add_function(wrap_pyfunction!(tilt_patch, m)?)?;

@@ -17,7 +17,10 @@ use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
+use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::stored_bitmap::render_patch_bitmap;
+use crate::progress::Progress;
 use crate::reconstruction::data::{
     ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
 };
@@ -284,12 +287,59 @@ pub(in crate::bench) fn with_columns(
 /// [`fixture`] carrying the optional per-observation and per-point columns a
 /// created point has to fill in: an `(P, r, r, 4)` bitmap column, an
 /// observation confidence and a normal confidence.
+///
+/// The bitmaps are real, as `sfm embed-patches` writes them: each point's
+/// reference view's render ([`render_patch_bitmap`]), with that observation
+/// recorded as the point's reference, so a track put on the bench from the
+/// fixture has a bitmap to score its rows against.
 pub(in crate::bench) fn fixture_with_columns(
     scene: &Scene,
     world: Point3<f64>,
     r: usize,
 ) -> SfmrReconstruction {
-    with_columns(fixture(scene, world), r)
+    let mut recon = with_columns(fixture(scene, world), r);
+    let edited = EditedReconstruction::new(Arc::new(recon.clone()));
+    let views = scene.views();
+    let params = KeypointSubpixelParams {
+        resolution: r as u32,
+        ..KeypointSubpixelParams::default()
+    };
+    let n = recon.point_set.points.len();
+    let mut bitmaps = Array4::<u8>::zeros((n, r, r, 4));
+    let mut references = vec![-1i32; n];
+    for (i, reference) in references.iter_mut().enumerate() {
+        let Some(point) = edited.point(i as u32) else {
+            continue;
+        };
+        let Some(patch) = point.placement() else {
+            continue;
+        };
+        let view_set: Vec<u32> = point.observations().iter().map(|o| o.image_index).collect();
+        let Some(keypoints) = (0..view_set.len())
+            .map(|k| point.keypoint_xy(k).map(|p| [f64::from(p[0]), f64::from(p[1])]))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let Some(rendered) = render_patch_bitmap(
+            &patch,
+            &views,
+            &view_set,
+            &keypoints,
+            &params,
+            &Progress::none(),
+        ) else {
+            continue;
+        };
+        for (k, value) in rendered.rgba.iter().enumerate() {
+            bitmaps[[i, k / (4 * r), (k / 4) % r, k % 4]] = *value;
+        }
+        *reference = rendered.reference.map_or(-1, |k| k as i32);
+    }
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
+    recon.point_set.reference_observations = Some(references);
+    recon.rebuild_derived_fields();
+    recon
 }
 
 /// The fixture wrapped as a version with no edits.

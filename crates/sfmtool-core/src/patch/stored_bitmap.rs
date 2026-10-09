@@ -51,7 +51,9 @@ use crate::patch::blur_matched::{
 };
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_subpixel::{fuse_patch_bitmap_reporting, KeypointSubpixelParams};
-use crate::patch::normal_refine::{window_weights, PatchWindow, ProjectedImage};
+use crate::patch::normal_refine::{
+    grid_bounds, middle_span, window_weights, PatchWindow, ProjectedImage,
+};
 use crate::patch::pair_sharpness::{bitmap_blur, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::reference_view::{
     read_track, render_view_tile, tile_semi_axes, ReferenceChoice, ReferenceFallback, TrackReading,
@@ -481,6 +483,16 @@ pub struct BitmapScore {
     /// over the samples with data in both ([`windowed_zncc`]); `NaN` where it
     /// cannot be read.
     pub zncc: f64,
+    /// The **middle score**: [`Self::zncc`] read over only the middle square
+    /// of the tile (the rows and columns `R/4 .. R - R/4`), with the same
+    /// window weights; `NaN` where it cannot be read.
+    pub zncc_middle: f64,
+    /// The **score grid**: the ZNCC of the observation's tile with the bitmap
+    /// as stored over each cell of a three-by-three split of the tile (rows
+    /// and columns cut at `R/3` and `R - R/3`), every sample with data in both
+    /// weighted equally, `grid[row][col]` from the top-left cell; `NaN` in a
+    /// cell that cannot be read.
+    pub zncc_grid: [[f64; 3]; 3],
     /// The same after the bitmap is blurred to the observation's sharpness,
     /// where [`bitmap_blur`] says to blur it; equal to [`Self::zncc`] where
     /// the pair is read plain.
@@ -508,6 +520,11 @@ pub struct BitmapScorer<'a> {
     /// be read.
     assessment: Option<Option<BlurAssessment>>,
     weights: Vec<f64>,
+    /// `weights` with every sample outside the middle square at `0`.
+    middle_weights: Vec<f64>,
+    /// Per cell of the three-by-three split, `1` on the cell's samples and `0`
+    /// elsewhere.
+    cell_weights: [[Vec<f64>; 3]; 3],
     scratch: BlurScratch,
     blurred: TilePlanes,
 }
@@ -518,11 +535,39 @@ impl<'a> BitmapScorer<'a> {
     /// ([`read_tile_ellipse`]).
     pub fn new(bitmap: &'a TilePlanes, window: PatchWindow) -> Self {
         let ellipse = read_tile_ellipse(&bitmap.values, bitmap.channels, bitmap.side, &bitmap.data);
+        let side = bitmap.side;
+        let weights = window_weights(window, side as u32);
+        let middle = middle_span(side as u32);
+        let middle_weights = weights
+            .iter()
+            .enumerate()
+            .map(|(k, &w)| {
+                if middle.contains(&(k / side)) && middle.contains(&(k % side)) {
+                    w
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let bounds = grid_bounds(side as u32);
+        let cell_weights = std::array::from_fn(|i| {
+            std::array::from_fn(|j| {
+                (0..side * side)
+                    .map(|k| {
+                        let inside = (bounds[i]..bounds[i + 1]).contains(&(k / side))
+                            && (bounds[j]..bounds[j + 1]).contains(&(k % side));
+                        f64::from(u8::from(inside))
+                    })
+                    .collect()
+            })
+        });
         Self {
             bitmap,
             ellipse,
             assessment: None,
-            weights: window_weights(window, bitmap.side as u32),
+            weights,
+            middle_weights,
+            cell_weights,
             scratch: BlurScratch::default(),
             blurred: TilePlanes::default(),
         }
@@ -539,7 +584,9 @@ impl<'a> BitmapScorer<'a> {
         self.assessment.as_ref().and_then(Option::as_ref)
     }
 
-    /// Score `observation`'s tile against the bitmap. `ellipse` is the
+    /// Score `observation`'s tile against the bitmap: the whole tile, its
+    /// middle square and its nine cells plain, and the whole tile
+    /// blur-matched. `ellipse` is the
     /// observation tile's self-similarity ellipse matrix in grid px²; `None`
     /// reads it here ([`read_tile_ellipse`]).
     ///
@@ -571,8 +618,15 @@ impl<'a> BitmapScorer<'a> {
             (Some([_, bitmap_minor]), Some(e)) => semi_axes(e)[0] < bitmap_minor,
             _ => false,
         };
+        let zncc_middle = windowed_zncc(self.bitmap, observation, &self.middle_weights);
+        let zncc_grid = self
+            .cell_weights
+            .each_ref()
+            .map(|row| row.each_ref().map(|w| windowed_zncc(self.bitmap, observation, w)));
         let plain = BitmapScore {
             zncc,
+            zncc_middle,
+            zncc_grid,
             blur_matched_zncc: zncc,
             blur_sigma: 0.0,
             sharper_than_bitmap,

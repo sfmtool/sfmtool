@@ -167,11 +167,11 @@ pub(super) fn bitmap_cell(
             is_bitmap: true,
         };
     }
-    let Some(plain) = m.bitmap_zncc else {
+    let Some(plain) = m.zncc else {
         return empty;
     };
     let blurred = m.bitmap_blur_sigma.filter(|&s| s > 0.0);
-    let second = match (blurred, m.blur_matched_bitmap_zncc) {
+    let second = match (blurred, m.blur_matched_zncc) {
         // The arrow is U+23F5, which egui's bundled fonts draw; U+2192 draws
         // as a box.
         (Some(_), Some(matched)) => format!("\u{23f5} {:.0}%", 100.0 * matched),
@@ -182,7 +182,7 @@ pub(super) fn bitmap_cell(
         "ZNCC with the patch bitmap {:.1}%, as stored.",
         100.0 * plain
     )];
-    match (blurred, m.blur_matched_bitmap_zncc) {
+    match (blurred, m.blur_matched_zncc) {
         (Some(sigma), Some(matched)) => hover.push(format!(
             "Blur-matched {:.1}%: the bitmap blurred by {sigma:.2} grid px to this row's \
              sharpness first.",

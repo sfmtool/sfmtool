@@ -41,7 +41,7 @@ pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
         .observations
         .iter()
         .filter(|o| o.verdict == Verdict::In)
-        .filter_map(|o| o.track.as_ref()?.zncc)
+        .filter_map(|o| o.track.as_ref()?.loo_zncc)
         .collect();
     if z.is_empty() {
         f64::NEG_INFINITY
@@ -58,7 +58,7 @@ pub(super) fn median_zncc_middle(track: &EditableTrack) -> f64 {
         .observations
         .iter()
         .filter(|o| o.verdict == Verdict::In)
-        .filter_map(|o| o.track.as_ref()?.zncc_middle)
+        .filter_map(|o| o.track.as_ref()?.loo_zncc_middle)
         .collect();
     if z.is_empty() {
         f64::NAN

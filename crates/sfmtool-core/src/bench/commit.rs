@@ -298,7 +298,7 @@ pub fn commit(
             feature_index: None,
             keypoint_xy: edited.has_keypoints().then_some(keypoint),
             confidence: edited.has_observation_confidence().then(|| {
-                let zncc = measurement.zncc.unwrap_or(0.0);
+                let zncc = measurement.loo_zncc.unwrap_or(0.0);
                 if zncc.is_nan() {
                     0
                 } else {

@@ -1350,7 +1350,7 @@ impl TrackBody {
                                     if bitmap_row == Some(i) && row.track.is_some() {
                                         Some(1.0)
                                     } else {
-                                        row.track.as_ref().and_then(|m| m.blur_matched_bitmap_zncc)
+                                        row.track.as_ref().and_then(|m| m.blur_matched_zncc)
                                     }
                                 })
                                 .flatten(),

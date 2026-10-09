@@ -377,7 +377,7 @@ fn the_stored_confidence_is_carried_as_the_leave_one_out_score() {
         let zncc = observation
             .track
             .as_ref()
-            .and_then(|m| m.zncc)
+            .and_then(|m| m.loo_zncc)
             .expect("the column is carried");
         assert!((zncc - 200.0 / 255.0).abs() < 1e-9);
     }
@@ -959,6 +959,60 @@ fn the_painting_proposes_verdicts_from_the_stored_measurements() {
     assert!(report.changed);
     // Painting is not deciding: nothing it touched is pinned.
     assert!(painted.observations.iter().all(|o| !o.pinned));
+}
+
+/// The bars judge the plain score against the bitmap: a row whose
+/// blur-matched score clears `min_zncc` and whose plain score does not, as a
+/// view out of focus reads, is turned out, and the leave-one-out reading
+/// beside it plays no part.
+#[test]
+fn the_bars_judge_the_plain_score_against_the_bitmap() {
+    let mut track = scored_track([0.95, 0.55]);
+    let m = track.observations[1].track.as_mut().expect("a slot");
+    m.blur_matched_zncc = Some(0.92);
+    m.loo_zncc = Some(0.93);
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[0].verdict, Verdict::In);
+    assert_eq!(
+        painted.observations[1].verdict,
+        Verdict::Out,
+        "the plain score is under the bar whatever the others read"
+    );
+    let checks = bar_checks(&track.observations[1], StageKind::Track, &track.thresholds)
+        .expect("a scored row");
+    assert_eq!(checks.min_zncc, BarCheck::Fail);
+}
+
+/// A row with no bitmap to read against has no score, says so, and the bars
+/// leave its verdict where it is, though the localizer read it.
+#[test]
+fn a_row_with_no_bitmap_to_read_against_is_unscored_and_left_alone() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (mut track, added) = three_rows_the_bars_decide(&scene);
+    payload_of(&mut track).drop_bitmap();
+
+    let (read, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    assert_eq!((report.turned_in, report.turned_out), (0, 0));
+    for (i, observation) in read.observations.iter().enumerate() {
+        let m = observation.track.as_ref().expect("a track slot");
+        assert_eq!(m.zncc, None, "row {i}");
+        assert_eq!(m.zncc_middle, None, "row {i}");
+        assert_eq!(m.zncc_grid, None, "row {i}");
+        assert_eq!(m.blur_matched_zncc, None, "row {i}");
+        assert!(m.loo_zncc.is_some(), "row {i}: the localizer read it");
+        assert_eq!(m.reason, Some(Unmeasured::NoBitmap), "row {i}");
+        assert!(bar_checks(observation, StageKind::Track, &read.thresholds).is_none());
+    }
+    assert_eq!(
+        read.observations[added].verdict,
+        Verdict::Out,
+        "the added row stays where it was"
+    );
+    assert_eq!(
+        Unmeasured::NoBitmap.to_string(),
+        "there is no bitmap to score it against"
+    );
 }
 
 /// The middle-ZNCC bar turns out a row whose middle disagrees, is off at `0`,
@@ -1882,10 +1936,18 @@ fn an_untouched_point_committed_back_rewrites_its_colour_and_its_error() {
     assert!(report.changed);
     let was = edited.point(0).expect("a live point").to_record();
     let now = next.point(report.point).expect("just written").to_record();
-    // The fixture's bitmap is blank and its colour is not, so the two differ
+    // The fixture's colour was not read from its bitmap, so the two differ
     // here; a point whose stored colour came from its own bitmap agrees.
+    let bitmap = track
+        .track()
+        .and_then(|p| p.bitmap.as_ref())
+        .expect("the fixture stores a bitmap");
+    let c = BITMAP_R / 2;
     assert_eq!(was.point.color, [120, 130, 140]);
-    assert_eq!(now.point.color, [0, 0, 0]);
+    assert_eq!(
+        now.point.color,
+        [bitmap[[c, c, 0]], bitmap[[c, c, 1]], bitmap[[c, c, 2]]]
+    );
     assert_eq!(was.point.error, 0.5);
     assert_eq!(now.point.error, 0.0);
     // Everything else, column for column.
@@ -1912,6 +1974,10 @@ fn observations_in_another_order_are_the_same_track() {
 
     let mut shuffled = track.with_origin(1, first.point);
     shuffled.observations.reverse();
+    // The reference follows its row, as every step that reorders rows keeps it.
+    let last = shuffled.observations.len() - 1;
+    let payload = payload_of(&mut shuffled);
+    payload.reference = payload.reference.map(|r| last - r);
     let (_, report) = commit(&next, &shuffled).expect("still two in");
     assert!(
         !report.changed,
@@ -2086,7 +2152,7 @@ fn a_column_the_commit_writes_is_a_column_it_compares() {
         measurement.keypoint = Some([keypoint[0] + 0.001, keypoint[1]]);
     });
     moved("an observation's confidence", &|t| {
-        t.observations[0].track.as_mut().expect("a track slot").zncc = Some(0.5);
+        t.observations[0].track.as_mut().expect("a track slot").loo_zncc = Some(0.5);
     });
     moved("the error", &|t| {
         t.observations[0]
@@ -3652,7 +3718,7 @@ fn a_seed_far_from_the_projection_is_named_rather_than_searched_for() {
         .track
         .as_ref()
         .expect("every row is written, measured or not");
-    assert!(row.zncc.is_none(), "nothing was searched for it");
+    assert!(row.loo_zncc.is_none(), "nothing was searched for it");
     let Some(Unmeasured::SeedTooFar {
         offset_px,
         bound_px,
@@ -5748,7 +5814,7 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
         .map(|o| {
             o.track
                 .as_ref()
-                .and_then(|m| m.zncc)
+                .and_then(|m| m.loo_zncc)
                 .expect("a bearing's tangent frame registers in every view")
         })
         .collect();
@@ -5810,7 +5876,7 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
         let now = m.keypoint.expect("a keypoint");
         let moved = f64::from(now[0] - was[0]).hypot(f64::from(now[1] - was[1]));
         assert!(moved < 1.0, "sighting {k} moved {moved} px");
-        let zncc = m.zncc.expect("a score");
+        let zncc = m.loo_zncc.expect("a score");
         assert!(zncc > 0.5, "sighting {k} scored {zncc}");
         assert!(
             (zncc - seen[k]).abs() < 0.2,

@@ -430,9 +430,9 @@ pub fn fit(
 /// returns, and the viewer's live evaluation renders with it after a patch
 /// step. The placement, the position, the verdicts and every keypoint come
 /// back as they were; what is written is the tile of the track's reference
-/// observation ([`TrackPayload::reference`]) where it holds one that is `in`
-/// with a keypoint, and otherwise the tile of the `in` sighting the
-/// reference-view rule picks (or the mean of the `in` sightings' tiles where
+/// observation ([`TrackPayload::reference`]) where its row holds it, `in`,
+/// with a keypoint and pinned ([`EditableTrack::held_reference`]), and
+/// otherwise the tile of the `in` sighting the reference-view rule picks (or the mean of the `in` sightings' tiles where
 /// it picks none or reaches its pick only through its last fallback, see
 /// [`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
 /// with [`TrackPayload::reference`] naming that sighting, on the
@@ -1215,11 +1215,10 @@ fn render_bitmap(
     if view_set.len() < 2 {
         return (None, None, None);
     }
-    // A defined reference is rendered from; the rule sets one only where the
-    // track holds none.
+    // A reference its pinned row holds is rendered from; otherwise the rule
+    // picks, and its pick becomes the reference.
     let held = track
-        .track()
-        .and_then(|p| p.reference)
+        .held_reference()
         .and_then(|r| rows.iter().position(|&i| i == r));
     if let Some(k) = held {
         let tile = render_view_tile(

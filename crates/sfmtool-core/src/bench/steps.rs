@@ -143,9 +143,12 @@ impl std::error::Error for CreateTrackError {}
 /// they stand until a person hands them to the bars ([`unpin_verdicts`]), and
 /// the evaluations that read the track leave them where they are. The
 /// measurements are carried from what the record stores and nothing is
-/// recomputed: the leave-one-out ZNCC is `observation_confidence` read back out
-/// of its byte scale where the column exists, and everything an evaluation
-/// would compute is left unmeasured. So putting a track on the bench and doing
+/// recomputed: the leave-one-out ZNCC (`loo_zncc`) is `observation_confidence`
+/// read back out of its byte scale where the column exists, and everything an
+/// evaluation would compute, the score against the bitmap among it, is left
+/// unmeasured. The point's stored reference observation comes on as the
+/// track's reference, and with every row pinned it is held until a person
+/// unpins its row. So putting a track on the bench and doing
 /// nothing shows the numbers the reconstruction already holds, plus the verdict
 /// column.
 ///
@@ -195,7 +198,7 @@ pub fn create_track(
                 // The stored column is the fit's own leave-one-out score in a
                 // byte scale; reading it back is carrying a measurement, not
                 // making one.
-                zncc: view
+                loo_zncc: view
                     .observation_confidence()
                     .map(|c| f64::from(c[k]) / f64::from(u8::MAX)),
                 ..TrackMeasurement::default()
@@ -537,6 +540,12 @@ pub enum TrackEditError {
         /// The view the pixel was named in.
         viewpoint: Viewpoint,
     },
+    /// The observation is `out`, and only an `in` observation can be the
+    /// track's reference.
+    NotIn {
+        /// The observation named.
+        observation: usize,
+    },
 }
 
 /// Which photograph a pixel of a gesture is in, and so which square the pointer
@@ -633,6 +642,10 @@ impl std::fmt::Display for TrackEditError {
             TrackEditError::NoProjection { viewpoint } => {
                 write!(f, "the patch and that pixel do not meet in {viewpoint}")
             }
+            TrackEditError::NotIn { observation } => write!(
+                f,
+                "observation {observation} is out, and only an in observation can be the reference"
+            ),
         }
     }
 }
@@ -870,6 +883,14 @@ pub struct UnpinReport {
 /// propose only when the evaluation that last read it followed a repaint
 /// ([`RepaintMark`]), and this brings it back in step.
 ///
+/// Unpinning the row that holds the track's reference observation
+/// ([`TrackPayload::reference`]) hands the reference to the reference-view
+/// rule: the next render
+/// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
+/// renders the bitmap from the rule's pick, and from then on the reference
+/// follows the pick at every render until a row holding it is pinned again or
+/// [`set_reference`] names one.
+///
 /// When none of `observations` is pinned nothing changes: the report says
 /// `changed: false` and a caller pushes no version for it. An index past the
 /// end is refused, and a repeated index counts once.
@@ -991,6 +1012,91 @@ pub fn pin_verdicts(
         PinReport {
             pinned,
             changed: pinned > 0,
+        },
+    ))
+}
+
+/// What one [`set_reference`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceReport {
+    /// The observation that is now the track's reference.
+    pub observation: usize,
+    /// The reference the track held before, if any.
+    pub was: Option<usize>,
+    /// Whether anything changed: the reference, or the pin of its row. Setting
+    /// the reference the track already holds on a pinned row changes nothing.
+    pub changed: bool,
+}
+
+/// Make `observation` the track's reference observation, the row its patch
+/// bitmap is rendered from, and pin it: *Set as reference* on a row of Track
+/// View.
+///
+/// The row's pin then holds the reference: every render renders the bitmap
+/// from it, whichever row the reference-view rule would pick, until the row is
+/// unpinned ([`unpin_verdicts`]), deleted, split off or turned `out`. The
+/// bitmap the track carries is no longer that row's render unless the row was
+/// the reference already, so it is dropped and the reference kept
+/// ([`TrackPayload::drop_stale_bitmap`]); the next render
+/// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap),
+/// which SfM Explorer's live evaluation runs after every step, or a fit)
+/// renders the bitmap from the row and scores every row against it. Pinning a
+/// row by itself ([`pin_verdicts`]) does not make it the reference.
+///
+/// Refused at the cluster stage, for an index past the end, for an `out` row
+/// ([`TrackEditError::NotIn`]) and for a row with no keypoint
+/// ([`TrackEditError::NoPlace`]).
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::bench::{set_reference, EditableTrack};
+/// # fn run(track: &EditableTrack) -> Result<(), Box<dyn std::error::Error>> {
+/// let (next, report) = set_reference(track, 3)?;
+/// assert_eq!(next.held_reference(), Some(3));
+/// println!("reference {:?} -> {}", report.was, report.observation);
+/// # Ok(())
+/// # }
+/// ```
+pub fn set_reference(
+    track: &EditableTrack,
+    observation: usize,
+) -> Result<(EditableTrack, ReferenceReport), TrackEditError> {
+    let row = track
+        .observations
+        .get(observation)
+        .ok_or(TrackEditError::NoSuchObservation {
+            observation,
+            observation_count: track.observations.len(),
+        })?;
+    let Stage::Track(payload) = &track.stage else {
+        return Err(TrackEditError::WrongStage {
+            wanted: StageKind::Track,
+            is: track.stage_kind(),
+        });
+    };
+    if row.verdict != Verdict::In {
+        return Err(TrackEditError::NotIn { observation });
+    }
+    if row.track.as_ref().and_then(|m| m.keypoint).is_none() {
+        return Err(TrackEditError::NoPlace { observation });
+    }
+    let was = payload.reference;
+    let changed = was != Some(observation) || !row.pinned;
+    let mut next = track.clone();
+    next.observations[observation].pinned = true;
+    if was != Some(observation) {
+        if let Stage::Track(payload) = &mut next.stage {
+            payload.drop_stale_bitmap();
+            payload.reference = Some(observation);
+        }
+    }
+    Ok((
+        next,
+        ReferenceReport {
+            observation,
+            was,
+            changed,
         },
     ))
 }

@@ -258,6 +258,9 @@ pub enum Unmeasured {
     /// The correlation could not be scored: the tile around the observation
     /// runs off the photograph, or no channel of it carries texture.
     Unscorable,
+    /// The track has no patch bitmap to score the observation against, as
+    /// before its first render, or one on another grid than the tile's.
+    NoBitmap,
 }
 
 impl std::fmt::Display for Unmeasured {
@@ -277,6 +280,7 @@ impl std::fmt::Display for Unmeasured {
             ),
             Unmeasured::NoConsensus => write!(f, "nothing to correlate against"),
             Unmeasured::Unscorable => write!(f, "its tile could not be scored"),
+            Unmeasured::NoBitmap => write!(f, "there is no bitmap to score it against"),
         }
     }
 }
@@ -284,8 +288,14 @@ impl std::fmt::Display for Unmeasured {
 /// What the track stage has measured about one observation.
 ///
 /// A track put on the bench from a committed point arrives with
-/// [`Self::keypoint`] and [`Self::zncc`] read off the stored columns; the rest
-/// is what an evaluation computes.
+/// [`Self::keypoint`] and [`Self::loo_zncc`] read off the stored columns; the
+/// rest is what an evaluation computes.
+///
+/// The row's **score** is its tile's ZNCC with the track's stored patch
+/// bitmap ([`Self::zncc`], with [`Self::zncc_middle`] and [`Self::zncc_grid`]
+/// beside it), which the bars judge. The localizer's leave-one-out reading
+/// against the consensus of the other rows, which places the row, is kept
+/// beside it as [`Self::loo_zncc`].
 ///
 /// The two distances are different questions, and both are here because a
 /// person reading a row has to tell them apart: [`Self::seed_shift_px`] is
@@ -303,29 +313,48 @@ pub struct TrackMeasurement {
     /// An evaluation never writes it: it reads the track as it stands, and this
     /// pixel is the thing it reads.
     pub keypoint: Option<[f32; 2]>,
-    /// The leave-one-out ZNCC against the consensus of the round's other
-    /// observations, at the correlation peak within the search radius of this
-    /// observation's own keypoint. With [`Self::seed_shift_px`] near zero it is
-    /// the agreement at the keypoint itself.
+    /// The **score**: the observation's tile, rendered at its keypoint, read
+    /// against the track's patch bitmap as stored ([`TrackPayload::bitmap`]),
+    /// plain, windowed, over the samples with data in both
+    /// ([`BitmapScorer`](crate::patch::stored_bitmap::BitmapScorer)). `1` for
+    /// the observation the bitmap is the render of
+    /// ([`TrackPayload::reference`]), which is not computed. This is the
+    /// reading [`Thresholds::min_zncc`] judges and the painting ranks rows by.
+    /// `None` where the track has no bitmap, the tile could not be rendered,
+    /// or the pair could not be read, and then [`Self::reason`] says which.
     pub zncc: Option<f64>,
-    /// The **middle ZNCC** beside [`Self::zncc`]: the same samples at the same
-    /// correlation peak against the same consensus, read over only the middle
-    /// square of the tile (the rows and columns `R/4 .. R - R/4`, the middle
-    /// `12 × 12` of a `24 × 24` tile). A high `zncc` that the middle does not
-    /// share is carried by the parts of the tile away from the keypoint: a
-    /// small near object in front of a textured background, a pixel at a depth
-    /// edge, a texture that repeats along the epipolar line. `None` wherever
-    /// `zncc` is, where the consensus's middle is flat, and on a track read
-    /// back from a committed point, which stores the whole-tile score alone.
+    /// The **middle ZNCC** beside [`Self::zncc`]: the same tile against the
+    /// same bitmap, read over only the middle square of the tile (the rows and
+    /// columns `R/4 .. R - R/4`, the middle `12 × 12` of a `24 × 24` tile). A
+    /// high `zncc` that the middle does not share is carried by the parts of
+    /// the tile away from the keypoint: a small near object in front of a
+    /// textured background, a pixel at a depth edge, a texture that repeats
+    /// along the epipolar line. `1` on the bitmap's own row. `None` wherever
+    /// `zncc` is and where the middle cannot be read.
     pub zncc_middle: Option<f64>,
-    /// The **ZNCC grid** beside [`Self::zncc`]: the same samples against the
-    /// same consensus, read over each cell of a three-by-three split of the
-    /// tile (rows and columns cut at `R/3` and `R - R/3`, `8 × 8` cells of a
-    /// `24 × 24` tile) with every pixel weighted equally, `grid[row][col]`
-    /// from the top-left cell. It says where in the tile an agreement or a
-    /// disagreement is. `None` wherever `zncc` is and on a track read back from a committed point; a single cell is
-    /// `NaN` where the consensus is flat over it.
+    /// The **ZNCC grid** beside [`Self::zncc`]: the same tile against the same
+    /// bitmap, read over each cell of a three-by-three split of the tile (rows
+    /// and columns cut at `R/3` and `R - R/3`, `8 × 8` cells of a `24 × 24`
+    /// tile) with every sample weighted equally, `grid[row][col]` from the
+    /// top-left cell. It says where in the tile an agreement or a disagreement
+    /// is. Every cell `1` on the bitmap's own row. `None` wherever `zncc` is;
+    /// a single cell is `NaN` where it cannot be read.
     pub zncc_grid: Option<[[f64; 3]; 3]>,
+    /// The **leave-one-out ZNCC**: the localizer's score against the
+    /// consensus of the round's other observations, at the correlation peak
+    /// within the search radius of this observation's own keypoint, which
+    /// [`Self::seed_shift_px`] is measured to. With that shift near zero it is
+    /// the agreement at the keypoint itself. No bar judges it; Track at Pixel's
+    /// own gates read it, and a commit writes it as the observation's
+    /// `observation_confidence`. `None` where the localizer could not read the
+    /// observation.
+    pub loo_zncc: Option<f64>,
+    /// The middle ZNCC beside [`Self::loo_zncc`]: the same samples at the
+    /// same peak against the same consensus, over the middle square. `None`
+    /// wherever `loo_zncc` is, where the consensus's middle is flat, and on a
+    /// track read back from a committed point, which stores the whole-tile
+    /// score alone.
+    pub loo_zncc_middle: Option<f64>,
     /// How far that correlation peak sits from the observation's own keypoint,
     /// in **patch-grid px** on the patch's plane: the observation's own
     /// evidence, and what [`Thresholds::max_shift_px`] paints on. In the unit of
@@ -437,30 +466,22 @@ pub struct TrackMeasurement {
     /// ([`choose_reference_view`](crate::patch::reference_view::choose_reference_view)).
     /// `None` for an `out` observation, which the rule does not consider.
     pub reference_view: Option<ReferenceStanding>,
-    /// The **bitmap score**: the observation's tile's ZNCC with the track's
-    /// patch bitmap as stored ([`TrackPayload::bitmap`]), windowed, over the
-    /// samples with data in both
-    /// ([`BitmapScorer`](crate::patch::stored_bitmap::BitmapScorer)). `1`
-    /// for the observation the bitmap is the render of
-    /// ([`TrackPayload::reference`]), which is not computed. `None` where the
-    /// track has no bitmap, the tile could not be rendered, or the pair could
-    /// not be read.
-    pub bitmap_zncc: Option<f64>,
-    /// The **blur-matched bitmap score**: [`Self::bitmap_zncc`] after the
-    /// bitmap, and only the bitmap, is blurred to this observation's
-    /// sharpness where it is sharper along every direction by at least the
-    /// ratio of 1.25; the plain score where it is not. `None` wherever
-    /// [`Self::bitmap_zncc`] is.
-    pub blur_matched_bitmap_zncc: Option<f64>,
+    /// The **blur-matched score**: [`Self::zncc`] after the bitmap, and only
+    /// the bitmap, is blurred to this observation's sharpness where it is
+    /// sharper along every direction by at least the ratio of 1.25; the plain
+    /// score where it is not. No bar judges it: a view out of focus scores as
+    /// well blur-matched as a sharp one, and the bars are there to catch it.
+    /// `None` wherever [`Self::zncc`] is.
+    pub blur_matched_zncc: Option<f64>,
     /// The width of the round blur, in grid px, the bitmap was blurred by for
-    /// [`Self::blur_matched_bitmap_zncc`]; `0` where the pair was read plain.
-    /// `None` wherever [`Self::bitmap_zncc`] is.
+    /// [`Self::blur_matched_zncc`]; `0` where the pair was read plain.
+    /// `None` wherever [`Self::zncc`] is.
     pub bitmap_blur_sigma: Option<f64>,
     /// Whether this observation's tile is sharper than the bitmap along every
     /// direction (its self-similarity semi-major axis shorter than the
     /// bitmap's semi-minor axis), so a candidate to replace the reference.
-    /// Such a pair is read plain. `None` wherever [`Self::bitmap_zncc`] is,
-    /// and for the reference observation itself.
+    /// Such a pair is read plain. `None` wherever [`Self::zncc`] is, and for
+    /// the reference observation itself.
     pub sharper_than_bitmap: Option<bool>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
@@ -491,19 +512,22 @@ pub struct TrackMeasurement {
     pub walked_to: Option<[f64; 2]>,
     /// The leave-one-out ZNCC the fit's localizer scored at [`Self::walked_to`]
     /// against the round's consensus, when it scored one: the agreement the walk
-    /// would have bought, to set beside [`Self::zncc`], which the reading after
-    /// the fit took with the sighting kept at its seed. Set and cleared with
+    /// would have bought, to set beside [`Self::loo_zncc`], which the reading
+    /// after the fit took with the sighting kept at its seed. Set and cleared with
     /// [`Self::walked_px`].
     pub walked_zncc: Option<f64>,
     /// The middle ZNCC beside [`Self::walked_zncc`], read the way
-    /// [`Self::zncc_middle`] is. Set and cleared with [`Self::walked_px`].
+    /// [`Self::loo_zncc_middle`] is. Set and cleared with [`Self::walked_px`].
     pub walked_zncc_middle: Option<f64>,
-    /// The ZNCC grid beside [`Self::walked_zncc`], read the way
-    /// [`Self::zncc_grid`] is. Set and cleared with [`Self::walked_px`].
+    /// The ZNCC grid beside [`Self::walked_zncc`], against the same consensus,
+    /// cut the way [`Self::zncc_grid`] is. Set and cleared with [`Self::walked_px`].
     pub walked_zncc_grid: Option<[[f64; 3]; 3]>,
-    /// Why there is no ZNCC, when there is none: an evaluation that could not
-    /// read an observation says which of its refusals it was rather than
-    /// leaving the row blank.
+    /// Why a reading is missing, when an evaluation has read the row: where
+    /// the localizer could not read the observation ([`Self::loo_zncc`] is
+    /// `None`), which of its refusals it was, whether or not the row has a
+    /// score against the bitmap; otherwise why there is no score
+    /// ([`Self::zncc`]), and `None` where there is one. So a row without a
+    /// score never reads as an unexplained blank.
     pub reason: Option<Unmeasured>,
 }
 
@@ -692,19 +716,24 @@ pub struct TrackPayload {
     /// removes the reference observation from the track, splits it off, or
     /// turns it `out` drops both (`drop_bitmap`).
     ///
-    /// **A render keeps a defined reference.** Every render of a new bitmap
-    /// on the bench -- the live evaluation's, a fit's, a normal step's --
-    /// renders from this reference where it is defined (`Some`, naming an
-    /// `in` row with a keypoint). Only where it is undefined (`None`, or naming
-    /// a row that is not `in` or has no keypoint) does the render run
-    /// the reference-view rule over the `in` rows and set the bitmap and this
-    /// reference together. So the rule's pick that an evaluation reports per
-    /// row (`TrackMeasurement::reference_view`) can differ from this
-    /// reference, which is the one in use. A reference read from a column
-    /// rendered for display is the rule's pick on the file's track, so holding
-    /// it is the bench having set it from the rule. A commit writes this
-    /// reference as the point's reference observation, beside the bitmap it
-    /// is the render of where the reconstruction stores bitmaps.
+    /// **The pin of its row holds it.** Every render of a new bitmap on the
+    /// bench -- the live evaluation's, a fit's, a normal step's -- renders
+    /// from this reference where its row is `in`, carries a keypoint and is
+    /// pinned ([`EditableTrack::held_reference`]), whichever row the
+    /// reference-view rule would pick. Otherwise (`None`, or a row that is
+    /// unpinned, not `in` or without a keypoint) the render runs the rule over
+    /// the `in` rows and sets the bitmap and this reference together, so while
+    /// the reference row is unpinned the reference follows the rule's pick at
+    /// every render. The rule's pick that an evaluation reports per row
+    /// (`TrackMeasurement::reference_view`) can therefore differ from this
+    /// reference, the one in use, only while the reference row is pinned.
+    /// [`set_reference`](super::steps::set_reference) makes a row the
+    /// reference and pins it. A track put on the bench from a point has every
+    /// row pinned, so the point's stored reference stays until the person
+    /// unpins its row. A reference read from a column rendered for display is
+    /// the rule's pick on the file's track, and is held the same way. A commit
+    /// writes this reference as the point's reference observation, beside the
+    /// bitmap it is the render of where the reconstruction stores bitmaps.
     pub reference: Option<usize>,
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
@@ -1193,5 +1222,17 @@ impl EditableTrack {
             Stage::Track(payload) => Some(payload),
             Stage::Cluster(_) => None,
         }
+    }
+
+    /// The reference observation the next render of the bitmap renders from
+    /// whatever the reference-view rule picks: the track's reference
+    /// ([`TrackPayload::reference`]) where its row is `in`, carries a keypoint
+    /// and is **pinned**. `None` at the cluster stage and where the track
+    /// holds no reference that way; a render then takes the rule's pick.
+    pub fn held_reference(&self) -> Option<usize> {
+        let r = self.track()?.reference?;
+        let row = self.observations.get(r)?;
+        let keyed = row.track.as_ref().is_some_and(|m| m.keypoint.is_some());
+        (row.pinned && row.verdict == Verdict::In && keyed).then_some(r)
     }
 }
