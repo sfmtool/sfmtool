@@ -102,7 +102,9 @@ impl PyPatchCloud {
     ///         template and whose keypoint is not moved. A point absent from the
     ///         map, mapped to ``None`` or ``-1``, or whose image is not in its view
     ///         set, has the reference-view rule pick one from the renders at the
-    ///         starting keypoints, as :meth:`localize_keypoints` does. Pass the
+    ///         starting keypoints, as :meth:`localize_keypoints` does.
+    ///         A point index the cloud does not have, or an image index that is
+    ///         neither ``-1`` nor one of the scene's images, raises ``ValueError``. Pass the
     ///         ``reference_image`` that :meth:`localize_keypoints` reported so
     ///         both align to the same reference.
     ///     progress: Optional :class:`ProgressCounter`, bumped once per patch.
@@ -236,8 +238,12 @@ impl PyPatchCloud {
             }
         }
 
-        let references =
-            reference_positions(reference_images.as_ref(), &self.inner.point_indexes, &sets);
+        let references = reference_positions(
+            reference_images.as_ref(),
+            &self.inner.point_indexes,
+            &sets,
+            n_images,
+        )?;
 
         // Per-view seeds in source-image px, one per view in the (final) view
         // set, in order. Sourced in priority:

@@ -112,6 +112,8 @@ impl PyPatchCloud {
     ///         set, has the reference-view rule pick one from the renders at the
     ///         starting keypoints. ``None`` (default) has the rule pick for every
     ///         point.
+    ///         A point index the cloud does not have, or an image index that is
+    ///         neither ``-1`` nor one of the scene's images, raises ``ValueError``.
     ///     progress: Optional :class:`ProgressCounter`, bumped once per patch.
     ///
     /// Returns:
@@ -288,8 +290,12 @@ impl PyPatchCloud {
             }
         };
 
-        let references =
-            reference_positions(reference_images.as_ref(), &self.inner.point_indexes, &sets);
+        let references = reference_positions(
+            reference_images.as_ref(),
+            &self.inner.point_indexes,
+            &sets,
+            n_images,
+        )?;
 
         let progress_handle = progress.as_ref().map(|p| p.handle());
         let results = py.detach(|| {

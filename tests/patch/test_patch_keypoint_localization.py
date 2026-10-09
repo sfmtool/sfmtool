@@ -310,6 +310,41 @@ def test_localize_keypoints_rejects_out_of_range_view_index(
         )
 
 
+def test_bad_reference_images_entries_are_a_value_error(seoul_bull_workspace: Path):
+    """An entry ``reference_images`` cannot mean (a point the cloud does not
+    have, an image index past the scene's images, a negative one other than
+    ``-1``) is a ValueError from both kernels, not a silent fall back to the
+    rule; ``None`` and ``-1`` still ask for the rule's pick."""
+    import pytest
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
+    images = load_images(recon)
+    cloud = recon.patches
+    pids = [int(p) for p in np.asarray(cloud.point_indexes)[:2]]
+    unknown = max(int(p) for p in np.asarray(cloud.point_indexes)) + 1
+    for name in ["localize_keypoints", "refine_keypoints"]:
+        run = getattr(cloud, name)
+        for bad in [{unknown: 0}, {pids[0]: len(images)}, {pids[0]: -2}]:
+            with pytest.raises(ValueError, match="reference_images"):
+                run(
+                    recon,
+                    images,
+                    point_indexes=pids,
+                    reference_images=bad,
+                    resolution=12,
+                )
+        out = run(
+            recon,
+            images,
+            point_indexes=pids,
+            reference_images={pids[0]: None, pids[1]: -1},
+            resolution=12,
+        )
+        assert len(out) == len(pids)
+
+
 def _selection(cloud, recon, images, sample):
     """The full ``select_views`` output keyed by point id, for the sampled points."""
     sel = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
