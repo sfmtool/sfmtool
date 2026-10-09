@@ -8,18 +8,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use sfmtool_core::camera::image::ImageU8;
-use sfmtool_core::spherical::per_tile_source_stack::{
-    BuildError, BuildParams, ConsensusAtlasError, PerSphericalTileSourceStack,
-};
+use sfmtool_core::spherical::per_tile_source_stack::{BuildParams, PerSphericalTileSourceStack};
 
 use crate::flow::warp::extract_image_u8;
 use crate::geometry::camera_intrinsics::PyCameraIntrinsics;
 use crate::geometry::rot_quaternion::PyRotQuaternion;
+use crate::helpers::value_err;
 use crate::spherical::tile_rig::PySphericalTileRig;
-
-fn err_to_py(e: BuildError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
-}
 
 /// Internal storage: dispatches between u8, f16, and f32 underlying stacks.
 pub(crate) enum Inner {
@@ -96,7 +91,7 @@ impl PyPerSphericalTileSourceStack {
                             &rig.inner, &parsed, &params,
                         )
                     })
-                    .map_err(err_to_py)?;
+                    .map_err(value_err)?;
                 Inner::U8(stack)
             }
             "float16" | "f16" | "half" => {
@@ -106,7 +101,7 @@ impl PyPerSphericalTileSourceStack {
                             &rig.inner, &parsed, &params,
                         )
                     })
-                    .map_err(err_to_py)?;
+                    .map_err(value_err)?;
                 Inner::F16(stack)
             }
             "float32" | "f32" => {
@@ -116,7 +111,7 @@ impl PyPerSphericalTileSourceStack {
                             &rig.inner, &parsed, &params,
                         )
                     })
-                    .map_err(err_to_py)?;
+                    .map_err(value_err)?;
                 Inner::F32(stack)
             }
             other => {
@@ -388,13 +383,13 @@ impl PyPerSphericalTileSourceStack {
             Inner::F16(stack) => {
                 let atlas = py
                     .detach(|| stack.primary_consensus_atlas(&rig.inner, &mask_vec))
-                    .map_err(consensus_err_to_py)?;
+                    .map_err(value_err)?;
                 (atlas, stack.channels() as usize)
             }
             Inner::F32(stack) => {
                 let atlas = py
                     .detach(|| stack.primary_consensus_atlas(&rig.inner, &mask_vec))
-                    .map_err(consensus_err_to_py)?;
+                    .map_err(value_err)?;
                 (atlas, stack.channels() as usize)
             }
             Inner::U8(_) => {
@@ -419,10 +414,6 @@ impl PyPerSphericalTileSourceStack {
         };
         Ok(arr)
     }
-}
-
-fn consensus_err_to_py(e: ConsensusAtlasError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
 }
 
 impl PyPerSphericalTileSourceStack {

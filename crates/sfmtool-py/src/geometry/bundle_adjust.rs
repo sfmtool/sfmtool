@@ -17,6 +17,7 @@ use sfmtool_core::geometry::{
 use sfmtool_core::progress::Progress;
 
 use crate::geometry::PyCameraIntrinsics;
+use crate::helpers::value_err;
 
 /// Read the `distance_from` argument into one optional reference per point.
 ///
@@ -81,8 +82,7 @@ fn build_constraints(
     n_pt: usize,
     n_img: usize,
 ) -> PyResult<Option<PointConstraints>> {
-    PointConstraints::from_arrays(held, distance, origins, n_pt, n_img)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    PointConstraints::from_arrays(held, distance, origins, n_pt, n_img).map_err(value_err)
 }
 
 /// The release gates the binding holds every camera to: each requested
@@ -168,89 +168,54 @@ fn check_releases(
 /// camera's focal length and distortion by minimizing soft-L1 pixel
 /// reprojection error over a trim schedule with inter-round retriangulation
 /// (canonical frame; the camera looks along −Z). Every observation is read
-/// through the camera of its own image, and each camera keeps its own lens
-/// parameters. See ``specs/core/geometry/bundle-adjustment.md``.
+/// through the camera of its own image. The algorithm, and the reasons behind
+/// each option, are in ``specs/core/geometry/bundle-adjustment.md``.
 ///
 /// Args:
 ///     cameras: Sequence of ``CameraIntrinsics``, one per camera (each
-///         carries its own initial focal).
+///         carries its own initial focal). Must not be empty.
 ///     image_camera: (n_img,) uint32 index into ``cameras`` of the camera that
 ///         took each image.
 ///     quaternions_wxyz: (n_img, 4) world-to-camera rotations (WXYZ).
 ///     translations: (n_img, 3) world-to-camera translations.
-///     points: (n_pt, 3) world points; NaN rows are re-admitted by the
-///         retriangulation rounds when observed twice.
+///     points: (n_pt, 3) world points; NaN rows are allowed.
 ///     uv: (n_obs, 2) observed pixels.
 ///     obs_image: (n_obs,) uint32 image index per observation.
 ///     obs_point: (n_obs,) uint32 point index per observation.
-///     point_at_infinity: Optional (n_pt,) bool mask marking points at
-///         infinity. A marked row of ``points`` is a world-frame direction
-///         (normalized on input and returned as a unit direction) whose
-///         observations depend on rotation and camera model only; an image
-///         whose surviving observations are all directions keeps its
-///         translation frozen. Absent and all-``False`` agree bit for bit;
-///         with ``free_points_cross=False`` they are the finite-only kernel,
-///         and by default a free point can still come back as a direction.
-///     held: Optional (n_pt,) bool mask marking held points. A held point's
-///         coordinate is the caller's for the whole solve: its observations
-///         still form residuals and still drive the cameras and the lens, it
-///         owns no parameters, the re-estimation skips it, and it comes back
-///         exactly as it went in. Absent or all-``False`` is every point
-///         unheld.
-///     distance: Optional (n_pt,) float64 array of ranged points' distances --
-///         a strictly positive world-unit distance, ``+inf`` for a direction,
-///         and ``NaN`` for a point this rule says nothing about. A ranged
-///         point is ``X = O + r * d``: the caller owns ``r``, the solve owns
-///         the unit direction ``d``, and ``O`` comes from ``distance_from``.
-///         Held and ranged are exclusive on one point.
-///     distance_from: Optional (n_pt,) sequence naming where each finite
-///         distance is measured from: an image index, or a sequence of image
-///         indices whose camera centres are averaged, with ``-1`` (or an empty
-///         sequence) where there is none. A finite ``distance`` requires one --
-///         the adjustment's gauge is free, so a distance from a fixed world
-///         coordinate would constrain nothing -- while ``+inf`` and ``NaN``
-///         rows ignore it.
-///     free_points_cross: Solve every free point in inverse depth about the
-///         centroid of its observing cameras, so it can move between near and
-///         infinity within a round, and decide at the end of the solve how it
-///         is stored, on the point-or-bearing test at the noise level the
-///         final round's residuals measure: a track whose rays ask for a depth
-///         is a position, one whose rays do not is a direction (default
-///         True). ``False`` turns the crossing off: the caller's
-///         ``point_at_infinity`` mask is honoured for the whole solve, and
-///         every free point keeps the representation it is handed in.
-///     protected: Optional (n_obs,) bool mask marking protected
-///         observations. A protected observation is never removed by the
-///         inter-round trim gates — it stays in the solve set every round
-///         regardless of its residual and always counts toward ``min_track``
-///         survival — and passes through the robust loss at the wider scale
-///         ``protected_loss_scale * loss_scale``. Absent or all-``False``
-///         reproduces the unprotected behavior bit for bit. Composable with
-///         ``point_at_infinity``.
+///     point_at_infinity: Optional (n_pt,) bool mask; a marked row of
+///         ``points`` is a world-frame direction. Absent and all-``False``
+///         agree bit for bit.
+///     held: Optional (n_pt,) bool mask of held points, whose coordinates
+///         come back exactly as they went in.
+///     distance: Optional (n_pt,) float64 distances of ranged points: a
+///         strictly positive world-unit distance, ``+inf`` for a direction,
+///         ``NaN`` where the point is not ranged. Held and ranged are
+///         exclusive on one point.
+///     distance_from: Optional (n_pt,) sequence; each entry is an image index,
+///         or a sequence of image indices whose camera centres are averaged,
+///         with ``-1`` (or an empty sequence) for none. A finite ``distance``
+///         requires one; ``+inf`` and ``NaN`` rows ignore it.
+///     free_points_cross: Solve free points in inverse depth and decide at the
+///         end of the solve whether each is stored as a position or a
+///         direction (default True). ``False`` keeps each free point in the
+///         representation it is handed in.
+///     protected: Optional (n_obs,) bool mask of protected observations, which
+///         no trim gate removes and which take the loss scale
+///         ``protected_loss_scale * loss_scale``.
 ///     protected_loss_scale: Multiplier on each stage's loss scale for
-///         protected observations (default 3.0; must be positive and
-///         finite).
-///     opt_f: Release each camera's focal (SIMPLE_PINHOLE,
-///         EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or
-///         SFMTOOL_PINHOLE — the models whose projection multiplies the focal
-///         onto a distorted coordinate that does not itself read it, where the
-///         kernel's analytic focal column is exact; a camera of any other
-///         model raises).
-///     opt_k1: Release each camera's radial coefficient
-///         (SIMPLE_RADIAL_FISHEYE only — the one model carrying it; a camera
-///         of any other model raises). The staged use is fixed -> opt_f ->
-///         opt_f + opt_k1, so the curvature rung opens on a focal that has
-///         already settled.
-///     opt_bspline: Release each camera's radial spline coefficients
-///         (SFMTOOL_FISHEYE or SFMTOOL_PINHOLE — the two models carrying
-///         them, and the spline must be defined: at least two coefficients on
-///         a positive ``bspline_theta_max`` / ``bspline_rho_max``; anything
-///         else raises). Mutually exclusive
-///         with ``opt_k1`` (no model carries both parameters). The staged
-///         use mirrors the curvature rung's: fixed -> opt_f -> opt_f +
-///         opt_bspline.
+///         protected observations (default 3.0; positive and finite).
+///     opt_f: Release each camera's focal. Every camera must be
+///         SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE,
+///         SFMTOOL_FISHEYE or SFMTOOL_PINHOLE.
+///     opt_k1: Release each camera's radial coefficient. Every camera must be
+///         SIMPLE_RADIAL_FISHEYE.
+///     opt_bspline: Release each camera's radial spline coefficients. Every
+///         camera must be SFMTOOL_FISHEYE or SFMTOOL_PINHOLE with a defined
+///         spline (at least two coefficients and a positive
+///         ``bspline_theta_max`` / ``bspline_rho_max``). Exclusive with
+///         ``opt_k1``.
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
-///         (default [(50, 5), (12, 2), (4, 1)]).
+///         (default [(50, 5), (12, 2), (4, 1)]); must not be empty.
 ///     max_iters: LM iteration budget per round (default 60).
 ///     min_track: Trim survivors a point needs to stay in a solve (default 2).
 ///     min_obs: Below this many trim survivors the round exits degenerate:
@@ -260,35 +225,25 @@ fn check_releases(
 ///     A dict ``{"cameras", "quaternions_wxyz" (n_img, 4), "translations"
 ///     (n_img, 3), "points" (n_pt, 3), "residual_norms" (n_obs,),
 ///     "point_at_infinity" (n_pt,), "free_point_decision"}``. ``cameras`` holds one
-///     ``CameraIntrinsics`` per input camera, in order: the input camera with
-///     its released parameters replaced by the solved ones, and equal to the
-///     input camera otherwise.
-///     ``point_at_infinity`` is the representation each point ended with:
-///     ``True`` where its returned row is a world-frame direction and
-///     ``False`` where it is a position. A free point's entry is the input
-///     mask unless ``free_points_cross`` solved it in inverse depth, a held
-///     point's is its input value, and a ranged point's is whether its distance
-///     is infinite.
-///     ``free_point_decision`` is ``None`` with ``free_points_cross=False`` (and
-///     when the solve exits degenerate), and otherwise a dict describing the
-///     end-of-solve storage decision: ``sigma_px`` (the noise level measured
-///     over the final round's kept observations of finite points, or ``None``
-///     where there were none), ``observation_count`` and ``outlier_count``
-///     (what that level was measured over and left out), ``decided`` (whether
-///     the test was read: not without a level, nor after a cancellation),
-///     ``converged`` (whether the final round met its convergence test; the
-///     decision is read either way, and a level read from a round that
-///     stopped on its budget still carries pose error), ``to_finite`` and
-///     ``to_direction`` (the free points stored in the other representation
-///     than the one they were handed in with), and ``unscored`` (the free
-///     points the final round kept fewer than two usable observations of,
-///     which the test cannot score: each is stored in the representation it
-///     was handed in with, or, handed in with no estimate, in the one the
-///     re-estimation gave it, and is counted in neither ``to_finite`` nor
-///     ``to_direction``).
-///     ``residual_norms`` are unweighted reprojection norms at the final
-///     state, ``+inf`` where the point is non-finite / behind the camera /
-///     outside the model domain.
+///     ``CameraIntrinsics`` per input camera, in order, with its released
+///     parameters replaced by the solved ones. ``point_at_infinity`` is
+///     ``True`` where the returned row is a direction and ``False`` where it
+///     is a position. ``free_point_decision`` is ``None`` with
+///     ``free_points_cross=False`` or on a degenerate exit, and otherwise a
+///     dict with keys ``sigma_px`` (or ``None``), ``observation_count``,
+///     ``outlier_count``, ``decided``, ``converged``, ``to_finite``,
+///     ``to_direction`` and ``unscored``. ``residual_norms`` are unweighted
+///     reprojection norms at the final state, ``+inf`` where the point is
+///     non-finite, behind the camera or outside the model domain.
+///
+/// Raises:
+///     ValueError: On a shape mismatch, an empty ``cameras`` or ``schedule``,
+///         an index out of range in ``image_camera``, ``obs_image`` or
+///         ``obs_point``, a malformed ``distance_from`` entry, a release some
+///         camera's model does not admit, ``opt_k1`` with ``opt_bspline``, or
+///         a point constraint the kernel refuses (held and ranged together, a
+///         non-positive distance, a finite distance with no origin, an origin
+///         past the image set).
 #[pyfunction]
 #[pyo3(signature = (
     cameras,
@@ -544,18 +499,15 @@ pub fn bundle_adjust<'py>(
     d.set_item("cameras", solved)?;
     d.set_item(
         "quaternions_wxyz",
-        PyArray2::from_vec2(py, &q_rows)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        PyArray2::from_vec2(py, &q_rows).map_err(value_err)?,
     )?;
     d.set_item(
         "translations",
-        PyArray2::from_vec2(py, &t_rows)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        PyArray2::from_vec2(py, &t_rows).map_err(value_err)?,
     )?;
     d.set_item(
         "points",
-        PyArray2::from_vec2(py, &p_rows)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        PyArray2::from_vec2(py, &p_rows).map_err(value_err)?,
     )?;
     d.set_item("residual_norms", PyArray1::from_vec(py, out.residual_norms))?;
     d.set_item(

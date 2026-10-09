@@ -16,9 +16,8 @@ use sfmtool_core::geometry::estimate_intrinsics::{
 use sfmtool_core::geometry::focal_vote::{CameraModel, FocalVoteOptions};
 
 use super::camera_intrinsics::PyCameraIntrinsics;
-use super::focal_vote::{
-    matches_err_to_py, scan_vote_dict, vote_columns, vote_dict, vote_source, VoteSource,
-};
+use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_source, VoteSource};
+use crate::helpers::value_err;
 
 /// Estimate a camera from cluster-track observations: the model verdict, its
 /// corroboration, the consensus focal, and the votes behind them (see
@@ -188,7 +187,7 @@ pub fn estimate_intrinsics<'py>(
                 &options,
             )),
         })
-        .map_err(matches_err_to_py)?;
+        .map_err(value_err)?;
 
     let d = PyDict::new(py);
     d.set_item("camera_model", estimate.camera_model.map(|m| m.as_str()))?;

@@ -38,11 +38,7 @@ use sfmtool_core::reconstruction::prune_covered::{
 use sfmtool_core::{Point3D, RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::sfmr_reconstruction::PySfmrReconstruction;
-
-/// Turn a core edit refusal into a Python `ValueError`.
-fn edit_err(e: sfmtool_core::EditError) -> PyErr {
-    PyValueError::new_err(e.to_string())
-}
+use crate::helpers::value_err;
 
 /// The plain reconstruction a version is, for a **bulk** edit to run over.
 ///
@@ -477,7 +473,7 @@ impl PyEditedReconstruction {
 
     /// Delete the point at `index`.
     fn delete_point(&mut self, index: u32) -> PyResult<()> {
-        self.inner.delete_point(index).map_err(edit_err)
+        self.inner.delete_point(index).map_err(value_err)
     }
 
     /// Replace the point at `index` with `record`, and give back the index the
@@ -485,13 +481,13 @@ impl PyEditedReconstruction {
     /// materialisation puts it back in its place.
     fn replace_point(&mut self, index: u32, record: &Bound<'_, PyDict>) -> PyResult<u32> {
         let record = record_from_dict(record)?;
-        self.inner.replace_point(index, record).map_err(edit_err)
+        self.inner.replace_point(index, record).map_err(value_err)
     }
 
     /// Add a point the base does not hold, and give back its index.
     fn add_point(&mut self, record: &Bound<'_, PyDict>) -> PyResult<u32> {
         let record = record_from_dict(record)?;
-        self.inner.add_point(record).map_err(edit_err)
+        self.inner.add_point(record).map_err(value_err)
     }
 
     /// Re-estimate `image`'s pose against structure held out from it, and give
@@ -565,7 +561,7 @@ impl PyEditedReconstruction {
             })
             .map_err(|e| match e {
                 ResectInPlaceError::Resect(e) => crate::geometry::resect_images::err_to_py(e),
-                ResectInPlaceError::Refused(reason) => PyValueError::new_err(reason),
+                ResectInPlaceError::Refused(reason) => value_err(reason),
             })?;
         let d = crate::geometry::resect_images::report_to_py(py, &report)?;
         Ok((
@@ -615,7 +611,7 @@ impl PyEditedReconstruction {
         let value = materialised(&self.inner);
         let (next, report) = py
             .detach(|| core_move_camera(&value, image, &pose))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(value_err)?;
 
         let d = PyDict::new(py);
         d.set_item("image", report.image)?;
@@ -716,7 +712,7 @@ impl PyEditedReconstruction {
         };
         let (next, map, report) = py
             .detach(|| core_prune_covered(&self.inner, &options, &Progress::none()))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(value_err)?;
 
         let census = PyDict::new(py);
         census.set_item("rows", report.census.rows)?;
@@ -881,7 +877,7 @@ impl PyEditedReconstruction {
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(value_err)?;
 
         let d = PyDict::new(py);
         d.set_item("images", report.images)?;
@@ -960,7 +956,7 @@ impl PyEditedReconstruction {
         Ok(self
             .inner
             .base_content_hash()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?
+            .map_err(value_err)?
             .content_xxh128
             .clone())
     }
@@ -973,9 +969,7 @@ impl PyEditedReconstruction {
             .iter()
             .map(record_from_dict)
             .collect::<PyResult<Vec<_>>>()?;
-        self.inner
-            .point_edit_hash(&records)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+        self.inner.point_edit_hash(&records).map_err(value_err)
     }
 
     fn __repr__(&self) -> String {

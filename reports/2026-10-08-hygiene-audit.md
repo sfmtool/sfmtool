@@ -515,6 +515,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Add `helpers::value_err` and `helpers::os_err` taking `impl Display`, and keep only the three helpers that map by variant.
 - Effort: low. Risk: low.
 
+> _Status (2026-10-09): **Partially done** — the `bundle_adjust` and `resect_images` binding docstrings now give the Python contract (args, shapes, returns, raises) and point to their specs for the reasoning; `helpers::value_err` / `os_err` added; the eight single-arm `*_err_to_py` helpers are removed in favour of `value_err`, and the inline closures in those files and in `helpers.rs`, `bundle_adjust.rs`, `resect_images.rs` and `edited.rs` use the helpers. Remaining: the inline `PyValueError::new_err(e.to_string())` / `PyIOError::new_err(e.to_string())` closures in the other `sfmtool-py` files (about 140 `new_err(e.to_string())` or `new_err(format!("{e}"))` sites across 44 files, counting the variant-mapping helpers), branch `hygiene-fix-1009-14-binding-doc-helpers`._
+
 **Split `kdf-format/src/read.rs` by job**
 - Location: `crates/sfmtool-kdf-format/src/read.rs`, 1,679 lines.
 - Problem: one file holds five jobs:

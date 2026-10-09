@@ -13,15 +13,11 @@ use numpy::PyArray1;
 use pyo3::prelude::*;
 
 use sfmtool_core::spherical::photometric_ransac::{
-    refine_photometric_ransac, RansacPhotometricError, RansacPhotometricOutput,
-    RansacPhotometricParams,
+    refine_photometric_ransac, RansacPhotometricOutput, RansacPhotometricParams,
 };
 
+use crate::helpers::value_err;
 use crate::spherical::tile_source_stack::{Inner, PyPerSphericalTileSourceStack};
-
-fn err_to_py(e: RansacPhotometricError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
-}
 
 /// Result of :func:`refine_photometric_ransac`. Fields are NumPy arrays and
 /// match the spec's ``RansacPhotometricOutput`` shape:
@@ -154,10 +150,10 @@ pub fn refine_photometric_ransac_py(
     let inner = match &stack.inner {
         Inner::F16(s) => py
             .detach(|| refine_photometric_ransac(s, &params))
-            .map_err(err_to_py)?,
+            .map_err(value_err)?,
         Inner::F32(s) => py
             .detach(|| refine_photometric_ransac(s, &params))
-            .map_err(err_to_py)?,
+            .map_err(value_err)?,
         Inner::U8(_) => {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "refine_photometric_ransac requires a float16- or float32-backed stack; \

@@ -10,22 +10,19 @@ use pyo3::prelude::*;
 
 use sfmtool_core::spherical::sphere_points::RelaxConfig;
 use sfmtool_core::spherical::tile_rig::{
-    CamRigConversionError, SphericalTileRig, SphericalTileRigError, SphericalTileRigParams,
+    CamRigConversionError, SphericalTileRig, SphericalTileRigParams,
 };
 
 use crate::flow::warp::PyWarpMap;
 use crate::geometry::camera_intrinsics::PyCameraIntrinsics;
 use crate::geometry::rot_quaternion::PyRotQuaternion;
 use crate::geometry::se3_transform::PySe3Transform;
-
-fn err_to_py(e: SphericalTileRigError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
-}
+use crate::helpers::{os_err, value_err};
 
 fn camrig_err_to_py(e: CamRigConversionError) -> PyErr {
     match e {
-        CamRigConversionError::File(_) => pyo3::exceptions::PyIOError::new_err(format!("{e}")),
-        _ => pyo3::exceptions::PyValueError::new_err(format!("{e}")),
+        CamRigConversionError::File(_) => os_err(e),
+        _ => value_err(e),
     }
 }
 
@@ -96,7 +93,7 @@ impl PySphericalTileRig {
         };
         let inner = py
             .detach(|| SphericalTileRig::new(&params))
-            .map_err(err_to_py)?;
+            .map_err(value_err)?;
         Ok(Self { inner })
     }
 

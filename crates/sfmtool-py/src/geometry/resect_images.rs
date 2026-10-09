@@ -22,6 +22,7 @@ use sfmtool_core::geometry::resect_images::{
 };
 use sfmtool_matches_format::MatchesData;
 
+use crate::helpers::{os_err, value_err};
 use crate::PySfmrReconstruction;
 
 /// Map a core resection error onto the Python exception the caller sees.
@@ -30,8 +31,8 @@ use crate::PySfmrReconstruction;
 /// estimate is one target's outcome and comes back in that target's report.
 pub(crate) fn err_to_py(e: ResectImageError) -> PyErr {
     match e {
-        ResectImageError::Observations(_) => pyo3::exceptions::PyIOError::new_err(e.to_string()),
-        _ => pyo3::exceptions::PyValueError::new_err(e.to_string()),
+        ResectImageError::Observations(_) => os_err(e),
+        _ => value_err(e),
     }
 }
 
@@ -107,60 +108,27 @@ fn totals_to_py<'py>(
 }
 
 /// Re-estimate a set of images' poses against structure held out from all of
-/// them (see ``specs/gui/edits/resect-image.md``).
+/// them.
 ///
-/// A stored pose was fit jointly with the points it observes, so it always
-/// agrees with them. This removes the whole target set's contribution first —
-/// every finite point any target observes that keeps at least two *non-target*
-/// observations is re-triangulated from those alone, at the non-target images'
-/// stored poses, and every direction a target observes is re-derived from the
-/// non-target rotations — then re-estimates each target's pose against what is
-/// left, then re-triangulates the points the accepted targets observe at their
-/// new poses. No bundle adjustment runs. A point two targets share is
-/// re-triangulated from neither, so holding a set out together questions the
-/// group rather than its members one at a time.
+/// The points and directions the targets observe are re-derived from the
+/// non-target images alone, each target's pose is re-estimated against them
+/// (RANSAC P3P with refinement, or a rotation-only fit for a target with fewer
+/// than ``min_obs`` finite pairs), and the points the accepted targets observe
+/// are re-triangulated at their new poses. No bundle adjustment runs. The
+/// mechanism, the cluster-pair rules and the report fields are described in
+/// ``specs/gui/edits/resect-image.md``.
 ///
-/// A target's track pairs are its observations of points with a held-out
-/// position and, as bearings, of points at infinity with a held-out direction.
-/// When ``cluster_patches_path`` is given, its cluster pairs stand beside them.
-/// A target with at least ``min_obs`` finite pairs (tracks and clusters) takes
-/// the finite path: RANSAC P3P through the image's own camera model, whose
-/// minimal samples are the finite track pairs when there are at least three
-/// (the tracks lead and the clusters only support) and every finite pair
-/// otherwise, scored over every pair at the 3 px bound, then a trimmed
-/// refinement. A bearing's residual is its angle times the camera's focal
-/// length, so it constrains the rotation only. A target below that floor takes
-/// the rotation-only path: its rotation is fit in closed form to the bearings
-/// (trimmed and iterated) and its translation is left at its stored value.
-///
-/// The input reconstruction is never modified; the answer is a new one. A
-/// target whose estimate misses ``accept_gate``, or that has no support on
-/// either path, is **refused** rather than raising: it keeps its stored pose,
-/// the other targets proceed, and its report says ``refused`` with a reason.
-/// Only a property of the call itself raises — an empty or duplicated target
-/// list, an unknown image name, an unposed target, fewer than three non-target
-/// posed images, a ``.matches`` file without the clusters and cluster-patches
-/// sections (``ValueError``), or an unreadable ``.matches`` file or ``.sift``
-/// observations (``OSError``).
+/// The input reconstruction is never modified. A target whose estimate misses
+/// ``accept_gate``, or that has no support, is **refused** rather than
+/// raising: it keeps its stored pose and its report says why.
 ///
 /// Args:
 ///     reconstruction: The source ``SfmrReconstruction``. Left untouched.
 ///     image_names: The targets' workspace-relative names as the
 ///         reconstruction stores them (e.g. ``["frames/000123.jpg"]``).
-///         ``ValueError`` when a name is not one of its images.
-///     cluster_patches_path: Optional cluster-patches ``.matches`` file (one
-///         with both the clusters and the cluster-patches sections). Without
-///         it the pairs are the tracks' alone. With it each cluster is also
-///         used as a track of its own: a cluster with exactly one kept member
-///         in the target and kept members in at least two non-target posed
-///         images that have tracks is triangulated from those members at
-///         their stored poses, and paired with the target member's refined
-///         position when every one of those members lies within
-///         ``max_cluster_residual_px`` of the triangulated point's
-///         reprojection in its own image. A member in an image with no track
-///         observation does not count. Clusters feed the pose estimate only;
-///         they create no points. Works the same on ``sift_files`` and
-///         ``embedded_patches`` reconstructions.
+///     cluster_patches_path: Optional ``.matches`` file with both the clusters
+///         and the cluster-patches sections. With it, clusters add pairs
+///         beside the tracks' (pose estimate only; they create no points).
 ///     min_obs: Held-out finite correspondences below which a target takes the
 ///         rotation-only path (default 8).
 ///     accept_gate: Accept an estimate at or above this inlier fraction
@@ -169,44 +137,35 @@ fn totals_to_py<'py>(
 ///         answer (default 0).
 ///     max_cluster_residual_px: The farthest, in pixels, a cluster's
 ///         non-target member may lie from the reprojection of the cluster's
-///         triangulated position into its image; a cluster with a member
-///         farther away, behind its camera or outside its frame gives no pair
-///         (default 1.5). Pass ``float("inf")`` to keep every cluster that
-///         triangulates.
+///         triangulated position (default 1.5). Pass ``float("inf")`` to keep
+///         every cluster that triangulates.
 ///
 /// Returns:
 ///     ``(reconstruction, report)``. The derived ``SfmrReconstruction``
 ///     differs from the source only in the accepted targets' poses and in the
-///     points the set observes, and records the operation, the targets, the
-///     correspondence source and the inlier fractions in its metadata. The
-///     report dict carries ``images`` (one per-target dict, in the order the
-///     names were given) plus the set's totals: ``targets``, ``accepted``,
-///     ``refused``, ``correspondences``, ``track_correspondences``,
-///     ``bearing_correspondences``, ``cluster_correspondences``, ``inliers``,
-///     ``track_inliers``, ``bearing_inliers``, ``cluster_inliers``,
-///     ``clusters_untracked``, ``clusters_inconsistent`` (summed over the
-///     targets), ``inlier_fraction``, ``held_out_points``,
-///     ``retriangulated``, ``removed_points`` (each point counted once however
-///     many targets observe it) and ``scene_scale``. Each per-target dict
-///     carries ``image_index``, ``image_name``, ``source`` (``"tracks"`` or
-///     ``"tracks_and_clusters"``), ``rotation_only``, ``correspondences`` and
-///     its split ``track_correspondences`` / ``cluster_correspondences``, with
-///     ``bearing_correspondences`` the track pairs at infinity, ``inliers``
-///     and its split ``track_inliers`` / ``cluster_inliers``, with
-///     ``bearing_inliers`` the track inliers at infinity,
-///     ``clusters_considered`` (clusters with a kept member in the image),
-///     ``clusters_skipped`` (set aside by the member rules),
-///     ``clusters_untracked`` (kept members in two or more non-target posed
-///     images, but in fewer than two with tracks), ``clusters_failed`` (did
-///     not triangulate), ``clusters_inconsistent`` (triangulated, but a member
-///     lies farther than ``max_cluster_residual_px`` from the point),
-///     ``inlier_fraction``, ``accepted``,
-///     ``refused``, ``refusal`` (the reason or ``None``), ``rotation_deg`` and
-///     ``translation`` (the move away from that image's stored pose),
-///     ``translation_scene`` and ``scene_scale`` (the translation in units of
-///     the source's median camera-to-structure distance, and that distance;
-///     both ``None`` when it is undefined), and that target's share of
-///     ``held_out_points``, ``retriangulated`` and ``removed_points``.
+///     points the set observes. The report dict carries ``images`` (one
+///     per-target dict, in the order the names were given) plus the set's
+///     totals: ``targets``, ``accepted``, ``refused``, ``correspondences``,
+///     ``track_correspondences``, ``bearing_correspondences``,
+///     ``cluster_correspondences``, ``inliers``, ``track_inliers``,
+///     ``bearing_inliers``, ``cluster_inliers``, ``clusters_untracked``,
+///     ``clusters_inconsistent``, ``inlier_fraction``, ``held_out_points``,
+///     ``retriangulated``, ``removed_points`` and ``scene_scale``. Each
+///     per-target dict carries ``image_index``, ``image_name``, ``source``
+///     (``"tracks"`` or ``"tracks_and_clusters"``), ``rotation_only``, the
+///     same correspondence and inlier counts, ``clusters_considered``,
+///     ``clusters_skipped``, ``clusters_untracked``, ``clusters_failed``,
+///     ``clusters_inconsistent``, ``inlier_fraction``, ``accepted``,
+///     ``refused``, ``refusal`` (the reason or ``None``), ``rotation_deg``,
+///     ``translation``, ``translation_scene`` and ``scene_scale`` (both
+///     ``None`` when undefined), ``held_out_points``, ``retriangulated`` and
+///     ``removed_points``.
+///
+/// Raises:
+///     ValueError: An empty or duplicated target list, an unknown image name,
+///         an unposed target, fewer than three non-target posed images, or a
+///         ``.matches`` file without the clusters and cluster-patches sections.
+///     OSError: An unreadable ``.matches`` file or ``.sift`` observations.
 #[pyfunction]
 #[pyo3(signature = (reconstruction, image_names, *, cluster_patches_path=None, min_obs=8, accept_gate=0.30, seed=0, max_cluster_residual_px=DEFAULT_MAX_CLUSTER_RESIDUAL_PX))]
 #[allow(clippy::too_many_arguments)]
@@ -277,7 +236,7 @@ pub(crate) fn read_cluster_patches(
 ) -> PyResult<Option<MatchesData>> {
     path.map(|path| {
         py.detach(|| sfmtool_matches_format::read_matches(path))
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+            .map_err(os_err)
     })
     .transpose()
 }

@@ -11,10 +11,21 @@ use sfmtool_sfmr_format::{FramesMetadata, RigFrameData, RigsMetadata, SfmrCamera
 
 use crate::PyCameraIntrinsics;
 
+/// A Python `ValueError` carrying `e`'s message, for `.map_err(value_err)` on
+/// a core error that is a property of the caller's input.
+pub(crate) fn value_err(e: impl std::fmt::Display) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
+}
+
+/// A Python `OSError` (`PyIOError`) carrying `e`'s message, for
+/// `.map_err(os_err)` on a failed read or write.
+pub(crate) fn os_err(e: impl std::fmt::Display) -> PyErr {
+    pyo3::exceptions::PyIOError::new_err(e.to_string())
+}
+
 /// Serialize a serde-compatible value to a Python object via JSON round-trip.
 pub(crate) fn serde_to_py<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>> {
-    let json_str = serde_json::to_string(value)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let json_str = serde_json::to_string(value).map_err(value_err)?;
     let json_mod = py.import("json")?;
     Ok(json_mod.call_method1("loads", (json_str,))?.into())
 }
@@ -26,8 +37,7 @@ pub(crate) fn py_to_serde<T: serde::de::DeserializeOwned>(
 ) -> PyResult<T> {
     let json_mod = py.import("json")?;
     let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
-    serde_json::from_str(&json_str)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    serde_json::from_str(&json_str).map_err(value_err)
 }
 
 /// Get a required key from a Python dict, raising KeyError if missing.

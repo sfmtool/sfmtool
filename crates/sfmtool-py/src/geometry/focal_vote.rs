@@ -12,13 +12,14 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::geometry::focal_vote::{
     focal_vote_from_matches, focal_vote_with_options, CameraModel, ColumnDiagnostics,
-    FocalVoteOptions, FocalVoteResult, MatchesInputError, ScanCell, ScanVote,
+    FocalVoteOptions, FocalVoteResult, ScanCell, ScanVote,
 };
 use sfmtool_matches_format::MatchesData;
 
 use crate::csr_args::{
     check_starts_close, check_starts_nondecreasing, float_array_f32, resolve_csr_source, CsrSource,
 };
+use crate::helpers::value_err;
 
 /// One column's `scan_votes` entry as a Python dict.
 pub(crate) fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyDict>> {
@@ -162,13 +163,6 @@ fn vote_arrays(
         width,
         height,
     })
-}
-
-/// Map a core matches-reading refusal onto the Python exception the caller
-/// sees. Every one of them is a property of the file, so they are all value
-/// errors.
-pub(crate) fn matches_err_to_py(e: MatchesInputError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
 }
 
 /// Resolve the `columns` argument; `None` is the pinhole-only default.
@@ -318,7 +312,7 @@ pub fn focal_vote<'py>(
         )),
     });
 
-    vote_dict(py, &result.map_err(matches_err_to_py)?)
+    vote_dict(py, &result.map_err(value_err)?)
 }
 
 /// A [`FocalVoteResult`] as the Python dict the binding documents.

@@ -11,17 +11,12 @@
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::spherical::consensus_atlas::{
-    render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,
-};
+use sfmtool_core::spherical::consensus_atlas::{render_consensus_atlas, ConsensusAtlasBatchParams};
 use sfmtool_core::spherical::photometric_ransac::RansacPhotometricParams;
 
+use crate::helpers::value_err;
 use crate::spherical::tile_rig::PySphericalTileRig;
 use crate::spherical::tile_source_stack::parse_sources;
-
-fn err_to_py(e: ConsensusAtlasBatchError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
-}
 
 /// `(atlas, tile_primary_count, tile_secondary_count, tile_primary_lum_mad,
 /// tile_secondary_lum_mad)` — the Python return shape of
@@ -113,10 +108,10 @@ pub fn render_consensus_atlas_py(
     let report = match dtype {
         "float16" | "f16" | "half" => py
             .detach(|| render_consensus_atlas::<half::f16>(&rig.inner, &parsed, &params))
-            .map_err(err_to_py)?,
+            .map_err(value_err)?,
         "float32" | "f32" => py
             .detach(|| render_consensus_atlas::<f32>(&rig.inner, &parsed, &params))
-            .map_err(err_to_py)?,
+            .map_err(value_err)?,
         "uint8" | "u8" => {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "render_consensus_atlas requires dtype \"float16\" or \"float32\"; \

@@ -13,13 +13,13 @@ use pyo3::prelude::*;
 use sfmtool_core::analysis::cluster_radii::{
     cluster_radii as core_cluster_radii, cluster_radii_from_matches,
     coarsest_cluster_ids as core_coarsest_cluster_ids, coarsest_cluster_ids_from_matches,
-    ClusterRadiiError,
 };
 use sfmtool_matches_format::MatchesData;
 
 use crate::csr_args::{
     check_starts_close, check_starts_nondecreasing, float_array_f32, resolve_csr_source, CsrSource,
 };
+use crate::helpers::value_err;
 
 /// What a radius-shaped binding was called with: a parsed `.matches` handle,
 /// or the CSR index and the shapes spelled out.
@@ -86,13 +86,6 @@ fn radii_source<'a, 'py>(
     })
 }
 
-/// Map a core radius-reading refusal onto the Python exception the caller
-/// sees. Every one of them is a property of the file, so they are all value
-/// errors.
-fn radii_err_to_py(e: ClusterRadiiError) -> PyErr {
-    PyValueError::new_err(e.to_string())
-}
-
 /// Each cluster's feature radius in pixels (see
 /// ``specs/core/analysis/source-clusters.md``).
 ///
@@ -152,7 +145,7 @@ pub fn cluster_radii<'py>(
                 refine_radius,
             )),
         })
-        .map_err(radii_err_to_py)?;
+        .map_err(value_err)?;
     Ok(PyArray1::from_vec(py, out))
 }
 
@@ -210,7 +203,7 @@ pub fn coarsest_cluster_ids<'py>(
                 n,
             )),
         })
-        .map_err(radii_err_to_py)?;
+        .map_err(value_err)?;
     Ok(PyArray1::from_vec(py, out))
 }
 
