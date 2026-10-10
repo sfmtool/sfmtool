@@ -149,6 +149,7 @@ Paths in the *Source* column are relative to
 | | `EditedReconstruction.move_camera` | [move-camera.md](core/reconstruction/move-camera.md) |
 | | `EditedReconstruction.prune_covered_observations` | [prune-covered-observations.md](core/reconstruction/prune-covered-observations.md) |
 | | `EditedReconstruction.resect_image_in_place` | [resect-image.md](gui/edits/resect-image.md) |
+| [reconstruction/bundle_adjust.rs](../crates/sfmtool-py/src/reconstruction/bundle_adjust.rs) | `focal_is_releasable`, `distortion_is_releasable` | [bundle-adjust.md](core/reconstruction/bundle-adjust.md) |
 | [reconstruction/add_image_to_tracks.rs](../crates/sfmtool-py/src/reconstruction/add_image_to_tracks.rs) | `EditedReconstruction.add_image_to_tracks` | [add-image-to-tracks.md](core/reconstruction/add-image-to-tracks.md) |
 | [reconstruction/switch_camera_model.rs](../crates/sfmtool-py/src/reconstruction/switch_camera_model.rs) | the `switch_camera_model` method of both reconstruction classes, `SfmrReconstruction.outermost_keypoints` | [switch-camera-model.md](core/reconstruction/switch-camera-model.md), [outermost-keypoint.md](core/reconstruction/outermost-keypoint.md) |
 | [reconstruction/triangulate_points.rs](../crates/sfmtool-py/src/reconstruction/triangulate_points.rs) | `triangulate_points`, `VERDICT_CODES` | [triangulation-rules.md](core/reconstruction/triangulation-rules.md) |
