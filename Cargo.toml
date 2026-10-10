@@ -62,9 +62,13 @@ rust-version = "1.97"
 # — `cargo test`, `cargo llvm-cov`, `pixi run ui-test`, a bare local `cargo test`
 # — with no flag to remember and no way to accidentally opt out.
 #
-# `[profile.dev]` itself is left alone so plain `cargo build` / `cargo check`
-# iteration stays fast; only dependencies are lifted, and those are compiled once
-# and then cached (in CI, by the `cargo home` + target caches keyed on Cargo.lock).
+# The level is set on `[profile.dev]`, which `[profile.test]` inherits, so a
+# development `cargo build` / `cargo run` builds the workspace crates at the
+# same level 1 as the tests. Level 1 is the balance between compile time and
+# run time found best for development. `cargo check` does no code generation,
+# so the level does not slow it. Dependencies are lifted to 3 below, and those
+# are compiled once and then cached (in CI, by the `cargo home` + target caches
+# keyed on Cargo.lock).
 #
 # Level 1 rather than 3. Most of the 46x comes from any optimization at all, and
 # the workspace crates are what CI recompiles on every run: dependencies come out
@@ -73,8 +77,10 @@ rust-version = "1.97"
 # rebuilding the workspace crates took 247-277s at level 1 against 343-358s at
 # level 3, and `cargo test --workspace` ran in 70s against 86s. The largest
 # suite, sfmtool-core's lib tests, took 12.5s against 11.5s.
-[profile.test]
+[profile.dev]
 opt-level = 1
+
+[profile.test]
 # Debuginfo is most of what a `target` dir weighs, and the Linux coverage cache
 # had reached 2.4 GB — enough that seven such caches overrun GitHub's 10 GB
 # per-repo budget and start evicting each other. Line tables keep what the test
