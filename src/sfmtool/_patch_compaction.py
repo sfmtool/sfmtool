@@ -163,6 +163,7 @@ def compact_to_embedded_patches(
     patch_bitmaps: np.ndarray | None = None,
     valid: np.ndarray | None = None,
     min_views: int = 2,
+    keep_stored_references: bool = False,
 ) -> SfmrReconstruction:
     """Compact per-point keypoint-localization results into an ``embedded_patches``
     reconstruction.
@@ -198,10 +199,17 @@ def compact_to_embedded_patches(
             culled point would otherwise be kept with an all-black bitmap).
             ``None`` skips the validity cull (``min_views`` still applies).
         min_views: Drop a point whose kept-view count is below this.
+        keep_stored_references: For a writer that writes no bitmap
+            (``xform --localize-keypoints``): each point keeps the reference
+            observation ``recon`` stores for it wherever the new track still
+            holds that image, whatever its views were aligned to, and takes
+            the image its localization names only where it stores none or
+            the stored image left its track.
 
     Each surviving point's reference observation is the observation, in its
     new track, of the image its views were aligned to, so that the keypoints,
-    the bitmap and the reference agree. Where the localization carries
+    the bitmap and the reference agree (unless ``keep_stored_references``,
+    above). Where the localization carries
     ``reference_image``, that is the image; ``None`` gives ``-1`` (the views
     were aligned to a fused mean, which is then the bitmap, or to nothing).
     The kernels align to a point's stored reference whenever it is in the
@@ -336,15 +344,18 @@ def compact_to_embedded_patches(
         views = np.asarray(loc["views"], dtype=np.uint32)
         kpts = np.asarray(loc["keypoints"], dtype=np.float32).reshape(-1, 2)
         # The reference the views were aligned to, where the localization
-        # says, else the stored one; recorded only where its image is in the
-        # track.
+        # says, else the stored one; with `keep_stored_references`, the
+        # stored one first. Recorded only where its image is in the track.
+        stored_image = int(stored_references[old_id])
         if "reference_image" in loc:
             aligned = loc["reference_image"]
-            candidate = -1 if aligned is None else int(aligned)
+            candidates = [-1 if aligned is None else int(aligned)]
+            if keep_stored_references:
+                candidates.insert(0, stored_image)
         else:
-            candidate = int(stored_references[old_id])
-        reference_image = (
-            candidate if candidate >= 0 and bool(np.any(views == candidate)) else None
+            candidates = [stored_image]
+        reference_image = next(
+            (c for c in candidates if c >= 0 and bool(np.any(views == c))), None
         )
         for k, j in enumerate(np.argsort(views, kind="stable")):
             if reference_image is not None and int(views[j]) == int(reference_image):

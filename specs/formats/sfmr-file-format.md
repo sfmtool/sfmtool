@@ -1397,15 +1397,16 @@ rules are checked on the flags alone.
 - **What it holds**: a point's bitmap is the render of its reference
   observation, which `tracks/reference_observations` names: its colour as
   rendered, alpha `255` on the samples on the photograph and `0` on the rest.
-  A point whose reference is `-1` has no reference observation in its track,
-  so its bitmap is not the render of one of its observations. It is a fused
+  A point whose reference is `-1` has no reference observation in use, so its
+  bitmap is not the render of one of its observations. It is a fused
   mean of its views, alpha their agreement and coverage (every bitmap written
   before version 12, and a point for which the reference-view rule picked no
   view or reached its pick only through its last fallback, `without_any`; see
   [../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
-  stored bitmap", `ReferenceRender::stored_reference`), or the render of an
-  observation that a later edit removed from the point, which keeps the
-  bitmap (§ 9, "Keeping it true").
+  stored bitmap", `ReferenceRender::stored_reference`, and a point whose
+  stored reference a writer that aligns keypoints and renders bitmaps could
+  no longer use; § 9, "Keeping it true"), or the render of an observation that
+  a later edit removed from the point, which keeps the bitmap (same place).
 
 ### 9. Tracks
 
@@ -1595,12 +1596,15 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   xform --add-patch-bitmaps`, SfM Explorer's display bitmaps, `sfm
   web-export`) renders the point from this observation, so dropping the
   bitmaps and adding them again gives the same bitmaps. `-1` where the point
-  has no reference observation in its track: a stored bitmap is then not the
-  render of one of its observations -- a fused mean (from before version 12,
-  or where the reference-view rule picks no view or reaches its pick only
-  through its last fallback, `without_any`), or the render of an observation
-  that has since been removed from the point -- and a later render runs the
-  reference-view rule for the point and records its pick.
+  has no reference observation in use: none in its track, or, after a writer
+  that aligns keypoints and renders bitmaps, a stored one that writer could no
+  longer render usefully and no pick to replace it (see "Keeping it true"). A
+  stored bitmap is then not the render of one of its observations -- a fused
+  mean (from before version 12, or where the reference-view rule picks no view
+  or reaches its pick only through its last fallback, `without_any`), or the
+  render of an observation that has since been removed from the point -- and
+  a later render runs the reference-view rule for the point and records its
+  pick.
 - **Presence**: required in a version 12 file whose `points3d/metadata.json`
   has `has_uv_frames: true`, and absent otherwise, so it needs no flag of its
   own. It is present with the patch frame, not with the bitmaps: a file
@@ -1619,20 +1623,36 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   longer has, until a later render replaces it from a reference the rule
   picks. A writer that moves geometry (a bundle adjustment, a similarity, moved keypoints, a refit
   normal or a new patch frame) keeps the index: the bitmap rendered after it
-  is rendered from the same observation. That includes a writer that zeroes a
+  is rendered from the same observation. The exception is a writer that
+  aligns keypoints and renders the bitmaps from them (`--refine-keypoints`
+  with `bitmaps`, and `sfm embed-patches`, whose compaction re-renders an
+  `embedded_patches` input): it records the reference the views were aligned
+  to, so the keypoints, the bitmap and the reference name the same
+  observation. Where the stored reference can no longer be rendered usefully
+  -- its core does not render at its keypoint (out of frame), or it is past
+  the obliquity cut (`embed-patches`' `--max-obliquity-deg`, or the
+  localizer's grazing pre-filter) -- it is replaced by the reference-view
+  rule's pick over the views kept, which is recorded, or by `-1` with the
+  fused mean as the bitmap where the rule picks no view it would store; the
+  stored observation can stay in the track. That includes a writer that zeroes a
   point's patch frame (`--convert-infinity` where a point's patch has no extent
   to keep): the point then has no patch and a zero bitmap row, and keeps its
   reference, since the observation is still in its track, so a render after a
-  later writer gives it a frame again renders from it. A writer that drops the bitmaps keeps
-  the column: `--minimal`, `--drop-patch-bitmaps`, `--localize-keypoints`
-  (which carries each point's reference to the observation of the same image
-  in its new track), and `--refine-keypoints` and `--refine-normals` without
-  `bitmaps`. A writer that
+  later writer gives it a frame again renders from it. A writer that drops the bitmaps, or
+  writes none, keeps each stored reference `≥ 0`, even one it could not align
+  to, since no bitmap is written for it to disagree with: `--minimal`,
+  `--drop-patch-bitmaps`, `--localize-keypoints` (which carries each point's
+  reference to the observation of the same image in its new track, and
+  records the reference its views were aligned to only where the point
+  stored none or the stored image left its track), and `--refine-keypoints`
+  and `--refine-normals` without `bitmaps` (the first records, for a point at
+  `-1`, the rule's pick its views were aligned to). A writer that
   renders the bitmaps renders each point that has a reference from that
   observation, and runs the reference-view rule only for a point at `-1`,
   writing the observation it picks: `--add-patch-bitmaps`, `--refine-keypoints`
   and `--refine-normals` with `bitmaps`, and `sfm embed-patches` on an input
-  that is already `embedded_patches`. In memory,
+  that is already `embedded_patches`, with the replacement above for the
+  writers that align keypoints. In memory,
   `SfmrReconstruction::to_sfmr_data` writes the column as the reconstruction
   holds it, except that a pick only SfM Explorer's display render made is
   written as `-1` (`PointSet::saved_reference_observations`) unless a bench

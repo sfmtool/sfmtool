@@ -112,8 +112,8 @@ debug = false
 # with the old Markdown parser, and naming a removed lint is itself a warning.
 # `congeal` is set only by hand, to build the keypoint-localization harness
 # (`crates/sfmtool-core/examples/align_vs_congealing.rs`) against the congealing
-# localizer of an older commit; declaring it keeps the normal build free of an
-# unexpected-cfg warning.
+# localizer of an older commit; declaring it keeps this tree's build free of an
+# unexpected-cfg warning (the older commit's build passes `--check-cfg` itself).
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(congeal)"] }
 

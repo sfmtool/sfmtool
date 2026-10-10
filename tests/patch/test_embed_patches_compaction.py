@@ -293,6 +293,38 @@ def test_compact_writes_references_naming_observations_of_the_compacted_tracks(
     assert got == want
     assert any(w not in (-1, old_image[p]) for p, w in want.items())
 
+    # A writer that writes no bitmap (`--localize-keypoints`) keeps the stored
+    # reference wherever its image is still in the track, whatever the views
+    # were aligned to, and records the aligned one only where the stored
+    # image left the track.
+    moved: dict[int, int] = {}
+    for loc in relocs:
+        pid = int(loc["point_index"])
+        views = np.asarray(loc["views"])
+        others = [int(v) for v in views if v != old_image.get(pid, -1)]
+        if pid in want and pid % 3 == 0 and len(others) >= 2 and len(moved) < 5:
+            keep = views != old_image[pid]
+            loc["views"] = views[keep]
+            loc["keypoints"] = np.asarray(loc["keypoints"])[keep]
+            moved[pid] = int(loc["reference_image"])
+    assert moved
+    fourth = compact_to_embedded_patches(
+        new,
+        new.patches,
+        relocs,
+        list(new.image_file_hashes),
+        min_views=2,
+        keep_stored_references=True,
+    )
+    refs4 = np.asarray(fourth.reference_observations)
+    counts4 = np.asarray(fourth.observation_counts)
+    offsets4 = np.concatenate([[0], np.cumsum(counts4)[:-1]]).astype(int)
+    timg4 = np.asarray(fourth.track_image_indexes)
+    got4 = {
+        p: (int(timg4[offsets4[p] + refs4[p]]) if refs4[p] >= 0 else -1) for p in want
+    }
+    assert got4 == {p: moved.get(p, int(old_image[p])) for p in want}
+
 
 def _normal_frame_angles_deg(recon) -> np.ndarray:
     """Per finite patched point, the angle (degrees) between the stored

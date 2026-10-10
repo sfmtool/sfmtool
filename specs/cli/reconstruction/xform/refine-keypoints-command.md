@@ -146,10 +146,12 @@ without re-rendering; it costs a tile render and a self-similarity reading per v
 point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
 and render once on the finalizing stage. With `bitmaps=false` the command
 writes the keypoints and drops any stored bitmaps, which were rendered at the
-old keypoints, as `--refine-normals bitmaps=false` does; each point records the
-reference its views were aligned to, as with bitmaps, so a later
-`--add-patch-bitmaps` renders each point from
-the reference its keypoints were refined against.
+old keypoints, as `--refine-normals bitmaps=false` does. With no bitmap
+written there is nothing for the reference to agree with, so a point that
+stores a reference `≥ 0` keeps it, even one whose tile does not render at its
+keypoint and so aligned nothing, and a point at `-1` records the rule's pick
+its views were aligned to; a later `--add-patch-bitmaps` renders each point
+from the reference it then stores.
 
 The transform prints a one-line summary in the established `xform` style over
 the finitely-scored views, the reference's included (a point with fewer than

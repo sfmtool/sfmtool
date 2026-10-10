@@ -95,11 +95,15 @@ CARGO_TARGET_DIR=$S/tb pixi run --manifest-path $W/pixi.toml \
 mkdir -p $S/main-src
 git -C $W archive 83ffb08e Cargo.toml Cargo.lock crates | tar -x -C $S/main-src
 mkdir -p $S/main-src/crates/sfmtool-core/examples && cp $W/$X $S/main-src/$X
-RUSTFLAGS="--cfg congeal" CARGO_TARGET_DIR=$S/tm \
+RUSTFLAGS="--cfg congeal --check-cfg cfg(congeal)" CARGO_TARGET_DIR=$S/tm \
   pixi run --manifest-path $W/pixi.toml \
   cargo build --release -p sfmtool-core --example align_vs_congealing \
   --manifest-path $S/main-src/Cargo.toml
 ```
+
+The `--check-cfg` flag is there because the root `Cargo.toml` at `83ffb08e`
+does not declare `cfg(congeal)`; without it the congealing build prints 7
+`unexpected_cfgs` warnings, which are harmless.
 
 The binaries are `$S/tb/release/examples/align_vs_congealing` and
 `$S/tm/release/examples/align_vs_congealing`; below they are `$TB` and `$TM`.

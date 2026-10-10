@@ -393,9 +393,10 @@ def test_stored_reference_is_kept_through_localize_and_refine(seoul_bull_workspa
     """A point's stored reference observation is the one ``--localize-keypoints``
     and then ``--refine-keypoints`` align its views to: both keep it, name the
     same image as the reference, and leave its keypoint where it was. A
-    reference whose core does not render at its keypoint aligns nothing, and
-    is recorded as no reference (``-1``), so the refinement after it aligns
-    that point to the reference-view rule's pick; few do."""
+    reference whose core does not render at its keypoint aligns nothing; the
+    localizer, which writes no bitmap, keeps it all the same, and the
+    refinement, which renders bitmaps, records it as no reference (``-1``) or
+    the reference-view rule's pick; few do."""
     from sfmtool.xform import RefineKeypointsTransform
 
     recon = _embedded(seoul_bull_workspace)
@@ -450,3 +451,5 @@ def test_stored_reference_is_kept_through_localize_and_refine(seoul_bull_workspa
             checked += 1
         assert 0 < len(named) // 2 <= checked, (checked, len(named))
         assert unused <= checked // 20, (unused, checked)
+        if out is localized:
+            assert unused == 0, unused

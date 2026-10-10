@@ -104,7 +104,13 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   the reference. The obliquity cut (`--max-obliquity-deg`) runs before each
   round's sub-pixel pass and drops a reference like any other view; the pass's
   reference-view rule then picks a new one from the views left, and that is the
-  reference the output records.
+  reference the output records. Round 1's sub-pixel pass therefore sees only
+  the views the cut keeps, so the round-1 bitmaps the early self-similarity
+  cull reads (below) are rendered from that set: a point whose reference the
+  cut drops is read from its new reference's tile, and a fused mean averages
+  no grazing view. With `--max-obliquity-deg` below `90`, the set of points
+  that cull removes can differ slightly from a run that cut after round 1's
+  sub-pixel pass.
 - **Observation thresholds.** A view is dropped if it can't be localized
   cleanly (grazing view, out-of-frame keypoint), if its own tile pins no 2D
   position (its ZNCC self-similarity radius above
@@ -133,9 +139,13 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   where it stores `-1`, where its reference left the view set (the obliquity
   cut, or the localizer's grazing pre-filter), or where its reference's core
   does not render at its keypoint, so nothing could be aligned to it. The
-  keypoints, the bitmap and the recorded reference therefore always name the
-  same observation, and no bitmap that is one view's render is recorded under
-  `-1`. Every point with a reference, kept or picked, then has its bitmap
+  bitmap and the recorded reference therefore always name the same
+  observation, and no bitmap that is one view's render is recorded under
+  `-1`. With the sub-pixel pass on, the keypoints name it too. With
+  `--no-subpixel` and `--rounds` 2 or more, a point whose round-1 reference
+  the obliquity cut drops keeps the keypoints the localizer aligned to that
+  reference, since no pass moves them again, and the final render-only pass
+  records the rule's pick over the views left. Every point with a reference, kept or picked, then has its bitmap
   rendered again from that observation through the compacted value's stored
   `f32` keypoints and frame (`render_from_references`), so dropping and adding
   the bitmaps later gives the same bytes; a fused mean stays as the pass

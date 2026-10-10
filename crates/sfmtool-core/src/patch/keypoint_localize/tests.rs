@@ -2890,3 +2890,70 @@ fn a_flat_view_the_gates_keep_is_left_where_it_started() {
         assert_eq!(res.offsets_px[k], 0.0, "{search_strategy:?}");
     }
 }
+
+/// The "+"-descent's diagonal move: a surface on which every cardinal
+/// neighbour of the start scores below it, so the cardinal walk stops at
+/// `(0, 0)`, while the diagonal `(1, 1)` scores above it. The tile varies
+/// fast along `x − y` and slowly along `x + y`, so a diagonal shift `(1, 1)`
+/// keeps the fast texture in register and a cardinal shift does not. The
+/// descent must move on to the diagonal, and the result's integer cell is
+/// `(1, 1)`, where the template was cut.
+#[test]
+fn search_shift_plus_descent_takes_a_diagonal_step() {
+    let resolution = 20usize;
+    let margin = 3i64;
+    let cr = resolution + 2 * margin as usize;
+    let channels = 1usize;
+    let mut raw = vec![0f32; cr * cr];
+    for row in 0..cr {
+        for col in 0..cr {
+            let (x, y) = (col as f64, row as f64);
+            raw[row * cr + col] =
+                (127.5 + 60.0 * ((x - y) * 2.0).sin() + 25.0 * ((x + y) * 0.2).sin()) as f32;
+        }
+    }
+    let tile = build_tile_from_interleaved(&raw, cr, channels, &vec![true; cr * cr]);
+    let support = disk_support(resolution);
+    let keep_mask = vec![true; channels];
+    let n = support.pixels.len();
+    let tmpl = template_at(
+        &tile, &support, &keep_mask, channels, resolution, margin, 1, 1,
+    );
+    let zncc_at = |dy: i64, dx: i64| {
+        let core = template_at(
+            &tile, &support, &keep_mask, channels, resolution, margin, dy, dx,
+        );
+        template_zncc(&core, &tmpl, channels, n)
+    };
+
+    // The surface the test needs: the start beats every cardinal neighbour,
+    // and the diagonal beats the start.
+    let start = zncc_at(0, 0);
+    for (dy, dx) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        let phi = zncc_at(dy, dx);
+        assert!(
+            phi < start,
+            "cardinal ({dy}, {dx}) scores {phi}, not below the start's {start}"
+        );
+    }
+    assert!(
+        zncc_at(1, 1) > start,
+        "the diagonal does not beat the start"
+    );
+
+    let base = margin as usize;
+    let mut sc = SearchScratch {
+        tmpl,
+        ..Default::default()
+    };
+    let plus = search_shift_plus_descent(
+        &tile, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
+    )
+    .expect("descent scores the seed cell");
+    assert_eq!(
+        (plus.iy, plus.ix),
+        (1, 1),
+        "the descent stopped at {plus:?}"
+    );
+    assert!(plus.peak > start);
+}

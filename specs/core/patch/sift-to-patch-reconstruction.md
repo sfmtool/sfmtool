@@ -155,7 +155,8 @@ Steps 2–5 form one **round**; the pipeline runs `rounds` of them (default `2`)
 alternating normal refinement and keypoint refinement so each feeds the next.
 Round 1 seeds from the SIFT detections (normal-refine → localize → sub-pixel
 refine); each later round re-refines every normal against the *previous* round's
-keypoints, then re-localizes the keypoints against the new normals — a fixed-point
+keypoints, then refines the keypoints again with the sub-pixel pass alone
+against the new normals (the localizer runs only in round 1) — a fixed-point
 alternation. The view set is expanded once (step 3, round 1) and only ever shrinks
 thereafter (the per-round obliquity drop).
 
@@ -186,7 +187,7 @@ thereafter (the per-round obliquity drop).
    render with the [keypoint-localization
    algorithm](patch-keypoint-localization.md), in one pass. The reference is
    the point's stored reference observation where an `embedded_patches` input
-   stores one in `G`, or the one an earlier round recorded, and otherwise the
+   stores one in `G`, and otherwise the
    [reference-view rule](reference-view.md)'s pick from the renders at the
    starting keypoints; its keypoint is not moved. The localizer drops views
    that cannot be aligned (grazing, out-of-frame, a tile that fixes no position,

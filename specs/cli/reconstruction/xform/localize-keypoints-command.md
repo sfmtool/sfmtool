@@ -48,13 +48,16 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   (points at infinity stay at infinity).
 - **Bitmaps are dropped.** The localizer renders no bitmaps, and any stored
   ones are stale once keypoints move and views drop, so the output carries
-  patch *frames* but no bitmaps. Each point records the reference observation
-  its views were aligned to in `tracks/reference_observations` (its stored
-  reference, or the rule's pick where it stored none or its stored one grazes
-  the patch plane), as the observation of that image in its rebuilt track, or
-  `-1` where the views were aligned to the fused mean, or to nothing because
-  the stored reference does not render at its keypoint, so a later render
-  renders the point from it. Re-run
+  patch *frames* but no bitmaps. With no bitmap written there is nothing for
+  the reference to agree with, so each point keeps its stored reference in
+  `tracks/reference_observations`, moved to the observation of that image in
+  its rebuilt track, wherever that image is still in the track -- including a
+  stored reference whose tile does not render at its keypoint, to which
+  nothing was aligned. A point that stores none, or whose stored reference was
+  dropped (a grazing one is dropped with the other grazing views), records
+  the reference its views were aligned to, the rule's pick, or `-1` where they
+  were aligned to the fused mean. A later render renders the point from the
+  reference it then stores. Re-run
   `sfm xform --refine-keypoints bitmaps=true` (or
   `--refine-normals bitmaps=true`) to regenerate them (a frames-without-bitmaps
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).

@@ -10,6 +10,9 @@ that best match the point's reference render (forward-additive ECC
 Gauss–Newton, one pass; never worse than the seed). The reference observation
 is the one the point stores, or the reference-view rule's pick where it stores
 none, and its keypoint is not moved; a point that stored none records the pick.
+With ``bitmaps`` each refined point records the reference its views were
+aligned to, so a stored one that does not render at its keypoint gives way to
+``-1`` and the fused mean; without, a point keeps the reference it stores.
 The track structure (``track_image_indexes`` / ``track_point_indexes`` /
 ``observation_counts``) is untouched. Because the refinement is photometric it
 reads the workspace's source images (``workspace_dir / image_name``), the same
@@ -253,8 +256,16 @@ class RefineKeypointsTransform:
                 patch_bitmaps=bitmaps, reference_observations=references
             )
         # Stored bitmaps were rendered at the old keypoints, so they go, as
-        # ``--refine-normals bitmaps=false`` drops them. Each point records the
-        # reference its views were aligned to, as with bitmaps.
+        # ``--refine-normals bitmaps=false`` drops them. With no bitmap written
+        # there is nothing for the reference to agree with, so a point that
+        # stores a reference keeps it, even one nothing was aligned to, and a
+        # point at -1 takes the one its views were aligned to.
+        stored = recon.reference_observations
+        if stored is not None:
+            stored = np.asarray(stored, dtype=np.int32)
+            references = np.where(stored >= 0, stored, aligned).astype(np.int32)
+        else:
+            references = aligned
         return recon.clone_with_changes(
             keypoints_xy=kxy, patch_bitmaps=None, reference_observations=references
         )

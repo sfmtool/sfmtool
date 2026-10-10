@@ -6,7 +6,9 @@
 is, or is to be, rendered from. A refinement that moves keypoints or frames
 keeps it, and renders each point that has one from the ``f32`` values the
 file stores, so dropping and adding the bitmaps gives the same bytes. A
-filter that removes the reference observation itself writes ``-1``.
+writer that aligns keypoints and renders bitmaps replaces a stored reference
+it cannot use; one that writes no bitmap keeps it. A filter that removes the
+reference observation itself writes ``-1``.
 """
 
 from pathlib import Path
@@ -391,3 +393,64 @@ def test_a_filter_that_removes_the_reference_observation_writes_minus_one(embedd
     image_map = {int(old): new for new, old in enumerate(keep)}
     for p in np.flatnonzero((refs >= 0) & ~lost):
         assert sub_images[sub_offsets[p] + sub_refs[p]] == image_map[ref_image[p]]
+
+
+def _unrenderable_references(recon: SfmrReconstruction) -> tuple:
+    """``recon`` with the reference observation of every third point that
+    stores one moved to the image's corner, where its core does not render, so
+    nothing can be aligned to it. Returns the new reconstruction and the
+    points moved."""
+    refs = np.asarray(recon.reference_observations).astype(np.int64)
+    counts = np.asarray(recon.observation_counts).astype(np.int64)
+    offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    kxy = np.asarray(recon.keypoints_xy, dtype=np.float32).copy()
+    points = [p for p in np.flatnonzero((refs >= 0) & (counts >= 3)) if p % 3 == 0]
+    assert points
+    for p in points:
+        kxy[offsets[p] + refs[p]] = (0.5, 0.5)
+    return recon.clone_with_changes(keypoints_xy=kxy), points
+
+
+def test_writers_without_bitmaps_keep_a_reference_nothing_was_aligned_to(embedded):
+    """A stored reference whose core does not render at its keypoint aligns
+    nothing. A writer that writes no bitmap keeps it all the same:
+    ``--refine-keypoints bitmaps=false`` keeps every stored reference, and
+    ``--localize-keypoints`` keeps it wherever its image is still in the
+    rebuilt track. ``--refine-keypoints`` with bitmaps replaces it by the
+    reference its views were aligned to, or ``-1`` with the fused mean."""
+    recon, points = _unrenderable_references(embedded)
+    stored = np.asarray(recon.reference_observations)
+
+    bare = RefineKeypointsTransform(
+        resolution=RESOLUTION, max_gn_steps=2, bitmaps=False
+    ).apply(recon)
+    np.testing.assert_array_equal(
+        np.asarray(bare.reference_observations)[stored >= 0], stored[stored >= 0]
+    )
+
+    rendered = RefineKeypointsTransform(resolution=RESOLUTION, max_gn_steps=2).apply(
+        recon
+    )
+    refs = np.asarray(rendered.reference_observations)
+    assert all(refs[p] != stored[p] for p in points), "an unusable one is replaced"
+    # Elsewhere the stored references stay.
+    others = (stored >= 0) & ~np.isin(np.arange(len(stored)), points)
+    assert (refs[others] == stored[others]).mean() > 0.9
+
+    # A wide shift bar, so the moved reference, which no search places, is
+    # not dropped for its distance from the projection and stays in the track.
+    out = LocalizeKeypointsTransform(max_shift_px=1e6).apply(recon)
+    want = _reference_images(recon, stored)
+    got = _reference_images(out)
+    src = np.asarray(recon.positions)
+    kept = 0
+    for k, position in enumerate(np.asarray(out.positions)):
+        distances = np.linalg.norm(src - position, axis=1)
+        nearest, second = np.partition(distances, 1)[:2]
+        s = int(np.argmin(distances))
+        if second <= nearest or s not in points:
+            continue
+        if want[s] in _point_images(out, k):
+            assert got[k] == want[s], k
+            kept += 1
+    assert kept > 0

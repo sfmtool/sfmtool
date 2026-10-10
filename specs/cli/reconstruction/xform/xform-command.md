@@ -561,9 +561,12 @@ co-register are dropped, points whose kept-view count falls below `min_views`
 rebuilt from the survivors (via the same compaction helper the `embed-patches`
 pipeline uses). Cameras, poses, and each surviving point's 3D geometry are
 unchanged. Stored patch bitmaps are dropped as stale (the frames are kept, and
-each point records the reference observation its views were aligned to in
-`tracks/reference_observations`, as the observation of that image in its
-rebuilt track, `-1` where the views were aligned to the fused mean) —
+each point keeps its stored reference in `tracks/reference_observations`, as
+the observation of that image in its rebuilt track, wherever that image is
+still in the track, since no bitmap is written for it to disagree with; a
+point that stores none, or whose stored image left the track, records the
+reference its views were aligned to, or `-1` where they were aligned to the
+fused mean) —
 re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
 render bitmaps by default); there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be
