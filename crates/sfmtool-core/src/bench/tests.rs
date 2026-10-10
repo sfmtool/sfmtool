@@ -6626,6 +6626,10 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
         let direct = BitmapScorer::new(&bitmap, MemberCoherenceParams::default().window)
             .score(&tile.planes(), None);
         assert_eq!(held.walked_plain_zncc, Some(direct.plain_zncc));
+        assert_eq!(
+            held.walked_plain_zncc_middle,
+            Some(direct.plain_zncc_middle)
+        );
         assert_eq!(held.walked_plain_zncc_grid, Some(direct.plain_zncc_grid));
         assert_eq!(
             held.walked_blur_matched_zncc,

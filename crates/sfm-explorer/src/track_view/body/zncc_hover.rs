@@ -95,13 +95,13 @@ pub(super) fn zncc_hover_text(m: &TrackMeasurement, is_reference: bool) -> ZnccH
             .zncc_self_similarity_ellipse
             .is_some_and(|e| e.grid_px.axes.iter().all(|a| a.is_finite())) =>
         {
-            "Read unblurred: this row's sharpness could not be read, so the bitmap was not \
+            "Read unblurred: this row has no sharpness reading, so the bitmap was not \
              blurred for it."
                 .to_string()
         }
         None => "Read unblurred: the bitmap was not blurred for this row. It is not sharper \
-                 than this row's tile along every direction by the ratio of 1.25, or its own \
-                 sharpness could not be read."
+                 than this row's tile along every direction by the ratio of 1.25, or the \
+                 bitmap's own sharpness could not be read."
             .to_string(),
     };
     ZnccHoverText::Scored {

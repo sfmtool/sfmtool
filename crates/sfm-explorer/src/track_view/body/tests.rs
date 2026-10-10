@@ -5764,6 +5764,21 @@ fn the_zoom_cell_picks_its_format_after_rounding() {
     assert_eq!(zooms(0.031, 123.4), "0.031/123\u{d7}");
 }
 
+/// The *ZNCC* hover's full-brightness bitmap is the track stage's stored
+/// bitmap: a cluster-stage track has none to draw.
+#[test]
+fn the_hover_bitmap_is_none_at_the_cluster_stage() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    assert_eq!(track.stage_kind(), StageKind::Cluster);
+    panel.hover_bitmap = None;
+    assert_eq!(panel.ensure_hover_bitmap(&ctx, &track), None);
+}
+
 // ── Viewed mode ─────────────────────────────────────────────────────────────
 
 mod viewed;

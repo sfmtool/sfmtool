@@ -1475,10 +1475,10 @@ the patch's width:
    compared. Where the pair was read unblurred, a note takes its place and
    says why, as far as the row's own readings tell: the row's tile is sharper
    than the bitmap along every direction, so it could replace the reference;
-   the row's own sharpness could not be read (it has no self-similarity
-   ellipse); or, otherwise, that the bitmap was not blurred for the row
+   this row has no sharpness reading (no self-similarity ellipse); or,
+   otherwise, that the bitmap was not blurred for the row
    because it is not sharper than the row's tile along every direction by the
-   ratio of 1.25 or its own sharpness could not be read. The row does not
+   ratio of 1.25 or the bitmap's own sharpness could not be read. The row does not
    carry the bitmap's sharpness reading, so the last note names both;
 3. the row's own tile, captioned *This row*.
 

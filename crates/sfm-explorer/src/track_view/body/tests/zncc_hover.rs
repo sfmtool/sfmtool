@@ -131,12 +131,12 @@ fn an_unblurred_row_says_why_in_place_of_the_blurred_bitmap() {
     let (textures, text) = drawn(&read, false);
     assert_eq!(textures, vec![BITMAP, TILE], "{text}");
     assert!(text.contains("ratio of 1.25"), "{text}");
-    assert!(text.contains("could not be read"), "{text}");
-    let (_, text) = drawn(&scored(0.0, false), false);
     assert!(
-        text.contains("this row's sharpness could not be read"),
+        text.contains("the bitmap's own sharpness could not be read"),
         "{text}"
     );
+    let (_, text) = drawn(&scored(0.0, false), false);
+    assert!(text.contains("this row has no sharpness reading"), "{text}");
     assert!(!text.contains("ratio of 1.25"), "{text}");
 }
 
