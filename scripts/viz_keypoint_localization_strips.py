@@ -116,9 +116,7 @@ def _ctx_tile(ctx_img, disp, margin, res, border, top_label, acc=None, bot_label
     scale = disp / ctx_img.shape[0]
     _box(bgr, margin, margin, res, scale, WHITE)  # core @ projection
     if acc is not None:
-        _box(
-            bgr, margin + acc[0], margin + acc[1], res, scale, CYAN
-        )  # core @ aligned
+        _box(bgr, margin + acc[0], margin + acc[1], res, scale, CYAN)  # core @ aligned
     cv2.rectangle(bgr, (0, 0), (disp - 1, disp - 1), border, 3)
     chip(bgr, top_label, (4, 14), border, 0.34)
     if bot_label is not None:
