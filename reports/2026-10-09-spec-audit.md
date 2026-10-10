@@ -354,6 +354,8 @@ Non-goals/deferrals checked: 2; no longer hold: 0
   - Code doc drift: `BasisPick::Strided` doc (`params.rs:53-55`) says "every `ceil(m/K)`-th entry"; the code and spec use the seats left after the track reservation. The spec is right.
   - Mannered prose: "The statistics don't want those views" → "Those views do not improve the consensus either"; "when the cap does not bite" → "when the cap does not reduce the view set".
 **Third copies:** `tail.rs:130-140` repeats § "Phase B mechanics"; minor.
+
+> _Status (2026-10-09): **Superseded** — `keypoint-localization-consensus-basis.md` is deleted with the consensus-basis cap, branch `localize-reference` (PR #914)._
 **Recommendation:** update spec; retire it with its measurements sibling when Part 9 is built.
 **Unclear / incorrect / suspicious:** none.
 Non-goals/deferrals checked: 3; no longer hold: 0
@@ -670,3 +672,5 @@ path `formats/cluster-selection.md`.
    checks it properly only when it is the only one in the PR. The carried
    third copies (kd-forest, self-similarity radius, pose verification) remain
    the largest open documentation debt.
+
+   > _Status (2026-10-09): **Partially done** — `keypoint-localization-consensus-basis.md` is deleted with the consensus-basis cap, branch `localize-reference` (PR #914); the other openings are open._
