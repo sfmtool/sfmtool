@@ -464,3 +464,107 @@ On the paired points, the median per-point difference H − F is −1.0° on seo
 The pipeline's figures on these points are those already published: a median error of 19.0° and 20.3° over every matched cluster ([cell-plane-normals.md](../core/patch/cell-plane-normals.md#what-the-measurements-show)) against 19.4° and 18.0° here. The route does not reproduce them within noise. At the same footprint its normals are 4° to 8° more accurate in median on the paired points and differ from the pipeline's by a median 12° and 9°, against a noise floor of 4° and 3°. Its clusters start where the pipeline's cannot: every member is a true observation, at the ground-truth keypoint, with the ground-truth shape, and the reference is the view where the square appears largest rather than the member with the largest SIFT scale. Its absolute errors are therefore those of ideally seeded clusters, and are lower than the pipeline's. The comparison between footprints is made within the one route, with everything but the footprint held fixed, and does not rest on the absolute errors.
 
 **Decision.** The anchor readings are not independent of the footprint. Going from the floor to the hand-set size changes the determinacy verdict on 25% to 30% of points, keeps the status of 60% to 64% of the cells of members kept at both, and turns a both-axes normal by a median 8.9° and 4.1° with p90 42° and 31°: about twice the median change and two to three times the p90 change of a 5% change of footprint. The hand-set footprint does not give more accurate normals: against the ground truth its median error is within 0.3° of the floor's and the constant's on kerry_park, and on seoul_bull better than the floor's by a median 1.0° per point and equal to the constant's. A normal read at the floor is therefore not the normal the anchor would read at its group's footprint, but it is as accurate as that one.
+
+## Whether the footprint matters downstream (2026-10-09)
+
+**Question.** The previous section found that the anchor readings change with the footprint. Does the footprint also change what the patch pipeline produces from them: where the keypoints land, how accurate the refined normals are, and where bundle adjustment puts the cameras? Each ground-truth point is run through the pipeline's kernels at the anchor floor, at a constant 12 px and at the hand-set size, with everything else held fixed.
+
+**Data.**
+
+- **Code and machine.** Commit `0a4b6d84` (branch `bootstrap-core-migration`), with the extension built from the same Rust sources (the commits since `e51f5360` change only this draft). Windows 11, Intel Core i9-14900HX, 63.7 GB RAM.
+- **Points and footprints.** The points of the previous section (245 on seoul_bull, 369 on kerry_park) and its footprints F, C, H and C5 (12.6 px, the noise floor), each a half-extent in the point's ground-truth reference view. Each variant's patch frame is the ground-truth frame with its centre and normal kept and both half-vectors scaled by the footprint divided by the hand-set size, so every view sees the same world square. The ground-truth files and images were copied to the session scratch directory and read from there.
+- **Pipeline.** For each variant, with the ground-truth poses and intrinsics: `PatchCloud.select_views` (`keypoint_anchor` on), then `localize_keypoints` seeded at the ground-truth keypoints for track views and at the projection for added views, with the selection's scores and track counts, then one sweep of `refine_keypoints`, as `sfm embed-patches` runs them in its first round. All at the `embed-patches` defaults (resolution 24, `min_relative_zncc` 0.7, `min_absolute_zncc` 0.5, member self-similarity bar 2.5, `max_shift_px` 3, consensus basis 8, `per_view` sampler).
+- **Fixed observations.** Every comparison is made over the observations (point, image) that all four variants keep after the sub-pixel step, on points left with at least two of them: 1021 observations on 222 points on seoul_bull (968 of them on ground-truth tracks), and 3118 on 358 points on kerry_park (2687 on tracks). For each variant a reconstruction is built from the ground truth with exactly these tracks and that variant's keypoints and frames (`clone_with_changes`).
+- **Readings.** Displacement is the distance of the variant's keypoint from the ground-truth inline keypoint, over the track observations. LOO ZNCC is the localiser's. ZNCC against the bitmap is the grey ZNCC of each observation's tile (`render_view_tile` at its keypoint, 24 × 24) against the variant's own stored bitmap (`render_bitmaps` on the variant's reconstruction), over the samples valid in both, leaving out every observation that is the reference in any variant. The self-similarity radius is that of each observation's tile, read the overlap way (`zncc_self_similarity_parts_stack`), in grid px.
+- **Normals.** `refine_normals` on the variant's reconstruction with the `embed-patches` settings (`obliquity_weight_power` 2, `fronto_prior_weight` 0.05, `max_refine_views` 8, stored keypoints), from two starts: the ground-truth normal, where the error against the ground truth and the refiner's move from its start are the same angle, and the mean viewing direction over the fixed observations (median start error 36.3° and 36.6°), which shows whether the footprint helps recover a normal. `refine_normals` leaves a normal unrefined when it has fewer than three valid views: 9.0% and 6.7% of the points, the same points at every footprint.
+- **Bundle adjustment.** `sfmtool._sfmtool.geometry.bundle_adjust` at its defaults over the fixed observations, starting from the ground-truth points and either from the ground-truth poses or from those poses with each camera turned 0.5° about a random axis and its centre moved 1% of the camera extent in a random direction. Intrinsics are held, and on kerry_park the adjustment is also run with the focal released. The adjusted centres are aligned to the ground truth by a similarity. Centre drift is in % of the diagonal of the ground-truth camera centres' bounding box (5.96 m and 27.7 m); rotation drift is the angle between the aligned and the ground-truth camera rotations.
+- **Intervals.** 90% intervals on the difference from C. For the keypoint and normal readings, 2000 bootstrap resamples of the points. For the adjustment, 200 half-samples of the points drawn without replacement, each adjusted at every footprint: a resample with replacement duplicates points in the adjustment, and in a first run it moved the median drift difference outside its own interval.
+- **Scripts.** `run.py`, `measure.py`, `boot_half.py` and `analyze.py` in the session scratch directory `footprint-downstream/`, run with `pixi run -e dev python`. Nothing here is checked in.
+
+**Keypoints.** Medians, with p90 after the slash. "Kept" counts the observations the localiser kept out of those `select_views` admitted; "track kept" counts the ground-truth track observations kept after the sub-pixel step out of the study points' track observations.
+
+| seoul_bull | kept | track kept | displacement, px | LOO ZNCC | ZNCC vs bitmap (median / p10) | self-similarity radius (median / p90 / share > 2) |
+|---|---|---|---|---|---|---|
+| F | 1189 / 1303 (91.3%) | 1093 / 1187 | 0.238 / 0.876 | 0.869 | 0.841 / 0.630 | 0.89 / 1.53 / 2.0% |
+| C | 1179 / 1304 (90.4%) | 1081 / 1187 | 0.196 / 0.773 | 0.870 | 0.840 / 0.603 | 0.59 / 1.22 / 0.5% |
+| H | 1144 / 1312 (87.2%) | 1049 / 1187 | 0.152 / 0.594 | 0.890 | 0.880 / 0.700 | 0.76 / 1.55 / 3.2% |
+| C5 | 1177 / 1303 (90.3%) | 1078 / 1187 | 0.199 / 0.827 | 0.872 | 0.839 / 0.615 | 0.57 / 1.19 / 0.8% |
+
+| kerry_park | kept | track kept | displacement, px | LOO ZNCC | ZNCC vs bitmap (median / p10) | self-similarity radius (median / p90 / share > 2) |
+|---|---|---|---|---|---|---|
+| F | 3699 / 4810 (76.9%) | 2967 / 3534 | 0.153 / 0.530 | 0.894 | 0.848 / 0.651 | 0.85 / 1.80 / 6.7% |
+| C | 3820 / 4782 (79.9%) | 3072 / 3534 | 0.159 / 0.521 | 0.889 | 0.847 / 0.620 | 0.69 / 1.56 / 3.7% |
+| H | 3788 / 4797 (79.0%) | 3077 / 3534 | 0.111 / 0.320 | 0.915 | 0.880 / 0.688 | 0.98 / 1.97 / 9.5% |
+| C5 | 3834 / 4791 (80.0%) | 3073 / 3534 | 0.164 / 0.580 | 0.890 | 0.843 / 0.609 | 0.67 / 1.53 / 3.1% |
+
+| Difference from C (90% interval) | seoul_bull | kerry_park |
+|---|---|---|
+| median displacement, H − C | −0.044 (−0.063 to −0.024) px | −0.048 (−0.059 to −0.039) px |
+| median displacement, F − C | +0.042 (+0.020 to +0.065) px | −0.006 (−0.014 to +0.004) px |
+| median displacement, C5 − C | +0.003 (−0.010 to +0.016) px | +0.005 (−0.002 to +0.012) px |
+| p90 displacement, H − C | −0.18 (−0.38 to −0.03) px | −0.20 (−0.27 to −0.15) px |
+| median ZNCC vs bitmap, H − C | +0.040 (+0.031 to +0.055) | +0.034 (+0.021 to +0.045) |
+| median ZNCC vs bitmap, F − C | +0.000 (−0.010 to +0.014) | +0.001 (−0.011 to +0.012) |
+| median self-similarity radius, H − C | +0.17 (+0.10 to +0.24) | +0.29 (+0.22 to +0.37) |
+| median self-similarity radius, F − C | +0.30 (+0.26 to +0.36) | +0.16 (+0.11 to +0.20) |
+| median self-similarity radius, C5 − C | −0.03 (−0.04 to −0.01) | −0.02 (−0.03 to −0.01) |
+
+The hand-set footprint puts the keypoints 0.04 to 0.05 px closer to the ground-truth keypoints in median and 0.2 px closer at p90, about ten times the change a 5% change of footprint makes. Part of this is built in: the ground-truth keypoints were localised with the hand-set frames, so H reproduces the conditions they were made under, and the displacement measures agreement with them rather than with an independent truth. The floor is worse than the constant on seoul_bull and equal to it on kerry_park. A smaller footprint gives tiles that slide further over themselves, but the hand-set size, smaller than 12 px in median, also reads a higher radius than C, so the radius does not order with size; no variant has more than 9.5% of its tiles above 2 grid px. The localiser keeps 3% fewer of the admitted observations at H on seoul_bull and at F on kerry_park.
+
+**Normals.** Error against the ground-truth normal, median / p90 in degrees, over the 222 and 358 points; for the mean-view start, the median angle the refiner moved the normal is in parentheses.
+
+| | seoul_bull, from ground truth | seoul_bull, from mean view (moved) | kerry_park, from ground truth | kerry_park, from mean view (moved) |
+|---|---|---|---|---|
+| F | 12.7 / 34.1 | 20.1 / 55.0 (20.7) | 4.0 / 35.6 | 26.0 / 54.0 (22.4) |
+| C | 10.3 / 37.1 | 18.7 / 54.6 (19.1) | 3.1 / 36.1 | 28.5 / 53.7 (22.5) |
+| H | 10.7 / 41.4 | 19.2 / 61.3 (20.3) | 0.6 / 34.0 | 25.3 / 54.0 (18.4) |
+| C5 | 10.6 / 40.3 | 18.7 / 57.8 (22.7) | 0.0 / 36.6 | 28.8 / 54.2 (21.7) |
+
+| Difference of median error from C (90% interval) | seoul_bull | kerry_park |
+|---|---|---|
+| from ground truth, H − C | +0.4 (−1.3 to +1.9)° | −2.5 (−4.1 to +0.5)° |
+| from ground truth, F − C | +2.4 (+0.6 to +3.8)° | +1.0 (−0.7 to +3.8)° |
+| from ground truth, C5 − C | +0.3 (−1.1 to +1.8)° | −3.1 (−4.5 to −0.0)° |
+| from mean view, H − C | +0.4 (−0.5 to +1.8)° | −3.2 (−4.7 to −0.7)° |
+| from mean view, F − C | +1.3 (+0.1 to +2.5)° | −2.5 (−5.0 to −0.6)° |
+| from mean view, C5 − C | −0.0 (−1.1 to +0.9)° | +0.3 (−0.7 to +2.0)° |
+
+From the ground-truth start the refiner returns the start unchanged on 15% to 17% of the seoul_bull points and 39% to 50% of the kerry_park points, depending on the footprint (the unrefined points included). The kerry_park median from that start therefore sits on the edge of that block and moves by 3.1° between C and C5, so the ground-truth start does not separate the footprints on kerry_park. From the mean viewing direction the noise floor is 0.3°, and there H and F recover kerry_park's normals 3.2° and 2.5° better in median than C, with the same p90. On seoul_bull the floor is worse than the constant by 2.4° from the ground-truth start and by 1.3° from the mean view, and the hand-set size equals the constant.
+
+**Bundle adjustment.** Over all fixed observations, intrinsics held: median reprojection residual; centre drift median / max in % of the camera extent; rotation drift median / max in degrees. The perturbed start converges to the same cameras as the ground-truth start, within 0.0005 percentage points of median and 0.005 of maximum centre drift and 0.005° of rotation drift, on both captures and in both focal modes, so it is not listed separately. The last row adjusts the ground-truth keypoints of the fixed track observations, for reference.
+
+| | seoul_bull residual | seoul_bull centre | seoul_bull rotation | kerry_park residual | kerry_park centre | kerry_park rotation |
+|---|---|---|---|---|---|---|
+| F | 0.217 px | 0.097 / 0.177 | 0.44 / 0.73 | 0.152 px | 0.048 / 0.755 | 0.070 / 0.210 |
+| C | 0.208 px | 0.100 / 0.138 | 0.50 / 0.71 | 0.155 px | 0.053 / 0.776 | 0.086 / 0.187 |
+| H | 0.211 px | 0.082 / 0.124 | 0.40 / 0.62 | 0.147 px | 0.052 / 0.751 | 0.068 / 0.210 |
+| C5 | 0.209 px | 0.107 / 0.162 | 0.57 / 0.75 | 0.156 px | 0.055 / 0.783 | 0.089 / 0.178 |
+| ground-truth keypoints, track observations | 0.202 px | 0.151 / 0.334 | 0.29 / 0.51 | 0.138 px | 0.051 / 0.833 | 0.072 / 0.230 |
+
+With the focal released on kerry_park these figures move by at most 0.01 percentage points of centre drift and 0.002° of rotation drift, and the focal settles within 0.006% (F), 0.015% (C), 0.011% (H) and 0.019% (C5) of the ground truth. On the track observations alone the footprints come out in a different order (seoul_bull centre drift 0.130 / 0.096 / 0.105 / 0.107 at F / C / H / C5), as differences inside the noise would.
+
+| Half-sample difference from C, median (90% interval) | seoul_bull | kerry_park, focal held | kerry_park, focal released |
+|---|---|---|---|
+| centre drift, H − C | −0.003 (−0.076 to +0.065) % | −0.002 (−0.022 to +0.020) % | −0.002 (−0.022 to +0.020) % |
+| centre drift, F − C | +0.003 (−0.067 to +0.058) % | −0.005 (−0.019 to +0.012) % | −0.005 (−0.020 to +0.013) % |
+| centre drift, C5 − C | +0.008 (−0.025 to +0.045) % | +0.002 (−0.005 to +0.013) % | +0.003 (−0.007 to +0.014) % |
+| rotation drift, H − C | −0.06 (−0.24 to +0.09)° | −0.022 (−0.073 to +0.031)° | −0.022 (−0.073 to +0.037)° |
+| rotation drift, F − C | −0.03 (−0.23 to +0.13)° | −0.021 (−0.061 to +0.016)° | −0.021 (−0.063 to +0.018)° |
+| rotation drift, C5 − C | +0.06 (−0.02 to +0.19)° | +0.004 (−0.018 to +0.026)° | +0.006 (−0.019 to +0.029)° |
+| residual, H − C | +0.004 (−0.007 to +0.016) px | −0.008 (−0.015 to −0.002) px | −0.008 (−0.015 to −0.002) px |
+| focal drift, H − C | | | −0.002 (−0.013 to +0.014) % |
+| focal drift, F − C | | | −0.006 (−0.014 to +0.006) % |
+
+Every centre, rotation and focal interval contains zero and is as wide as the noise floor's or wider. The one difference that clears zero is kerry_park's residual at H, 0.008 px lower than at C.
+
+**Deviations and binding gaps.**
+
+- `bundle_adjust` releases the focal only for the camera models whose projection multiplies it onto a coordinate that does not depend on it. seoul_bull's `SIMPLE_RADIAL` camera is not one of them, so its intrinsics are held in every run.
+- `bundle_adjust` takes one pose per image and no rig, so kerry_park's 48 images are adjusted as independent cameras rather than as 24 rig frames.
+- With the ground-truth normal as the refiner's start, the error against the ground truth and the move from the start are one quantity; the mean-viewing-direction start was added so that the move is a separate reading.
+- The order asked for (localise, then refine normals) differs from the first round of `embed-patches`, which refines the normal before selecting views. A sub-pixel `refine_keypoints` sweep follows the localiser, as in `embed-patches`, and its keypoints feed the normals and the adjustment; the discrete localiser's own keypoints give displacements within 0.01 px of those in the tables.
+- ZNCC against the stored bitmap is read against each variant's own bitmap, since the ground truth stores one only for the hand-set frame.
+- The `refine_normals` binding defaults turn the obliquity weight and the fronto prior off; the `embed-patches` values were used instead.
+- `clone_with_changes` on an `embedded_patches` reconstruction requires `track_feature_indexes` together with the other two track arrays, although the reconstruction carries none; sequential indexes were passed.
+
+**Decision.** On seoul_bull the footprint changes the keypoints and normals beyond noise but not the cameras: the hand-set size keeps the keypoints closest to the ground-truth keypoints, the floor gives normals 1° to 2° worse than 12 px, and the adjusted camera centres, rotations and residuals differ by no more than the noise floor at any footprint. On kerry_park the cameras likewise do not depend on the footprint beyond noise, apart from a 0.008 px lower residual at the hand-set size, which also gives the closest keypoints, while the hand-set size and the floor both recover normals from the mean viewing direction about 3° better than 12 px.
