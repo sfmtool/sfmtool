@@ -648,7 +648,17 @@ looking at is the one at the cursor, and this block reports it.
                  "half_extent": [0.004, 0.004] },  // null with no patch frame
   "normal_confidence": 212,                         // null without the column
   "track": [ { "camera_image_index": 3, "name": "images/IMG_0042.jpg",
-               "xy": [131.4, 208.9], "reproj_error": 0.44 } ] }
+               "xy": [131.4, 208.9], "reproj_error": 0.44,
+               // with the file's observation readings only; null where not
+               // measured or not read
+               "stored_reading": {
+                 "zncc_self_similarity_ellipse_axes": [1.21, 0.64],
+                 "zncc_self_similarity_ellipse_axes_is_at_least": [false, false],
+                 "zncc_self_similarity_ellipse_major_angle": 0.42,
+                 "zncc_self_similarity_cos_view_angle": 0.93,
+                 "zncc_self_similarity_tilt_angle": 2.71,
+                 "zncc_self_similarity_zoom": [0.18, 0.21],
+                 "plain_bitmap_zncc": 0.88, "blur_matched_bitmap_zncc": 0.91 } } ] }
 
 // get_point { "point": 1207 }   // bare index, in the selected reconstruction
 
@@ -717,6 +727,16 @@ there is no call that evaluates an arbitrary point on request, since that is a
 separate operation with a cost. A `select_point` earlier in the same batch of
 calls moves the viewed point with it, since `get_point` asks for the viewed
 track again before answering while Track View is drawn.
+
+**`stored_reading` is what the file records of each observation's render**,
+present on every `track` entry where the reconstruction carries the
+observation readings and absent otherwise: the eight columns of
+[`../formats/sfmr-file-format.md`](../formats/sfmr-file-format.md) §
+"Observation readings" under their column names, angles in radians and
+lengths in grid px, a value not measured or not read as `null`. They are the
+record of the render they name, not a reading of the current geometry; the
+viewed track's `evaluation` block reads them back into its rows until its
+evaluation lands.
 
 **`placement` is the point's patch**: its centre, its unit axes, its outward
 normal and its world half-size along each axis, read through

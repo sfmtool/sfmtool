@@ -63,6 +63,13 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   `--refine-normals bitmaps=true`) to regenerate them (a frames-without-bitmaps
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).
   There is no `bitmaps` key on this op.
+- **Observation readings are read again.** Every kept observation was rendered
+  at its new keypoint, so the output stores its
+  [observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+  read on the compacted value's tile, at `resolution` with `sampler`: the
+  self-similarity ellipse, the viewing angle, tilt and zoom, and `NaN` scores,
+  since no bitmap is stored to score against (`with_observation_readings` in
+  [`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)).
 
 The output is built by the same compaction step the `embed-patches` pipeline
 uses after its own localization, so both produce `embedded_patches` files by

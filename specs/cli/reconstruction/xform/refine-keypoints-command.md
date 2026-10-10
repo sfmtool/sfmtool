@@ -153,6 +153,16 @@ keypoint and so aligned nothing, and a point at `-1` records the rule's pick
 its views were aligned to; a later `--add-patch-bitmaps` renders each point
 from the reference it then stores.
 
+**Observation readings.** Every observation was rendered at its refined
+keypoint, so each is read again there and the output stores its
+[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional-version-12):
+the tile at the stored `f32` keypoint and frame, at `resolution`, with
+`sampler`, read for its self-similarity ellipse, its viewing angle, tilt and
+zoom, and its plain and blur-matched scores against the bitmap the output
+stores (`with_observation_readings` in
+[`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)). With
+`bitmaps=false` the output stores no bitmap, so the scores are `NaN`.
+
 The transform prints a one-line summary in the established `xform` style over
 the finitely-scored views, the reference's included (a point with fewer than
 two views, or with no template rendered, carries NaN scores and keeps its

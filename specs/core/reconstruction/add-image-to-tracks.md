@@ -214,8 +214,17 @@ For a point `p` with existing observations in images `J`, and the target image
 Accepted observations are written with their keypoint and, where the value has
 the column, their blur-matched score (`zncc`) in `observation_confidence` on
 the byte scale the bench commit uses (`round(255·clamp(z, 0, 1))`), raised to `1` because `0` means
-unmeasured. Each track stays in image order. The stored per-point error is left
-as it was, since nothing moved the point.
+unmeasured. Each also carries its
+[observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+(`CandidateReport::reading`), read on the tile its score was read on: the
+tile's self-similarity ellipse, viewing angle, tilt and zoom, and its plain
+and blur-matched scores against the template where the template is the point's
+stored bitmap, `NaN` where it is the render the point would store. A value
+without readings gains the columns, every existing row not measured; one whose
+readings stand under other options than the default ones gets new rows with
+nothing measured. Every existing row is carried with its observation. Each
+track stays in image order. The stored per-point error is left as it was,
+since nothing moved the point.
 
 ## The judging rules
 
@@ -386,7 +395,9 @@ it lands after it; a two-reference track is judged by the
 pair rule; `PooledOrTrack` accepts what either bar accepts; a photograph of a
 different texture is refused by every rule; a point out of frame is
 `not_in_frame`; a camera behind the plane is `back_facing`; two points at one
-place keep one observation; the confidence column grows in lockstep; the new
+place keep one observation; the confidence column grows in lockstep; each
+added observation carries its candidate's readings, every existing row not
+measured where the value had none; the new
 view's score, judged and stored in the confidence column, is its blur-matched
 score against the template, as `BitmapScorer` reads it directly; a missing
 reference image leaves that reference out; the preconditions refuse by name.

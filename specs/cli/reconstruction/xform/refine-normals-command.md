@@ -310,6 +310,15 @@ per-point patch textures and can display them without re-rendering; a multi-stag
 pipeline can pass `bitmaps=false` on intermediate stages to skip the redundant
 render and render once on the finalizing stage.
 
+**Observation readings.** Every observation's tile is rendered through the
+refined normal, so each is read again on that render and the output stores its
+[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional-version-12):
+its self-similarity ellipse, its viewing angle, tilt and zoom, and its plain
+and blur-matched scores against the bitmaps the output stores, at `resolution`
+with `sampler` (`with_observation_readings` in
+[`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)). With
+`bitmaps=false` the output stores no bitmap, so the scores are `NaN`.
+
 **Persisting the refined normals (decided).** `.sfmr` *write* used to recompute
 the per-point normals from geometry (the mean-viewing normals; see
 `sfmtool-sfmr-format/src/depth_stats.rs`) on every save, which would silently

@@ -123,6 +123,7 @@ pub struct TrackMeasurement {
     pub zncc_self_similarity_tolerance: Option<f64>, // the deficit it was judged by
     pub viewing_angle_deg: Option<f64>,      // the angle at the keypoint, 0 facing the patch
     pub tilt_direction_deg: Option<f64>,     // which way in the patch's plane the ray leans
+    pub zoom: Option<[f64; 2]>,              // [least, most] zoom of the tile, grid px per photograph px
     pub coverage: Option<f64>,               // share of the tile on the photograph
     pub clipped_share: Option<f64>,          // share of the photograph under it at 0 or 255
     pub pair_zncc: Option<f64>,              // median ZNCC with the other `in` rows
@@ -1595,6 +1596,7 @@ every reader of a row's ZNCC reads the score against the bitmap:
 | The wire's `plain_zncc*` and `blur_matched_zncc*` | both; its description says the blur-matched ones judge |
 | Track at Pixel's own gates (the median ZNCC its members and finish judge) | `blur_matched_zncc` and `blur_matched_zncc_middle`, over the `in` rows other than the reference row ([track-at-pixel.md](track-at-pixel.md)) |
 | The commit's `observation_confidence`, and `create_track` reading it back | `blur_matched_zncc`, the reference row's `1` among them; read back into `blur_matched_zncc` alone |
+| The commit's stored readings (`plain_bitmap_zncc`, `blur_matched_bitmap_zncc`), and `create_track` reading them back | both, as `float32`, the reference row's `1` among them; read back into `plain_zncc` and `blur_matched_zncc`, in preference to `observation_confidence` |
 | The fit's walk and *Accept walk*'s hover (`walked_blur_matched_zncc`, `walked_blur_matched_zncc_middle`, `walked_blur_matched_zncc_grid`) | the blur-matched score against the bitmap of the tile at `walked_to`; `walked_plain_zncc*` beside them judge nothing |
 | Nearby tracks, the geometry search, cluster-stage rows | their own kernels' ZNCCs |
 
@@ -1827,10 +1829,19 @@ observation (read with or without a bitmap), colour and keypoints, its
 origin set to that point, and every observation `in` and **pinned**. The
 point's observations are ones a reconstruction already decided on, so they stand
 as that decision until a person hands them to the bars with `unpin_verdicts`;
-an evaluation's repaint does not move them. **Nothing is recomputed.** The
-score against the bitmap (`blur_matched_zncc`, with no plain score beside it) is `observation_confidence` read back out of
-its byte scale where the column exists, which is what a commit writes there,
-and every other measurement an evaluation would produce is left unmeasured.
+an evaluation's repaint does not move them. **Nothing is recomputed**
+(`stored_measurement`). Where the reconstruction stores the observations'
+readings ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md)
+§ "Observation readings"), each measured row carries what its render recorded:
+its self-similarity radius and ellipse in grid px (with no image-px or patch
+form, which the next evaluation fills), its viewing angle, tilt direction and
+zoom, and its plain and blur-matched scores against the bitmap
+(`plain_zncc`, `blur_matched_zncc`) as the `float32` columns hold them. Where
+it stores no readings, or a row's score was not read, the blur-matched score is
+`observation_confidence` read back out of its byte scale, with no plain score
+beside it, which is what a commit writes there. Every other measurement an
+evaluation would produce is left unmeasured, and committing the untouched track
+writes the same rows again, so the commit changes nothing.
 With no localizer reading (`seed_shift_px`) the bars judge no row until the
 first evaluation. So putting a track on the bench and doing
 nothing shows the numbers the reconstruction already holds plus the verdict
@@ -2524,6 +2535,7 @@ stored bitmap for its score. What lands in each slot is:
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. The px is what `max_projection_error_px` paints on once the track is triangulated. |
 | `zncc_self_similarity_radius` and its middle, grid, ellipses and surface | How far the observation's own tile, through the frame anchored at its keypoint, slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). What `max_zncc_self_similarity_radius` paints on. |
 | `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share` | The angle the view sees the patch at at the keypoint and the direction its ray leans in the patch's plane, the share of the tile on the photograph, and the share of the photograph under the tile that is clipped (§ "The reference view"). No bar judges them. |
+| `zoom` | The tile's `[least, most]` zoom, `[1/σ_major, 1/σ_minor]` of the Jacobian of its warp at its centre, grid px per photograph px. No bar judges it; a commit stores it with the row's other readings (§ "The commit"). |
 | `pair_zncc`, `pair_zncc_grid`, `cell_deficit`, `reference_view` | For an `in` row: its agreement with the other `in` rows over the whole tile and each ninth, how far it falls below the track's typical agreement in its worst ninth, and what the reference-view rule decided about it (§ "The reference view"). `None` on an `out` row. No bar judges them. |
 | `reason` | The localizer's refusal where it could not read the row, whether or not the row has a score; otherwise why there is no score, and absent where there is one. |
 
@@ -2851,7 +2863,18 @@ anywhere else), and one observation per `in` sighting with its keypoint and, in
 `observation_confidence` where the column exists, its blur-matched score against the
 bitmap (`blur_matched_zncc`) clamped to `0 ..= 1` and scaled to a byte, a measured score
 that would round to `0` raised to `1`: `255` for the reference observation,
-`0` where the row has no score or the score is not a number. The
+`0` where the row has no score or the score is not a number. Each observation
+also carries its **readings** (`measurement_reading`), the row
+[../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md) §
+"Observation readings" stores: the self-similarity ellipse its last evaluation
+read on its tile in grid px, the viewing angle, tilt direction and zoom of that
+tile, and its plain and blur-matched scores against the bitmap, the scores
+`NaN` where the commit writes no bitmap (a file without them, or a bitmap for
+judging) since they would name a bitmap the file does not hold. A commit into a
+reconstruction with no readings brings the columns, every other observation's
+row not measured. A reconstruction whose readings stand under other options
+than the bench's (the default self-similarity reading and the sampler rule at
+`a = 1.5`) gets rows with nothing measured. The
 observations are written in image order, which is the order a stored track is in
 and every reader of one relies on. Where the reconstruction carries reference
 observations (it does wherever it carries patch frames), the record's
@@ -3818,6 +3841,20 @@ unit-tested in `normal.rs` itself.
   changes nothing; it is refused on an `out` row and at the cluster stage.
 - Every render's reference row reads `1` for the whole, the middle, every cell
   and blur-matched, and every other `in` row reads below `1`.
+
+### [bench/tests/observation_readings.rs](../../../crates/sfmtool-core/src/bench/tests/observation_readings.rs)
+
+- A commit after an evaluation writes each row's readings from it: the ellipse
+  in grid px, its flags, the scores as `float32`, `1` for the reference row,
+  the cosine of the viewing angle and a zoom with its least at most its most.
+- Rendering and reading every observation of the committed reconstruction
+  (`read_cloud_observations`) gives the committed rows, to the rounding of the
+  frame stored in `f32`.
+- A committed point put on the bench carries its stored readings, the
+  `float32` scores in place of the byte, and committing it again changes
+  nothing.
+- A base whose readings stand under other options gets rows with nothing
+  measured.
 
 ### [bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)
 

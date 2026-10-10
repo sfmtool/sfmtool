@@ -151,6 +151,18 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   `f32` keypoints and frame (`render_from_references`), so dropping and adding
   the bitmaps later gives the same bytes; a fused mean stays as the pass
   rendered it.
+- **Observation readings.** Once the bitmaps and the references are final,
+  every observation of the output is rendered again at its stored keypoint, as
+  the bitmaps are, and read for the
+  [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+  the file then stores: its ZNCC self-similarity ellipse, the viewing angle,
+  tilt and zoom of its render, and its plain and blur-matched scores against the
+  point's stored bitmap, `1` for the reference observation
+  (`with_observation_readings`, `PatchCloud.read_observations`). The rows are
+  read on the stored `f32` keypoints and frames, so reading the file again
+  gives the same rows. The rounds before the last write none: their tiles are
+  rendered at keypoints and against bitmaps the output does not keep. On the
+  seoul_bull ground truth the reading adds a few percent to a run.
 - **Self-similarity cull.** After round 1 the sub-pixel stage renders each
   point's bitmap (whatever the round count, while the cull is on),
   and a point whose bitmap's ZNCC self-similarity radius is over

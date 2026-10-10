@@ -32,7 +32,12 @@ At least two reconstructions are required.
    lists.
 6. **Refine poses** — Run parallel PnP+RANSAC to refine camera poses in the merged
    reconstruction.
-7. **Combine tracks** — Build the final unified track data.
+7. **Combine tracks** — Build the final unified track data. Where an input
+   carries [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12),
+   each merged observation takes the row of the input observation with the
+   same image name and feature index, since the merge renders nothing; an
+   observation no input read, or one from an input whose readings stand under
+   other options than the first input's that has them, is not measured.
 
 ## Usage Examples
 

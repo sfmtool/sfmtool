@@ -202,13 +202,21 @@ reconstruction.sfmr (ZIP archive)
 │   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v (version 3+)
 │   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence (version 3+)
 └── tracks/
+    ├── blur_matched_bitmap_zncc.{M}.float32.zst  # (Optional, readings) blur-matched ZNCC against the stored bitmap (version 12+)
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
     ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files) (version 4+)
     ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+)
+    ├── plain_bitmap_zncc.{M}.float32.zst      # (Optional, readings) plain ZNCC against the stored bitmap (version 12+)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
     ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from (version 12+)
+    ├── zncc_self_similarity_cos_view_angle.{M}.float32.zst          # (Optional, readings) cos θ of the render (version 12+)
+    ├── zncc_self_similarity_ellipse_axes.{M}.2.float32.zst          # (Optional, readings) self-similarity semi-axes, grid px (version 12+)
+    ├── zncc_self_similarity_ellipse_axes_is_at_least.{M}.2.uint8.zst # (Optional, readings) 1 where an axis may be longer (version 12+)
+    ├── zncc_self_similarity_ellipse_major_angle.{M}.float32.zst     # (Optional, readings) major axis angle, radians (version 12+)
+    ├── zncc_self_similarity_tilt_angle.{M}.float32.zst              # (Optional, readings) tilt direction of the render, radians (version 12+)
+    ├── zncc_self_similarity_zoom.{M}.2.float32.zst                  # (Optional, readings) [least, most] zoom of the render (version 12+)
     └── metadata.json.zst                      # Tracks metadata
 ```
 
@@ -408,7 +416,7 @@ in the `content_xxh128` entry below.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
 - `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
-- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`.
+- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc` first, before `feature_indexes`; `plain_bitmap_zncc` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
 - `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
 - `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying"). Before version 10 the depth statistics reached this digest through `images_xxh128`.
 
@@ -1412,10 +1420,12 @@ rules are checked on the flags alone.
 
 Tracks link 2D feature observations to 3D points. Each observation has three components stored in separate columnar files.
 
-The tracks section stores no per-observation ZNCC self-similarity radius, and
-`points3d/` stores no blur assessment of a point's bitmap. Storing both is
-proposed in [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) §
-"Part 7".
+The tracks section can also store each observation's **readings** on its own
+`R×R` render: its ZNCC self-similarity ellipse, the angle, tilt and zoom of that
+render, and its plain and blur-matched scores against the point's stored bitmap
+([Observation readings](#observation-readings-optional-version-12)). `points3d/`
+stores no blur assessment of a point's bitmap: it is a function of the bitmap
+alone, which the file holds.
 
 #### `tracks/metadata.json.zst`
 
@@ -1424,7 +1434,15 @@ proposed in [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) §
   "observation_count": 9427,
   "has_feature_indexes": true,
   "has_keypoints_xy": false,
-  "has_observation_confidence": false
+  "has_observation_confidence": false,
+  "has_observation_readings": true,
+  "observation_reading_options": {
+    "max_radius": 3,
+    "flat_floor": 0.5,
+    "noise": 2.0,
+    "relative_tolerance": 0.05,
+    "anisotropic_threshold": 1.5
+  }
 }
 ```
 
@@ -1446,6 +1464,25 @@ proposed in [sharper-patch-bitmap.md](../drafts/sharper-patch-bitmap.md) §
   above — it rates observations, which exist in either mode. A missing flag is
   `false`, so a version 1–5 file reads as having no `observation_confidence`
   column.
+- `has_observation_readings`: (version 12, optional) whether the eight
+  observation-reading columns are present. Written only when they are, so a
+  file without them has the bytes, and the content hash, it had before the
+  columns existed. A missing flag is `false`.
+- `observation_reading_options`: present exactly with `has_observation_readings`
+  and required with it: what the readings were taken with, so a reader can
+  tell whether the stored radii are comparable with its own. `max_radius` is
+  the self-similarity reading's `r` in grid px, the largest shift searched and
+  the largest radius read; `flat_floor` the template spread, in grey levels,
+  under which a channel carries no texture; `noise` the noise `n` between two
+  views, in grey levels; `relative_tolerance` the deficit `ε` two views of the
+  same surface show
+  ([zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md)).
+  `anisotropic_threshold` is the sampler rule's `a` the renders were made under
+  ([image-warping.md](../core/camera/image-warping.md) § "Choosing the sampler
+  per view"), from which a reader works out each render's sampler from its
+  stored zoom; `null` where every render used one sampler whatever its zoom.
+  `tool_options` records `anisotropic_threshold` for one tool run only, so the
+  readings carry their own record.
 
 #### `tracks/image_indexes.{M}.uint32.zst`
 
@@ -1553,6 +1590,11 @@ scores are the same.
 
 - **Writers**: the bench's commit and Add Image to Tracks fill it for the
   observations they write, where the file has the column.
+- **Beside the readings**: `tracks/blur_matched_bitmap_zncc`
+  ([Observation readings](#observation-readings-optional-version-12)) holds the
+  same score as `float32`. A reader that has both reads the `float32` score;
+  this column stays, since it is present without the readings and the bench
+  reads it back into a track put on the bench where they are absent.
 
 **Why it exists**: an observation that matches its point's appearance well and
 one that matches it poorly are indistinguishable in `keypoints_xy`, which records
@@ -1681,6 +1723,93 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   frames creates the column with every row `-1`, so every reconstruction with
   patch frames has one in memory and every later save writes it. A file below
   version 12 without patch frames gets no column.
+
+#### Observation readings (Optional, version 12+)
+
+Each observation's readings on its own `R×R` render: the render through the
+point's patch re-anchored on the observation's keypoint, at the point's patch
+resolution `R` (`points3d/metadata.json`'s `patch_bitmap_resolution`, or the
+writer's resolution where the file stores no bitmaps), with the sampler the
+sampler rule picks for that view. That render is the tile the bench reads and
+the stored bitmap is rendered as, and it is never stored, so reading it again
+needs the photograph. The file stores the readings, and an operation without
+the photographs reads them here: bundle adjustment's per-observation weight,
+the self-similarity culls, the ellipse as a bound on the point on its patch,
+and Track View before a committed track's first evaluation.
+
+Eight columns, parallel to the other `tracks/*` arrays (sorted by
+`(point_indexes, image_indexes)` and permuted in lockstep by a writer that
+sorts), present or absent together, flagged by `has_observation_readings`:
+
+| Column | Shape, type | Meaning |
+|---|---|---|
+| `tracks/zncc_self_similarity_ellipse_axes.{M}.2.float32.zst` | `(M, 2)` `float32` | Semi-major and semi-minor axis lengths of the whole render's ZNCC self-similarity ellipse, grid px. The semi-major axis is the ZNCC self-similarity radius, each axis capped at `max_radius` |
+| `tracks/zncc_self_similarity_ellipse_axes_is_at_least.{M}.2.uint8.zst` | `(M, 2)` `uint8` | `1` per axis where the true length may be larger, `0` otherwise |
+| `tracks/zncc_self_similarity_ellipse_major_angle.{M}.float32.zst` | `(M,)` `float32` | Angle of the major axis from the patch's `u` axis towards its `v` axis, radians in `[0, π)`; `NaN` where the ellipse is a circle and has no direction |
+| `tracks/zncc_self_similarity_cos_view_angle.{M}.float32.zst` | `(M,)` `float32` | `cos θ = −n · d̂` of the render: `n` the re-anchored patch's outward normal, `d̂` the unit ray from the camera centre through the observation's keypoint. Positive where the patch faces the camera |
+| `tracks/zncc_self_similarity_tilt_angle.{M}.float32.zst` | `(M,)` `float32` | `α`, the angle of the render's tilt direction (`d̂` projected into the patch plane) from the patch's `u` axis towards its `v` axis, radians in `[0, π)`; `NaN` where the view faces the patch head on (within 0.1°) |
+| `tracks/zncc_self_similarity_zoom.{M}.2.float32.zst` | `(M, 2)` `float32` | `[least, most]` zoom of the render: `[1/σ_major, 1/σ_minor]` of the Jacobian of the patch grid into the photograph at the patch centre, grid px per photograph px |
+| `tracks/plain_bitmap_zncc.{M}.float32.zst` | `(M,)` `float32` | The render's plain ZNCC against the point's stored bitmap. `1` for the reference observation, whose score is not computed |
+| `tracks/blur_matched_bitmap_zncc.{M}.float32.zst` | `(M,)` `float32` | The render's blur-matched ZNCC against the point's stored bitmap ([blur-matched-zncc.md](../core/patch/blur-matched-zncc.md) § "Scores against the stored bitmap"). `1` for the reference observation |
+
+- **A record of a render.** The angle, tilt and zoom columns record the
+  geometry of the render the readings were taken on, not the file's current
+  geometry. Bundle adjustment moves the poses and a refit moves a normal; the
+  row stays the record of the render it names, as a keypoint stays the
+  measurement it was. No reader applies a tolerance to treat a row as a
+  reading of another render. A consumer that needs the current render's
+  reading and has the photographs compares the row's angle, tilt and zoom
+  with the current geometry and reads again where they differ.
+- **The fallback render.** Where the keypoint's ray cannot meet the patch's
+  plane in front of the camera, the render uses the stored patch without
+  re-anchoring, and `d̂` is the ray to the patch's centre. Such a view is at or
+  past grazing, so its cosine is near zero or negative either way.
+- **Not measured.** `NaN` in the axes means the observation was not measured:
+  its angles and zoom are then `NaN` and its flags `0`. `NaN` in a score means
+  the score was not read, as where the point has no stored bitmap: such a row
+  has axes and no scores. A row can be `NaN` throughout.
+- **What is not stored.** No ratio to the track's shortest radius, no weight,
+  no covariance: those depend on the rest of the track and on constants still
+  being tuned. Nor the middle-square and per-cell readings, nor the stored
+  bitmap's own readings and blur assessment, which are read from the bitmap.
+- **Units.** The grid px are those of the point's `R`, so the axes convert to
+  scene units through the point's patch half-extents.
+- **Why `float32` scores.** A covariance reads `1 − ZNCC`, and near a good
+  match that difference is small: at a score of 0.98 one step of the `uint8`
+  `observation_confidence` is a fifth of it. Both scores are stored because
+  each needs the photograph to read again.
+- **Keeping the readings true.** A writer that renders an observation's tile
+  reads it again and writes the row; a writer without the photographs carries
+  each row with its observation; a writer that replaces an observation's
+  photograph clears the row; a writer that changes a point's reference
+  observation reads its observations' scores against the new bitmap, or clears
+  them (`NaN`) where it does not render them. Writers that write a bitmap
+  rendered again from the same reference keep the scores as records. A writer
+  whose rows were read under other options than the stored ones writes rows
+  with nothing measured rather than mixing options. In the writers this
+  repository has:
+  - the bench's commit writes each `in` row's readings from its evaluation,
+    with the scores where it writes the bitmap they were read against
+    ([../core/bench/editable-track.md](../core/bench/editable-track.md) §
+    "Commit"), so Track at Pixel's tracks, which reach a file through a commit,
+    are written that way too; Add Image to Tracks writes the new view's readings
+    from the tile it scored, its scores where the template is the stored bitmap;
+  - `sfm embed-patches` (after its last round, against the bitmaps it stores),
+    `sfm xform --localize-keypoints`, `--refine-keypoints` and
+    `--refine-normals` read every observation again on its render
+    (`PatchCloud.read_observations`), with `NaN` scores where they store no
+    bitmap;
+  - bundle adjustment (Rust and Python), the similarity transforms, point and
+    image filters, the covered-observation prune, `sfm merge` (by image name
+    and feature index), the viewer's edits and every other writer that
+    copies, removes or reorders observations carry the rows; a discovered
+    bearing's new observations are not measured;
+  - `--add-patch-bitmaps` and `clone_with_changes(reference_observations=...)`
+    clear the scores of each point whose reference changed;
+  - `sfm undistort`, the one writer that replaces the photographs, writes a
+    new reconstruction with no readings.
+- **Older files.** A file without the flag reads with no readings, as every
+  file before the columns did.
 
 ### Observation source (version 4+)
 
@@ -1879,7 +2008,12 @@ For the structure, a file fails verification when:
   `false`;
 - `keypoints_xy` is not `observation_count` rows of 8 bytes, or a row is not
   finite or lies outside `[0, width) × [0, height)` of its image's camera, the
-  constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states.
+  constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states;
+- `has_observation_readings` is set without a readable
+  `observation_reading_options`, an observation-reading column is not
+  `observation_count` rows of its shape, or
+  `zncc_self_similarity_ellipse_axes_is_at_least` holds a value other than `0`
+  or `1`.
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -1933,6 +2067,18 @@ describes. Other parts of this spec are implemented by:
   builds rows from the photographs through the extractors' own resize, so they
   match the `.sift` rows byte for byte; `sfmtool-core`'s `resize_area` averages
   the same way but does not match `INTER_AREA` bit for bit.
+- Observation readings: the columns are `ObservationReadingColumns` and a row
+  is `ObservationReading`, with the options in `ObservationReadingOptions`
+  ([source](../../crates/sfmtool-sfmr-format/src/observation_readings.rs)); in
+  memory, `PointSet::observation_readings` holds the rows, and
+  [`patch::observation_reading`](../../crates/sfmtool-core/src/patch/observation_reading.rs)
+  builds a row from a render's readings (`observation_reading`), reads a
+  rendered tile (`read_view_tile`) and renders and reads every observation of
+  a reconstruction (`read_cloud_observations`, Python
+  `PatchCloud.read_observations`). Python sees the columns as a dict under
+  their column names with an `"options"` dict: `read_sfmr`'s
+  `observation_readings`, `SfmrReconstruction.observation_readings` and
+  `clone_with_changes(observation_readings=...)`.
 - Normals and their confidence: `write_sfmr` fills each zero row of
   `normals_xyz` from mean-viewing normals it recomputes from the geometry, and
   passes `normal_confidence` through untouched. It never invents or adjusts a
@@ -2155,7 +2301,7 @@ described; [Version History](#version-history) is an index into it.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals
-in 3, observation confidence in 6, constraints in 7, thumbnails in 11) was
+in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12) was
 introduced this way, and a writer that picked its version by content would make
 "which version is this file" a question about its columns.
 
@@ -2165,13 +2311,18 @@ introduced this way, and a writer that picked its version by content would make
 |---|---|
 | `tracks/reference_observations.{N}.int32.zst` | New column, **required with the patch frame** (`points3d/metadata.json` `has_uv_frames: true`) and absent otherwise: per point, the index within its own track of the observation its patch bitmap is, or is to be, rendered from, `-1` where the point has no reference observation in its track (its bitmap, if any, is then a fused mean or the render of an observation since removed). Folded into `tracks_xxh128` in its lexicographic slot, after `point_indexes`. No metadata key is added, since `has_uv_frames` says whether it is present. |
 | `points3d/patch_bitmaps_y_x_rgba` | Writers store a point's reference view's render, with alpha `255` on the samples on the photograph and `0` elsewhere, in place of a fused mean of the views ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The stored bitmap"). The entry's layout is unchanged. |
+| `tracks/` observation readings | Eight new **optional** columns, present together: each observation's self-similarity ellipse (`zncc_self_similarity_ellipse_axes`, `_axes_is_at_least`, `_major_angle`), the `cos_view_angle`, `tilt_angle` and `zoom` of its render, and its `plain_bitmap_zncc` and `blur_matched_bitmap_zncc` against the stored bitmap ([Observation readings](#observation-readings-optional-version-12)). Each folded into `tracks_xxh128` in its lexicographic slot when present. |
+| `tracks/metadata.json` `has_observation_readings`, `observation_reading_options` | New keys, written only with the readings: the flag, and the reading's options and the sampler threshold the renders were made under. |
 
 Migration is mechanical. A version 11 file with patch frames reads with every
 point's reference observation `-1`, which says its bitmap (a fused mean) is not
 known to be one observation's render; it saves as version 12 with that column, and the
 tracks section's hash changes by its bytes. A version 11 file without patch
 frames reads and saves with no column, and its tracks section is unchanged. A
-version 12 file maps back to version 11 by dropping the column, which loses
+version 11 file reads with no observation readings, and a version 12 file
+without them writes no key for them. A version 12 file maps back to version 11
+by dropping the readings, which loses each observation's record of its render,
+and the reference column, which loses
 each point's reference observation, in a file that stores no bitmaps as much
 as in one that does: the observation a bitmap was, or a later render would be,
 rendered from.
@@ -2376,7 +2527,8 @@ One line per version, newest first. Each version's changes are described in
 the migration section it links to.
 
 - **Version 12**: `tracks/reference_observations`, required with the patch
-  frame. See [Version 11 → Version 12](#version-11--version-12).
+  frame, and the optional per-observation readings. See
+  [Version 11 → Version 12](#version-11--version-12).
 - **Version 11**: `images/thumbnails_y_x_rgb` becomes optional. See
   [Version 10 → Version 11](#version-10--version-11).
 - **Version 10**: the depth statistics move into a `derived/` section that is

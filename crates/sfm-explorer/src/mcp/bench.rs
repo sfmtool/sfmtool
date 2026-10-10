@@ -1816,8 +1816,6 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         // rows, over the whole tile and per ninth, and its cell deficit.
         "viewing_angle_deg": finite(measured.viewing_angle_deg),
         "tilt_direction_deg": finite(measured.tilt_direction_deg),
-        // The tile's `[least, most]` zoom, grid px per photograph px.
-        "zoom": measured.zoom.map(|z| z.map(|v| v.is_finite().then_some(v))),
         "coverage": finite(measured.coverage),
         "clipped_share": finite(measured.clipped_share),
         "pair_zncc": finite(measured.pair_zncc),
