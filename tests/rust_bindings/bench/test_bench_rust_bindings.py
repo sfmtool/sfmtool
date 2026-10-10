@@ -725,14 +725,14 @@ class TestEvaluating:
         )
         pick = plain.reference_view_observation
         assert pick is not None
-        assert plain.observation(pick)["track"]["zncc"] < 1.0
+        assert plain.observation(pick)["track"]["plain_zncc"] < 1.0
 
         rendered, _ = evaluate(track, edited, images)
         assert all(o["pinned"] for o in rendered.observations)
         assert rendered.bitmap_pending is False
         assert rendered.reference_observation == rendered.reference_view_observation
         assert rendered.reference_observation == pick
-        assert rendered.observation(pick)["track"]["zncc"] == 1.0
+        assert rendered.observation(pick)["track"]["plain_zncc"] == 1.0
         assert not np.array_equal(committed_bitmap(rendered), bitmaps[long_track_point])
 
     def test_a_re_pinned_reference_is_unpinned_again_as_if_never_unpinned(
