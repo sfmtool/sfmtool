@@ -757,7 +757,7 @@ fn finalize(
         old_point_count,
         replacing_tracks,
         observation_readings,
-    );
+    )?;
 
     // The track arrays and the observation-source columns can be supplied in the
     // same call (and are applied in separate passes), so guard against leaving a
@@ -1050,7 +1050,8 @@ fn settle_reference_observations(
 /// Settle the observation readings once the tracks and the references are.
 ///
 /// A passed value replaces them (`None` drops them); its row count is checked
-/// with the other per-observation columns. Otherwise the rows travel with
+/// with the other per-observation columns, and a value taken at another
+/// resolution than the stored bitmaps' is refused. Otherwise the rows travel with
 /// their observations. Where the tracks are replaced and the point count is
 /// unchanged, each new observation takes the row of the observation of
 /// `inner` with the same point index and the same image name, and an
@@ -1067,19 +1068,39 @@ fn settle_observation_readings(
     old_point_count: usize,
     replacing_tracks: bool,
     passed: Option<Option<sfmtool_core::reconstruction::ObservationReadings>>,
-) {
+) -> PyResult<()> {
     use sfmtool_core::reconstruction::{ObservationReading, ObservationReadings};
+    let bitmap_resolution = |recon: &SfmrReconstruction| {
+        recon
+            .point_set
+            .patch_bitmaps_y_x_rgba
+            .as_ref()
+            .filter(|_| !recon.point_set.patch_bitmaps_for_display)
+            .map(|b| b.shape()[1] as u32)
+    };
     if let Some(passed) = passed {
+        // Passed readings describe renders at their resolution, so they must
+        // be the stored bitmaps' resolution where there are bitmaps.
+        if let (Some(readings), Some(r)) = (passed.as_ref(), bitmap_resolution(recon)) {
+            if readings.options.resolution != r {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): observation_readings were taken at resolution {} \
+                     but the patch bitmaps are {r}x{r}; read them again at {r}, or pass \
+                     observation_readings=None",
+                    readings.options.resolution
+                )));
+            }
+        }
         recon.point_set.observation_readings = passed;
-        return;
+        return Ok(());
     }
     let Some(old) = inner.point_set.observation_readings.as_ref() else {
-        return;
+        return Ok(());
     };
     if replacing_tracks {
         if recon.point_set.points.len() != old_point_count {
             recon.point_set.observation_readings = None;
-            return;
+            return Ok(());
         }
         let name = |r: &SfmrReconstruction, image: u32| -> String {
             r.image_table.images[image as usize].name.clone()
@@ -1110,20 +1131,18 @@ fn settle_observation_readings(
     // Every row describes a render at the readings' resolution; bitmaps now
     // stored at another one say the renders the file names are at that R, so
     // no row describes them, and the columns are dropped.
-    let bitmap_resolution = recon
-        .point_set
-        .patch_bitmaps_y_x_rgba
-        .as_ref()
-        .filter(|_| !recon.point_set.patch_bitmaps_for_display)
-        .map(|b| b.shape()[1] as u32);
-    if bitmap_resolution.is_some_and(|r| r != old.options.resolution) {
+    if bitmap_resolution(recon).is_some_and(|r| r != old.options.resolution) {
         recon.point_set.observation_readings = None;
-        return;
+        return Ok(());
     }
     // A point whose reference observation is another observation than before
     // (by image name, so it holds when the tracks were replaced too) has its
     // scores cleared: they were read against the bitmap of the old reference.
-    if recon.point_set.points.len() == old_point_count {
+    // With the tracks and the references both as they were, no reference
+    // moved, so nothing is compared (and a renamed image clears nothing).
+    let references_moved = replacing_tracks
+        || inner.point_set.reference_observations != recon.point_set.reference_observations;
+    if references_moved && recon.point_set.points.len() == old_point_count {
         let reference_image = |r: &SfmrReconstruction, p: usize| -> Option<String> {
             r.point_set.reference_observation_row(p).map(|row| {
                 r.image_table.images[r.point_set.tracks[row].image_index as usize]
@@ -1137,6 +1156,7 @@ fn settle_observation_readings(
             }
         }
     }
+    Ok(())
 }
 
 /// Replace the tracks from the three track arrays, which must all be passed,

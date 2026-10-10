@@ -171,11 +171,23 @@ fn a_commit_records_the_options_its_rows_were_read_under() {
 fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
     // A point with no patch in the cloud keeps the rows the value stores,
     // where they stand under the same options; under other options it is not
-    // measured.
+    // measured. The value is saved to a `.sfmr` and loaded back first, so the
+    // options compared are the ones the file's JSON gives back.
     let scene = Scene::new();
     let (next, point, _) = evaluated_and_committed(&scene);
-    let (recon, map) = next.materialize();
+    let (written, map) = next.materialize();
     let p = map.forward(point).expect("kept") as usize;
+    let dir = std::env::temp_dir().join(format!("sfmtool_readings_carry_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("committed.sfmr");
+    sfmtool_sfmr_format::write_sfmr(&path, &mut written.to_sfmr_data()).unwrap();
+    let recon =
+        SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        recon.point_set.observation_readings,
+        written.point_set.observation_readings
+    );
     let mut cloud = PatchCloud::from_stored_frames(&recon).expect("a patch frame");
     let at = cloud
         .point_indexes

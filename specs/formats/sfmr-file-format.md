@@ -1810,7 +1810,15 @@ sorts), present or absent together, flagged by `has_observation_readings`:
   stored options are its own. **Bitmaps at another resolution or from another
   sampler drop the readings**: once the file's bitmaps are renders at another
   `R`, or made with another sampler, than the readings record, no row
-  describes a render the file names, scores or radii, so the columns go. In
+  describes a render the file names, scores or radii, so the columns go. The
+  resolution half of that rule is checked wherever bitmaps are set, since a
+  bitmap column states its `R`; the sampler half belongs to the writers that
+  render the bitmaps, since nothing in the file, and so nothing in
+  `clone_with_changes`, records which sampler made a bitmap. A writer that
+  only reads rows (a bench commit whose tiles were read with another sampler)
+  marks its own rows as not measured and leaves the others. Passing readings
+  to `clone_with_changes` at another resolution than the stored bitmaps' is
+  refused. In
   the writers this repository has:
   - the bench's commit writes each `in` row's readings from its evaluation,
     under the options its tile was rendered and read with, with the scores

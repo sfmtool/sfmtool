@@ -43,14 +43,22 @@ pub(crate) fn options_to_py<'py>(
 }
 
 /// The options from such a dict. Every key is required: readings are only
-/// comparable under the same options, so none is assumed.
+/// comparable under the same options, so none is assumed. A numpy scalar
+/// value is taken as the Python number it holds.
 pub(crate) fn options_from_py(value: &Bound<'_, PyAny>) -> PyResult<ObservationReadingOptions> {
-    if !value.is_instance_of::<PyDict>() {
-        return Err(PyTypeError::new_err(
-            "observation_readings['options'] must be a dict",
-        ));
+    let dict = value
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err("observation_readings['options'] must be a dict"))?;
+    let plain = PyDict::new(value.py());
+    for (k, v) in dict.iter() {
+        let v = if v.hasattr("item")? && !v.is_instance_of::<pyo3::types::PyString>() {
+            v.call_method0("item")?
+        } else {
+            v
+        };
+        plain.set_item(k, v)?;
     }
-    py_to_serde(value.py(), value)
+    py_to_serde(value.py(), plain.as_any())
         .map_err(|e| PyValueError::new_err(format!("observation_readings['options']: {e}")))
 }
 

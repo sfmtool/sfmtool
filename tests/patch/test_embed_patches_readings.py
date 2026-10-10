@@ -98,3 +98,35 @@ def test_refine_keypoints_reads_every_observation_again(seoul_bull_workspace: Pa
     readings = without.observation_readings
     _check_ranges(readings, without)
     assert np.isnan(readings["plain_bitmap_zncc"]).all()
+
+
+def test_read_observations_advances_its_progress_counter(seoul_bull_workspace: Path):
+    from sfmtool import ProgressCounter
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
+    cloud = recon.patches
+    counter = ProgressCounter()
+    cloud.read_observations(recon, load_images(recon), resolution=12, progress=counter)
+    assert counter.value == len(cloud)
+
+
+def test_passed_readings_at_another_resolution_than_the_bitmaps_are_refused(
+    seoul_bull_workspace: Path,
+):
+    import pytest
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
+    refined = RefineKeypointsTransform(resolution=12, max_gn_steps=3).apply(recon)
+    readings = refined.observation_readings
+    readings["options"]["resolution"] = 24
+    with pytest.raises(ValueError, match="resolution 24"):
+        refined.clone_with_changes(observation_readings=readings)
+    # Numpy scalars in the options are taken as the numbers they hold.
+    readings["options"]["resolution"] = np.uint32(12)
+    readings["options"]["noise"] = np.float64(2.0)
+    out = refined.clone_with_changes(observation_readings=readings)
+    assert out.observation_readings["options"]["resolution"] == 12

@@ -164,6 +164,10 @@ pub enum ReadingWindow {
 /// stored zoom. Two sets of readings are comparable only where every field is
 /// equal: a writer whose rows would stand under other options writes rows
 /// with nothing measured rather than mix them into one column.
+///
+/// The comparison is exact, floats included, so the JSON round trip must give
+/// back the bits written: this crate builds `serde_json` with its
+/// `float_roundtrip` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ObservationReadingOptions {
     /// The patch resolution `R` of the renders, the edge of the `R×R` tile
