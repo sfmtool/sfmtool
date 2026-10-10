@@ -1774,6 +1774,10 @@ sorts), present or absent together, flagged by `has_observation_readings`:
   bitmap's own readings and blur assessment, which are read from the bitmap.
 - **Units.** The grid px are those of the point's `R`, so the axes convert to
   scene units through the point's patch half-extents.
+- **Size.** 37 bytes an observation before compression. On the dino_dog_toy
+  `sfm embed-patches` output (262,430 observations) the eight entries take
+  8.1 MB of a 44.3 MB file, about 31 bytes an observation after zstd; the
+  float columns compress little, the flags column to almost nothing.
 - **Why `float32` scores.** A covariance reads `1 − ZNCC`, and near a good
   match that difference is small: at a score of 0.98 one step of the `uint8`
   `observation_confidence` is a fifth of it. Both scores are stored because

@@ -16,7 +16,7 @@ fn tagged(j: usize) -> ObservationReading {
     let t = j as f32 + 1.0;
     ObservationReading {
         ellipse_axes: [t, t / 2.0],
-        ellipse_axes_is_at_least: [j % 2 == 0, false],
+        ellipse_axes_is_at_least: [j.is_multiple_of(2), false],
         ellipse_major_angle: 0.01 * t,
         cos_view_angle: 0.5,
         tilt_angle: f32::NAN,

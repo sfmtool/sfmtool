@@ -19,7 +19,7 @@ const OPTIONS: ObservationReadingOptions = ObservationReadingOptions {
 fn tagged_row(tag: f32) -> ObservationReading {
     ObservationReading {
         ellipse_axes: [tag, tag / 2.0],
-        ellipse_axes_is_at_least: [tag as u32 % 2 == 0, false],
+        ellipse_axes_is_at_least: [(tag as u32).is_multiple_of(2), false],
         ellipse_major_angle: 0.1 * tag,
         cos_view_angle: 0.9,
         tilt_angle: f32::NAN,

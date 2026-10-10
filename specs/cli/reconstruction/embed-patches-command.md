@@ -162,7 +162,8 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   read on the stored `f32` keypoints and frames, so reading the file again
   gives the same rows. The rounds before the last write none: their tiles are
   rendered at keypoints and against bitmaps the output does not keep. On the
-  seoul_bull ground truth the reading adds a few percent to a run.
+  dino_dog_toy solve (17,905 points, 262,430 observations at `R = 24`) the
+  reading took 1.8 s of a 52 s run.
 - **Self-similarity cull.** After round 1 the sub-pixel stage renders each
   point's bitmap (whatever the round count, while the cull is on),
   and a point whose bitmap's ZNCC self-similarity radius is over

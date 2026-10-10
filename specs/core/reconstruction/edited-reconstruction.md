@@ -66,6 +66,7 @@ pub struct PointSet {
     pub normal_confidence: Option<Vec<u8>>,
     pub point_constraints: Option<PointConstraintColumns>,
     pub observation_confidence: Option<Vec<u8>>,
+    pub observation_readings: Option<ObservationReadings>, // per observation, its render's readings
     pub reference_observations: Option<Vec<i32>>, // per point, within its track; -1 none
     pub display_only_references: Option<Vec<bool>>, // picks only the display render made
     // Derived from the fields above and the image count.
@@ -224,7 +225,14 @@ two parts instead: an immutable base, and the small set of edits made on it.
   size of the edit.
 - **The additions** are the points this version holds and the base does not, as
   a `PointSet` of their own with exactly the base's columns, whose observations
-  index the base's image table.
+  index the base's image table. The one exception is the observation readings
+  ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md) §
+  "Observation readings"), which the additions always carry and a record may
+  leave out: a record without them adds rows with nothing measured, and a
+  record that brings measured rows to a base without them gives the
+  materialised value the columns, the base's rows not measured, under the
+  base's options or the default ones. So a bench commit can store the readings
+  it measured in a file that had none.
 
 The images and the cameras are the base's. An edit to the image table is not an
 overlay edit.
@@ -310,6 +318,8 @@ impl EditedReconstruction {
     pub fn has_feature_indexes(&self) -> bool;
     pub fn has_keypoints(&self) -> bool;
     pub fn has_observation_confidence(&self) -> bool;
+    pub fn has_observation_readings(&self) -> bool;
+    pub fn observation_reading_options(&self) -> ObservationReadingOptions; // the base's, or the default
     pub fn has_patch_frames(&self) -> bool;
     pub fn has_patch_bitmaps(&self) -> bool;
     pub fn has_normal_confidence(&self) -> bool;
@@ -355,6 +365,7 @@ pub struct RecordObservation {
     pub feature_index: Option<u32>,
     pub keypoint_xy: Option<[f32; 2]>,
     pub confidence: Option<u8>,
+    pub reading: Option<ObservationReading>, // optional whatever the base carries
 }
 
 impl RowMap {
