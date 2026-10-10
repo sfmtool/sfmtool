@@ -126,9 +126,12 @@ impl PyPatchCloud {
     ///     ``reference_image`` is the image index of the reference observation
     ///     the views were aligned to, or ``None`` where the rule picked none it
     ///     would store (the template was the fused mean of the views) or nothing
-    ///     rendered. The reference is always kept when it renders; every other
-    ///     view can be dropped, so ``K`` can be below two for the caller's
-    ///     ``min_views`` cull to remove.
+    ///     rendered. A given reference that grazes the patch plane (fails
+    ///     ``min_grazing_cos``) is dropped with the other grazing views, and
+    ///     the rule's pick from the views left is the reference reported
+    ///     instead. Otherwise the reference is always kept when it renders;
+    ///     every other view can be dropped, so ``K`` can be below two for the
+    ///     caller's ``min_views`` cull to remove.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -162,7 +165,7 @@ impl PyPatchCloud {
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<Option<[f64; 2]>>>>,
         search_strategy: &str,
-        reference_images: Option<std::collections::HashMap<u32, Option<i64>>>,
+        reference_images: Option<std::collections::HashMap<i64, Option<i64>>>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard, n_images) = resolve_patch_scene(

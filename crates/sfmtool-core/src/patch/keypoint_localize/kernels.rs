@@ -20,6 +20,27 @@
 
 use crate::patch::normal_refine::Support;
 
+/// Each support pixel's offset from the window's top-left in the cache plane,
+/// `r_k · istride + c_k` (`r_k = pixel / resolution`, `c_k = pixel %
+/// resolution`), into `out`. The whole-grid kernels read support pixel `k` of
+/// grid row `gy` at `(gy + win_oy) · istride + win_ox + out[k]`, the same
+/// integer as `(gy + win_oy + r_k) · istride + win_ox + c_k`, so computing the
+/// offsets once per search instead of once per `(k, gy)` changes no address.
+pub(super) fn support_offsets(
+    support: &Support,
+    resolution: usize,
+    istride: usize,
+    out: &mut Vec<usize>,
+) {
+    out.clear();
+    out.extend(
+        support
+            .pixels
+            .iter()
+            .map(|&p| (p / resolution) * istride + p % resolution),
+    );
+}
+
 /// **Compute and overwrite** one channel's per-shift correlation grids over the
 /// `span × span` shift window: numerator `g_n[s] = Σ_k kern[k]·I[s+k]` and the
 /// centered window moments `g_s1[s] = Σ_k w[k]·I[s+k]`,
@@ -34,11 +55,14 @@ use crate::patch::normal_refine::Support;
 /// Runtime-dispatched to a hand-rolled AVX2 kernel where available (mirrors
 /// `normal_refine::fronto_cache::resample_support_avx2`); the scalar form is the
 /// reference, the non-x86 / non-AVX2 fallback, and the path for spans larger
-/// than the AVX2 kernel's 16-lane row.
+/// than the AVX2 kernel's 16-lane row. `offsets` is [`support_offsets`] for
+/// this `support`, `resolution` and `istride`; the AVX2 kernel addresses its
+/// loads through it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compute_channel_grids(
     plane: &[f32],
     support: &Support,
+    offsets: &[usize],
     kern: &[f32],
     w: &[f32],
     resolution: usize,
@@ -61,8 +85,8 @@ pub(super) fn compute_channel_grids(
             // bounds of `plane[..istride * cache_rows]`.
             unsafe {
                 return compute_channel_grids_avx2(
-                    plane, support, kern, w, resolution, istride, span, win_oy, win_ox, g_n, g_s1,
-                    g_s2,
+                    plane, support, offsets, kern, w, resolution, istride, span, win_oy, win_ox,
+                    g_n, g_s1, g_s2,
                 );
             }
         }
@@ -150,6 +174,10 @@ pub(super) fn compute_channel_grids_scalar(
 ///    `g_n.len()`, `g_s1.len()`, `g_s2.len() ≥ span * span`.
 /// 5. **`support.pixels` is laid out as `row * resolution + col`** so `r_k <
 ///    resolution` and `c_k < resolution` — both contribute to invariant 3.
+/// 6. **`offsets` is [`support_offsets`] of the same `support`, `resolution`
+///    and `istride`**, so `offsets[k] = r_k · istride + c_k` and each load at
+///    `(gy + win_oy) · istride + win_ox + offsets[k]` is the address (3)
+///    bounds.
 ///
 /// `debug_assert!`s spot-check (2), (4), and the tight per-call worst case of
 /// (3); release builds rely on the caller's contract.
@@ -159,6 +187,7 @@ pub(super) fn compute_channel_grids_scalar(
 unsafe fn compute_channel_grids_avx2(
     plane: &[f32],
     support: &Support,
+    offsets: &[usize],
     kern: &[f32],
     w: &[f32],
     resolution: usize,
@@ -194,15 +223,16 @@ unsafe fn compute_channel_grids_avx2(
             plane.len(),
         );
     }
+    debug_assert_eq!(offsets.len(), support.pixels.len());
     let plane_ptr = plane.as_ptr();
-    let pixels = support.pixels.as_ptr();
+    let offsets_ptr = offsets.as_ptr();
     let n = support.pixels.len();
     let kern_ptr = kern.as_ptr();
     let w_ptr = w.as_ptr();
     // Per-row temporaries that mirror the YMM accumulators when we store them.
     let mut tmp = [0.0f32; 16];
     for gy in 0..span {
-        let row_y = gy + win_oy;
+        let row_base = (gy + win_oy) * istride + win_ox;
         let mut n_lo = _mm256_setzero_ps();
         let mut n_hi = _mm256_setzero_ps();
         let mut s1_lo = _mm256_setzero_ps();
@@ -210,10 +240,7 @@ unsafe fn compute_channel_grids_avx2(
         let mut s2_lo = _mm256_setzero_ps();
         let mut s2_hi = _mm256_setzero_ps();
         for k in 0..n {
-            let p = *pixels.add(k);
-            let r_k = p / resolution;
-            let c_k = p % resolution;
-            let base = (row_y + r_k) * istride + (win_ox + c_k);
+            let base = row_base + *offsets_ptr.add(k);
             let src_lo = _mm256_loadu_ps(plane_ptr.add(base));
             let src_hi = _mm256_loadu_ps(plane_ptr.add(base + 8));
             let kb = _mm256_set1_ps(*kern_ptr.add(k));
@@ -246,23 +273,19 @@ unsafe fn compute_channel_grids_avx2(
 /// count is `0` (every support pixel in frame), the grid analogue of
 /// [`extract_core`](super::extract_core) returning `false` for any invalid support
 /// pixel. The invalidity plane lives in the same `istride` row layout as the
-/// centered planes.
-#[allow(clippy::too_many_arguments)]
+/// centered planes; `offsets` is [`support_offsets`] for it.
 pub(super) fn accumulate_count(
     invalid: &[f32],
-    support: &Support,
-    resolution: usize,
+    offsets: &[usize],
     istride: usize,
     span: usize,
     win_oy: usize,
     win_ox: usize,
     g: &mut [f32],
 ) {
-    for &p in &support.pixels {
-        let r_k = p / resolution;
-        let c_k = p % resolution;
+    for &offset in offsets {
         for gy in 0..span {
-            let src = &invalid[(gy + win_oy + r_k) * istride + (win_ox + c_k)..][..span];
+            let src = &invalid[(gy + win_oy) * istride + win_ox + offset..][..span];
             let gr = &mut g[gy * span..][..span];
             for gx in 0..span {
                 gr[gx] += src[gx];

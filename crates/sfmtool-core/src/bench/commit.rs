@@ -308,14 +308,11 @@ pub fn commit(
             feature_index: None,
             keypoint_xy: edited.has_keypoints().then_some(keypoint),
             // `0` is reserved for "unmeasured"; a measured score, however low,
-            // is stored in `1..=255`, as Add Image to Tracks stores it.
+            // is stored in `1..=255`, by the function Add Image to Tracks uses.
             confidence: edited.has_observation_confidence().then(|| {
-                match measurement.zncc.filter(|z| !z.is_nan()) {
-                    Some(zncc) => {
-                        ((zncc.clamp(0.0, 1.0) * f64::from(u8::MAX)).round() as u8).max(1)
-                    }
-                    None => 0,
-                }
+                measurement
+                    .zncc
+                    .map_or(0, crate::reconstruction::data::observation_confidence_byte)
             }),
         });
     }

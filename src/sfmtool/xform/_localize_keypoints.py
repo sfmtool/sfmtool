@@ -9,9 +9,11 @@ per-view keypoints to its reference render by a discrete search and **drops
 views that won't co-register** (drift too far, leave the frame, graze the patch
 plane, pin no 2D position of their own, or do not match the reference). Every
 view starts at its stored keypoint. The reference observation is the one the
-point stores, where its image is in the track, or else the reference-view
-rule's pick, and its keypoint is not moved; the output records it as the
-point's reference observation. After a ``min_views`` cull the
+point stores, where its image is in the track and it does not graze the patch
+plane (a grazing one is dropped with the other grazing views), or else the
+reference-view rule's pick, and its keypoint is not moved; the output records
+it as the point's reference observation, or none where the stored one does
+not render at its keypoint and nothing is aligned. After a ``min_views`` cull the
 survivors are renumbered and the reconstruction is rebuilt — ``keypoints_xy``
 and all three track arrays — via :func:`compact_to_embedded_patches`, the same
 helper the ``embed-patches`` pipeline uses. The output therefore has fewer
@@ -170,7 +172,7 @@ class LocalizeKeypointsTransform:
         # Bitmaps are dropped (patch_bitmaps=None): the localizer renders none,
         # and any stored ones are stale after the keypoints move and views drop.
         # Each point records the reference observation its views were aligned
-        # to (its stored one where the track still holds that image), so a
+        # to (its stored one where it stays in the track and renders), so a
         # later render renders from it.
         out = compact_to_embedded_patches(
             recon,

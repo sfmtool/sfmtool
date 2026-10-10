@@ -33,6 +33,7 @@ from .._patch_compaction import (
     reference_images_by_point,
     reference_observations_from_images,
     render_from_references,
+    stored_reference_images,
 )
 from ._patch_params import validate_patch_params
 
@@ -190,12 +191,28 @@ class RefineKeypointsTransform:
         self._print_summary(result)
 
         # The reference observation each point's views were aligned to: its
-        # stored one, or the reference-view rule's pick where it stores none.
+        # stored one where that is in the track and renders, else the
+        # reference-view rule's pick, or none (-1) where they were aligned to
+        # a fused mean or to nothing. Each refined point records that one, so
+        # its keypoints, bitmap and reference agree; a point the refiner did
+        # not return keeps what it stores. A stored reference the refiner
+        # used keeps its own observation, even in an image the point is
+        # observed twice in.
         reference_images = np.full(recon.point_count, -1, dtype=np.int64)
+        refined = np.zeros(recon.point_count, dtype=bool)
         for d in result:
+            pid = int(d["point_index"])
+            refined[pid] = True
             if d.get("reference_image") is not None:
-                reference_images[int(d["point_index"])] = int(d["reference_image"])
-        picked_references = reference_observations_from_images(recon, reference_images)
+                reference_images[pid] = int(d["reference_image"])
+        aligned = reference_observations_from_images(recon, reference_images)
+        stored = recon.reference_observations
+        if stored is None:
+            references = aligned
+        else:
+            stored = np.asarray(stored, dtype=np.int32)
+            same = ~refined | (reference_images == stored_reference_images(recon))
+            references = np.where(same, stored, aligned).astype(np.int32)
 
         # With `bitmaps`, also persist the per-point stored bitmaps rendered at
         # the final refined keypoints, each the tile of the reference
@@ -218,17 +235,17 @@ class RefineKeypointsTransform:
                 f"  Saving {len(result)} patches and {n_filled} bitmaps "
                 f"to the reconstruction"
             )
-            # A point that already names a reference observation keeps it,
-            # and only a point at -1 takes the refiner's pick. Every bitmap
-            # with a reference is rendered again from the stored (f32)
-            # keypoints, so dropping and adding the bitmaps later gives the
-            # same bytes.
-            moved = recon.clone_with_changes(keypoints_xy=kxy, patches=cloud)
+            # Every bitmap with a reference is rendered again from the stored
+            # (f32) keypoints, so dropping and adding the bitmaps later gives
+            # the same bytes; a point at -1 keeps the refiner's fused mean.
+            moved = recon.clone_with_changes(
+                keypoints_xy=kxy, patches=cloud, reference_observations=references
+            )
             bitmaps, references = render_from_references(
                 moved,
                 images,
                 bitmaps,
-                picked_references,
+                references,
                 resolution=self.resolution,
                 sampler=self.sampler,
             )
@@ -236,17 +253,8 @@ class RefineKeypointsTransform:
                 patch_bitmaps=bitmaps, reference_observations=references
             )
         # Stored bitmaps were rendered at the old keypoints, so they go, as
-        # ``--refine-normals bitmaps=false`` drops them. A point that stores a
-        # reference keeps it, and a point at -1 takes the one its views were
-        # aligned to.
-        stored = recon.reference_observations
-        references = (
-            picked_references
-            if stored is None
-            else np.where(
-                np.asarray(stored) >= 0, np.asarray(stored), picked_references
-            ).astype(np.int32)
-        )
+        # ``--refine-normals bitmaps=false`` drops them. Each point records the
+        # reference its views were aligned to, as with bitmaps.
         return recon.clone_with_changes(
             keypoints_xy=kxy, patch_bitmaps=None, reference_observations=references
         )

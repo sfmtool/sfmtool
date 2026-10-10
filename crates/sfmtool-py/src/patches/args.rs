@@ -118,13 +118,14 @@ pub(super) fn parse_extent(
 /// view set, gets `None`: the kernel's reference-view rule picks one from the
 /// renders at the starting keypoints.
 ///
-/// A point index the cloud does not have, a negative image index other than
+/// A point index the cloud does not have (a negative one included, which is
+/// why the map is keyed `i64`), a negative image index other than
 /// `-1`, or an image index past the scene's `n_images` is a `ValueError`, as
 /// it is for `starting_keypoints`: such an entry is a caller's mistake (an
 /// observation index passed for an image index, say), not a request for the
 /// rule's pick.
 pub(super) fn reference_positions(
-    reference_images: Option<&std::collections::HashMap<u32, Option<i64>>>,
+    reference_images: Option<&std::collections::HashMap<i64, Option<i64>>>,
     point_indexes: &[u32],
     sets: &[Vec<u32>],
     n_images: u32,
@@ -132,7 +133,8 @@ pub(super) fn reference_positions(
     let Some(map) = reference_images else {
         return Ok(None);
     };
-    let known: std::collections::HashSet<u32> = point_indexes.iter().copied().collect();
+    let known: std::collections::HashSet<i64> =
+        point_indexes.iter().map(|&p| i64::from(p)).collect();
     for (&pid, &image) in map {
         if !known.contains(&pid) {
             return Err(PyValueError::new_err(format!(
@@ -143,7 +145,8 @@ pub(super) fn reference_positions(
             None | Some(-1) => {}
             Some(i) if i < 0 || i >= i64::from(n_images) => {
                 return Err(PyValueError::new_err(format!(
-                    "reference_images[{pid}] = {i} is not an image index of this                      scene's {n_images} images (or -1 for none)"
+                    "reference_images[{pid}] = {i} is not an image index of this \
+                     scene's {n_images} images (or -1 for none)"
                 )));
             }
             Some(_) => {}
@@ -154,7 +157,7 @@ pub(super) fn reference_positions(
             .iter()
             .zip(sets)
             .map(|(pid, set)| {
-                let image = map.get(pid).copied().flatten()?;
+                let image = map.get(&i64::from(*pid)).copied().flatten()?;
                 let image = u32::try_from(image).ok()?;
                 set.iter().position(|&v| v == image)
             })

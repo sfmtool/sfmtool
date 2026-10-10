@@ -312,9 +312,10 @@ def test_localize_keypoints_rejects_out_of_range_view_index(
 
 def test_bad_reference_images_entries_are_a_value_error(seoul_bull_workspace: Path):
     """An entry ``reference_images`` cannot mean (a point the cloud does not
-    have, an image index past the scene's images, a negative one other than
-    ``-1``) is a ValueError from both kernels, not a silent fall back to the
-    rule; ``None`` and ``-1`` still ask for the rule's pick."""
+    have, a negative point index included, an image index past the scene's
+    images, a negative one other than ``-1``) is a ValueError from both
+    kernels, not a silent fall back to the rule; ``None`` and ``-1`` still ask
+    for the rule's pick."""
     import pytest
 
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
@@ -326,8 +327,18 @@ def test_bad_reference_images_entries_are_a_value_error(seoul_bull_workspace: Pa
     unknown = max(int(p) for p in np.asarray(cloud.point_indexes)) + 1
     for name in ["localize_keypoints", "refine_keypoints"]:
         run = getattr(cloud, name)
-        for bad in [{unknown: 0}, {pids[0]: len(images)}, {pids[0]: -2}]:
-            with pytest.raises(ValueError, match="reference_images"):
+        not_a_point = "reference_images names point .*, which this patch cloud"
+        not_an_image = (
+            rf"reference_images\[{pids[0]}\] = .* is not an image index of this "
+            rf"scene's {len(images)} images \(or -1 for none\)$"
+        )
+        for bad, match in [
+            ({unknown: 0}, not_a_point),
+            ({-1: 0}, not_a_point),
+            ({pids[0]: len(images)}, not_an_image),
+            ({pids[0]: -2}, not_an_image),
+        ]:
+            with pytest.raises(ValueError, match=match):
                 run(
                     recon,
                     images,
@@ -647,6 +658,13 @@ def test_reference_outside_the_view_set_falls_back_to_the_rule(
     fallback = cloud.localize_keypoints(
         recon, images, reference_images=outside, **common
     )
+    for a, b in zip(ruled, fallback):
+        assert a["reference_image"] == b["reference_image"]
+        assert np.array_equal(np.asarray(a["keypoints"]), np.asarray(b["keypoints"]))
+
+    # The sub-pixel refiner sets such an entry aside in the same way.
+    ruled = cloud.refine_keypoints(recon, images, **common)
+    fallback = cloud.refine_keypoints(recon, images, reference_images=outside, **common)
     for a, b in zip(ruled, fallback):
         assert a["reference_image"] == b["reference_image"]
         assert np.array_equal(np.asarray(a["keypoints"]), np.asarray(b["keypoints"]))

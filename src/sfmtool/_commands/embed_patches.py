@@ -12,7 +12,9 @@ from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
 
 
-@click.command("embed-patches")
+# Extra positional arguments are collected rather than refused by click, so a
+# count left over from `--subpixel N` is reported as that in any position.
+@click.command("embed-patches", context_settings={"allow_extra_args": True})
 @timed_command
 @click.help_option("--help", "-h")
 @click.argument("input_path", type=click.Path(exists=True))
@@ -122,11 +124,12 @@ from ._sfmr_path import check_sfmr_path
     default=80.0,
     show_default=True,
     help=(
-        "After round 1, drop each observation that views its surfel more than this "
-        "many degrees off the (refined) patch normal — a grazing view renders as a "
-        "cross-view-consistent but degenerate smear that biases the consensus and "
-        "pulls the normal toward grazing over subsequent rounds. `90` keeps all "
-        "views (disables the filter)."
+        "In every round, before the sub-pixel keypoint refinement, drop each "
+        "observation that views its surfel more than this many degrees off the "
+        "(refined) patch normal, the reference observation included — a grazing "
+        "view renders as a cross-view-consistent but degenerate smear that biases "
+        "the consensus and pulls the normal toward grazing over subsequent rounds. "
+        "`90` keeps all views (disables the filter)."
     ),
 )
 @click.option(
@@ -260,9 +263,11 @@ def embed_patches_command(
     generally differ from the input.
 
     An input that is already embedded_patches and stores reference
-    observations keeps them: each such point's bitmap is rendered from its own
-    reference observation at the final keypoints, where its track still holds
-    that image, and only a point with none takes the reference-view rule's pick.
+    observations keeps them: each such point's views are aligned to its own
+    reference observation and its bitmap is rendered from it at the final
+    keypoints. A point takes the reference-view rule's pick where it stores
+    none, where the obliquity cut or the localizer drops its reference, or
+    where its reference does not render at its keypoint.
 
     \b
     Examples:
@@ -282,14 +287,21 @@ def embed_patches_command(
 
     input_path = check_sfmr_path(input_path, "Input path")
 
+    # `--subpixel N` from before the flag became a switch: the count is read
+    # as the output path, or as an extra argument after it.
+    extra = list(click.get_current_context().args)
+    count = next(
+        (a for a in [output_path, *extra] if a is not None and a.isdigit()), None
+    )
+    if count is not None:
+        raise click.UsageError(
+            f"--subpixel no longer takes a count (got {count}); use "
+            "--subpixel or --no-subpixel, and --rounds for the number of rounds."
+        )
+    if extra:
+        raise click.UsageError(f"Got unexpected extra arguments ({' '.join(extra)})")
+
     if output_path is not None:
-        if output_path.isdigit():
-            # `--subpixel N` from before the flag became a switch: the count is
-            # read as the output path.
-            raise click.UsageError(
-                f"--subpixel no longer takes a count (got {output_path}); use "
-                "--subpixel or --no-subpixel, and --rounds for the number of rounds."
-            )
         output_path = check_sfmr_path(output_path, "Output path")
     else:
         output_path = auto_output_path(input_path, suffix="embedded")

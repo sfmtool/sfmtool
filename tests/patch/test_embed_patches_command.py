@@ -380,6 +380,54 @@ def test_embed_patches_cli_rejects_removed_options(
     assert not (tmp_path / "out.sfmr").exists()
 
 
+@pytest.mark.parametrize(
+    "order",
+    [
+        ["IN", "--subpixel", "2"],
+        ["IN", "--subpixel", "2", "OUT"],
+        ["IN", "OUT", "--subpixel", "2"],
+    ],
+)
+def test_embed_patches_cli_names_a_subpixel_count(
+    seoul_bull_workspace, tmp_path, order
+):
+    """A count left over from ``--subpixel N`` is reported as that, wherever it
+    lands among the positional arguments, before any work happens."""
+    out = tmp_path / "out.sfmr"
+    args = ["embed-patches"] + [
+        str(seoul_bull_workspace) if a == "IN" else str(out) if a == "OUT" else a
+        for a in order
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "--subpixel no longer takes a count (got 2)" in result.output
+    assert not out.exists()
+
+
+def test_embed_patches_cli_rejects_extra_arguments(seoul_bull_workspace, tmp_path):
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(tmp_path / "out.sfmr"),
+        "stray",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "unexpected extra arguments (stray)" in result.output
+
+
+def test_embed_patches_subpixel_must_be_a_bool(seoul_bull_workspace):
+    """``subpixel`` was a count of passes; a number is refused up front rather
+    than read as true."""
+    from sfmtool._embed_patches import embed_patches
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    with pytest.raises(ValueError, match="subpixel must be a bool, got 1"):
+        embed_patches(recon, [], subpixel=1)
+
+
 def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
     """Regression (channel order): the stored ``patch_bitmaps_y_x_rgba`` is RGB,
     not BGR — so the GUI, which uploads channel 0 as red, shows true colours.
@@ -451,7 +499,9 @@ def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace
     """An ``embedded_patches`` input's stored reference observation is the one
     every round aligns the point's views to: where its image is still in the
     output track, the output names the same image as the reference, and its
-    keypoint has not moved."""
+    keypoint has not moved. A stored reference whose core does not render at
+    its keypoint aligns nothing, so the views are aligned to the
+    reference-view rule's pick and the output records that; few are."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _rgb_images(recon)
     first = ep.embed_patches(recon, images, resolution=12)
@@ -486,7 +536,7 @@ def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace
     refs2 = np.asarray(second.reference_observations)
     timg2 = np.asarray(second.track_image_indexes)
     kxy2 = np.asarray(second.keypoints_xy, dtype=np.float32)
-    checked = 0
+    checked = replaced = 0
     for p, pos in enumerate(np.asarray(second.positions)):
         hit = ref_image.get(tuple(pos))
         if hit is None:
@@ -495,12 +545,14 @@ def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace
         track = timg2[offsets2[p] : offsets2[p] + counts2[p]]
         if image not in track.tolist():
             continue
-        assert refs2[p] >= 0
         row = offsets2[p] + refs2[p]
-        assert timg2[row] == image, f"point {p}: reference moved off image {image}"
+        if refs2[p] < 0 or timg2[row] != image:
+            replaced += 1
+            continue
         assert np.array_equal(kxy2[row], keypoint), f"point {p}: reference moved"
         checked += 1
     assert 0 < len(ref_image) // 2 <= checked, (checked, len(ref_image))
+    assert replaced <= checked // 20, (replaced, checked)
 
 
 def test_embed_patches_cli_absolute_localizer_gates_forward(

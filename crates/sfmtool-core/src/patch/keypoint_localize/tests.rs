@@ -1306,6 +1306,7 @@ fn build_tile_from_interleaved(
         planes,
         invalid_plane,
         valid: valid.to_vec(),
+        all_valid: valid.iter().all(|&v| v),
     }
 }
 
@@ -1465,6 +1466,8 @@ fn run_compute_channel_grids_equivalence(resolution: usize, margin: i64) {
     let tile = synthetic_tile(cr, channels, false);
     let n = support.pixels.len();
     let w_f32: Vec<f32> = support.weights.iter().map(|&w| w as f32).collect();
+    let mut offsets = Vec::new();
+    support_offsets(&support, resolution, tile.istride, &mut offsets);
     let kern: Vec<f32> = (0..n)
         .map(|k| support.sqrt_weights[k] * (0.7 + 0.3 * ((k as f32) * 0.13).sin()))
         .collect();
@@ -1498,6 +1501,7 @@ fn run_compute_channel_grids_equivalence(resolution: usize, margin: i64) {
         compute_channel_grids(
             &tile.planes[c],
             &support,
+            &offsets,
             &kern,
             &w_f32,
             resolution,
@@ -1593,6 +1597,8 @@ fn score_cell_matches_compute_channel_grids() {
         let tile = synthetic_tile(cr, channels, false);
         let n = support.pixels.len();
         let w_f32: Vec<f32> = support.weights.iter().map(|&w| w as f32).collect();
+        let mut offsets = Vec::new();
+        support_offsets(&support, resolution, tile.istride, &mut offsets);
         let kern: Vec<f32> = (0..n)
             .map(|k| support.sqrt_weights[k] * (0.7 + 0.3 * ((k as f32) * 0.13).sin()))
             .collect();
@@ -1610,6 +1616,7 @@ fn score_cell_matches_compute_channel_grids() {
             compute_channel_grids(
                 &tile.planes[c],
                 &support,
+                &offsets,
                 &kern,
                 &w_f32,
                 resolution,
@@ -2807,4 +2814,79 @@ fn a_reference_given_at_a_repeated_image_is_kept() {
     assert_eq!(res.views, vec![0, 1, 2]);
     assert_eq!(res.reference, Some(1));
     assert_eq!(res.zncc[1], 1.0);
+}
+
+#[test]
+fn a_window_that_scores_the_same_everywhere_stays_at_the_start() {
+    // A flat tile scores 0 at every shift. The exact tie goes to the cell
+    // nearest the start in the exhaustive search and in its oracle, and the
+    // descent finds no neighbour that improves, so all three leave the view
+    // where it started rather than at the window's first corner.
+    let resolution = 20usize;
+    let margin = 4i64;
+    let cr = resolution + 2 * margin as usize;
+    let channels = 3usize;
+    let support = disk_support(resolution);
+    let keep_mask = vec![true; channels];
+    let textured = synthetic_tile(cr, channels, false);
+    let tmpl = template_at(
+        &textured, &support, &keep_mask, channels, resolution, margin, 1, -2,
+    );
+    let flat = build_tile_from_interleaved(
+        &vec![100.0f32; cr * cr * channels],
+        cr,
+        channels,
+        &vec![true; cr * cr],
+    );
+    let base = margin as usize;
+    let mut sc = SearchScratch {
+        tmpl: tmpl.clone(),
+        ..Default::default()
+    };
+    let exhaustive = search_shift(
+        &flat, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
+    );
+    let descent = search_shift_plus_descent(
+        &flat, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
+    );
+    let oracle = search_shift_ref(
+        &flat, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
+    );
+    for (name, got) in [
+        ("exhaustive", exhaustive),
+        ("descent", descent),
+        ("oracle", oracle),
+    ] {
+        let got = got.unwrap_or_else(|| panic!("{name}: every shift is in frame"));
+        assert_eq!((got.ix, got.iy), (0, 0), "{name}");
+        assert_eq!((got.dx, got.dy), (0.0, 0.0), "{name}");
+        assert_eq!(got.peak, 0.0, "{name}");
+    }
+}
+
+#[test]
+fn a_flat_view_the_gates_keep_is_left_where_it_started() {
+    // With every per-view gate off, as the bench runs the localizer, a
+    // textureless member is not refused, and is searched. It scores the same
+    // at every shift, so it keeps its starting keypoint (here the projection)
+    // under either search strategy.
+    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
+    let offs = [[0.0; 2]; 2];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, flat_texture];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+    for search_strategy in [SearchStrategy::Exhaustive, SearchStrategy::PlusDescent] {
+        let open = KeypointLocalizeParams {
+            max_member_zncc_self_similarity_radius: 0.0,
+            min_absolute_zncc: 0.0,
+            min_relative_zncc: 0.0,
+            max_shift_px: f64::MAX,
+            search_strategy,
+            ..params()
+        };
+        let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &open);
+        let k = pos(&res, 1).expect("the gates are off, so the flat view is kept");
+        assert_eq!(res.offsets_px[k], 0.0, "{search_strategy:?}");
+    }
 }

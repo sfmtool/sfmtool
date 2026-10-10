@@ -185,6 +185,110 @@ def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded, ro
     _assert_drop_then_add_reproduces(out)
 
 
+def _spy_final_references(monkeypatch, *, forget_every: int = 0) -> dict:
+    """Record, by point position, the image of the reference each sub-pixel
+    pass of ``embed_patches`` reports its views were aligned to (``-1`` for
+    none), keeping the last pass's. With ``forget_every``, every so many points
+    reach the pass with no reference named, as where the localizer could not
+    render a stored reference and aligned nothing."""
+    import sfmtool._embed_patches as ep
+
+    real = ep._refine_subpixel
+    reported: dict = {}
+
+    def spy(cloud, recon, images, localizations, **kwargs):
+        if forget_every:
+            localizations = [
+                dict(loc, reference_image=None)
+                if int(loc["point_index"]) % forget_every == 0
+                else loc
+                for loc in localizations
+            ]
+        out = real(cloud, recon, images, localizations, **kwargs)
+        positions = [tuple(p) for p in np.asarray(recon.positions)]
+        # Points are matched by position, so a position two points share (two
+        # tracks triangulated to one place) is left out.
+        shared = {p for p in positions if positions.count(p) > 1}
+        reported.clear()
+        for loc in out[0]:
+            position = positions[int(loc["point_index"])]
+            if position not in shared:
+                image = loc.get("reference_image")
+                reported[position] = -1 if image is None else int(image)
+        return out
+
+    monkeypatch.setattr(ep, "_refine_subpixel", spy)
+    return reported
+
+
+def _assert_output_records_the_reported_references(out, reported) -> int:
+    """Every output point records the reference its views were aligned to.
+    Returns how many points were checked."""
+    got = _reference_images(out)
+    checked = 0
+    for k, position in enumerate(np.asarray(out.positions)):
+        want = reported.get(tuple(position))
+        if want is None:
+            continue
+        assert got[k] == want, (k, got[k], want)
+        checked += 1
+    assert checked > out.point_count // 2, (checked, out.point_count)
+    return checked
+
+
+def test_embed_patches_records_the_reference_the_views_were_aligned_to(
+    embedded, monkeypatch
+):
+    """Where the localizer reports no reference for a point (its stored
+    reference did not render at its keypoint, so it aligned nothing), the
+    sub-pixel pass aligns the views to the reference-view rule's pick. The
+    output records that pick, whose tile the bitmap is, not the stored
+    reference the views were never aligned to, and dropping and adding the
+    bitmaps gives the same bytes."""
+    stored = _other_references(embedded)
+    recon = embedded.clone_with_changes(reference_observations=stored)
+    reported = _spy_final_references(monkeypatch, forget_every=3)
+    out = embed_patches(
+        recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=1
+    )
+    _assert_output_records_the_reported_references(out, reported)
+    # Some of those points record another image than the stored one.
+    want = _reference_images(recon, stored)
+    positions = {tuple(p): i for i, p in enumerate(np.asarray(recon.positions))}
+    got = _reference_images(out)
+    moved = sum(
+        1
+        for k, p in enumerate(np.asarray(out.positions))
+        if positions[tuple(p)] % 3 == 0
+        and want[positions[tuple(p)]] in _point_images(out, k)
+        and got[k] != want[positions[tuple(p)]]
+    )
+    assert moved > 0
+    _assert_drop_then_add_reproduces(out)
+
+
+@pytest.mark.parametrize("rounds", [1, 2])
+def test_embed_patches_records_a_new_reference_where_the_obliquity_cut_drops_it(
+    embedded, monkeypatch, rounds
+):
+    """The obliquity cut runs before each round's sub-pixel pass and drops a
+    reference like any other view, so the pass's reference-view rule picks
+    again from the views left and the output records that pick. No bitmap is
+    left as a removed observation's render under ``-1``, and dropping and
+    adding the bitmaps gives the same bytes."""
+    reported = _spy_final_references(monkeypatch)
+    out = embed_patches(
+        embedded,
+        load_workspace_images(embedded),
+        resolution=RESOLUTION,
+        rounds=rounds,
+        max_obliquity_deg=30.0,
+    )
+    assert out.observation_count < embedded.observation_count
+    _assert_output_records_the_reported_references(out, reported)
+    _assert_drop_then_add_reproduces(out)
+
+
 def test_embed_patches_rounds_keep_the_references_without_bitmaps(
     embedded, monkeypatch
 ):

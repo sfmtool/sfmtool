@@ -79,7 +79,7 @@ use search::{search_shift, search_shift_plus_descent, SearchScratch, ShiftResult
 #[cfg(test)]
 use kernels::{
     compute_channel_grids, compute_channel_grids_scalar, score_cell_one_channel,
-    score_cell_one_channel_scalar,
+    score_cell_one_channel_scalar, support_offsets,
 };
 
 /// `f32` lanes per destination pixel the render scratch behind one context tile
@@ -260,6 +260,10 @@ struct ContextTile {
     /// Per-pixel validity (`true` in frame), `[row · res + col]`. The `bool` form
     /// is what the core read (`extract_core`) checks.
     valid: Vec<bool>,
+    /// Whether every pixel of [`valid`](Self::valid) is in frame, recorded when
+    /// the tile is built. Then [`invalid_plane`](Self::invalid_plane) is all
+    /// zero, so the search skips its validity count.
+    all_valid: bool,
 }
 
 /// Compute the row stride for the centered planar cache: enough lanes to admit a
@@ -428,6 +432,7 @@ fn render_context(
     // Centered planar planes. Pad columns past `cr` stay at `0.0` (= the mean
     // after centering, harmless — those columns only feed discarded grid cells
     // past the search window).
+    let mut all_valid = true;
     prof::RENDER_CENTER.time(|| {
         for row in 0..context_res {
             for col in 0..context_res {
@@ -436,6 +441,7 @@ fn render_context(
                 let row_off = r * istride + c;
                 let v = map.is_valid(col, row);
                 valid[r * cr + c] = v;
+                all_valid &= v;
                 invalid_plane[row_off] = if v { 0.0 } else { 1.0 };
                 for ch in 0..channels {
                     let p = img.get_pixel(col, row, ch as u32) as f32;
@@ -452,6 +458,7 @@ fn render_context(
         planes,
         invalid_plane,
         valid,
+        all_valid,
     })
 }
 
@@ -944,7 +951,10 @@ fn search_shift_ref(
             znorm_core(&raw, support, keep_mask, &mut core);
             let z = template_zncc(&core, tmpl, channels, n);
             grid[at(dy, dx)] = z;
-            if z > best.0 {
+            // An exact tie goes to the cell nearer the start, as in
+            // `search_shift`.
+            let nearer = dy.abs() + dx.abs() < best.1.abs() + best.2.abs();
+            if z > best.0 || (z == best.0 && nearer) {
                 best = (z, dy, dx);
             }
         }

@@ -44,6 +44,7 @@ mod sift_keypoints;
 
 pub use affine_shape::patch_affine_shape;
 pub use image_table::ImageTable;
+pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{ObservationSource, PointSet};
 pub use sift_keypoints::SiftKeypointFill;
 

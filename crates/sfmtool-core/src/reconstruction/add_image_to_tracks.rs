@@ -44,7 +44,9 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
 use crate::reconstruction::bundle_adjust::is_posed;
-use crate::reconstruction::data::{ObservationSource, SfmrReconstruction, TrackObservation};
+use crate::reconstruction::data::{
+    observation_confidence_byte, ObservationSource, SfmrReconstruction, TrackObservation,
+};
 
 /// The scale factor from a median absolute deviation to a normal standard
 /// deviation.
@@ -1108,7 +1110,7 @@ fn insert_observations(
             kp_flat.push(kp[0] as f32);
             kp_flat.push(kp[1] as f32);
             if let Some(c) = confidence.as_mut() {
-                c.push(confidence_byte(z));
+                c.push(observation_confidence_byte(z));
             }
         };
         for row in start..end {
@@ -1151,16 +1153,6 @@ fn insert_observations(
     // not that file.
     next.content_hash = ContentHash::default();
     next
-}
-
-/// A ZNCC on the bench commit's byte scale, never the `0` that means
-/// unmeasured.
-fn confidence_byte(zncc: f64) -> u8 {
-    if zncc.is_finite() {
-        ((zncc.clamp(0.0, 1.0) * f64::from(u8::MAX)).round() as u8).max(1)
-    } else {
-        1
-    }
 }
 
 #[cfg(test)]

@@ -392,7 +392,10 @@ def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace):
 def test_stored_reference_is_kept_through_localize_and_refine(seoul_bull_workspace):
     """A point's stored reference observation is the one ``--localize-keypoints``
     and then ``--refine-keypoints`` align its views to: both keep it, name the
-    same image as the reference, and leave its keypoint where it was."""
+    same image as the reference, and leave its keypoint where it was. A
+    reference whose core does not render at its keypoint aligns nothing, and
+    is recorded as no reference (``-1``), so the refinement after it aligns
+    that point to the reference-view rule's pick; few do."""
     from sfmtool.xform import RefineKeypointsTransform
 
     recon = _embedded(seoul_bull_workspace)
@@ -421,23 +424,29 @@ def test_stored_reference_is_kept_through_localize_and_refine(seoul_bull_workspa
     localized = _modest_params().apply(recon)
     refined = RefineKeypointsTransform(resolution=12).apply(localized)
 
+    not_used: set[tuple] = set()
     for out in (localized, refined):
         counts2 = np.asarray(out.observation_counts, dtype=np.int64)
         offsets2 = np.concatenate([[0], np.cumsum(counts2)[:-1]])
         refs2 = np.asarray(out.reference_observations)
         timg2 = np.asarray(out.track_image_indexes)
         kxy2 = np.asarray(out.keypoints_xy, dtype=np.float32)
-        checked = 0
+        checked = unused = 0
         for p, pos in enumerate(np.asarray(out.positions)):
             hit = named.get(tuple(pos))
-            if hit is None:
+            if hit is None or tuple(pos) in not_used:
                 continue
             image, keypoint = hit
             track = timg2[offsets2[p] : offsets2[p] + counts2[p]].tolist()
             if image not in track:
                 continue
+            if refs2[p] < 0:
+                not_used.add(tuple(pos))
+                unused += 1
+                continue
             row = offsets2[p] + refs2[p]
-            assert refs2[p] >= 0 and timg2[row] == image, p
+            assert timg2[row] == image, p
             assert np.array_equal(kxy2[row], keypoint), p
             checked += 1
         assert 0 < len(named) // 2 <= checked, (checked, len(named))
+        assert unused <= checked // 20, (unused, checked)

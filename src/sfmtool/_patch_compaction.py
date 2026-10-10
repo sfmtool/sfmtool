@@ -180,8 +180,9 @@ def compact_to_embedded_patches(
             keypoints, ...}`` with the kept image indices and refined keypoints.
             A dict's optional ``reference_image`` names the image of the
             reference observation its views were aligned to, whose tile the
-            point's bitmap is, and becomes the reference observation of a point
-            that has none (see below).
+            point's bitmap is (``None``: they were aligned to a fused mean, or
+            to nothing), and becomes the point's reference observation (see
+            below).
         image_file_hashes: One 16-byte XXH128 per image (see
             :func:`image_file_hashes_from_images`), parallel to ``recon.image_names``.
         patch_bitmaps: Optional ``(point_count, R, R, 4)`` uint8 stored bitmaps
@@ -198,16 +199,20 @@ def compact_to_embedded_patches(
             ``None`` skips the validity cull (``min_views`` still applies).
         min_views: Drop a point whose kept-view count is below this.
 
-    Each surviving point's reference observation is the observation of the
-    same image in its new track as the reference observation ``recon`` stores
-    for it: a reference names the observation the point's bitmap is, or is to
-    be, rendered from, and moving keypoints or refining the frame does not
-    change it. Where ``recon`` stores none for the point (``-1``), or the
-    localizer dropped that image from its track, it is the observation of
-    the image its localization names (``reference_image``) where the new track
-    holds that image, and ``-1`` otherwise. A point whose stored reference is kept has a bitmap that
-    is not necessarily that observation's render, so a caller passing ``patch_bitmaps``
-    renders those points again (:func:`render_from_references`).
+    Each surviving point's reference observation is the observation, in its
+    new track, of the image its views were aligned to, so that the keypoints,
+    the bitmap and the reference agree. Where the localization carries
+    ``reference_image``, that is the image; ``None`` gives ``-1`` (the views
+    were aligned to a fused mean, which is then the bitmap, or to nothing).
+    The kernels align to a point's stored reference whenever it is in the
+    view set and renders, so a stored reference survives a refinement that
+    moves keypoints or the frame, and is replaced only where it could not be
+    used. Where the localization carries no ``reference_image``, the point
+    keeps the reference observation ``recon`` stores for it if the new track
+    still holds that image, and ``-1`` otherwise. A kept reference's bitmap is
+    not necessarily that observation's render at the stored ``f32`` values,
+    so a caller passing ``patch_bitmaps`` renders those points again
+    (:func:`render_from_references`).
 
     Returns:
         A new ``embedded_patches`` :class:`SfmrReconstruction`, ready to ``save()``.
@@ -319,9 +324,9 @@ def compact_to_embedded_patches(
 
     # Flat, point-then-image-sorted observations and parallel keypoints. Each
     # point's reference observation is the place in its sorted track of the
-    # image its stored reference observation was in, or of the image of the
-    # reference its views were aligned to (``reference_image`` on its
-    # localization); -1 where there is none.
+    # image of the reference its views were aligned to (``reference_image`` on
+    # its localization), or, where the localization does not say, of the image
+    # its stored reference observation was in; -1 where there is none.
     track_image_indexes: list[int] = []
     track_point_indexes: list[int] = []
     keypoints: list[np.ndarray] = []
@@ -330,13 +335,16 @@ def compact_to_embedded_patches(
         loc = loc_by_pid[old_id]
         views = np.asarray(loc["views"], dtype=np.uint32)
         kpts = np.asarray(loc["keypoints"], dtype=np.float32).reshape(-1, 2)
-        # The stored reference where its image is still in the track, else
-        # the one the views were aligned to.
-        candidates = [int(stored_references[old_id])]
-        if loc.get("reference_image") is not None:
-            candidates.append(int(loc["reference_image"]))
-        reference_image = next(
-            (c for c in candidates if c >= 0 and bool(np.any(views == c))), None
+        # The reference the views were aligned to, where the localization
+        # says, else the stored one; recorded only where its image is in the
+        # track.
+        if "reference_image" in loc:
+            aligned = loc["reference_image"]
+            candidate = -1 if aligned is None else int(aligned)
+        else:
+            candidate = int(stored_references[old_id])
+        reference_image = (
+            candidate if candidate >= 0 and bool(np.any(views == candidate)) else None
         )
         for k, j in enumerate(np.argsort(views, kind="stable")):
             if reference_image is not None and int(views[j]) == int(reference_image):

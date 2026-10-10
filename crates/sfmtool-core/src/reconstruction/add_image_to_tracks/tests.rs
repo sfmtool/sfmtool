@@ -447,6 +447,19 @@ fn two_points_at_one_place_keep_one_observation() {
 }
 
 #[test]
+fn a_score_is_stored_on_the_confidence_byte_scale() {
+    // A measured score is never the `0` that means unmeasured; a score that
+    // is not a number is unmeasured.
+    assert_eq!(observation_confidence_byte(1.0), 255);
+    assert_eq!(observation_confidence_byte(0.5), 128);
+    assert_eq!(observation_confidence_byte(0.0), 1);
+    assert_eq!(observation_confidence_byte(-0.4), 1);
+    assert_eq!(observation_confidence_byte(1.7), 255);
+    assert_eq!(observation_confidence_byte(f64::NAN), 0);
+    assert_eq!(observation_confidence_byte(f64::INFINITY), 0);
+}
+
+#[test]
 fn the_confidence_column_is_extended_in_lockstep() {
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
@@ -457,7 +470,7 @@ fn the_confidence_column_is_extended_in_lockstep() {
     for (p, c) in report.candidates.iter().enumerate() {
         let start = next.point_set.observation_offsets[p];
         assert_eq!(&conf[start..start + 4], &[200; 4]);
-        assert_eq!(conf[start + 4], confidence_byte(c.zncc));
+        assert_eq!(conf[start + 4], observation_confidence_byte(c.zncc));
         assert!(conf[start + 4] >= 1);
     }
 }

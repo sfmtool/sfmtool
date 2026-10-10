@@ -147,13 +147,14 @@ pub struct PointSet {
     /// drops or reindexes images moves the references with
     /// [`PointConstraintColumns::remap_images`].
     pub point_constraints: Option<PointConstraintColumns>,
-    /// Optional per-observation confidence in that observation's **photometric
-    /// sharpness relative to its track's consensus** (parallel to `tracks`),
-    /// persisted as `tracks/observation_confidence` (version 6+): `0` means no
-    /// data-derived support — nothing measured this observation — and `1..=255`
-    /// is a measured scale running from maximally soft to fully sharp. `None`
-    /// means the reconstruction carries no such information at all, which is
-    /// *not* the same as "every observation is sharp".
+    /// Optional per-observation confidence in how well that observation agrees
+    /// with its point's appearance (parallel to `tracks`), persisted as
+    /// `tracks/observation_confidence` (version 6+): its plain ZNCC against the
+    /// point's stored patch bitmap, as `observation_confidence_byte` writes
+    /// it. `0` means no data-derived support — nothing measured this
+    /// observation — and `1..=255` is a measured score, `255` for the reference
+    /// observation. `None` means the reconstruction carries no such information
+    /// at all, which is *not* the same as "every observation agrees".
     ///
     /// It is **metadata**: nothing in this crate reads it to decide anything. It
     /// rides along untouched, and every pass that drops or reorders observations
@@ -554,5 +555,18 @@ impl PointSet {
             }
         }
         Ok(())
+    }
+}
+
+/// An observation's score on the `tracks/observation_confidence` byte scale:
+/// a measured ZNCC `z` is `round(255 · clamp(z, 0, 1))`, raised to at least `1`
+/// so that it never reads as the `0` that means unmeasured; a non-finite score
+/// (NaN, no measurement) is that `0`. Every writer of the column calls this, so
+/// the bench commit and Add Image to Tracks store a score the same way.
+pub(crate) fn observation_confidence_byte(zncc: f64) -> u8 {
+    if zncc.is_finite() {
+        ((zncc.clamp(0.0, 1.0) * f64::from(u8::MAX)).round() as u8).max(1)
+    } else {
+        0
     }
 }

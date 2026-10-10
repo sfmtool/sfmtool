@@ -259,6 +259,40 @@ def test_compact_writes_references_naming_observations_of_the_compacted_tracks(
             kept += 1
     assert kept > 0 and dropped
 
+    # The reference the views were aligned to wins over the stored one, so the
+    # keypoints, the bitmap and the reference agree: a localization naming
+    # another image of the track records that image, one naming None (a fused
+    # mean, or nothing aligned) records -1, and one that does not say keeps
+    # the stored reference.
+    relocs = _localizations_from_recon(new)
+    want: dict[int, int] = {}
+    for loc in relocs:
+        pid = int(loc["point_index"])
+        if pid not in old_image:
+            continue
+        others = [int(v) for v in np.asarray(loc["views"]) if v != old_image[pid]]
+        if pid % 3 == 0 and others:
+            loc["reference_image"] = others[0]
+            want[pid] = others[0]
+        elif pid % 3 == 1:
+            loc["reference_image"] = None
+            want[pid] = -1
+        else:
+            del loc["reference_image"]
+            want[pid] = int(old_image[pid])
+    third = compact_to_embedded_patches(
+        new, new.patches, relocs, list(new.image_file_hashes), min_views=2
+    )
+    refs3 = np.asarray(third.reference_observations)
+    counts3 = np.asarray(third.observation_counts)
+    offsets3 = np.concatenate([[0], np.cumsum(counts3)[:-1]]).astype(int)
+    timg3 = np.asarray(third.track_image_indexes)
+    got = {
+        p: (int(timg3[offsets3[p] + refs3[p]]) if refs3[p] >= 0 else -1) for p in want
+    }
+    assert got == want
+    assert any(w not in (-1, old_image[p]) for p, w in want.items())
+
 
 def _normal_frame_angles_deg(recon) -> np.ndarray:
     """Per finite patched point, the angle (degrees) between the stored

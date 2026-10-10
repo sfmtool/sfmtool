@@ -156,7 +156,7 @@ impl PyPatchCloud {
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
         render_bitmaps: bool,
-        reference_images: Option<std::collections::HashMap<u32, Option<i64>>>,
+        reference_images: Option<std::collections::HashMap<i64, Option<i64>>>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard, n_images) = resolve_patch_scene(

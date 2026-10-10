@@ -433,7 +433,11 @@ def embed_patches(
        to their peers). The reference observation is the one an
        ``embedded_patches`` input stores for the point where it is in the view
        set, and otherwise the reference-view rule's pick at the starting
-       keypoints; its keypoint is not moved, and later rounds keep it. Each
+       keypoints; its keypoint is not moved, and later rounds keep it. The
+       obliquity cut (``max_obliquity_deg``) runs before each round's
+       sub-pixel pass and drops the reference like any other view; the
+       sub-pixel pass's reference-view rule then picks again from the views
+       left, and the output records that pick. Each
        observed view seeds at its stored keypoint; a view step 2 added has no
        observation, so it seeds at the point's projection.
        The final round's sub-pixel pass also renders each point's **stored
@@ -498,9 +502,10 @@ def embed_patches(
             re-refines the keypoints against the new normals — a fixed-point
             alternation. The per-point view set can only shrink across rounds (the
             grazing-observation drop below); it is never expanded after round 1.
-        max_obliquity_deg: After **each** round's normal refinement, drop every
-            observation viewing its surfel more than this off the (just-refined)
-            normal (``< 90`` enables the filter). Grazing views render as
+        max_obliquity_deg: After **each** round's normal refinement, before its
+            sub-pixel pass, drop every observation viewing its surfel more than
+            this off the (just-refined) normal (``< 90`` enables the filter),
+            the reference observation included. Grazing views render as
             cross-view-consistent but degenerate smears; the low-parallax
             degeneracy tilts a normal toward grazing gradually across rounds, so a
             view only crosses the threshold once the tilt reaches it — pruning each
@@ -676,6 +681,27 @@ def embed_patches(
             progress=counter,
         )
 
+    # Drop grazing observations against the refined normal before the
+    # sub-pixel pass, as every later round does, so the views it aligns (and
+    # the bitmap it renders, the final one on a single-round run) are the ones
+    # the output keeps, and the later rounds' consensus is not dragged toward
+    # a degenerate grazing smear. The reference is cut like any other view:
+    # a reference viewed more than `max_obliquity_deg` off the normal renders
+    # as a smear, so the sub-pixel pass's reference-view rule picks again from
+    # the remaining views, and that pick is recorded.
+    localizations, n_dropped = _drop_grazing_observations(
+        localizations,
+        cloud,
+        recon_camera_centers(embedded),
+        np.asarray(embedded.positions, np.float64),
+        np.asarray(embedded.point_is_at_infinity),
+        max_obliquity_deg,
+    )
+    if log and n_dropped:
+        log(
+            f"  dropped {n_dropped} grazing obs (> {max_obliquity_deg:.0f} deg off normal)"
+        )
+
     # 3.5. Sub-pixel keypoint refinement, seeded at the localizer's kept keypoints
     #      (the localizer put each view in the basin; the LK refiner sharpens it)
     #      against the reference the localizer aligned them to. The FINAL
@@ -729,21 +755,6 @@ def embed_patches(
                 f"(ZNCC self-similarity radius > "
                 f"{max_zncc_self_similarity_radius:.2f} grid px)"
             )
-
-    # After round 1: drop grazing observations against the refined normal, so the
-    # subsequent rounds' consensus is not dragged toward a degenerate grazing smear.
-    localizations, n_dropped = _drop_grazing_observations(
-        localizations,
-        cloud,
-        recon_camera_centers(embedded),
-        np.asarray(embedded.positions, np.float64),
-        np.asarray(embedded.point_is_at_infinity),
-        max_obliquity_deg,
-    )
-    if log and n_dropped:
-        log(
-            f"  dropped {n_dropped} grazing obs (> {max_obliquity_deg:.0f} deg off normal)"
-        )
 
     # Rounds 2..N: compact the current state into a self-contained embedded recon
     # (keeping every localized point, min_views=1), re-refine its normals against

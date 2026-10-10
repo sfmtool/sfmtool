@@ -16,6 +16,7 @@ use crate::patch::normal_refine::{Support, FLAT_NORM_SQ_EPS};
 
 use super::kernels::{
     accumulate_count, compute_channel_grids, count_invalid_at_cell, score_cell_one_channel,
+    support_offsets,
 };
 use super::{prof, subpixel_peak, ContextTile, LocalizeError};
 
@@ -42,6 +43,10 @@ pub(super) struct SearchScratch {
     /// Per-support-pixel window weight `w` as `f32` (one-time conversion from the
     /// `f64` `support.weights`; broadcast each k-step).
     pub(super) w_f32: Vec<f32>,
+    /// Per-support-pixel offset `r_k · istride + c_k` in the cache plane
+    /// ([`support_offsets`]), computed once per [`search_shift`] call and read
+    /// by both whole-grid kernels for every channel and grid row.
+    pub(super) offsets: Vec<usize>,
     /// Per-channel correlation maps over the shift grid (`(2·margin+1)²`): the
     /// numerator `Σ kern·I_c` and the centered window moments `Σ w·I_c`,
     /// `Σ w·I_c²` (`I_c = I − cache_mean`, so the centering algebra absorbs the
@@ -187,20 +192,26 @@ pub(super) fn search_shift(
     sc.w_f32.clear();
     sc.w_f32.extend(support.weights.iter().map(|&w| w as f32));
 
+    support_offsets(support, resolution, istride, &mut sc.offsets);
+
     // Validity: count out-of-frame support pixels per shift (channel-independent);
     // a shift with any is unscorable, matching `extract_core`'s all-valid gate.
+    // A tile with every pixel in frame has an all-zero invalidity plane (its
+    // pad columns are zero too), so the count would add only zeros to the
+    // zeroed grid and is skipped.
     sc.ginv.clear();
     sc.ginv.resize(gsz, 0.0);
-    accumulate_count(
-        &tile.invalid_plane,
-        support,
-        resolution,
-        istride,
-        span,
-        win_oy,
-        win_ox,
-        &mut sc.ginv,
-    );
+    if !tile.all_valid {
+        accumulate_count(
+            &tile.invalid_plane,
+            &sc.offsets,
+            istride,
+            span,
+            win_oy,
+            win_ox,
+            &mut sc.ginv,
+        );
+    }
 
     // Per kept channel: accumulate the three correlation maps over the centered
     // plane, then fold the channel's ZNCC into the combined grid. With centered
@@ -235,6 +246,7 @@ pub(super) fn search_shift(
             compute_channel_grids(
                 &tile.planes[c],
                 support,
+                &sc.offsets,
                 &sc.kern,
                 &sc.w_f32,
                 resolution,
@@ -318,12 +330,14 @@ pub(super) fn search_shift(
 /// [`SearchStrategy::PlusDescent`](super::SearchStrategy::PlusDescent)
 /// counterpart to [`search_shift`]: starts at `(dy, dx) = (0, 0)` (the view's
 /// current integer base offset), evaluates the 4 axis neighbors per step, moves
-/// to the best improver, and stops when no neighbor beats the current cell. Each
+/// to the best improver, and stops when no neighbor beats the current cell. It
+/// then scores the 4 diagonal neighbors; where one beats the current cell, it
+/// moves to the best of them and walks on. Each
 /// cell is scored at most once via [`score_cell_one_channel`]; the visited cache
 /// stores the combined ZNCC per cell. The final sub-pixel fit is a quadratic
-/// over the 3×3 neighbourhood of the final cell: it reuses the 4 cardinal
-/// neighbors already in the cache (each was evaluated to discover the STOP
-/// condition) and scores the 4 diagonal ones.
+/// over the 3×3 neighbourhood of the final cell, which no scored neighbour
+/// beats: the 4 cardinal neighbors are in the cache from the STOP check, and
+/// the 4 diagonal ones from the diagonal check.
 ///
 /// Same `ShiftResult` contract as `search_shift` — the integer argmax `(ix, iy)`
 /// drives the read accumulator, `(dx, dy)` carry the sub-pixel residual, and
@@ -331,8 +345,9 @@ pub(super) fn search_shift(
 /// margin`; neighbors past the bound or with any out-of-frame support pixel
 /// score `None` (skipped, never chosen).
 ///
-/// Cells visited per call: `9 + 3 · walk_steps` (1 seed + 4 neighbors per step,
-/// with 1 cache hit per move, + 4 diagonals for the fit). Before the diagonals
+/// Cells visited per call: about `9 + 3 · walk_steps` (1 seed + 4 neighbors per
+/// step, with 1 cache hit per move, + 4 diagonals for the fit, and a few more
+/// each time a diagonal move restarts the walk). Before the diagonals
 /// were added, the average on dino was ~6 cells per call — vs
 /// the 169 cells of the default ±6 grid `search_shift` processes — at ~32 µs
 /// per call (the per-cell `vgatherdps` kernel) vs ~145 µs (the SAXPY). The
@@ -458,14 +473,20 @@ pub(super) fn search_shift_plus_descent(
                     let win_y = (base_y as i64 + dy_) as usize;
                     let win_x = (base_x as i64 + dx_) as usize;
                     let ginv = prof::SEARCH_ACC.time(|| {
-                        let ginv = count_invalid_at_cell(
-                            &tile.invalid_plane,
-                            support,
-                            resolution,
-                            istride,
-                            win_y,
-                            win_x,
-                        );
+                        // A tile with every pixel in frame has no invalid
+                        // pixel to count.
+                        let ginv = if tile.all_valid {
+                            0.0
+                        } else {
+                            count_invalid_at_cell(
+                                &tile.invalid_plane,
+                                support,
+                                resolution,
+                                istride,
+                                win_y,
+                                win_x,
+                            )
+                        };
                         if ginv <= 0.5 {
                             for k in 0..channels {
                                 let tile_c = sc.pd_kept_channels[k];
@@ -526,31 +547,49 @@ pub(super) fn search_shift_plus_descent(
     // The per-neighbor best-of-4 pick is a handful of `f64` comparisons —
     // small enough relative to the score_cell calls driving it that it is not
     // separately timed.
+    //
+    // The 2-D sub-pixel fit needs the four diagonal cells around the final
+    // cell too; the 4 cardinal ones are already in the visited cache (each was
+    // evaluated by the STOP-check loop). Scoring them costs 4 cells per stop,
+    // and without them the fit has no cross term. A diagonal that beats the
+    // cell the walk stopped at means the peak is not there: the walk moves to
+    // the best such diagonal and goes on, so the fit is always centred on a
+    // cell no scored neighbour beats.
     loop {
-        let mut best_move: Option<((i64, i64), f64)> = None;
-        for (dy_step, dx_step) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let next = (current.0 + dy_step, current.1 + dx_step);
-            if let Some(phi) = score_cell!(next.0, next.1) {
-                if phi > current_phi && best_move.is_none_or(|(_, bs)| phi > bs) {
-                    best_move = Some((next, phi));
+        loop {
+            let mut best_move: Option<((i64, i64), f64)> = None;
+            for (dy_step, dx_step) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let next = (current.0 + dy_step, current.1 + dx_step);
+                if let Some(phi) = score_cell!(next.0, next.1) {
+                    if phi > current_phi && best_move.is_none_or(|(_, bs)| phi > bs) {
+                        best_move = Some((next, phi));
+                    }
+                }
+            }
+            match best_move {
+                None => break,
+                Some((next, phi)) => {
+                    current = next;
+                    current_phi = phi;
                 }
             }
         }
-        match best_move {
+        let mut best_diagonal: Option<((i64, i64), f64)> = None;
+        for (dy_step, dx_step) in [(-1, -1), (-1, 1), (1, -1), (1, 1)] {
+            let next = (current.0 + dy_step, current.1 + dx_step);
+            if let Some(phi) = score_cell!(next.0, next.1) {
+                if phi > current_phi && best_diagonal.is_none_or(|(_, bs)| phi > bs) {
+                    best_diagonal = Some((next, phi));
+                }
+            }
+        }
+        match best_diagonal {
             None => break,
             Some((next, phi)) => {
                 current = next;
                 current_phi = phi;
             }
         }
-    }
-
-    // The 2-D sub-pixel fit needs the four diagonal cells around the final
-    // cell too; the 4 cardinal ones are already in the visited cache (each was
-    // evaluated by the STOP-check loop above). Scoring them here costs 4 cells
-    // per call, and without them the fit has no cross term.
-    for (dy_step, dx_step) in [(-1, -1), (-1, 1), (1, -1), (1, 1)] {
-        let _ = score_cell!(current.0 + dy_step, current.1 + dx_step);
     }
 
     // SEARCH_ARGMAX: 2-D quadratic sub-pixel refinement over the 3×3
