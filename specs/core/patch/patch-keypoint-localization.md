@@ -397,122 +397,181 @@ in [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md).
 
 Aligning to the reference render replaced congealing, which aligned each view
 over several rounds to the robust (IRLS) mean of all the other views and scored
-it by that leave-one-out ZNCC. The two were compared on the seoul_bull (259
-tracks) and kerry_park (380 tracks) ground truths, which are metric
-reconstructions with known poses. Each view's starting keypoint was displaced
-from its ground-truth projection by 0, 0.5, 1, 2 or 3 px in a random direction,
-the reference kept at its stored keypoint; the agreement bars and
-`max_shift_px` were off and the member gate at its default. Four variants of the
-alignment were run: the "+"-descent and the exhaustive search, each alone and
-each after an exhaustive search at half resolution (a **coarse level**, from
-which the full-resolution search starts).
+it by that leave-one-out ZNCC. The two are compared on the seoul_bull (259
+tracks) and kerry_park (380 tracks) ground truths, every point with at least
+three views, by the harness in
+[`scripts/keypoint_localization/`](../../../scripts/keypoint_localization/README.md),
+which has the commands, the full tables and the views kept. Congealing is built
+from commit `83ffb08e`, the last with it; the alignment includes the 3×3
+quadratic sub-pixel step. These figures were recorded on 2026-10-09.
 
-Two errors were read per kept view:
+**Protocol.** The poses the ground truth stores are taken as correct, and a
+view's ground-truth keypoint is the projection of the patch centre. At a
+displacement of 0 every view starts at its stored keypoint; at `d` px every
+view starts `d` px from its ground-truth keypoint in a random direction. The
+agreement bars and `max_shift_px` are off and the member gate is at its
+default. Two variants differ in the reference:
 
-- the **raw error**, its distance from the ground-truth projection;
-- the **re-triangulated residual**, its reprojection residual after each track
-  is re-triangulated from its aligned keypoints at the ground-truth poses. This
-  leaves out the offset the reference shares with every view aligned to it,
-  which moves the point rather than adding reprojection error.
+- **Reference displaced**, the comparison on equal terms: the reference starts
+  `d` px off like every other view, as its keypoint does in real use.
+- **Reference stored**: the reference keeps its stored keypoint, which gives
+  the alignment a template rendered at an almost correct keypoint and
+  congealing none. This favours the alignment; it is how the alignment was
+  first measured.
 
-A view more than 1.5 px from the ground-truth projection is counted as **locked
-to a side peak**.
+Two biases remain in both. The ground-truth points were triangulated from
+keypoints that congealing placed, which favours congealing at 0 px. And the
+ground-truth poses are themselves solved, so a residual of about 0.15 to 0.3 px
+is the floor of either method.
 
-**Mean raw error (px) / side-peak share**, by starting displacement:
+Two errors are read per kept view:
 
-| dataset | disp px | congealing | "+"-descent | exhaustive | coarse, then descent | coarse, then exhaustive |
-|---|---|---|---|---|---|---|
-| seoul_bull | 0 | 0.53 / 5.7% | **0.48 / 6.7%** | 0.59 / 7.9% | 0.63 / 7.8% | 0.62 / 7.6% |
-| seoul_bull | 0.5 | 0.58 / 5.6% | **0.50 / 6.7%** | 0.60 / 7.9% | 0.65 / 7.8% | 0.64 / 7.6% |
-| seoul_bull | 1 | 0.78 / 8.0% | **0.51 / 6.5%** | 0.60 / 7.5% | 0.66 / 7.6% | 0.65 / 7.6% |
-| seoul_bull | 2 | 1.29 / 30.0% | **0.54 / 8.2%** | 0.63 / 8.2% | 0.68 / 8.9% | 0.67 / 8.4% |
-| seoul_bull | 3 | 1.79 / 60.1% | **0.90 / 14.8%** | 0.69 / 9.2% | 0.69 / 8.9% | 0.69 / 9.1% |
-| kerry_park | 0 | 0.29 / 0.6% | **0.29 / 1.0%** | 0.32 / 1.6% | 0.37 / 1.9% | 0.36 / 1.8% |
-| kerry_park | 0.5 | 0.38 / 0.9% | **0.31 / 1.0%** | 0.34 / 1.7% | 0.40 / 2.5% | 0.37 / 2.1% |
-| kerry_park | 1 | 0.64 / 4.2% | **0.31 / 1.1%** | 0.35 / 1.7% | 0.41 / 2.6% | 0.40 / 2.3% |
-| kerry_park | 2 | 1.26 / 38.2% | **0.54 / 9.1%** | 0.43 / 4.2% | 0.47 / 5.1% | 0.44 / 4.6% |
-| kerry_park | 3 | 1.86 / 60.3% | **1.22 / 27.8%** | 0.77 / 12.1% | 0.69 / 10.6% | 0.65 / 9.3% |
+- the **raw error**, its distance from the ground-truth keypoint. A view
+  aligned to a displaced reference carries the reference's offset with it, so
+  with the reference displaced the alignment's raw error is close to `d` even
+  where the views agree perfectly with each other;
+- the **re-triangulated residual**, its reprojection residual after the track
+  is re-triangulated from its kept keypoints at the ground-truth poses. This
+  leaves out an offset all views share, so it is the measure that compares the
+  two methods with the reference displaced. A few tracks per run fail to
+  re-triangulate (residual over 5 px; 0 to 5 per cell), and they dominate the
+  mean, so the median is the steadier figure.
 
-**Median re-triangulated residual (px):**
+**Re-triangulated residual, mean / median (px), reference displaced:**
 
-| dataset | disp px | congealing | "+"-descent | exhaustive | coarse, then descent | coarse, then exhaustive |
-|---|---|---|---|---|---|---|
-| seoul_bull | 0 | 0.27 | **0.26** | 0.26 | 0.26 | 0.26 |
-| seoul_bull | 1 | 0.29 | **0.28** | 0.27 | 0.27 | 0.27 |
-| seoul_bull | 3 | 0.36 | **0.34** | 0.29 | 0.28 | 0.28 |
-| kerry_park | 0 | 0.17 | **0.17** | 0.17 | 0.17 | 0.17 |
-| kerry_park | 1 | 0.19 | **0.18** | 0.18 | 0.17 | 0.17 |
-| kerry_park | 3 | 0.55 | **0.86** | 0.37 | 0.24 | 0.22 |
+| dataset | disp px | congealing | "+"-descent | exhaustive |
+|---|---|---|---|---|
+| seoul_bull | 0 | **0.357 / 0.261** | 0.428 / 0.263 | 0.436 / 0.264 |
+| seoul_bull | 0.5 | 0.349 / 0.271 | **0.340 / 0.265** | 0.369 / 0.272 |
+| seoul_bull | 1 | 0.355 / 0.279 | **0.346 / 0.262** | 0.373 / 0.263 |
+| seoul_bull | 2 | 0.522 / 0.316 | 0.623 / 0.331 | **0.439 / 0.292** |
+| seoul_bull | 3 | 0.954 / 0.427 | 1.276 / 0.633 | **0.796 / 0.412** |
+| kerry_park | 0 | 0.207 / 0.160 | **0.202 / 0.156** | 0.232 / 0.157 |
+| kerry_park | 0.5 | 0.216 / 0.164 | **0.204 / 0.158** | 0.236 / 0.159 |
+| kerry_park | 1 | 0.252 / 0.177 | 2.469 / 0.163 | **0.240 / 0.160** |
+| kerry_park | 2 | 0.672 / 0.290 | 4.387 / 0.437 | **0.527 / 0.254** |
+| kerry_park | 3 | 2.185 / 0.751 | 1.942 / 1.469 | **1.297 / 0.712** |
+
+**Raw error, mean / median (px), and the share of views more than 1.5 px from
+the ground truth, reference displaced:**
+
+| dataset | disp px | congealing | "+"-descent | exhaustive |
+|---|---|---|---|---|
+| seoul_bull | 0 | 0.559 / 0.306, 5.9% | 0.509 / 0.284, 5.9% | 0.607 / 0.284, 6.7% |
+| seoul_bull | 1 | 0.904 / 0.754, 10.2% | 1.135 / 1.000, 13.1% | 1.176 / 1.000, 14.0% |
+| seoul_bull | 3 | 2.727 / 2.644, 88.5% | 3.158 / 3.000, 95.9% | 3.022 / 3.000, 95.9% |
+| kerry_park | 0 | 0.250 / 0.180, 0.6% | 0.247 / 0.174, 0.9% | 0.271 / 0.175, 1.4% |
+| kerry_park | 1 | 0.746 / 0.659, 7.2% | 0.915 / 0.894, 7.2% | 0.931 / 0.897, 7.2% |
+| kerry_park | 3 | 2.380 / 2.255, 73.9% | 2.984 / 2.970, 86.7% | 2.781 / 2.698, 83.8% |
+
+**Reference stored, mean / median (px):**
+
+| dataset | disp px | method | raw error | re-triangulated | over 1.5 px |
+|---|---|---|---|---|---|
+| seoul_bull | 1 | congealing | 0.796 / 0.614 | 0.363 / 0.278 | 8.3% |
+| seoul_bull | 1 | "+"-descent | **0.510 / 0.290** | 0.363 / **0.265** | **5.8%** |
+| seoul_bull | 3 | congealing | 1.945 / 1.799 | 0.720 / 0.377 | 60.3% |
+| seoul_bull | 3 | "+"-descent | 0.759 / 0.318 | 0.635 / 0.329 | 11.7% |
+| seoul_bull | 3 | exhaustive | **0.636 / 0.306** | **0.407 / 0.275** | **7.4%** |
+| kerry_park | 1 | congealing | 0.645 / 0.554 | 0.254 / 0.177 | 5.0% |
+| kerry_park | 1 | "+"-descent | **0.263 / 0.182** | **0.210 / 0.158** | **1.0%** |
+| kerry_park | 3 | congealing | 2.005 / 1.859 | 4.894 / 0.550 | 61.0% |
+| kerry_park | 3 | "+"-descent | 1.156 / 0.332 | 1.205 / 0.571 | 24.6% |
+| kerry_park | 3 | exhaustive | **0.681 / 0.278** | **0.635 / 0.301** | **10.7%** |
 
 **Time per track** with the reference given, from the stored keypoints, by
-track length (ms):
+track length (ms). This was measured before the 3×3 sub-pixel fit, which adds
+four scored cells to each view's "+"-descent:
 
 | dataset | method | 3-5 views | 6-10 | 11-20 | 21+ |
 |---|---|---|---|---|---|
 | seoul_bull | congealing | 1.21 | 2.19 | 3.74 | - |
 | seoul_bull | "+"-descent | **0.42** | **0.77** | **1.44** | - |
 | seoul_bull | exhaustive | 0.52 | 0.97 | 1.76 | - |
-| seoul_bull | coarse, then descent | 0.66 | 1.26 | 2.20 | - |
 | kerry_park | congealing | 1.59 | 3.03 | 4.29 | 5.19 |
 | kerry_park | "+"-descent | **0.61** | **1.29** | **2.27** | **3.42** |
 | kerry_park | exhaustive | 0.73 | 1.52 | 2.76 | 4.25 |
-| kerry_park | coarse, then descent | 1.04 | 2.13 | 3.72 | 5.86 |
 
 Where the point has no reference and the reference-view rule picks one, the
 pick adds a mean of 1.4 ms per track on seoul_bull and 3.9 ms on kerry_park.
 
-What it decided:
+What it shows:
 
-- **Alignment to the reference replaced congealing.** It is 1.5 to 2.9 times
-  faster, and from starting keypoints 1 px or more off it places views far
-  closer: congealing's share of views locked to a side peak rises to 30-60% at 2
-  and 3 px, against 8-28% for the "+"-descent. From the stored keypoints the two
-  are close (mean raw error 0.48 against 0.53 px on seoul_bull, 0.29 against
-  0.29 on kerry_park), with congealing leaving slightly fewer views past 1.5 px
-  (5.7% against 6.7%, 0.6% against 1.0%).
-- **There is no coarse level.** It lowered the error only from starting
-  keypoints 2 to 3 px off, and raised it from 0 to 1 px: from the stored keypoints its mean raw error is
-  0.63 against 0.48 px on seoul_bull and 0.37 against 0.29 px on kerry_park. Its
-  time per track is 1.6 to 1.7 times the descent's.
+- **On equal terms the alignment is not more accurate than congealing.** With
+  the reference displaced, from 0.5 and 1 px the "+"-descent's median
+  re-triangulated residual is level with or slightly below congealing's (0.262
+  to 0.265 against 0.271 to 0.279 on seoul_bull, 0.158 to 0.163 against 0.164
+  to 0.177 on kerry_park). From 2 and 3 px congealing does better than the
+  "+"-descent on both captures (median 0.316 and 0.427 against 0.331 and 0.633
+  on seoul_bull, 0.290 and 0.751 against 0.437 and 1.469 on kerry_park), and
+  the exhaustive search is about level with congealing. From the stored
+  keypoints congealing's mean is lower on seoul_bull (0.357 against 0.428; the
+  medians are 0.261 and 0.263), and the two are level on kerry_park.
+- **With the reference stored the alignment places views far closer**, from
+  0.5 px up: at 3 px 11.7% (seoul_bull) and 24.6% (kerry_park) of the
+  "+"-descent's views are more than 1.5 px off against congealing's 60.3% and
+  61.0%. That advantage comes from the reference's correct keypoint, which in
+  real use carries error too.
+- **The raw errors with the reference displaced** favour congealing from
+  0.5 px, by about the displacement, which is the reference's offset that every
+  aligned view shares and that moves the point rather than adding reprojection
+  error.
+- **Why the alignment replaced congealing** is therefore not accuracy. It
+  scores and places each view against the same render the point stores, the
+  one the bench, the scores and the stored bitmap read, so a view's keypoint
+  and its score mean the same thing everywhere; it has no rounds, no weights
+  and no basis cap; and it is 1.5 to 2.9 times faster.
+- **There is no coarse level.** Before the 3×3 fit, with the reference stored,
+  a half-resolution coarse level lowered the error from starting keypoints
+  3 px off, and 2 px off on kerry_park, and raised it from 0 to 1 px on both
+  captures and from 2 px on seoul_bull (mean raw error 0.63 against 0.48 px
+  from the stored keypoints on seoul_bull, 0.68 against 0.54 px at 2 px; 0.37
+  against 0.29 px from the stored keypoints on kerry_park), at 1.5 to 1.7
+  times the descent's time per track.
 - **The "+"-descent is the default search.** From starting keypoints within
-  1 px of the truth it places views closer than the exhaustive search, because
-  a side peak of a repeated texture can score higher than the true peak, and
-  the descent stops at the peak nearest the start, which is the evidence for
-  which peak is meant. From 2 to 3 px off the exhaustive search does better, so
-  a caller whose starting keypoints may be that far off can choose
+  1 px of the truth it is as close as the exhaustive search or closer, since a
+  side peak of a repeated texture can score higher than the true peak and the
+  descent stops at the peak nearest the start. From 2 to 3 px off the
+  exhaustive search does better, on equal terms as well, so a caller whose
+  starting keypoints may be that far off can choose
   `SearchStrategy::Exhaustive`.
 
 ### The agreement gates on the plain score
 
 The gates `min_absolute_zncc` and `min_relative_zncc` read the plain ZNCC
-against the reference render. Their bars were measured on the views of the 0,
-0.5 and 1 px runs: a **good** view is within 1 px of the ground-truth
-projection, a **bad** one more than 1.5 px from it. The table gives the share of
-each a bar drops, for the plain score against the reference and for congealing's
-leave-one-out score it replaced:
+against the reference render. Their bars were measured with the reference
+stored, one table per starting displacement rather than the runs pooled, over
+the views kept by both methods (the reference left out): a **good** view is
+within 1 px of the ground-truth keypoint, a **bad** one more than 1.5 px from
+it, each by the error of the method whose score is gated. Each cell is the
+share of good / bad views a bar drops, for the plain score and for
+congealing's leave-one-out score it replaced:
 
-| bar | seoul_bull plain: good / bad | seoul_bull leave-one-out | kerry_park plain | kerry_park leave-one-out |
-|---|---|---|---|---|
-| absolute 0.4 | 0.5% / 10.9% | 0.0% / 0.6% | 0.3% / 4.4% | 0.3% / 1.2% |
-| **absolute 0.5** | **0.9% / 13.1%** | 0.4% / 1.8% | **0.6% / 7.7%** | 0.5% / 2.4% |
-| absolute 0.6 | 4.2% / 18.3% | 1.8% / 3.0% | 1.5% / 16.5% | 0.8% / 7.3% |
-| relative 0.6 | 0.3% / 0.6% | 0.1% / 0.6% | 0.3% / 3.3% | 0.3% / 1.2% |
-| **relative 0.7** | **0.7% / 5.7%** | 0.5% / 1.2% | **0.5% / 7.7%** | 0.5% / 3.6% |
-| relative 0.8 | 2.7% / 9.1% | 2.0% / 1.8% | 1.8% / 8.8% | 1.4% / 7.9% |
+| dataset, disp | views | good / bad, plain | good / bad, leave-one-out | absolute 0.5, plain | absolute 0.5, leave-one-out | relative 0.7, plain | relative 0.7, leave-one-out |
+|---|---|---|---|---|---|---|---|
+| seoul_bull, 0 px | 872 | 784 / 59 | 781 / 49 | 0.9% / 15.3% | 0.4% / 4.1% | 0.8% / 8.5% | 0.5% / 2.0% |
+| seoul_bull, 0.5 px | 878 | 794 / 59 | 776 / 49 | 1.0% / 11.9% | 0.4% / 2.0% | 0.6% / 5.1% | 0.5% / 2.0% |
+| seoul_bull, 1 px | 871 | 781 / 58 | 666 / 70 | 0.9% / 12.1% | 0.5% / 0.0% | 0.6% / 3.4% | 0.6% / 0.0% |
+| kerry_park, 0 px | 2876 | 2821 / 28 | 2840 / 18 | 0.5% / 7.1% | 0.5% / 0.0% | 0.5% / 7.1% | 0.6% / 5.6% |
+| kerry_park, 0.5 px | 2862 | 2804 / 28 | 2783 / 26 | 0.5% / 7.1% | 0.4% / 7.7% | 0.4% / 7.1% | 0.6% / 7.7% |
+| kerry_park, 1 px | 2843 | 2768 / 32 | 2430 / 121 | 0.7% / 9.4% | 0.5% / 1.7% | 0.5% / 9.4% | 0.5% / 2.5% |
 
-(2632 views on seoul_bull, 2361 good and 175 bad; 8660 on kerry_park, 8465
-good and 91 bad.) The plain score separates the two better than the
-leave-one-out score did: at the same bars it drops slightly more good views and
-2 to 7 times as many bad ones. The defaults stay at 0.5 and 0.7, where each bar
-drops under 1% of good views. The median plain score of a good view is lower
-than its leave-one-out score was (0.85 and 0.88, against 0.90 and 0.93), since
-a single sharp render correlates less with a view than the mean of the other
-views did.
+The absolute bars at 0.4 and 0.6 and the relative bars at 0.6 and 0.8 are in
+the README. The bad views are few (18 to 121 per table), so one view moves a
+share by up to 6 points. At the same
+bars the plain score drops about as many good views and, in most tables, more
+of the bad ones than the leave-one-out score did, by up to several times; on
+kerry_park at 0.5 px the two are level. The defaults stay at 0.5 and 0.7,
+where each bar drops at most 1% of good views. The median plain score of a
+good view is lower than its leave-one-out score was, since a single sharp
+render correlates less with a view than the mean of the other views did.
 
 ### A spot check on four other reconstructions
 
 400 tracks of each, from their stored keypoints with the default gates, the
-reference given:
+reference given, before the 3×3 sub-pixel fit. The score column is each
+method's own: congealing's leave-one-out ZNCC and the "+"-descent's plain
+ZNCC against the reference, so the two are not the same measure:
 
 | reconstruction | method | views kept | tracks with 2+ views | median score | ms per track |
 |---|---|---|---|---|---|
