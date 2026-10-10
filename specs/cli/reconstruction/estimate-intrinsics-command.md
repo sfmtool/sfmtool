@@ -33,7 +33,8 @@ sfm estimate-intrinsics -i MATCHES [OPTIONS...]
 | `--pattern PATTERN` | derived | Image pattern stored in the `.camrig`; defaults to the matches' common image directory plus one `*` segment per directory level below it, ending `*<ext>` for the extension the image names share (`*` when they mix) |
 | `--force` | off | Allow `--write-camrig` to overwrite an existing file |
 | `--json` | off | Emit the full vote result as JSON on stdout instead of the report |
-| `--seed N` | `0` | RANSAC / pair-sampling seed; same inputs + seed give bit-identical output |
+| `--seed N` | `0` | RANSAC / pair-sampling seed; same inputs + seed + `--draws` give bit-identical output |
+| `--draws N` | `5` | RANSAC draws behind each pair's vote, at least 1 (see [Draws per pair](#draws-per-pair)) |
 
 ## Behavior
 
@@ -52,6 +53,20 @@ The vote assumes one shared camera with a centred principal point. A
 `.matches` file whose images carry more than one distinct `(width, height)`
 is rejected up front with a message naming the differing dimensions; split
 the images into per-camera match files to estimate each.
+
+### Draws per pair
+
+`--draws` is passed to the binding as `draws`. Each pair's vote reads that
+many RANSAC fits rather than one: draw `k` runs the pair's estimators at seed
+`seed + k`, and the pair votes the log-space median of its draws' focals when
+more than half of the draws cast a vote, and casts no vote otherwise (see
+[Draws per pair](../../core/geometry/focal-vote.md#draws-per-pair) in the
+focal-vote spec). A single fit is an unstable reading of a pair, so the
+default reads five; `--draws 1` is the single-draw vote. The vote's run time
+grows with the number of draws. The output is a function of the inputs,
+`--seed` and `--draws` together, and a rerun with the same three is
+bit-identical. Neither the binding's result nor the report echoes the seed or
+the draw count, so `--json` carries no `draws` key.
 
 ### When the camera-model columns run
 

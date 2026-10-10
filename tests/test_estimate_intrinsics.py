@@ -204,6 +204,26 @@ def test_model_option_selects_the_columns(
     assert stub_estimate.calls[-1]["columns"] == expected_columns
 
 
+def test_draws_default_to_five_and_pass_through(stub_estimate):
+    out = stub_estimate(_estimate())
+    assert out.exit_code == 0, out.output
+    assert stub_estimate.calls[-1]["draws"] == 5
+
+    out = stub_estimate(_estimate(), "--draws", "1", "--seed", "7")
+    assert out.exit_code == 0, out.output
+    assert stub_estimate.calls[-1]["draws"] == 1
+    assert stub_estimate.calls[-1]["seed"] == 7
+
+
+@pytest.mark.parametrize("draws", ["0", "-3"])
+def test_draws_below_one_are_refused(stub_estimate, draws):
+    out = stub_estimate(_estimate(), "--draws", draws)
+    assert out.exit_code == 2
+    assert "--draws" in out.output
+    # Click refuses the value before the kernel is called.
+    assert stub_estimate.calls == []
+
+
 # ── Whether the camera-model columns ran ─────────────────────────────────────
 #
 # Under `--model auto` the kernel decides, so the report says which way it went
@@ -684,3 +704,24 @@ def test_estimate_intrinsics_named_model_runs_one_column(cluster_matches_file: P
     # One column ran, so nothing arbitrated and nothing is marked confirmed.
     assert "Pinhole" not in out.output
     assert "CONFIRMED" not in out.output
+
+
+def test_estimate_intrinsics_draws_on_a_real_capture(cluster_matches_file: Path):
+    """The single-draw vote and the default both run on the real capture, and a
+    rerun with the same seed and draw count is bit-identical."""
+    runner = CliRunner()
+
+    def run(*args: str) -> dict:
+        out = runner.invoke(
+            main,
+            ["estimate-intrinsics", "-i", str(cluster_matches_file), "--json", *args],
+        )
+        assert out.exit_code == 0, out.output
+        return json.loads(out.output)
+
+    single = run("--draws", "1")
+    default = run()
+    assert single["focal_px"] is not None
+    assert default["focal_px"] is not None
+    assert default == run("--seed", "0", "--draws", "5")
+    assert run("--seed", "3", "--draws", "3") == run("--seed", "3", "--draws", "3")

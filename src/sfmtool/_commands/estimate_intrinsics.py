@@ -401,7 +401,20 @@ def _write_camrig(
     type=int,
     default=0,
     show_default=True,
-    help="RANSAC / pair-sampling seed; same inputs and seed give the same output.",
+    help=(
+        "RANSAC / pair-sampling seed; same inputs, seed and --draws give the "
+        "same output."
+    ),
+)
+@click.option(
+    "--draws",
+    type=click.IntRange(min=1),
+    default=5,
+    show_default=True,
+    help=(
+        "RANSAC draws per pair vote; a pair votes the log-space median of its "
+        "draws when more than half of them vote."
+    ),
 )
 def estimate_intrinsics(
     input_path,
@@ -411,6 +424,7 @@ def estimate_intrinsics(
     force,
     as_json,
     seed,
+    draws,
 ):
     """Estimate a shared focal length and camera model from cluster matches.
 
@@ -443,6 +457,7 @@ def estimate_intrinsics(
         result = estimate(
             selection,
             seed=seed,
+            draws=draws,
             columns=_MODEL_COLUMNS[model_option.lower()],
         )
     except click.UsageError:
