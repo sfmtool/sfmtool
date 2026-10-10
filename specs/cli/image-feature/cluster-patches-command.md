@@ -103,12 +103,12 @@ consumer reads the cells.
    scattered back to those rows, sized by `feature_counts[i]` — which presents
    them exactly as a `.sift` read would.
 3. **Refine.** Load the images with `sfmtool.fileio.read_image_rgb`
-   ([reading-photographs.md](../../core/camera/reading-photographs.md)), in
-   the RGB order the kernel takes and the viewer hands it too — decoded
-   through a thread pool (the decoder releases the GIL; the
-   embed-patches pattern), results collected in submission order — present the seed geometry from step 2 in
-   images-section order,
-   and call `_sfmtool.matching.refine_cluster_patches` (the
+   ([reading-photographs.md](../../core/camera/reading-photographs.md)),
+   decoded through a thread pool (the decoder releases the GIL; the
+   embed-patches pattern), with results collected in submission order. The
+   arrays are RGB, as the kernel takes them; the viewer hands it the same.
+   Present the seed geometry from step 2 in images-section order, and call
+   `_sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,
    reference selection by largest SIFT scale, Gaussian-windowed-ZNCC shift →
    similarity → affine Nelder-Mead cascade seeded from the SIFT affine

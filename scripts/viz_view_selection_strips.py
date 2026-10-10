@@ -76,7 +76,8 @@ def geometric_candidates(
 
 def _draw_tile(tile, idx, score, color, kind, tile_px):
     p8 = np.clip(tile, 0, 255).astype(np.uint8)
-    bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+    # The tile is RGB or grey; OpenCV draws on BGR.
+    bgr = cv2.cvtColor(p8, cv2.COLOR_RGB2BGR if p8.ndim == 3 else cv2.COLOR_GRAY2BGR)
     bgr = cv2.resize(bgr, (tile_px, tile_px), interpolation=cv2.INTER_NEAREST)
     cv2.rectangle(bgr, (0, 0), (tile_px - 1, tile_px - 1), color, 3)
     chip(bgr, f"{kind}{idx}", (3, 12), color, 0.3)

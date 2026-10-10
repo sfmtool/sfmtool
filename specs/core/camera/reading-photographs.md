@@ -73,8 +73,7 @@ pixels to OpenCV for drawing or `imwrite` converts to BGR itself, at that call.
 
 ## Code that reads photographs
 
-Every Python image read in `src/` and `scripts/` goes through the bindings,
-except the two below:
+These read through the bindings:
 
 - `read_workspace_image` in
   [_workspace_image.py](../../../src/sfmtool/_workspace_image.py), the
@@ -95,8 +94,9 @@ except the two below:
 - `insv2rig` and `pano2rig`, for the frames and panoramas they resample into
   rig images.
 - The scripts, among them `bench_bars`, `add_image_to_tracks`,
-  `track_at_pixel`, `patch_crossval` and the benchmarks. Those that draw or
-  render patches in BGR reverse the channels after the read.
+  `track_at_pixel`, `patch_crossval` and the benchmarks. They hand the Rust
+  kernels the RGB as read, and those that draw with OpenCV convert to BGR at
+  the drawing step.
 
 Two readers decode inside other libraries, and both ignore the orientation
 tag:

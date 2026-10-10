@@ -424,7 +424,7 @@ class TestRealReconstruction:
           - a non-trivial fraction of output pixels are non-black (i.e. the
             warp lands many dst pixels inside the src image)
         """
-        import cv2
+        from sfmtool.fileio import read_image_rgb
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         src_idx, dst_idx = 0, 1
@@ -446,8 +446,7 @@ class TestRealReconstruction:
         workspace = Path(seoul_bull_workspace).parent
         image_name = recon.image_names[src_idx]
         image_path = workspace / image_name
-        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
-        assert image is not None
+        image = read_image_rgb(image_path)
 
         warp = WarpMap.from_cameras_with_pose(
             src=src_cam,

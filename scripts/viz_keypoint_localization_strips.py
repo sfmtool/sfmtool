@@ -92,7 +92,8 @@ GREY = (200, 200, 200)
 
 def _to_bgr(img, disp):
     p8 = np.clip(img, 0, 255).astype(np.uint8)
-    bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+    # The tile is RGB or grey; OpenCV draws on BGR.
+    bgr = cv2.cvtColor(p8, cv2.COLOR_RGB2BGR if p8.ndim == 3 else cv2.COLOR_GRAY2BGR)
     return cv2.resize(bgr, (disp, disp), interpolation=cv2.INTER_NEAREST)
 
 

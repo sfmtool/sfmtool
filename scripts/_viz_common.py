@@ -102,13 +102,10 @@ def run_over_recons(args, render_fn, stem: str) -> None:
 
 
 def load_images(recon) -> list[np.ndarray]:
+    """Every image of ``recon``, RGB as read. The kernels take them as they
+    are; a tile drawn with OpenCV is converted to BGR at the drawing step."""
     ws = recon.workspace_dir
-    out = []
-    for name in recon.image_names:
-        # The images are drawn on with OpenCV, which takes BGR.
-        rgb = read_image_rgb(os.path.join(ws, name))
-        out.append(np.ascontiguousarray(rgb[:, :, ::-1]))
-    return out
+    return [read_image_rgb(os.path.join(ws, name)) for name in recon.image_names]
 
 
 def rotation_matrices(recon) -> np.ndarray:

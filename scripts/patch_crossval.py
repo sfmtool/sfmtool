@@ -132,18 +132,14 @@ def make_renderer(
     renderer that warps the normalized patch around a keypoint via the Rust
     remap path (reusing one ImagePyramid per image for the aniso sampler).
 
-    ``color`` renders 3-channel BGR patches; otherwise single-channel luminance.
+    ``color`` renders 3-channel RGB patches; otherwise single-channel luminance.
     """
     images, kpts, cache, pyrs = {}, {}, {}, {}
 
     def get(idx):
         if idx not in images:
             rgb = read_image_rgb(os.path.join(workspace, names[idx]))
-            if color:
-                img = rgb[:, :, ::-1]  # the patches are rendered and shown in BGR
-            else:
-                img = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-            images[idx] = np.ascontiguousarray(img)
+            images[idx] = rgb if color else cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
             d = read_sift(sift_paths[names[idx]])
             kpts[idx] = (
                 np.asarray(d["positions_xy"], np.float64),
@@ -363,8 +359,7 @@ def strips_mode_3d(
 
     def image(i):
         if i not in images:
-            rgb = read_image_rgb(os.path.join(workspace, names[i]))
-            images[i] = np.ascontiguousarray(rgb[:, :, ::-1])  # BGR, as above
+            images[i] = read_image_rgb(os.path.join(workspace, names[i]))
         return images[i]
 
     # Group observations by 3D point id.
@@ -545,7 +540,8 @@ def render_track_strip(track, patch_of, w, *, tile, inner=None, sep=2):
         p8 = np.clip(pf, 0, 255).astype(np.uint8)
         src_sz = p8.shape[0]
         p8 = cv2.resize(p8, (tile, tile), interpolation=cv2.INTER_NEAREST)
-        bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+        # The patch is RGB or grey; OpenCV draws on BGR.
+        bgr = cv2.cvtColor(p8, cv2.COLOR_RGB2BGR if p8.ndim == 3 else cv2.COLOR_GRAY2BGR)
         if inner is not None:
             off, sz = inner
             scale = tile / src_sz

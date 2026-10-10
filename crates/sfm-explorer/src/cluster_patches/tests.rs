@@ -135,9 +135,18 @@ fn a_build_writes_cluster_patches_that_read_current() {
 /// `background_floor_clusters_kdf` binding ran them, the members' detections
 /// read from the `.sift` files as `sfm match --cluster` reads them, the
 /// photographs as `read_image_rgb` decodes them with the binding's pyramid
-/// depth, and
-/// the whole refinement in one call with the options `sfm cluster-patches`
-/// passes, rather than in batches.
+/// depth, and the whole refinement in one call with the options
+/// `sfm cluster-patches` passes, rather than in batches.
+///
+/// The photographs are the one exception: the expected pixels come from
+/// `ImageU8::read_rgb`, the same call the build makes, so this test cannot
+/// catch a difference in decoding or channel order between the viewer and the
+/// command line. `read_image_rgb` is the binding over `ImageU8::read_rgb`, and
+/// that it returns RGB is tested on the Python side, in
+/// `tests/rust_bindings/fileio/test_read_image_rust_bindings.py`
+/// (`test_rgba_keeps_a_png_alpha` and
+/// `test_the_contents_not_the_extension_choose_the_decoder`, which compare
+/// every pixel of a PNG with known colours).
 #[test]
 fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     let dir = tempfile::tempdir().unwrap();
