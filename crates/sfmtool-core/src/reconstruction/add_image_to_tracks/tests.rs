@@ -834,7 +834,13 @@ fn the_bars_read_the_references_scores_against_the_template() {
         assert_eq!(c.reference_zncc[2], 1.0);
         let scores: Vec<f64> = c.bar_zncc().collect();
         assert_eq!(scores.len(), 3);
-        assert!(scores.iter().all(|&z| z < 1.0 && z > 0.5), "{scores:?}");
+        // The views see the same synthetic texture, so each score is 1 up to
+        // the rounding of a dot product of two `f32` unit vectors, which can
+        // land just above 1 (it does on the non-AVX2 render path).
+        assert!(
+            scores.iter().all(|&z| z <= 1.0 + 1e-6 && z > 0.5),
+            "{scores:?}"
+        );
         want = scores.iter().copied().fold(want, f64::min);
     }
     assert_eq!(report.pooled_bar, Some(want));

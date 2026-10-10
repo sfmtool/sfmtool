@@ -66,6 +66,24 @@ def _other_references(recon: SfmrReconstruction) -> np.ndarray:
     return stored
 
 
+def _leaves_the_photograph(recon: SfmrReconstruction, stored: np.ndarray) -> np.ndarray:
+    """Per point, whether its stored reference's tile at its keypoint has a
+    sample off the photograph (alpha 0). Only such a reference can fail to
+    render its core, which is when a writer that aligns keypoints and renders
+    bitmaps replaces it, so a test holds the writers to keeping every other
+    one. Which observations sit at the frame's edge depends on the fixture's
+    SIFT tracks, and those differ between platforms."""
+    picked = recon.clone_with_changes(reference_observations=stored)
+    bitmaps, _ = picked.patches.render_bitmaps(
+        picked,
+        load_workspace_images(picked),
+        resolution=RESOLUTION,
+        referenced_only=True,
+    )
+    off = (np.asarray(bitmaps)[..., 3] == 0).any(axis=(1, 2))
+    return off & (np.asarray(stored) >= 0)
+
+
 def _reference_images(recon: SfmrReconstruction, refs=None) -> np.ndarray:
     """The image each point's reference observation is in, -1 for none."""
     refs = np.asarray(recon.reference_observations if refs is None else refs).astype(
@@ -89,14 +107,19 @@ def _assert_references_follow_their_images(
     out: SfmrReconstruction,
     *,
     picks: bool,
+    unusable: np.ndarray | None = None,
 ) -> tuple[int, int]:
     """Each output point, found by its position among ``recon``'s (the
     compaction does not move it), names the image its stored reference was
     in where its new track still holds that image. Where it does not, the
     point names no reference, or with ``picks`` (a pass that renders bitmaps)
-    may name the observation its new bitmap is the tile of. Returns how many
+    may name the observation its new bitmap is the tile of. A point flagged in
+    ``unusable`` (a stored reference that may not render, see
+    :func:`_leaves_the_photograph`) is not checked. Returns how many
     references were kept and how many images were dropped."""
     want = _reference_images(recon, stored)
+    if unusable is not None:
+        want = np.where(unusable, -1, want)
     got = _reference_images(out)
     src = np.asarray(recon.positions)
     kept = lost = 0
@@ -141,7 +164,11 @@ def test_refine_keypoints_keeps_stored_references(embedded):
     recon = embedded.clone_with_changes(reference_observations=stored)
     out = RefineKeypointsTransform(resolution=RESOLUTION, max_gn_steps=2).apply(recon)
     refs = np.asarray(out.reference_observations)
-    np.testing.assert_array_equal(refs[stored >= 0], stored[stored >= 0])
+    # A stored reference whose core does not render is replaced; every one
+    # whose tile stays on the photograph renders, and is kept.
+    usable = (stored >= 0) & ~_leaves_the_photograph(recon, stored)
+    assert usable.sum() > (stored >= 0).sum() * 0.9
+    np.testing.assert_array_equal(refs[usable], stored[usable])
     assert (refs[stored < 0] >= 0).any(), "a point at -1 takes the refiner's pick"
     _assert_drop_then_add_reproduces(out)
 
@@ -156,7 +183,8 @@ def test_refine_keypoints_keeps_stored_references(embedded):
     bare_refs = np.asarray(bare.reference_observations)
     np.testing.assert_array_equal(bare_refs[stored >= 0], stored[stored >= 0])
     assert (bare_refs[stored < 0] >= 0).any(), "a point at -1 takes the refiner's pick"
-    np.testing.assert_array_equal(bare_refs, refs)
+    np.testing.assert_array_equal(bare_refs[usable], refs[usable])
+    np.testing.assert_array_equal(bare_refs[stored < 0], refs[stored < 0])
 
 
 def test_refine_normals_keeps_stored_references(embedded):
@@ -183,7 +211,11 @@ def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded, ro
     out = embed_patches(
         recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=rounds
     )
-    _assert_references_follow_their_images(recon, stored, out, picks=True)
+    unusable = _leaves_the_photograph(recon, stored)
+    assert unusable.sum() < (stored >= 0).sum() * 0.1
+    _assert_references_follow_their_images(
+        recon, stored, out, picks=True, unusable=unusable
+    )
     _assert_drop_then_add_reproduces(out)
 
 
