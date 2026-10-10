@@ -13,8 +13,9 @@ use zip::ZipWriter;
 use sfmtool_archive_io::{format_hash, json_entry_bytes, write_binary_entry, write_json_entry};
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
-use crate::entries;
+use crate::entries::{self, ReadingColumn};
 use crate::types::*;
+use crate::{HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS};
 
 /// Where one section entry's **uncompressed** bytes go.
 ///
@@ -864,6 +865,30 @@ fn write_tracks<S: EntrySink>(
 ) -> Result<u128, SfmrError> {
     // === Tracks (hashed in lexicographic path order) ===
     let mut tracks_hasher = Xxh3::new();
+    let readings = data.observation_readings.as_ref();
+    // The observation-reading columns (optional, present together), each in
+    // its lexicographic slot among the other tracks entries.
+    let write_readings =
+        |sink: &mut S, columns: &[ReadingColumn], hasher: &mut Xxh3| -> Result<(), SfmrError> {
+            if let Some(readings) = readings {
+                for &column in columns {
+                    binary_hashed(
+                        sink,
+                        &column.entry(observation_count),
+                        readings.bytes(column),
+                        hasher,
+                    )?;
+                }
+            }
+            Ok(())
+        };
+
+    // tracks/blur_matched_bitmap_zncc (optional; sorts first)
+    write_readings(
+        sink,
+        &[ReadingColumn::BlurMatchedBitmapZncc],
+        &mut tracks_hasher,
+    )?;
 
     // tracks/feature_indexes (sift_files only; lexicographically before image_indexes)
     if !is_embedded {
@@ -896,12 +921,20 @@ fn write_tracks<S: EntrySink>(
     }
 
     // tracks/metadata.json
-    let tracks_meta = serde_json::json!({
+    let mut tracks_meta = serde_json::json!({
         "observation_count": observation_count,
         "has_feature_indexes": !is_embedded,
         "has_keypoints_xy": data.keypoints_xy.is_some(),
         "has_observation_confidence": data.observation_confidence.is_some(),
     });
+    // Written only where the readings are present, so a file without them
+    // keeps the bytes, and the content hash, it had before the columns
+    // existed. A missing flag reads as `false`.
+    if let Some(readings) = readings {
+        tracks_meta[HAS_OBSERVATION_READINGS] = serde_json::Value::Bool(true);
+        tracks_meta[OBSERVATION_READING_OPTIONS] = serde_json::to_value(readings.options)
+            .map_err(|e| SfmrError::InvalidFormat(format!("{OBSERVATION_READING_OPTIONS}: {e}")))?;
+    }
     let bytes = sink.write_json(entries::tracks_metadata(), &tracks_meta)?;
     tracks_hasher.update(&bytes);
 
@@ -928,6 +961,10 @@ fn write_tracks<S: EntrySink>(
         &mut tracks_hasher,
     )?;
 
+    // tracks/plain_bitmap_zncc (optional; after observation_counts, before
+    // point_indexes)
+    write_readings(sink, &[ReadingColumn::PlainBitmapZncc], &mut tracks_hasher)?;
+
     // tracks/point_indexes
     binary_hashed(
         sink,
@@ -946,6 +983,9 @@ fn write_tracks<S: EntrySink>(
             &mut tracks_hasher,
         )?;
     }
+
+    // tracks/zncc_self_similarity_* (optional; sort last)
+    write_readings(sink, &ReadingColumn::ALL[2..], &mut tracks_hasher)?;
 
     Ok(tracks_hasher.digest128())
 }
@@ -1102,6 +1142,9 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
         for (i, &pi) in perm.iter().enumerate() {
             oc[i] = old[pi];
         }
+    }
+    if let Some(readings) = data.observation_readings.as_mut() {
+        *readings = readings.select(&perm);
     }
     // A reference observation counts within its point's run, so it moves with
     // the observation it names: the `k`-th of the point's observations in the
@@ -1367,6 +1410,11 @@ fn validate_dimensions_with(
                 observation_confidence.len()
             )
         );
+    }
+    if let Some(readings) = &data.observation_readings {
+        readings
+            .validate(observation_count)
+            .map_err(SfmrError::ShapeMismatch)?;
     }
     check!(
         data.point_indexes.len() == observation_count,

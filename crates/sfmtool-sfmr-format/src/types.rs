@@ -1026,6 +1026,17 @@ pub struct SfmrData {
     /// that supplies it is responsible for keeping it parallel to the
     /// observations.
     pub observation_confidence: Option<Array1<u8>>,
+    /// Optional per-observation readings on each observation's own `R×R`
+    /// render: its self-similarity ellipse, the angle, tilt and zoom of that
+    /// render, and its plain and blur-matched scores against the point's
+    /// stored bitmap, with the options they were read with.
+    ///
+    /// On disk these are eight `tracks/` columns, present or absent together,
+    /// flagged by `tracks/metadata.json`'s `has_observation_readings` (a
+    /// version 12 addition, optional). Defined in both feature sources. Like
+    /// `observation_confidence`, the writer passes the rows through untouched
+    /// and only permutes them with the other per-observation arrays.
+    pub observation_readings: Option<crate::ObservationReadingColumns>,
     /// `(M,)` point index per observation.
     pub point_indexes: Array1<u32>,
     /// `(P,)` number of observations per 3D point.

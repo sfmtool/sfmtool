@@ -16,12 +16,17 @@ compile_error!(
 
 mod depth_stats;
 mod entries;
+mod observation_readings;
 mod read;
 mod types;
 mod verify;
 mod write;
 
 pub use depth_stats::{compute_depth_statistics, DepthStatsResult};
+pub use observation_readings::{
+    ObservationReading, ObservationReadingColumns, ObservationReadingOptions,
+    HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS,
+};
 pub use read::{read_sfmr, read_sfmr_content_hash, read_sfmr_metadata, resolve_workspace_dir};
 pub use types::*;
 pub use verify::verify_sfmr;

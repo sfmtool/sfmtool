@@ -9,8 +9,12 @@ use ndarray::{Array1, Array2, Array4};
 
 use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
-use crate::entries;
+use crate::entries::{self, ReadingColumn};
+use crate::observation_readings::{
+    observation_reading_options, observation_readings_flagged, ReadingColumnsBuilder,
+};
 use crate::types::*;
+use crate::ObservationReadingColumns;
 
 const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
 
@@ -132,6 +136,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         feature_indexes: tracks.feature_indexes,
         keypoints_xy: tracks.keypoints_xy,
         observation_confidence: tracks.observation_confidence,
+        observation_readings: tracks.observation_readings,
         point_indexes: tracks.point_indexes,
         observation_counts: tracks.observation_counts,
         reference_observations: tracks.reference_observations,
@@ -613,6 +618,7 @@ struct TracksSection {
     feature_indexes: Option<Array1<u32>>,
     keypoints_xy: Option<Array2<f32>>,
     observation_confidence: Option<Array1<u8>>,
+    observation_readings: Option<ObservationReadingColumns>,
     point_indexes: Array1<u32>,
     observation_counts: Array1<u32>,
     reference_observations: Option<Array1<i32>>,
@@ -702,6 +708,8 @@ fn read_tracks_section(
         None
     };
 
+    let observation_readings = read_observation_readings(archive, tracks_meta, observation_count)?;
+
     // Version 1 named this array `points3d_indexes`; version 2 renames it to
     // `point_indexes`.
     let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
@@ -740,10 +748,39 @@ fn read_tracks_section(
         feature_indexes,
         keypoints_xy,
         observation_confidence,
+        observation_readings,
         point_indexes,
         observation_counts,
         reference_observations,
     })
+}
+
+/// The eight observation-reading columns, where `tracks/metadata.json` flags
+/// them (`has_observation_readings`), with the options recorded beside them.
+/// Absent in a file without the flag, as every file before the columns was.
+fn read_observation_readings(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    tracks_meta: &serde_json::Value,
+    observation_count: usize,
+) -> Result<Option<ObservationReadingColumns>, SfmrError> {
+    if !observation_readings_flagged(tracks_meta) {
+        return Ok(None);
+    }
+    let options = observation_reading_options(tracks_meta).map_err(SfmrError::InvalidFormat)?;
+    let mut builder = ReadingColumnsBuilder::default();
+    for column in ReadingColumn::ALL {
+        let len = observation_count * column.width();
+        let name = column.entry(observation_count);
+        if column == ReadingColumn::EllipseAxesIsAtLeast {
+            builder.push_flags(read_binary_array(archive, &name, len)?);
+        } else {
+            builder.push_f32(column, read_binary_array(archive, &name, len)?);
+        }
+    }
+    builder
+        .finish(observation_count, options)
+        .map(Some)
+        .map_err(SfmrError::InvalidFormat)
 }
 
 fn read_rig_frames(

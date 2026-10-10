@@ -313,6 +313,74 @@ pub(crate) fn tracks_observation_confidence(observation_count: impl std::fmt::Di
     format!("tracks/observation_confidence.{observation_count}.uint8.zst")
 }
 
+/// The eight per-observation reading columns (optional, present together
+/// when `tracks/metadata.json`'s `has_observation_readings` is `true`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadingColumn {
+    BlurMatchedBitmapZncc,
+    PlainBitmapZncc,
+    CosViewAngle,
+    EllipseAxes,
+    EllipseAxesIsAtLeast,
+    EllipseMajorAngle,
+    TiltAngle,
+    Zoom,
+}
+
+impl ReadingColumn {
+    /// Every column, in the lexicographic order of its entry name, which is
+    /// the order the tracks digest folds them in.
+    pub(crate) const ALL: [ReadingColumn; 8] = [
+        ReadingColumn::BlurMatchedBitmapZncc,
+        ReadingColumn::PlainBitmapZncc,
+        ReadingColumn::CosViewAngle,
+        ReadingColumn::EllipseAxes,
+        ReadingColumn::EllipseAxesIsAtLeast,
+        ReadingColumn::EllipseMajorAngle,
+        ReadingColumn::TiltAngle,
+        ReadingColumn::Zoom,
+    ];
+
+    /// The column's name under `tracks/`.
+    pub(crate) fn stem(self) -> &'static str {
+        match self {
+            ReadingColumn::BlurMatchedBitmapZncc => "blur_matched_bitmap_zncc",
+            ReadingColumn::PlainBitmapZncc => "plain_bitmap_zncc",
+            ReadingColumn::CosViewAngle => "zncc_self_similarity_cos_view_angle",
+            ReadingColumn::EllipseAxes => "zncc_self_similarity_ellipse_axes",
+            ReadingColumn::EllipseAxesIsAtLeast => "zncc_self_similarity_ellipse_axes_is_at_least",
+            ReadingColumn::EllipseMajorAngle => "zncc_self_similarity_ellipse_major_angle",
+            ReadingColumn::TiltAngle => "zncc_self_similarity_tilt_angle",
+            ReadingColumn::Zoom => "zncc_self_similarity_zoom",
+        }
+    }
+
+    /// Values per row: `2` for the axes, their flags and the zoom, `1`
+    /// otherwise.
+    pub(crate) fn width(self) -> usize {
+        match self {
+            ReadingColumn::EllipseAxes
+            | ReadingColumn::EllipseAxesIsAtLeast
+            | ReadingColumn::Zoom => 2,
+            _ => 1,
+        }
+    }
+
+    /// The entry name for `observation_count` rows.
+    pub(crate) fn entry(self, observation_count: impl std::fmt::Display) -> String {
+        let shape = if self.width() == 2 { ".2" } else { "" };
+        let dtype = if self == ReadingColumn::EllipseAxesIsAtLeast {
+            "uint8"
+        } else {
+            "float32"
+        };
+        format!(
+            "tracks/{}.{observation_count}{shape}.{dtype}.zst",
+            self.stem()
+        )
+    }
+}
+
 /// `tracks/observation_counts` — observation count per point.
 ///
 /// Sized by `point_count`, not `observation_count` — it is the per-point CSR

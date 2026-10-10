@@ -13,7 +13,8 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipArchive;
 
-use crate::entries;
+use crate::entries::{self, ReadingColumn};
+use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, raw_to_u32, read_zst_entry};
 
@@ -664,6 +665,54 @@ fn verify_tracks_section<R: Read + Seek>(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // The observation-reading columns (optional, present together), hashed
+    // each in its lexicographic slot; the flags column is checked for 0 or 1.
+    let has_observation_readings = observation_readings_flagged(&tracks_meta);
+    if has_observation_readings {
+        if let Err(e) = observation_reading_options(&tracks_meta) {
+            errors.push(e);
+        }
+    }
+    let hash_readings = |archive: &mut ZipArchive<R>,
+                         columns: &[ReadingColumn],
+                         hasher: &mut Xxh3,
+                         errors: &mut Vec<String>|
+     -> Result<(), SfmrError> {
+        if !has_observation_readings {
+            return Ok(());
+        }
+        for &column in columns {
+            let raw = read_zst_entry(archive, &column.entry(observation_count))?;
+            let element = if column == ReadingColumn::EllipseAxesIsAtLeast {
+                1
+            } else {
+                4
+            };
+            if raw.len() != observation_count * column.width() * element {
+                errors.push(format!(
+                    "tracks/{} holds {} bytes, not {}",
+                    column.stem(),
+                    raw.len(),
+                    observation_count * column.width() * element
+                ));
+            } else if column == ReadingColumn::EllipseAxesIsAtLeast && raw.iter().any(|&f| f > 1) {
+                errors.push(format!(
+                    "tracks/{} holds a value other than 0 or 1",
+                    column.stem()
+                ));
+            }
+            hasher.update(&raw);
+        }
+        Ok(())
+    };
+    // tracks/blur_matched_bitmap_zncc (sorts first)
+    hash_readings(
+        archive,
+        &[ReadingColumn::BlurMatchedBitmapZncc],
+        &mut tracks_hasher,
+        errors,
+    )?;
+
     // tracks/feature_indexes (sift_files only; sorts before image_indexes)
     if !is_embedded {
         tracks_hasher.update(&read_zst_entry(
@@ -697,6 +746,13 @@ fn verify_tracks_section<R: Read + Seek>(
     let track_obs_counts_raw =
         read_zst_entry(archive, &entries::tracks_observation_counts(point_count))?;
     tracks_hasher.update(&track_obs_counts_raw);
+    // tracks/plain_bitmap_zncc (after observation_counts, before point_indexes)
+    hash_readings(
+        archive,
+        &[ReadingColumn::PlainBitmapZncc],
+        &mut tracks_hasher,
+        errors,
+    )?;
     // tracks/points3d_indexes (version 1) or point_indexes (version 2)
     let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
     let track_point_indexes_raw = read_zst_entry(archive, &point_indexes_name)?;
@@ -714,6 +770,13 @@ fn verify_tracks_section<R: Read + Seek>(
     } else {
         None
     };
+    // tracks/zncc_self_similarity_* (sort last)
+    hash_readings(
+        archive,
+        &ReadingColumn::ALL[2..],
+        &mut tracks_hasher,
+        errors,
+    )?;
 
     let tracks_hash = tracks_hasher.digest128();
     if format_hash(tracks_hash) != stored.tracks_xxh128 {

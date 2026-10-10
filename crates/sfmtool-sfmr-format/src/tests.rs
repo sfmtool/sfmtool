@@ -5,6 +5,8 @@ use crate::*;
 use ndarray::{Array1, Array2, Array4};
 use std::collections::BTreeMap;
 
+mod observation_readings;
+
 /// Create minimal valid SfmrData for testing.
 fn make_test_data() -> SfmrData {
     let image_count = 3;
@@ -149,6 +151,7 @@ fn make_test_data() -> SfmrData {
         feature_indexes: Some(feature_indexes),
         keypoints_xy: None,
         observation_confidence: None,
+        observation_readings: None,
         point_indexes,
         observation_counts,
         reference_observations: None,
@@ -1044,6 +1047,7 @@ fn test_empty_reconstruction() {
         feature_indexes: Some(Array1::from_vec(vec![])),
         keypoints_xy: None,
         observation_confidence: None,
+        observation_readings: None,
         point_indexes: Array1::from_vec(vec![]),
         observation_counts: Array1::from_vec(vec![]),
         reference_observations: None,
