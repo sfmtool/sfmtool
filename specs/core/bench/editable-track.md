@@ -2797,8 +2797,9 @@ sighting's reprojection error in the point's `error` column (zero where nothing
 was measured, which is what a point no observation could be scored for carries
 anywhere else), and one observation per `in` sighting with its keypoint and, in
 `observation_confidence` where the column exists, its plain score against the
-bitmap (`zncc`) clamped to `0 ..= 1` and scaled to a byte: `255` for the
-reference observation, `0` where the row has no score. The
+bitmap (`zncc`) clamped to `0 ..= 1` and scaled to a byte, a measured score
+that would round to `0` raised to `1`: `255` for the reference observation,
+`0` where the row has no score or the score is not a number. The
 observations are written in image order, which is the order a stored track is in
 and every reader of one relies on. Where the reconstruction carries reference
 observations (it does wherever it carries patch frames), the record's

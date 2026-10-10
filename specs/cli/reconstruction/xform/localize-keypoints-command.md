@@ -50,9 +50,11 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   ones are stale once keypoints move and views drop, so the output carries
   patch *frames* but no bitmaps. Each point records the reference observation
   its views were aligned to in `tracks/reference_observations` (its stored
-  reference, or the rule's pick where it stored none), as the observation of
-  that image in its rebuilt track, or `-1` where the views were aligned to the
-  fused mean, so a later render renders the point from it. Re-run
+  reference, or the rule's pick where it stored none or its stored one grazes
+  the patch plane), as the observation of that image in its rebuilt track, or
+  `-1` where the views were aligned to the fused mean, or to nothing because
+  the stored reference does not render at its keypoint, so a later render
+  renders the point from it. Re-run
   `sfm xform --refine-keypoints bitmaps=true` (or
   `--refine-normals bitmaps=true`) to regenerate them (a frames-without-bitmaps
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).

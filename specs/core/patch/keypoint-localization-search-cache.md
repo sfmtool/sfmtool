@@ -59,7 +59,9 @@ position `g + δ`. So reading the tile at an integer shift is bit-identical to
 rendering the patch at that shift, and the search touches the source pyramid
 once per view. The exactness holds only for **integer** shifts, which is why
 the search reads integer cells and keeps its sub-pixel step as a separate
-parabolic estimate that never becomes a fractional read.
+estimate, a quadratic fitted to the 3×3 cells around the integer peak (a
+per-axis parabola where that fit cannot be made, § "Sub-pixel hand-off"),
+that never becomes a fractional read.
 
 **Rendering** is the same `WarpMap::from_patch` and remap every patch render
 uses, with the sampler chosen once for the view at its starting keypoint. Pixels
@@ -74,7 +76,10 @@ centering), which only feeds grid cells that are discarded.
 
 **Validity.** A per-pixel invalidity plane (`1.0` out of frame, else `0.0`) is
 built with the tile in the same row layout, beside a `bool` validity map. A
-shift whose window has any out-of-frame support pixel cannot be scored.
+shift whose window has any out-of-frame support pixel cannot be scored. The
+tile also records whether every pixel is in frame; then the invalidity plane
+is all zero (its pad columns too), so both strategies skip counting
+out-of-frame pixels, which could only add zeros.
 
 **Memory.** At the defaults one view's tile is about 15 KB and stays in L1
 while it is searched. The side grows with `search`, so the tile grows as its
@@ -109,7 +114,7 @@ for c in channels:                         // plane_c (centered), kern_c, w, Σk
   for gy in 0..span:
     n_lo=n_hi=s1_lo=s1_hi=s2_lo=s2_hi = 0  // 6 YMM accumulators (2× __m256 per map)
     for k in 0..n:
-      off = (gy + r_k)·istride + c_k
+      off = gy·istride + off_k             // off_k = r_k·istride + c_k
       src_lo = loadu(plane_c[off..]); src_hi = loadu(plane_c[off+8..])   // 16 cols
       kb = bcast(kern_c[k]); wb = bcast(w[k])
       n_lo  = fma(kb, src_lo, n_lo);  n_hi  = fma(kb, src_hi, n_hi)
@@ -123,8 +128,18 @@ The inner loop is 2 loads, 2 multiplies, 6 FMAs and 2 broadcasts for 16 lanes,
 with about 12 YMM registers live. The three maps share each load; padding the
 13-cell row to 16 lanes wastes about 19% of them. The combine step (per row,
 after the `k` loop) is scalar over `span` cells per channel, which is small.
+The per-support-pixel offsets `off_k` are computed once per search, into
+`SearchScratch`, rather than by a division and a remainder for every `k` and
+`gy`; the address is the same integer, so the result is bit-identical.
+Measured with the harness ([scripts/keypoint_localization/](../../../scripts/keypoint_localization/README.md)),
+five single-threaded runs alternating with a build without these two changes,
+from the stored keypoints: the keypoints and scores of every exhaustive run on
+both ground truths are identical, and the time per track falls by 18% on
+seoul_bull and 15% on kerry_park; on 40 long DnDTabletop tracks no change was
+measurable against the run-to-run spread.
 A separate single-accumulator pass over the invalidity plane, with the same
-structure, marks unscorable shifts. The argmax and the 3×3 quadratic
+structure and offsets, marks unscorable shifts; it is skipped for a tile with
+every pixel in frame. The argmax and the 3×3 quadratic
 sub-pixel fit follow.
 
 ### Why centering enables f32
@@ -162,9 +177,10 @@ It costs 113 µs per search against the descent's 50 µs at the default window
 (13×13 cells), which is 1.1 to 1.2 times the descent's time per track, since
 the renders dominate. The measurements are in
 [patch-keypoint-localization.md](patch-keypoint-localization.md#how-the-alignment-was-measured).
-The accumulation kernel's AVX2 path covers spans up to 16 cells (`search` up
-to 8); a wider window runs the scalar kernel, and at `search` 9 the whole grid
-costs 1.7 to 2.0 times the descent per track.
+The accumulation kernel's AVX2 path covers spans up to 16 cells; the span is
+`2·⌈search⌉ + 1`, so that is `search` up to 7. A wider window runs the scalar
+kernel, and at `search` 9 the whole grid costs 1.2 to 2.0 times the descent
+per track (1.7 to 2.0 on DnDTabletop, 1.2 to 1.8 on DinoLedge).
 
 ### "+"-descent
 
@@ -173,9 +189,12 @@ view's starting keypoint, score the 4 axis neighbours, move to the best one that
 improves on the current cell, and stop when none does. Each cell is scored at
 most once; the visited cache is a dense `Vec<f64>` of the grid's size, with
 `NaN` for unvisited, `−∞` for visited and unscorable, and the ZNCC otherwise.
-The final sub-pixel fit reuses the 4 neighbours already scored to find that the
-walk had stopped, and scores the 4 diagonal cells around the final cell for the
-fit's cross term. A walk visits `9 + 3 · walk_steps` cells: the start and its 4
+Where the walk stops it scores the 4 diagonal cells around the cell, which the
+fit needs for its cross term; if one of them beats the cell, the walk moves to
+the best such diagonal and goes on. So the fit is always centred on a cell no
+scored neighbour beats, and reuses the 4 axis neighbours already scored to find
+that the walk had stopped and the 4 diagonals. A walk that never moves
+diagonally visits `9 + 3 · walk_steps` cells: the start and its 4
 neighbours, 3 new cells per step, and the 4 diagonals. Neighbours past `±margin` or with any
 out-of-frame support pixel are skipped.
 

@@ -1515,6 +1515,12 @@ below), read at the observation's keypoint. The reference observation itself
 scores `1.0`. It holds this score until the per-observation keypoint covariance
 replaces it as the confidence bundle adjustment weighs observations by.
 
+The column's meaning changed without a version bump. Earlier bench commits
+stored each observation's leave-one-out ZNCC here (its score against the mean
+of the track's other views), and stored a measured score that rounds to `0`
+as `0`. Such a file's bytes read back as the plain ZNCC described here, and
+nothing in the file tells the two apart.
+
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint8` (little-endian)
 - **Format**: `0` means the observation carries **no data-derived support** — no

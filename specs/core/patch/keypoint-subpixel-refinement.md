@@ -83,8 +83,13 @@ pub fn fuse_patch_bitmap(
   given reference is used as given; the localizer, which drops grazing views
   before it resolves, never reports a grazing one. Given the localizer's
   reported reference, the refiner therefore aligns to the same observation's
-  render, and later `embed-patches` rounds keep a point's stored reference even
-  where a refined normal has tilted it toward edge-on. Where the localizer aligned to the fused mean (it
+  render, and later `embed-patches` rounds keep a point's stored reference
+  while it is in the view set and renders. The `embed-patches` obliquity cut
+  (`max_obliquity_deg`, 80° by default, stricter than this pre-filter's
+  `0.1`, about 84°) runs before each round's sub-pixel pass and drops a
+  reference like any other view; the refiner is then given a reference that
+  is not in its view set, sets it aside, and the rule picks again from the
+  views left, which is the reference the output records. Where the localizer aligned to the fused mean (it
   reported no reference), the refiner resolves again from the views and
   keypoints it is handed, which are the localizer's kept views at their new
   keypoints: the rule may then pick a view it would store, and that view's

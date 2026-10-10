@@ -435,8 +435,8 @@ Two errors are read per kept view:
   is re-triangulated from its kept keypoints at the ground-truth poses. This
   leaves out an offset all views share, so it is the measure that compares the
   two methods with the reference displaced. A few tracks per run fail to
-  re-triangulate (residual over 5 px; 0 to 5 per cell), and they dominate the
-  mean, so the median is the steadier figure.
+  re-triangulate (residual over 5 px; 0 to 5 per cell) and weigh heavily on
+  the mean, so the median is the steadier figure.
 
 **Re-triangulated residual, mean / median (px), reference displaced:**
 
@@ -452,6 +452,11 @@ Two errors are read per kept view:
 | kerry_park | 1 | 0.252 / 0.177 | 2.469 / 0.163 | **0.240 / 0.160** |
 | kerry_park | 2 | 0.672 / 0.290 | 4.387 / 0.437 | **0.527 / 0.254** |
 | kerry_park | 3 | 2.185 / 0.751 | 1.942 / 1.469 | **1.297 / 0.712** |
+
+The "+"-descent figures here and below are from before its walk moved on to a
+diagonal neighbour that beats the cell it stopped at
+([keypoint-localization-search-cache.md](keypoint-localization-search-cache.md#-descent)).
+Run again since, its medians in this table move by at most 0.022 px.
 
 **Raw error, mean / median (px), and the share of views more than 1.5 px from
 the ground truth, reference displaced:**
@@ -470,12 +475,14 @@ the ground truth, reference displaced:**
 | dataset | disp px | method | raw error | re-triangulated | over 1.5 px |
 |---|---|---|---|---|---|
 | seoul_bull | 1 | congealing | 0.796 / 0.614 | 0.363 / 0.278 | 8.3% |
-| seoul_bull | 1 | "+"-descent | **0.510 / 0.290** | 0.363 / **0.265** | **5.8%** |
+| seoul_bull | 1 | "+"-descent | **0.510** / 0.290 | 0.363 / **0.265** | **5.8%** |
+| seoul_bull | 1 | exhaustive | 0.604 / **0.289** | **0.359** / 0.269 | 6.6% |
 | seoul_bull | 3 | congealing | 1.945 / 1.799 | 0.720 / 0.377 | 60.3% |
 | seoul_bull | 3 | "+"-descent | 0.759 / 0.318 | 0.635 / 0.329 | 11.7% |
 | seoul_bull | 3 | exhaustive | **0.636 / 0.306** | **0.407 / 0.275** | **7.4%** |
 | kerry_park | 1 | congealing | 0.645 / 0.554 | 0.254 / 0.177 | 5.0% |
 | kerry_park | 1 | "+"-descent | **0.263 / 0.182** | **0.210 / 0.158** | **1.0%** |
+| kerry_park | 1 | exhaustive | 0.292 / **0.182** | 0.242 / 0.160 | 1.4% |
 | kerry_park | 3 | congealing | 2.005 / 1.859 | 4.894 / 0.550 | 61.0% |
 | kerry_park | 3 | "+"-descent | 1.156 / 0.332 | 1.205 / 0.571 | 24.6% |
 | kerry_park | 3 | exhaustive | **0.681 / 0.278** | **0.635 / 0.301** | **10.7%** |
@@ -484,8 +491,9 @@ the ground truth, reference displaced:**
 track length, in ms: the best of three single-threaded runs of the harness
 (`--threads 1`), each method run on a point straight after the others, so the
 ratios hold better than the absolute times on this machine's mixed cores. The
-long tracks are 10 tracks per length range of a DnDTabletop reconstruction,
-chosen by a local option of the copy of the harness used for this run:
+long tracks are 10 tracks per length range of a DnDTabletop reconstruction
+and 10, 10 and 20 of a DinoLedge one, spread evenly over each range by the
+harness's `--bins` option:
 
 | dataset | views | congealing | "+"-descent | exhaustive | exhaustive / "+"-descent | exhaustive / congealing |
 |---|---|---|---|---|---|---|
@@ -499,18 +507,24 @@ chosen by a local option of the copy of the harness used for this run:
 | DnDTabletop | 50-99 | 17.39 | **13.56** | 15.36 | 1.13 | 0.88 |
 | DnDTabletop | 100-199 | 38.00 | **31.65** | 36.33 | 1.15 | 0.96 |
 | DnDTabletop | 200-399 | **49.22** | 50.36 | 57.98 | 1.15 | 1.18 |
+| DinoLedge | 20-49 | **7.55** | 7.57 | 8.44 | 1.11 | 1.12 |
+| DinoLedge | 50-99 | **12.47** | 13.83 | 15.62 | 1.13 | 1.25 |
+| DinoLedge | 100-199 | **8.15** | 22.81 | 23.16 | 1.02 | 2.84 |
 
 At the default `search` of 6 (a 13×13 shift grid) the exhaustive search costs
 1.1 to 1.2 times the "+"-descent per track at every length. Per search it
 takes 113 µs against the descent's 50 µs, but rendering the views and the
 reference is about 90% of the localizer's time either way, and a whole
-`embed_patches` run takes the same time with either: 0.84 to 0.87 s on
-kerry_park and 0.24 to 0.25 s on seoul_bull with all threads (congealing took
-0.96 to 1.02 s on kerry_park). The cost grows with the window: at `search` 9
-(19×19, wider than the AVX2 grid kernel takes, so the scalar kernel runs) the
-exhaustive search costs 1.7 to 2.0 times the descent per track. That matters
+`embed_patches` run takes the same time with either: the best of two runs is
+0.84 to 0.87 s on kerry_park and 0.24 to 0.25 s on seoul_bull with all
+threads. The cost grows with the window: at `search` 9 (19×19, wider than the
+AVX2 grid kernel takes, so the scalar kernel runs) the exhaustive search costs
+1.2 to 2.0 times the descent per track (1.7 to 2.0 on DnDTabletop, 1.2 to 1.8
+on DinoLedge). That matters
 to the bench, whose evaluation widens the window by the farthest starting
-keypoint's offset.
+keypoint's offset: its `search` is the track's `max_shift_px` (6 by default)
+plus that offset, so a seed more than 1 grid px off takes it past 7 and the
+whole window is scored in the scalar kernel.
 
 Where the point has no reference and the reference-view rule picks one, the
 pick adds a mean of 1.4 ms per track on seoul_bull and 3.9 ms on kerry_park.
@@ -518,7 +532,8 @@ pick adds a mean of 1.4 ms per track on seoul_bull and 3.9 ms on kerry_park.
 What it shows:
 
 - **With the exhaustive search, the default, the alignment is as accurate as
-  congealing or more, on equal terms.** With the reference displaced, its
+  congealing or more by the median, on equal terms, and less accurate by the
+  mean at small displacements.** With the reference displaced, its
   median re-triangulated residual is level with congealing's from the stored
   keypoints (0.264 against 0.261 px on seoul_bull, 0.157 against 0.160 on
   kerry_park) and at 0.5 px on seoul_bull (0.272 against 0.271), and lower at
@@ -527,15 +542,28 @@ What it shows:
   and 0.712 against 0.164, 0.177, 0.290 and 0.751 at 0.5 to 3 px. Its means
   are higher than congealing's from 0 to 0.5 px on both captures and at 1 px
   on seoul_bull (0.436 against 0.357 px on seoul_bull from the stored
-  keypoints), from one or two tracks per run that fail to re-triangulate, and
-  lower from 2 px.
-- **The "+"-descent is no better than the exhaustive search near the truth and
-  worse farther off.** Its median is level with the exhaustive search's or up
-  to 0.007 px lower from 0 to 1 px, and higher from 2 px (0.331 and 0.633 on
-  seoul_bull, 0.437 and 1.469 on kerry_park), where it stops at a nearer,
-  lower peak; at 2 and 3 px it is above congealing too. On kerry_park at 1 and
-  2 px it also has tracks that fail to re-triangulate (means 2.469 and
-  4.387 px).
+  keypoints, 0.369 and 0.373 against 0.349 and 0.355 at 0.5 and 1 px), and
+  lower from 2 px. The higher means do not come from a few tracks that fail
+  to re-triangulate: at 0.5 and 1 px on seoul_bull no exhaustive track is
+  over 5 px; with every track whose mean residual is over 2 px left out, the
+  exhaustive search's mean is still higher (0.343 against 0.323 px on
+  seoul_bull at 0 px, 0.212 against 0.200 and 0.225 against 0.209 on
+  kerry_park at 0 and 0.5 px); and from 0 to 1 px it has more tracks whose
+  mean residual is over 1 px, 7 to 12 per cell against 4 to 9. Its residuals
+  have a heavier tail, spread over more tracks than congealing's.
+- **The "+"-descent is level with the exhaustive search by the median near
+  the truth, slightly better by the mean and the share of views on a side
+  peak, and worse farther off.** From 0 to 1 px its median is within 0.007 px
+  of the exhaustive search's; its mean is lower (0.340 and 0.346 against 0.369
+  and 0.373 px on seoul_bull at 0.5 and 1 px, 0.202 and 0.204 against 0.232
+  and 0.236 on kerry_park at 0 and 0.5 px) except on kerry_park at 1 px; and
+  fewer of its views are more than 1.5 px off (from the stored keypoints 5.9%
+  against 6.7% on seoul_bull and 0.9% against 1.4% on kerry_park, and with the
+  reference stored at 1 px 5.8% and 1.0% against 6.6% and 1.4%). From 2 px its
+  median is higher (0.331 and 0.633 on seoul_bull, 0.437 and 1.469 on
+  kerry_park), where it stops at a nearer, lower peak; at 2 and 3 px it is
+  above congealing too. On kerry_park at 1 and 2 px it also has tracks that
+  fail to re-triangulate (means 2.469 and 4.387 px).
 - **With the reference stored the alignment places views far closer**, from
   0.5 px up: at 3 px 7.4% (seoul_bull) and 10.7% (kerry_park) of the
   exhaustive search's views are more than 1.5 px off against congealing's
@@ -548,10 +576,12 @@ What it shows:
 - **Why the alignment replaced congealing.** It scores and places each view
   against the same render the point stores, the one the bench, the scores and
   the stored bitmap read, so a view's keypoint and its score mean the same
-  thing everywhere; it has no rounds, no weights and no basis cap; with the
-  exhaustive search it is as accurate or more by the median residual; and it
-  is 1.1 to 2.5 times faster on the ground truths' tracks, slightly faster on
-  tracks of 20 to 199 views, and 1.2 times slower on tracks of 200 or more.
+  thing everywhere; it has no rounds, no weights and no basis cap; and with
+  the exhaustive search it is as accurate or more by the median residual. It
+  is not faster everywhere: per track it takes 0.40 to 0.90 times congealing's
+  time on the ground truths and 0.84 to 0.96 times on DnDTabletop tracks of 20
+  to 199 views, but 1.18 times on DnDTabletop tracks of 200 views or more and
+  1.12 to 2.84 times on DinoLedge tracks of 20 to 199 views.
 - **There is no coarse level.** Before the 3×3 fit, with the reference stored,
   a half-resolution coarse level lowered the error from starting keypoints
   3 px off, and 2 px off on kerry_park, and raised it from 0 to 1 px on both
@@ -561,7 +591,9 @@ What it shows:
   times the descent's time per track.
 - **The exhaustive search is the default.** It finds the highest peak in the
   window, which on these captures is the true one more often than the peak
-  nearest a start 2 px or more off is, and near the truth it is no worse. The
+  nearest a start 2 px or more off is. Near the truth it is level with the
+  descent by the median and slightly worse by the mean and the share of views
+  on a side peak; that is the cost of the default. The
   "+"-descent remains as `SearchStrategy::PlusDescent` for a caller that wants
   the 11 to 18% of the time per track it saves.
 

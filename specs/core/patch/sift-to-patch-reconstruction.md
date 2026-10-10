@@ -167,8 +167,11 @@ thereafter (the per-round obliquity drop).
    refinement](patch-normal-refinement.md); the refined frame is re-persisted.
    The robust consensus **down-weights oblique views** by
    `|v̂·n|^obliquity_weight_power` and adds a **fronto-parallel prior**
-   (`fronto_prior_weight · mean(v̂·n)²`); after each round every observation
-   more than `max_obliquity_deg` off the refined normal is dropped. From round 2
+   (`fronto_prior_weight · mean(v̂·n)²`); in each round, after the normal
+   refinement and before the sub-pixel keypoint refinement, every observation
+   more than `max_obliquity_deg` off the refined normal is dropped, the
+   reference observation included (the sub-pixel pass's reference-view rule
+   then picks a new reference from the views left). From round 2
    the refinement basis is capped at the `max_refine_views` most
    normal-informative views per point (output-lossless — every observation still
    registers and has its bitmap rendered; see
@@ -262,7 +265,7 @@ spec).
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_views` | 2 | pipeline cull: drop a point left with fewer kept views |
 | `rounds` | `2` | pipeline loop: number of alternating (normal-refine, keypoint-refine) passes (see [Pipeline](#pipeline)) |
-| `max_obliquity_deg` | `80.0` | normal refinement: after each round, drop observations viewing the surfel more than this off the refined normal (`90` disables) |
+| `max_obliquity_deg` | `80.0` | normal refinement: in each round, before the sub-pixel pass, drop observations (the reference included) viewing the surfel more than this off the refined normal (`90` disables) |
 | `obliquity_weight_power` | `2.0` | normal refinement: exponent `p` of the multiplicative obliquity view-weight `\|v̂·n\|^p` in the robust consensus (`0` disables; `2` = cos²θ foreshortening) |
 | `fronto_prior_weight` | `0.05` | normal refinement: weight `λ` of the additive fronto-parallel prior `λ·mean(v̂·n)²` pulling a low-parallax normal toward facing the cameras (`0` disables) |
 | `max_refine_views` (`--refine-max-views`) | `8` | normal refinement: cap the round-2+ refinement basis at the N most normal-informative views/point (`0` = all); output-lossless ([patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)) |

@@ -13,16 +13,22 @@ track views:
 
 Files:
 
-- `align_vs_congealing/` is a standalone Cargo crate (its own `[workspace]`
-  table, so it is outside the main workspace) with one source file,
-  `src/main.rs`. Built without features it calls this branch's
-  `try_localize_patch_keypoints` (methods `pd` and `ex`); built with
-  `--features congeal` it calls the congealing `try_localize_patch_keypoints`
-  of `83ffb08e` (method `congeal`). It writes one JSON file per run.
-- `report.py` reads those JSON files and prints the markdown tables below,
-  and a table of the time per track by track length. That table is from the
-  runs above, with 8 threads; the single-threaded timing quoted in
-  `specs/core/patch/patch-keypoint-localization.md` was run separately.
+- The harness is the `align_vs_congealing` example of `sfmtool-core`,
+  [`crates/sfmtool-core/examples/align_vs_congealing.rs`](../../crates/sfmtool-core/examples/align_vs_congealing.rs).
+  Built as it is, it calls this tree's `try_localize_patch_keypoints`
+  (methods `pd` and `ex`). Built with `RUSTFLAGS="--cfg congeal"` in a copy
+  of commit `83ffb08e` it calls that commit's congealing
+  `try_localize_patch_keypoints` instead (method `congeal`). It writes one
+  JSON file per run. It is an example target rather than a crate of its own
+  so that `cargo test --workspace` and `cargo clippy --all-targets` in CI
+  compile and lint it against the current localizer, and it builds with the
+  workspace's `Cargo.lock`.
+- `report.py` reads those JSON files and prints the accuracy and gate tables
+  below, and a table of the time per track by track length. The README leaves
+  the time table out: the accuracy runs use 8 threads and are not a timing.
+  The single-threaded timings quoted in
+  `specs/core/patch/patch-keypoint-localization.md` come from the separate
+  runs under "Timing".
 
 ## Protocol
 
@@ -75,22 +81,28 @@ from the working tree. On Windows keep `CARGO_TARGET_DIR` short: a target
 directory nested under a long scratch path fails to link with LNK1104.
 
 ```bash
-H=scripts/keypoint_localization/align_vs_congealing
+X=crates/sfmtool-core/examples/align_vs_congealing.rs
 
 # Branch snapshot.
-mkdir -p $S/branch-src/scripts/keypoint_localization
+mkdir -p $S/branch-src
 cp $W/Cargo.toml $W/Cargo.lock $S/branch-src/ && cp -r $W/crates $S/branch-src/
-cp -r $W/$H $S/branch-src/scripts/keypoint_localization/
 CARGO_TARGET_DIR=$S/tb pixi run --manifest-path $W/pixi.toml \
-  cargo build --release --manifest-path $S/branch-src/$H/Cargo.toml
+  cargo build --release -p sfmtool-core --example align_vs_congealing \
+  --manifest-path $S/branch-src/Cargo.toml
 
-# Congealing snapshot, from commit 83ffb08e.
-mkdir -p $S/main-src/scripts/keypoint_localization
+# Congealing snapshot, from commit 83ffb08e, with this tree's harness copied in.
+# RUSTFLAGS rebuilds every crate of the snapshot, which takes a few minutes.
+mkdir -p $S/main-src
 git -C $W archive 83ffb08e Cargo.toml Cargo.lock crates | tar -x -C $S/main-src
-cp -r $W/$H $S/main-src/scripts/keypoint_localization/
-CARGO_TARGET_DIR=$S/tm pixi run --manifest-path $W/pixi.toml \
-  cargo build --release --features congeal --manifest-path $S/main-src/$H/Cargo.toml
+mkdir -p $S/main-src/crates/sfmtool-core/examples && cp $W/$X $S/main-src/$X
+RUSTFLAGS="--cfg congeal" CARGO_TARGET_DIR=$S/tm \
+  pixi run --manifest-path $W/pixi.toml \
+  cargo build --release -p sfmtool-core --example align_vs_congealing \
+  --manifest-path $S/main-src/Cargo.toml
 ```
+
+The binaries are `$S/tb/release/examples/align_vs_congealing` and
+`$S/tm/release/examples/align_vs_congealing`; below they are `$TB` and `$TM`.
 
 ## Run
 
@@ -100,14 +112,14 @@ KERRY=$W/test-data/images/kerry_park/kerry_park_ground_truth.sfmr
 for ds in seoul kerry; do
   [ $ds = seoul ] && F=$SEOUL || F=$KERRY
   for mode in displaced stored; do
-    $S/tb/release/align-vs-congealing $F $S/out/${ds}_${mode}_align.json \
+    $TB $F $S/out/${ds}_${mode}_align.json \
       --ref-mode $mode --disp 0,0.5,1,2,3 --min-views 3 --threads 8
-    $S/tm/release/align-vs-congealing $F $S/out/${ds}_${mode}_congeal.json \
+    $TM $F $S/out/${ds}_${mode}_congeal.json \
       --ref-mode $mode --disp 0,0.5,1,2,3 --min-views 3 --threads 8 \
       --references $S/out/${ds}_${mode}_align.json
   done
 done
-python scripts/keypoint_localization/report.py $S/out
+pixi run python scripts/keypoint_localization/report.py $S/out
 ```
 
 The harness writes nothing next to the input. `--workspace DIR` overrides the
@@ -115,13 +127,39 @@ directory the image names are resolved against; the two ground truths do not
 need it. Each run takes 0.4 s (seoul_bull) to 1.7 s (kerry_park) with 8
 threads.
 
+## Timing
+
+The time per track in the spec is from single-threaded runs at displacement
+0 with the reference stored, three of each, alternating the two builds:
+
+```bash
+COMMON="--disp 0 --ref-mode stored --threads 1"
+for r in 1 2 3; do
+  $TB $SEOUL $S/t/seoul-br-r$r.json $COMMON
+  $TM $SEOUL $S/t/seoul-cg-r$r.json $COMMON
+  # ... the same for $KERRY, and for the long-track files with
+  # --workspace DIR --bins 20-49:10,50-99:10,100-199:10,200-399:10
+done
+```
+
+`--bins LO-HI:N,...` keeps `N` tracks spread evenly over the eligible points
+of each track-length range, `--top N` the `N` longest tracks, `--search S`
+sets the search radius and `--methods` runs a subset of the methods; only the
+images the kept tracks observe are decoded. Each run records each track's
+time per method under `secs`. The DnDTabletop and DinoLedge reconstructions
+are local, not checked in.
+
 ## Results (2026-10-09)
 
-Branch at commit `92ad37ef` plus the working-tree changes of that day (the 2-D
-quadratic sub-pixel fit), against `83ffb08e`. Run again the same day after the
-default search became `ex`: every accuracy figure and every per-view result is
-unchanged, since the harness names the strategy of each run; the gate tables
-below now read `ex`'s score.
+Branch at commit `0a7df104` (the 2-D quadratic sub-pixel fit is from
+`92ad37ef`, and no commit between changes what the localizer computes for a
+given strategy), against `83ffb08e`. The `pd` rows predate a later change to
+the "+"-descent: a diagonal neighbour that beats the cell its walk stopped at
+now moves the walk on. Run again after that change, 115 to 242 of each
+file's `pd` runs differ, and the medians of the re-triangulated residual with
+the reference displaced move by at most 0.022 px (kerry_park at 3 px, 1.469
+to 1.447 px); the `ex` results are unchanged.
+The gate tables read `ex`'s score.
 
 ### Accuracy
 

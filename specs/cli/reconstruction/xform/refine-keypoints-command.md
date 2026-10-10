@@ -130,8 +130,12 @@ point's reference observation, attached via
 reference_observations=…)`; the stored frame is
 re-persisted alongside so the bitmaps have a frame to attach to (the frame
 itself is unchanged — keypoints moved, not the surfel). A point whose
-`tracks/reference_observations` entry already names an observation keeps it,
-and only a point at `-1` takes the reference its views were aligned to. Every point with a
+`tracks/reference_observations` entry already names an observation keeps it
+where its views were aligned to it, which is wherever it renders at its
+keypoint; each refined point records the reference its views were aligned
+to, so a point at `-1` takes the rule's pick, and a point whose stored
+reference does not render, and so aligned nothing, records `-1` and keeps the
+fused mean the refiner rendered. Every point with a
 reference then has its bitmap rendered again from that observation at its
 refined keypoint as the file stores it, in `f32` (`render_from_references` in
 [`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py), through
@@ -142,9 +146,9 @@ without re-rendering; it costs a tile render and a self-similarity reading per v
 point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
 and render once on the finalizing stage. With `bitmaps=false` the command
 writes the keypoints and drops any stored bitmaps, which were rendered at the
-old keypoints, as `--refine-normals bitmaps=false` does; a point that stores a
-reference observation keeps it, and a point at `-1` records the reference its
-views were aligned to, so a later `--add-patch-bitmaps` renders each point from
+old keypoints, as `--refine-normals bitmaps=false` does; each point records the
+reference its views were aligned to, as with bitmaps, so a later
+`--add-patch-bitmaps` renders each point from
 the reference its keypoints were refined against.
 
 The transform prints a one-line summary in the established `xform` style over
