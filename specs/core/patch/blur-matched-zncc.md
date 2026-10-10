@@ -133,10 +133,12 @@ pub fn windowed_zncc(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> f64;
 // patch::stored_bitmap: each observation against the stored bitmap.
 pub fn bitmap_planes(rgba: &[u8], resolution: usize) -> TilePlanes; // alpha > 0 is data
 pub struct BitmapScore {
-    pub zncc: f64,
-    pub zncc_middle: f64,           // the same pair over the middle square, window weights
-    pub zncc_grid: [[f64; 3]; 3],   // and over each ninth, samples weighted equally
+    pub plain_zncc: f64,
+    pub plain_zncc_middle: f64,     // the same pair over the middle square, window weights
+    pub plain_zncc_grid: [[f64; 3]; 3], // and over each ninth, samples weighted equally
     pub blur_matched_zncc: f64,     // the whole tile, the bitmap blurred to the observation
+    pub blur_matched_zncc_middle: f64,  // the middle against the same blurred bitmap
+    pub blur_matched_zncc_grid: [[f64; 3]; 3], // and each ninth
     pub blur_sigma: f64,            // the bitmap's blur, 0 where read plain
     pub sharper_than_bitmap: bool,  // read plain; a candidate to replace the reference
 }
@@ -404,6 +406,15 @@ is scored against the bitmap twice (`BitmapScorer`, `score_against_bitmap`):
   blurred to the target and
   correlated with the observation's tile as rendered; elsewhere the plain score.
 
+Each is read three ways from the one pair: over the whole tile, over the
+middle square (rows and columns `R/4 .. R - R/4`, with the window's weights)
+and over each ninth of a three-by-three split (cut at `R/3` and `R - R/3`,
+every sample weighted equally). Where the bitmap is blurred for an
+observation, the blur-matched middle and ninths are read against the same
+blurred bitmap as the whole tile, ten more windowed ZNCCs; where it is not,
+about nine observations in ten, every blur-matched reading is the plain one,
+not computed again.
+
 **Only the bitmap is blurred.** The bitmap's blur assessment is read once per
 point, on the bitmap, with the reading its own ellipse came from
 (`read_tile_ellipse`), at the first observation that needs it, and every
@@ -426,12 +437,16 @@ A bitmap that names no reference (a fused mean, one stored before the
 reference was recorded, or the render of an observation since removed from
 the point) scores every observation.
 
-**What reads the scores.** The bench writes both for every row it evaluates,
-as the row's score (`zncc`, with `zncc_middle` and `zncc_grid` read from the
-same pair over the middle square and each ninth, plain) and
-`blur_matched_zncc`, with `bitmap_blur_sigma` and `sharper_than_bitmap`
-([editable-track.md](../bench/editable-track.md)), and Track View shows them
-in its *ZNCC* column, plain and blur-matched. The bench's `min_zncc` bars,
+**What reads the scores.** The bench writes both for every row it evaluates:
+the plain score (`plain_zncc`, `plain_zncc_middle`, `plain_zncc_grid`) and the
+blur-matched one (`blur_matched_zncc`, `blur_matched_zncc_middle`,
+`blur_matched_zncc_grid`), with `bitmap_blur_sigma` and `sharper_than_bitmap`;
+so does the tile at a row's `walked_to` (`walked_plain_zncc*`,
+`walked_blur_matched_zncc*`) ([editable-track.md](../bench/editable-track.md)).
+No field of a track-stage row is a bare `zncc`. Track View shows them in its
+*ZNCC* column, and its hover draws the bitmap, the bitmap as blurred for the
+row and the row's tile, with both sets of scores
+([track-view.md](../../gui/track-view.md)). The bench's `min_zncc` bars,
 whole and middle, judge the **plain** score, which reads lower for a view that
 is out of focus than the blur-matched score does. A blurred view of the right
 place is a view to keep, and the bars are not there to catch focus; the
@@ -666,7 +681,9 @@ stored bitmap (§ "Scores against the stored bitmap"). A tile's channels read
 as above, and `valid` is an optional `(k, R, R)` bool stack, `False` marking a
 sample without data; a bitmap sample whose alpha is 0 carries none. `reference`
 is the index of the tile the bitmap is, not computed. It returns a dict:
-`zncc` and `blur_matched_zncc` `(k,)` (NaN where a pair cannot be read, 1 for
+`plain_zncc`, `plain_zncc_middle`, `blur_matched_zncc` and
+`blur_matched_zncc_middle` `(k,)`, and `plain_zncc_grid` and
+`blur_matched_zncc_grid` `(k, 3, 3)` (NaN where a pair cannot be read, 1 for
 the reference: the Rust call returns `None` there so a caller can tell a score
 that was not computed from one that was, and a float array has no `None`, so
 the binding writes the value that row stands for), `blur_sigma` `(k,)` (the width the bitmap was blurred by, 0
@@ -735,10 +752,13 @@ depend on the order of the views.
 [stored_bitmap/tests.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap/tests.rs)
 checks the scores against a stored bitmap: that a sharp bitmap is blurred,
 and only the bitmap, to a blurrier observation's semi-minor axis by the width
-its own assessment gives, the blur-matched score rising over the plain one;
-that an observation sharper than the bitmap is read plain, bit for bit, and
-flagged, with no assessment read; that grain at another angle and a
-difference under the ratio are read plain; that the reference is not scored
+its own assessment gives, the blur-matched score rising over the plain one,
+and the middle and every ninth rising with it, each what the plain reading
+against the bitmap blurred by that width gives;
+that an observation sharper than the bitmap is read plain, bit for bit, whole,
+middle and grid, and flagged, with no assessment read; that grain at another
+angle and a difference under the ratio are read plain, every blur-matched
+reading the plain one; that the reference is not scored
 and every other observation scores as it does alone, against one assessment;
 and that samples without data are left out.
 [member_coherence/tests.rs](../../../crates/sfmtool-core/src/patch/member_coherence/tests.rs)

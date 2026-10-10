@@ -73,7 +73,7 @@ def test_a_held_out_point_is_rebuilt_on_its_pixel(
     # the bitmap that the final median gate and the bars judge.
     assert all(
         o["track"].get("seed_shift_px") is not None
-        and o["track"].get("zncc") is not None
+        and o["track"].get("plain_zncc") is not None
         for o in track.observations
         if o["verdict"] == "in"
     )

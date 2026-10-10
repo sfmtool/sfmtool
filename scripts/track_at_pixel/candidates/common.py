@@ -74,11 +74,11 @@ def median_zncc(track) -> float:
     gate reads it."""
     ref = track.reference_observation
     z = [
-        o["track"]["zncc"]
+        o["track"]["plain_zncc"]
         for i, o in enumerate(track.observations)
         if o["verdict"] == "in"
         and i != ref
-        and o.get("track", {}).get("zncc") is not None
+        and o.get("track", {}).get("plain_zncc") is not None
     ]
     return float(np.median(z)) if z else float("-inf")
 
@@ -380,7 +380,7 @@ def ray_consensus(ctx, track, q: int, pixel, opts: dict, diag: dict):
         if i == q or o["verdict"] != "in":
             continue
         tr = o.get("track", {})
-        kp, z = tr.get("keypoint"), tr.get("zncc")
+        kp, z = tr.get("keypoint"), tr.get("plain_zncc")
         if kp is None or z is None or z < opts["ray_min_zncc"]:
             continue
         # A keypoint the correlation peak has left is not a sighting yet.

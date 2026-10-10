@@ -97,7 +97,7 @@ def ground_truth_reading(dataset, point: int) -> dict:
     rows = _in_rows(track)
     return {
         "track": track,
-        **_stats("gt_zncc", _track_numbers(_scored_rows(track), "zncc")),
+        **_stats("gt_zncc", _track_numbers(_scored_rows(track), "plain_zncc")),
         **_stats(
             "gt_self_similarity",
             _track_numbers(rows, "zncc_self_similarity_radius"),
@@ -231,7 +231,7 @@ def score(
             gt_scales.append(s)
     m.update(_scale_stats("gt_texel_scale", gt_scales))
 
-    zncc = _track_numbers(_scored_rows(track), "zncc")
+    zncc = _track_numbers(_scored_rows(track), "plain_zncc")
     m.update(_stats("zncc", zncc))
     m.update(
         _stats("self_similarity", _track_numbers(rows, "zncc_self_similarity_radius"))

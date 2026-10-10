@@ -293,8 +293,8 @@ pub fn blur_to_length<'py>(
 /// computed: its scores read 1.
 ///
 /// The bench scores every row of a track this way
-/// (``EditableTrack.observations``' ``zncc`` and
-/// ``blur_matched_zncc``), from the tiles
+/// (``EditableTrack.observations``' ``plain_zncc`` and
+/// ``blur_matched_zncc``, with their middle and grid readings), from the tiles
 /// ``OrientedPatch.render_view_tile`` renders at the evaluation's resolution
 /// and with its sampler.
 ///
@@ -313,8 +313,13 @@ pub fn blur_to_length<'py>(
 ///         ``"uniform"``.
 ///     window_sigma: Its sigma.
 ///
-/// Returns a dict: ``zncc`` and ``blur_matched_zncc`` (``(k,)`` float64, NaN
-/// where a pair could not be read, 1 for the reference), ``blur_sigma``
+/// Returns a dict: ``plain_zncc``, ``plain_zncc_middle``,
+/// ``blur_matched_zncc`` and ``blur_matched_zncc_middle`` (``(k,)`` float64,
+/// NaN where a pair could not be read, 1 for the reference),
+/// ``plain_zncc_grid`` and ``blur_matched_zncc_grid`` (``(k, 3, 3)`` float64,
+/// each ninth from the top-left; the blur-matched middle and grid are read
+/// against the same blurred bitmap as the whole tile, and equal the plain ones
+/// where the bitmap is not blurred), ``blur_sigma``
 /// (``(k,)`` float64, the width the bitmap was blurred by, 0 where it was
 /// not), ``sharper_than_bitmap`` (``(k,)`` bool), and ``bitmap_semi_axes``
 /// (``(2,)``, the bitmap's [major, minor] in grid px, NaN where it has no
@@ -404,10 +409,31 @@ pub fn score_against_bitmap<'py>(
             .collect()
     };
     let out = PyDict::new(py);
-    out.set_item("zncc", pick(&|s| s.zncc, 1.0).into_pyarray(py))?;
+    let pick_grid = |f: &dyn Fn(&BitmapScore) -> [[f64; 3]; 3]| {
+        numpy::ndarray::Array3::from_shape_fn((scores.len(), 3, 3), |(v, i, j)| {
+            scores[v].as_ref().map_or(1.0, |s| f(s)[i][j])
+        })
+    };
+    out.set_item("plain_zncc", pick(&|s| s.plain_zncc, 1.0).into_pyarray(py))?;
+    out.set_item(
+        "plain_zncc_middle",
+        pick(&|s| s.plain_zncc_middle, 1.0).into_pyarray(py),
+    )?;
+    out.set_item(
+        "plain_zncc_grid",
+        pick_grid(&|s| s.plain_zncc_grid).into_pyarray(py),
+    )?;
     out.set_item(
         "blur_matched_zncc",
         pick(&|s| s.blur_matched_zncc, 1.0).into_pyarray(py),
+    )?;
+    out.set_item(
+        "blur_matched_zncc_middle",
+        pick(&|s| s.blur_matched_zncc_middle, 1.0).into_pyarray(py),
+    )?;
+    out.set_item(
+        "blur_matched_zncc_grid",
+        pick_grid(&|s| s.blur_matched_zncc_grid).into_pyarray(py),
     )?;
     out.set_item("blur_sigma", pick(&|s| s.blur_sigma, 0.0).into_pyarray(py))?;
     out.set_item(

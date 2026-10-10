@@ -672,9 +672,9 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
 
 /// At the track stage the *ZNCC* cell prints the plain score against the
 /// stored bitmap, with the blur-matched one after an arrow where the bitmap was
-/// blurred and the two print differently, and its hover gives the blur, the
-/// sharper note, the reason for a missing score and a note where the localizer
-/// could not read the row.
+/// blurred and the two print differently, and its hover gives the scores, the
+/// blur, the sharper note and the reason for a missing score
+/// (`tests/zncc_hover.rs` draws it).
 #[test]
 fn the_zncc_cell_prints_the_score_against_the_bitmap() {
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement, Unmeasured};
@@ -687,8 +687,8 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            zncc: Some(plain),
-            zncc_middle: Some(0.61),
+            plain_zncc: Some(plain),
+            plain_zncc_middle: Some(0.61),
             blur_matched_zncc: Some(matched),
             bitmap_blur_sigma: Some(sigma),
             sharper_than_bitmap: Some(sharper),
@@ -698,25 +698,18 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
     };
     let current = crate::bench::live::Evaluation::Current;
     let text = |o: &Observation| super::measurements(o, StageKind::Track, &current)[0].clone();
-    let hover =
-        |o: &Observation, own: bool| super::reference::zncc_hover(o.track.as_ref().unwrap(), own);
+    let hover = |o: &Observation, own: bool| {
+        format!(
+            "{:?}",
+            super::zncc_hover::zncc_hover_text(o.track.as_ref().unwrap(), own)
+        )
+    };
 
     let blurred = row(0.504, 0.531, 0.83, false);
     assert_eq!(text(&blurred), "50% \u{23f5} 53% whole\n61% mid");
     let said = hover(&blurred, false);
-    assert!(
-        said.contains("ZNCC with the stored patch bitmap 50.4% whole"),
-        "{said}"
-    );
-    assert!(said.contains("blurred by 0.83 grid px"), "{said}");
-    assert!(!said.contains("could not align"), "{said}");
-    let mut unread = blurred.clone();
-    unread.track.as_mut().unwrap().seed_shift_px = None;
-    let said = hover(&unread, false);
-    assert!(
-        said.contains("could not align this row to the reference's render"),
-        "{said}"
-    );
+    assert!(said.contains("50.4%") && said.contains("53.1%"), "{said}");
+    assert!(said.contains("Blurred by \u{3c3} 0.83 grid px"), "{said}");
 
     // One number where the blur leaves the printed score as it was, and where
     // the pair was read plain.
@@ -727,15 +720,15 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
 
     // The reference's own row reads 100%.
     let mut own = row(1.0, 1.0, 0.0, false);
-    own.track.as_mut().unwrap().zncc_middle = Some(1.0);
+    own.track.as_mut().unwrap().plain_zncc_middle = Some(1.0);
     assert_eq!(text(&own), "100% whole\n100% mid");
     assert!(hover(&own, true).contains("track's reference"));
 
     // A row with no score says why, in the hover and the status cell.
     let mut unscored = row(0.5, 0.5, 0.0, false);
     let slot = unscored.track.as_mut().unwrap();
-    slot.zncc = None;
-    slot.zncc_middle = None;
+    slot.plain_zncc = None;
+    slot.plain_zncc_middle = None;
     slot.reason = Some(Unmeasured::NoBitmap);
     assert_eq!(text(&unscored), "-");
     let reason = Unmeasured::NoBitmap.to_string();
@@ -787,10 +780,10 @@ fn a_fitted_track_marks_the_one_row_its_bitmap_is_rendered_from() {
             for (i, observation) in track.observations.iter().enumerate() {
                 let m = observation.track.as_ref().expect("measured");
                 if i == r {
-                    assert_eq!(m.zncc, Some(1.0));
+                    assert_eq!(m.plain_zncc, Some(1.0));
                     assert!(rows[i].cells[0].starts_with("100% whole"), "{rows:?}");
                 } else {
-                    assert!(m.zncc.is_some(), "row {i} has no score");
+                    assert!(m.plain_zncc.is_some(), "row {i} has no score");
                 }
             }
         }
@@ -843,7 +836,7 @@ fn set_as_reference_is_offered_on_an_in_row_with_a_keypoint() {
         after.observations[other]
             .track
             .as_ref()
-            .and_then(|m| m.zncc),
+            .and_then(|m| m.plain_zncc),
         Some(1.0)
     );
     assert_eq!(
@@ -947,7 +940,7 @@ fn unpinning_the_held_reference_logs_that_the_verdicts_wait_for_the_render() {
     assert!(pending
         .observations
         .iter()
-        .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none())));
+        .all(|o| o.track.as_ref().is_none_or(|m| m.plain_zncc.is_none())));
 
     state.settle_bench_evaluation();
     let after = state.bench_track(id, &label).expect("on the bench").clone();
@@ -1123,7 +1116,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         row.provenance
     );
     assert!(
-        row.track.as_ref().is_none_or(|m| m.zncc.is_none()),
+        row.track.as_ref().is_none_or(|m| m.plain_zncc.is_none()),
         "the candidate arrived already read, so this proves nothing"
     );
     let seed = row.cluster.as_ref().expect("a searched seed").seed_position;
@@ -2552,7 +2545,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            zncc: Some(0.41),
+            plain_zncc: Some(0.41),
             walked_px: Some(19.4),
             ..TrackMeasurement::default()
         }),
@@ -2563,8 +2556,8 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     // With the score against the bitmap at the walked peak, where there is one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
-    slot.walked_zncc = Some(0.873);
-    slot.walked_zncc_middle = Some(0.412);
+    slot.walked_plain_zncc = Some(0.873);
+    slot.walked_plain_zncc_middle = Some(0.412);
     assert_eq!(
         super::measurements(&scored, StageKind::Track, &current)[4],
         "walked 19 grid px (ZNCC 87% / 41% there), kept at seed"
@@ -2597,8 +2590,8 @@ fn the_zncc_cell_shows_the_whole_and_the_middle_reading() {
         cluster: Some(cluster),
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            zncc: Some(0.95),
-            zncc_middle: Some(0.2),
+            plain_zncc: Some(0.95),
+            plain_zncc_middle: Some(0.2),
             ..TrackMeasurement::default()
         }),
     };
@@ -2611,12 +2604,12 @@ fn the_zncc_cell_shows_the_whole_and_the_middle_reading() {
         "95% whole\n20% mid"
     );
     // A committed track read back carries the stored ZNCC and no middle.
-    row.track.as_mut().expect("a track slot").zncc_middle = None;
+    row.track.as_mut().expect("a track slot").plain_zncc_middle = None;
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[0],
         "95% whole\n- mid"
     );
-    row.track.as_mut().expect("a track slot").zncc = None;
+    row.track.as_mut().expect("a track slot").plain_zncc = None;
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[0],
         "-"
@@ -2785,7 +2778,7 @@ fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
         cluster: Some(cluster),
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            zncc: Some(0.9),
+            plain_zncc: Some(0.9),
             zncc_self_similarity_radius: Some(0.37),
             zncc_self_similarity_radius_middle: Some(1.44),
             ..TrackMeasurement::default()
@@ -3722,8 +3715,8 @@ fn zncc_readings(state: &AppState, id: ReconId, label: &str, i: usize) -> (f64, 
         .as_ref()
         .expect("a track-stage reading");
     (
-        m.zncc.expect("a whole ZNCC"),
-        m.zncc_middle.expect("a middle ZNCC"),
+        m.plain_zncc.expect("a whole ZNCC"),
+        m.plain_zncc_middle.expect("a middle ZNCC"),
     )
 }
 
@@ -3793,7 +3786,7 @@ fn readings_no_bar_judges_are_drawn_plain() {
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
             seed_shift_px: Some(0.5),
-            zncc: Some(0.95),
+            plain_zncc: Some(0.95),
             ..TrackMeasurement::default()
         }),
     };
@@ -5774,6 +5767,7 @@ fn the_zoom_cell_picks_its_format_after_rounding() {
 // ── Viewed mode ─────────────────────────────────────────────────────────────
 
 mod viewed;
+mod zncc_hover;
 
 /// An ellipse with semi-axes `[major, minor]`, their lower bounds, and its
 /// major axis at `degrees`, with the matrix that goes with them.

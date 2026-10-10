@@ -362,12 +362,14 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             // The row's score: its tile against the stored patch bitmap,
             // plain, which the bars judge; 1 for the row the bitmap is the
             // tile of.
-            ("zncc", m.zncc),
+            ("plain_zncc", m.plain_zncc),
             // The same tile read over the middle of the tile only.
-            ("zncc_middle", m.zncc_middle),
-            // The score with the bitmap alone blurred to the row's sharpness,
-            // and the width of that blur in grid px (0 when read plain).
+            ("plain_zncc_middle", m.plain_zncc_middle),
+            // The same two with the bitmap alone blurred to the row's
+            // sharpness (the plain ones where it is not blurred), and the
+            // width of that blur in grid px (0 when read plain).
             ("blur_matched_zncc", m.blur_matched_zncc),
+            ("blur_matched_zncc_middle", m.blur_matched_zncc_middle),
             ("bitmap_blur_sigma", m.bitmap_blur_sigma),
             // How far the localizer's correlation peak against the reference
             // render sits from the row's keypoint; present exactly when the
@@ -378,10 +380,16 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("ray_angle_deg", m.ray_angle_deg),
             // Present exactly when the last fit refused the walk and left this
             // sighting at its seed; the number is how far the peak sat, and
-            // `walked_zncc` the tile there scored against the stored bitmap.
+            // `walked_plain_zncc` and `walked_blur_matched_zncc` the tile
+            // there scored against the stored bitmap.
             ("walked_px", m.walked_px),
-            ("walked_zncc", m.walked_zncc),
-            ("walked_zncc_middle", m.walked_zncc_middle),
+            ("walked_plain_zncc", m.walked_plain_zncc),
+            ("walked_plain_zncc_middle", m.walked_plain_zncc_middle),
+            ("walked_blur_matched_zncc", m.walked_blur_matched_zncc),
+            (
+                "walked_blur_matched_zncc_middle",
+                m.walked_blur_matched_zncc_middle,
+            ),
             // The reference view's per-view readings: the angle the view sees
             // the patch at and the direction it leans, how much of the tile
             // has data and how much of the photograph under it is clipped, and
@@ -411,8 +419,13 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         }
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.
         for (key, grid) in [
-            ("zncc_grid", m.zncc_grid),
-            ("walked_zncc_grid", m.walked_zncc_grid),
+            ("plain_zncc_grid", m.plain_zncc_grid),
+            ("blur_matched_zncc_grid", m.blur_matched_zncc_grid),
+            ("walked_plain_zncc_grid", m.walked_plain_zncc_grid),
+            (
+                "walked_blur_matched_zncc_grid",
+                m.walked_blur_matched_zncc_grid,
+            ),
             ("pair_zncc_grid", m.pair_zncc_grid),
         ] {
             if let Some(grid) = grid {
@@ -1488,8 +1501,8 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 /// painting -- where several would pass, the best-scoring takes the image.
 ///
 /// ``min_zncc`` and ``min_zncc_middle`` are the track stage's bars, on each
-/// row's plain score against the stored patch bitmap (``zncc``,
-/// ``zncc_middle``); ``cluster_min_zncc`` and ``cluster_min_zncc_middle`` are
+/// row's plain score against the stored patch bitmap (``plain_zncc``,
+/// ``plain_zncc_middle``); ``cluster_min_zncc`` and ``cluster_min_zncc_middle`` are
 /// the cluster stage's, on the achieved template ZNCC. Each stage judges only
 /// its own pair. A track-stage row with no score against a bitmap is not
 /// judged.
@@ -1737,9 +1750,10 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// (how far the observation sits from the point's projection -- the number
 /// that says how far the *point* is off), the reprojection error, the ray
 /// angle, and its tile's ZNCC self-similarity radius. Each row's score
-/// (``zncc``, ``zncc_middle``, ``zncc_grid``), which the bars judge, is its
-/// tile against the track's stored patch bitmap, plain, with
-/// ``blur_matched_zncc`` beside it; a track with no bitmap scores no row, and
+/// (``plain_zncc``, ``plain_zncc_middle``, ``plain_zncc_grid``), which the
+/// bars judge, is its tile against the track's stored patch bitmap, plain,
+/// with the blur-matched readings beside it (``blur_matched_zncc``,
+/// ``blur_matched_zncc_middle``, ``blur_matched_zncc_grid``); a track with no bitmap scores no row, and
 /// the bars then leave every verdict where it is.
 ///
 /// By default (``render_bitmap=True``) the reading is the viewer's live

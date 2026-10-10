@@ -311,11 +311,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           an index read here still names the same observation after a verdict \
                           or a fit; delete_camera_image is the one call that renumbers them, \
                           since it renumbers the images they are in. A cluster-stage zncc is the \
-                          member's ZNCC with the reference's template. A track-stage zncc is the \
-                          row's windowed ZNCC with the track's stored patch bitmap over the \
-                          samples both have, 1 on the row the bitmap is rendered from, and null \
-                          with a reason where the track has no bitmap yet or the pair could not \
-                          be read; the min_zncc bars judge it. Both the cluster and the track block carry \
+                          member's ZNCC with the reference's template. A track-stage plain_zncc \
+                          is the row's windowed ZNCC with the track's stored patch bitmap over \
+                          the samples both have, 1 on the row the bitmap is rendered from, and \
+                          null with a reason where the track has no bitmap yet or the pair could \
+                          not be read; the min_zncc bars judge it. (The track block names no \
+                          field a bare zncc: its readings against the bitmap are plain_zncc, \
+                          plain_zncc_middle and plain_zncc_grid, and blur_matched_zncc, \
+                          blur_matched_zncc_middle and blur_matched_zncc_grid; what is said \
+                          below of the cluster block's zncc, zncc_middle and zncc_grid holds for \
+                          the track block's plain ones.) Both the cluster and the track block carry \
                           zncc_middle beside zncc: the same samples correlated over only the \
                           middle square of the patch, half its width (rows and columns R/4 to \
                           R - R/4 of the patch grid, R being its size, given below). A high \
@@ -395,10 +400,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           not finite. A track-stage \
                           observation the last \
                           fit kept at its seed carries walked_px (how far the fit wanted to move \
-                          it), walked_to (the pixel it would have reached), walked_zncc (the \
-                          plain ZNCC of the tile there with the stored bitmap, beside the row's \
-                          own zncc read at the seed) and \
-                          walked_zncc_middle and walked_zncc_grid (the parts' readings there); \
+                          it), walked_to (the pixel it would have reached), walked_plain_zncc \
+                          (the plain ZNCC of the tile there with the stored bitmap, beside the \
+                          row's own plain_zncc read at the seed), walked_plain_zncc_middle and \
+                          walked_plain_zncc_grid (the parts' readings there), and \
+                          walked_blur_matched_zncc, walked_blur_matched_zncc_middle and \
+                          walked_blur_matched_zncc_grid, the same read blur-matched; \
                           sight_bench_observation with walked_to as the pixel accepts the walk. \
                           A track-stage observation also carries the reference view's readings: \
                           viewing_angle_deg, the angle between the patch's normal and the \
@@ -452,19 +459,21 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           against the bitmap kept until then (each row's reason says so), and \
                           where the pick alternated between rows within one evaluation. \
                           set_bench_track_reference makes a row the reference and pins it. \
-                          Beside zncc, every track-stage observation with a score carries \
+                          Beside plain_zncc, every track-stage observation with a score carries \
                           blur_matched_zncc, the same after the bitmap alone is blurred \
                           by a round Gaussian until its self-similarity semi-major axis reaches \
                           the row's semi-minor axis (at most 2 grid px), where that semi-minor \
                           axis is at least a quarter longer than the bitmap's semi-major axis, \
-                          and zncc where it is not; bitmap_blur_sigma, the width of that \
+                          and plain_zncc where it is not, with blur_matched_zncc_middle and \
+                          blur_matched_zncc_grid read against the same blurred bitmap (the \
+                          plain ones where it is not blurred); bitmap_blur_sigma, the width of that \
                           blur in grid px, 0 where the pair was read plain; and \
                           sharper_than_bitmap, true where the row's tile is sharper than the \
                           bitmap along every direction (read plain; a candidate to replace the \
                           reference). The bitmap's own row reads 1 and is not computed. No bar \
-                          judges blur_matched_zncc. A commit writes zncc as the observation's \
-                          confidence, and a track put on the bench from a point carries that \
-                          confidence as its zncc until the first evaluation. The keypoint \
+                          judges the blur-matched readings. A commit writes plain_zncc as the \
+                          observation's confidence, and a track put on the bench from a point \
+                          carries that confidence as its plain_zncc until the first evaluation. The keypoint \
                           localizer aligns every observation to the render of the track's \
                           reference observation, and seed_shift_px is how far the peak of that \
                           alignment sits from the observation's keypoint, 0 on the reference's \

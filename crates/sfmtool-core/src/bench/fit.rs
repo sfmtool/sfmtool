@@ -345,7 +345,7 @@ impl std::fmt::Display for FitReport {
 /// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to)),
 /// with the tile there scored against the new bitmap by the evaluation the fit
 /// ends with
-/// ([`TrackMeasurement::walked_zncc`](super::track::TrackMeasurement::walked_zncc)),
+/// ([`TrackMeasurement::walked_plain_zncc`](super::track::TrackMeasurement::walked_plain_zncc)),
 /// so a person can accept the walk with
 /// [`sight_observation`](super::steps::sight_observation).
 ///
@@ -912,9 +912,7 @@ pub(super) fn fit_track(
         let seed = seed_of(&track.observations[i]);
         measurement.walked_px = None;
         measurement.walked_to = None;
-        measurement.walked_zncc = None;
-        measurement.walked_zncc_middle = None;
-        measurement.walked_zncc_grid = None;
+        measurement.clear_walked_scores();
         measurement.keypoint = match fits.get(&i) {
             Some(fit) => {
                 // In grid px, the unit of the bar.

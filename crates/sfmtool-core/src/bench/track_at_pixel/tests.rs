@@ -451,7 +451,7 @@ fn the_median_gate_reads_the_plain_score_against_the_bitmap() {
         .iter()
         .enumerate()
         .filter(|&(i, o)| o.verdict == Verdict::In && i != reference)
-        .map(|(_, o)| o.track.as_ref().and_then(|m| m.zncc).expect("scored"))
+        .map(|(_, o)| o.track.as_ref().and_then(|m| m.plain_zncc).expect("scored"))
         .collect();
     let expected = crate::numeric::median_in_place(&mut others);
     let Some(StageRecord::Final { zncc_median, .. }) = report.stages.last() else {
@@ -467,13 +467,13 @@ fn the_median_gate_reads_the_plain_score_against_the_bitmap() {
         let m = o.track.as_mut().expect("a slot");
         m.blur_matched_zncc = Some(0.0);
         if i == reference {
-            m.zncc = Some(0.0);
+            m.plain_zncc = Some(0.0);
         }
     }
     assert_eq!(finish::median_zncc(&changed), expected);
     for (i, o) in changed.observations.iter_mut().enumerate() {
         if i != reference && o.verdict == Verdict::In {
-            o.track.as_mut().expect("a slot").zncc = Some(0.25);
+            o.track.as_mut().expect("a slot").plain_zncc = Some(0.25);
         }
     }
     assert_eq!(finish::median_zncc(&changed), 0.25);
@@ -595,9 +595,9 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
             continue;
         };
         if Some(i) == payload.reference {
-            assert_eq!(measured.zncc, Some(1.0), "row {i}");
+            assert_eq!(measured.plain_zncc, Some(1.0), "row {i}");
         } else if measured.keypoint.is_some() {
-            assert!(measured.zncc.is_some(), "row {i} has no bitmap score");
+            assert!(measured.plain_zncc.is_some(), "row {i} has no bitmap score");
         }
     }
 
@@ -669,7 +669,10 @@ fn a_reading_after_the_patch_moves_scores_the_rows_and_the_bars_judge_them() {
     );
     for (i, o) in read.observations.iter().enumerate() {
         let m = o.track.as_ref().expect("a track slot");
-        assert!(m.zncc.is_some(), "row {i} is scored against the bitmap");
+        assert!(
+            m.plain_zncc.is_some(),
+            "row {i} is scored against the bitmap"
+        );
     }
     assert_eq!(
         read.observations[last].verdict,

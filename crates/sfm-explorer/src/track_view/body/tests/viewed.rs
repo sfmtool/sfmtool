@@ -275,7 +275,7 @@ fn an_unmeasured_viewed_row_reads_a_dash_untinted() {
         .track
         .observations
         .iter()
-        .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none())));
+        .all(|o| o.track.as_ref().is_none_or(|m| m.plain_zncc.is_none())));
     for row in panel.rows() {
         assert_eq!(row.verdict_text.as_deref(), Some("-"), "{row:?}");
         assert_eq!(row.tint, None, "{row:?}");

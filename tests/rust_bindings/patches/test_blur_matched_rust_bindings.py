@@ -112,19 +112,54 @@ def test_a_length_that_is_negative_or_not_finite_is_refused(length):
         blur_to_length(tile, a, length)
 
 
+_SCALAR_KEYS = (
+    "plain_zncc",
+    "plain_zncc_middle",
+    "blur_matched_zncc",
+    "blur_matched_zncc_middle",
+)
+_GRID_KEYS = ("plain_zncc_grid", "blur_matched_zncc_grid")
+
+
+def _assert_shapes(out, k):
+    """One score per tile for each whole and middle reading, and one 3x3 grid
+    per tile for each grid reading; no bare ``zncc`` key."""
+    assert "zncc" not in out
+    for key in _SCALAR_KEYS:
+        assert out[key].shape == (k,), key
+    for key in _GRID_KEYS:
+        assert out[key].shape == (k, 3, 3), key
+
+
+def _assert_read_plain(out, i):
+    """Row ``i``'s bitmap was not blurred, so its blur-matched readings are
+    its plain ones."""
+    assert out["blur_sigma"][i] == 0
+    assert out["blur_matched_zncc"][i] == out["plain_zncc"][i]
+    assert out["blur_matched_zncc_middle"][i] == out["plain_zncc_middle"][i]
+    np.testing.assert_array_equal(
+        out["blur_matched_zncc_grid"][i], out["plain_zncc_grid"][i]
+    )
+
+
 def test_the_bitmap_alone_is_blurred_to_a_blurrier_observation():
     bitmap = _texture()
     tiles = np.stack([_texture(), _texture(blur=2.0)])
     out = score_against_bitmap(bitmap, tiles)
+    _assert_shapes(out, 2)
     # The same tile as the bitmap reads 1, plain.
-    assert out["zncc"][0] == pytest.approx(1.0)
-    assert out["blur_sigma"][0] == 0
+    assert out["plain_zncc"][0] == pytest.approx(1.0)
+    assert out["plain_zncc_middle"][0] == pytest.approx(1.0)
+    np.testing.assert_allclose(out["plain_zncc_grid"][0], np.ones((3, 3)))
+    _assert_read_plain(out, 0)
     # The blurrier observation has the bitmap blurred by the width the
     # bitmap's own assessment gives to reach its semi-minor axis.
     a = assess_blur(bitmap)
     target = min(assess_blur(tiles[1])["semi_axes"][1], 2.0)
     assert out["blur_sigma"][1] == blur_sigma_to_reach(a, target)
-    assert out["blur_matched_zncc"][1] > out["zncc"][1] + 0.01
+    assert out["blur_matched_zncc"][1] > out["plain_zncc"][1] + 0.01
+    # The middle is read against the same blurred bitmap, and gains with it.
+    assert out["blur_matched_zncc_middle"][1] > out["plain_zncc_middle"][1]
     assert not out["sharper_than_bitmap"].any()
     np.testing.assert_allclose(out["bitmap_semi_axes"], a["semi_axes"])
 
@@ -132,19 +167,24 @@ def test_the_bitmap_alone_is_blurred_to_a_blurrier_observation():
 def test_an_observation_sharper_than_the_bitmap_is_read_plain():
     bitmap = _texture(blur=2.0)
     out = score_against_bitmap(bitmap, np.stack([_texture()]))
+    _assert_shapes(out, 1)
     assert out["sharper_than_bitmap"][0]
-    assert out["blur_sigma"][0] == 0
-    assert out["blur_matched_zncc"][0] == out["zncc"][0]
+    _assert_read_plain(out, 0)
 
 
 def test_the_reference_is_not_computed():
     bitmap = _texture()
     tiles = np.stack([_texture(blur=1.5), bitmap])
     out = score_against_bitmap(bitmap, tiles, reference=1)
-    assert out["zncc"][1] == 1.0 and out["blur_matched_zncc"][1] == 1.0
+    _assert_shapes(out, 2)
+    for key in _SCALAR_KEYS:
+        assert out[key][1] == 1.0, key
+    for key in _GRID_KEYS:
+        np.testing.assert_array_equal(out[key][1], np.ones((3, 3)))
     assert out["blur_sigma"][1] == 0 and not out["sharper_than_bitmap"][1]
     alone = score_against_bitmap(bitmap, tiles[:1])
-    assert out["zncc"][0] == alone["zncc"][0]
+    for key in _SCALAR_KEYS + _GRID_KEYS:
+        np.testing.assert_array_equal(out[key][0], alone[key][0])
 
 
 def test_samples_without_data_are_left_out():
@@ -153,16 +193,16 @@ def test_samples_without_data_are_left_out():
     holed[:, :6, :3] = 0
     holed[:, :6, 3] = 0
     out = score_against_bitmap(bitmap, np.stack([holed]))
-    assert out["zncc"][0] == pytest.approx(1.0)
+    assert out["plain_zncc"][0] == pytest.approx(1.0)
     # The same through the valid flags.
     flagged = bitmap.copy()
     flagged[:, :6, :3] = 0
     valid = np.ones((1, 24, 24), bool)
     valid[0, :, :6] = False
     out = score_against_bitmap(bitmap, np.stack([flagged]), valid=valid)
-    assert out["zncc"][0] == pytest.approx(1.0)
+    assert out["plain_zncc"][0] == pytest.approx(1.0)
     unflagged = score_against_bitmap(bitmap, np.stack([flagged]))
-    assert unflagged["zncc"][0] < 0.99
+    assert unflagged["plain_zncc"][0] < 0.99
 
 
 def test_bad_bitmap_arguments_are_refused():

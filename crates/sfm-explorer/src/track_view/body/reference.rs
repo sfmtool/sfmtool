@@ -4,8 +4,8 @@
 //! The *Reference* column: which row the track's patch bitmap is rendered
 //! from, which row the reference-view rule picks, what the rule decided about
 //! each row, the per-view readings it decided on, and the sentence that says
-//! why a row is not its pick; and the *ZNCC* cell's hover at the track stage,
-//! which says how the row scores against that bitmap.
+//! why a row is not its pick. The *ZNCC* cell's hover, which shows how the
+//! row scores against that bitmap, is in `super::zncc_hover`.
 //!
 //! The rule picks one `in` row
 //! (`sfmtool_core::patch::reference_view::choose_reference_view`). The
@@ -303,78 +303,16 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
 /// `None` where it prints one number: where the pair was read plain, and where
 /// the two print the same.
 pub(super) fn blur_matched_shown(m: &TrackMeasurement) -> Option<f64> {
-    let plain = m.zncc.filter(|v| v.is_finite())?;
+    let plain = m.plain_zncc.filter(|v| v.is_finite())?;
     m.bitmap_blur_sigma.filter(|&s| s > 0.0)?;
     let matched = m.blur_matched_zncc.filter(|v| v.is_finite())?;
     let shown = |v: f64| format!("{:.0}", 100.0 * v);
     (shown(plain) != shown(matched)).then_some(matched)
 }
 
-/// The *ZNCC* cell's hover text at the track stage: the row's score against
-/// the stored patch bitmap, the blur-matched score and the blur's width or
-/// the note that the row is sharper than the bitmap, the reason where there is
-/// no score, and a note where the localizer could not read the row.
-/// `is_reference` says the bitmap is this row's own render.
-pub(super) fn zncc_hover(m: &TrackMeasurement, is_reference: bool) -> String {
-    let percent = |v: f64| {
-        if v.is_finite() {
-            format!("{:.1}%", 100.0 * v)
-        } else {
-            "NaN".to_string()
-        }
-    };
-    let mut lines: Vec<String> = Vec::new();
-    match m.zncc {
-        Some(_) if is_reference => lines.push(
-            "This row is the track's reference: the patch bitmap is its render at its \
-             keypoint, so its score against the bitmap is 100% and is not computed."
-                .to_string(),
-        ),
-        Some(plain) => {
-            lines.push(format!(
-                "ZNCC with the stored patch bitmap {} whole, {} middle, read plain: the \
-                 min ZNCC bars judge these.",
-                percent(plain),
-                m.zncc_middle.map_or_else(|| "-".to_string(), percent)
-            ));
-            let blurred = m.bitmap_blur_sigma.filter(|&s| s > 0.0);
-            match (blurred, m.blur_matched_zncc) {
-                (Some(sigma), Some(matched)) => lines.push(format!(
-                    "Blur-matched {}: the bitmap blurred by {sigma:.2} grid px to this row's \
-                     sharpness first. No bar judges it: a view out of focus scores as well \
-                     blur-matched as a sharp one.",
-                    percent(matched)
-                )),
-                _ if m.sharper_than_bitmap == Some(true) => lines.push(
-                    "This row's tile is sharper than the bitmap along every direction, so \
-                     neither is blurred: it could replace the reference."
-                        .to_string(),
-                ),
-                _ => lines.push(
-                    "Read plain only: the bitmap is not sharper than this row's tile along \
-                     every direction by enough to blur it."
-                        .to_string(),
-                ),
-            }
-        }
-        None => lines.push(match m.reason {
-            Some(reason) => format!("No score against the stored patch bitmap: {reason}."),
-            None => "No score against the stored patch bitmap.".to_string(),
-        }),
-    }
-    if m.seed_shift_px.is_none() {
-        lines.push(
-            "The localizer could not align this row to the reference's render, so the bars \
-             do not judge it."
-                .to_string(),
-        );
-    }
-    lines.join("\n")
-}
-
 /// The lines of a per-ninth grid, each value in percent, `-` where a ninth
 /// has no reading.
-fn grid_lines(grid: [[f64; 3]; 3]) -> Vec<String> {
+pub(super) fn grid_lines(grid: [[f64; 3]; 3]) -> Vec<String> {
     grid.iter()
         .map(|row| {
             row.iter()

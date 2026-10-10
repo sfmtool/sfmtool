@@ -64,6 +64,7 @@ mod reference;
 mod surface_plot;
 mod table;
 mod tile;
+mod zncc_hover;
 
 #[cfg(test)]
 mod tests;
@@ -304,6 +305,12 @@ pub struct TrackBody {
     /// The hover view of each row's crop, rendered the first time the pointer
     /// rests on that crop and dropped with [`TrackBody::crops`].
     crop_contexts: HashMap<usize, Option<crop::DrawnCrop>>,
+    /// The stored bitmap as blurred for each row's blur-matched score, by
+    /// observation index, uploaded the first time the pointer rests on that
+    /// row's *ZNCC* cell and dropped with [`TrackBody::tiles`], since a step
+    /// that moves the track can change the bitmap and the blur. `None` is
+    /// cached as the tile's is.
+    blurred_bitmaps: HashMap<usize, Option<egui::TextureHandle>>,
     /// The track's own patch drawn left of the toolbar, uploaded, or `None`
     /// until it has been asked for since the track moved. The inner `None` is
     /// a track with nothing to show, cached as the tile's is. Dropped with
@@ -384,6 +391,7 @@ impl TrackBody {
             contexts: HashMap::new(),
             crops: HashMap::new(),
             crop_contexts: HashMap::new(),
+            blurred_bitmaps: HashMap::new(),
             track_patch: None,
             plots: HashMap::new(),
             rows: Vec::new(),
@@ -442,6 +450,7 @@ impl TrackBody {
         self.contexts.clear();
         self.crops.clear();
         self.crop_contexts.clear();
+        self.blurred_bitmaps.clear();
         self.track_patch = None;
         if self
             .showing
@@ -1068,6 +1077,31 @@ impl TrackBody {
         texture.as_ref().map(|texture| texture.id())
     }
 
+    /// The stored bitmap blurred by `sigma` grid px for one row's *ZNCC*
+    /// hover, uploading it if this is the first frame that has asked for it
+    /// since the track moved. `None` where the track has no bitmap at the
+    /// track stage.
+    fn ensure_blurred_bitmap(
+        &mut self,
+        ctx: &egui::Context,
+        track: &EditableTrack,
+        observation: usize,
+        sigma: f64,
+    ) -> Option<egui::TextureId> {
+        let texture = self.blurred_bitmaps.entry(observation).or_insert_with(|| {
+            let sfmtool_core::bench::Stage::Track(payload) = &track.stage else {
+                return None;
+            };
+            let image = zncc_hover::blurred_bitmap_image(payload.bitmap.as_ref()?.view(), sigma)?;
+            Some(ctx.load_texture(
+                format!("bench_blurred_bitmap_{observation}"),
+                image,
+                egui::TextureOptions::NEAREST,
+            ))
+        });
+        texture.as_ref().map(|texture| texture.id())
+    }
+
     /// The crop one row draws beside its tile, cutting it out of the
     /// photograph if this is the first frame that has asked for it since the
     /// track moved. `None` is cached as the tile's is, and, as with the tile,
@@ -1202,6 +1236,7 @@ impl TrackBody {
         self.contexts.clear();
         self.crops.clear();
         self.crop_contexts.clear();
+        self.blurred_bitmaps.clear();
         self.track_patch = None;
         self.tiles_for = Some(key);
     }
@@ -1230,7 +1265,7 @@ fn track_zncc_text(m: Option<&sfmtool_core::bench::TrackMeasurement>) -> String 
     let Some(m) = m else {
         return "-".to_string();
     };
-    let text = zncc_text(m.zncc, m.zncc_middle);
+    let text = zncc_text(m.plain_zncc, m.plain_zncc_middle);
     match reference::blur_matched_shown(m) {
         // The arrow is U+23F5, which egui's bundled fonts draw; U+2192 draws
         // as a box.
@@ -1702,7 +1737,7 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .track
             .as_ref()
             .map_or_else(RowGrids::default, |m| RowGrids {
-                zncc: m.zncc_grid,
+                zncc: m.plain_zncc_grid,
                 radius: m.zncc_self_similarity_radius_grid,
                 radius_ellipse: m.zncc_self_similarity_ellipse_grid,
             }),
@@ -2636,17 +2671,17 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
                     Some(m) if m.walked_px.is_some() => format!(
                         "walked {:.0} grid px{}, kept at seed",
                         m.walked_px.expect("just matched"),
-                        match m.walked_zncc {
+                        match m.walked_plain_zncc {
                             Some(z) if z.is_finite() => format!(
                                 " (ZNCC {} there)",
-                                zncc_sentence(Some(z), m.walked_zncc_middle)
+                                zncc_sentence(Some(z), m.walked_plain_zncc_middle)
                             ),
                             _ => String::new(),
                         }
                     ),
                     Some(m) => match m.reason {
                         Some(reason) => reason.to_string(),
-                        None if m.seed_shift_px.is_some() || m.zncc.is_some() => {
+                        None if m.seed_shift_px.is_some() || m.plain_zncc.is_some() => {
                             "localized".to_string()
                         }
                         None => "not evaluated".to_string(),

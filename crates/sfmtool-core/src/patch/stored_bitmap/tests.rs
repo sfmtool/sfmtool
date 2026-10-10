@@ -34,11 +34,30 @@ fn a_sharp_bitmap_is_blurred_to_a_blurrier_observation() {
     assert!(score.blur_sigma > 0.0, "{score:?}");
     assert!(!score.sharper_than_bitmap);
     assert!(
-        score.blur_matched_zncc > score.zncc + 0.02,
+        score.blur_matched_zncc > score.plain_zncc + 0.02,
         "blur-matched {} against plain {}",
         score.blur_matched_zncc,
-        score.zncc
+        score.plain_zncc
     );
+    // The middle and every ninth are read against the same blurred bitmap,
+    // and rise with the whole tile.
+    assert!(
+        score.blur_matched_zncc_middle > score.plain_zncc_middle + 0.02,
+        "{score:?}"
+    );
+    let cells = |grid: [[f64; 3]; 3]| grid.into_iter().flatten().collect::<Vec<_>>();
+    let (plain, matched) = (
+        cells(score.plain_zncc_grid),
+        cells(score.blur_matched_zncc_grid),
+    );
+    assert!(
+        plain.iter().zip(&matched).all(|(p, m)| m > p),
+        "{plain:?} {matched:?}"
+    );
+    let blurred = bitmap.blurred(score.blur_sigma, &mut BlurScratch::default());
+    let again = BitmapScorer::new(&blurred, window()).score(&observation, None);
+    assert!((score.blur_matched_zncc_middle - again.plain_zncc_middle).abs() < 1e-9);
+    assert_eq!(score.blur_matched_zncc_grid, again.plain_zncc_grid);
     assert!(scorer.assessment().is_some());
     // The observation's tile is read as it is.
     assert_eq!(observation, untouched);
@@ -67,11 +86,7 @@ fn an_observation_sharper_than_the_bitmap_is_read_plain() {
     let score = scorer.score(&sharp, None);
     assert!(score.sharper_than_bitmap);
     assert_eq!(score.blur_sigma, 0.0);
-    assert_eq!(
-        score.blur_matched_zncc.to_bits(),
-        score.zncc.to_bits(),
-        "read plain"
-    );
+    assert_read_plain(&score);
     assert!(scorer.assessment().is_none(), "no blur was needed");
 }
 
@@ -84,7 +99,24 @@ fn grain_at_another_angle_is_read_plain() {
     let score = BitmapScorer::new(&bitmap, window()).score(&observation, None);
     assert_eq!(score.blur_sigma, 0.0);
     assert!(!score.sharper_than_bitmap);
-    assert_eq!(score.blur_matched_zncc.to_bits(), score.zncc.to_bits());
+    assert_read_plain(&score);
+}
+
+/// Every blur-matched reading of `score` is its plain one, bit for bit.
+fn assert_read_plain(score: &BitmapScore) {
+    assert_eq!(
+        score.blur_matched_zncc.to_bits(),
+        score.plain_zncc.to_bits()
+    );
+    assert_eq!(
+        score.blur_matched_zncc_middle.to_bits(),
+        score.plain_zncc_middle.to_bits()
+    );
+    let bits = |grid: [[f64; 3]; 3]| grid.map(|row| row.map(f64::to_bits));
+    assert_eq!(
+        bits(score.blur_matched_zncc_grid),
+        bits(score.plain_zncc_grid)
+    );
 }
 
 /// A pair whose sharpness differs by less than the ratio of 1.25 is read
@@ -100,6 +132,7 @@ fn a_difference_under_the_ratio_is_read_plain() {
     assert!(minor < DEFAULT_MIN_ELLIPSE_RATIO * major, "{major} {minor}");
     let score = BitmapScorer::new(&bitmap, window()).score(&observation, None);
     assert_eq!(score.blur_sigma, 0.0);
+    assert_read_plain(&score);
 }
 
 /// The reference observation is not scored, and every other observation is
@@ -137,7 +170,11 @@ fn samples_without_data_are_left_out() {
         }
     }
     let score = BitmapScorer::new(&bitmap, window()).score(&holed, None);
-    assert!((score.zncc - 1.0).abs() < 1e-9, "{}", score.zncc);
+    assert!(
+        (score.plain_zncc - 1.0).abs() < 1e-9,
+        "{}",
+        score.plain_zncc
+    );
 }
 
 // ---- The bitmap --------------------------------------------------------------

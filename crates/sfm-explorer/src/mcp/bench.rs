@@ -1769,15 +1769,18 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         // The row's score against the stored patch bitmap, plain: 1 on the
         // row the bitmap is rendered from, null with `reason` where there is
         // no bitmap or the pair could not be read. The bars judge it.
-        "zncc": finite(measured.zncc),
+        "plain_zncc": finite(measured.plain_zncc),
         // The same pair read over the middle of the tile only.
-        "zncc_middle": finite(measured.zncc_middle),
+        "plain_zncc_middle": finite(measured.plain_zncc_middle),
         // And over each ninth of the tile, rows from the top.
-        "zncc_grid": grid(measured.zncc_grid),
-        // The same score with the bitmap alone blurred to the row's
-        // sharpness, the blur's width in grid px (0 when read plain), and
-        // whether the row is sharper than the bitmap.
+        "plain_zncc_grid": grid(measured.plain_zncc_grid),
+        // The same three readings with the bitmap alone blurred to the row's
+        // sharpness (equal to the plain ones where it is not blurred), the
+        // blur's width in grid px (0 when read plain), and whether the row is
+        // sharper than the bitmap.
         "blur_matched_zncc": finite(measured.blur_matched_zncc),
+        "blur_matched_zncc_middle": finite(measured.blur_matched_zncc_middle),
+        "blur_matched_zncc_grid": grid(measured.blur_matched_zncc_grid),
         "bitmap_blur_sigma": finite(measured.bitmap_blur_sigma),
         "sharper_than_bitmap": measured.sharper_than_bitmap,
         // How far the peak of the row's correlation with the reference's
@@ -1825,14 +1828,18 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         })),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
-        // and the plain score of the tile there against the stored bitmap,
-        // whole, middle and per ninth, to set beside `zncc`. Accepting the
-        // walk is `sight_bench_observation` with `walked_to` as its pixel.
+        // and the scores of the tile there against the stored bitmap, plain
+        // and blur-matched, whole, middle and per ninth, to set beside the
+        // row's own. Accepting the walk is `sight_bench_observation` with
+        // `walked_to` as its pixel.
         "walked_px": finite(measured.walked_px),
         "walked_to": measured.walked_to,
-        "walked_zncc": finite(measured.walked_zncc),
-        "walked_zncc_middle": finite(measured.walked_zncc_middle),
-        "walked_zncc_grid": grid(measured.walked_zncc_grid),
+        "walked_plain_zncc": finite(measured.walked_plain_zncc),
+        "walked_plain_zncc_middle": finite(measured.walked_plain_zncc_middle),
+        "walked_plain_zncc_grid": grid(measured.walked_plain_zncc_grid),
+        "walked_blur_matched_zncc": finite(measured.walked_blur_matched_zncc),
+        "walked_blur_matched_zncc_middle": finite(measured.walked_blur_matched_zncc_middle),
+        "walked_blur_matched_zncc_grid": grid(measured.walked_blur_matched_zncc_grid),
         "reason": measured.reason.map(|reason| reason.to_string()),
     })
 }

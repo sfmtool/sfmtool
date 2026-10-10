@@ -414,11 +414,26 @@ class TestEvaluating:
             assert entry["ray_angle_deg"] >= 0.0
             assert entry.get("seed_shift_px", 0.0) >= 0.0
             assert entry.get("projection_offset_px", 0.0) >= 0.0
-            # Each score carries its parts: the ZNCC grid, and the tile's
-            # self-similarity over its middle and each ninth of it.
-            if "zncc" in entry:
-                assert entry["zncc_grid"].shape == (3, 3)
+            # Each score carries its parts: the plain and blur-matched readings
+            # over the whole tile, its middle and each ninth of it, and the
+            # tile's self-similarity over its middle and each ninth of it. No
+            # key is a bare `zncc`: every score says how it was read.
+            assert "zncc" not in entry
+            if "plain_zncc" in entry:
+                assert "plain_zncc_middle" in entry
+                assert entry["plain_zncc_grid"].shape == (3, 3)
                 assert "blur_matched_zncc" in entry
+                assert "blur_matched_zncc_middle" in entry
+                assert entry["blur_matched_zncc_grid"].shape == (3, 3)
+            else:
+                for key in (
+                    "plain_zncc_middle",
+                    "plain_zncc_grid",
+                    "blur_matched_zncc",
+                    "blur_matched_zncc_middle",
+                    "blur_matched_zncc_grid",
+                ):
+                    assert key not in entry, key
             if "zncc_self_similarity_radius" in entry:
                 assert 0.0 <= entry["zncc_self_similarity_radius"] <= 3.0
                 assert 0.0 <= entry["zncc_self_similarity_radius_middle"] <= 3.0
@@ -558,17 +573,25 @@ class TestEvaluating:
         assert fitted.reference_view_observation == source
         rows = [o["track"] for o in fitted.observations]
         assert rows[source]["reference_view"]["is_reference"]
-        assert rows[source]["zncc"] == 1.0
-        assert rows[source]["zncc_middle"] == 1.0
-        np.testing.assert_array_equal(rows[source]["zncc_grid"], np.ones((3, 3)))
+        for key in ("plain_zncc", "plain_zncc_middle"):
+            assert rows[source][key] == 1.0, key
+        np.testing.assert_array_equal(rows[source]["plain_zncc_grid"], np.ones((3, 3)))
         assert "sharper_than_bitmap" not in rows[source]
         for i, entry in enumerate(rows):
-            if i == source or "zncc" not in entry:
+            assert "zncc" not in entry
+            if i == source or "plain_zncc" not in entry:
                 continue
-            assert -1.0 <= entry["zncc"] < 1.0
+            assert -1.0 <= entry["plain_zncc"] < 1.0
             assert entry["bitmap_blur_sigma"] >= 0.0
             if entry["bitmap_blur_sigma"] == 0.0:
-                assert entry["blur_matched_zncc"] == entry["zncc"]
+                # The bitmap was not blurred, so the blur-matched readings
+                # are the plain ones, over the whole tile, its middle and
+                # each ninth.
+                assert entry["blur_matched_zncc"] == entry["plain_zncc"]
+                assert entry["blur_matched_zncc_middle"] == entry["plain_zncc_middle"]
+                np.testing.assert_array_equal(
+                    entry["blur_matched_zncc_grid"], entry["plain_zncc_grid"]
+                )
             assert isinstance(entry["sharper_than_bitmap"], bool)
             assert "seed_shift_px" in entry
 
@@ -596,7 +619,7 @@ class TestEvaluating:
         rendered, _ = evaluate(chosen, edited, images, render_bitmap=True)
         assert rendered.reference_observation == other
         assert rendered.reference_view_observation == pick
-        assert rendered.observation(other)["track"]["zncc"] == 1.0
+        assert rendered.observation(other)["track"]["plain_zncc"] == 1.0
         _, again = set_reference(rendered, other)
         assert not again["changed"]
 
@@ -618,14 +641,14 @@ class TestEvaluating:
         assert any("seed_shift_px" in o["track"] for o in read.observations)
         for o in read.observations:
             entry = o["track"]
-            assert "zncc" not in entry
+            assert "plain_zncc" not in entry
             if "seed_shift_px" in entry:
                 assert entry["reason"] == "there is no bitmap to score it against"
         # The viewer's live evaluation, the default, renders one and scores
         # every row.
         rendered, _ = evaluate(moved, edited, images)
         assert rendered.reference_observation is not None
-        assert any("zncc" in o["track"] for o in rendered.observations)
+        assert any("plain_zncc" in o["track"] for o in rendered.observations)
 
     def test_unpinning_the_held_reference_leaves_the_bitmap_pending(
         self, edited, images, long_track_point
@@ -651,7 +674,7 @@ class TestEvaluating:
         assert report["bitmap_pending"] is True
         assert unpinned.bitmap_pending is True
         assert (report["turned_in"], report["turned_out"]) == (0, 0)
-        assert all("zncc" not in o["track"] for o in unpinned.observations)
+        assert all("plain_zncc" not in o["track"] for o in unpinned.observations)
         # The bitmap and its reference stay until the render replaces them.
         assert unpinned.reference_observation == other
         pending = "the bitmap is to be rendered again before the row is scored"
@@ -660,14 +683,14 @@ class TestEvaluating:
         # A reading that renders nothing scores no row against that bitmap.
         plain, report = evaluate(unpinned, edited, images, render_bitmap=False)
         assert report["scored"] == 0
-        assert all("zncc" not in o["track"] for o in plain.observations)
+        assert all("plain_zncc" not in o["track"] for o in plain.observations)
         assert [o["verdict"] for o in plain.observations] == [
             o["verdict"] for o in unpinned.observations
         ]
 
         rendered, _ = evaluate(unpinned, edited, images)
         assert rendered.reference_observation == pick
-        assert rendered.observation(pick)["track"]["zncc"] == 1.0
+        assert rendered.observation(pick)["track"]["plain_zncc"] == 1.0
         assert rendered.bitmap_pending is False
 
     def test_a_point_stored_at_minus_one_takes_the_pick_at_its_first_render(
@@ -745,7 +768,7 @@ class TestEvaluating:
         assert t.reference_view_observation == other
 
         def scored(track):
-            return sum("zncc" in o["track"] for o in track.observations)
+            return sum("plain_zncc" in o["track"] for o in track.observations)
 
         again, report = unpin_verdict(t, other)
         assert report["bitmap_pending"] is False
@@ -877,8 +900,8 @@ class TestEvaluating:
         # keypoint.
         for observation in read.observations:
             entry = observation["track"]
-            assert "zncc" in entry or "reason" in entry
-            if "reason" in entry and "zncc" in entry:
+            assert "plain_zncc" in entry or "reason" in entry
+            if "reason" in entry and "plain_zncc" in entry:
                 assert "seed_shift_px" not in entry
             if "reason" in entry:
                 assert entry["reason"]
@@ -905,7 +928,7 @@ class TestEvaluating:
 
         read, report = evaluate(track, edited, images)
         entry = read.observation(added["observation"])["track"]
-        assert "zncc" not in entry
+        assert "plain_zncc" not in entry
         assert entry["reason"] == "it sits off the photograph"
         assert report["unmeasured"] >= 1
 
@@ -929,7 +952,7 @@ class TestEvaluating:
             report["evaluate"]["unmeasured"],
         )
         for before, after in zip(fitted.observations, read.observations):
-            assert before["track"].get("zncc") == after["track"].get("zncc")
+            assert before["track"].get("plain_zncc") == after["track"].get("plain_zncc")
             assert before["track"].get("seed_shift_px") == after["track"].get(
                 "seed_shift_px"
             )
@@ -1420,7 +1443,7 @@ class TestPlacingSizingAndTurningByHand:
         for index in range(moved.observation_count):
             observation = moved.observation(index)
             assert observation["pinned"] == track.observation(index)["pinned"]
-            assert "zncc" not in observation["track"]
+            assert "plain_zncc" not in observation["track"]
             before_at = track.observation(index)["track"]["keypoint"]
             assert not np.array_equal(observation["track"]["keypoint"], before_at)
 
@@ -1441,7 +1464,7 @@ class TestPlacingSizingAndTurningByHand:
             (was[0] + 3.0, was[1] - 4.0), abs=1e-3
         )
         assert placed["pinned"], "a sighting a person placed is one they ruled on"
-        assert "zncc" not in placed["track"], "the old reading does not hold here"
+        assert "plain_zncc" not in placed["track"], "the old reading does not hold here"
         # The track it was called on is untouched, as every step's is.
         np.testing.assert_array_equal(track.observation(0)["track"]["keypoint"], was)
 
@@ -1462,7 +1485,7 @@ class TestPlacingSizingAndTurningByHand:
             np.testing.assert_array_equal(
                 after["track"]["keypoint"], before["track"]["keypoint"]
             )
-            assert "zncc" not in after["track"]
+            assert "plain_zncc" not in after["track"]
 
         with pytest.raises(ValueError, match="not a size"):
             resize_patch(track, edited, 0.0)

@@ -103,11 +103,11 @@ def _median_zncc(track) -> float:
     gate reads it."""
     ref = track.reference_observation
     z = [
-        o["track"]["zncc"]
+        o["track"]["plain_zncc"]
         for i, o in enumerate(track.observations)
         if o["verdict"] == "in"
         and i != ref
-        and o.get("track", {}).get("zncc") is not None
+        and o.get("track", {}).get("plain_zncc") is not None
     ]
     return float(np.median(z)) if z else float("-inf")
 

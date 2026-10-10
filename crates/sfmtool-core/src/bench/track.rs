@@ -296,12 +296,14 @@ impl std::fmt::Display for Unmeasured {
 /// What the track stage has measured about one observation.
 ///
 /// A track put on the bench from a committed point arrives with
-/// [`Self::keypoint`] and [`Self::zncc`] read off the stored columns; the
+/// [`Self::keypoint`] and [`Self::plain_zncc`] read off the stored columns; the
 /// rest is what an evaluation computes.
 ///
 /// The row's **score** is its tile's ZNCC with the track's stored patch
-/// bitmap ([`Self::zncc`], with [`Self::zncc_middle`] and [`Self::zncc_grid`]
-/// beside it, plain, and [`Self::blur_matched_zncc`]), which the bars judge.
+/// bitmap, read twice: plain ([`Self::plain_zncc`], with
+/// [`Self::plain_zncc_middle`] and [`Self::plain_zncc_grid`] beside it), which
+/// the bars judge, and blur-matched ([`Self::blur_matched_zncc`], with
+/// [`Self::blur_matched_zncc_middle`] and [`Self::blur_matched_zncc_grid`]).
 /// The bitmap is the render of the track's reference observation, which is
 /// also the template the localizer aligns every other row to, so the score
 /// and the alignment read one comparison. The localizer's own reading of the
@@ -336,24 +338,24 @@ pub struct TrackMeasurement {
     /// its first evaluation. `None` where the track has no bitmap, the tile
     /// could not be rendered, or the pair could not be read, and then
     /// [`Self::reason`] says which.
-    pub zncc: Option<f64>,
-    /// The **middle ZNCC** beside [`Self::zncc`]: the same tile against the
+    pub plain_zncc: Option<f64>,
+    /// The **middle ZNCC** beside [`Self::plain_zncc`]: the same tile against the
     /// same bitmap, read over only the middle square of the tile (the rows and
     /// columns `R/4 .. R - R/4`, the middle `12 × 12` of a `24 × 24` tile). A
-    /// high `zncc` that the middle does not share is carried by the parts of
+    /// high `plain_zncc` that the middle does not share is carried by the parts of
     /// the tile away from the keypoint: a small near object in front of a
     /// textured background, a pixel at a depth edge, a texture that repeats
     /// along the epipolar line. `1` on the bitmap's own row. `None` wherever
-    /// `zncc` is and where the middle cannot be read.
-    pub zncc_middle: Option<f64>,
-    /// The **ZNCC grid** beside [`Self::zncc`]: the same tile against the same
+    /// `plain_zncc` is and where the middle cannot be read.
+    pub plain_zncc_middle: Option<f64>,
+    /// The **ZNCC grid** beside [`Self::plain_zncc`]: the same tile against the same
     /// bitmap, read over each cell of a three-by-three split of the tile (rows
     /// and columns cut at `R/3` and `R - R/3`, `8 × 8` cells of a `24 × 24`
     /// tile) with every sample weighted equally, `grid[row][col]` from the
     /// top-left cell. It says where in the tile an agreement or a disagreement
-    /// is. Every cell `1` on the bitmap's own row. `None` wherever `zncc` is;
+    /// is. Every cell `1` on the bitmap's own row. `None` wherever `plain_zncc` is;
     /// a single cell is `NaN` where it cannot be read.
-    pub zncc_grid: Option<[[f64; 3]; 3]>,
+    pub plain_zncc_grid: Option<[[f64; 3]; 3]>,
     /// How far the localizer's correlation peak sits from the observation's
     /// own keypoint, in **patch-grid px** on the patch's plane: the
     /// observation's own evidence, and what [`Thresholds::max_shift_px`] paints
@@ -473,21 +475,28 @@ pub struct TrackMeasurement {
     /// ([`choose_reference_view`](crate::patch::reference_view::choose_reference_view)).
     /// `None` for an `out` observation, which the rule does not consider.
     pub reference_view: Option<ReferenceStanding>,
-    /// The **blur-matched score**: [`Self::zncc`] after the bitmap, and only
+    /// The **blur-matched score**: [`Self::plain_zncc`] after the bitmap, and only
     /// the bitmap, is blurred to this observation's sharpness where it is
     /// sharper along every direction by at least the ratio of 1.25; the plain
-    /// score where it is not. No bar judges it: a view out of focus scores as
-    /// well blur-matched as a sharp one, and the bars are there to catch it.
-    /// `None` wherever [`Self::zncc`] is.
+    /// score where it is not. No bar judges it yet. `1` on the bitmap's own
+    /// row. `None` wherever [`Self::plain_zncc`] is.
     pub blur_matched_zncc: Option<f64>,
+    /// [`Self::plain_zncc_middle`] read against the same blurred bitmap as
+    /// [`Self::blur_matched_zncc`]; the plain middle score where the pair is
+    /// read plain. `None` wherever [`Self::plain_zncc_middle`] is.
+    pub blur_matched_zncc_middle: Option<f64>,
+    /// [`Self::plain_zncc_grid`] read against the same blurred bitmap as
+    /// [`Self::blur_matched_zncc`]; the plain grid where the pair is read
+    /// plain. `None` wherever [`Self::plain_zncc`] is.
+    pub blur_matched_zncc_grid: Option<[[f64; 3]; 3]>,
     /// The width of the round blur, in grid px, the bitmap was blurred by for
     /// [`Self::blur_matched_zncc`]; `0` where the pair was read plain.
-    /// `None` wherever [`Self::zncc`] is.
+    /// `None` wherever [`Self::plain_zncc`] is.
     pub bitmap_blur_sigma: Option<f64>,
     /// Whether this observation's tile is sharper than the bitmap along every
     /// direction (its self-similarity semi-major axis shorter than the
     /// bitmap's semi-minor axis), so a candidate to replace the reference.
-    /// Such a pair is read plain. `None` wherever [`Self::zncc`] is, and for
+    /// Such a pair is read plain. `None` wherever [`Self::plain_zncc`] is, and for
     /// the reference observation itself.
     pub sharper_than_bitmap: Option<bool>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
@@ -518,27 +527,51 @@ pub struct TrackMeasurement {
     /// cleared with [`Self::walked_px`], and only by a fit.
     pub walked_to: Option<[f64; 2]>,
     /// The plain score against the stored bitmap of the tile rendered at
-    /// [`Self::walked_to`], read the way [`Self::zncc`] is read at the
+    /// [`Self::walked_to`], read the way [`Self::plain_zncc`] is read at the
     /// keypoint: the agreement the walk would have bought, to set beside
-    /// [`Self::zncc`], which is read with the sighting kept at its seed. Every
+    /// [`Self::plain_zncc`], which is read with the sighting kept at its seed. Every
     /// reading that scores the rows against the bitmap reads it where
     /// [`Self::walked_to`] is set, so the two scores are always against the
     /// same bitmap; `None` where `walked_to` is not set, where the track has
     /// no bitmap to score against, and where the tile could not be read.
-    pub walked_zncc: Option<f64>,
-    /// The middle ZNCC beside [`Self::walked_zncc`], read the way
-    /// [`Self::zncc_middle`] is.
-    pub walked_zncc_middle: Option<f64>,
-    /// The ZNCC grid beside [`Self::walked_zncc`], read the way
-    /// [`Self::zncc_grid`] is.
-    pub walked_zncc_grid: Option<[[f64; 3]; 3]>,
+    pub walked_plain_zncc: Option<f64>,
+    /// The middle ZNCC beside [`Self::walked_plain_zncc`], read the way
+    /// [`Self::plain_zncc_middle`] is.
+    pub walked_plain_zncc_middle: Option<f64>,
+    /// The ZNCC grid beside [`Self::walked_plain_zncc`], read the way
+    /// [`Self::plain_zncc_grid`] is.
+    pub walked_plain_zncc_grid: Option<[[f64; 3]; 3]>,
+    /// The blur-matched score of the tile at [`Self::walked_to`], read the way
+    /// [`Self::blur_matched_zncc`] is: the bitmap blurred to that tile's
+    /// sharpness where the ratio selects it. `None` wherever
+    /// [`Self::walked_plain_zncc`] is.
+    pub walked_blur_matched_zncc: Option<f64>,
+    /// The middle score beside [`Self::walked_blur_matched_zncc`], read the
+    /// way [`Self::blur_matched_zncc_middle`] is.
+    pub walked_blur_matched_zncc_middle: Option<f64>,
+    /// The grid beside [`Self::walked_blur_matched_zncc`], read the way
+    /// [`Self::blur_matched_zncc_grid`] is.
+    pub walked_blur_matched_zncc_grid: Option<[[f64; 3]; 3]>,
     /// Why a reading is missing, when an evaluation has read the row: where
     /// the localizer could not read the observation ([`Self::seed_shift_px`]
     /// is `None`), which of its refusals it was, whether or not the row has a
     /// score against the bitmap; otherwise why there is no score
-    /// ([`Self::zncc`]), and `None` where there is one. So a row without a
+    /// ([`Self::plain_zncc`]), and `None` where there is one. So a row without a
     /// score never reads as an unexplained blank.
     pub reason: Option<Unmeasured>,
+}
+
+impl TrackMeasurement {
+    /// Clear the scores of the tile at [`Self::walked_to`], plain and
+    /// blur-matched.
+    pub(crate) fn clear_walked_scores(&mut self) {
+        self.walked_plain_zncc = None;
+        self.walked_plain_zncc_middle = None;
+        self.walked_plain_zncc_grid = None;
+        self.walked_blur_matched_zncc = None;
+        self.walked_blur_matched_zncc_middle = None;
+        self.walked_blur_matched_zncc_grid = None;
+    }
 }
 
 /// One observation of an editable track: an image, a place in it, what has been
@@ -902,12 +935,12 @@ pub struct Origin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
     /// The ZNCC an observation has to reach at the track stage: the plain
-    /// score of its tile against the stored bitmap ([`TrackMeasurement::zncc`]).
+    /// score of its tile against the stored bitmap ([`TrackMeasurement::plain_zncc`]).
     /// The default is [`BENCH_MIN_ZNCC`]. The cluster stage judges another
     /// score, and has its own bar, [`Self::cluster_min_zncc`].
     pub min_zncc: f64,
     /// The middle ZNCC an observation has to reach at the track stage
-    /// ([`TrackMeasurement::zncc_middle`]). It turns out a sighting whose
+    /// ([`TrackMeasurement::plain_zncc_middle`]). It turns out a sighting whose
     /// whole-patch agreement is carried by the patch's surroundings rather
     /// than its middle.
     ///

@@ -479,24 +479,32 @@ pub fn bitmap_planes(rgba: &[u8], resolution: usize) -> TilePlanes {
 /// ([`BitmapScorer::score`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BitmapScore {
-    /// The windowed ZNCC of the observation's tile with the bitmap as stored,
-    /// over the samples with data in both ([`windowed_zncc`]); `NaN` where it
-    /// cannot be read.
-    pub zncc: f64,
-    /// The **middle score**: [`Self::zncc`] read over only the middle square
-    /// of the tile (the rows and columns `R/4 .. R - R/4`), with the same
-    /// window weights; `NaN` where it cannot be read.
-    pub zncc_middle: f64,
+    /// The **plain score**: the windowed ZNCC of the observation's tile with
+    /// the bitmap as stored, over the samples with data in both
+    /// ([`windowed_zncc`]); `NaN` where it cannot be read.
+    pub plain_zncc: f64,
+    /// The **middle score**: [`Self::plain_zncc`] read over only the middle
+    /// square of the tile (the rows and columns `R/4 .. R - R/4`), with the
+    /// same window weights; `NaN` where it cannot be read.
+    pub plain_zncc_middle: f64,
     /// The **score grid**: the ZNCC of the observation's tile with the bitmap
     /// as stored over each cell of a three-by-three split of the tile (rows
     /// and columns cut at `R/3` and `R - R/3`), every sample with data in both
     /// weighted equally, `grid[row][col]` from the top-left cell; `NaN` in a
     /// cell that cannot be read.
-    pub zncc_grid: [[f64; 3]; 3],
-    /// The same after the bitmap is blurred to the observation's sharpness,
-    /// where [`bitmap_blur`] says to blur it; equal to [`Self::zncc`] where
-    /// the pair is read plain.
+    pub plain_zncc_grid: [[f64; 3]; 3],
+    /// The **blur-matched score**: [`Self::plain_zncc`] after the bitmap is
+    /// blurred to the observation's sharpness, where [`bitmap_blur`] says to
+    /// blur it; equal to [`Self::plain_zncc`] where the pair is read plain.
     pub blur_matched_zncc: f64,
+    /// [`Self::plain_zncc_middle`] against the same blurred bitmap as
+    /// [`Self::blur_matched_zncc`]; equal to the plain middle score where the
+    /// pair is read plain.
+    pub blur_matched_zncc_middle: f64,
+    /// [`Self::plain_zncc_grid`] against the same blurred bitmap as
+    /// [`Self::blur_matched_zncc`]; equal to the plain grid where the pair is
+    /// read plain.
+    pub blur_matched_zncc_grid: [[f64; 3]; 3],
     /// The width of the round blur the bitmap was blurred by, in grid px; `0`
     /// where the pair was read plain.
     pub blur_sigma: f64,
@@ -585,8 +593,7 @@ impl<'a> BitmapScorer<'a> {
     }
 
     /// Score `observation`'s tile against the bitmap: the whole tile, its
-    /// middle square and its nine cells plain, and the whole tile
-    /// blur-matched. `ellipse` is the
+    /// middle square and its nine cells, plain and blur-matched. `ellipse` is the
     /// observation tile's self-similarity ellipse matrix in grid px²; `None`
     /// reads it here ([`read_tile_ellipse`]).
     ///
@@ -595,7 +602,8 @@ impl<'a> BitmapScorer<'a> {
     /// [`DEFAULT_MIN_ELLIPSE_RATIO`]: the bitmap is blurred by the width its
     /// assessment gives to reach the observation's semi-minor axis, at most
     /// 2 grid px, and correlated with the observation's tile as rendered.
-    /// Otherwise both readings are the plain one.
+    /// The middle and the nine cells are read against the same blurred
+    /// bitmap. Otherwise every blur-matched reading is the plain one.
     ///
     /// # Panics
     ///
@@ -605,7 +613,7 @@ impl<'a> BitmapScorer<'a> {
         observation: &TilePlanes,
         ellipse: Option<[[f64; 2]; 2]>,
     ) -> BitmapScore {
-        let zncc = windowed_zncc(self.bitmap, observation, &self.weights);
+        let plain_zncc = windowed_zncc(self.bitmap, observation, &self.weights);
         let ellipse = ellipse.or_else(|| {
             read_tile_ellipse(
                 &observation.values,
@@ -618,16 +626,15 @@ impl<'a> BitmapScorer<'a> {
             (Some([_, bitmap_minor]), Some(e)) => semi_axes(e)[0] < bitmap_minor,
             _ => false,
         };
-        let zncc_middle = windowed_zncc(self.bitmap, observation, &self.middle_weights);
-        let zncc_grid = self.cell_weights.each_ref().map(|row| {
-            row.each_ref()
-                .map(|w| windowed_zncc(self.bitmap, observation, w))
-        });
+        let plain_zncc_middle = windowed_zncc(self.bitmap, observation, &self.middle_weights);
+        let plain_zncc_grid = self.read_grid(self.bitmap, observation);
         let plain = BitmapScore {
-            zncc,
-            zncc_middle,
-            zncc_grid,
-            blur_matched_zncc: zncc,
+            plain_zncc,
+            plain_zncc_middle,
+            plain_zncc_grid,
+            blur_matched_zncc: plain_zncc,
+            blur_matched_zncc_middle: plain_zncc_middle,
+            blur_matched_zncc_grid: plain_zncc_grid,
             blur_sigma: 0.0,
             sharper_than_bitmap,
         };
@@ -664,11 +671,23 @@ impl<'a> BitmapScorer<'a> {
         if sigma <= 0.0 {
             return plain;
         }
+        let blurred = &self.blurred;
         BitmapScore {
-            blur_matched_zncc: windowed_zncc(&self.blurred, observation, &self.weights),
+            blur_matched_zncc: windowed_zncc(blurred, observation, &self.weights),
+            blur_matched_zncc_middle: windowed_zncc(blurred, observation, &self.middle_weights),
+            blur_matched_zncc_grid: self.read_grid(blurred, observation),
             blur_sigma: sigma,
             ..plain
         }
+    }
+
+    /// The ZNCC of `observation` with `bitmap` over each cell of the
+    /// three-by-three split.
+    fn read_grid(&self, bitmap: &TilePlanes, observation: &TilePlanes) -> [[f64; 3]; 3] {
+        self.cell_weights.each_ref().map(|row| {
+            row.each_ref()
+                .map(|w| windowed_zncc(bitmap, observation, w))
+        })
     }
 }
 
@@ -700,7 +719,7 @@ impl<'a> BitmapScorer<'a> {
 ///     PatchWindow::GaussianDisk { sigma: 0.6 },
 /// );
 /// assert!(scores[0].is_none());
-/// assert!((scores[1].unwrap().zncc - 1.0).abs() < 1e-9);
+/// assert!((scores[1].unwrap().plain_zncc - 1.0).abs() < 1e-9);
 /// ```
 ///
 /// # Panics

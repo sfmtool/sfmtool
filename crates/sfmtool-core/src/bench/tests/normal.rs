@@ -89,7 +89,9 @@ fn assert_rows_scored_against_the_bitmap(track: &EditableTrack) {
     let reference = track.track().expect("track stage").reference;
     for (i, o) in track.observations.iter().enumerate() {
         let m = o.track.as_ref().expect("a reading");
-        let z = m.zncc.unwrap_or_else(|| panic!("row {i} is not scored"));
+        let z = m
+            .plain_zncc
+            .unwrap_or_else(|| panic!("row {i} is not scored"));
         if Some(i) == reference {
             assert_eq!(z, 1.0);
         }

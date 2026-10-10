@@ -439,10 +439,10 @@ impl std::fmt::Display for EvaluateReport {
 /// ray angle and the tile self-similarity -- and, for an observation no round
 /// could read, the [`Unmeasured`] reason instead. Every row's tile is then
 /// scored against the stored bitmap the track holds, into
-/// [`zncc`](super::track::TrackMeasurement::zncc) and the readings beside it,
+/// [`plain_zncc`](super::track::TrackMeasurement::plain_zncc) and the readings beside it,
 /// which the bars judge, and so is the tile at the pixel a fit refused to walk
 /// a row to, where one is recorded
-/// ([`walked_zncc`](super::track::TrackMeasurement::walked_zncc)); a track
+/// ([`walked_plain_zncc`](super::track::TrackMeasurement::walked_plain_zncc)); a track
 /// with no bitmap gets no such score, and its rows say
 /// [`Unmeasured::NoBitmap`]. This call does not render the bitmap;
 /// [`evaluate_rendering_bitmap`] does. **The keypoint itself is not written**, nor the position, the frame or
@@ -960,15 +960,15 @@ fn bitmap_from_tile_of(
 pub(super) fn clear_bitmap_scores(track: &mut EditableTrack, reason: Unmeasured) {
     for observation in &mut track.observations {
         if let Some(m) = observation.track.as_mut() {
-            m.zncc = None;
-            m.zncc_middle = None;
-            m.zncc_grid = None;
+            m.plain_zncc = None;
+            m.plain_zncc_middle = None;
+            m.plain_zncc_grid = None;
             m.blur_matched_zncc = None;
+            m.blur_matched_zncc_middle = None;
+            m.blur_matched_zncc_grid = None;
             m.bitmap_blur_sigma = None;
             m.sharper_than_bitmap = None;
-            m.walked_zncc = None;
-            m.walked_zncc_middle = None;
-            m.walked_zncc_grid = None;
+            m.clear_walked_scores();
             if m.seed_shift_px.is_some() {
                 m.reason = Some(reason);
             }
@@ -1652,12 +1652,10 @@ fn evaluate_track(
                 Some(_) => None,
                 None => Some(reasons.get(&i).copied().unwrap_or(Unmeasured::Unscorable)),
             };
-            measurement.zncc = None;
-            measurement.zncc_middle = None;
-            measurement.zncc_grid = None;
-            measurement.walked_zncc = None;
-            measurement.walked_zncc_middle = None;
-            measurement.walked_zncc_grid = None;
+            measurement.plain_zncc = None;
+            measurement.plain_zncc_middle = None;
+            measurement.plain_zncc_grid = None;
+            measurement.clear_walked_scores();
             measurement.projection_offset_px = None;
             measurement.reprojection_error = None;
             measurement.ray_angle_deg = None;
@@ -1677,6 +1675,8 @@ fn evaluate_track(
             measurement.pair_zncc_grid = None;
             measurement.cell_deficit = None;
             measurement.blur_matched_zncc = None;
+            measurement.blur_matched_zncc_middle = None;
+            measurement.blur_matched_zncc_grid = None;
             measurement.bitmap_blur_sigma = None;
             measurement.sharper_than_bitmap = None;
             measurement.reference_view = None;
@@ -2132,8 +2132,10 @@ fn read_reference_view(
 
 /// Score every observation whose tile is in `tiles` against the track's
 /// stored bitmap, and write its scores into its track-stage slot: the plain
-/// whole-tile, middle and grid scores (`zncc`, `zncc_middle`, `zncc_grid`),
-/// which the bars judge, and the blur-matched whole-tile score beside them.
+/// whole-tile, middle and grid scores (`plain_zncc`, `plain_zncc_middle`,
+/// `plain_zncc_grid`), which the bars judge, and the blur-matched ones beside
+/// them (`blur_matched_zncc`, `_middle`, `_grid`), read against the one
+/// blurred bitmap.
 ///
 /// The scores are [`BitmapScorer`]'s, plain and blur-matched, blurring only
 /// the bitmap, over member coherence's default window; the observation the
@@ -2142,7 +2144,8 @@ fn read_reference_view(
 /// grid, scores nothing. Every row in `tiles` then has its reason settled
 /// ([`settle_reason`]). `walked` holds the tiles at the pixels a fit refused
 /// to walk rows to ([`walked_tiles`]), scored the same way into each row's
-/// `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid`. Timed as the
+/// `walked_plain_zncc` and `walked_blur_matched_zncc` with their middle and
+/// grid readings. Timed as the
 /// `bitmap scores` phase of `progress`, with a note of how many observations
 /// had the bitmap blurred and how many are sharper than it.
 fn score_against_bitmap(
@@ -2202,10 +2205,12 @@ fn score_against_bitmap(
             continue;
         };
         if Some(*i) == reference {
-            measurement.zncc = Some(1.0);
-            measurement.zncc_middle = Some(1.0);
-            measurement.zncc_grid = Some([[1.0; 3]; 3]);
+            measurement.plain_zncc = Some(1.0);
+            measurement.plain_zncc_middle = Some(1.0);
+            measurement.plain_zncc_grid = Some([[1.0; 3]; 3]);
             measurement.blur_matched_zncc = Some(1.0);
+            measurement.blur_matched_zncc_middle = Some(1.0);
+            measurement.blur_matched_zncc_grid = Some([[1.0; 3]; 3]);
             measurement.bitmap_blur_sigma = Some(0.0);
             measurement.sharper_than_bitmap = None;
             settle_reason(measurement, None);
@@ -2217,12 +2222,17 @@ fn score_against_bitmap(
             .filter(|e| e.axes.iter().all(|a| a.is_finite()))
             .map(|e| e.matrix);
         let score = scorer.score(&tile.planes(), ellipse);
-        measurement.zncc = finite(score.zncc);
-        measurement.zncc_middle = measurement.zncc.and(finite(score.zncc_middle));
-        measurement.zncc_grid = measurement.zncc.map(|_| score.zncc_grid);
-        measurement.blur_matched_zncc = finite(score.blur_matched_zncc);
-        measurement.bitmap_blur_sigma = measurement.zncc.map(|_| score.blur_sigma);
-        measurement.sharper_than_bitmap = measurement.zncc.map(|_| score.sharper_than_bitmap);
+        let plain = finite(score.plain_zncc);
+        measurement.plain_zncc = plain;
+        measurement.plain_zncc_middle = plain.and(finite(score.plain_zncc_middle));
+        measurement.plain_zncc_grid = plain.map(|_| score.plain_zncc_grid);
+        measurement.blur_matched_zncc = plain.and(finite(score.blur_matched_zncc));
+        measurement.blur_matched_zncc_middle = measurement
+            .plain_zncc_middle
+            .and(finite(score.blur_matched_zncc_middle));
+        measurement.blur_matched_zncc_grid = plain.map(|_| score.blur_matched_zncc_grid);
+        measurement.bitmap_blur_sigma = plain.map(|_| score.blur_sigma);
+        measurement.sharper_than_bitmap = plain.map(|_| score.sharper_than_bitmap);
         settle_reason(measurement, None);
         blurred += usize::from(score.blur_sigma > 0.0);
         sharper += usize::from(score.sharper_than_bitmap);
@@ -2231,12 +2241,16 @@ fn score_against_bitmap(
         let Some(measurement) = next.observations[*i].track.as_mut() else {
             continue;
         };
-        // Only the plain readings are kept: the walk is judged beside the
-        // row's own plain score, the one the bars read.
         let score = scorer.score(&tile.planes(), None);
-        measurement.walked_zncc = finite(score.zncc);
-        measurement.walked_zncc_middle = measurement.walked_zncc.and(finite(score.zncc_middle));
-        measurement.walked_zncc_grid = measurement.walked_zncc.map(|_| score.zncc_grid);
+        let plain = finite(score.plain_zncc);
+        measurement.walked_plain_zncc = plain;
+        measurement.walked_plain_zncc_middle = plain.and(finite(score.plain_zncc_middle));
+        measurement.walked_plain_zncc_grid = plain.map(|_| score.plain_zncc_grid);
+        measurement.walked_blur_matched_zncc = plain.and(finite(score.blur_matched_zncc));
+        measurement.walked_blur_matched_zncc_middle = measurement
+            .walked_plain_zncc_middle
+            .and(finite(score.blur_matched_zncc_middle));
+        measurement.walked_blur_matched_zncc_grid = plain.map(|_| score.blur_matched_zncc_grid);
     }
     progress_note!(
         phase,
@@ -2255,7 +2269,7 @@ fn score_against_bitmap(
 fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Option<Unmeasured>) {
     measurement.reason = if measurement.seed_shift_px.is_none() {
         measurement.reason.or(Some(Unmeasured::Unscorable))
-    } else if measurement.zncc.is_some() {
+    } else if measurement.plain_zncc.is_some() {
         None
     } else {
         Some(missing.unwrap_or(Unmeasured::Unscorable))

@@ -193,7 +193,7 @@ impl From<EditError> for CommitError {
 /// observation per `in` observation with its keypoint and, in
 /// `observation_confidence` where the column exists, its plain score against
 /// the stored bitmap
-/// ([`TrackMeasurement::zncc`](super::track::TrackMeasurement::zncc)),
+/// ([`TrackMeasurement::plain_zncc`](super::track::TrackMeasurement::plain_zncc)),
 /// clamped to `0 ..= 1` and scaled to a byte (`0` where the row has no score,
 /// `255` for the reference observation).
 ///
@@ -311,7 +311,7 @@ pub fn commit(
             // is stored in `1..=255`, by the function Add Image to Tracks uses.
             confidence: edited.has_observation_confidence().then(|| {
                 measurement
-                    .zncc
+                    .plain_zncc
                     .map_or(0, crate::reconstruction::data::observation_confidence_byte)
             }),
         });

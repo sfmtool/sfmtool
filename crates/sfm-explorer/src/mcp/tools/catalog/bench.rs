@@ -656,7 +656,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         threshold_schema(
                             "The ZNCC a track-stage observation has to reach: the plain ZNCC of \
                              its tile with the stored patch bitmap. The bench's default is 0.65. \
-                             An observation with no zncc, as one has before the first render of \
+                             An observation with no plain_zncc, as one has before the first render of \
                              the bitmap and while an unpin leaves the bitmap to be rendered \
                              again (its reason says which), or with no seed_shift_px, because \
                              the keypoint localizer could not read it, is not judged and keeps \
@@ -666,10 +666,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     (
                         "min_zncc_middle",
                         threshold_schema(
-                            "The zncc_middle a track-stage observation has to reach: the same \
-                             samples as its zncc, read over only the middle square of the patch. \
-                             0 turns the bar off, and is the bench's default. An observation \
-                             with no zncc_middle clears it.",
+                            "The plain_zncc_middle a track-stage observation has to reach: the \
+                             same samples as its plain_zncc, read over only the middle square of \
+                             the patch. 0 turns the bar off, and is the bench's default. An \
+                             observation with no plain_zncc_middle clears it.",
                         ),
                     ),
                     (

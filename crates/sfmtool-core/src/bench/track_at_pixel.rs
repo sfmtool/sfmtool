@@ -185,7 +185,7 @@ pub struct FinishOptions {
     /// Gate: the fewest `in` views.
     pub min_in_views: usize,
     /// Gate: the lowest median plain score against the stored bitmap
-    /// ([`TrackMeasurement::zncc`](super::track::TrackMeasurement::zncc)) over
+    /// ([`TrackMeasurement::plain_zncc`](super::track::TrackMeasurement::plain_zncc)) over
     /// the `in` views other than the reference observation, which scores `1`
     /// against its own render. The default `0.7` refuses about as many
     /// ground-truth tracks after a fit (5.1% of 450 from seoul_bull,
@@ -613,7 +613,7 @@ pub enum StageRecord {
         /// Why the classification came out as it did.
         reason: Option<ClassificationReason>,
         /// The median plain score against the stored bitmap
-        /// (`TrackMeasurement::zncc`) over the `in` views after it, the
+        /// (`TrackMeasurement::plain_zncc`) over the `in` views after it, the
         /// reference observation left out.
         zncc_median: f64,
     },
@@ -624,7 +624,7 @@ pub enum StageRecord {
         /// How many views are `in` after it.
         in_views: usize,
         /// The median plain score against the stored bitmap
-        /// (`TrackMeasurement::zncc`) over them after it, the reference
+        /// (`TrackMeasurement::plain_zncc`) over them after it, the reference
         /// observation left out.
         zncc_median: f64,
     },
@@ -642,7 +642,7 @@ pub enum StageRecord {
         /// How many views are `in`.
         in_views: usize,
         /// The median plain score against the stored bitmap over them
-        /// (`TrackMeasurement::zncc`), the reference observation left out:
+        /// (`TrackMeasurement::plain_zncc`), the reference observation left out:
         /// the reading the median gate judges.
         zncc_median: f64,
         /// The median plain middle score against the stored bitmap over the

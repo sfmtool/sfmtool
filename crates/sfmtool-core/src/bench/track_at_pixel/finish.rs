@@ -54,11 +54,11 @@ fn in_readings(track: &EditableTrack, key: fn(&TrackMeasurement) -> Option<f64>)
 }
 
 /// The median plain score against the stored bitmap
-/// ([`TrackMeasurement::zncc`]) over the `in` observations that carry one,
+/// ([`TrackMeasurement::plain_zncc`]) over the `in` observations that carry one,
 /// the reference observation left out, or negative infinity when none does.
 /// The reading [`FinishOptions::min_zncc_median`] gates on.
 pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
-    let mut z = in_readings(track, |m| m.zncc);
+    let mut z = in_readings(track, |m| m.plain_zncc);
     if z.is_empty() {
         f64::NEG_INFINITY
     } else {
@@ -67,11 +67,11 @@ pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
 }
 
 /// The median plain middle score against the stored bitmap
-/// ([`TrackMeasurement::zncc_middle`]) over the same observations as
+/// ([`TrackMeasurement::plain_zncc_middle`]) over the same observations as
 /// [`median_zncc`], or `NaN` when none carries one: the figure to set beside
 /// it.
 pub(super) fn median_zncc_middle(track: &EditableTrack) -> f64 {
-    let mut z = in_readings(track, |m| m.zncc_middle);
+    let mut z = in_readings(track, |m| m.plain_zncc_middle);
     if z.is_empty() {
         f64::NAN
     } else {

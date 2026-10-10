@@ -37,7 +37,7 @@ this cascade first ran as a Python composition of the bench bindings
 ([`candidates/cascade.py`](../../../scripts/track_at_pixel/candidates/cascade.py)); the Rust operation is a port of it and scores the
 same there. The Python candidates read a track with `evaluate(...,
 render_bitmap=True)`, as the Rust operation does, and take their medians of
-the plain score against the stored bitmap (`zncc`), the reference row left
+the plain score against the stored bitmap (`plain_zncc`), the reference row left
 out. What is still open about the operation, and the other candidates,
 is in [the draft](../../drafts/track-at-pixel.md).
 
@@ -164,9 +164,9 @@ against a bitmap rendered where the patch then stands
 ([editable-track.md](editable-track.md) § "The reference view"). The median
 ZNCC that scores a candidate, keeps or drops a refit or a tilt, and is judged
 by the gate is the median of the `in` rows' plain score against that bitmap
-(`zncc`), leaving out the reference row, which scores `1` against its own
+(`plain_zncc`), leaving out the reference row, which scores `1` against its own
 render and says nothing about agreement; the blur-matched score plays no part.
-The `Final` record's middle median is likewise the median of `zncc_middle` over
+The `Final` record's middle median is likewise the median of `plain_zncc_middle` over
 the same rows.
 
 ```rust
@@ -301,11 +301,11 @@ patch centre's projection until a fit localizes them.
 5. **Gates** (stage `gate`), in this order: the queried sighting is `in`; its
    keypoint is within `max_query_offset_px` of the pixel; at least
    `min_in_views` views are `in`; the median of their plain score against the
-   bitmap (`zncc`), the reference row left out, is at least
+   bitmap (`plain_zncc`), the reference row left out, is at least
    `min_zncc_median`; and no `in` view's keypoint
    sits more than `max_projection_offset_px` from the point's projection. The
    `Final` record carries the median the gate judged and, beside it, the median
-   middle ZNCC over the same views (`zncc_middle_median`, of `zncc_middle`,
+   middle ZNCC over the same views (`zncc_middle_median`, of `plain_zncc_middle`,
    [`editable-track.md`](editable-track.md) § "The middle ZNCC"), which no gate
    reads.
 6. **Bitmap.** The track that passed already carries the bitmap its last

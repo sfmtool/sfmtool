@@ -56,9 +56,9 @@ use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
 use super::reference::{
-    reference_cell, reference_rank, zncc_hover, ReferenceCell, ReferenceMark, ReferenceRows,
-    REFERENCE_TIP,
+    reference_cell, reference_rank, ReferenceCell, ReferenceMark, ReferenceRows, REFERENCE_TIP,
 };
+use super::zncc_hover::{show_zncc_hover, zncc_hover_text, ZnccHoverText, ZnccHoverTiles};
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
     row_ellipse, row_grids, row_radius, row_surface, self_similarity_cell_color,
@@ -178,10 +178,9 @@ pub(crate) struct RowSummary {
     /// The *Reference* cell as drawn, with its hover text and whether the
     /// rule picks the row.
     pub(crate) reference: ReferenceCell,
-    /// The *ZNCC* cell's hover text at the track stage: the score against
-    /// the stored bitmap and the blur-matched score ([`zncc_hover`]). `None`
-    /// where the cell has no hover.
-    pub(crate) zncc_hover: Option<String>,
+    /// What the *ZNCC* cell's hover says at the track stage, apart from its
+    /// pictures ([`zncc_hover_text`]). `None` where the cell has no hover.
+    pub(crate) zncc_hover: Option<ZnccHoverText>,
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
@@ -1341,7 +1340,7 @@ impl TrackBody {
                                 if j.proposal == Verdict::Out { 1.0 } else { 0.0 },
                             )
                         }),
-                    SortColumn::Zncc => number_key(readings(|m| m.zncc, |m| m.zncc)),
+                    SortColumn::Zncc => number_key(readings(|m| m.zncc, |m| m.plain_zncc)),
                     SortColumn::SelfSimilarity => number_key(readings(
                         |m| m.zncc_self_similarity_radius,
                         |m| m.zncc_self_similarity_radius,
@@ -2052,16 +2051,15 @@ impl TrackBody {
             .on_hover_text(egui::RichText::new(hover).monospace());
         }
 
-        // The ZNCC cell's hover, at the track stage: the row's score against
-        // the stored bitmap, plain and blur-matched.
-        let zncc_hover = (stage == StageKind::Track && !refused)
-            .then(|| {
-                row.track
-                    .as_ref()
-                    .map(|m| zncc_hover(m, reference_rows.reference == Some(observation)))
-            })
+        // The ZNCC cell's hover, at the track stage: the stored bitmap, the
+        // bitmap as blurred for the row and the row's tile, with the scores
+        // against the bitmap plain and blur-matched.
+        let zncc_measured = (stage == StageKind::Track && !refused)
+            .then_some(row.track.as_ref())
             .flatten();
-        if let Some(hover) = &zncc_hover {
+        let is_reference = reference_rows.reference == Some(observation);
+        let zncc_hover = zncc_measured.map(|m| zncc_hover_text(m, is_reference));
+        if let Some(m) = zncc_measured {
             let cell = egui::Rect::from_min_max(
                 egui::pos2(x0 + cols.zncc, rect.min.y),
                 egui::pos2(x0 + cols.zncc_grid - 4.0, rect.max.y),
@@ -2071,7 +2069,22 @@ impl TrackBody {
                 ui.id().with(("track_view_zncc", observation)),
                 egui::Sense::hover(),
             )
-            .on_hover_text(hover);
+            .on_hover_ui(|ui| {
+                let label = self
+                    .showing
+                    .as_ref()
+                    .map(|s| s.label.clone())
+                    .unwrap_or_default();
+                let tiles = ZnccHoverTiles {
+                    bitmap: self.ensure_track_patch(ui.ctx(), &label, track),
+                    blurred: m
+                        .bitmap_blur_sigma
+                        .filter(|&s| s > 0.0 && !is_reference)
+                        .and_then(|s| self.ensure_blurred_bitmap(ui.ctx(), track, observation, s)),
+                    tile: self.ensure_tile(ui.ctx(), recon, track, observation, state),
+                };
+                show_zncc_hover(ui, m, is_reference, tiles);
+            });
         }
 
         // The two grids, faded with the numbers while an evaluation is on its
@@ -2317,8 +2330,8 @@ pub(super) fn set_reference_offer(
 /// the last fit did not keep at its seed.
 ///
 /// The numbers a person decides by: how far, to where, and the plain ZNCC
-/// against the stored bitmap at each end -- the row's own `zncc`, read at the
-/// seed, and `walked_zncc`, read at the walked peak. Every reading scores both
+/// against the stored bitmap at each end -- the row's own `plain_zncc`, read at the
+/// seed, and `walked_plain_zncc`, read at the walked peak. Every reading scores both
 /// against the same bitmap, so they compare.
 pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<String> {
     let m = row.track.as_ref()?;
@@ -2334,8 +2347,8 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
         m.walked_px.unwrap_or(f64::NAN),
         to[0],
         to[1],
-        zncc(m.zncc, m.zncc_middle),
-        zncc(m.walked_zncc, m.walked_zncc_middle),
+        zncc(m.plain_zncc, m.plain_zncc_middle),
+        zncc(m.walked_plain_zncc, m.walked_plain_zncc_middle),
     ))
 }
 

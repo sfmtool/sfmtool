@@ -1297,7 +1297,7 @@ fn a_report_lands_on_the_item_it_measured() {
         .track
         .as_mut()
         .expect("a slot")
-        .zncc = Some(0.5);
+        .plain_zncc = Some(0.5);
 
     let item = label.clone();
     state
@@ -1322,7 +1322,7 @@ fn a_report_lands_on_the_item_it_measured() {
             .observations[0]
             .track
             .as_ref()
-            .and_then(|m| m.zncc),
+            .and_then(|m| m.plain_zncc),
         Some(0.5)
     );
 }

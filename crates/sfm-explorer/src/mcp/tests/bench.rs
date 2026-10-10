@@ -1272,7 +1272,7 @@ fn every_observation_reports_where_it_sits_read_or_not() {
         "the added pixel is the candidate's keypoint: {track}"
     );
     assert_eq!(
-        rows[candidate]["track"]["zncc"],
+        rows[candidate]["track"]["plain_zncc"],
         Value::Null,
         "nothing has read the candidate yet: {track}"
     );
@@ -1747,9 +1747,18 @@ fn a_refused_walk_is_on_the_wire_and_sighting_its_pixel_accepts_it() {
     ];
     assert!(measured["walked_px"].is_number(), "{measured}");
     assert!(
-        measured["walked_zncc"].is_number() || measured["walked_zncc"].is_null(),
+        measured["walked_plain_zncc"].is_number() || measured["walked_plain_zncc"].is_null(),
         "{measured}"
     );
+    // The blur-matched readings of the tile there sit beside the plain ones,
+    // present exactly where they are.
+    for part in ["", "_middle", "_grid"] {
+        assert_eq!(
+            measured[format!("walked_plain_zncc{part}")].is_null(),
+            measured[format!("walked_blur_matched_zncc{part}")].is_null(),
+            "{measured}"
+        );
+    }
 
     call(
         &mut state,
@@ -2489,8 +2498,10 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     );
     let measured = &track["observations"][0]["track"];
     for column in [
-        "zncc",
-        "zncc_middle",
+        "plain_zncc",
+        "plain_zncc_middle",
+        "blur_matched_zncc",
+        "blur_matched_zncc_middle",
         "seed_shift_px",
         "projection_offset_px",
         "zncc_self_similarity_radius",
@@ -2502,7 +2513,8 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         );
     }
     for key in [
-        "zncc_grid",
+        "plain_zncc_grid",
+        "blur_matched_zncc_grid",
         "zncc_self_similarity_radius_grid",
         "zncc_self_similarity_ellipse_grid",
     ] {
@@ -2598,8 +2610,9 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
                 "{key} is not on the wire: {track}"
             );
         }
-        assert!(measured["zncc"].is_number(), "{track}");
+        assert!(measured["plain_zncc"].is_number(), "{track}");
         assert!(measured["blur_matched_zncc"].is_number(), "{track}");
+        assert!(measured.get("zncc").is_none(), "no bare zncc: {track}");
         assert!(measured["bitmap_blur_sigma"].is_number(), "{track}");
         for gone in ["bitmap_zncc", "blur_matched_bitmap_zncc"] {
             assert!(
@@ -2608,7 +2621,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             );
         }
         if bitmap_row == Some(i as u64) {
-            assert_eq!(measured["zncc"], json!(1.0), "{track}");
+            assert_eq!(measured["plain_zncc"], json!(1.0), "{track}");
         }
         // An `out` row is not considered by the rule.
         if row["verdict"] != json!("in") {
@@ -2679,10 +2692,10 @@ fn a_tilt_scores_the_rows_against_the_bitmap_rendered_after_it() {
     for (i, row) in rows.iter().enumerate() {
         let measured = &row["track"];
         if bitmap_row == Some(i as u64) {
-            assert_eq!(measured["zncc"], json!(1.0), "{track}");
+            assert_eq!(measured["plain_zncc"], json!(1.0), "{track}");
             continue;
         }
-        assert!(measured["zncc"].is_number(), "row {i}: {track}");
+        assert!(measured["plain_zncc"].is_number(), "row {i}: {track}");
         assert!(
             measured["blur_matched_zncc"].is_number(),
             "row {i}: {track}"
@@ -2694,7 +2707,7 @@ fn a_tilt_scores_the_rows_against_the_bitmap_rendered_after_it() {
 
 /// `set_bench_track_reference` makes a row the reference and pins it as one
 /// version; the evaluation after it renders the bitmap from the row, which
-/// `stage_data.reference_observation` then names and whose `zncc` reads 1. A
+/// `stage_data.reference_observation` then names and whose `plain_zncc` reads 1. A
 /// second call on the same row pushes nothing, and an `out` row is refused.
 #[test]
 fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
@@ -2736,7 +2749,7 @@ fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
     );
     let row = &track["observations"][other as usize];
     assert_eq!(row["pinned"], json!(true), "{track}");
-    assert_eq!(row["track"]["zncc"], json!(1.0), "{track}");
+    assert_eq!(row["track"]["plain_zncc"], json!(1.0), "{track}");
     assert!(
         track["stage_data"]
             .get("reference_view_observation")
@@ -4044,7 +4057,7 @@ fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
     );
     assert!(evaluation.get("bitmap_observation").is_none(), "{point}");
     if let Some(row) = evaluation["reference_observation"].as_u64() {
-        assert_eq!(rows[row as usize]["track"]["zncc"], json!(1.0));
+        assert_eq!(rows[row as usize]["track"]["plain_zncc"], json!(1.0));
     }
 
     let other = (0..state.scene[0].edited().point_count() as u32)

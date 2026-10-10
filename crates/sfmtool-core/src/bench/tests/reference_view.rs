@@ -355,7 +355,7 @@ fn every_row_is_scored_against_the_stored_bitmap() {
         let m = read.observations[i].track.as_ref().unwrap();
         let ellipse = m.zncc_self_similarity_ellipse.map(|e| e.grid_px.matrix);
         let direct = scorer.score(&tile_of_row(&read, &views, i, resolution).planes(), ellipse);
-        assert_eq!(m.zncc, Some(direct.zncc), "row {i}");
+        assert_eq!(m.plain_zncc, Some(direct.plain_zncc), "row {i}");
         assert_eq!(
             m.blur_matched_zncc,
             Some(direct.blur_matched_zncc),
@@ -369,7 +369,10 @@ fn every_row_is_scored_against_the_stored_bitmap() {
         );
         // A view is at least as close to a bitmap blurred to its sharpness.
         if direct.blur_sigma > 0.0 {
-            assert!(direct.blur_matched_zncc > direct.zncc - 0.02, "row {i}");
+            assert!(
+                direct.blur_matched_zncc > direct.plain_zncc - 0.02,
+                "row {i}"
+            );
         }
     }
 }
@@ -420,10 +423,10 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
     for (i, o) in again.observations.iter().enumerate() {
         let m = o.track.as_ref().unwrap();
         if i == picked {
-            assert_eq!(m.zncc, Some(1.0));
+            assert_eq!(m.plain_zncc, Some(1.0));
             assert_eq!(m.sharper_than_bitmap, None);
         } else {
-            let z = m.zncc.expect("a scored row");
+            let z = m.plain_zncc.expect("a scored row");
             assert!(z < 1.0 && z > 0.0, "row {i}: {z}");
         }
     }
@@ -776,8 +779,8 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         .enumerate()
     {
         let (a, b) = (a.track.as_ref().unwrap(), b.track.as_ref().unwrap());
-        assert!(a.zncc.is_some(), "row {i} is scored");
-        assert_eq!(a.zncc, b.zncc, "row {i}");
+        assert!(a.plain_zncc.is_some(), "row {i} is scored");
+        assert_eq!(a.plain_zncc, b.plain_zncc, "row {i}");
         assert_eq!(a.blur_matched_zncc, b.blur_matched_zncc, "row {i}");
         assert_eq!(a.sharper_than_bitmap, b.sharper_than_bitmap, "row {i}");
     }
@@ -826,7 +829,7 @@ fn assert_same_bitmap_and_scores(a: &EditableTrack, b: &EditableTrack) {
     assert_eq!(pa.color, pb.color);
     for (i, (x, y)) in a.observations.iter().zip(&b.observations).enumerate() {
         let (x, y) = (x.track.as_ref().unwrap(), y.track.as_ref().unwrap());
-        assert_eq!(x.zncc, y.zncc, "row {i}");
+        assert_eq!(x.plain_zncc, y.plain_zncc, "row {i}");
         assert_eq!(x.blur_matched_zncc, y.blur_matched_zncc, "row {i}");
         assert_eq!(x.bitmap_blur_sigma, y.bitmap_blur_sigma, "row {i}");
         assert_eq!(x.sharper_than_bitmap, y.sharper_than_bitmap, "row {i}");
@@ -908,18 +911,18 @@ fn assert_rendered_from(
         .collect();
     assert_eq!(stored, tile, "{step}");
     let m = track.observations[row].track.as_ref().unwrap();
-    assert_eq!(m.zncc, Some(1.0), "{step}");
-    assert_eq!(m.zncc_middle, Some(1.0), "{step}");
-    assert_eq!(m.zncc_grid, Some([[1.0; 3]; 3]), "{step}");
+    assert_eq!(m.plain_zncc, Some(1.0), "{step}");
+    assert_eq!(m.plain_zncc_middle, Some(1.0), "{step}");
+    assert_eq!(m.plain_zncc_grid, Some([[1.0; 3]; 3]), "{step}");
     assert_eq!(m.blur_matched_zncc, Some(1.0), "{step}");
     // Every other row that has a tile is scored against the bitmap.
     for (i, o) in track.observations.iter().enumerate() {
         if i != row && o.verdict == Verdict::In {
             let m = o.track.as_ref().unwrap();
             assert!(
-                m.zncc.is_some_and(|z| z < 1.0),
+                m.plain_zncc.is_some_and(|z| z < 1.0),
                 "{step}: row {i} {:?}",
-                m.zncc
+                m.plain_zncc
             );
         }
     }
@@ -986,9 +989,9 @@ fn unpinning_the_reference_row_moves_the_reference_to_the_rule_s_pick() {
     assert_rendered_from(&moved, &views, &edited, picked, "unpinned");
     let m = moved.observations[other].track.as_ref().unwrap();
     assert!(
-        m.zncc.is_some_and(|z| z < 1.0),
+        m.plain_zncc.is_some_and(|z| z < 1.0),
         "the old reference is scored against the new bitmap: {:?}",
-        m.zncc
+        m.plain_zncc
     );
 }
 
@@ -1040,7 +1043,7 @@ fn set_as_reference_pins_the_row_and_renders_from_it() {
     assert!(
         set.observations
             .iter()
-            .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none())),
+            .all(|o| o.track.as_ref().is_none_or(|m| m.plain_zncc.is_none())),
         "so is every score read against it"
     );
     // Unpinning another row while the held reference waits for its render
@@ -1208,7 +1211,7 @@ fn unscored(track: &EditableTrack) -> bool {
     track
         .observations
         .iter()
-        .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none()))
+        .all(|o| o.track.as_ref().is_none_or(|m| m.plain_zncc.is_none()))
 }
 
 /// Whether the bars would move none of `track`'s verdicts: every unpinned
@@ -1248,7 +1251,7 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
     assert!(unpinned
         .observations
         .iter()
-        .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none())));
+        .all(|o| o.track.as_ref().is_none_or(|m| m.plain_zncc.is_none())));
     for (a, b) in first.observations.iter().zip(&unpinned.observations) {
         assert_eq!(
             a.verdict, b.verdict,
@@ -1529,7 +1532,7 @@ fn a_re_pinned_reference_is_unpinned_again_as_if_never_unpinned() {
     let scored = |t: &EditableTrack| {
         t.observations
             .iter()
-            .filter(|o| o.track.as_ref().is_some_and(|m| m.zncc.is_some()))
+            .filter(|o| o.track.as_ref().is_some_and(|m| m.plain_zncc.is_some()))
             .count()
     };
 
@@ -1620,7 +1623,7 @@ fn a_repaint_that_moves_the_pick_rerenders_and_rejudges_in_the_same_evaluation()
             assert_eq!(stored, None);
         }
     }
-    let scored = read.observations[pick].track.as_ref().unwrap().zncc;
+    let scored = read.observations[pick].track.as_ref().unwrap().plain_zncc;
     assert!(
         scored.is_some_and(|z| z < 1.0),
         "the row turned out is scored against the new bitmap: {scored:?}"
@@ -1679,7 +1682,7 @@ fn a_track_whose_rows_all_go_out_is_judged_against_a_bitmap_for_judging() {
     assert!(
         out.observations
             .iter()
-            .all(|o| o.track.as_ref().is_none_or(|m| m.zncc.is_none())),
+            .all(|o| o.track.as_ref().is_none_or(|m| m.plain_zncc.is_none())),
         "no score outlives the bitmap it was read against"
     );
 
@@ -1697,7 +1700,7 @@ fn a_track_whose_rows_all_go_out_is_judged_against_a_bitmap_for_judging() {
             .observations
             .iter()
             .filter(|o| o.track.as_ref().is_some_and(|m| m.keypoint.is_some()))
-            .all(|o| o.track.as_ref().unwrap().zncc.is_some()),
+            .all(|o| o.track.as_ref().unwrap().plain_zncc.is_some()),
         "every row with a keypoint is scored"
     );
     assert!(commit(&edited, &judged).is_err(), "no row is in");
@@ -1771,7 +1774,7 @@ fn a_track_with_one_in_row_is_judged_against_the_same_bitmap_for_judging() {
     for (x, y) in a.observations.iter().zip(&b.observations) {
         assert_eq!(x.verdict, y.verdict);
         let (mx, my) = (x.track.as_ref().unwrap(), y.track.as_ref().unwrap());
-        assert_eq!(mx.zncc, my.zncc);
+        assert_eq!(mx.plain_zncc, my.plain_zncc);
     }
     // A plain reading scores the rows against it.
     let (plain, report) = evaluate(
@@ -1909,7 +1912,7 @@ fn a_fit_aligns_the_rows_to_the_held_reference_and_leaves_it_unmoved() {
     );
     let m = fit_once.observations[other].track.as_ref().unwrap();
     assert_eq!(m.seed_shift_px, Some(0.0), "aligned to its own render");
-    assert_eq!(m.zncc, Some(1.0));
+    assert_eq!(m.plain_zncc, Some(1.0));
     let ins: Vec<usize> = (0..fit_once.observations.len())
         .filter(|&i| i != other && fit_once.observations[i].verdict == Verdict::In)
         .collect();

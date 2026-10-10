@@ -1006,7 +1006,7 @@ enum Subject {
 **It is built the way a put builds a bench track**: core's `create_track`, from
 the version at the cursor, under the label a put gives it (the point's portable
 ID) and with the same options. Its rows arrive `in` and pinned, the
-score against the bitmap (`zncc`) is read back from the point's stored confidence column, and the bars are
+score against the bitmap (`plain_zncc`) is read back from the point's stored confidence column, and the bars are
 the defaults. It is held in `AppState::viewed_tracks` as a `ViewedTrack` (node,
 point, document serial, label, track, evaluation state), never in a version: no
 step accepts it, the Scene tree does not list it, and the bench layers do not
@@ -1508,9 +1508,11 @@ An agent that has just made a step reads `evaluating` and the previous numbers,
 and reads again until it says `current`. `get_bench_track` is
 Track View's Edited-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
-measurements where they exist -- at both stages `zncc_middle` and `zncc_grid`
-beside `zncc` (the same samples read over the middle square of the patch and
-over each ninth of it, § "The middle ZNCC" and § "The ZNCC grid" of
+measurements where they exist -- at the cluster stage `zncc_middle` and
+`zncc_grid` beside `zncc`, at the track stage `plain_zncc_middle` and
+`plain_zncc_grid` beside `plain_zncc` (the same samples read over the middle
+square of the patch and over each ninth of it, § "The middle ZNCC" and § "The
+ZNCC grid" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and the ZNCC
 self-similarity radius `zncc_self_similarity_radius` with its `_middle` and
 `_grid`, `zncc_self_similarity_surface`, `zncc_self_similarity_tolerance`,
@@ -1519,10 +1521,15 @@ axis is the radius, in grid px, image px and along the patch, and
 `zncc_self_similarity_ellipse_grid`, each ninth's in grid px
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 ZNCC self-similarity radius"), at the track stage
-`zncc` as the score against the stored bitmap with `blur_matched_zncc`,
+`plain_zncc` as the score against the stored bitmap with `blur_matched_zncc`,
+`blur_matched_zncc_middle`, `blur_matched_zncc_grid`,
 `bitmap_blur_sigma` and `sharper_than_bitmap` beside it, the two distances
 (`seed_shift_px`, the localizer's peak against the reference render, and
-`projection_offset_px`), `walked_px`, `walked_to`, and `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid` (the plain score against the bitmap of the tile there) for a row the last fit
+`projection_offset_px`), `walked_px`, `walked_to`, and `walked_plain_zncc`,
+`walked_plain_zncc_middle` and `walked_plain_zncc_grid` with
+`walked_blur_matched_zncc`, `walked_blur_matched_zncc_middle` and
+`walked_blur_matched_zncc_grid` (the plain and blur-matched scores against the
+bitmap of the tile there) for a row the last fit
 refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the localizer could
 not read or that has no score, the `reason` sentence. The track stage's data names
 the reference in use as `reference_observation` and the reference-view rule's
