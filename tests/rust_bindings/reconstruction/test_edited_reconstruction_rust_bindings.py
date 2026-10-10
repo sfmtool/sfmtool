@@ -14,7 +14,12 @@ import time
 import numpy as np
 import pytest
 
-from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from sfmtool.reconstruction import (
+    EditedReconstruction,
+    SfmrReconstruction,
+    distortion_is_releasable,
+    focal_is_releasable,
+)
 
 
 @pytest.fixture
@@ -601,13 +606,13 @@ class TestSwitchCameraModel:
         with pytest.raises(ValueError, match="camera 0 .* together with its focal"):
             switched.bundle_adjust(releases=[{"distortion": True}])
 
-    def test_the_release_capabilities_are_read_off_the_camera(self, embedded):
+    def test_the_release_capabilities_are_checked_per_camera(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
         spline = switched.materialize()[0].cameras[0]
-        assert spline.focal_is_releasable and spline.distortion_is_releasable
+        assert focal_is_releasable(spline) and distortion_is_releasable(spline)
         simple_radial = embedded.materialize()[0].cameras[0]
-        assert not simple_radial.focal_is_releasable
-        assert not simple_radial.distortion_is_releasable
+        assert not focal_is_releasable(simple_radial)
+        assert not distortion_is_releasable(simple_radial)
 
     def test_the_outermost_keypoints_are_observed_and_detected(self, embedded):
         recon = embedded.materialize()[0]

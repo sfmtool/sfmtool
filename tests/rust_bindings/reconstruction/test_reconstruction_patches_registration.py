@@ -9,10 +9,16 @@ from types import ModuleType
 
 import sfmtool
 import sfmtool._sfmtool as _sfmtool
+import sfmtool._sfmtool.geometry as geometry
 import sfmtool._sfmtool.patches as patches
 import sfmtool._sfmtool.reconstruction as reconstruction
 
 _RECONSTRUCTION_CLASSES = ("SfmrReconstruction", "RangeExpr")
+_RECONSTRUCTION_FUNCTIONS = (
+    "triangulate_points",
+    "focal_is_releasable",
+    "distortion_is_releasable",
+)
 _PATCHES_CLASSES = (
     "OrientedPatch",
     "PatchCloud",
@@ -33,6 +39,17 @@ def test_reconstruction_bindings_registered():
     assert not missing, f"missing reconstruction bindings: {missing}"
     for name in _RECONSTRUCTION_CLASSES:
         assert isinstance(getattr(reconstruction, name), type), f"{name} is not a class"
+    missing = [n for n in _RECONSTRUCTION_FUNCTIONS if not hasattr(reconstruction, n)]
+    assert not missing, f"missing reconstruction functions: {missing}"
+    for name in _RECONSTRUCTION_FUNCTIONS:
+        assert callable(getattr(reconstruction, name)), f"{name} is not callable"
+
+
+def test_bundle_adjust_release_checks_are_not_on_the_camera():
+    """Whether bundle adjustment can release a camera's focal or distortion is
+    asked of `reconstruction`, not of `CameraIntrinsics`."""
+    for name in ("focal_is_releasable", "distortion_is_releasable"):
+        assert not hasattr(geometry.CameraIntrinsics, name), name
 
 
 def test_patches_bindings_registered():

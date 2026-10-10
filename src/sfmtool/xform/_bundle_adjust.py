@@ -28,7 +28,11 @@ import click
 import numpy as np
 import pycolmap
 
-from .._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from .._sfmtool.reconstruction import (
+    EditedReconstruction,
+    SfmrReconstruction,
+    distortion_is_releasable,
+)
 from ._switch_camera_model import format_outermost_keypoint
 
 # The camera models only sfmtool's own bundle adjustment can refine.
@@ -139,7 +143,7 @@ class BundleAdjustTransform:
                 "distortion": released
                 and self.refine_focal_length
                 and self.refine_extra_params
-                and camera.distortion_is_releasable,
+                and distortion_is_releasable(camera),
             }
             for camera, released in zip(recon.cameras, self._released(recon))
         ]

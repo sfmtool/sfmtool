@@ -39,7 +39,11 @@ The function lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust.rs),
 re-exported as `sfmtool_core::{bundle_adjust, BundleAdjustOptions,
 BundleAdjustReport, CameraAdjustment, BundleAdjustError}` and bound as
-`EditedReconstruction.bundle_adjust`. `CameraRelease` is the kernel's type,
+`EditedReconstruction.bundle_adjust`. `focal_is_releasable` and
+`distortion_is_releasable` are bound as functions of the same names in
+`sfmtool.reconstruction`
+([bundle_adjust.rs](../../../crates/sfmtool-py/src/reconstruction/bundle_adjust.rs)).
+`CameraRelease` is the kernel's type,
 [`../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs`](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs),
 re-exported from this module.
 
@@ -475,6 +479,22 @@ adjusted, report = value.bundle_adjust(
 print(report["median_residual_before"], "->", report["median_residual_after"])
 for camera in report["cameras"]:
     print(camera["camera"], camera["focal_before"], "->", camera["focal_after"])
+```
+
+`focal_is_releasable(camera)` and `distortion_is_releasable(camera)` in
+`sfmtool.reconstruction` take a `CameraIntrinsics` and return the core
+functions' answers, so a caller can build `releases` without asking for a
+release the call would refuse. They are module functions beside the
+adjustment rather than properties of `CameraIntrinsics`, because what the
+adjustment can release is a fact about the adjustment, not about the camera.
+
+```python
+from sfmtool.reconstruction import distortion_is_releasable, focal_is_releasable
+
+releases = [
+    {"focal": focal_is_releasable(c), "distortion": distortion_is_releasable(c)}
+    for c in recon.cameras
+]
 ```
 
 ## Testing
