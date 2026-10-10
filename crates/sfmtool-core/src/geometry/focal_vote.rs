@@ -20,8 +20,10 @@
 //! all.
 //!
 //! The pair-table pass is deterministic and the RANSAC estimators derive their
-//! sampling from the input seed, so identical inputs and seed reproduce
-//! identical output.
+//! sampling from the input seed, so identical inputs, seed and draw count
+//! reproduce identical output. Each pair's vote can be read over several
+//! RANSAC draws ([`FocalVoteOptions::draws`]) and is then the median of its
+//! draws, so the vote measures the pair rather than one sample sequence.
 //!
 //! See `specs/core/geometry/focal-vote.md` for the design.
 
@@ -294,6 +296,15 @@ const MIN_POOL: usize = 2;
 pub struct FocalVoteOptions {
     /// SplitMix64 seed for the RANSAC estimators and the column scans.
     pub seed: u64,
+    /// RANSAC draws per pair vote. Draw `k` of a pair runs its estimators at
+    /// seed `seed + k`, and the pair contributes the log-space median of the
+    /// focals its draws produced, provided more than half of its draws produced
+    /// one; otherwise it casts no vote. The pair's diagnostic entry (inlier
+    /// counts, H/F ratio, gate counters) is the draw at the median. `1` (the
+    /// default) is the single-draw kernel exactly, and `0` reads as `1`. The
+    /// output is bit-identical for a fixed seed and draw count. The column
+    /// scans read one draw whatever this is.
+    pub draws: usize,
     /// Wide-baseline gate for epipolar candidate pairs, as a fraction of the
     /// image diagonal their mean feature displacement must reach. Too low
     /// admits near-static pairs whose ill-conditioned fundamental matrices vote
@@ -311,6 +322,7 @@ impl Default for FocalVoteOptions {
     fn default() -> Self {
         Self {
             seed: 0,
+            draws: 1,
             epipolar_min_disp_frac: EPIPOLAR_MIN_DISP_FRAC,
             columns: vec![CameraModel::Pinhole],
         }
@@ -422,6 +434,29 @@ fn log_median(vals: &[f64]) -> Option<f64> {
     }
     let mut v: Vec<f64> = vals.iter().map(|x| x.ln()).collect();
     Some(median_in_place(&mut v).exp())
+}
+
+/// The RANSAC seed of a pair's draw `k`: draw 0 is the kernel seed itself, so
+/// a single draw is the single-draw kernel bit for bit.
+fn draw_seed(seed: u64, k: usize) -> u64 {
+    seed.wrapping_add(k as u64)
+}
+
+/// The median draw of a pair's focals, as `(draw index, focal)`: the focal is
+/// the log-space median of `focals` ([`log_median`]), and the draw is the one
+/// at the lower middle of the focals sorted ascending (ties by draw index),
+/// which a caller reads the pair's diagnostics from. `None` unless more than
+/// half of the pair's `n_draws` draws produced a focal: a pair whose estimator
+/// fails in most draws has no stable reading to report.
+fn median_draw(focals: &[(usize, f64)], n_draws: usize) -> Option<(usize, f64)> {
+    if focals.len() * 2 <= n_draws {
+        return None;
+    }
+    let mut sorted = focals.to_vec();
+    sorted.sort_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)));
+    let values: Vec<f64> = sorted.iter().map(|d| d.1).collect();
+    let rep = sorted[(sorted.len() - 1) / 2].0;
+    Some((rep, log_median(&values)?))
 }
 
 /// Per-image-pair accumulator over the exhaustive per-cluster pass: how many
@@ -852,6 +887,7 @@ fn focal_vote_impl(
     options: &FocalVoteOptions,
 ) -> FocalVoteResult {
     let seed = options.seed;
+    let draws = options.draws.max(1);
     let epipolar_min_disp_frac = options.epipolar_min_disp_frac;
     let columns = canonical_columns(&options.columns);
     // The whole input contract, checked once and in O(n_clusters): a valid CSR
@@ -880,9 +916,19 @@ fn focal_vote_impl(
         pp,
         max_wh,
         seed,
+        draws,
     );
 
-    let rotation = rotation_votes(&image_clusters, &pair_accum, n_img, pp, max_wh, diag, seed);
+    let rotation = rotation_votes(
+        &image_clusters,
+        &pair_accum,
+        n_img,
+        pp,
+        max_wh,
+        diag,
+        seed,
+        draws,
+    );
 
     // ── Consensus ────────────────────────────────────────────────────────────
     // Per-pair gating already certified every surviving vote, so both families
@@ -1103,39 +1149,54 @@ fn epipolar_votes(
     pp: [f64; 2],
     max_wh: f64,
     seed: u64,
+    draws: usize,
 ) -> EpipolarTally {
-    let f_opts = FundamentalOptions {
-        max_error_px: 3.0,
-        seed,
-        ..Default::default()
-    };
-    let h_opts = HomographyOptions {
-        max_error_px: 3.0,
-        seed,
-        min_inliers: 4,
-        ..Default::default()
-    };
+    let draw_opts: Vec<(FundamentalOptions, HomographyOptions)> = (0..draws)
+        .map(|k| {
+            let seed = draw_seed(seed, k);
+            (
+                FundamentalOptions {
+                    max_error_px: 3.0,
+                    seed,
+                    ..Default::default()
+                },
+                HomographyOptions {
+                    max_error_px: 3.0,
+                    seed,
+                    min_inliers: 4,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
 
     // Each candidate pair's estimators depend on nothing but that pair's own
     // correspondences and the shared options — both `estimate_fundamental` and
     // `estimate_homography` seed their sampler from `options.seed` alone, so no
     // sampler state crosses pairs — and the pairs therefore run in parallel.
-    // The outcomes come back in pair order and are folded sequentially, so
-    // every counter, every pooled vote and every diagnostic entry lands exactly
-    // where the serial pass put it.
+    // A pair's draws run in draw order inside its task and reduce to one
+    // outcome there. The outcomes come back in pair order and are folded
+    // sequentially, so every counter, every pooled vote and every diagnostic
+    // entry lands exactly where the serial pass put it.
     let outcomes: Vec<EpipolarPairOutcome> = epipolar_pairs
         .par_iter()
         .map(|&(a, b)| {
-            epipolar_pair_outcome(
-                image_clusters,
-                pair_accum,
-                a,
-                b,
-                pp,
-                max_wh,
-                &f_opts,
-                &h_opts,
-            )
+            let per_draw: Vec<EpipolarPairOutcome> = draw_opts
+                .iter()
+                .map(|(f_opts, h_opts)| {
+                    epipolar_pair_outcome(
+                        image_clusters,
+                        pair_accum,
+                        a,
+                        b,
+                        pp,
+                        max_wh,
+                        f_opts,
+                        h_opts,
+                    )
+                })
+                .collect();
+            EpipolarPairOutcome::median_of_draws(per_draw)
         })
         .collect();
 
@@ -1190,6 +1251,7 @@ struct RotationTally {
 
 /// Scan a sample of images for their widest partner and self-calibrate each
 /// partner pair's homography.
+#[allow(clippy::too_many_arguments)]
 fn rotation_votes(
     image_clusters: &ImageClusters,
     pair_accum: &HashMap<(u32, u32), PairAccum>,
@@ -1198,6 +1260,7 @@ fn rotation_votes(
     max_wh: f64,
     diag: f64,
     seed: u64,
+    draws: usize,
 ) -> RotationTally {
     // ── Rotation votes ───────────────────────────────────────────────────────
     // For a sample of images spaced to visit at most 60, the partner with the
@@ -1207,12 +1270,14 @@ fn rotation_votes(
     // the inverse homography over the same correspondences is the same
     // measurement, not a second one — so the later occurrence is skipped.
     let step = rotation_scan_step(n_img);
-    let rot_h_opts = HomographyOptions {
-        max_error_px: 3.0,
-        seed,
-        min_inliers: ROTATION_MIN_INLIERS,
-        ..Default::default()
-    };
+    let rot_h_opts: Vec<HomographyOptions> = (0..draws)
+        .map(|k| HomographyOptions {
+            max_error_px: 3.0,
+            seed: draw_seed(seed, k),
+            min_inliers: ROTATION_MIN_INLIERS,
+            ..Default::default()
+        })
+        .collect();
     // The images the scan visits, and each one's widest qualifying partner. The
     // partner search reduces over the pair table under a total order (mean
     // displacement descending, partner index ascending), so its answer does not
@@ -1242,18 +1307,34 @@ fn rotation_votes(
             // Centre on the principal point: H = K R K⁻¹ has K at the origin.
             let x1c: Vec<[f64; 2]> = x1.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
             let x2c: Vec<[f64; 2]> = x2.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
-            let hest = prof::EST_H.time(|| estimate_homography(&x1c, &x2c, &rot_h_opts))?;
-            let fv = prof::ORTHO.time(|| rotation_self_calib_focal(&hest.h_matrix, max_wh))?;
-            if fv <= FOCAL_BAND_LO * max_wh || fv >= FOCAL_BAND_HI * max_wh {
-                return None;
-            }
+            // One in-band self-calibration focal and its inlier count per draw
+            // that produced one; the pair votes the median draw's.
+            let per_draw: Vec<Option<(f64, usize)>> = rot_h_opts
+                .iter()
+                .map(|h_opts| {
+                    let hest = prof::EST_H.time(|| estimate_homography(&x1c, &x2c, h_opts))?;
+                    let fv =
+                        prof::ORTHO.time(|| rotation_self_calib_focal(&hest.h_matrix, max_wh))?;
+                    if fv <= FOCAL_BAND_LO * max_wh || fv >= FOCAL_BAND_HI * max_wh {
+                        return None;
+                    }
+                    Some((fv, hest.inliers.iter().filter(|&&k| k).count()))
+                })
+                .collect();
+            let focals: Vec<(usize, f64)> = per_draw
+                .iter()
+                .enumerate()
+                .filter_map(|(k, d)| d.map(|(fv, _)| (k, fv)))
+                .collect();
+            let (rep, fv) = median_draw(&focals, per_draw.len())?;
+            let n_inliers = per_draw[rep].map_or(0, |(_, n)| n);
             Some((
                 fv,
                 RotationVote {
                     image: i as u32,
                     partner: j,
                     mean_disp_px: dmean,
-                    n_inliers: hest.inliers.iter().filter(|&&k| k).count(),
+                    n_inliers,
                     focal_px: fv,
                 },
             ))
@@ -1460,6 +1541,33 @@ impl EpipolarPairOutcome {
             detail: Vec::new(),
             vote: None,
             inconsistent: false,
+        }
+    }
+
+    /// One pair's draws reduced to the pair's outcome: the median draw's
+    /// diagnostics with the log-space median of the draws' votes, when more
+    /// than half of the draws voted ([`median_draw`]); otherwise the first draw
+    /// that cast no vote, which then carries the reason the pair did not vote.
+    /// A single draw comes back unchanged.
+    fn median_of_draws(mut draws: Vec<Self>) -> Self {
+        if draws.len() == 1 {
+            return draws.swap_remove(0);
+        }
+        let votes: Vec<(usize, f64)> = draws
+            .iter()
+            .enumerate()
+            .filter_map(|(k, d)| d.vote.map(|v| (k, v)))
+            .collect();
+        match median_draw(&votes, draws.len()) {
+            Some((rep, v)) => {
+                let mut out = draws.swap_remove(rep);
+                out.vote = Some(v);
+                out
+            }
+            None => {
+                let rep = draws.iter().position(|d| d.vote.is_none()).unwrap_or(0);
+                draws.swap_remove(rep)
+            }
         }
     }
 }

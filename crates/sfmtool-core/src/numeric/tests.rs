@@ -312,6 +312,16 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "delegates: the shared median of the logs, exponentiated",
     ),
     (
+        "sfmtool-core/src/geometry/focal_vote.rs",
+        "median_draw",
+        "delegates: the value is `log_median` of the draws' focals; what it adds is which draw sits at the lower middle, an argument the shared median does not return",
+    ),
+    (
+        "sfmtool-core/src/geometry/focal_vote.rs",
+        "median_of_draws",
+        "delegates: reduces a pair's draws through `median_draw`",
+    ),
+    (
         "sfmtool-core/src/geometry/translation_averaging.rs",
         "median_floor",
         "delegates: the shared median with a positive floor",

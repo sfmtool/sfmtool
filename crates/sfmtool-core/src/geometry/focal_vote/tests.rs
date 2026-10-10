@@ -691,6 +691,101 @@ fn determinism_same_seed() {
     );
 }
 
+/// The vote at `draws` RANSAC draws per pair, on the given seed.
+fn run_draws(obs: &Obs, seed: u64, draws: usize) -> FocalVoteResult {
+    focal_vote_with_options(
+        &obs.starts,
+        &obs.image,
+        &obs.pos,
+        W,
+        H,
+        &FocalVoteOptions {
+            seed,
+            draws,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn one_draw_is_the_single_draw_kernel() {
+    // `draws` 1 (and 0, which reads as 1) is the kernel that took one draw
+    // per pair, bit for bit.
+    let obs = two_subcapture_scene(4, 8, F_TRUE, F_TRUE, 1234);
+    let single = obs.run(3);
+    for draws in [0, 1] {
+        let res = run_draws(&obs, 3, draws);
+        assert_eq!(
+            res.focal_px.map(f64::to_bits),
+            single.focal_px.map(f64::to_bits)
+        );
+        assert_eq!(
+            (res.n_epipolar, res.n_rotation),
+            (single.n_epipolar, single.n_rotation)
+        );
+        assert_eq!(res.pool_spread.to_bits(), single.pool_spread.to_bits());
+        assert_eq!(
+            res.parallax_poverty.to_bits(),
+            single.parallax_poverty.to_bits()
+        );
+    }
+}
+
+#[test]
+fn drawn_votes_are_the_median_of_their_draws() {
+    // Every rotation pair's vote at 5 draws on seed `s` is the log-space median
+    // of the votes that pair casts in single-draw runs at seeds `s..s + 5`, and
+    // the result is bit-identical run to run.
+    let obs = two_subcapture_scene(4, 8, F_TRUE, F_TRUE, 1234);
+    let res = run_draws(&obs, 10, 5);
+    let again = run_draws(&obs, 10, 5);
+    assert_eq!(
+        res.focal_px.map(f64::to_bits),
+        again.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(res.pool_spread.to_bits(), again.pool_spread.to_bits());
+    assert!(!res.rotation_votes.is_empty(), "{res:?}");
+    let singles: Vec<FocalVoteResult> = (10..15).map(|s| obs.run(s)).collect();
+    for v in &res.rotation_votes {
+        let per_draw: Vec<f64> = singles
+            .iter()
+            .filter_map(|r| {
+                r.rotation_votes
+                    .iter()
+                    .find(|w| (w.image, w.partner) == (v.image, v.partner))
+                    .map(|w| w.focal_px)
+            })
+            .collect();
+        assert_eq!(per_draw.len(), 5, "pair ({}, {})", v.image, v.partner);
+        assert_eq!(
+            v.focal_px.to_bits(),
+            log_median(&per_draw).unwrap().to_bits()
+        );
+    }
+    // The drawn vote still lands on the planted focal.
+    let f = res.focal_px.expect("consensus focal");
+    assert!((f - F_TRUE).abs() / F_TRUE < 0.01, "pooled focal {f}");
+}
+
+#[test]
+fn median_draw_needs_a_majority_and_reads_the_lower_middle() {
+    // Odd count: the middle focal, and that draw's index.
+    let odd = [(0, 300.0), (2, 250.0), (4, 280.0)];
+    let (rep, f) = median_draw(&odd, 5).unwrap();
+    assert_eq!(rep, 4);
+    // Taken through the logs, so equal to the middle focal to rounding.
+    assert!((f - 280.0).abs() < 1e-9, "{f}");
+    // Even count: the geometric mean of the two middle focals; the diagnostics
+    // come from the lower one's draw.
+    let even = [(0, 300.0), (1, 250.0), (2, 320.0), (3, 260.0)];
+    let (rep, f) = median_draw(&even, 5).unwrap();
+    assert_eq!(rep, 3);
+    assert!((f - (260.0_f64 * 300.0).sqrt()).abs() < 1e-9, "{f}");
+    // Half the draws or fewer produced a focal: no reading.
+    assert_eq!(median_draw(&even, 8), None);
+    assert_eq!(median_draw(&[], 1), None);
+}
+
 // ── Camera-model columns ─────────────────────────────────────────────────────
 
 /// Planted equidistant focal on the 1000 px test sensor: `θ = r/f` puts the

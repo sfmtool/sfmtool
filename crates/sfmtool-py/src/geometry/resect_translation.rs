@@ -28,12 +28,13 @@ use crate::geometry::PyCameraIntrinsics;
 ///     points: (N, 3) world points (canonical frame).
 ///     uv: (N, 2) observed pixels.
 ///     max_error_px: Trim gate on the pixel residual norm (default 8.0).
-///     min_inliers: Fewer survivors than this at any round fails (default 10).
+///     min_inliers: Fewer survivors than this in the final kept set fails
+///         (default 10); an earlier trim round may dip under it.
 ///
 /// Returns:
 ///     A dict ``{"translation" (3,), "inliers" (N,) bool,
 ///     "residual_norms" (N,)}`` for the world-to-camera translation, or
-///     ``None`` when the survivor set falls below ``min_inliers``.
+///     ``None`` when the final survivor set falls below ``min_inliers``.
 #[pyfunction]
 #[pyo3(signature = (
     camera,

@@ -336,3 +336,143 @@ fn perspective_trim_gate_is_bit_identical_to_the_half_space() {
         }
     }
 }
+
+#[test]
+fn floor_reads_the_final_kept_set_not_an_intermediate_round() {
+    let cam = simple_pinhole();
+    let r = rotation();
+    // 14 clean observations and 3 shifted 40 px: the first least-squares solve
+    // over all 17 is pulled far enough that only 6 survive its gate, under the
+    // floor of 10, while the solve over those 6 is the true translation and
+    // re-admits all 14 clean ones.
+    let (t_true, points, mut uv) = make_scene(&cam, &r, 17);
+    for item in uv.iter_mut().take(3) {
+        item[0] += 40.0;
+    }
+    let rays: Vec<Vector3<f64>> = uv
+        .iter()
+        .map(|p| {
+            let q = cam.pixel_to_ray(p[0], p[1]);
+            Vector3::new(q[0], q[1], q[2]).normalize()
+        })
+        .collect();
+    let rot_pts: Vec<Vector3<f64>> = points
+        .iter()
+        .map(|x| r * Vector3::new(x[0], x[1], x[2]))
+        .collect();
+    let t1 = solve_ls(&rays, &rot_pts, &[true; 17]).unwrap();
+    let first_round = (0..17)
+        .filter(|&i| residual_norm(&cam, &uv[i], &rays[i], &rot_pts[i], &t1) < 8.0)
+        .count();
+    assert!(first_round < 10, "the scene must dip under the floor");
+
+    let out = resect_translation(&cam, &r, &points, &uv, 8.0, 10)
+        .expect("the final kept set clears the floor");
+    assert_eq!(out.inliers.iter().filter(|&&k| k).count(), 14);
+    assert!(out.inliers[..3].iter().all(|&k| !k));
+    assert!((out.translation - t_true).norm() < 1e-9);
+}
+
+/// Unit rays and rotated world points of a scene, as the kernel computes them.
+fn rays_and_rotated(
+    cam: &CameraIntrinsics,
+    r: &UnitQuaternion<f64>,
+    points: &[[f64; 3]],
+    uv: &[[f64; 2]],
+) -> (Vec<Vector3<f64>>, Vec<Vector3<f64>>) {
+    let rays = uv
+        .iter()
+        .map(|p| {
+            let q = cam.pixel_to_ray(p[0], p[1]);
+            Vector3::new(q[0], q[1], q[2]).normalize()
+        })
+        .collect();
+    let rot_pts = points
+        .iter()
+        .map(|x| r * Vector3::new(x[0], x[1], x[2]))
+        .collect();
+    (rays, rot_pts)
+}
+
+/// A 12-observation scene with every pixel jittered by up to 3 px, and its
+/// residuals at the least-squares fit over all of them, ascending: the first
+/// trim round keeps exactly `k` observations under a gate between the `k`-th
+/// and the `k+1`-th of them.
+fn noisy_scene_and_first_round_residuals() -> (Vec<[f64; 3]>, Vec<[f64; 2]>, Vec<f64>) {
+    let cam = simple_pinhole();
+    let r = rotation();
+    let (_t, points, mut uv) = make_scene(&cam, &r, 12);
+    for (i, item) in uv.iter_mut().enumerate() {
+        item[0] += 3.0 * jitter(i, 7);
+        item[1] += 3.0 * jitter(i, 8);
+    }
+    let (rays, rot_pts) = rays_and_rotated(&cam, &r, &points, &uv);
+    let t1 = solve_ls(&rays, &rot_pts, &[true; 12]).unwrap();
+    let mut res: Vec<f64> = (0..12)
+        .map(|i| residual_norm(&cam, &uv[i], &rays[i], &rot_pts[i], &t1))
+        .collect();
+    res.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (points, uv, res)
+}
+
+#[test]
+fn a_round_keeping_one_observation_fails() {
+    let cam = simple_pinhole();
+    let (points, uv, res) = noisy_scene_and_first_round_residuals();
+    let gate = 0.5 * (res[0] + res[1]);
+    // A floor of 1 would accept one survivor; one ray does not determine a
+    // translation, so the round itself fails.
+    assert!(resect_translation(&cam, &rotation(), &points, &uv, gate, 1).is_none());
+}
+
+#[test]
+fn a_round_keeping_two_observations_continues() {
+    let cam = simple_pinhole();
+    let (points, uv, res) = noisy_scene_and_first_round_residuals();
+    let gate = 0.5 * (res[1] + res[2]);
+    let out = resect_translation(&cam, &rotation(), &points, &uv, gate, 2)
+        .expect("two rays determine the translation, so the trim continues");
+    assert!(out.inliers.iter().filter(|&&k| k).count() >= 2);
+}
+
+#[test]
+fn unstable_trim_returns_the_fit_over_its_own_inliers() {
+    let cam = simple_pinhole();
+    let r = rotation();
+    // 20 observations, the first 6 shifted by 8, 16, ... 48 px along a
+    // diagonal: the kept set reads 4, 13, 15 and 14 over the first four rounds,
+    // so the three trim rounds end with the gate still changing the set.
+    let (t_true, points, mut uv) = make_scene(&cam, &r, 20);
+    for (j, item) in uv.iter_mut().take(6).enumerate() {
+        let shift = 8.0 + 8.0 * j as f64;
+        item[0] += shift;
+        item[1] -= 0.5 * shift;
+    }
+    let (rays, rot_pts) = rays_and_rotated(&cam, &r, &points, &uv);
+    let gate_at = |t: &Vector3<f64>| -> Vec<bool> {
+        (0..20)
+            .map(|i| residual_norm(&cam, &uv[i], &rays[i], &rot_pts[i], t) < 8.0)
+            .collect()
+    };
+    let mut kept = vec![true; 20];
+    let mut previous = kept.clone();
+    for _ in 0..TRIM_ROUNDS {
+        let t = solve_ls(&rays, &rot_pts, &kept).unwrap();
+        previous = kept;
+        kept = gate_at(&t);
+        assert_ne!(
+            kept, previous,
+            "the scene must not stabilise in three rounds"
+        );
+    }
+
+    let out = resect_translation(&cam, &r, &points, &uv, 8.0, 10).expect("enough inliers");
+    assert_eq!(out.inliers, kept);
+    let fit = solve_ls(&rays, &rot_pts, &out.inliers).unwrap();
+    assert_eq!(out.translation, fit);
+    // The fit over the round before differs: returning it would report one
+    // set and a translation fitted to another.
+    let stale = solve_ls(&rays, &rot_pts, &previous).unwrap();
+    assert!((stale - fit).norm() > 1e-9);
+    assert!((out.translation - t_true).norm() < 0.05);
+}

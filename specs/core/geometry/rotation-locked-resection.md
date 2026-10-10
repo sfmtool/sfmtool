@@ -48,8 +48,23 @@ round. The solve is trimmed iteratively reweighted least squares:
    observations, initially).
 2. Reproject: keep observations in front of the camera with pixel
    residual below `max_error_px`.
-3. Repeat 3 rounds or until the kept set is stable. Fewer than
-   `min_inliers` survivors at any round fails the resection.
+3. Repeat 3 rounds or until the kept set is stable. A round that keeps
+   fewer than 2 observations fails the resection, since two rays are the
+   fewest that determine `t` and the next solve would be underdetermined.
+4. When the 3 rounds end with the last gate still changing the set, solve
+   once more over the final kept set and gate once more at that solve. The
+   returned `t` is therefore always the least-squares fit over the returned
+   kept set, whether or not the set stabilised.
+5. Fewer than `min_inliers` members of the final kept set within the gate at
+   the returned `t` fails the resection. When the set stabilised that is the
+   whole kept set. An earlier round may keep fewer: the next solve runs over
+   that round's survivors and can re-admit observations, so the floor is read
+   on the set the trim ends with, not on the way there.
+
+Reading the floor on every round dropped resections that converge well. On
+`KerryPark480`'s seed with its mover members dropped, image 31 failed on an
+intermediate round although its final round kept 31 observations; read on
+the final set it resects with 31.
 
 Working in ray space makes the equations camera-model-agnostic: fisheye
 and equirectangular observations resect through the same rows,
@@ -72,7 +87,9 @@ chirality, and it is therefore model-dependent:
   reflection, which is the one thing the sign-blind rows need the gate
   for.
 
-Output: `t`, the surviving-observation mask, and pixel residual norms.
+Output: `t`, the surviving-observation mask (the final kept set, which `t`
+is the fit over), and pixel residual norms. When the set did not stabilise, a
+member of the mask can lie outside the gate at `t`; its residual says so.
 All three outputs are per **input** observation and length `n`: a
 non-survivor keeps the residual it scored at the final translation, and
 an observation the camera cannot image — behind it, outside the model's
@@ -118,6 +135,16 @@ The binding raises `ValueError` when `points` is not `(N, 3)`, `uv` is
 not `(N, 2)`, or the two differ in length, so the core's
 length-mismatch `None` never reaches Python.
 
+## Callers
+
+The far-field rotation skeleton in
+[rotation_init.rs](../../../crates/sfmtool-core/src/geometry/rotation_init.rs)
+keeps an image whose resection fails among its candidates, so the image is
+tried again after the next round of growth adds structure. Its growth loop
+calls this kernel directly, so the round-survivor minimum, the extra solve
+over a set that did not stabilise and the floor read on the final kept set
+apply to the skeleton.
+
 ## Testing requirements
 
 - Exact recovery on noiseless synthetic data, pinhole and fisheye.
@@ -129,7 +156,13 @@ length-mismatch `None` never reaches Python.
   reflection along each ray. A perspective camera evaluates the same
   half-space expression it always did.
 - Failure path: fewer than `min_inliers` consistent observations
-  returns `None` (core and binding). `uv` and `points` of different
+  returns `None` (core and binding).
+- A trim round that dips under `min_inliers` does not fail a resection
+  whose final kept set clears it. A round that keeps one observation fails
+  the resection even under a floor of 1; a round that keeps two continues.
+  When the rounds run out before the set stabilises, the returned
+  translation is the least-squares fit over the returned kept set. `uv` and
+  `points` of different
   lengths return `None` from the core and raise `ValueError` from the
   binding.
 - Degenerate ray bundles (all rays near-parallel) still return the

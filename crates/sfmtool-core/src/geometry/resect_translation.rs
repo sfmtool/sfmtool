@@ -16,7 +16,14 @@
 //! solve over the current observation set, then a re-gate keeping observations
 //! in front of the camera with pixel residual (through `ray_to_pixel`) below
 //! `max_error_px`, repeated for three rounds or until the kept set is stable.
-//! Fewer than `min_inliers` survivors at any round fails the resection.
+//! A round that keeps fewer than two observations fails the resection, since
+//! two rays are the fewest that determine a translation. When the rounds run
+//! out before the set is stable, the translation is solved once more over the
+//! final kept set, so the returned translation is always the least-squares fit
+//! over the returned inliers. Fewer than `min_inliers` of those inliers within
+//! the gate at that translation fails the resection; an earlier round that dips
+//! under the floor does not, since the next solve over its survivors can
+//! re-admit observations.
 //!
 //! **"In front" is model-dependent, because the rows are sign-blind.**
 //! `[r_k]ₓ·(R·X_k + t)` vanishes for `−r_k` as well, so the equations alone
@@ -40,6 +47,11 @@ const INVALID_RESIDUAL: f64 = 1e6;
 
 /// Trim rounds: least-squares solve + residual gate per round.
 const TRIM_ROUNDS: usize = 3;
+
+/// Fewest survivors a trim round may keep: two non-parallel rays are the
+/// fewest that determine a translation, so a round keeping one leaves the next
+/// solve underdetermined.
+const MIN_ROUND_SURVIVORS: usize = 2;
 
 /// Relative ridge added to the normal matrix only when the plain 3×3 solve
 /// fails (exactly parallel rays): a degenerate bundle still returns the
@@ -132,10 +144,14 @@ fn residual_norm(
 /// - `points`: world points (canonical frame), one per correspondence.
 /// - `rotation`: the fixed world-to-camera rotation (`x_cam = R·X + t`).
 /// - `max_error_px`: trim gate on the pixel residual norm.
-/// - `min_inliers`: fewer survivors than this at any round fails.
+/// - `min_inliers`: fewer than this many of the final kept set within the gate
+///   at the returned translation fails.
 ///
-/// Returns `None` when the observation counts disagree or the survivor set
-/// falls below `min_inliers`. See `specs/core/geometry/rotation-locked-resection.md`.
+/// The returned translation is the least-squares fit over the returned
+/// `inliers`. Returns `None` when the observation counts disagree, when a trim
+/// round keeps fewer than two observations, or when fewer than `min_inliers`
+/// of the final kept set lie within the gate at the returned translation. See
+/// `specs/core/geometry/rotation-locked-resection.md`.
 pub fn resect_translation(
     cam: &CameraIntrinsics,
     rotation: &UnitQuaternion<f64>,
@@ -179,28 +195,43 @@ pub fn resect_translation(
     if kept.iter().filter(|&&k| k).count() < min_inliers {
         return None;
     }
+    let gate = |t: &Vector3<f64>| -> Vec<bool> {
+        (0..n)
+            .map(|i| {
+                valid[i] && residual_norm(cam, &uv[i], &rays[i], &rot_pts[i], t) < max_error_px
+            })
+            .collect()
+    };
     let mut translation = Vector3::zeros();
+    let mut stable = false;
     for _ in 0..TRIM_ROUNDS {
         translation = solve_ls(&rays, &rot_pts, &kept)?;
-        let mut new_kept = vec![false; n];
-        let mut survivors = 0usize;
-        for i in 0..n {
-            if !valid[i] {
-                continue;
-            }
-            let keep =
-                residual_norm(cam, &uv[i], &rays[i], &rot_pts[i], &translation) < max_error_px;
-            new_kept[i] = keep;
-            survivors += keep as usize;
-        }
-        if survivors < min_inliers {
+        let new_kept = gate(&translation);
+        // An intermediate round may dip under the floor: the next solve over
+        // its survivors can re-admit observations, and the floor is a verdict
+        // on the set the trim ends with, not on the way there. A round keeping
+        // fewer than two observations ends the trim, since the next solve would
+        // be underdetermined.
+        if new_kept.iter().filter(|&&k| k).count() < MIN_ROUND_SURVIVORS {
             return None;
         }
-        let stable = new_kept == kept;
+        stable = new_kept == kept;
         kept = new_kept;
         if stable {
             break;
         }
+    }
+    if !stable {
+        // The rounds ran out with the last gate still changing the set, so
+        // `translation` is the fit over the round before. Solve over the set
+        // being returned, and read the floor on its members within the gate
+        // at that fit.
+        translation = solve_ls(&rays, &rot_pts, &kept)?;
+    }
+    let regated = gate(&translation);
+    let within = (0..n).filter(|&i| kept[i] && regated[i]).count();
+    if within < min_inliers {
+        return None;
     }
 
     let residual_norms: Vec<f64> = (0..n)

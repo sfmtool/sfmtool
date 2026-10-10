@@ -53,7 +53,9 @@ use crate::helpers::value_err;
 ///         Omitted in the ``MatchesFile`` form.
 ///     height: Shared image height. Omitted in the ``MatchesFile`` form.
 ///     seed: SplitMix64 seed for the RANSAC estimators and the column scans;
-///         same inputs + seed => bit-identical output (default 0).
+///         same inputs + seed + ``draws`` => bit-identical output (default 0).
+///     draws: RANSAC draws per pair vote (default 1), as in ``focal_vote``:
+///         each pair votes the log-space median of its draws' focals.
 ///     epipolar_min_disp_frac: Wide-baseline gate for epipolar candidate
 ///         pairs, as a fraction of the image diagonal their mean feature
 ///         displacement must reach (default 0.02).
@@ -124,7 +126,7 @@ use crate::helpers::value_err;
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_starts, member_images=None, member_positions=None, width=None, height=None, *, seed=0, epipolar_min_disp_frac=0.02, columns=None, min_rotation_mass=1))]
+#[pyo3(signature = (cluster_starts, member_images=None, member_positions=None, width=None, height=None, *, seed=0, draws=1, epipolar_min_disp_frac=0.02, columns=None, min_rotation_mass=1))]
 pub fn estimate_intrinsics<'py>(
     py: Python<'py>,
     cluster_starts: Bound<'py, PyAny>,
@@ -133,6 +135,7 @@ pub fn estimate_intrinsics<'py>(
     width: Option<u32>,
     height: Option<u32>,
     seed: u64,
+    draws: usize,
     epipolar_min_disp_frac: f64,
     columns: Option<Bound<'py, PyAny>>,
     min_rotation_mass: usize,
@@ -168,6 +171,7 @@ pub fn estimate_intrinsics<'py>(
     let options = IntrinsicsOptions {
         vote: FocalVoteOptions {
             seed,
+            draws,
             epipolar_min_disp_frac,
             columns: models,
         },

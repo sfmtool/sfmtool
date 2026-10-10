@@ -65,7 +65,7 @@ pub enum EscalationReason {
 }
 
 pub struct IntrinsicsOptions {
-    /// Passed through to the vote (seed, epipolar_min_disp_frac, and --
+    /// Passed through to the vote (seed, draws, epipolar_min_disp_frac, and --
     /// under `Fixed` -- the column set).
     pub vote: FocalVoteOptions,
     /// Whether the column set is the one `vote` names, or one the
@@ -275,7 +275,7 @@ policy pays for itself.
   `focal_vote` as `pub(crate)` constants rather than restated: two of the
   four cut points are questions about the vote's own grid and band, and a
   second copy would be free to drift from the machinery it describes.
-- Determinism: same inputs and seed give bit-identical output, exactly as
+- Determinism: same inputs, seed and draws give bit-identical output, exactly as
   the vote guarantees; the estimate adds no randomness and no ordering of
   its own (`verdict_votes` preserves the column's stored vote order).
 - The PyO3 binding returns the estimate as a dict with the vote dict nested

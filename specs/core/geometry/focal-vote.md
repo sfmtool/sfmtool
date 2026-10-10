@@ -82,6 +82,7 @@ pub fn focal_vote_with_min_disp(/* as focal_vote */, epipolar_min_disp_frac: f64
 
 pub struct FocalVoteOptions {
     pub seed: u64,                    // default 0
+    pub draws: usize,                 // default 1: RANSAC draws per pair vote
     pub epipolar_min_disp_frac: f64,  // default 0.02
     pub columns: Vec<CameraModel>,    // default [Pinhole]
 }
@@ -163,7 +164,8 @@ backbone stores, so a file's own arrays are the vote's arguments:
 | `member_images` | `u32 [n_members]` | Image id per member |
 | `member_positions` | `f32 [n_members, 2]` | Full-pixel keypoint position per member |
 | `width`, `height` | `u32` | Shared image size; the principal point is the image centre |
-| `seed` | `u64` | RANSAC seed; identical inputs and seed reproduce identical output |
+| `seed` | `u64` | RANSAC seed; identical inputs, seed and `draws` reproduce identical output |
+| `draws` | `usize` | RANSAC draws behind each pair's vote (options only; default 1, `0` reads as 1); see [Draws per pair](#draws-per-pair) |
 
 Positions arrive at `f32` because that is the width the `.matches` backbone
 stores them at, so a file's array is the argument with nothing converted in
@@ -556,12 +558,12 @@ focal.
 `sfmtool.geometry.focal_vote` takes its observations in either of
 two forms and only these two, mirroring the two Rust entry points:
 
-- `focal_vote(matches_file, *, seed=0, epipolar_min_disp_frac=0.02,
+- `focal_vote(matches_file, *, seed=0, draws=1, epipolar_min_disp_frac=0.02,
   columns=None)` — a `MatchesFile` handle, a selection included, forwarded to
   `focal_vote_from_matches`.
 - `focal_vote(cluster_starts, member_images, member_positions, width, height,
-  *, seed=0, epipolar_min_disp_frac=0.02, columns=None)` — the CSR arrays
-  spelled out.
+  *, seed=0, draws=1, epipolar_min_disp_frac=0.02, columns=None)` — the CSR
+  arrays spelled out.
 
 `member_positions` is a `float32` array; a `float64` array is accepted and
 cast to `float32`, which is exact for positions read out of a `.matches`
@@ -581,13 +583,40 @@ local_optimization=True)` is exposed alongside `estimate_fundamental`; its
 options are keyword-only, and it returns `{"h_matrix", "inliers",
 "iterations"}`, or `None` when no consensus reaches `min_inliers`.
 
+## Draws per pair
+
+A pair's vote is the reading of one RANSAC fit, and on a real capture one fit
+is not a stable reading of the pair: on `SeoulBull`'s cluster file, changing
+only the seed from 0 to 9 moves single pair votes by up to a factor of two and
+the pooled vote between 251 and 323 px. Over the same ten seeds the pooled
+vote spans 245 to 298 px at 5 draws per pair and 254 to 290 px at 9.
+`draws` reads each pair over several fits. Draw `k` of a pair runs its
+estimators at seed `seed + k`, so draw 0 is the single-draw vote and
+`draws = 1` is that vote bit for bit.
+
+- **Epipolar pair.** Each draw runs the whole epipolar cell (fundamental
+  matrix, the homography-domination gate, the two directional Bougnoux focals
+  and their agreement). The pair votes when more than half of its draws cast a
+  vote, and its vote is the log-space median of those draws' votes. Its
+  diagnostic entries, inlier counts, H/F ratio and gate counters are the
+  median draw's: the draw at the lower middle of the votes sorted ascending,
+  ties by draw index. A pair that votes in half its draws or fewer casts no
+  vote and reports the first draw that cast none.
+- **Rotation pair.** Each draw fits the homography and self-calibrates; the
+  pair votes the log-space median of the in-band focals when more than half of
+  its draws produced one, with the median draw's inlier count.
+
+The pooling, the family rule and the escalation then read these votes exactly
+as they read single-draw votes. The column scans draw their minimal samples
+once per pair (see below) and read one draw whatever `draws` is.
+
 ## Determinism
 
 The pair tables and every pair selection built on them are exhaustive and
 draw no randomness at all; all sampling that remains (the RANSAC
 estimators and the column scans) derives from the input seed through a
-SplitMix64 generator. Identical inputs and seed produce identical output
-on every platform. The column scans draw their minimal-sample index sets
+SplitMix64 generator. Identical inputs, seed and `draws` produce identical
+output on every platform. The column scans draw their minimal-sample index sets
 once per candidate pair from the seed and the pair's position in the candidate list, then reuse them
 at every candidate focal, in every cell direction and in every column —
 so the cost curves carry no RANSAC jitter, the columns are directly
@@ -729,7 +758,10 @@ that sets them is a forensic run, not a supported configuration.
   sub-captures at different focals) triggers the family-disagreement rule
   and returns the majority family's median, never a between-modes blend;
   the tie→`Rotation` rule; homography RANSAC recovers a planted H under
-  outlier contamination; seeded determinism.
+  outlier contamination; seeded determinism; `draws` 1 (and 0) reproduce the
+  single-draw vote bit for bit, a drawn rotation vote is the log-space median
+  of the single-draw votes at seeds `seed..seed + draws`, and the median draw
+  needs a majority and reads the lower middle.
 - Rust, the CSR contract: every way of breaking the index — no offsets at
   all, an index that opens late, closes short, closes past the members, or
   runs backwards, and member arrays of different lengths — votes nothing on

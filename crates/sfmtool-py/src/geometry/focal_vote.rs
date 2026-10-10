@@ -239,8 +239,12 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 ///         positions; a float64 array is accepted and cast.
 ///     width: Shared image width; the principal point is the image centre.
 ///     height: Shared image height.
-///     seed: Seed for the RANSAC estimators and the column scans; same inputs
-///         and seed give bit-identical output (default 0).
+///     seed: Seed for the RANSAC estimators and the column scans; same inputs,
+///         seed and ``draws`` give bit-identical output (default 0).
+///     draws: RANSAC draws per pair vote (default 1). Draw ``k`` runs at seed
+///         ``seed + k`` and the pair votes the log-space median of its draws'
+///         focals when more than half of them produced one, so the vote does
+///         not move with one draw's samples. ``1`` is the single-draw vote.
 ///     epipolar_min_disp_frac: Fraction of the image diagonal an epipolar
 ///         candidate pair's mean feature displacement must reach
 ///         (default 0.02).
@@ -275,7 +279,7 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_starts, member_images=None, member_positions=None, width=None, height=None, *, seed=0, epipolar_min_disp_frac=0.02, columns=None))]
+#[pyo3(signature = (cluster_starts, member_images=None, member_positions=None, width=None, height=None, *, seed=0, draws=1, epipolar_min_disp_frac=0.02, columns=None))]
 pub fn focal_vote<'py>(
     py: Python<'py>,
     cluster_starts: Bound<'py, PyAny>,
@@ -284,6 +288,7 @@ pub fn focal_vote<'py>(
     width: Option<u32>,
     height: Option<u32>,
     seed: u64,
+    draws: usize,
     epipolar_min_disp_frac: f64,
     columns: Option<Vec<String>>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -296,6 +301,7 @@ pub fn focal_vote<'py>(
     )?;
     let options = FocalVoteOptions {
         seed,
+        draws,
         epipolar_min_disp_frac,
         columns: vote_columns(columns)?,
     };
