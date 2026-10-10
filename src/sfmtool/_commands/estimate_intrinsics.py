@@ -409,7 +409,7 @@ def _write_camrig(
 @click.option(
     "--draws",
     type=click.IntRange(min=1),
-    default=5,
+    default=1,
     show_default=True,
     help=(
         "RANSAC draws per pair vote; a pair votes the log-space median of its "

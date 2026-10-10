@@ -34,7 +34,7 @@ sfm estimate-intrinsics -i MATCHES [OPTIONS...]
 | `--force` | off | Allow `--write-camrig` to overwrite an existing file |
 | `--json` | off | Emit the full vote result as JSON on stdout instead of the report |
 | `--seed N` | `0` | RANSAC / pair-sampling seed; same inputs + seed + `--draws` give bit-identical output |
-| `--draws N` | `5` | RANSAC draws behind each pair's vote, at least 1 (see [Draws per pair](#draws-per-pair)) |
+| `--draws N` | `1` | RANSAC draws behind each pair's vote, at least 1 (see [Draws per pair](#draws-per-pair)) |
 
 ## Behavior
 
@@ -61,11 +61,11 @@ many RANSAC fits rather than one: draw `k` runs the pair's estimators at seed
 `seed + k`, and the pair votes the log-space median of its draws' focals when
 more than half of the draws cast a vote, and casts no vote otherwise (see
 [Draws per pair](../../core/geometry/focal-vote.md#draws-per-pair) in the
-focal-vote spec). A single fit is an unstable reading of a pair, so the
-default reads five; `--draws 1` is the single-draw vote. The vote's run time
-grows with the number of draws. The output is a function of the inputs,
-`--seed` and `--draws` together, and a rerun with the same three is
-bit-identical. Neither the binding's result nor the report echoes the seed or
+focal-vote spec). The default, `--draws 1`, is the single-draw vote, the
+same as the binding's default. More draws make the focal depend less on
+`--seed`, and the vote's run time grows with the number of draws. The output
+is a function of the inputs, `--seed` and `--draws` together, and a rerun
+with the same three is bit-identical. Neither the binding's result nor the report echoes the seed or
 the draw count, so `--json` carries no `draws` key.
 
 ### When the camera-model columns run

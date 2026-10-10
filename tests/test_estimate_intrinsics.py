@@ -204,14 +204,14 @@ def test_model_option_selects_the_columns(
     assert stub_estimate.calls[-1]["columns"] == expected_columns
 
 
-def test_draws_default_to_five_and_pass_through(stub_estimate):
+def test_draws_default_to_one_and_pass_through(stub_estimate):
     out = stub_estimate(_estimate())
     assert out.exit_code == 0, out.output
-    assert stub_estimate.calls[-1]["draws"] == 5
-
-    out = stub_estimate(_estimate(), "--draws", "1", "--seed", "7")
-    assert out.exit_code == 0, out.output
     assert stub_estimate.calls[-1]["draws"] == 1
+
+    out = stub_estimate(_estimate(), "--draws", "5", "--seed", "7")
+    assert out.exit_code == 0, out.output
+    assert stub_estimate.calls[-1]["draws"] == 5
     assert stub_estimate.calls[-1]["seed"] == 7
 
 
@@ -707,8 +707,8 @@ def test_estimate_intrinsics_named_model_runs_one_column(cluster_matches_file: P
 
 
 def test_estimate_intrinsics_draws_on_a_real_capture(cluster_matches_file: Path):
-    """The single-draw vote and the default both run on the real capture, and a
-    rerun with the same seed and draw count is bit-identical."""
+    """The default single-draw vote and a five-draw vote both run on the real
+    capture, and a rerun with the same seed and draw count is bit-identical."""
     runner = CliRunner()
 
     def run(*args: str) -> dict:
@@ -719,9 +719,9 @@ def test_estimate_intrinsics_draws_on_a_real_capture(cluster_matches_file: Path)
         assert out.exit_code == 0, out.output
         return json.loads(out.output)
 
-    single = run("--draws", "1")
+    several = run("--draws", "5")
     default = run()
-    assert single["focal_px"] is not None
+    assert several["focal_px"] is not None
     assert default["focal_px"] is not None
-    assert default == run("--seed", "0", "--draws", "5")
+    assert default == run("--seed", "0", "--draws", "1")
     assert run("--seed", "3", "--draws", "3") == run("--seed", "3", "--draws", "3")
