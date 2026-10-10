@@ -120,8 +120,9 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
         .map(|v| v.extract())
         .transpose()?;
     let k = image_indexes.len();
-    // Optional whatever the base carries: a record without it adds rows with
-    // nothing measured.
+    // Optional whatever the base carries, with its "options": a record without
+    // it adds rows with nothing measured, as does one read under other options
+    // than the value's.
     let readings = match get(d, "observation_readings")? {
         Some(v) => crate::readings::readings_from_py(&v, Some(k))?,
         None => None,
@@ -186,6 +187,9 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
         // Only the viewer's display render marks a pick, and a reconstruction
         // Python holds never carries the marks.
         display_only_reference: false,
+        // The options the readings were taken under; the value turns rows read
+        // under other options than its own into rows with nothing measured.
+        reading_options: readings.as_ref().map(|r| r.options),
     })
 }
 
@@ -243,7 +247,13 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
             .collect();
         d.set_item("observation_confidence", PyArray1::from_vec(py, v))?;
     }
-    if r.observations.iter().any(|o| o.reading.is_some()) {
+    // Labelled with the options the record's readings stand under, so a
+    // record handed back keeps them, and a value whose readings stand under
+    // others takes its rows as not measured.
+    if let Some(options) = r
+        .reading_options
+        .filter(|_| r.observations.iter().any(|o| o.reading.is_some()))
+    {
         let rows = r
             .observations
             .iter()
@@ -252,12 +262,7 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
                     .unwrap_or(sfmtool_core::reconstruction::ObservationReading::NOT_MEASURED)
             })
             .collect();
-        let readings = sfmtool_core::reconstruction::ObservationReadings {
-            rows,
-            options: sfmtool_core::reconstruction::observation_reading_options(
-                sfmtool_core::camera::sampler::SamplerChoice::per_view(),
-            ),
-        };
+        let readings = sfmtool_core::reconstruction::ObservationReadings { rows, options };
         d.set_item(
             "observation_readings",
             crate::readings::readings_to_py(py, &readings)?,

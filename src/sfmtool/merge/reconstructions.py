@@ -382,10 +382,18 @@ def _merged_readings(source_reconstructions, image_names, tracks):
     index: a merge moves no keypoint and renders nothing, so the row is
     carried as the record it is. An observation no source read, or one from a
     source whose readings were taken under other options than the first
-    source's that has them, is not measured. ``None`` when no source carries
-    readings.
+    source's that has them, is not measured. The two scores are cleared to NaN
+    in every row: they were read against a source point's stored bitmap, and
+    the merged reconstruction stores no bitmap of the source points (the merge
+    renumbers the points and writes no patch frame). A source with no feature
+    indexes (``embedded_patches``) has no observation to match, so it gives no
+    rows. ``None`` when no source carries readings.
     """
-    carrying = [r for r in source_reconstructions if r.observation_readings is not None]
+    carrying = [
+        r
+        for r in source_reconstructions
+        if r.observation_readings is not None and r.track_feature_indexes is not None
+    ]
     if not carrying:
         return None
     first = carrying[0].observation_readings
@@ -419,6 +427,8 @@ def _merged_readings(source_reconstructions, image_names, tracks):
         if row is not None:
             for k in keys:
                 out[k][j] = row[k]
+    out["plain_bitmap_zncc"][:] = np.nan
+    out["blur_matched_bitmap_zncc"][:] = np.nan
     out["options"] = options
     return out
 

@@ -289,15 +289,16 @@ pub fn commit(
         .map(|&i| (track.observations[i].image, i))
         .collect();
     rows.sort_by_key(|&(image, i)| (image, i));
-    // The rows' readings are the evaluation's, taken under the default
-    // reading options; a base whose readings stand under other options gets
-    // rows with nothing measured rather than readings it cannot compare. The
-    // scores are against the bitmap the evaluation read, which is the one
-    // written only where the commit writes a bitmap.
-    let readings_comparable = edited.observation_reading_options()
-        == crate::reconstruction::observation_reading_options(
-            crate::camera::sampler::SamplerChoice::per_view(),
-        );
+    // The rows' readings are the evaluation's, under the options each row's
+    // tile was rendered and read with. The record stands under the value's
+    // options where it has readings, else under the first row's; a row read
+    // under other options is written with nothing measured, so no column
+    // mixes them. The scores are against the bitmap the evaluation read,
+    // which is the one written only where the commit writes a bitmap.
+    let record_options = edited.observation_reading_options().or_else(|| {
+        kept.iter()
+            .find_map(|&i| track.observations[i].track.as_ref()?.reading_options)
+    });
     let scores_stored = edited.has_patch_bitmaps() && payload.committable_bitmap().is_some();
     let mut observations = Vec::with_capacity(rows.len());
     for &(image, i) in &rows {
@@ -326,11 +327,13 @@ pub fn commit(
                     .blur_matched_zncc
                     .map_or(0, crate::reconstruction::data::observation_confidence_byte)
             }),
-            reading: Some(if readings_comparable {
-                measurement_reading(measurement, scores_stored)
-            } else {
-                crate::reconstruction::ObservationReading::NOT_MEASURED
-            }),
+            reading: Some(
+                if record_options.is_some() && measurement.reading_options == record_options {
+                    measurement_reading(measurement, scores_stored)
+                } else {
+                    crate::reconstruction::ObservationReading::NOT_MEASURED
+                },
+            ),
         });
     }
 
@@ -404,6 +407,7 @@ pub fn commit(
                 .map_or(sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION, |k| k as i32)
         }),
         display_only_reference: false,
+        reading_options: record_options,
     };
 
     // ---- The edit ----

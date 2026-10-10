@@ -29,7 +29,9 @@ use crate::patch::self_similarity::{
 };
 use crate::patch::stored_bitmap::{stored_bitmap_planes, BitmapScorer};
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::{ObservationReading, SfmrReconstruction};
+use crate::reconstruction::{
+    observation_reading_options, ObservationReading, ObservationReadings, SfmrReconstruction,
+};
 
 /// The angle of an axis, in radians, brought into `[0, π)`; `NaN` stays
 /// `NaN`.
@@ -164,16 +166,22 @@ pub fn read_view_tile(
 /// keypoint, parallel across patches (rayon), scoring each against its
 /// point's stored bitmap in `recon`.
 ///
-/// Returns one row per observation of `recon`, parallel to its tracks. A row
-/// is [`ObservationReading::NOT_MEASURED`] where its point has no patch in
-/// `cloud`, its photograph is not to hand (`views[image]` is `None`), or its
-/// tile has no data. The scores are `NaN` where the point has no stored bitmap
+/// Returns one row per observation of `recon`, parallel to its tracks, under
+/// the options of these renders ([`observation_reading_options`] of
+/// `sampler`, `resolution` and member coherence's window). An observation this
+/// call does not read, because its point has no patch in `cloud` or its
+/// photograph is not to hand (`views[image]` is `None`), keeps the row `recon`
+/// stores for it where `recon`'s readings stand under the same options, and is
+/// not measured otherwise ([`ObservationReadings::merge_read`]). A read row is
+/// not measured where its tile has no data. The scores are `NaN` where the point has no stored bitmap
 /// at `resolution` (a zero row, or no bitmap column), and `1` for the point's
 /// reference observation ([`PointSet::reference_observations`](crate::PointSet::reference_observations)),
 /// whose render the bitmap is. Each tile is rendered as the stored bitmap is,
 /// through the patch re-anchored on the keypoint at `resolution` with the
 /// sampler `sampler` picks ([`render_view_tile`]), and scored by
 /// [`BitmapScorer`] over member coherence's window, as the bench scores a row.
+/// `patches_done`, when given, is bumped once per patch read, and `progress`
+/// receives a `patches` count about every hundredth of the way through.
 ///
 /// # Errors
 ///
@@ -189,8 +197,9 @@ pub fn read_cloud_observations(
     views: &[Option<ProjectedImage<'_>>],
     resolution: usize,
     sampler: SamplerChoice,
+    patches_done: Option<&AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<Vec<ObservationReading>, Cancelled> {
+) -> Result<ObservationReadings, Cancelled> {
     let keypoints = recon
         .keypoints_xy()
         .expect("read_cloud_observations needs a reconstruction with inline keypoints");
@@ -202,7 +211,7 @@ pub fn read_cloud_observations(
     let total = cloud.patches.len();
     let step = (total / 100).max(1);
     let done = AtomicUsize::new(0);
-    let read: Vec<(usize, Vec<ObservationReading>)> = cloud
+    let read: Vec<(usize, Vec<Option<ObservationReading>>)> = cloud
         .patches
         .par_iter()
         .zip(cloud.point_indexes.par_iter())
@@ -224,7 +233,7 @@ pub fn read_cloud_observations(
                 .enumerate()
                 .map(|(k, j)| {
                     let Some(view) = &views[set.tracks[j].image_index as usize] else {
-                        return ObservationReading::NOT_MEASURED;
+                        return None;
                     };
                     let keypoint = [f64::from(keypoints[[j, 0]]), f64::from(keypoints[[j, 1]])];
                     let tile = render_view_tile(
@@ -235,9 +244,12 @@ pub fn read_cloud_observations(
                         sampler,
                         progress,
                     );
-                    read_view_tile(&tile, scorer.as_mut(), reference == Some(k))
+                    Some(read_view_tile(&tile, scorer.as_mut(), reference == Some(k)))
                 })
                 .collect();
+            if let Some(counter) = patches_done {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n.is_multiple_of(step) || n == total {
                 progress.count(n as u64, Some(total as u64), "patches");
@@ -246,9 +258,13 @@ pub fn read_cloud_observations(
         })
         .collect();
     progress.check_cancel()?;
-    let mut out = vec![ObservationReading::NOT_MEASURED; set.tracks.len()];
+    let mut out: Vec<Option<ObservationReading>> = vec![None; set.tracks.len()];
     for (p, rows) in read {
         out[offsets[p]..offsets[p + 1]].copy_from_slice(&rows);
     }
-    Ok(out)
+    Ok(ObservationReadings::merge_read(
+        set.observation_readings.as_ref(),
+        out,
+        observation_reading_options(sampler, resolution, window),
+    ))
 }

@@ -48,7 +48,8 @@ pub use image_table::ImageTable;
 pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{ObservationSource, PointSet};
 pub use readings::{
-    observation_reading_options, ObservationReading, ObservationReadingOptions, ObservationReadings,
+    observation_reading_options, ObservationReading, ObservationReadingOptions,
+    ObservationReadings, ReadingSampler, ReadingWindow,
 };
 pub use sift_keypoints::SiftKeypointFill;
 

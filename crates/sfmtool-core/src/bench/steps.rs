@@ -206,7 +206,9 @@ pub fn create_track(
             cluster: None,
             track: Some(stored_measurement(
                 view.keypoint_xy(k),
-                view.observation_readings().map(|r| r[k]),
+                view.observation_readings()
+                    .zip(view.observation_reading_options())
+                    .map(|(r, o)| (r[k], o)),
                 view.observation_confidence().map(|c| c[k]),
             )),
         })
@@ -278,15 +280,18 @@ pub fn create_track(
 /// writes the same row again ([`measurement_reading`](super::commit::measurement_reading)).
 pub fn stored_measurement(
     keypoint: Option<[f32; 2]>,
-    reading: Option<ObservationReading>,
+    reading: Option<(
+        ObservationReading,
+        crate::reconstruction::ObservationReadingOptions,
+    )>,
     confidence: Option<u8>,
 ) -> TrackMeasurement {
-    let reading = reading.filter(ObservationReading::is_measured);
+    let reading = reading.filter(|(r, _)| r.is_measured());
     let finite = |v: f32| (!v.is_nan()).then_some(f64::from(v));
     let byte_score = confidence
         .filter(|&byte| byte != 0)
         .map(|byte| f64::from(byte) / f64::from(u8::MAX));
-    let Some(row) = reading else {
+    let Some((row, options)) = reading else {
         return TrackMeasurement {
             keypoint,
             blur_matched_zncc: byte_score,
@@ -309,6 +314,7 @@ pub fn stored_measurement(
         zoom: (!row.zoom.iter().any(|z| z.is_nan())).then(|| row.zoom.map(f64::from)),
         plain_zncc: finite(row.plain_bitmap_zncc),
         blur_matched_zncc: blur_matched.or(byte_score),
+        reading_options: Some(options),
         ..TrackMeasurement::default()
     }
 }

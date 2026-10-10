@@ -546,3 +546,42 @@ fn a_point_with_no_frame_of_its_own_is_counted_and_read_past() {
     assert!(!report.changed);
     assert_eq!(report.census.pairs_finer, 0);
 }
+
+/// Each surviving observation keeps its own readings row: the prune renders
+/// nothing, so a row moves with the observation it was read on.
+#[test]
+fn the_observation_readings_move_with_their_observations() {
+    use crate::reconstruction::{
+        observation_reading_options, ObservationReading, ObservationReadings,
+    };
+    let mut start = scene();
+    let m = start.point_set.tracks.len();
+    let tag = |j: usize| ObservationReading {
+        ellipse_axes: [j as f32 + 1.0, 0.5],
+        plain_bitmap_zncc: 0.001 * j as f32,
+        ..ObservationReading::NOT_MEASURED
+    };
+    start.point_set.observation_readings = Some(ObservationReadings {
+        rows: (0..m).map(tag).collect(),
+        options: observation_reading_options(
+            crate::camera::sampler::SamplerChoice::per_view(),
+            24,
+            crate::patch::normal_refine::PatchWindow::GaussianDisk { sigma: 0.6 },
+        ),
+    });
+    let start = edited(start);
+    let (next, map, _report) = prune(&start).expect("the fixture prunes");
+    for q in 0..next.point_count() as u32 {
+        let before = start.point(map.inverse(q).expect("kept")).expect("live");
+        let after = next.point(q).expect("live");
+        let rows = after.observation_readings().expect("carried");
+        for (k, o) in after.observations().iter().enumerate() {
+            let at = before
+                .observations()
+                .iter()
+                .position(|b| b.image_index == o.image_index)
+                .expect("an observation the input had");
+            assert_eq!(rows[k], before.observation_readings().expect("input")[at]);
+        }
+    }
+}

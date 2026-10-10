@@ -875,7 +875,7 @@ fn write_tracks<S: EntrySink>(
                     binary_hashed(
                         sink,
                         &column.entry(observation_count),
-                        readings.bytes(column),
+                        &readings.bytes(column),
                         hasher,
                     )?;
                 }

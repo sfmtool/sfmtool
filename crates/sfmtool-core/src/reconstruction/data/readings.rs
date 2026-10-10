@@ -5,9 +5,12 @@
 //! ([`ObservationReadings`]), the rows of the `.sfmr` columns flagged by
 //! `has_observation_readings`.
 
-pub use sfmtool_sfmr_format::{ObservationReading, ObservationReadingOptions};
+pub use sfmtool_sfmr_format::{
+    ObservationReading, ObservationReadingOptions, ReadingSampler, ReadingWindow,
+};
 
-use crate::camera::sampler::SamplerChoice;
+use crate::camera::sampler::{Sampler, SamplerChoice};
+use crate::patch::normal_refine::PatchWindow;
 use crate::patch::self_similarity::{SelfSimilarityParams, FLAT_FLOOR};
 
 /// One row per observation, parallel to
@@ -44,15 +47,65 @@ impl ObservationReadings {
             options: self.options,
         }
     }
+
+    /// The rows a writer that read some observations again writes, under
+    /// `options`: each row it read (`Some`), and for each it did not read
+    /// (`None`, as where a point has no patch or a photograph is not to hand)
+    /// the row `stored` holds where `stored` stands under the same options,
+    /// and a row with nothing measured where it does not or there is none, so
+    /// no column mixes readings taken under different options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stored` is not parallel to `read`.
+    pub fn merge_read(
+        stored: Option<&ObservationReadings>,
+        read: Vec<Option<ObservationReading>>,
+        options: ObservationReadingOptions,
+    ) -> Self {
+        let carried = stored.filter(|s| s.options == options);
+        if let Some(s) = carried {
+            assert_eq!(s.rows.len(), read.len(), "stored rows must be parallel");
+        }
+        let rows = read
+            .into_iter()
+            .enumerate()
+            .map(|(j, row)| {
+                row.or_else(|| carried.map(|s| s.rows[j]))
+                    .unwrap_or(ObservationReading::NOT_MEASURED)
+            })
+            .collect();
+        Self { rows, options }
+    }
 }
 
-/// The reading options of renders made with `sampler`: the default
-/// self-similarity reading ([`SelfSimilarityParams::default`], [`FLAT_FLOOR`]),
-/// which is the one every reading in this crate takes, and the sampler rule's
-/// threshold where `sampler` is the rule.
-pub fn observation_reading_options(sampler: SamplerChoice) -> ObservationReadingOptions {
+/// The reading options of renders at `resolution` made with `sampler`, their
+/// scores read over `window`: the default self-similarity reading
+/// ([`SelfSimilarityParams::default`], [`FLAT_FLOOR`]), which is the one every
+/// reading in this crate takes, and the sampler rule's threshold where
+/// `sampler` is the rule.
+pub fn observation_reading_options(
+    sampler: SamplerChoice,
+    resolution: usize,
+    window: PatchWindow,
+) -> ObservationReadingOptions {
     let params = SelfSimilarityParams::default();
+    let reading_sampler = match sampler {
+        SamplerChoice::PerView { .. } => ReadingSampler::PerView,
+        SamplerChoice::Fixed(Sampler::Bilinear) => ReadingSampler::Bilinear,
+        SamplerChoice::Fixed(Sampler::BilinearMip) => ReadingSampler::BilinearMip,
+        SamplerChoice::Fixed(Sampler::Anisotropic) => ReadingSampler::Anisotropic,
+    };
+    let (score_window, score_window_sigma) = match window {
+        PatchWindow::Uniform => (ReadingWindow::Uniform, None),
+        PatchWindow::Gaussian { sigma } => (ReadingWindow::Gaussian, Some(sigma)),
+        PatchWindow::GaussianDisk { sigma } => (ReadingWindow::GaussianDisk, Some(sigma)),
+    };
     ObservationReadingOptions {
+        resolution: resolution as u32,
+        sampler: reading_sampler,
+        score_window,
+        score_window_sigma,
         max_radius: params.max_radius,
         flat_floor: FLAT_FLOOR,
         noise: params.noise,

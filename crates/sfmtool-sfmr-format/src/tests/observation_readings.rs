@@ -7,6 +7,10 @@ use super::{make_test_data, rewrite_entries, rewrite_without_meta_key};
 use crate::*;
 
 const OPTIONS: ObservationReadingOptions = ObservationReadingOptions {
+    resolution: 24,
+    sampler: ReadingSampler::PerView,
+    score_window: ReadingWindow::GaussianDisk,
+    score_window_sigma: Some(0.6),
     max_radius: 3,
     flat_floor: 0.5,
     noise: 2.0,
@@ -269,5 +273,68 @@ fn rows_follow_their_observation_through_the_sort() {
             "row {j} misaligned"
         );
     }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_tracks_hash_is_over_the_entries_in_sorted_name_order() {
+    // Taken from the archive alone: every `tracks/` entry, sorted by name,
+    // decompressed and hashed in that order. It must be what the writer
+    // stored, whatever order the writer's own table lists the columns in.
+    use std::io::Read;
+    let mut data = make_test_data();
+    let rows: Vec<ObservationReading> = (0..8).map(|j| tagged_row(j as f32 + 1.0)).collect();
+    data.observation_readings = Some(readings_for(&rows));
+    let dir = temp_dir("sfmr_test_observation_readings_hash_order");
+    let path = dir.join("test.sfmr");
+    write_sfmr(&path, &mut data).unwrap();
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut names: Vec<String> = archive
+        .file_names()
+        .filter(|n| n.starts_with("tracks/"))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 5 + 8, "{names:?}");
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        hasher.update(&zstd::stream::decode_all(&compressed[..]).unwrap());
+    }
+    let stored = read_sfmr(&path).unwrap().content_hash.tracks_xxh128;
+    assert_eq!(sfmtool_archive_io::format_hash(hasher.digest128()), stored);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_column_in_another_layout_is_written_in_row_major_order() {
+    // A reversed view, as numpy hands over `a[::-1]`, writes its values in
+    // their logical order rather than panicking.
+    let mut data = make_test_data();
+    let rows: Vec<ObservationReading> = (0..8).map(|j| tagged_row(j as f32 + 1.0)).collect();
+    let mut readings = readings_for(&rows);
+    let reversed: Vec<f32> = rows.iter().rev().map(|r| r.plain_bitmap_zncc).collect();
+    let mut column = ndarray::Array1::from_vec(reversed);
+    column.invert_axis(ndarray::Axis(0));
+    assert!(column.as_slice().is_none());
+    readings.plain_bitmap_zncc = column;
+    data.observation_readings = Some(readings);
+    let dir = temp_dir("sfmr_test_observation_readings_layout");
+    let path = dir.join("test.sfmr");
+    write_sfmr(&path, &mut data).unwrap();
+    assert_eq!(
+        read_sfmr(&path)
+            .unwrap()
+            .observation_readings
+            .unwrap()
+            .rows(),
+        rows
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

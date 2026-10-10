@@ -270,8 +270,18 @@ class AddPatchBitmapsTransform:
         bitmaps, references = cloud.render_bitmaps(
             recon, images, resolution=self.resolution, sampler=self.sampler
         )
+        # The stored readings describe renders at their own resolution and
+        # sampler. Bitmaps rendered at another resolution make
+        # clone_with_changes drop them; bitmaps rendered with another sampler
+        # are dropped here. Rendered at the same ones, from the same
+        # references, the readings stay as the records they are, and a point
+        # whose reference the render picked has its scores cleared.
+        extra = {}
+        readings = recon.observation_readings
+        if readings is not None and readings["options"]["sampler"] != self.sampler:
+            extra["observation_readings"] = None
         return recon.clone_with_changes(
-            patch_bitmaps=bitmaps, reference_observations=references
+            patch_bitmaps=bitmaps, reference_observations=references, **extra
         )
 
     def description(self) -> str:

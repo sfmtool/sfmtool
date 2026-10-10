@@ -14,7 +14,6 @@ use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::patch::observation_reading::read_cloud_observations;
 use sfmtool_core::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
 use sfmtool_core::progress::Progress;
-use sfmtool_core::reconstruction::{observation_reading_options, ObservationReadings};
 
 use super::args::parse_sampler;
 use super::cloud::PyPatchCloud;
@@ -162,8 +161,10 @@ impl PyPatchCloud {
     /// direction and zoom, and its plain and blur-matched scores against the
     /// point's stored bitmap in ``recon`` (``1`` for the point's reference
     /// observation, ``NaN`` where the point has no stored bitmap). A row is
-    /// not measured (``NaN``) where its point has no patch in the cloud or
-    /// its tile has no data. Run it on the reconstruction whose bitmaps and
+    /// not measured (``NaN``) where its tile has no data. A point with no patch
+    /// in the cloud keeps the rows ``recon`` stores for it where those stand
+    /// under the same options (``resolution``, ``sampler``), and is not
+    /// measured otherwise. Run it on the reconstruction whose bitmaps and
     /// references are final, after ``clone_with_changes(patch_bitmaps=...,
     /// reference_observations=...)``.
     ///
@@ -174,7 +175,7 @@ impl PyPatchCloud {
     ///         :class:`ImagePyramidSet`.
     ///     resolution: The R×R grid, the bitmaps' resolution.
     ///     sampler: ``"per_view"`` (default) or one sampler for every view.
-    ///     progress: Optional progress counter (unused; reserved).
+    ///     progress: Optional progress counter, bumped once per patch.
     ///
     /// Returns:
     ///     The readings dict ``clone_with_changes(observation_readings=...)``
@@ -191,7 +192,6 @@ impl PyPatchCloud {
         sampler: &str,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-        let _ = progress;
         if resolution < 3 {
             return Err(PyValueError::new_err(format!(
                 "resolution must be >= 3, got {resolution}"
@@ -220,7 +220,8 @@ impl PyPatchCloud {
                 })
             })
             .collect();
-        let rows = py
+        let counter = progress.as_ref().map(|p| p.handle());
+        let readings = py
             .detach(|| {
                 read_cloud_observations(
                     &self.inner,
@@ -228,16 +229,11 @@ impl PyPatchCloud {
                     &views,
                     resolution as usize,
                     sampler,
+                    counter.as_deref(),
                     &Progress::none(),
                 )
             })
             .expect("nothing cancels a reading given no cancel flag");
-        crate::readings::readings_to_py(
-            py,
-            &ObservationReadings {
-                rows,
-                options: observation_reading_options(sampler),
-            },
-        )
+        crate::readings::readings_to_py(py, &readings)
     }
 }

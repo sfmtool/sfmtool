@@ -78,6 +78,7 @@ fn the_readings_are_float32_and_match_a_reading_of_the_committed_reconstruction(
         &views,
         BITMAP_R,
         crate::camera::sampler::SamplerChoice::per_view(),
+        None,
         &Progress::none(),
     )
     .expect("not cancelled");
@@ -91,7 +92,7 @@ fn the_readings_are_float32_and_match_a_reading_of_the_committed_reconstruction(
     for j in run {
         // The committed frame is stored in `f32`, so the render differs from
         // the evaluation's by the rounding of the frame.
-        let (a, b) = (rows[j], stored[j]);
+        let (a, b) = (rows.rows[j], stored[j]);
         assert_eq!(a.ellipse_axes_is_at_least, b.ellipse_axes_is_at_least);
         for (x, y) in [
             (a.ellipse_axes[0], b.ellipse_axes[0]),
@@ -143,14 +144,77 @@ fn a_committed_point_put_on_the_bench_reads_its_stored_readings_back() {
     let _ = again;
 }
 
+/// The options the bench's evaluation reads a row under at `resolution`.
+fn bench_options(resolution: usize) -> crate::reconstruction::ObservationReadingOptions {
+    crate::reconstruction::observation_reading_options(
+        EvaluateOptions::default().localize.sampler,
+        resolution,
+        crate::patch::member_coherence::MemberCoherenceParams::default().window,
+    )
+}
+
 #[test]
-fn a_base_with_readings_under_other_options_gets_unmeasured_rows() {
+fn a_commit_records_the_options_its_rows_were_read_under() {
+    let scene = Scene::new();
+    let (next, point, _) = evaluated_and_committed(&scene);
+    let written = next.point(point).expect("just written");
+    let options = written.observation_reading_options().expect("stored");
+    assert_eq!(options, bench_options(BITMAP_R));
+    assert_eq!(options.resolution, BITMAP_R as u32);
+    assert_eq!(
+        options.sampler,
+        crate::reconstruction::ReadingSampler::PerView
+    );
+}
+
+#[test]
+fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
+    // A point with no patch in the cloud keeps the rows the value stores,
+    // where they stand under the same options; under other options it is not
+    // measured.
+    let scene = Scene::new();
+    let (next, point, _) = evaluated_and_committed(&scene);
+    let (recon, map) = next.materialize();
+    let p = map.forward(point).expect("kept") as usize;
+    let mut cloud = PatchCloud::from_stored_frames(&recon).expect("a patch frame");
+    let at = cloud
+        .point_indexes
+        .iter()
+        .position(|&q| q as usize == p)
+        .expect("the point has a patch");
+    cloud.patches.remove(at);
+    cloud.point_indexes.remove(at);
+    let views: Vec<_> = scene.views().into_iter().map(Some).collect();
+    let read = |resolution: usize| {
+        read_cloud_observations(
+            &cloud,
+            &recon,
+            &views,
+            resolution,
+            crate::camera::sampler::SamplerChoice::per_view(),
+            None,
+            &Progress::none(),
+        )
+        .expect("not cancelled")
+    };
+    let stored = recon
+        .point_set
+        .observation_readings
+        .as_ref()
+        .expect("stored");
+    let run = recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1];
+    let same = read(BITMAP_R);
+    assert_eq!(&same.rows[run.clone()], &stored.rows[run.clone()]);
+    let other = read(16);
+    assert_eq!(other.options.resolution, 16);
+    assert!(other.rows[run].iter().all(|r| !r.is_measured()));
+}
+
+#[test]
+fn a_base_with_readings_at_another_resolution_gets_unmeasured_rows() {
     let scene = Scene::new();
     let mut recon = fixture_with_columns(&scene, WORLD, BITMAP_R);
-    let mut options = crate::reconstruction::observation_reading_options(
-        crate::camera::sampler::SamplerChoice::per_view(),
-    );
-    options.max_radius += 1;
+    let options = bench_options(BITMAP_R / 2);
     recon.point_set.observation_readings =
         Some(crate::reconstruction::ObservationReadings::not_measured(
             recon.point_set.tracks.len(),

@@ -445,6 +445,13 @@ pub struct TrackMeasurement {
     /// `None` wherever the tile could not be rendered or its centre does not
     /// project.
     pub zoom: Option<[f64; 2]>,
+    /// The options the row's tile was rendered and read under: its
+    /// resolution, sampler, the window its scores were read over and the
+    /// self-similarity reading's settings, which a commit stores the row's
+    /// readings under. `None` wherever the tile could not be rendered; on a
+    /// row read back from a committed point, the options the point's
+    /// readings were stored under.
+    pub reading_options: Option<crate::reconstruction::ObservationReadingOptions>,
     /// The **coverage** of the observation's own `R×R` tile: the share of its
     /// samples the warp places on the photograph, `0 ..= 1`. `None` wherever
     /// the tile could not be rendered.

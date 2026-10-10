@@ -12,11 +12,10 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::camera::sampler::SamplerChoice;
-use sfmtool_core::reconstruction::{
-    observation_reading_options, ObservationReadingOptions, ObservationReadings,
-};
+use sfmtool_core::reconstruction::{ObservationReadingOptions, ObservationReadings};
 use sfmtool_sfmr_format::ObservationReadingColumns;
+
+use crate::helpers::{py_to_serde, serde_to_py};
 
 /// The keys of the eight columns, as the `.sfmr` file names them.
 pub(crate) const COLUMN_KEYS: [&str; 8] = [
@@ -30,53 +29,29 @@ pub(crate) const COLUMN_KEYS: [&str; 8] = [
     "blur_matched_bitmap_zncc",
 ];
 
-/// The options as a dict: `max_radius`, `flat_floor`, `noise`,
-/// `relative_tolerance` and `anisotropic_threshold` (`None` where every render
-/// used one sampler).
-fn options_to_py<'py>(
+/// The options as a dict, under the keys `tracks/metadata.json` stores them
+/// by: `resolution`, `sampler` (`"per_view"`, `"bilinear"`, `"bilinear_mip"`
+/// or `"anisotropic"`), `score_window` (`"uniform"`, `"gaussian"` or
+/// `"gaussian_disk"`), `score_window_sigma`, `max_radius`, `flat_floor`,
+/// `noise`, `relative_tolerance` and `anisotropic_threshold` (`None` for one
+/// sampler for every view).
+pub(crate) fn options_to_py<'py>(
     py: Python<'py>,
     options: &ObservationReadingOptions,
-) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("max_radius", options.max_radius)?;
-    d.set_item("flat_floor", options.flat_floor)?;
-    d.set_item("noise", options.noise)?;
-    d.set_item("relative_tolerance", options.relative_tolerance)?;
-    d.set_item("anisotropic_threshold", options.anisotropic_threshold)?;
-    Ok(d)
+) -> PyResult<Bound<'py, PyAny>> {
+    Ok(serde_to_py(py, options)?.into_bound(py))
 }
 
-fn options_from_py(value: Option<Bound<'_, PyAny>>) -> PyResult<ObservationReadingOptions> {
-    let defaults = observation_reading_options(SamplerChoice::per_view());
-    let Some(value) = value.filter(|v| !v.is_none()) else {
-        return Ok(defaults);
-    };
-    let d = value
-        .cast::<PyDict>()
-        .map_err(|_| PyTypeError::new_err("observation_readings['options'] must be a dict"))?;
-    let get = |key: &str| d.get_item(key);
-    Ok(ObservationReadingOptions {
-        max_radius: match get("max_radius")? {
-            Some(v) => v.extract()?,
-            None => defaults.max_radius,
-        },
-        flat_floor: match get("flat_floor")? {
-            Some(v) => v.extract()?,
-            None => defaults.flat_floor,
-        },
-        noise: match get("noise")? {
-            Some(v) => v.extract()?,
-            None => defaults.noise,
-        },
-        relative_tolerance: match get("relative_tolerance")? {
-            Some(v) => v.extract()?,
-            None => defaults.relative_tolerance,
-        },
-        anisotropic_threshold: match get("anisotropic_threshold")? {
-            Some(v) => v.extract()?,
-            None => defaults.anisotropic_threshold,
-        },
-    })
+/// The options from such a dict. Every key is required: readings are only
+/// comparable under the same options, so none is assumed.
+pub(crate) fn options_from_py(value: &Bound<'_, PyAny>) -> PyResult<ObservationReadingOptions> {
+    if !value.is_instance_of::<PyDict>() {
+        return Err(PyTypeError::new_err(
+            "observation_readings['options'] must be a dict",
+        ));
+    }
+    py_to_serde(value.py(), value)
+        .map_err(|e| PyValueError::new_err(format!("observation_readings['options']: {e}")))
 }
 
 /// The columns as a dict of numpy arrays, with `"options"`.
@@ -159,7 +134,7 @@ pub(crate) fn columns_from_py(
                 "observation_readings['{key}'] must be a 1D float32 array"
             ))
         })?;
-        Ok(a.as_array().to_owned())
+        Ok(a.as_array().as_standard_layout().into_owned())
     };
     let f32_2 = |key: &str| -> PyResult<ndarray::Array2<f32>> {
         let a: PyReadonlyArray2<f32> = item(key)?.extract().map_err(|_| {
@@ -187,7 +162,7 @@ pub(crate) fn columns_from_py(
         zncc_self_similarity_zoom: f32_2(COLUMN_KEYS[5])?,
         plain_bitmap_zncc: f32_1(COLUMN_KEYS[6])?,
         blur_matched_bitmap_zncc: f32_1(COLUMN_KEYS[7])?,
-        options: options_from_py(d.get_item("options")?)?,
+        options: options_from_py(&item("options")?)?,
     };
     // Without a count to hold them to, the first column sets it.
     let rows = observation_count.unwrap_or(columns.zncc_self_similarity_ellipse_axes.nrows());

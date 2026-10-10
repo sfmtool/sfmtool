@@ -1056,9 +1056,11 @@ fn settle_reference_observations(
 /// `inner` with the same point index and the same image name, and an
 /// observation `inner` does not have is not measured; where the point count
 /// changed, no observation can be matched, and the columns are dropped. Where
-/// the tracks are kept, every row is kept, except that a point whose reference
-/// observation changed has its scores cleared, since they were read against
-/// the bitmap of another reference.
+/// the tracks are kept, every row is kept. Then, in either case, the columns
+/// are dropped where the value now stores bitmaps at another resolution than
+/// the readings were taken at, and a point whose reference observation is
+/// another observation than before has its scores cleared, since they were
+/// read against the bitmap of another reference.
 fn settle_observation_readings(
     inner: &SfmrReconstruction,
     recon: &mut SfmrReconstruction,
@@ -1104,17 +1106,34 @@ fn settle_observation_readings(
             rows,
             options: old.options,
         });
+    }
+    // Every row describes a render at the readings' resolution; bitmaps now
+    // stored at another one say the renders the file names are at that R, so
+    // no row describes them, and the columns are dropped.
+    let bitmap_resolution = recon
+        .point_set
+        .patch_bitmaps_y_x_rgba
+        .as_ref()
+        .filter(|_| !recon.point_set.patch_bitmaps_for_display)
+        .map(|b| b.shape()[1] as u32);
+    if bitmap_resolution.is_some_and(|r| r != old.options.resolution) {
+        recon.point_set.observation_readings = None;
         return;
     }
-    if let (Some(before), Some(after)) = (
-        inner.point_set.reference_observations.as_ref(),
-        recon.point_set.reference_observations.clone(),
-    ) {
-        if before.len() == after.len() {
-            for (p, (a, b)) in before.iter().zip(&after).enumerate() {
-                if a != b {
-                    recon.point_set.clear_observation_scores(p);
-                }
+    // A point whose reference observation is another observation than before
+    // (by image name, so it holds when the tracks were replaced too) has its
+    // scores cleared: they were read against the bitmap of the old reference.
+    if recon.point_set.points.len() == old_point_count {
+        let reference_image = |r: &SfmrReconstruction, p: usize| -> Option<String> {
+            r.point_set.reference_observation_row(p).map(|row| {
+                r.image_table.images[r.point_set.tracks[row].image_index as usize]
+                    .name
+                    .clone()
+            })
+        };
+        for p in 0..old_point_count {
+            if reference_image(inner, p) != reference_image(recon, p) {
+                recon.point_set.clear_observation_scores(p);
             }
         }
     }

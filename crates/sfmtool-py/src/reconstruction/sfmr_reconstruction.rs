@@ -403,8 +403,10 @@ impl PySfmrReconstruction {
     /// grid px per photograph px), ``plain_bitmap_zncc`` and
     /// ``blur_matched_bitmap_zncc`` ``(M,)`` float32 (scores against the
     /// stored bitmap, ``1`` for the reference observation); and ``"options"``,
-    /// a dict of the reading's ``max_radius``, ``flat_floor``, ``noise`` and
-    /// ``relative_tolerance`` and the sampler rule's ``anisotropic_threshold``.
+    /// a dict of the options every row stands under: the renders' ``resolution``,
+    /// ``sampler``, ``score_window`` and ``score_window_sigma``, the reading's
+    /// ``max_radius``, ``flat_floor``, ``noise`` and ``relative_tolerance``, and
+    /// the sampler rule's ``anisotropic_threshold``; passing readings requires it.
     /// ``NaN`` axes mean the observation was not measured; a ``NaN`` score
     /// means it was not read. Set it with
     /// ``clone_with_changes(observation_readings=...)``; every pass that drops

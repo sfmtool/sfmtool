@@ -35,6 +35,7 @@ fn accepted(p: u32) -> Accepted {
         keypoint: [1.0, 1.0],
         zncc: 0.9,
         reading: ObservationReading::NOT_MEASURED,
+        reading_options: None,
     }
 }
 
@@ -518,6 +519,44 @@ fn the_new_views_readings_are_written_with_its_observation() {
         assert!(z.is_nan() || z == c.zncc as f32, "{z} against {}", c.zncc);
     }
     assert!(added > 0);
+}
+
+#[test]
+fn the_new_rows_stand_under_the_options_they_were_read_with() {
+    // A base without readings takes the options the new views were read
+    // under; a base whose readings stand under another resolution keeps its
+    // own, and the new rows are not measured rather than mixed in.
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let cap = capture(&points);
+    let (next, report) = run(&cap, &fixed());
+    let options = next
+        .point_set
+        .observation_readings
+        .as_ref()
+        .expect("created")
+        .options;
+    let read = report
+        .candidates
+        .iter()
+        .find_map(|c| c.reading_options)
+        .expect("a candidate was read");
+    assert_eq!(options, read);
+    assert_eq!(
+        options.sampler,
+        crate::reconstruction::ReadingSampler::PerView
+    );
+
+    let mut cap = capture(&points);
+    let mut other = read;
+    other.resolution += 8;
+    cap.recon.point_set.observation_readings = Some(ObservationReadings::not_measured(
+        cap.recon.point_set.tracks.len(),
+        other,
+    ));
+    let (next, _report) = run(&cap, &fixed());
+    let readings = next.point_set.observation_readings.as_ref().expect("kept");
+    assert_eq!(readings.options, other);
+    assert!(readings.rows.iter().all(|r| !r.is_measured()));
 }
 
 #[test]

@@ -33,7 +33,6 @@ use rayon::prelude::*;
 use sfmtool_sfmr_format::ContentHash;
 
 use crate::camera::image::ImageU8Pyramid;
-use crate::camera::sampler::SamplerChoice;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
@@ -52,7 +51,8 @@ use crate::progress_info;
 use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::data::{
     observation_confidence_byte, observation_reading_options, ObservationReading,
-    ObservationReadings, ObservationSource, SfmrReconstruction, TrackObservation,
+    ObservationReadingOptions, ObservationReadings, ObservationSource, SfmrReconstruction,
+    TrackObservation,
 };
 
 /// The scale factor from a median absolute deviation to a normal standard
@@ -380,6 +380,10 @@ pub struct CandidateReport {
     /// is not the stored bitmap. [`ObservationReading::NOT_MEASURED`] until the
     /// score is read.
     pub reading: ObservationReading,
+    /// The options [`Self::reading`] was taken under: the resolution the
+    /// tile was rendered at, the localizer's sampler and the window its
+    /// scores were read over. `None` until the score is read.
+    pub reading_options: Option<ObservationReadingOptions>,
 }
 
 impl CandidateReport {
@@ -405,6 +409,7 @@ impl CandidateReport {
             judged: f64::NAN,
             bar: f64::NAN,
             reading: ObservationReading::NOT_MEASURED,
+            reading_options: None,
         }
     }
 
@@ -763,6 +768,7 @@ pub fn add_image_to_tracks(
             keypoint: c.keypoint.expect("an accepted candidate has a keypoint"),
             zncc: c.zncc,
             reading: c.reading,
+            reading_options: c.reading_options,
         })
         .collect();
     let observations_before = set.tracks.len();
@@ -975,10 +981,11 @@ impl Context<'_, '_> {
             return out;
         };
         out.pair_zncc = score.pair_zncc;
-        let (references_z, z, reading) =
+        let (references_z, z, reading, reading_options) =
             self.bitmap_scores(&patch, &local, &references, &ref_keypoints, keypoint);
         settle_score(&mut out, references_z, z);
         out.reading = reading;
+        out.reading_options = Some(reading_options);
         out
     }
 
@@ -1000,7 +1007,7 @@ impl Context<'_, '_> {
         references: &TrackReferences,
         ref_keypoints: &[[f64; 2]],
         keypoint: [f64; 2],
-    ) -> (Vec<f64>, f64, ObservationReading) {
+    ) -> (Vec<f64>, f64, ObservationReading, ObservationReadingOptions) {
         let render = |l: usize, kp: [f64; 2], r: usize| {
             render_view_tile(
                 patch,
@@ -1065,7 +1072,8 @@ impl Context<'_, '_> {
             tile.jacobian.map(zoom_of_jacobian),
             stored.then_some((score.plain_zncc, score.blur_matched_zncc)),
         );
-        (references_z, score.blur_matched_zncc, reading)
+        let options = observation_reading_options(self.localize.sampler, r, self.localize.window);
+        (references_z, score.blur_matched_zncc, reading, options)
     }
 }
 
@@ -1182,14 +1190,17 @@ struct Accepted {
     keypoint: [f64; 2],
     zncc: f64,
     reading: ObservationReading,
+    reading_options: Option<ObservationReadingOptions>,
 }
 
 /// `source` with one observation of `image` added to each point in `accepted`
 /// (each point at most once), in image order within its track, with its
-/// `observation_confidence` and its readings. The readings column is created
-/// where `source` has none, every existing row not measured; where `source`'s
-/// readings stand under other options, the new rows are not measured either.
-/// Every other column travels verbatim.
+/// `observation_confidence` and its readings. The column's options are
+/// `source`'s where it has readings, else those of the first new row read;
+/// where `source` has none it is created, every existing row not measured. A
+/// new row read under other options than the column's (another resolution,
+/// sampler or window) is written with nothing measured. Every other column
+/// travels verbatim.
 fn insert_observations(
     source: &SfmrReconstruction,
     image: u32,
@@ -1199,15 +1210,15 @@ fn insert_observations(
         return source.clone();
     }
     let set = &source.point_set;
-    let options = observation_reading_options(SamplerChoice::per_view());
-    let comparable = set
+    let column_options = set
         .observation_readings
         .as_ref()
-        .is_none_or(|r| r.options == options);
+        .map(|r| r.options)
+        .or_else(|| accepted.iter().find_map(|a| a.reading_options));
     let mut added: HashMap<u32, ([f64; 2], f64, ObservationReading)> =
         HashMap::with_capacity(accepted.len());
     for a in accepted {
-        let reading = if comparable {
+        let reading = if column_options.is_some() && a.reading_options == column_options {
             a.reading
         } else {
             ObservationReading::NOT_MEASURED
@@ -1318,13 +1329,12 @@ fn insert_observations(
     out.observation_confidence = confidence;
     // A column is written where `source` has one, and where a new row was
     // measured.
-    if set.observation_readings.is_some() || readings.iter().any(ObservationReading::is_measured) {
+    if let Some(options) = column_options.filter(|_| {
+        set.observation_readings.is_some() || readings.iter().any(ObservationReading::is_measured)
+    }) {
         out.observation_readings = Some(ObservationReadings {
             rows: readings,
-            options: set
-                .observation_readings
-                .as_ref()
-                .map_or(options, |r| r.options),
+            options,
         });
     }
     out.reference_observations = references;

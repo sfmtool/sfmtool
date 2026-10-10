@@ -96,6 +96,7 @@ pub(super) fn new_record(seed: u32, image_count: u32) -> PointRecord {
         constraint: Some((POINT_CONSTRAINT_FREE, f64::NAN, NO_REFERENCE_IMAGE)),
         reference_observation: Some(1),
         display_only_reference: false,
+        reading_options: None,
     }
 }
 

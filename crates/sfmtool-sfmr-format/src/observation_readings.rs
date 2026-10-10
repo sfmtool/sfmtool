@@ -10,6 +10,8 @@
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 
+use std::borrow::Cow;
+
 use crate::entries::ReadingColumn;
 
 /// The `tracks/metadata.json` flag that says the eight observation-reading
@@ -127,12 +129,52 @@ impl PartialEq for ObservationReading {
     }
 }
 
+/// Which sampler the renders were made with: the sampler rule per view, or
+/// one sampler for every view. Stored by its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingSampler {
+    /// The sampler rule, per view, at
+    /// [`ObservationReadingOptions::anisotropic_threshold`].
+    PerView,
+    /// Plain bilinear for every view.
+    Bilinear,
+    /// One bilinear sample from the matching pyramid level for every view.
+    BilinearMip,
+    /// The anisotropic sampler for every view.
+    Anisotropic,
+}
+
+/// The window the scores against the stored bitmap were read over. Stored by
+/// its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingWindow {
+    /// Every sample weighted equally.
+    Uniform,
+    /// A Gaussian over the square grid.
+    Gaussian,
+    /// A Gaussian confined to the inscribed disk.
+    GaussianDisk,
+}
+
 /// The options the readings were taken with, recorded in
-/// `tracks/metadata.json` so a reader can tell whether the stored radii are
-/// comparable with its own, and work out each render's sampler from its
-/// stored zoom.
+/// `tracks/metadata.json` so a reader can tell whether the stored readings
+/// are comparable with its own, and work out each render's sampler from its
+/// stored zoom. Two sets of readings are comparable only where every field is
+/// equal: a writer whose rows would stand under other options writes rows
+/// with nothing measured rather than mix them into one column.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ObservationReadingOptions {
+    /// The patch resolution `R` of the renders, the edge of the `R×R` tile
+    /// every reading is taken on, in grid px.
+    pub resolution: u32,
+    /// The sampler the renders were made with.
+    pub sampler: ReadingSampler,
+    /// The window the scores were read over.
+    pub score_window: ReadingWindow,
+    /// The window's sigma; `None` (`null`) for [`ReadingWindow::Uniform`].
+    pub score_window_sigma: Option<f64>,
     /// The self-similarity reading's `max_radius` `r`, in grid px: the
     /// largest shift searched and the largest radius read.
     pub max_radius: u32,
@@ -145,7 +187,8 @@ pub struct ObservationReadingOptions {
     /// fraction.
     pub relative_tolerance: f64,
     /// The sampler rule's threshold `a` the renders were made under; `None`
-    /// (`null`) where every render used one sampler whatever its zoom.
+    /// (`null`) where every render used one sampler whatever its zoom
+    /// (any [`Self::sampler`] but [`ReadingSampler::PerView`]).
     pub anisotropic_threshold: Option<f64>,
 }
 
@@ -305,39 +348,33 @@ impl ObservationReadingColumns {
         Self::from_rows(&picked, self.options)
     }
 
-    /// The stored bytes of `column`, little-endian, row-major.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a column is not contiguous.
-    pub(crate) fn bytes(&self, column: ReadingColumn) -> &[u8] {
-        fn f32s(a: &[f32]) -> &[u8] {
-            bytemuck::cast_slice(a)
+    /// The stored bytes of `column`, little-endian, row-major: borrowed where
+    /// the column is in standard layout, copied in row-major order where it
+    /// is not (a reversed or sliced view a caller handed in).
+    pub(crate) fn bytes(&self, column: ReadingColumn) -> Cow<'_, [u8]> {
+        fn f32s<D: ndarray::Dimension>(a: &ndarray::Array<f32, D>) -> Cow<'_, [u8]> {
+            match a.as_slice() {
+                Some(s) => Cow::Borrowed(bytemuck::cast_slice(s)),
+                None => Cow::Owned(a.iter().flat_map(|v| v.to_le_bytes()).collect()),
+            }
         }
         match column {
-            ReadingColumn::BlurMatchedBitmapZncc => {
-                f32s(self.blur_matched_bitmap_zncc.as_slice().unwrap())
+            ReadingColumn::BlurMatchedBitmapZncc => f32s(&self.blur_matched_bitmap_zncc),
+            ReadingColumn::PlainBitmapZncc => f32s(&self.plain_bitmap_zncc),
+            ReadingColumn::CosViewAngle => f32s(&self.zncc_self_similarity_cos_view_angle),
+            ReadingColumn::EllipseAxes => f32s(&self.zncc_self_similarity_ellipse_axes),
+            ReadingColumn::EllipseAxesIsAtLeast => {
+                let a = &self.zncc_self_similarity_ellipse_axes_is_at_least;
+                match a.as_slice() {
+                    Some(s) => Cow::Borrowed(s),
+                    None => Cow::Owned(a.iter().copied().collect()),
+                }
             }
-            ReadingColumn::PlainBitmapZncc => f32s(self.plain_bitmap_zncc.as_slice().unwrap()),
-            ReadingColumn::CosViewAngle => {
-                f32s(self.zncc_self_similarity_cos_view_angle.as_slice().unwrap())
+            ReadingColumn::EllipseMajorAngle => {
+                f32s(&self.zncc_self_similarity_ellipse_major_angle)
             }
-            ReadingColumn::EllipseAxes => {
-                f32s(self.zncc_self_similarity_ellipse_axes.as_slice().unwrap())
-            }
-            ReadingColumn::EllipseAxesIsAtLeast => self
-                .zncc_self_similarity_ellipse_axes_is_at_least
-                .as_slice()
-                .unwrap(),
-            ReadingColumn::EllipseMajorAngle => f32s(
-                self.zncc_self_similarity_ellipse_major_angle
-                    .as_slice()
-                    .unwrap(),
-            ),
-            ReadingColumn::TiltAngle => {
-                f32s(self.zncc_self_similarity_tilt_angle.as_slice().unwrap())
-            }
-            ReadingColumn::Zoom => f32s(self.zncc_self_similarity_zoom.as_slice().unwrap()),
+            ReadingColumn::TiltAngle => f32s(&self.zncc_self_similarity_tilt_angle),
+            ReadingColumn::Zoom => f32s(&self.zncc_self_similarity_zoom),
         }
     }
 }

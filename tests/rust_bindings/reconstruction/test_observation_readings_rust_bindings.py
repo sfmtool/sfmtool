@@ -39,8 +39,22 @@ def _readings(m: int) -> dict:
         "zncc_self_similarity_zoom": np.tile(np.float32([0.25, 0.5]), (m, 1)),
         "plain_bitmap_zncc": (tag * 1e-4).astype(np.float32),
         "blur_matched_bitmap_zncc": (tag * 2e-4).astype(np.float32),
+        "options": dict(OPTIONS),
     }
     return out
+
+
+OPTIONS = {
+    "resolution": 24,
+    "sampler": "per_view",
+    "score_window": "gaussian_disk",
+    "score_window_sigma": 0.6,
+    "max_radius": 3,
+    "flat_floor": 0.5,
+    "noise": 2.0,
+    "relative_tolerance": 0.05,
+    "anisotropic_threshold": 1.5,
+}
 
 
 def _assert_rows_equal(a: dict, b: dict) -> None:
@@ -162,3 +176,59 @@ def test_a_changed_reference_clears_that_points_scores(ground_truth):
     np.testing.assert_array_equal(
         got["plain_bitmap_zncc"][keep], want["plain_bitmap_zncc"][keep]
     )
+
+
+def test_options_are_required_and_round_trip(ground_truth):
+    m = len(np.asarray(ground_truth.track_point_indexes))
+    readings = _readings(m)
+    del readings["options"]
+    with pytest.raises(ValueError, match="options"):
+        ground_truth.clone_with_changes(observation_readings=readings)
+    partial = _readings(m)
+    del partial["options"]["resolution"]
+    with pytest.raises(ValueError, match="resolution"):
+        ground_truth.clone_with_changes(observation_readings=partial)
+    got = ground_truth.clone_with_changes(observation_readings=_readings(m))
+    assert got.observation_readings["options"] == OPTIONS
+
+
+def test_a_reversed_column_writes(ground_truth, seoul_bull_ground_truth_sfmr):
+    # A column handed over as a reversed view is written in its logical order,
+    # rather than failing on its negative stride.
+    m = len(np.asarray(ground_truth.track_point_indexes))
+    path = seoul_bull_ground_truth_sfmr.parent / "with_readings.sfmr"
+    ground_truth.clone_with_changes(observation_readings=_readings(m)).save(path)
+    data = read_sfmr(path)
+    arr = np.ascontiguousarray(data["observation_readings"]["plain_bitmap_zncc"][::-1])
+    data["observation_readings"]["plain_bitmap_zncc"] = arr[::-1]
+    out = seoul_bull_ground_truth_sfmr.parent / "reversed.sfmr"
+    write_sfmr(out, data)
+    np.testing.assert_array_equal(
+        read_sfmr(out)["observation_readings"]["plain_bitmap_zncc"],
+        _readings(m)["plain_bitmap_zncc"],
+    )
+
+
+def test_an_edit_record_carries_its_options(ground_truth):
+    from sfmtool.reconstruction import EditedReconstruction
+
+    m = len(np.asarray(ground_truth.track_point_indexes))
+    recon = ground_truth.clone_with_changes(observation_readings=_readings(m))
+    edited = EditedReconstruction(recon)
+    record = edited.point(0)
+    assert record["observation_readings"]["options"] == OPTIONS
+    # Handed back as it came, the rows stand.
+    kept = edited.replace_point(0, dict(record))
+    np.testing.assert_array_equal(
+        edited.point(kept)["observation_readings"]["plain_bitmap_zncc"],
+        record["observation_readings"]["plain_bitmap_zncc"],
+    )
+    # Read under another resolution, they are not measured.
+    other = dict(record)
+    readings = {k: v for k, v in record["observation_readings"].items()}
+    readings["options"] = dict(OPTIONS, resolution=12)
+    other["observation_readings"] = readings
+    moved = edited.replace_point(kept, other)
+    got = edited.point(moved)["observation_readings"]
+    assert got["options"] == OPTIONS
+    assert np.isnan(got["zncc_self_similarity_ellipse_axes"]).all()

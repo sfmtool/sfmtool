@@ -32,7 +32,11 @@ fn demo_with_readings(num_points: usize) -> SfmrReconstruction {
     let m = recon.point_set.tracks.len();
     recon.point_set.observation_readings = Some(ObservationReadings {
         rows: (0..m).map(tagged).collect(),
-        options: observation_reading_options(SamplerChoice::per_view()),
+        options: observation_reading_options(
+            SamplerChoice::per_view(),
+            24,
+            crate::patch::normal_refine::PatchWindow::GaussianDisk { sigma: 0.6 },
+        ),
     });
     recon.validate_observation_columns().unwrap();
     recon
@@ -134,8 +138,27 @@ fn an_edit_brings_readings_to_a_base_without_them() {
     for (k, o) in record.observations.iter_mut().enumerate() {
         o.reading = Some(tagged(k));
     }
+    let options = demo_with_readings(1)
+        .point_set
+        .observation_readings
+        .unwrap()
+        .options;
+    // Without the options they were read under, the rows are not taken.
+    let mut unlabelled = edited.clone();
+    unlabelled.replace_point(0, record.clone()).unwrap();
+    assert!(unlabelled
+        .materialize()
+        .0
+        .point_set
+        .observation_readings
+        .is_none());
+    record.reading_options = Some(options);
     edited.replace_point(0, record).unwrap();
     let (out, _) = edited.materialize();
+    assert_eq!(
+        out.point_set.observation_readings.as_ref().unwrap().options,
+        options
+    );
     let r = rows(&out);
     assert_eq!(r.len(), out.point_set.tracks.len());
     // The rewritten point keeps its slot, the first.
