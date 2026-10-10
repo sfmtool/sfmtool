@@ -373,7 +373,8 @@ pub fn clusters_to_pair_matches(
 ///
 /// Args:
 ///     images: One HxW / HxWxC uint8 numpy array per image, in the
-///         images-section order the cluster arrays index.
+///         images-section order the cluster arrays index. Colour images are
+///         RGB, as ``sfmtool.fileio.read_image_rgb`` returns them.
 ///     positions: Per image, the (N, 2) float32 SIFT keypoint positions
 ///         (COLMAP pixel convention), parallel to ``images``.
 ///     affine_shapes: Per image, the (N, 2, 2) float32 SIFT affine shapes,

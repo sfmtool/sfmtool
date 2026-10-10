@@ -218,9 +218,8 @@ def test_enriched_output_states_the_refinement(cluster_matches_file: Path):
     member_images = np.asarray(src["member_images"])
     member_features = np.asarray(src["member_features"])
     for i, name in enumerate(src["image_names"]):
-        # The command hands the kernel `read_image_rgb`'s pixels in BGR.
-        rgb = read_image_rgb(workspace_dir / name)
-        images.append(np.ascontiguousarray(rgb[:, :, ::-1]))
+        # The command hands the kernel `read_image_rgb`'s pixels as they are.
+        images.append(read_image_rgb(workspace_dir / name))
         count = int(src["feature_counts"][i])
         p = np.zeros((count, 2), dtype=np.float32)
         a = np.zeros((count, 2, 2), dtype=np.float32)

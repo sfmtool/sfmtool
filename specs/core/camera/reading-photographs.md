@@ -83,8 +83,9 @@ except the two below:
 - `load_gray` in [_image_load.py](../../../src/sfmtool/_image_load.py), the
   grey decode for optical flow, which converts the RGB with OpenCV's
   `COLOR_RGB2GRAY`.
-- `cluster-patches`, whose refinement kernel takes BGR, as the viewer's
-  cluster run hands it too; it reverses the channels after the read.
+- `cluster-patches`, whose refinement kernel takes the RGB as read. The
+  viewer's cluster run reads with `ImageU8::read_rgb`, so it hands the kernel
+  the same pixels.
 - The `sfmtool`, OpenCV and COLMAP SIFT backends' decodes and thumbnails, and
   `xform --add-thumbnails`.
 - `render_equirect_panorama`, and the drawing in `sift --draw`, the epipolar,

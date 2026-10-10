@@ -742,12 +742,11 @@ fn member_detections(
 
 /// Every photograph decoded into a full pyramid, in the node's order.
 ///
-/// **In blue, green, red order.** `sfm cluster-patches` reads its photographs
-/// with `read_image_rgb` and reverses the channels to BGR for the kernel, the
-/// order its refinement was first built and measured in; the refinement
-/// averages a score over the channels, so the order is the order of a
-/// floating-point sum, and matching it keeps the two builds' arithmetic the
-/// same.
+/// Each is read with [`ImageU8::read_rgb`], the reader under
+/// `sfm cluster-patches`' `read_image_rgb`, so the two builds hand the
+/// refinement the same RGB pixels. The refinement averages a score over the
+/// channels, so the channel order is the order of a floating-point sum, and
+/// reading the same order keeps the two builds' arithmetic the same.
 fn read_photographs(
     photographs: &[PathBuf],
     progress: &Progress<'_>,
@@ -761,14 +760,9 @@ fn read_photographs(
             if phase.is_cancelled() {
                 return Ok(None);
             }
-            let decoded = image::open(path)
+            let image = ImageU8::read_rgb(path)
                 .map_err(|e| format!("Cannot read the photograph {}: {e}", path.display()))?;
-            let mut bgr = decoded.to_rgb8();
-            for pixel in bgr.pixels_mut() {
-                pixel.0.swap(0, 2);
-            }
-            let (width, height) = bgr.dimensions();
-            let image = ImageU8::new(width, height, 3, bgr.into_raw());
+            let (width, height) = (image.width(), image.height());
             let pyramid =
                 ImageU8Pyramid::from_image(image, ImageU8Pyramid::full_levels(width, height));
             let finished = done.fetch_add(1, Ordering::Relaxed) + 1;

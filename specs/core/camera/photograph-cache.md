@@ -315,9 +315,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 ## Non-goals
 
-- **Cluster patches** keeps its own reads. It wants BGR channel order and full
-  pyramid depth to match `sfm cluster-patches` arithmetic, and it runs once per
-  index build.
+- **Cluster patches** keeps its own reads. It wants full pyramid depth to
+  match `sfm cluster-patches` arithmetic, and it runs once per index build.
 - **Display thumbnails and the 3D view's background image** keep their own
   decodes. The first make small images once per open; the second is a GPU
   texture the renderer caches.

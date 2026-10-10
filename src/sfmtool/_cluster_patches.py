@@ -104,18 +104,14 @@ def _run_cluster_patches(
     detected_positions = np.asarray(data["member_positions"], dtype=np.float32)
     detected_shapes = np.asarray(data["member_affine_shapes"], dtype=np.float32)
 
-    def _read_one(name: str):
-        # The kernel works in BGR, the order the viewer's cluster run hands
-        # it too, so the decoded RGB is reversed here.
-        rgb = read_image_rgb(workspace_dir / name)
-        return np.ascontiguousarray(rgb[:, :, ::-1])
-
     click.echo("Reading images...")
     # Decode in a thread pool (the decoder releases the GIL), collecting results in
     # submission order so the list stays parallel to `image_names` (the
-    # embed-patches pattern).
+    # embed-patches pattern). The kernel takes the RGB the reader returns.
     with ThreadPoolExecutor() as pool:
-        futures = [pool.submit(_read_one, name) for name in image_names]
+        futures = [
+            pool.submit(read_image_rgb, workspace_dir / name) for name in image_names
+        ]
         images = []
         try:
             for future in futures:

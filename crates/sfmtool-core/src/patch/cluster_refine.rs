@@ -1274,7 +1274,10 @@ fn member_zncc_at(
 /// cluster.
 ///
 /// The kernel is pure: no I/O, no `.sift` reads — the caller supplies decoded
-/// pyramids and feature geometry, one [`FeatureGeometry`] per pyramid.
+/// pyramids and feature geometry, one [`FeatureGeometry`] per pyramid. A
+/// colour pyramid is RGB, as [`ImageU8::read_rgb`](crate::camera::image::ImageU8::read_rgb)
+/// decodes it. The score averages the channels, so their order changes only
+/// the order of that floating-point sum.
 ///
 /// # Panics
 ///

@@ -134,7 +134,8 @@ fn a_build_writes_cluster_patches_that_read_current() {
 /// calling the build's own functions: the self-join and the clustering as the
 /// `background_floor_clusters_kdf` binding ran them, the members' detections
 /// read from the `.sift` files as `sfm match --cluster` reads them, the
-/// photographs in OpenCV's channel order with the binding's pyramid depth, and
+/// photographs as `read_image_rgb` decodes them with the binding's pyramid
+/// depth, and
 /// the whole refinement in one call with the options `sfm cluster-patches`
 /// passes, rather than in batches.
 #[test]
@@ -219,21 +220,14 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     assert_eq!(built.feature_counts.to_vec(), counts);
 
     // `sfm cluster-patches`: the photographs as `read_image_rgb` decodes them,
-    // reversed to BGR, the detections scattered to their rows, one refinement
-    // call.
+    // the detections scattered to their rows, one refinement call.
     let pyramids: Vec<ImageU8Pyramid> = recon
         .image_table
         .images
         .iter()
         .map(|image| {
-            let mut bgr = image::open(recon.workspace_dir.join(&image.name))
-                .unwrap()
-                .to_rgb8();
-            for pixel in bgr.pixels_mut() {
-                pixel.0.swap(0, 2);
-            }
-            let (w, h) = bgr.dimensions();
-            let src = ImageU8::new(w, h, 3, bgr.into_raw());
+            let src = ImageU8::read_rgb(&recon.workspace_dir.join(&image.name)).unwrap();
+            let (w, h) = (src.width(), src.height());
             ImageU8Pyramid::build(&src, ImageU8Pyramid::full_levels(w, h))
         })
         .collect();
