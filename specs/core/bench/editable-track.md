@@ -106,7 +106,7 @@ impl Observation {
 
 pub struct TrackMeasurement {
     pub keypoint: Option<[f32; 2]>,
-    pub plain_zncc: Option<f64>,             // the score: the tile against the stored bitmap, plain; 1 for its row
+    pub plain_zncc: Option<f64>,             // the tile against the stored bitmap, plain; 1 for its row
     pub plain_zncc_middle: Option<f64>,      // the same over the middle square
     pub plain_zncc_grid: Option<[[f64; 3]; 3]>, // and over each ninth of the tile
     pub seed_shift_px: Option<f64>,          // the peak against the reference render, grid px; None: not read
@@ -129,7 +129,7 @@ pub struct TrackMeasurement {
     pub pair_zncc_grid: Option<[[f64; 3]; 3]>, // the same per ninth
     pub cell_deficit: Option<f64>,           // the worst ninth below the typical agreement
     pub reference_view: Option<ReferenceStanding>, // what the reference-view rule decided
-    pub blur_matched_zncc: Option<f64>,      // the score with the bitmap blurred to this row
+    pub blur_matched_zncc: Option<f64>,      // the score the bars judge: the bitmap blurred to this row
     pub blur_matched_zncc_middle: Option<f64>, // the same over the middle square
     pub blur_matched_zncc_grid: Option<[[f64; 3]; 3]>, // and over each ninth
     pub bitmap_blur_sigma: Option<f64>,      // that blur's width, 0 where read plain
@@ -139,7 +139,7 @@ pub struct TrackMeasurement {
     pub walked_plain_zncc: Option<f64>,      // the tile there against the stored bitmap, plain
     pub walked_plain_zncc_middle: Option<f64>, // and its middle reading
     pub walked_plain_zncc_grid: Option<[[f64; 3]; 3]>, // and its ZNCC grid
-    pub walked_blur_matched_zncc: Option<f64>, // the same tile, blur-matched
+    pub walked_blur_matched_zncc: Option<f64>, // the same tile, blur-matched, the one judged
     pub walked_blur_matched_zncc_middle: Option<f64>, // and its middle reading
     pub walked_blur_matched_zncc_grid: Option<[[f64; 3]; 3]>, // and its ZNCC grid
     pub reason: Option<Unmeasured>,          // the localizer's refusal, or why there is no score
@@ -176,8 +176,8 @@ pub enum Stage {
 pub struct Origin { pub version: u64, pub point: u32 }
 
 pub struct Thresholds {
-    pub min_zncc: f64,                       // track stage: the score against the stored bitmap
-    pub min_zncc_middle: f64,                // track stage; 0 turns it off
+    pub min_zncc: f64,                       // track stage: the blur-matched score against the stored bitmap
+    pub min_zncc_middle: f64,                // track stage, its middle; 0 turns it off
     pub cluster_min_zncc: f64,               // cluster stage: the achieved template ZNCC
     pub cluster_min_zncc_middle: f64,        // cluster stage; 0 turns it off
     pub max_shift_px: f64,
@@ -196,8 +196,8 @@ impl Thresholds {
 // projection error bar in source-image px.
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
-pub const BENCH_MIN_ZNCC: f64 = 0.65;                // measured (§ "Parameters")
-pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.0;          // off
+pub const BENCH_MIN_ZNCC: f64 = 0.70;                // measured (§ "Parameters")
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.50;         // chosen from the same measurement
 pub const BENCH_CLUSTER_MIN_ZNCC: f64 = 0.7;         // not measured
 pub const BENCH_CLUSTER_MIN_ZNCC_MIDDLE: f64 = 0.7;  // not measured
 pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
@@ -1307,14 +1307,15 @@ photographs show.
 
 **The refusal can be overruled, so the fit keeps what it refused.** Beside
 `walked_px` the row carries `walked_to`, the refined keypoint the bound turned
-away, and `walked_plain_zncc`, the plain score against the stored bitmap of the
-tile rendered at `walked_to`, with `walked_plain_zncc_middle` and
-`walked_plain_zncc_grid` beside it, and the same three read blur-matched
-(`walked_blur_matched_zncc`, `_middle`, `_grid`). Every reading that scores the
+away, and `walked_blur_matched_zncc`, the blur-matched score against the
+stored bitmap of the tile rendered at `walked_to`, the score the bars judge,
+with `walked_blur_matched_zncc_middle` and `walked_blur_matched_zncc_grid`
+beside it, and the same three read plain (`walked_plain_zncc`, `_middle`,
+`_grid`). Every reading that scores the
 rows against the bitmap scores the tile at `walked_to` too, the evaluation a fit
 ends with among them, so the two scores are always against the same bitmap
 (absent where the track has no bitmap or the tile could not be read). Set
-beside the row's own `plain_zncc`, read at the seed, the
+beside the row's own `blur_matched_zncc`, read at the seed, the
 two say whether the walk found the same detail better or a different detail. A person
 who judges the walked place right **accepts the walk** by putting the sighting
 there with `sight_observation(track, edited, i, walked_to)`: that is a hand
@@ -1360,17 +1361,18 @@ bitmap's own row reads `1` in both, not computed. The tile at a refused walk's
 pixel is read the same way, into `walked_plain_zncc_middle` and
 `walked_blur_matched_zncc_middle`.
 
-At the track stage the whole-patch `plain_zncc` has the bar `min_zncc`, and the
-middle reading has a bar of its own, `min_zncc_middle`, which is off at `0`;
-the cluster stage has its own pair, `cluster_min_zncc` and
-`cluster_min_zncc_middle` (`Thresholds::zncc_bars`). The track stage's middle
-bar defaults to `BENCH_MIN_ZNCC_MIDDLE`, which is `0`, off: in the measurement
-behind the track stage's bars a middle bar beside the whole bar cost members
-and turned out no more wrong views (§ "Parameters"). Where it is on it sits no
-higher than the whole-patch bar: the middle covers a quarter of the samples,
-so on a correct sighting it scatters more and reads markedly lower than the
-whole, and a higher middle bar would turn out correct sightings the whole bar
-keeps. The middle bar reads `plain_zncc_middle`. A middle reading is `None`
+At the track stage the whole-patch `blur_matched_zncc` has the bar
+`min_zncc`, and the middle reading has a bar of its own, `min_zncc_middle`,
+which `0` turns off; the cluster stage has its own pair, `cluster_min_zncc`
+and `cluster_min_zncc_middle` (`Thresholds::zncc_bars`). The track stage's
+middle bar defaults to `BENCH_MIN_ZNCC_MIDDLE`, `0.50`: in the measurement
+behind the track stage's bars a middle bar beside the whole bar changes the
+objective by little either way, and at `0.50` it turns out a few more of the
+wrong views most similar to the true content (§ "Parameters"). Where it is on
+it sits no higher than the whole-patch bar: the middle covers a quarter of the
+samples, so on a correct sighting it scatters more and reads markedly lower
+than the whole, and a higher middle bar would turn out correct sightings the
+whole bar keeps. The middle bar reads `blur_matched_zncc_middle`. A middle reading is `None`
 wherever its stage's whole-patch reading is and
 where the middle cannot be read (fewer than eight samples with data in both, or
 every channel flat). A row with no middle reading clears the middle bar, the
@@ -1551,13 +1553,19 @@ judge and the painting ranks rows by:
 
 The row the bitmap is the tile of (`TrackPayload::reference`) reads `1` for
 the whole, the middle and every cell, plain and blur-matched, and `0` for the blur,
-with no `sharper_than_bitmap`, and is not computed. **The bars judge the plain
-score.** It reads lower for a view that is out of focus than the blur-matched
-score does. A blurred view of the right place is a view to keep, and the ZNCC
-bars are not there to catch focus: of the blurred true members in the
-measurement (§ "Parameters") that clear the geometry bars, the default bar
-turns out 5.6%, against 3.5% of the sharp ones. The self-similarity bar is
-another matter: it turns out 55% of the blurred members. A row the track has no
+with no `sharper_than_bitmap`, and is not computed. **The bars judge the
+blur-matched score**, whole, middle and grid alike. The plain score charges a
+row for detail the bitmap carries and the row's tile cannot, so a view that is
+out of focus reads lower than its content deserves; blur matching blurs only
+the bitmap, only where it is sharper than the tile along every direction, and
+only until it reaches the tile's sharpest direction, so what is left of the
+disagreement is the content, not the focus. A blurred view of the right place
+is a view to keep, and the ZNCC bars are not there to catch focus: of the
+blurred true members in the measurement (§ "Parameters") that clear the
+geometry bars, the default bars turn out 2.1%, where the plain score's `0.65`
+turned out 5.2%. The self-similarity bar is another matter: it turns out 55%
+of the blurred members. The plain readings stay beside the blur-matched ones
+to show what blur matching changed. A row the track has no
 bitmap to read against, before its first render or after a step dropped the
 bitmap, has no score: its `reason` is `NoBitmap` where the localizer read it,
 and the bars leave its verdict where it is (`bar_checks` is `None` for it).
@@ -1582,11 +1590,12 @@ every reader of a row's ZNCC reads the score against the bitmap:
 
 | Reader | Reads |
 |---|---|
-| The bars (`bar_checks`, `apply_thresholds`, `verdicts_if_unpinned`) and the painting's ranking | the plain score against the bitmap |
-| Track View's *ZNCC* column, grid and hover, the wire's `plain_zncc*` and `blur_matched_zncc*` | the score against the bitmap, plain and blur-matched |
-| Track at Pixel's own gates (the median ZNCC its members and finish judge) | `plain_zncc` and `plain_zncc_middle`, over the `in` rows other than the reference row ([track-at-pixel.md](track-at-pixel.md)) |
-| The commit's `observation_confidence`, and `create_track` reading it back | `plain_zncc`, the reference row's `1` among them |
-| The fit's walk (`walked_plain_zncc`, `walked_plain_zncc_middle`, `walked_plain_zncc_grid`) | the plain score against the bitmap of the tile at `walked_to`; `walked_blur_matched_zncc*` beside them judge nothing |
+| The bars (`bar_checks`, `apply_thresholds`, `verdicts_if_unpinned`), the cells' colours and the painting's ranking | the blur-matched score against the bitmap, `blur_matched_zncc` and `blur_matched_zncc_middle` |
+| Track View's *ZNCC* column, grid and sort | the blur-matched score; the cell's hover shows the plain and blur-matched scores side by side |
+| The wire's `plain_zncc*` and `blur_matched_zncc*` | both; its description says the blur-matched ones judge |
+| Track at Pixel's own gates (the median ZNCC its members and finish judge) | `blur_matched_zncc` and `blur_matched_zncc_middle`, over the `in` rows other than the reference row ([track-at-pixel.md](track-at-pixel.md)) |
+| The commit's `observation_confidence`, and `create_track` reading it back | `blur_matched_zncc`, the reference row's `1` among them; read back into `blur_matched_zncc` alone |
+| The fit's walk and *Accept walk*'s hover (`walked_blur_matched_zncc`, `walked_blur_matched_zncc_middle`, `walked_blur_matched_zncc_grid`) | the blur-matched score against the bitmap of the tile at `walked_to`; `walked_plain_zncc*` beside them judge nothing |
 | Nearby tracks, the geometry search, cluster-stage rows | their own kernels' ZNCCs |
 
 The standing always agrees with the verdicts. The rule decides over the rows
@@ -1819,7 +1828,7 @@ origin set to that point, and every observation `in` and **pinned**. The
 point's observations are ones a reconstruction already decided on, so they stand
 as that decision until a person hands them to the bars with `unpin_verdicts`;
 an evaluation's repaint does not move them. **Nothing is recomputed.** The
-score against the bitmap (`plain_zncc`) is `observation_confidence` read back out of
+score against the bitmap (`blur_matched_zncc`, with no plain score beside it) is `observation_confidence` read back out of
 its byte scale where the column exists, which is what a commit writes there,
 and every other measurement an evaluation would produce is left unmeasured.
 With no localizer reading (`seed_shift_px`) the bars judge no row until the
@@ -2505,10 +2514,10 @@ stored bitmap for its score. What lands in each slot is:
 
 | Slot | What it says |
 |------|--------------|
-| `plain_zncc` | The **score**: the row's tile at its keypoint against the stored bitmap, plain; `1` on the bitmap's own row (§ "The reference view", "The scores against the stored bitmap"). What `min_zncc` paints on. `None` where the track has no bitmap on the tile's grid. |
-| `plain_zncc_middle` | The same tile and bitmap over the middle square of the tile only (§ "The middle ZNCC"). What `min_zncc_middle` paints on. |
-| `plain_zncc_grid` | The same tile and bitmap over each ninth of the tile (§ "The ZNCC grid"). |
-| `blur_matched_zncc`, `blur_matched_zncc_middle`, `blur_matched_zncc_grid`, `bitmap_blur_sigma`, `sharper_than_bitmap` | The whole, middle and grid scores with the bitmap alone blurred to the row's sharpness (the plain ones where it is not blurred), that blur's width, and whether the row is sharper than the bitmap. No bar judges them. |
+| `blur_matched_zncc` | The **score**: the row's tile at its keypoint against the stored bitmap, the bitmap alone blurred to the row's sharpness where it is sharper along every direction (the plain score where it is not); `1` on the bitmap's own row (§ "The reference view", "The scores against the stored bitmap"). What `min_zncc` paints on and the cell is coloured by. `None` where the track has no bitmap on the tile's grid. |
+| `blur_matched_zncc_middle` | The same over the middle square of the tile only (§ "The middle ZNCC"). What `min_zncc_middle` paints on. |
+| `blur_matched_zncc_grid` | The same over each ninth of the tile (§ "The ZNCC grid"). |
+| `plain_zncc`, `plain_zncc_middle`, `plain_zncc_grid`, `bitmap_blur_sigma`, `sharper_than_bitmap` | The whole, middle and grid scores against the bitmap as stored, the blur's width (`0` where read plain), and whether the row is sharper than the bitmap. No bar judges them; they show what blur matching changed. |
 | `seed_shift_px` | How far the localizer's correlation peak against the reference render, searched within the track's `max_shift_px` of where the sighting is, sits from the observation's own keypoint, in patch-grid px on the patch's plane, both ends through the unprojection the localizer seeds from; `0` on the reference's own row. The **sighting's** own evidence, and what `max_shift_px` paints on. In the unit of the self-similarity radius, so a shift inside the radius is within what the patch cannot tell apart. Present is also the statement that the localizer read the row: `None` where it could not, and the bars then do not judge the row. |
 | `walked_px`, `walked_to`, `walked_plain_zncc*`, `walked_blur_matched_zncc*` | Where a fit's bound refused to walk the row, and the scores against the bitmap of the tile there, plain and blur-matched, whole, middle and grid (§ "The fit's walk is bounded by the person's bar"). Set and cleared by a fit; the scores are read again by every reading that scores the rows. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. What `max_projection_error_px` paints on before the track is triangulated. |
@@ -2839,8 +2848,8 @@ frame states, the mean of what the last evaluation measured as each `in`
 sighting's reprojection error in the point's `error` column (zero where nothing
 was measured, which is what a point no observation could be scored for carries
 anywhere else), and one observation per `in` sighting with its keypoint and, in
-`observation_confidence` where the column exists, its plain score against the
-bitmap (`plain_zncc`) clamped to `0 ..= 1` and scaled to a byte, a measured score
+`observation_confidence` where the column exists, its blur-matched score against the
+bitmap (`blur_matched_zncc`) clamped to `0 ..= 1` and scaled to a byte, a measured score
 that would round to `0` raised to `1`: `255` for the reference observation,
 `0` where the row has no score or the score is not a number. The
 observations are written in image order, which is the order a stored track is in
@@ -2964,7 +2973,7 @@ it is also the radius a reading searches and the bound on a fit's walk
 (§ "The fit's walk is bounded by the person's bar"). The two stages judge
 different scores and have their own ZNCC bars (`Thresholds::zncc_bars`).
 `min_zncc` and `min_zncc_middle` are the track stage's, `BENCH_MIN_ZNCC`
-(`0.65`) and `BENCH_MIN_ZNCC_MIDDLE` (`0`, off), measured as below; a tile
+(`0.70`) and `BENCH_MIN_ZNCC_MIDDLE` (`0.50`), on the blur-matched score, measured as below; a tile
 read against one view's render reads lower on a correct sighting than the
 cluster refinement's score after it has fitted a whole affine warp, and the
 batch pass keeps its `0.85`. `cluster_min_zncc` and `cluster_min_zncc_middle`
@@ -2983,165 +2992,166 @@ someone moves it.
 tracks of at least four observations from each of eight reconstructions: the
 seoul_bull and kerry_park ground truths, whose members are correct, and six
 solves (kerry480, a badlands panorama, a mossy railing, a gallery sculpture,
-the dino toy and a Christmas tree), whose members are assumed correct. 1,169
-of the 1,200 tracks have a reference row and receive planted views. A wrong
-view is a substitution: a square of another place in the same photograph,
-either the most similar one found or a random other point's keypoint, is
-pasted unwarped over the row's keypoint in an image the track observes, or
-over the point's projection in an image it does not. The square's half-width
-is the footprint's radius plus 10 px, so it covers the footprint with a
-margin; the footprint's radius is 20 source px at the median, from 8 at the
-10th percentile to 49 at the 90th. A substitution's similarity is the ZNCC of
-the pasted content with the true content over the footprint. True members
-blurred with a Gaussian of sigma 1.5 or 3 source px, the same width whatever
-the footprint, count as members to keep: a blurred view of the right place is
-a view to keep, and the bars are not there to catch focus. Planted rows are
-pinned `out`, so they do not change the other rows' readings. The measurement
-was taken when the localizer still placed each row against the leave-one-out
-consensus of the others, which it no longer computes; the `0.7` / `0.7` column
-below reads that leave-one-out score, the bars of that date. The shift bar's
-figures were read under that localizer too, and the bars have not been
-measured again since every row is aligned to the reference render
-([`../patch/patch-keypoint-localization.md`](../patch/patch-keypoint-localization.md)).
+the dino toy and a Christmas tree), whose members are assumed correct. Every
+view is aligned to the reference render (§ "Fitting"). 1,169 of the 1,200
+tracks have a reference row and receive planted views. A wrong view is a
+substitution: a square of another place in the same photograph, either the
+most similar one found or a random other point's keypoint, is pasted unwarped
+over the row's keypoint in an image the track observes, or over the point's
+projection in an image it does not. The square's half-width is the
+footprint's radius plus 10 px, so it covers the footprint with a margin; the
+footprint's radius is 20 source px at the median, from 8 at the 10th
+percentile to 49 at the 90th. A substitution's similarity is the ZNCC of the
+pasted content with the true content over the footprint. True members blurred
+with a Gaussian of sigma 1.5 or 3 source px, the same width whatever the
+footprint, count as members to keep: a blurred view of the right place is a
+view to keep, and the bars are not there to catch focus. Planted rows are
+pinned `out`, so they do not change the other rows' readings. Every row is
+read on both scores against the stored bitmap, plain and blur-matched, and
+the bars are evaluated on each. The bitmap is blurred for 10.4% of the
+members, 68.6% of the blurred members and 55.5% of the similar substitutions.
 
-**Most planted views fail a geometry bar.** 62% of the judged substitutions
-fail some geometry bar (59% of those in observed images), against 12% of the
-members. The projection bar turns out at most 1.4% of them. The shift bar
-turns out 24% to 54% of them, by kind and image, against 0.5% of the members,
-and the self-similarity bar 47% to 62% of the similar ones, against 10.6% of
+**Most planted views fail a geometry bar.** 78% of the judged substitutions
+fail some geometry bar (75% of those in observed images), against 12.9% of
+the members. The projection bar turns out at most 1.5% of them. The shift bar
+turns out 50% to 75% of them, by kind and image, against 2.0% of the members,
+and the self-similarity bar 47% to 64% of the similar ones, against 10.7% of
 the members. Part of this is likely the planting: the pasted square's edge
 lies inside the tile. A row that fails a geometry bar is out whatever the ZNCC
 bars are, so the measure of the ZNCC bars counts only the rows, members and
 substitutions, that clear every geometry bar. Substitutions in images the
 track does not observe are left out of it too: there the unmodified true
-pixels at the projection fail the `0.65` bar in 67.4% of the cases that clear
-the geometry bars (occlusion, the viewing angle), so turning out a
+pixels at the projection fail a blur-matched `0.70` bar in 63.4% of the cases
+that clear the geometry bars (occlusion, the viewing angle), so turning out a
 substitution there says little about the bar. They are reported apart.
-
-Of the judged rows that clear every geometry bar, the ZNCC bars alone turn out
-(substitutions) or lose (true rows), with `n` the rows each share is over, the
-`0.7` / `0.7` column reading the leave-one-out ZNCC and the others the score
-against the bitmap:
-
-| Rows that clear every geometry bar | n | `0.7` / `0.7`, leave-one-out reading | `0.7` alone | `0.65` alone, the default | `0.60` alone |
-|---|---|---|---|---|---|
-| Substitutions in observed images, similarity below 0.5 | 703 | 96.6% | 99.0% | 97.2% | 95.4% |
-| … similarity 0.5 to 0.7 | 134 | 73.1% | 88.8% | 82.8% | 71.6% |
-| … similarity 0.7 to 0.85 | 34 | 52.9% | 70.6% | 55.9% | 41.2% |
-| … similarity 0.85 and above | 6 | 33.3% | 16.7% | 16.7% | 16.7% |
-| … all, turned out | 877 | 90.9% | 95.8% | 92.8% | 89.2% |
-| Substitutions in observed and unobserved images (all plants), turned out | 1,378 | 92.1% | 96.8% | 94.5% | 91.7% |
-| Members, lost | 7,021 | 4.4% | 6.4% | 3.5% | 2.2% |
-| Blurred members, lost | 916 | 14.3% | 9.4% | 5.6% | 2.7% |
-| True pixels at the projection in unobserved images, lost | 528 | 46.2% | 72.5% | 67.4% | 62.3% |
 
 The objective is the mean over tracks of the average of two shares, over the
 rows that clear every geometry bar: the members kept (blurred ones included)
 and the substitutions in observed images turned out. The grid is the whole bar
 from 0.50 to 0.85 in steps of 0.05, with the middle bar off or from 0.30 up to
-the whole bar. Per-track means of members kept / substitutions turned out, on
-the objective's rows, and beside them with every bar applied to every member
-and every substitution in every image (all plants):
+the whole bar, on each score. The pick is held out by reconstruction: the
+grid's best on seven reconstructions is scored on the eighth.
 
-| Reconstruction | `0.7` / `0.7`, leave-one-out | `0.7` alone | `0.65` alone, the default | `0.60` alone | All plants, every bar: `0.7` / `0.7`, leave-one-out | All plants, every bar: `0.65` alone |
+Of the judged rows that clear every geometry bar, the ZNCC bars turn out
+(substitutions) or lose (true rows), with `n` the rows each share is over and
+the middle bar off unless a column names it:
+
+| Rows that clear every geometry bar | n | plain `0.65`, the default before | plain `0.70` | blur-matched `0.65` | blur-matched `0.70` | blur-matched `0.70` / `0.50`, the default |
 |---|---|---|---|---|---|---|
-| seoul_bull ground truth | 87.9 / 91.7 | 85.5 / 100 | 90.9 / 100 | 93.4 / 97.2 | 62.6 / 97.7 | 64.6 / 100 |
-| kerry_park ground truth | 92.2 / 86.1 | 90.9 / 96.7 | 94.9 / 93.4 | 97.3 / 91.0 | 67.2 / 98.0 | 69.6 / 99.1 |
-| kerry480 | 96.3 / 92.2 | 93.8 / 94.2 | 97.5 / 92.9 | 98.7 / 90.3 | 79.1 / 97.6 | 79.5 / 98.3 |
-| badlands | 100 / 91.3 | 100 / 91.3 | 100 / 88.4 | 100 / 83.3 | 86.3 / 95.1 | 86.3 / 93.9 |
-| mossy railing | 97.8 / 97.3 | 97.7 / 100 | 99.3 / 98.5 | 99.9 / 96.9 | 88.6 / 98.3 | 89.9 / 99.1 |
-| gallery sculpture | 91.1 / 90.3 | 93.6 / 94.2 | 96.7 / 90.3 | 98.7 / 88.1 | 74.9 / 96.0 | 80.0 / 95.8 |
-| dino toy | 73.8 / 91.9 | 78.8 / 95.3 | 84.6 / 88.5 | 89.8 / 82.4 | 42.0 / 98.3 | 45.7 / 98.1 |
-| Christmas tree | 95.4 / 77.0 | 93.8 / 89.5 | 97.4 / 84.9 | 98.3 / 76.3 | 80.0 / 94.8 | 81.8 / 96.9 |
-| mean over tracks | 91.8 / 90.4 | 91.7 / 95.5 | 95.2 / 92.5 | 97.0 / 88.9 | 72.4 / 97.1 | 74.5 / 97.8 |
-| objective (average of the two) | 91.1 | 93.6 | 93.8 | 92.9 | | |
+| Substitutions in observed images, similarity below 0.5 | 423 | 96.0% | 98.6% | 95.5% | 98.1% | 98.3% |
+| … similarity 0.5 to 0.7 | 95 | 78.9% | 86.3% | 75.8% | 85.3% | 85.3% |
+| … similarity 0.7 to 0.85 | 22 | 45.5% | 63.6% | 31.8% | 59.1% | 59.1% |
+| … similarity 0.85 and above | 6 | 33.3% | 33.3% | 33.3% | 33.3% | 50.0% |
+| … all, turned out | 546 | 90.3% | 94.3% | 88.8% | 93.6% | 94.0% |
+| Substitutions in observed and unobserved images (all plants), turned out | 841 | 92.5% | 95.7% | 91.0% | 95.0% | 95.2% |
+| Members, lost | 7,126 | 3.1% | 5.9% | 2.7% | 5.2% | 5.8% |
+| … members whose bitmap is blurred, lost | 695 | 6.5% | 12.9% | 2.6% | 5.6% | 6.6% |
+| Blurred members, lost | 922 | 5.2% | 9.0% | 1.0% | 1.8% | 2.1% |
+| True pixels at the projection in unobserved images, lost | 418 | 58.9% | 64.8% | 57.4% | 63.4% | 63.4% |
 
-Against `0.7` / `0.7` on the leave-one-out reading, the bars on `main` before
-this measurement, the default keeps more of the objective's members on seven
-reconstructions and the same on the badlands; it turns out more of the
-objective's substitutions on five, the same on the gallery sculpture and fewer
-on the badlands (88.4 against 91.3) and the dino toy (88.5 against 91.9).
+Per-track means of members kept / substitutions turned out, on the
+objective's rows, and beside them with every bar applied to every member and
+every substitution in every image (all plants):
 
-The default is picked by leave-one-reconstruction-out: the grid's best on
-seven reconstructions is scored on the eighth. Held out:
+| Reconstruction | plain `0.65` | plain `0.70` | blur-matched `0.65` | blur-matched `0.70` | blur-matched `0.70` / `0.50` | All plants, every bar: plain `0.65` | All plants, every bar: blur-matched `0.70` / `0.50` |
+|---|---|---|---|---|---|---|---|
+| seoul_bull ground truth | 91.3 / 96.9 | 85.9 / 99.0 | 92.5 / 94.9 | 87.5 / 99.0 | 87.0 / 99.0 | 64.6 / 99.5 | 61.4 / 99.8 |
+| kerry_park ground truth | 95.2 / 92.3 | 91.1 / 97.4 | 96.3 / 91.0 | 93.3 / 93.6 | 92.2 / 93.6 | 69.4 / 99.3 | 67.1 / 99.1 |
+| kerry480 | 98.2 / 83.8 | 94.8 / 86.5 | 99.1 / 83.8 | 96.7 / 86.5 | 96.6 / 86.5 | 78.0 / 98.2 | 76.8 / 98.4 |
+| badlands | 100 / 82.4 | 100 / 87.0 | 100 / 82.4 | 100 / 87.0 | 100 / 88.9 | 86.6 / 94.0 | 86.6 / 96.0 |
+| mossy railing | 99.3 / 98.1 | 97.7 / 100 | 99.4 / 97.2 | 98.1 / 99.1 | 98.1 / 99.1 | 89.9 / 99.1 | 88.9 / 99.7 |
+| gallery sculpture | 96.7 / 91.8 | 93.6 / 95.9 | 97.8 / 91.8 | 95.5 / 95.9 | 95.4 / 95.9 | 80.2 / 98.2 | 79.6 / 99.0 |
+| dino toy | 85.6 / 84.0 | 79.1 / 93.6 | 87.4 / 79.8 | 82.2 / 91.5 | 79.6 / 93.6 | 45.4 / 98.5 | 43.0 / 99.5 |
+| Christmas tree | 97.8 / 80.6 | 94.2 / 86.1 | 98.6 / 75.9 | 95.6 / 86.1 | 95.5 / 86.1 | 81.6 / 97.3 | 79.8 / 98.0 |
+| mean over tracks | 95.6 / 90.0 | 92.2 / 94.1 | 96.5 / 88.5 | 93.7 / 93.4 | 93.2 / 93.8 | 74.5 / 98.2 | 72.9 / 98.8 |
+| objective (average of the two) | 92.80 | 93.15 | 92.48 | 93.55 | 93.48 | | |
 
-| Held out | Pick on the other seven | Pick | `0.65` alone, the default | `0.60` alone | `0.7` alone | `0.7` / `0.7` |
-|---|---|---|---|---|---|---|
-| seoul_bull ground truth | `0.65` / `0.40` | 95.2 | 95.4 | 95.3 | 92.8 | 89.3 |
-| kerry_park ground truth | `0.65` / `0.40` | 94.0 | 94.2 | 94.1 | 93.8 | 90.5 |
-| kerry480 | `0.65` / `0.30` | 95.2 | 95.2 | 94.5 | 94.0 | 94.3 |
-| badlands | `0.65` / `0.30` | 95.7 | 94.2 | 91.7 | 95.7 | 96.4 |
-| mossy railing | `0.65` / `0.30` | 98.9 | 98.9 | 98.4 | 98.9 | 98.2 |
-| gallery sculpture | `0.65` / `0.30` | 93.5 | 93.5 | 93.4 | 93.9 | 92.9 |
-| dino toy | `0.65` / `0.40` | 88.1 | 86.6 | 86.1 | 87.0 | 77.7 |
-| Christmas tree | `0.65` / `0.30` | 91.1 | 91.1 | 87.3 | 91.6 | 91.0 |
-| mean | | 94.0 | 93.6 | 92.6 | 93.5 | 91.3 |
+Held out by reconstruction:
 
-Every fold picks a whole bar of `0.65`, with a middle bar of 0.30 or 0.40.
-With the middle bar off, the whole bar alone picks `0.65` on seven folds and
-`0.70` on the seoul_bull fold. `0.65` beats `0.60` on every fold, and beats
-`0.7` alone, the same score with the middle bar off, on four folds of eight:
-93.6 against 93.5 on average, 93.8 against 93.6 over all the data. A higher
-whole bar turns out more of the rare substitutions that are very similar to
-the true content (in the 0.7 to 0.85 band, 55.9% at `0.65` against 70.6% at
-`0.7`), at the cost of members.
+| Held out | Pick on the other seven, plain | Pick, blur-matched | plain `0.65` | plain `0.70` | blur-matched pick | blur-matched `0.70` | blur-matched `0.70` / `0.30` | blur-matched `0.70` / `0.50` |
+|---|---|---|---|---|---|---|---|---|
+| seoul_bull ground truth | `0.70` / `0.30` | `0.70` / `0.30` | 94.1 | 92.4 | 93.3 | 93.3 | 93.3 | 93.0 |
+| kerry_park ground truth | `0.70` / `0.30` | `0.70` / `0.30` | 93.8 | 94.3 | 93.5 | 93.5 | 93.5 | 92.9 |
+| kerry480 | `0.70` / `0.30` | `0.70` / `0.30` | 91.0 | 90.6 | 91.6 | 91.6 | 91.6 | 91.5 |
+| badlands | `0.65` / `0.30` | `0.70` / `0.30` | 91.2 | 93.5 | 94.4 | 93.5 | 94.4 | 94.4 |
+| mossy railing | `0.70` / `0.30` | `0.70` / `0.30` | 98.7 | 98.9 | 98.6 | 98.6 | 98.6 | 98.6 |
+| gallery sculpture | `0.65` / `0.30` | `0.70` / `0.30` | 94.3 | 94.8 | 95.7 | 95.7 | 95.7 | 95.6 |
+| dino toy | `0.70` / `0.30` | `0.70` / `0.30` | 84.8 | 86.4 | 87.7 | 86.9 | 87.7 | 86.6 |
+| Christmas tree | `0.65` / `0.30` | `0.70` / `0.30` | 89.2 | 90.1 | 90.9 | 90.9 | 90.9 | 90.8 |
+| mean | | | 92.13 | 92.62 | 93.20 | 92.98 | 93.20 | 92.94 |
+
+On the blur-matched score every fold picks a whole bar of `0.70` with a
+middle bar of `0.30`, and with the middle bar off every fold picks `0.70`. On
+the plain score the picks are `0.70` / `0.30` on five folds and `0.65` /
+`0.30` on three, and the whole bar alone picks `0.70` on all eight: under
+alignment to the reference render the plain score moves to `0.70` as well.
+The plain score's held-out pick scores 92.51.
+
+**The defaults.** `min_zncc` is `0.70` and `min_zncc_middle` is `0.50`, both
+on the blur-matched score. Blur matching is what lets the whole bar rise:
+against the plain `0.65` it replaced, the blur-matched `0.70` with the middle
+bar off loses 1.8% of the blurred members rather than 5.2%, and 5.6% of the
+members whose bitmap is blurred rather than 6.5%, while it turns out 93.6% of
+the substitutions in observed images rather than 90.3%, and 59.1% of those
+0.7 to 0.85 similar to the true content rather than 45.5%. It loses 5.2% of
+the members rather than 3.1%. On the plain score a `0.70` bar loses 9.0% of
+the blurred members. The middle bar was chosen at `0.50` by the maintainer;
+in this data it changes little. Beside the whole bar of `0.70` the objective
+is 93.48 over all the data with the middle bar at `0.50`, 93.55 with it off
+and 93.74 at `0.30`, and held out 92.94, 92.98 and 93.20. At `0.50` it turns
+out 94.0% of the substitutions in observed images rather than 93.6%,
+including 3 of the 6 that are 0.85 or more similar to the true content rather
+than 2, for 0.6% more of the members and 0.3% more of the blurred ones. Every
+middle bar from `0.30` to `0.55` is within 0.3 point of the bar off; from
+`0.60` up the objective falls.
 
 The badlands reconstruction cannot inform the ZNCC bar: every member there
-that clears the geometry bars reads at least 0.855, so no whole bar up to 0.85
-loses one, and its fold prefers whichever bar turns out the most substitutions.
+that clears the geometry bars reads at least 0.892 blur-matched (0.855
+plain), so no whole bar up to 0.85 loses one, and its fold prefers whichever
+bar turns out the most substitutions.
 
-`0.65` edges `0.70` narrowly: 93.64 against 93.46 held out, better on four
-folds of eight. Which rows the objective counts moves the pick between `0.60`
-and `0.70`, and `0.65` lies inside that range. With the keep half over every member and every
-bar applied, so that the members the geometry bars lose dilute how the keep
-half answers the ZNCC bar, the whole bar alone picks `0.70` on all eight folds. With substitutions
-in unobserved images counted too, it picks `0.65` on all eight. With every
-member, every substitution and every bar, the first analysis of this data, it
-picks `0.60` on seven folds and `0.65` on one. With the similar substitutions
-alone, it picks `0.70` on all eight folds.
-
-These bars are expected to be measured again once normal estimation and
-fitting improve: both move the tiles the scores are read from, and so the
-scores of members and wrong views alike.
-
-The middle bar is off by default. Beside a whole bar of `0.65`, a middle bar
-from 0.30 to 0.55 raises the score over all the data by 0.1 to 0.3 point, and
-from 0.60 up lowers it; held out, the per-fold pick with its middle bar scores
-94.0 against 93.6 for `0.65` alone. The bar stays for a person to set.
+Which rows the objective counts moves the pick between `0.60` and `0.75`, and
+`0.70` lies inside that range. On the blur-matched score, with the keep half
+over every member and every bar applied, the whole bar alone picks `0.70` on
+five folds and `0.75` on three. With substitutions in unobserved images
+counted too, it picks `0.70` on all eight. With every member, every
+substitution and every bar, it picks `0.60` on five folds and `0.65` on
+three. With the similar substitutions alone, it picks `0.75` on five folds
+and `0.70` on three.
 
 Member keep with every bar applied is low on some reconstructions for a reason
-apart from the ZNCC bars: the self-similarity bar (`2.5`) turns out 10.6% of
-the members and 55% of the blurred members by itself. Near misses, the true
+apart from the ZNCC bars: the self-similarity bar (`2.5`) turns out 10.7% of
+the members and 55.3% of the blurred members by itself. Near misses, the true
 pixels with the keypoint moved 2 to 6 px, are a separate check of the
-geometry bars: the projection bar turns out 18.5% of those 2 to 3 px off, 88%
-of those 3 to 4 px off and 99% of those 4 to 6 px off.
+geometry bars: the projection bar turns out 17.9% of those 2 to 3 px off,
+88.3% of those 3 to 4 px off and 99.0% of those 4 to 6 px off.
 
 The measurement has limits. The substituted squares are pasted unwarped, with
 a hard edge. Few substitutions that clear the geometry bars are very similar
-to the true content (34 at 0.7 to 0.85 and 6 at 0.85 or above in observed
-images), so the shares in those bands rest on few rows. The blur is a fixed
-width in source px, so it blurs a small footprint more than a large one.
-Planted rows are pinned `out`, so a wrong row that turns `in` and changes the
-other rows' readings is not tested. The cluster stage is not
-measured.
+to the true content (22 at 0.7 to 0.85 and 6 at 0.85 or above in observed
+images), so the shares in those bands rest on few rows, and the middle bar's
+effect rests on fewer still. The blur is a fixed width in source px, so it
+blurs a small footprint more than a large one. Planted rows are pinned `out`,
+so a wrong row that turns `in` and changes the other rows' readings is not
+tested. The cluster stage is not measured.
 
 **Where the figures come from.** Every figure above is printed by
-`analyze2.py`, run on the eight per-reconstruction `.jsonl` files that
-`measure.py` wrote; its output, `analysis2.txt`, records each file's hash. The
-two scripts, the data and the six solves are not in the repository, so the
-figures cannot be re-derived from it. Each file holds 150 tracks, 141 to 150
-of them with planted views. `measure.py` changed twice during the runs. The
-first change gave blurred plants near the image edge a wider margin, which had
-made those plants fail; every file in use was written after it, the
-seoul_bull, kerry_park and kerry480 files by a re-run. The second change, made
-before the Christmas tree's re-run (its first run failed an allocation after
-50 tracks), freed memory only and changes no reading. Re-read on a build of
-this branch, the members' scores matched the files exactly.
+[scripts/bench_bars/analyze.py](../../../scripts/bench_bars/analyze.py), run on
+the eight per-reconstruction `.jsonl` files that
+[scripts/bench_bars/measure.py](../../../scripts/bench_bars/measure.py) wrote
+(150 tracks each, sampling seed 20261009) on a build of the measurement's
+branch before the bars were switched; the analysis records each file's hash.
+The eight reconstructions' paths are in
+[scripts/bench_bars/datasets.py](../../../scripts/bench_bars/datasets.py): the
+two ground truths are in `test-data`, the six solves are not in the
+repository, and one of them, the Christmas tree, is a 30-frame subset of its
+solve embedded for the measurement, whose making the file describes. The
+[README](../../../scripts/bench_bars/README.md) has the commands.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `min_zncc` | `0.65` | The ZNCC an observation has to reach at the track stage: the plain score of its tile against the stored bitmap. `BENCH_MIN_ZNCC`, measured; not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
-| `min_zncc_middle` | `0` | The `plain_zncc_middle` an observation has to reach at the track stage. `BENCH_MIN_ZNCC_MIDDLE`, off; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
+| `min_zncc` | `0.70` | The ZNCC an observation has to reach at the track stage: the blur-matched score of its tile against the stored bitmap. `BENCH_MIN_ZNCC`, measured; not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
+| `min_zncc_middle` | `0.50` | The `blur_matched_zncc_middle` an observation has to reach at the track stage. `BENCH_MIN_ZNCC_MIDDLE`, chosen from the same measurement; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
 | `cluster_min_zncc` | `0.7` | The achieved template ZNCC an observation has to reach at the cluster stage. `BENCH_CLUSTER_MIN_ZNCC`, not measured. |
 | `cluster_min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach at the cluster stage. `BENCH_CLUSTER_MIN_ZNCC_MIDDLE`, not measured; `0` turns it off, and a row with no middle reading clears it. |
 | `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, to the point's projection, is judged by `max_projection_error_px`. |
@@ -3421,8 +3431,8 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   carries the stored numbers; the stored confidence is carried as each row's
   score against the bitmap, and with no localizer reading the bars judge no row
   until the first evaluation.
-- A commit writes each row's plain score against the bitmap as its confidence,
-  `255` on the reference row, and the blur-matched score plays no part.
+- A commit writes each row's blur-matched score against the bitmap as its confidence,
+  `255` on the reference row, and the plain score plays no part.
 - A `sift_files` point can be put on the bench for inspection; a point that is
   not live is refused.
 
@@ -3439,8 +3449,11 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
 - `bar_checks` passes and fails each bar, fails a `NaN`, and judges neither a
   missing reading nor the middle bar at `0`; the projection bar reads the reprojection
   error before the projection offset.
-- The bars judge the plain score against the bitmap: a row whose blur-matched
-  score clears `min_zncc` and whose plain score does not is turned out. A row
+- The bars judge the blur-matched score against the bitmap: a row whose
+  blur-matched score clears `min_zncc` and `min_zncc_middle` and whose plain
+  score does not is kept, and a row whose plain score clears a bar and whose
+  blur-matched score does not is turned out. The track stage's bars default
+  to `0.70` and `0.50`. A row
   the localizer could not read (no `seed_shift_px`) is not judged on its score
   against the bitmap.
 - On a track with no bitmap no row has a score, each row the localizer read

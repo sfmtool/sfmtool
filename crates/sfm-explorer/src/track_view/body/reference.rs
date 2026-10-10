@@ -299,17 +299,6 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
     }
 }
 
-/// The blur-matched score the *ZNCC* cell prints after the plain one, or
-/// `None` where it prints one number: where the pair was read plain, and where
-/// the two print the same.
-pub(super) fn blur_matched_shown(m: &TrackMeasurement) -> Option<f64> {
-    let plain = m.plain_zncc.filter(|v| v.is_finite())?;
-    m.bitmap_blur_sigma.filter(|&s| s > 0.0)?;
-    let matched = m.blur_matched_zncc.filter(|v| v.is_finite())?;
-    let shown = |v: f64| format!("{:.0}", 100.0 * v);
-    (shown(plain) != shown(matched)).then_some(matched)
-}
-
 /// The lines of a per-ninth grid, each value in percent, `-` where a ninth
 /// has no reading.
 pub(super) fn grid_lines(grid: [[f64; 3]; 3]) -> Vec<String> {

@@ -83,7 +83,11 @@ COLS = [
     ("blur 0.65", "blur", 0.65, 0.0),
     ("blur 0.70", "blur", 0.70, 0.0),
     ("blur 0.75", "blur", 0.75, 0.0),
+    ("blur .70/.30", "blur", 0.70, 0.30),
+    ("blur .70/.50", "blur", 0.70, 0.50),
 ]
+# The fixed (whole, middle) bars the held-out tables score beside the pick.
+FIXED = [(0.6, 0.0), (0.65, 0.0), (0.7, 0.0), (0.75, 0.0), (0.7, 0.3), (0.7, 0.5)]
 LINES: list[str] = []
 
 
@@ -427,10 +431,10 @@ def main() -> None:
         for sc in SCORES:
             tab = tabs[(key, sc)]
             P(f" -- {SCORE_LABEL[sc]} score --")
-            fixed = [(0.6, 0.0), (0.65, 0.0), (0.7, 0.0), (0.75, 0.0)]
+            fixed = FIXED
             P(
                 f"  {'held out':10s} {'pick':>10s} {'pick':>6s} "
-                + " ".join(f"{w:>6.2f}" for w, _ in fixed)
+                + " ".join(f"{w:.2f}/{m:.2f}"[:9].rjust(9) for w, m in fixed)
                 + f" {'pick, mid off':>14s}"
             )
             res = []
@@ -452,21 +456,22 @@ def main() -> None:
                 )
                 P(
                     f"  {d:10s} {GRID[b][0]:.2f}/{GRID[b][1]:.2f} {gte[b]:6.1f} "
-                    + " ".join(f"{gte[GI[f]]:6.1f}" for f in fixed)
+                    + " ".join(f"{gte[GI[f]]:9.1f}" for f in fixed)
                     + f" {GRID[bw][0]:7.2f} {gte[bw]:6.1f}"
                 )
-            a = np.array([[x[2], *x[3:7], x[8]] for x in res])
+            nf = len(fixed)
+            a = np.array([[x[2], *x[3 : 3 + nf], x[4 + nf]] for x in res])
             mean = a.mean(0)
             P(
                 f"  {'mean':10s} {'':10s} {mean[0]:6.2f} "
-                + " ".join(f"{v:6.2f}" for v in mean[1:5])
-                + f" {'':7s} {mean[5]:6.2f}"
+                + " ".join(f"{v:9.2f}" for v in mean[1 : 1 + nf])
+                + f" {'':7s} {mean[1 + nf]:6.2f}"
             )
             picks = defaultdict(int)
             wpicks = defaultdict(int)
             for x in res:
                 picks[f"{x[1][0]:.2f}/{x[1][1]:.2f}"] += 1
-                wpicks[f"{x[7]:.2f}"] += 1
+                wpicks[f"{x[3 + nf]:.2f}"] += 1
             P(f"  picks (whole/middle): {dict(picks)}; whole bar alone: {dict(wpicks)}")
             g = bal(tab, NAMES)
             P(f"  all data: best {GRID[int(np.argmax(g))]} {g.max():.2f}")

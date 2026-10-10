@@ -51,10 +51,10 @@ impl PyPatchCloud {
     ///         in patch-grid px (also the context-tile margin).
     ///     max_shift_px: Drop a view whose refined keypoint sits more than this many
     ///         source-image px from the point's projection.
-    ///     min_relative_zncc: Drop a view whose ZNCC against the reference render
+    ///     min_relative_zncc: Drop a view whose blur-matched score against the reference render
     ///         falls below this fraction of the median over the point's other
     ///         views (the reference left out). ``0`` disables it exactly.
-    ///     min_absolute_zncc: Drop a view whose ZNCC against the reference render
+    ///     min_absolute_zncc: Drop a view whose blur-matched score against the reference render
     ///         is finite and below this **absolute** floor. Default ``0.5``;
     ///         ``0`` disables it exactly.
     ///     max_member_zncc_self_similarity_radius: Drop a view whose **own**
@@ -119,10 +119,15 @@ impl PyPatchCloud {
     /// Returns:
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]), zncc (float64[K]),
-    ///     reference_image}`` over the **kept** views. ``zncc`` is each view's
-    ///     plain ZNCC against the template at its integer peak: ``1.0`` for the
-    ///     reference observation, and NaN for a view that was not searched
-    ///     because there was no template, so guard before reducing it.
+    ///     blur_matched_zncc (float64[K]), reference_image}`` over the **kept**
+    ///     views. ``zncc`` is each view's plain ZNCC against the template at its
+    ///     integer peak: ``1.0`` for the reference observation, and NaN for a
+    ///     view that was not searched because there was no template, so guard
+    ///     before reducing it. ``blur_matched_zncc`` is each view's blur-matched
+    ///     score against the template at its final keypoint, the score the
+    ///     agreement gates (``min_absolute_zncc``, ``min_relative_zncc``) judge:
+    ///     ``1.0`` for the reference, NaN for a view that was not searched and
+    ///     for every view when both gates are off.
     ///     ``reference_image`` is the image index of the reference observation
     ///     the views were aligned to, or ``None`` where the rule picked none it
     ///     would store (the template was the fused mean of the views) or nothing
@@ -334,6 +339,10 @@ impl PyPatchCloud {
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
             d.set_item("zncc", res.zncc.clone().into_pyarray(py))?;
+            d.set_item(
+                "blur_matched_zncc",
+                res.blur_matched_zncc.clone().into_pyarray(py),
+            )?;
             d.set_item("reference_image", res.reference)?;
             out.push(d);
         }

@@ -23,7 +23,10 @@ use crate::patch::keypoint_subpixel::{fuse_patch_bitmap_reporting, KeypointSubpi
 use crate::patch::normal_refine::{
     build_support, znormalize_into_kept, PatchWindow, ProjectedImage, SamplerChoice, Support,
 };
-use crate::patch::stored_bitmap::{render_reference, stored_view};
+use crate::patch::reference_view::render_view_tile;
+use crate::patch::stored_bitmap::{
+    bitmap_from_tile, bitmap_planes, render_reference, stored_view, BitmapScorer,
+};
 use crate::progress::Progress;
 
 /// What a point's views are aligned to: the position among them of the
@@ -343,7 +346,9 @@ pub(super) fn align_to_reference(
         for st in &mut states {
             st.placed = true;
         }
-        return Ok(finish(patch, views, states, None, wpp_u, wpp_v, params));
+        return Ok(finish(
+            patch, views, states, None, None, wpp_u, wpp_v, params,
+        ));
     };
     if let Some(a) = anchor {
         states[a].zncc = 1.0;
@@ -412,8 +417,37 @@ pub(super) fn align_to_reference(
     }
 
     let reference = anchor.map(|a| states[a].idx);
+    // The template as a stored bitmap, which the agreement gates read each
+    // placed view against blur-matched: the reference's render at its
+    // keypoint, as a stored bitmap renders it, or the fused mean. Only built
+    // where a gate is on.
+    let gates_on = gate_is_on(params.min_absolute_zncc) || gate_is_on(params.min_relative_zncc);
+    let bitmap = if !gates_on {
+        None
+    } else if let Some(a) = anchor {
+        let st = &states[a];
+        Some(bitmap_from_tile(&render_view_tile(
+            patch,
+            &views[st.idx as usize],
+            Some(st.seed.unwrap_or(st.proj)),
+            r,
+            params.sampler,
+            progress,
+        )))
+    } else {
+        resolved.fused.clone()
+    };
     states.retain(|st| st.localizable);
-    let mut out = finish(patch, views, states, reference, wpp_u, wpp_v, params);
+    let mut out = finish(
+        patch,
+        views,
+        states,
+        reference,
+        bitmap.as_deref(),
+        wpp_u,
+        wpp_v,
+        params,
+    );
     out.reference = reference.filter(|idx| out.views.contains(idx));
     Ok(out)
 }
@@ -458,48 +492,106 @@ fn search_tile(
     Some(([sh.dx, sh.dy], sh.peak))
 }
 
+/// Whether an agreement gate's bar turns it on: finite and above `0`.
+fn gate_is_on(bar: f64) -> bool {
+    bar.is_finite() && bar > 0.0
+}
+
 /// Map the final offsets to keypoints and apply the gates that read them:
 /// a view the search could not place is dropped, as is one whose keypoint
 /// leaves the frame, sits more than `max_shift_px` from the projection, or
 /// scores below the absolute or relative bar. The reference observation,
 /// `anchor`, keeps the keypoint it was given and faces no gate.
+///
+/// The two agreement gates read each placed view's **blur-matched score**
+/// against `bitmap`, the template as a stored bitmap: the view's tile rendered
+/// at its final keypoint ([`render_view_tile`]) and read by [`BitmapScorer`],
+/// the bitmap blurred to the tile's sharpness where blur matching selects it,
+/// as the bench reads a row against the stored bitmap. The alignment itself
+/// read the unblurred template. `bitmap` is `None` where neither gate is on,
+/// and then no view is scored this way.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     states: Vec<AlignedView>,
     anchor: Option<u32>,
+    bitmap: Option<&[u8]>,
     wpp_u: f64,
     wpp_v: f64,
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization {
-    let mut others: Vec<f64> = states
+    // Each view's keypoint, before any gate.
+    let placed: Vec<(AlignedView, Option<[f64; 2]>)> = states
+        .into_iter()
+        .map(|st| {
+            let view = &views[st.idx as usize];
+            let is_anchor = Some(st.idx) == anchor;
+            let keypoint = if is_anchor || (st.placed && st.off == st.start && st.start_is_seed) {
+                // The reference's keypoint, and any view's that did not move
+                // (there was nothing to align it to), is returned exactly as
+                // it was given rather than through a round trip onto the
+                // plane.
+                Some(st.seed.unwrap_or(st.proj))
+            } else if st.placed {
+                let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
+                project(view, &center, patch.w).map(|(x, y)| [x, y])
+            } else {
+                None
+            };
+            (st, keypoint)
+        })
+        .collect();
+
+    // The blur-matched score of every searched view at its keypoint.
+    let resolution = params.resolution.max(2) as usize;
+    let planes = bitmap
+        .filter(|b| b.len() == resolution * resolution * 4)
+        .map(|b| bitmap_planes(b, resolution));
+    let mut scorer = planes.as_ref().map(|p| BitmapScorer::new(p, params.window));
+    let blur_matched: Vec<f64> = placed
         .iter()
-        .filter(|st| Some(st.idx) != anchor)
-        .map(|st| st.zncc)
+        .map(|(st, kp)| {
+            if Some(st.idx) == anchor {
+                return 1.0;
+            }
+            match (scorer.as_mut(), kp) {
+                (Some(scorer), Some(kp)) if st.zncc.is_finite() => {
+                    prof::count(&prof::N_RENDER, 1);
+                    let tile = prof::RENDER.time(|| {
+                        render_view_tile(
+                            patch,
+                            &views[st.idx as usize],
+                            Some(*kp),
+                            resolution,
+                            params.sampler,
+                            &Progress::none(),
+                        )
+                    });
+                    scorer.score(&tile.planes(), None).blur_matched_zncc
+                }
+                _ => f64::NAN,
+            }
+        })
+        .collect();
+
+    let mut others: Vec<f64> = placed
+        .iter()
+        .zip(&blur_matched)
+        .filter(|((st, _), _)| Some(st.idx) != anchor)
+        .map(|(_, &z)| z)
         .filter(|z| z.is_finite())
         .collect();
     let median = median_in_place(&mut others);
     let relative = params.min_relative_zncc;
-    let bar = if relative.is_finite() && relative > 0.0 && median.is_finite() {
+    let bar = if gate_is_on(relative) && median.is_finite() {
         relative * median
     } else {
         f64::NEG_INFINITY
     };
     let mut out = KeypointLocalization::default();
-    for st in states {
-        let view = &views[st.idx as usize];
+    for ((st, keypoint), bz) in placed.into_iter().zip(blur_matched) {
         let is_anchor = Some(st.idx) == anchor;
-        let keypoint = if is_anchor || (st.placed && st.off == st.start && st.start_is_seed) {
-            // The reference's keypoint, and any view's that did not move (there
-            // was nothing to align it to), is returned exactly as it was given
-            // rather than through a round trip onto the plane.
-            Some(st.seed.unwrap_or(st.proj))
-        } else if st.placed {
-            let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
-            project(view, &center, patch.w).map(|(x, y)| [x, y])
-        } else {
-            None
-        };
         let Some(kp) = keypoint else {
             continue;
         };
@@ -509,11 +601,11 @@ fn finish(
                 prof::count(&prof::N_DROP_SHIFT, 1);
                 continue;
             }
-            if below_absolute_floor(st.zncc, params.min_absolute_zncc) {
+            if below_absolute_floor(bz, params.min_absolute_zncc) {
                 prof::count(&prof::N_DROP_ABS_ZNCC, 1);
                 continue;
             }
-            if st.zncc.is_finite() && st.zncc < bar {
+            if bz.is_finite() && bz < bar {
                 prof::count(&prof::N_DROP_REL_ZNCC, 1);
                 continue;
             }
@@ -522,6 +614,7 @@ fn finish(
         out.keypoints.push(kp);
         out.offsets_px.push(shift);
         out.zncc.push(st.zncc);
+        out.blur_matched_zncc.push(bz);
     }
     out
 }

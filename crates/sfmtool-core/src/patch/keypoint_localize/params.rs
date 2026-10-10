@@ -58,14 +58,17 @@ pub struct KeypointLocalizeParams {
     /// distance, not the move from the starting keypoint). Never applied to the
     /// reference observation, which is not moved.
     pub max_shift_px: f64,
-    /// Drop a view whose ZNCC against the template falls below this fraction
-    /// of the median over the point's other views (the reference left out),
-    /// so a uniformly low-texture patch is not over-dropped. `0.0` (or a
-    /// non-finite value) disables it exactly.
-    pub min_relative_zncc: f64,
-    /// Drop a view whose ZNCC against the template is finite and **below this
-    /// absolute floor**, however many views remain. `0.0` (or a non-finite
+    /// Drop a view whose blur-matched score against the template falls below
+    /// this fraction of the median over the point's other views (the reference
+    /// left out), so a uniformly low-texture patch is not over-dropped. The
+    /// score is read at the keypoint the alignment placed the view at
+    /// ([`KeypointLocalization::blur_matched_zncc`]). `0.0` (or a non-finite
     /// value) disables it exactly.
+    pub min_relative_zncc: f64,
+    /// Drop a view whose blur-matched score against the template
+    /// ([`KeypointLocalization::blur_matched_zncc`]) is finite and **below
+    /// this absolute floor**, however many views remain. `0.0` (or a
+    /// non-finite value) disables it exactly.
     pub min_absolute_zncc: f64,
     /// Drop a view whose **own** rendered core tile does not pin a 2D position:
     /// its [ZNCC self-similarity radius](crate::patch::self_similarity), how far
@@ -183,8 +186,20 @@ pub struct KeypointLocalization {
     /// Per kept view, its plain ZNCC against the template at the search's
     /// integer peak, parallel to [`views`](Self::views): `1.0` for the
     /// reference observation, whose render the template is, and `NaN` for a
-    /// view that was not searched because there was no template.
+    /// view that was not searched because there was no template. No gate
+    /// reads it; the agreement gates read [`Self::blur_matched_zncc`].
     pub zncc: Vec<f64>,
+    /// Per kept view, its blur-matched score against the template at its
+    /// final keypoint, parallel to [`views`](Self::views): the view's tile
+    /// rendered there as a stored bitmap's tiles are, read against the
+    /// template as a stored bitmap with the template blurred to the tile's
+    /// sharpness where blur matching selects it
+    /// ([`BitmapScorer`](crate::patch::stored_bitmap::BitmapScorer)). The
+    /// reading [`KeypointLocalizeParams::min_absolute_zncc`] and
+    /// [`KeypointLocalizeParams::min_relative_zncc`] judge. `1.0` for the
+    /// reference observation; `NaN` for a view that was not searched, and for
+    /// every view when both gates are off, since nothing then reads it.
+    pub blur_matched_zncc: Vec<f64>,
     /// The image index of the reference observation the views were aligned
     /// to. `None` where there was none to align to: the reference-view rule
     /// picked no reference it would store, so the template was the fused mean

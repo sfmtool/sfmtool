@@ -1768,16 +1768,17 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "keypoint": measured.keypoint,
         // The row's score against the stored patch bitmap, plain: 1 on the
         // row the bitmap is rendered from, null with `reason` where there is
-        // no bitmap or the pair could not be read. The bars judge it.
+        // no bitmap or the pair could not be read. Shown beside the
+        // blur-matched score, which the bars judge.
         "plain_zncc": finite(measured.plain_zncc),
         // The same pair read over the middle of the tile only.
         "plain_zncc_middle": finite(measured.plain_zncc_middle),
         // And over each ninth of the tile, rows from the top.
         "plain_zncc_grid": grid(measured.plain_zncc_grid),
         // The same three readings with the bitmap alone blurred to the row's
-        // sharpness (equal to the plain ones where it is not blurred), the
-        // blur's width in grid px (0 when read plain), and whether the row is
-        // sharper than the bitmap.
+        // sharpness (equal to the plain ones where it is not blurred): the
+        // readings the bars judge. Then the blur's width in grid px (0 when
+        // read plain), and whether the row is sharper than the bitmap.
         "blur_matched_zncc": finite(measured.blur_matched_zncc),
         "blur_matched_zncc_middle": finite(measured.blur_matched_zncc_middle),
         "blur_matched_zncc_grid": grid(measured.blur_matched_zncc_grid),
@@ -1829,8 +1830,8 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the scores of the tile there against the stored bitmap, plain
-        // and blur-matched, whole, middle and per ninth, to set beside the
-        // row's own. Accepting the walk is `sight_bench_observation` with
+        // and blur-matched (the one judged), whole, middle and per ninth, to
+        // set beside the row's own. Accepting the walk is `sight_bench_observation` with
         // `walked_to` as its pixel.
         "walked_px": finite(measured.walked_px),
         "walked_to": measured.walked_to,

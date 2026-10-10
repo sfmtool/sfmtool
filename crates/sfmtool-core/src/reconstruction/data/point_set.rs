@@ -149,7 +149,7 @@ pub struct PointSet {
     pub point_constraints: Option<PointConstraintColumns>,
     /// Optional per-observation confidence in how well that observation agrees
     /// with its point's appearance (parallel to `tracks`), persisted as
-    /// `tracks/observation_confidence` (version 6+): its plain ZNCC against the
+    /// `tracks/observation_confidence` (version 6+): its blur-matched ZNCC against the
     /// point's stored patch bitmap, as `observation_confidence_byte` writes
     /// it. `0` means no data-derived support — nothing measured this
     /// observation — and `1..=255` is a measured score, `255` for the reference

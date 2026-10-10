@@ -231,7 +231,7 @@ fit over the 3×3 neighbourhood of the correlation peak, and measured again
 the same day once its search became the exhaustive one
 (`SearchStrategy::Exhaustive`, which scores every shift of the window; it was
 the "+"-descent). The finish's median
-gate (`finish.min_zncc_median`) reads each `in` row's plain ZNCC against the
+gate (`finish.min_zncc_median`) read each `in` row's plain ZNCC against the
 stored bitmap, the reference row left out; its default is 0.7.
 `core_cascade`, full pass, every query of the checked-in ground truths, swept
 with `--opt core_options={"finish.min_zncc_median": x}`; the gate is off at
@@ -277,6 +277,40 @@ lower at every gate (at 0.7: 2992 (79.4%) at 0.837).
 The empty pass builds no track on this date: with no reconstructed point, the
 point-or-bearing test has no observation to measure the reprojection noise
 from, and every member is refused at the upgrade.
+
+## The median gate on the blur-matched score
+
+Recorded 2026-10-10. The median gate, and every median the operation ranks
+members and fits by, now reads each `in` row's blur-matched score against the
+stored bitmap, the score the bench's bars judge. The sweep above was run again
+on that build, on a fresh cache, with:
+
+```bash
+sh scripts/track_at_pixel/sweep_median_gate.sh <out dir>          # 14 shards
+pixi run python scripts/track_at_pixel/summarize_sweep.py <out dir>/seoul_bull_* <out dir>/kerry_*
+```
+
+`summarize_sweep.py` counts a built track as correct when it passes the good
+bar's position and precision tests, the bar's own ZNCC test left out. Built /
+correct / wrong / precision; the plain columns are the table above:
+
+| gate | seoul plain | seoul blur-matched | Kerry Park plain | Kerry Park blur-matched |
+|---|---|---|---|---|
+| off | 1147 / 974 / 173 / 0.849 | 1143 / 969 / 174 / 0.848 | 3192 / 2618 / 574 / 0.820 | 3181 / 2619 / 562 / 0.823 |
+| 0.6 | 1103 / 961 / 142 / 0.871 | 1096 / 953 / 143 / 0.870 | 3088 / 2585 / 503 / 0.837 | 3079 / 2589 / 490 / 0.841 |
+| 0.65 | 1082 / 950 / 132 / 0.878 | 1070 / 935 / 135 / 0.874 | 3061 / 2568 / 493 / 0.839 | 3043 / 2568 / 475 / 0.844 |
+| **0.7** | 1055 / 930 / 125 / 0.882 | **1052 / 925 / 127 / 0.879** | 3007 / 2534 / 473 / 0.843 | **3015 / 2556 / 459 / 0.848** |
+| 0.75 | 1013 / 904 / 109 / 0.892 | 1015 / 901 / 114 / 0.888 | 2900 / 2438 / 462 / 0.841 | 2938 / 2489 / 449 / 0.847 |
+| 0.8 | 903 / 810 / 93 / 0.897 | 913 / 816 / 97 / 0.894 | 2707 / 2269 / 438 / 0.838 | 2770 / 2328 / 439 / 0.840 |
+
+On Kerry Park the blur-matched gate keeps 22 to 59 more correct tracks from
+`0.7` up, and its precision is highest at `0.7`; on seoul_bull, where the
+bitmap is blurred for few views, the two read almost alike. The gate stays at
+0.7. Before the switch, the same sweep with only the gate reading the
+blur-matched score (through an experiment option since removed) gave the
+same picture: at 0.7, 1056 / 931 / 125 / 0.882 on seoul_bull and
+3021 / 2545 / 476 / 0.842 on Kerry Park. The Python candidates and
+`metrics.py` read the blur-matched score as well.
 
 ## Normals, gates and fallbacks on two ground truths
 

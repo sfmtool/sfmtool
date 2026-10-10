@@ -670,11 +670,10 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
     );
 }
 
-/// At the track stage the *ZNCC* cell prints the plain score against the
-/// stored bitmap, with the blur-matched one after an arrow where the bitmap was
-/// blurred and the two print differently, and its hover gives the scores, the
-/// blur, the sharper note and the reason for a missing score
-/// (`tests/zncc_hover.rs` draws it).
+/// At the track stage the *ZNCC* cell prints the blur-matched score against
+/// the stored bitmap, the one the bars judge, and only it, and its hover gives
+/// the plain and blur-matched scores, the blur, the sharper note and the
+/// reason for a missing score (`tests/zncc_hover.rs` draws it).
 #[test]
 fn the_zncc_cell_prints_the_score_against_the_bitmap() {
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement, Unmeasured};
@@ -688,8 +687,9 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
             plain_zncc: Some(plain),
-            plain_zncc_middle: Some(0.61),
+            plain_zncc_middle: Some(0.55),
             blur_matched_zncc: Some(matched),
+            blur_matched_zncc_middle: Some(0.61),
             bitmap_blur_sigma: Some(sigma),
             sharper_than_bitmap: Some(sharper),
             seed_shift_px: Some(0.4),
@@ -706,21 +706,20 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
     };
 
     let blurred = row(0.504, 0.531, 0.83, false);
-    assert_eq!(text(&blurred), "50% \u{23f5} 53% whole\n61% mid");
+    assert_eq!(text(&blurred), "53% whole\n61% mid");
     let said = hover(&blurred, false);
     assert!(said.contains("50.4%") && said.contains("53.1%"), "{said}");
     assert!(said.contains("Blurred by \u{3c3} 0.83 grid px"), "{said}");
 
-    // One number where the blur leaves the printed score as it was, and where
-    // the pair was read plain.
-    assert_eq!(text(&row(0.5, 0.502, 0.4, false)), "50% whole\n61% mid");
+    // The plain score is not printed, however it differs.
+    assert_eq!(text(&row(0.3, 0.502, 0.4, false)), "50% whole\n61% mid");
     let sharper = row(0.64, 0.64, 0.0, true);
     assert_eq!(text(&sharper), "64% whole\n61% mid");
     assert!(hover(&sharper, false).contains("could replace the reference"));
 
     // The reference's own row reads 100%.
     let mut own = row(1.0, 1.0, 0.0, false);
-    own.track.as_mut().unwrap().plain_zncc_middle = Some(1.0);
+    own.track.as_mut().unwrap().blur_matched_zncc_middle = Some(1.0);
     assert_eq!(text(&own), "100% whole\n100% mid");
     assert!(hover(&own, true).contains("track's reference"));
 
@@ -729,6 +728,8 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
     let slot = unscored.track.as_mut().unwrap();
     slot.plain_zncc = None;
     slot.plain_zncc_middle = None;
+    slot.blur_matched_zncc = None;
+    slot.blur_matched_zncc_middle = None;
     slot.reason = Some(Unmeasured::NoBitmap);
     assert_eq!(text(&unscored), "-");
     let reason = Unmeasured::NoBitmap.to_string();
@@ -2545,7 +2546,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
         cluster: None,
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            plain_zncc: Some(0.41),
+            blur_matched_zncc: Some(0.41),
             walked_px: Some(19.4),
             ..TrackMeasurement::default()
         }),
@@ -2556,8 +2557,8 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     // With the score against the bitmap at the walked peak, where there is one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
-    slot.walked_plain_zncc = Some(0.873);
-    slot.walked_plain_zncc_middle = Some(0.412);
+    slot.walked_blur_matched_zncc = Some(0.873);
+    slot.walked_blur_matched_zncc_middle = Some(0.412);
     assert_eq!(
         super::measurements(&scored, StageKind::Track, &current)[4],
         "walked 19 grid px (ZNCC 87% / 41% there), kept at seed"
@@ -2590,8 +2591,8 @@ fn the_zncc_cell_shows_the_whole_and_the_middle_reading() {
         cluster: Some(cluster),
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
-            plain_zncc: Some(0.95),
-            plain_zncc_middle: Some(0.2),
+            blur_matched_zncc: Some(0.95),
+            blur_matched_zncc_middle: Some(0.2),
             ..TrackMeasurement::default()
         }),
     };
@@ -2604,12 +2605,15 @@ fn the_zncc_cell_shows_the_whole_and_the_middle_reading() {
         "95% whole\n20% mid"
     );
     // A committed track read back carries the stored ZNCC and no middle.
-    row.track.as_mut().expect("a track slot").plain_zncc_middle = None;
+    row.track
+        .as_mut()
+        .expect("a track slot")
+        .blur_matched_zncc_middle = None;
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[0],
         "95% whole\n- mid"
     );
-    row.track.as_mut().expect("a track slot").plain_zncc = None;
+    row.track.as_mut().expect("a track slot").blur_matched_zncc = None;
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[0],
         "-"
@@ -3786,7 +3790,7 @@ fn readings_no_bar_judges_are_drawn_plain() {
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
             seed_shift_px: Some(0.5),
-            plain_zncc: Some(0.95),
+            blur_matched_zncc: Some(0.95),
             ..TrackMeasurement::default()
         }),
     };

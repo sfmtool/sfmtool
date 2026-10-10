@@ -296,14 +296,15 @@ impl std::fmt::Display for Unmeasured {
 /// What the track stage has measured about one observation.
 ///
 /// A track put on the bench from a committed point arrives with
-/// [`Self::keypoint`] and [`Self::plain_zncc`] read off the stored columns; the
-/// rest is what an evaluation computes.
+/// [`Self::keypoint`] and [`Self::blur_matched_zncc`] read off the stored
+/// columns; the rest is what an evaluation computes.
 ///
 /// The row's **score** is its tile's ZNCC with the track's stored patch
 /// bitmap, read twice: plain ([`Self::plain_zncc`], with
-/// [`Self::plain_zncc_middle`] and [`Self::plain_zncc_grid`] beside it), which
-/// the bars judge, and blur-matched ([`Self::blur_matched_zncc`], with
-/// [`Self::blur_matched_zncc_middle`] and [`Self::blur_matched_zncc_grid`]).
+/// [`Self::plain_zncc_middle`] and [`Self::plain_zncc_grid`] beside it), and
+/// blur-matched ([`Self::blur_matched_zncc`], with
+/// [`Self::blur_matched_zncc_middle`] and [`Self::blur_matched_zncc_grid`]),
+/// which the bars judge.
 /// The bitmap is the render of the track's reference observation, which is
 /// also the template the localizer aligns every other row to, so the score
 /// and the alignment read one comparison. The localizer's own reading of the
@@ -330,14 +331,12 @@ pub struct TrackMeasurement {
     /// plain, windowed, over the samples with data in both
     /// ([`BitmapScorer`](crate::patch::stored_bitmap::BitmapScorer)). `1` for
     /// the observation the bitmap is the render of
-    /// ([`TrackPayload::reference`]), which is not computed. This is the
-    /// reading [`Thresholds::min_zncc`] judges and the painting ranks rows by,
-    /// the one Track at Pixel's median gate reads, and the one a commit writes
-    /// as the observation's `observation_confidence`. A track put on the
-    /// bench from a committed point carries that column read back here until
-    /// its first evaluation. `None` where the track has no bitmap, the tile
-    /// could not be rendered, or the pair could not be read, and then
-    /// [`Self::reason`] says which.
+    /// ([`TrackPayload::reference`]), which is not computed. No bar judges
+    /// it: the bars read [`Self::blur_matched_zncc`], and this one is kept
+    /// beside it to show what blur matching changed. `None` where the track
+    /// has no bitmap, the tile could not be rendered, or the pair could not be
+    /// read, and then [`Self::reason`] says which; also `None` on a row read
+    /// back from a committed point, which carries only the blur-matched score.
     pub plain_zncc: Option<f64>,
     /// The **middle ZNCC** beside [`Self::plain_zncc`]: the same tile against the
     /// same bitmap, read over only the middle square of the tile (the rows and
@@ -478,12 +477,17 @@ pub struct TrackMeasurement {
     /// The **blur-matched score**: [`Self::plain_zncc`] after the bitmap, and only
     /// the bitmap, is blurred to this observation's sharpness where it is
     /// sharper along every direction by at least the ratio of 1.25; the plain
-    /// score where it is not. No bar judges it yet. `1` on the bitmap's own
-    /// row. `None` wherever [`Self::plain_zncc`] is.
+    /// score where it is not. `1` on the bitmap's own row. This is the reading
+    /// [`Thresholds::min_zncc`] judges and the painting ranks rows by, the one
+    /// Track at Pixel's median gate reads, and the one a commit writes as the
+    /// observation's `observation_confidence`. A track put on the bench from a
+    /// committed point carries that column read back here until its first
+    /// evaluation. Otherwise `None` wherever [`Self::plain_zncc`] is.
     pub blur_matched_zncc: Option<f64>,
     /// [`Self::plain_zncc_middle`] read against the same blurred bitmap as
     /// [`Self::blur_matched_zncc`]; the plain middle score where the pair is
-    /// read plain. `None` wherever [`Self::plain_zncc_middle`] is.
+    /// read plain. The reading [`Thresholds::min_zncc_middle`] judges. `None`
+    /// wherever [`Self::plain_zncc_middle`] is.
     pub blur_matched_zncc_middle: Option<f64>,
     /// [`Self::plain_zncc_grid`] read against the same blurred bitmap as
     /// [`Self::blur_matched_zncc`]; the plain grid where the pair is read
@@ -528,8 +532,8 @@ pub struct TrackMeasurement {
     pub walked_to: Option<[f64; 2]>,
     /// The plain score against the stored bitmap of the tile rendered at
     /// [`Self::walked_to`], read the way [`Self::plain_zncc`] is read at the
-    /// keypoint: the agreement the walk would have bought, to set beside
-    /// [`Self::plain_zncc`], which is read with the sighting kept at its seed. Every
+    /// keypoint, kept beside [`Self::walked_blur_matched_zncc`], which is the
+    /// one judged. Every
     /// reading that scores the rows against the bitmap reads it where
     /// [`Self::walked_to`] is set, so the two scores are always against the
     /// same bitmap; `None` where `walked_to` is not set, where the track has
@@ -543,8 +547,10 @@ pub struct TrackMeasurement {
     pub walked_plain_zncc_grid: Option<[[f64; 3]; 3]>,
     /// The blur-matched score of the tile at [`Self::walked_to`], read the way
     /// [`Self::blur_matched_zncc`] is: the bitmap blurred to that tile's
-    /// sharpness where the ratio selects it. `None` wherever
-    /// [`Self::walked_plain_zncc`] is.
+    /// sharpness where the ratio selects it. The agreement the walk would have
+    /// bought, judged by the bars as [`Self::blur_matched_zncc`] is, to set
+    /// beside it, which is read with the sighting kept at its seed. `None`
+    /// wherever [`Self::walked_plain_zncc`] is.
     pub walked_blur_matched_zncc: Option<f64>,
     /// The middle score beside [`Self::walked_blur_matched_zncc`], read the
     /// way [`Self::blur_matched_zncc_middle`] is.
@@ -934,18 +940,19 @@ pub struct Origin {
 /// and judges the radius by this bar instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
-    /// The ZNCC an observation has to reach at the track stage: the plain
-    /// score of its tile against the stored bitmap ([`TrackMeasurement::plain_zncc`]).
+    /// The ZNCC an observation has to reach at the track stage: the
+    /// blur-matched score of its tile against the stored bitmap
+    /// ([`TrackMeasurement::blur_matched_zncc`]).
     /// The default is [`BENCH_MIN_ZNCC`]. The cluster stage judges another
     /// score, and has its own bar, [`Self::cluster_min_zncc`].
     pub min_zncc: f64,
     /// The middle ZNCC an observation has to reach at the track stage
-    /// ([`TrackMeasurement::plain_zncc_middle`]). It turns out a sighting whose
+    /// ([`TrackMeasurement::blur_matched_zncc_middle`]). It turns out a sighting whose
     /// whole-patch agreement is carried by the patch's surroundings rather
     /// than its middle.
     ///
-    /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`], which
-    /// is `0`, off; its doc gives what the measurement found. An
+    /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`]; its
+    /// doc gives what the measurement found. An
     /// observation with no middle reading, because its middle is flat or it
     /// was read back from a committed point, has nothing to judge and clears
     /// the bar, as a row with no self-similarity reading clears
@@ -1029,40 +1036,41 @@ pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 
 /// The bench's default [`Thresholds::min_zncc`], the track stage's bar on the
-/// plain score against the stored bitmap: `0.65`.
+/// blur-matched score against the stored bitmap: `0.70`.
 ///
 /// Below the cluster refinement's own `min_zncc` (0.85), which stays the batch
 /// pass's bar: a correct sighting's tile reads lower against one view's render
 /// than a fitted template does. Measured on 150 tracks from each of eight
 /// reconstructions (two ground truths, six solves whose members are taken as
-/// correct). Wrong views were planted by pasting an unwarped square of another
-/// place's pixels over a row's keypoint, and true members were blurred, which
-/// are views to keep. About 60% of the planted views fail a geometry bar and
-/// are out whatever this bar is, so the objective counts only rows that clear
+/// correct), every view aligned to the reference render. Wrong views were
+/// planted by pasting an unwarped square of another place's pixels over a
+/// row's keypoint, and true members were blurred, which are views to keep.
+/// About three in four of the views planted in observed images fail a
+/// geometry bar and are out whatever this bar is, so the objective counts only rows that clear
 /// every geometry bar: the mean over tracks of the share of members kept and
-/// the share of wrong views in images the track observes turned out. Held out
-/// by reconstruction, the whole bar alone picks `0.65` on seven folds of eight
-/// and `0.70` on one, and `0.65` scores 93.6 against 92.6 for `0.60` and 93.5
-/// for a `0.7` bar alone. At `0.65` the bar loses 3.5% of the members that
-/// clear the geometry bars and turns out 92.8% of the wrong views that do:
-/// 82.8% of those 0.5 to 0.7 similar to the true content and 55.9% of those
-/// 0.7 to 0.85 similar. The margin over `0.70` is narrow: 93.64 against 93.46
-/// held out, better on four folds of eight. Which wrong views the objective
-/// counts moves the pick between `0.60` and `0.70`. The bar is expected to be
-/// measured again once normal estimation and fitting improve, since both move
-/// the scores it judges. The spec of the editable track
-/// (specs/core/bench/editable-track.md) gives the tables.
-pub const BENCH_MIN_ZNCC: f64 = 0.65;
+/// the share of wrong views in images the track observes turned out. Held
+/// out by reconstruction, the whole bar alone picks `0.70` on all eight
+/// folds, on the blur-matched score and on the plain one. Against the plain
+/// `0.65` it replaced, the blur-matched `0.70` with the middle bar of
+/// [`BENCH_MIN_ZNCC_MIDDLE`] loses 2.1% of the blurred members that clear the
+/// geometry bars rather than 5.2%, and turns out 94.0% of the wrong views
+/// rather than 90.3%, for 5.8% of the members rather than 3.1%. The spec of
+/// the editable track (specs/core/bench/editable-track.md) gives the tables.
+pub const BENCH_MIN_ZNCC: f64 = 0.70;
 
-/// The bench's default [`Thresholds::min_zncc_middle`]: `0`, off.
+/// The bench's default [`Thresholds::min_zncc_middle`]: `0.50`, on the
+/// blur-matched middle score.
 ///
-/// In the measurement behind [`BENCH_MIN_ZNCC`], a middle bar from 0.30 to
-/// 0.55 beside the whole bar of `0.65` raises the score over all the data by
-/// 0.1 to 0.3 point (93.8 to at most 94.2), and from 0.60 up lowers it. The
-/// middle reading covers a quarter of the samples, so on a correct sighting
-/// it scatters more and reads lower than the whole-patch one, and a middle
-/// bar costs members the whole bar keeps. The bar stays for a person to set.
-pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.0;
+/// The maintainer's choice from the measurement behind [`BENCH_MIN_ZNCC`],
+/// where the middle bar changes little: beside a whole bar of `0.70` the
+/// objective is 93.48 over all the data at a middle bar of `0.50`, 93.55 with
+/// it off and 93.74 at `0.30`, and held out by reconstruction 92.94, 92.98 and
+/// 93.20. A middle bar of `0.50` turns out a few more of the wrong views most
+/// similar to the true content, which the whole bar cannot tell apart, at the
+/// cost of 0.6% of the members. The middle reading covers a quarter of the
+/// samples, so on a correct sighting it scatters more and reads lower than the
+/// whole-patch one.
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.50;
 
 /// The bench's default [`Thresholds::cluster_min_zncc`], the cluster stage's
 /// bar on the achieved template ZNCC.

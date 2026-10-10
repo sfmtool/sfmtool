@@ -205,7 +205,7 @@ reconstruction.sfmr (ZIP archive)
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
     ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files) (version 4+)
-    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation ZNCC against the patch bitmap (version 6+)
+    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
     ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from (version 12+)
@@ -1510,17 +1510,24 @@ identifies nothing on its own, so it may accompany `feature_indexes`.
 #### `tracks/observation_confidence.{M}.uint8.zst` (Optional, version 6+)
 
 Per-observation confidence in how well the observation agrees with its point's
-appearance: the observation's **plain ZNCC against the point's stored patch
-bitmap**, the render of its reference observation (`reference_observations`
-below), read at the observation's keypoint. The reference observation itself
-scores `1.0`. It holds this score until the per-observation keypoint covariance
-replaces it as the confidence bundle adjustment weighs observations by.
+appearance: the observation's **blur-matched ZNCC against the point's stored
+patch bitmap**, the render of its reference observation
+(`reference_observations` below), read at the observation's keypoint, the
+bitmap alone blurred to the observation's sharpness where it is sharper along
+every direction ([blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)
+§ "Scores against the stored bitmap"). It is the score the bench's bars judge
+the observation by. The reference observation itself scores `1.0`. It holds
+this score until the per-observation keypoint covariance replaces it as the
+confidence bundle adjustment weighs observations by.
 
-The column's meaning changed without a version bump. Earlier bench commits
-stored each observation's leave-one-out ZNCC here (its score against the mean
-of the track's other views), and stored a measured score that rounds to `0`
-as `0`. Such a file's bytes read back as the plain ZNCC described here, and
-nothing in the file tells the two apart.
+The column's meaning changed without a version bump, twice. Earlier bench
+commits stored each observation's leave-one-out ZNCC here (its score against
+the mean of the track's other views), and stored a measured score that rounds
+to `0` as `0`; later ones stored the plain ZNCC against the stored bitmap,
+before blur matching. Such a file's bytes read back as the blur-matched ZNCC
+described here, and nothing in the file tells them apart. Where the bitmap is
+not blurred for an observation, about nine in ten, the plain and blur-matched
+scores are the same.
 
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint8` (little-endian)

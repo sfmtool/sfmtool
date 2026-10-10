@@ -8,9 +8,11 @@ solves outside the repository, whose members are assumed correct. Every file is
 read in place and never written to: the measurement loads it, drops its stored
 patch bitmaps in memory, and writes only its own ``.jsonl`` output.
 
-The paths are data. On another machine, pass ``--sfmr <name>=<path>`` to
-``measure.py`` for any reconstruction that lives elsewhere; each file's own
-workspace must hold its images.
+The paths are data, in ``DATASETS`` below. Five of the solves are found under
+``BENCH_BARS_DATASETS_DIR`` (an environment variable, ``C:\DataSets`` when it is
+not set), and ``xmas`` at ``BENCH_BARS_XMAS`` (no default). For any one
+reconstruction, ``--sfmr <name>=<path>`` on ``measure.py`` overrides both. Each
+file's own workspace must hold its images.
 
 ``xmas`` is not a file of the dataset as it was solved. The solve of
 ``ChristmasTreeWithPresents`` is a ``sift_files`` reconstruction of 4054 frames
@@ -21,22 +23,23 @@ or more of those frames and run through ``embed_patches`` with its defaults
 solve with ``SfmrReconstruction.subset_by_image_indices`` and
 ``filter_points_by_mask(observation_counts >= 3)``, save it, and run
 ``sfm embed-patches`` on that file. A rebuild under a later ``embed_patches``
-gives different tracks, so its figures are not those of the file below.
+gives different tracks, so its figures are not those of the file measured on
+2026-10-10, which was kept outside the repository.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-DATASETS_DIR = Path(r"C:\DataSets")
-# Where the derived Christmas-tree file was written (a session scratchpad).
-XMAS_DERIVED = Path(
-    r"C:\Users\mwwie\AppData\Local\Temp\claude\C--Dev-prod3-sfmtool"
-    r"\8dd8af41-c011-4533-a6a1-94c8a5fa8ab9\scratchpad\part4-review\copies\xmas.sfmr"
+DATASETS_DIR = Path(os.environ.get("BENCH_BARS_DATASETS_DIR", r"C:\DataSets"))
+# The derived Christmas-tree file (see the module docstring); no default.
+XMAS_DERIVED = (
+    Path(os.environ["BENCH_BARS_XMAS"]) if "BENCH_BARS_XMAS" in os.environ else None
 )
 
 
@@ -44,7 +47,7 @@ XMAS_DERIVED = Path(
 class Dataset:
     name: str
     label: str
-    sfmr: Path
+    sfmr: Path | None
     ground_truth: bool
 
 
@@ -107,7 +110,12 @@ def resolve(name: str, overrides: dict[str, str] | None = None) -> Path:
         return Path(overrides[name])
     if name not in DATASETS:
         raise SystemExit(f"unknown dataset {name!r} (known: {', '.join(NAMES)})")
-    return DATASETS[name].sfmr
+    path = DATASETS[name].sfmr
+    if path is None:
+        raise SystemExit(
+            f"no path for {name!r}: set BENCH_BARS_XMAS or pass --sfmr {name}=PATH"
+        )
+    return path
 
 
 def read_image(workspace_dir: str | Path, image_name: str) -> np.ndarray:

@@ -191,9 +191,9 @@ thereafter (the per-round obliquity drop).
    [reference-view rule](reference-view.md)'s pick from the renders at the
    starting keypoints; its keypoint is not moved. The localizer drops views
    that cannot be aligned (grazing, out-of-frame, a tile that fixes no position,
-   large-shift `max_shift_px`, a ZNCC against the reference below
-   `min_absolute_zncc` or below `min_relative_zncc` times the median of the
-   other views) and returns the kept views with their keypoints and their ZNCC
+   large-shift `max_shift_px`, a blur-matched score against the reference
+   below `min_absolute_zncc` or below `min_relative_zncc` times the median of
+   the other views) and returns the kept views with their keypoints and their ZNCC
    against the reference. The sub-pixel pass
    ([keypoint-subpixel-refinement](keypoint-subpixel-refinement.md)) then
    refines the keypoints against the same reference **and renders each point's
@@ -260,7 +260,7 @@ spec).
 | parameter | default | forwarded to / meaning |
 |---|---|---|
 | `min_relative_zncc` | `0.7` | view selection **and** keypoint localizer: a view must agree at least this fraction as well as the reference (the track's self-agreement on admission; during alignment, the median ZNCC against the reference render of the views other than the reference) |
-| `min_absolute_zncc` | `0.5` | keypoint localizer: drop a view whose ZNCC against the reference render is below this (`0` disables) |
+| `min_absolute_zncc` | `0.5` | keypoint localizer: drop a view whose blur-matched score against the reference render is below this (`0` disables) |
 | `max_member_zncc_self_similarity_radius` | `2.5` | keypoint localizer: drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px (`0` disables) |
 | `patch_size` | `11.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |

@@ -305,3 +305,38 @@ self-similarity gate, which refuses 112 seoul_bull observations either way.
   seoul_bull and 2 on kerry_park; at 0.85 kerry_park gains 59 extra
   observations, 2 more of them bad. A floor of 0.6 costs 1.6 points of recall
   on seoul_bull and 0.4 on kerry_park, with no fewer bad extra observations.
+
+## The bars on the blur-matched score
+
+Recorded 2026-10-10. The bars now read each reference's and the new view's
+blur-matched score against the template, read as the bench reads a row
+against the stored bitmap: the tile rendered at its keypoint and scored
+against the template as a bitmap, the bitmap blurred to the tile's sharpness
+where blur matching selects it. The pair rule still reads the search's plain
+pairwise ZNCCs. Before the switch the same sweep ran with the bars on the
+search's plain score and, through an experiment option since removed, on the
+bench's plain score, which gave exactly the search's numbers (they agree to
+1e-8), and on the blur-matched score. Resected pose; recall / extra / bad /
+worse:
+
+| rule | seoul plain | seoul blur-matched | kerry plain | kerry blur-matched |
+|---|---|---|---|---|
+| **default (pooled k = 2)** | 79.8% / 106 / 0 / 0 | **79.9% / 108 / 0 / 0** | 77.8% / 1143 / 1 / 13 | **77.8% / 1148 / 1 / 16** |
+| pooled k = 3 | 81.5% / 139 / 0 / 1 | 81.5% / 140 / 0 / 1 | 79.7% / 1327 / 6 / 28 | 79.4% / 1321 / 5 / 28 |
+| pooled k = 4 | 81.9% / 152 / 0 / 2 | 81.9% / 152 / 0 / 2 | 80.9% / 1519 / 9 / 42 | 80.6% / 1505 / 8 / 40 |
+| track bar 0.85 | 80.2% / 107 / 0 / 0 | 80.2% / 109 / 0 / 0 | 78.7% / 1202 / 3 / 15 | 78.9% / 1212 / 3 / 19 |
+| track bar 0.95 | 79.6% / 105 / 0 / 0 | 79.7% / 107 / 0 / 0 | 76.7% / 1121 / 1 / 12 | 76.8% / 1117 / 1 / 14 |
+| pair rule 0.8 | 79.9% / 106 / 0 / 0 | 79.9% / 108 / 0 / 0 | 78.3% / 1167 / 2 / 16 | 78.2% / 1171 / 2 / 17 |
+| pair rule 1.0 | 79.8% / 106 / 0 / 0 | 79.8% / 108 / 0 / 0 | 77.6% / 1130 / 1 / 13 | 77.6% / 1132 / 1 / 16 |
+| floor 0.4 | 79.8% / 106 / 0 / 0 | 79.9% / 108 / 0 / 0 | 77.8% / 1144 / 1 / 13 | 77.8% / 1148 / 1 / 16 |
+| floor 0.6 | 78.2% / 105 / 0 / 0 | 78.3% / 107 / 0 / 0 | 77.4% / 1128 / 1 / 15 | 77.6% / 1135 / 1 / 16 |
+
+Every bar is relative to the references' own scores, which blur matching
+raises together with the new view's, so the switch moves the results by
+under half a point of recall and a few extra observations. The defaults are
+kept. At the ground-truth pose the default reads 79.3% / 88 / 0 / 0 and
+79.3% / 87 / 0 / 0 on seoul_bull, 78.6% / 1074 / 10 / 16 and
+78.2% / 1074 / 10 / 16 on kerry_park.
+
+`sweep_bars.sh <out dir>` runs this sweep on the current build and prints its
+tables.

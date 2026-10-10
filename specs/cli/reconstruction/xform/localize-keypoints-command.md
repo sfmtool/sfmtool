@@ -28,7 +28,8 @@ render. Views that drift too far, leave the frame, graze the patch plane
 (`min_grazing_cos`), pin no 2D position of their own
 (`max_member_zncc_self_similarity_radius`, 2.5 by default), or match the
 reference render too poorly — absolutely (`min_absolute_zncc`) or relative to
-the other views (`min_relative_zncc`) — are **dropped**.
+the other views (`min_relative_zncc`), by the blur-matched score at the place
+the alignment put them — are **dropped**.
 
 It is therefore a **structural** operation — the search counterpart of the
 in-place `--refine-keypoints`, with a fundamentally different shape:
@@ -139,8 +140,8 @@ the binding's own default. The "Default" column lists those binding defaults.
 | `min_views`                    | `2`             | `compact_to_embedded_patches` (drop a point with fewer kept views; `>= 1`) |
 | `search`                       | `6.0`           | `localize_keypoints` (reach of each view's search around its stored keypoint, patch-grid px) |
 | `max_shift_px`                 | `3.0`           | `localize_keypoints` (drop a view whose keypoint sits further than this from the point's projection, source-image px) |
-| `min_relative_zncc`            | `0.7`           | `localize_keypoints` (drop a view whose ZNCC against the reference render falls below this fraction of the median over the views other than the reference; `0` disables) |
-| `min_absolute_zncc`            | `0.5`           | `localize_keypoints` (drop a view whose ZNCC against the reference render is finite and below this absolute floor, whatever the view count; `0` disables) |
+| `min_relative_zncc`            | `0.7`           | `localize_keypoints` (drop a view whose blur-matched score against the reference render falls below this fraction of the median over the views other than the reference; `0` disables) |
+| `min_absolute_zncc`            | `0.5`           | `localize_keypoints` (drop a view whose blur-matched score against the reference render is finite and below this absolute floor, whatever the view count; `0` disables) |
 | `max_member_zncc_self_similarity_radius` | `2.5` | `localize_keypoints` (drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px — see [`specs/core/patch/patch-keypoint-localization.md`](../../../core/patch/patch-keypoint-localization.md#the-member-self-similarity-gate); `0` disables, `3` or more turns nothing out) |
 | `min_grazing_cos`              | `0.1`           | `localize_keypoints` (drop a view whose ray grazes the patch plane) |
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |

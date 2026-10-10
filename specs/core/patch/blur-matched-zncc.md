@@ -38,7 +38,9 @@ point's stored bitmap, the reference view's render
 ([reference-view.md](reference-view.md) § "The stored bitmap"), plain and
 blur-matched, with only the bitmap assessed and blurred (§ "Scores against the
 stored bitmap"); the bench reports both scores for every row it evaluates,
-and its `min_zncc` bars judge the plain one.
+and its `min_zncc` bars judge the blur-matched one, as do Track at Pixel's
+median gate, Add Image to Tracks' bars and the keypoint localizer's agreement
+gates (§ "What reads the scores").
 Member-coherence validation can read it, and does not by default
 ([member-coherence-validation.md](member-coherence-validation.md) § "Blur
 matching"). The reference-view rule reads plain agreement: blur matching was
@@ -445,14 +447,29 @@ blur-matched one (`blur_matched_zncc`, `blur_matched_zncc_middle`,
 so does the tile at a row's `walked_to` (`walked_plain_zncc*`,
 `walked_blur_matched_zncc*`) ([editable-track.md](../bench/editable-track.md)).
 No field of a track-stage row is a bare `zncc`. Track View shows them in its
-*ZNCC* column, and its hover draws the bitmap, the bitmap as blurred for the
-row and the row's tile, with both sets of scores
-([track-view.md](../../gui/track-view.md)). The bench's `min_zncc` bars,
-whole and middle, judge the **plain** score, which reads lower for a view that
-is out of focus than the blur-matched score does. A blurred view of the right
-place is a view to keep, and the bars are not there to catch focus; the
-measured default loses 5.6% of the blurred true members that clear the
-geometry bars, against 3.5% of the sharp ones
+*ZNCC* column, blur-matched only, and its hover draws the bitmap, the bitmap
+as blurred for the row and the row's tile, with both sets of scores
+([track-view.md](../../gui/track-view.md)). **The blur-matched score is the
+one that judges**:
+
+- the bench's track-stage bars, `min_zncc` and `min_zncc_middle`, the cells'
+  colours, the painting and the "if unpinned" proposals
+  ([editable-track.md](../bench/editable-track.md) § "The scores against the
+  stored bitmap"), and a row's walk (`walked_blur_matched_zncc*`);
+- Track at Pixel's median gate
+  ([track-at-pixel.md](../bench/track-at-pixel.md));
+- Add Image to Tracks' bars, whose template is the bitmap the point stores or
+  would store ([add-image-to-tracks.md](../reconstruction/add-image-to-tracks.md));
+- the keypoint localizer's agreement gates, read where the alignment put each
+  view ([patch-keypoint-localization.md](patch-keypoint-localization.md));
+- `observation_confidence`, which a bench commit and Add Image to Tracks write
+  from it.
+
+The plain score reads lower for a view that is out of focus. A blurred view of
+the right place is a view to keep, and the bars are not there to catch focus:
+on the blur-matched score the bench's measured bars (`0.70`, middle `0.50`)
+lose 2.1% of the blurred true members that clear the geometry bars, where the
+plain score's `0.65` lost 5.2%, while turning out more of the wrong views
 ([editable-track.md](../bench/editable-track.md) § "Parameters"). Member coherence decides on its own matrix, and the
 per-observation covariance's `1 − ZNCC` is the localizer's peak; whether
 either should read the blur-matched score against the bitmap is an open
@@ -569,7 +586,7 @@ datasets of the reference-view work, all in one session on one machine:
 
 | Consumer | Option | Added cost | Effect | Default |
 |---|---|---|---|---|
-| Each observation against the stored bitmap (§ "Scores against the stored bitmap") | blur-matched, ratio 1.25, the bitmap alone blurred | +0.043 ms per track (median; p90 0.11 ms), 0.7% of an evaluation | the bitmap blurred for 10.5% of observations, their score raised by a median of 0.025; reported beside the plain score, and nothing decides on it yet | on |
+| Each observation against the stored bitmap (§ "Scores against the stored bitmap") | blur-matched, ratio 1.25, the bitmap alone blurred | +0.043 ms per track (median; p90 0.11 ms), 0.7% of an evaluation | the bitmap blurred for 10.5% of observations, their score raised by a median of 0.025; the score the bench's bars, Track at Pixel's median gate, Add Image to Tracks' bars and the localizer's agreement gates judge, the plain score reported beside it | on |
 | Reference view: agreement test and cell check ([reference-view.md](reference-view.md)) | blur-matched, ratio 1.25 | +0.13 ms per track (median; p90 0.81 ms), 2.1% of an evaluation (a blur per direction: +0.37 ms, 5.8%) | 28 of 77 hand picks exactly, as plain (tune half 18, held-out 10), against 30 for a blur per direction; the pick differs from plain on 4 of 661 tracks | off (removed) |
 | Member coherence's decision ([member-coherence-validation.md](member-coherence-validation.md)) | blur-matched, ratio 1.25 | 1.18 × the plain run on one thread (a blur per direction 1.77 ×) | a planted member blurred by `σ` 2 is evicted 2.9% of the time against 4.9% plain (1.8% for a blur per direction); verdicts change on 0.4% of real points, in both directions | off |
 

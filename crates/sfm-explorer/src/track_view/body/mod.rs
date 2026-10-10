@@ -1282,26 +1282,15 @@ pub(crate) fn zncc_text(whole: Option<f64>, middle: Option<f64>) -> String {
     stacked(whole, middle, |value| format!("{:.0}%", 100.0 * value))
 }
 
-/// The track stage's *ZNCC* cell: the row's plain score against the stored
-/// patch bitmap over its middle reading, as [`zncc_text`] prints them, with
-/// the blur-matched score after an arrow where the bitmap was blurred and the
-/// two print differently (`50% ⏵ 53% whole` over `61% mid`). The reference's
-/// own row reads 100%.
+/// The track stage's *ZNCC* cell: the row's blur-matched score against the
+/// stored patch bitmap over its blur-matched middle reading, as [`zncc_text`]
+/// prints them, the scores the bars judge. The plain scores are in the cell's
+/// hover. The reference's own row reads 100%.
 fn track_zncc_text(m: Option<&sfmtool_core::bench::TrackMeasurement>) -> String {
     let Some(m) = m else {
         return "-".to_string();
     };
-    let text = zncc_text(m.plain_zncc, m.plain_zncc_middle);
-    match reference::blur_matched_shown(m) {
-        // The arrow is U+23F5, which egui's bundled fonts draw; U+2192 draws
-        // as a box.
-        Some(matched) => text.replacen(
-            " whole",
-            &format!(" \u{23f5} {:.0}% whole", 100.0 * matched),
-            1,
-        ),
-        None => text,
-    }
+    zncc_text(m.blur_matched_zncc, m.blur_matched_zncc_middle)
 }
 
 /// [`zncc_text`] for a sentence, on one line (`92% / 61%`).
@@ -1763,7 +1752,7 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .track
             .as_ref()
             .map_or_else(RowGrids::default, |m| RowGrids {
-                zncc: m.plain_zncc_grid,
+                zncc: m.blur_matched_zncc_grid,
                 radius: m.zncc_self_similarity_radius_grid,
                 radius_ellipse: m.zncc_self_similarity_ellipse_grid,
             }),
@@ -2697,17 +2686,17 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
                     Some(m) if m.walked_px.is_some() => format!(
                         "walked {:.0} grid px{}, kept at seed",
                         m.walked_px.expect("just matched"),
-                        match m.walked_plain_zncc {
+                        match m.walked_blur_matched_zncc {
                             Some(z) if z.is_finite() => format!(
                                 " (ZNCC {} there)",
-                                zncc_sentence(Some(z), m.walked_plain_zncc_middle)
+                                zncc_sentence(Some(z), m.walked_blur_matched_zncc_middle)
                             ),
                             _ => String::new(),
                         }
                     ),
                     Some(m) => match m.reason {
                         Some(reason) => reason.to_string(),
-                        None if m.seed_shift_px.is_some() || m.plain_zncc.is_some() => {
+                        None if m.seed_shift_px.is_some() || m.blur_matched_zncc.is_some() => {
                             "localized".to_string()
                         }
                         None => "not evaluated".to_string(),

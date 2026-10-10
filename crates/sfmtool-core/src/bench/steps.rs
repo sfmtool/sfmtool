@@ -143,7 +143,7 @@ impl std::error::Error for CreateTrackError {}
 /// they stand until a person hands them to the bars ([`unpin_verdicts`]), and
 /// the evaluations that read the track leave them where they are. The
 /// measurements are carried from what the record stores and nothing is
-/// recomputed: the score against the bitmap (`plain_zncc`) is
+/// recomputed: the score against the bitmap (`blur_matched_zncc`) is
 /// `observation_confidence` read back out of its byte scale where the column
 /// exists, which is what a commit writes there, and everything else an
 /// evaluation would compute is left unmeasured. With no localizer reading
@@ -201,12 +201,12 @@ pub fn create_track(
             cluster: None,
             track: Some(TrackMeasurement {
                 keypoint: view.keypoint_xy(k),
-                // The stored column is the row's plain score against the
-                // stored bitmap in a byte scale; reading it back is carrying a
+                // The stored column is the row's blur-matched score against
+                // the stored bitmap in a byte scale; reading it back is carrying a
                 // measurement, not making one, and a commit of the untouched
                 // track writes the same byte again. A `0` byte is no
                 // measurement, so the row carries none.
-                plain_zncc: view
+                blur_matched_zncc: view
                     .observation_confidence()
                     .map(|c| c[k])
                     .filter(|&byte| byte != 0)
@@ -2797,7 +2797,7 @@ fn paint(track: &EditableTrack, unpinned: &[usize]) -> Vec<Option<Verdict>> {
 fn score(observation: &Observation, stage: StageKind) -> f64 {
     let zncc = match stage {
         StageKind::Cluster => observation.cluster.as_ref().and_then(|m| m.zncc),
-        StageKind::Track => observation.track.as_ref().and_then(|m| m.plain_zncc),
+        StageKind::Track => observation.track.as_ref().and_then(|m| m.blur_matched_zncc),
     };
     zncc.unwrap_or(f64::NEG_INFINITY)
 }
@@ -2923,8 +2923,8 @@ pub fn bar_checks(
             let m = observation.track.as_ref()?;
             m.seed_shift_px?;
             (
-                m.plain_zncc?,
-                m.plain_zncc_middle,
+                m.blur_matched_zncc?,
+                m.blur_matched_zncc_middle,
                 m.seed_shift_px,
                 m.zncc_self_similarity_radius,
                 m.reprojection_error.or(m.projection_offset_px),

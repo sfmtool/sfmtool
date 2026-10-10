@@ -438,10 +438,11 @@ impl std::fmt::Display for EvaluateReport {
 /// ray angle and the tile self-similarity -- and, for an observation no round
 /// could read, the [`Unmeasured`] reason instead. Every row's tile is then
 /// scored against the stored bitmap the track holds, into
-/// [`plain_zncc`](super::track::TrackMeasurement::plain_zncc) and the readings beside it,
-/// which the bars judge, and so is the tile at the pixel a fit refused to walk
-/// a row to, where one is recorded
-/// ([`walked_plain_zncc`](super::track::TrackMeasurement::walked_plain_zncc)); a track
+/// [`plain_zncc`](super::track::TrackMeasurement::plain_zncc) and
+/// [`blur_matched_zncc`](super::track::TrackMeasurement::blur_matched_zncc), the
+/// one the bars judge, with the readings beside them, and so is the tile at
+/// the pixel a fit refused to walk a row to, where one is recorded
+/// ([`walked_blur_matched_zncc`](super::track::TrackMeasurement::walked_blur_matched_zncc)); a track
 /// with no bitmap gets no such score, and its rows say
 /// [`Unmeasured::NoBitmap`]. This call does not render the bitmap;
 /// [`evaluate_rendering_bitmap`] does. **The keypoint itself is not written**, nor the position, the frame or
@@ -2132,9 +2133,9 @@ fn read_reference_view(
 /// Score every observation whose tile is in `tiles` against the track's
 /// stored bitmap, and write its scores into its track-stage slot: the plain
 /// whole-tile, middle and grid scores (`plain_zncc`, `plain_zncc_middle`,
-/// `plain_zncc_grid`), which the bars judge, and the blur-matched ones beside
-/// them (`blur_matched_zncc`, `_middle`, `_grid`), read against the one
-/// blurred bitmap.
+/// `plain_zncc_grid`), and the blur-matched ones beside them
+/// (`blur_matched_zncc`, `_middle`, `_grid`), read against the one blurred
+/// bitmap, which the bars judge.
 ///
 /// The scores are [`BitmapScorer`]'s, plain and blur-matched, blurring only
 /// the bitmap, over member coherence's default window; the observation the

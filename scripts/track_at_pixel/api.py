@@ -43,7 +43,7 @@ class TrackAtPixelResult:
     """A built track, plus the trail of how it was built.
 
     ``track`` is a track-stage ``sfmtool.bench.EditableTrack`` that has
-    been evaluated, so every ``in`` observation carries its ``plain_zncc`` against
+    been evaluated, so every ``in`` observation carries its ``blur_matched_zncc`` against
     the stored bitmap and friends. ``query_observation`` is the index of the observation
     that sits in the queried image (``None`` if the candidate moved off it).
     """

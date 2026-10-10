@@ -191,9 +191,9 @@ impl From<EditError> for CommitError {
 /// coordinate it carries, the frame it stands on, the patch bitmap, the
 /// colour read from that bitmap's centre, the normal the frame states, and one
 /// observation per `in` observation with its keypoint and, in
-/// `observation_confidence` where the column exists, its plain score against
+/// `observation_confidence` where the column exists, its blur-matched score against
 /// the stored bitmap
-/// ([`TrackMeasurement::plain_zncc`](super::track::TrackMeasurement::plain_zncc)),
+/// ([`TrackMeasurement::blur_matched_zncc`](super::track::TrackMeasurement::blur_matched_zncc)),
 /// clamped to `0 ..= 1` and scaled to a byte (`0` where the row has no score,
 /// `255` for the reference observation).
 ///
@@ -311,7 +311,7 @@ pub fn commit(
             // is stored in `1..=255`, by the function Add Image to Tracks uses.
             confidence: edited.has_observation_confidence().then(|| {
                 measurement
-                    .plain_zncc
+                    .blur_matched_zncc
                     .map_or(0, crate::reconstruction::data::observation_confidence_byte)
             }),
         });

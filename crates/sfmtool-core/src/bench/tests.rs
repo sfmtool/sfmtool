@@ -367,8 +367,9 @@ fn a_point_put_on_the_bench_is_a_track_with_every_observation_in() {
     );
 }
 
-/// `observation_confidence` is the plain score against the stored bitmap, so
-/// putting a point on the bench carries it into `zncc`; with no localizer
+/// `observation_confidence` is the blur-matched score against the stored
+/// bitmap, so putting a point on the bench carries it into
+/// `blur_matched_zncc`, with no plain score beside it; with no localizer
 /// reading the bars judge no row until the first evaluation.
 #[test]
 fn the_stored_confidence_is_carried_as_the_score_against_the_bitmap() {
@@ -378,8 +379,9 @@ fn the_stored_confidence_is_carried_as_the_score_against_the_bitmap() {
     let track = bench.track(&label).expect("just put on");
     for observation in &track.observations {
         let m = observation.track.as_ref().expect("a track slot");
-        let zncc = m.plain_zncc.expect("the column is carried");
+        let zncc = m.blur_matched_zncc.expect("the column is carried");
         assert!((zncc - 200.0 / 255.0).abs() < 1e-9);
+        assert_eq!(m.plain_zncc, None);
         assert_eq!(m.seed_shift_px, None);
         assert!(bar_checks(observation, StageKind::Track, &track.thresholds).is_none());
     }
@@ -945,7 +947,7 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
         let measurement = observation.track.as_mut().expect("a track slot");
         // The localizer read the row (`seed_shift_px`, below): a row it
         // refused is not judged.
-        measurement.plain_zncc = Some(score);
+        measurement.blur_matched_zncc = Some(score);
         measurement.seed_shift_px = Some(0.5);
         measurement.zncc_self_similarity_radius = Some(0.5);
     }
@@ -985,7 +987,7 @@ fn render_alternating(
     payload.reference = from;
     for (i, observation) in next.observations.iter_mut().enumerate() {
         let m = observation.track.as_mut().expect("a track slot");
-        m.plain_zncc = Some(if Some(i) == from { 1.0 } else { 0.1 });
+        m.blur_matched_zncc = Some(if Some(i) == from { 1.0 } else { 0.1 });
     }
     Ok(next)
 }
@@ -1156,24 +1158,64 @@ fn the_painting_proposes_verdicts_from_the_stored_measurements() {
     assert!(painted.observations.iter().all(|o| !o.pinned));
 }
 
-/// The bars judge the plain score against the bitmap: a row whose
-/// blur-matched score clears `min_zncc` and whose plain score does not, as a
-/// view out of focus reads, is turned out.
+/// The bars judge the blur-matched score against the bitmap: a row whose
+/// plain score is under `min_zncc` and whose blur-matched score clears it, as
+/// a view out of focus reads, is kept.
 #[test]
-fn the_bars_judge_the_plain_score_against_the_bitmap() {
-    let mut track = scored_track([0.95, 0.55]);
+fn the_bars_judge_the_blur_matched_score_against_the_bitmap() {
+    let mut track = scored_track([0.95, 0.92]);
     let m = track.observations[1].track.as_mut().expect("a slot");
-    m.blur_matched_zncc = Some(0.92);
+    m.plain_zncc = Some(0.55);
+    m.plain_zncc_middle = Some(0.2);
+    m.blur_matched_zncc_middle = Some(0.8);
     let (painted, _) = apply_thresholds(&track);
     assert_eq!(painted.observations[0].verdict, Verdict::In);
     assert_eq!(
         painted.observations[1].verdict,
-        Verdict::Out,
-        "the plain score is under the bar whatever the others read"
+        Verdict::In,
+        "the blur-matched score clears the bar whatever the plain one reads"
     );
     let checks = bar_checks(&track.observations[1], StageKind::Track, &track.thresholds)
         .expect("a scored row");
+    assert_eq!(checks.min_zncc, BarCheck::Pass);
+    assert_eq!(checks.min_zncc_middle, BarCheck::Pass);
+}
+
+/// The reverse: a row whose plain score clears `min_zncc` and whose
+/// blur-matched score does not is turned out, and so is one whose plain
+/// middle score clears `min_zncc_middle` and whose blur-matched middle does
+/// not.
+#[test]
+fn a_plain_score_over_the_bar_does_not_keep_a_row_the_blur_matched_one_fails() {
+    let mut track = scored_track([0.95, 0.6]);
+    let m = track.observations[1].track.as_mut().expect("a slot");
+    m.plain_zncc = Some(0.9);
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[1].verdict, Verdict::Out);
+    let checks = bar_checks(&track.observations[1], StageKind::Track, &track.thresholds)
+        .expect("a scored row");
     assert_eq!(checks.min_zncc, BarCheck::Fail);
+
+    let mut track = scored_track([0.95, 0.9]);
+    let m = track.observations[1].track.as_mut().expect("a slot");
+    m.plain_zncc_middle = Some(0.9);
+    m.blur_matched_zncc_middle = Some(0.4);
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[1].verdict, Verdict::Out);
+    let checks = bar_checks(&track.observations[1], StageKind::Track, &track.thresholds)
+        .expect("a scored row");
+    assert_eq!(checks.min_zncc, BarCheck::Pass);
+    assert_eq!(checks.min_zncc_middle, BarCheck::Fail);
+}
+
+/// The track stage's default bars are the measured ones: `0.70` whole and
+/// `0.50` middle, on the blur-matched score.
+#[test]
+fn the_track_stage_bars_default_to_the_measured_values() {
+    let t = Thresholds::default();
+    assert_eq!(t.min_zncc, 0.70);
+    assert_eq!(t.min_zncc_middle, 0.50);
+    assert_eq!(t.zncc_bars(StageKind::Track), (0.70, 0.50));
 }
 
 /// A row with no bitmap to read against has no score, says so, and the bars
@@ -1219,12 +1261,12 @@ fn the_painting_judges_the_middle_zncc_against_its_own_bar() {
         .track
         .as_mut()
         .expect("a slot")
-        .plain_zncc_middle = Some(0.9);
+        .blur_matched_zncc_middle = Some(0.9);
     track.observations[1]
         .track
         .as_mut()
         .expect("a slot")
-        .plain_zncc_middle = Some(0.3);
+        .blur_matched_zncc_middle = Some(0.3);
     track.thresholds.min_zncc_middle = 0.0;
     let (painted, _) = apply_thresholds(&track);
     assert_eq!(painted.verdict_counts().0, 2, "a bar of 0 is off");
@@ -1242,7 +1284,7 @@ fn the_painting_judges_the_middle_zncc_against_its_own_bar() {
         .track
         .as_mut()
         .expect("a slot")
-        .plain_zncc_middle = None;
+        .blur_matched_zncc_middle = None;
     let (painted, _) = apply_thresholds(&track);
     assert_eq!(painted.observations[1].verdict, Verdict::In);
 }
@@ -1516,8 +1558,8 @@ fn slot(track: &mut EditableTrack, i: usize) -> &mut TrackMeasurement {
 fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
     let mut track = scored_track([0.95, 0.40]);
     track.thresholds.min_zncc_middle = 0.6;
-    slot(&mut track, 0).plain_zncc_middle = Some(0.9);
-    slot(&mut track, 1).plain_zncc_middle = Some(0.3);
+    slot(&mut track, 0).blur_matched_zncc_middle = Some(0.9);
+    slot(&mut track, 1).blur_matched_zncc_middle = Some(0.3);
     slot(&mut track, 1).seed_shift_px = Some(track.thresholds.max_shift_px + 1.0);
     slot(&mut track, 1).zncc_self_similarity_radius = Some(3.0);
     slot(&mut track, 0).reprojection_error = Some(0.5);
@@ -1555,7 +1597,7 @@ fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
 
     // A reading no round produced fails its bar, whichever bar it is.
     for set in [
-        |m: &mut TrackMeasurement| m.plain_zncc_middle = Some(f64::NAN),
+        |m: &mut TrackMeasurement| m.blur_matched_zncc_middle = Some(f64::NAN),
         |m: &mut TrackMeasurement| m.seed_shift_px = Some(f64::NAN),
         |m: &mut TrackMeasurement| m.zncc_self_similarity_radius = Some(f64::NAN),
         |m: &mut TrackMeasurement| m.reprojection_error = Some(f64::NAN),
@@ -1565,7 +1607,7 @@ fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
         let checks = bar_checks(&nan.observations[0], stage, &nan.thresholds).expect("measured");
         assert!(!checks.clears_every_bar(), "{checks:?}");
     }
-    slot(&mut track, 0).plain_zncc = Some(f64::NAN);
+    slot(&mut track, 0).blur_matched_zncc = Some(f64::NAN);
     let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
     assert_eq!(checks.min_zncc, BarCheck::Fail);
 }
@@ -1605,7 +1647,7 @@ fn projection_bar_judges_the_reprojection_error_before_the_projection_offset() {
 fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
     let mut track = scored_track([0.95, 0.40]);
     track.thresholds.min_zncc_middle = 0.6;
-    slot(&mut track, 0).plain_zncc_middle = None;
+    slot(&mut track, 0).blur_matched_zncc_middle = None;
     slot(&mut track, 0).zncc_self_similarity_radius = None;
     slot(&mut track, 0).reprojection_error = None;
     slot(&mut track, 0).projection_offset_px = None;
@@ -1627,7 +1669,7 @@ fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
     );
 
     // The middle bar at 0 is off, even over a reading that would fail it.
-    slot(&mut track, 0).plain_zncc_middle = Some(0.1);
+    slot(&mut track, 0).blur_matched_zncc_middle = Some(0.1);
     track.thresholds.min_zncc_middle = 0.0;
     let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
     assert_eq!(checks.min_zncc_middle, BarCheck::NotJudged);
@@ -1640,7 +1682,7 @@ fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
         "a row the localizer could not read is unmeasured"
     );
 
-    slot(&mut track, 0).plain_zncc = None;
+    slot(&mut track, 0).blur_matched_zncc = None;
     assert_eq!(
         bar_checks(&track.observations[0], stage, &track.thresholds),
         None,
@@ -1696,7 +1738,7 @@ fn verdicts_if_unpinned_give_a_pinned_row_what_unpinning_it_would() {
     let mut shared = scored_track([0.95, 0.99]);
     let mut third = shared.observations[0].clone();
     third.image = 0;
-    third.track.as_mut().expect("a slot").plain_zncc = Some(0.90);
+    third.track.as_mut().expect("a slot").blur_matched_zncc = Some(0.90);
     shared.observations.push(third);
     shared.observations[1].image = 0;
     // Observation 2 (0.90) is pinned `in`, and holds image 0 against the two
@@ -1744,7 +1786,7 @@ fn verdicts_if_unpinned_give_an_unpinned_row_the_painting() {
             .map(|o| Some(o.verdict))
             .collect::<Vec<_>>()
     );
-    slot(&mut track, 0).plain_zncc = None;
+    slot(&mut track, 0).blur_matched_zncc = None;
     assert_eq!(verdicts_if_unpinned(&track)[0], None);
 }
 
@@ -2052,12 +2094,12 @@ fn a_commit_with_no_origin_appends_the_in_observations_keypoints() {
     );
 }
 
-/// A commit fills `observation_confidence` from each row's plain score
+/// A commit fills `observation_confidence` from each row's blur-matched score
 /// against the stored bitmap, clamped and scaled to a byte: `255` for the
-/// reference observation, whose render the bitmap is, and the blur-matched
-/// score plays no part.
+/// reference observation, whose render the bitmap is, and the plain score
+/// plays no part.
 #[test]
-fn a_commit_writes_the_plain_score_against_the_bitmap_as_the_confidence() {
+fn a_commit_writes_the_blur_matched_score_against_the_bitmap_as_the_confidence() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -2066,8 +2108,8 @@ fn a_commit_writes_the_plain_score_against_the_bitmap_as_the_confidence() {
     let mut track = read.clone();
     let other = 1 - reference;
     let m = track.observations[other].track.as_mut().expect("a slot");
-    m.plain_zncc = Some(0.6);
-    m.blur_matched_zncc = Some(0.9);
+    m.blur_matched_zncc = Some(0.6);
+    m.plain_zncc = Some(0.9);
     let (next, report) = commit(&edited, &track).expect("two in, with a position");
     let written = next.point(report.point).expect("just written");
     let confidence = written.observation_confidence().expect("the column");
@@ -2089,7 +2131,7 @@ fn a_commit_writes_the_plain_score_against_the_bitmap_as_the_confidence() {
             .track
             .as_mut()
             .expect("a slot")
-            .plain_zncc = zncc;
+            .blur_matched_zncc = zncc;
         let (next, report) = commit(&edited, &track).expect("two in, with a position");
         let written = next.point(report.point).expect("just written");
         let confidence = written.observation_confidence().expect("the column");
@@ -2110,14 +2152,14 @@ fn a_zero_confidence_byte_is_carried_as_no_score() {
         .track
         .as_mut()
         .expect("a slot")
-        .plain_zncc = None;
+        .blur_matched_zncc = None;
     let (next, report) = commit(&edited, &track).expect("two in, with a position");
     let (bench, label) = bench_with_point(&next, report.point);
     let carried = bench.track(&label).expect("just put on");
     let zncc: Vec<Option<f64>> = carried
         .observations
         .iter()
-        .map(|o| o.track.as_ref().expect("a track slot").plain_zncc)
+        .map(|o| o.track.as_ref().expect("a track slot").blur_matched_zncc)
         .collect();
     assert_eq!(zncc[1], None, "{zncc:?}");
     assert!(zncc[0].is_some(), "{zncc:?}");
@@ -2433,7 +2475,7 @@ fn a_column_the_commit_writes_is_a_column_it_compares() {
             .track
             .as_mut()
             .expect("a track slot")
-            .plain_zncc = Some(0.5);
+            .blur_matched_zncc = Some(0.5);
     });
     moved("the error", &|t| {
         t.observations[0]
@@ -3313,7 +3355,7 @@ fn a_repaint_that_turns_rows_out_leaves_no_out_row_named_the_reference_view() {
         .track
         .as_mut()
         .expect("a track slot")
-        .plain_zncc = Some(0.0);
+        .blur_matched_zncc = Some(0.0);
     let (painted, report) = apply_thresholds(&failing);
     assert_eq!((report.turned_in, report.turned_out), (0, 1));
     assert_eq!(painted.observations[picked].verdict, Verdict::Out);
@@ -4620,7 +4662,7 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
         .track
         .as_mut()
         .expect("a track slot")
-        .plain_zncc = Some(0.9);
+        .blur_matched_zncc = Some(0.9);
 
     let dragged = 1;
     let image = track.observations[dragged].image as usize;
@@ -5304,7 +5346,7 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
         .track
         .as_mut()
         .expect("a track slot")
-        .plain_zncc = Some(0.91);
+        .blur_matched_zncc = Some(0.91);
     assert!(
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
         "the column fixture should carry a patch bitmap to drop"
@@ -5531,7 +5573,7 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
         .track
         .as_mut()
         .expect("a track slot")
-        .plain_zncc = Some(0.91);
+        .blur_matched_zncc = Some(0.91);
     assert!(
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
         "the column fixture should carry a patch bitmap to drop"
@@ -5808,7 +5850,7 @@ fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_o
         .track
         .as_mut()
         .expect("a track slot")
-        .plain_zncc = Some(0.88);
+        .blur_matched_zncc = Some(0.88);
     let centre = track
         .track()
         .and_then(|p| p.placement.as_ref())

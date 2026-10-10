@@ -186,22 +186,6 @@ pub enum TemplateSource {
     StoredBitmap,
 }
 
-/// Which reading of the new view and of the references against the template
-/// the photometric bars judge. An experiment setting, for measuring the bars
-/// on the bench's scores; the default is [`Self::Template`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CandidateScore {
-    /// The windowed ZNCC of the view's core against the template that the
-    /// search correlates ([`TrackReferences`]).
-    Template,
-    /// The bench's plain score against the template: the view's tile rendered
-    /// at its keypoint, read by [`BitmapScorer`] against the template as an
-    /// RGBA bitmap.
-    BitmapPlain,
-    /// The bench's blur-matched score against the same bitmap.
-    BitmapBlurMatched,
-}
-
 /// The rules one call judges each candidate by.
 #[derive(Debug, Clone)]
 pub struct AddImageToTracksOptions {
@@ -215,9 +199,6 @@ pub struct AddImageToTracksOptions {
     pub position_gate: PositionGate,
     /// What the new view is searched against.
     pub template: TemplateSource,
-    /// Which reading the photometric bars judge. The pair rule's pairwise
-    /// ZNCCs are read as the search reads them whatever this is.
-    pub score: CandidateScore,
     /// Refuse a finite point whose patch plane has the new camera on the other
     /// side from the majority of the cameras that observe it.
     pub require_facing: bool,
@@ -267,7 +248,6 @@ impl Default for AddImageToTracksOptions {
                 floor_px: 1.0,
             },
             template: TemplateSource::Rendered,
-            score: CandidateScore::Template,
             require_facing: true,
             subpixel: true,
             ascend_on_edge: false,
@@ -353,10 +333,13 @@ pub struct CandidateReport {
     /// observation (see [`TrackReferences::reference`]), whose score no bar
     /// reads.
     pub reference_observation: Option<usize>,
-    /// Per reference, its plain ZNCC against the template at its own keypoint;
+    /// Per reference, its blur-matched score against the template at its own
+    /// keypoint, read as the bench reads a row against the stored bitmap;
     /// `1.0` for the reference observation where the template is its render.
+    /// The scores the track and pooled bars are set from.
     pub reference_zncc: Vec<f64>,
-    /// The references' pairwise ZNCCs, row-major `n × n`.
+    /// The references' pairwise ZNCCs, row-major `n × n`, as the search reads
+    /// them (plain): what the pair rule reads.
     pub reference_pair_zncc: Vec<f64>,
     /// The keypoint the search found, before any sub-pixel step.
     pub search_keypoint: Option<[f64; 2]>,
@@ -369,9 +352,13 @@ pub struct CandidateReport {
     pub zncc_self_similarity_radius: f64,
     /// The ZNCC at the search's integer peak.
     pub peak_zncc: f64,
-    /// The new view's plain ZNCC against the template, at the final keypoint.
+    /// The new view's blur-matched score against the template at the final
+    /// keypoint, read as the bench reads a row against the stored bitmap: the
+    /// score the bars and the floor judge, and the one written as the new
+    /// observation's `observation_confidence`.
     pub zncc: f64,
-    /// The new view's ZNCC against each reference, at the final keypoint.
+    /// The new view's ZNCC against each reference, at the final keypoint, as
+    /// the search reads it (plain): what the pair rule reads.
     pub pair_zncc: Vec<f64>,
     /// The number the rule compared with [`Self::bar`]: the ZNCC, or for a
     /// two-reference track under [`AcceptRule::TrackBasis`] the pair
@@ -974,23 +961,24 @@ impl Context<'_, '_> {
             out.refusal = Some(Refusal::Unscorable);
             return out;
         };
-        out.zncc = score.zncc;
         out.pair_zncc = score.pair_zncc;
-        if self.options.score != CandidateScore::Template {
-            let (references_z, z) =
-                self.bitmap_scores(&patch, &local, &references, &ref_keypoints, keypoint);
-            out.reference_zncc = references_z;
-            out.zncc = z;
-        }
+        let (references_z, z) =
+            self.bitmap_scores(&patch, &local, &references, &ref_keypoints, keypoint);
+        out.reference_zncc = references_z;
+        out.zncc = z;
         out
     }
 
-    /// The references' and the new view's scores against the template read as
-    /// the bench reads a row against the stored bitmap, plain or blur-matched
-    /// as [`AddImageToTracksOptions::score`] says: each view's tile rendered at
-    /// its keypoint ([`render_view_tile`]) and scored by [`BitmapScorer`]
-    /// against the template as an RGBA bitmap. The reference observation reads
-    /// `1` where the template is its render. `local` is the measured point's
+    /// The references' and the new view's blur-matched scores against the
+    /// template, read as the bench reads a row against the stored bitmap: each
+    /// view's tile rendered at its keypoint ([`render_view_tile`]) and scored
+    /// by [`BitmapScorer`] against the template as an RGBA bitmap, blurred to
+    /// the tile's sharpness where blur matching selects it. The template is
+    /// the point's stored bitmap under [`TemplateSource::StoredBitmap`], and
+    /// otherwise the bitmap the point would store, its reference observation's
+    /// render (or the fused mean), so a point with no stored bitmap is scored
+    /// against the render it would store. The reference observation reads `1`
+    /// where the template is its render. `local` is the measured point's
     /// views, the target first; `ref_keypoints` is parallel to `local[1..]`.
     fn bitmap_scores(
         &self,
@@ -1019,14 +1007,10 @@ impl Context<'_, '_> {
         };
         let planes = bitmap_planes(&bitmap, r);
         let mut scorer = BitmapScorer::new(&planes, self.localize.window);
-        let blur = self.options.score == CandidateScore::BitmapBlurMatched;
         let mut read = |l: usize, kp: [f64; 2]| {
-            let s = scorer.score(&render(l, kp, r).planes(), None);
-            if blur {
-                s.blur_matched_zncc
-            } else {
-                s.plain_zncc
-            }
+            scorer
+                .score(&render(l, kp, r).planes(), None)
+                .blur_matched_zncc
         };
         let rendered_from = |k: usize| {
             references.template_kind == TemplateKind::ReferenceObservation

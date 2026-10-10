@@ -810,8 +810,83 @@ fn where_the_rule_picks_none_the_template_is_the_fused_mean() {
     }
 }
 
-/// The bars read the existing observations' plain ZNCCs against the template,
-/// the reference observation's left out.
+/// [`texture`] as an out-of-focus photograph shows it: the finest sinusoid
+/// gone and the others attenuated, as a Gaussian blur attenuates them.
+fn blurred_texture(x: f64, y: f64) -> f64 {
+    127.5 + 55.0 * 0.3 * (x * 17.0).sin() + 45.0 * 0.1 * (y * 23.0).cos()
+}
+
+/// The new view's score, the one the bars judge and the confidence column
+/// stores, is its blur-matched score against the template, read as the bench
+/// reads a row against the stored bitmap, here for an out-of-focus
+/// photograph of the right surface.
+#[test]
+fn the_new_views_score_is_blur_matched_against_the_template() {
+    use crate::patch::reference_view::render_view_tile;
+    use crate::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
+
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    let n = points.len();
+    cap.recon.point_set.reference_observations = Some(vec![2; n]);
+    cap.recon.point_set.observation_confidence = Some(vec![200; cap.recon.point_set.tracks.len()]);
+    let (q, t) = down_z(CENTERS[TARGET]);
+    cap.repose(TARGET, q, t, blurred_texture);
+    let options = AddImageToTracksOptions {
+        rule: AcceptRule::FixedZncc,
+        min_zncc: -2.0,
+        position_gate: PositionGate::Off,
+        ..gate_off()
+    };
+    let (next, report) = run(&cap, &options);
+    let poses = poses_of(&cap);
+    let camera = pinhole();
+    let view = |i: usize| ProjectedImage {
+        camera: &camera,
+        cam_from_world: &poses[i],
+        pyramid: &cap.pyramids[i],
+    };
+    let r = options.localize.resolution as usize;
+    let sampler = options.localize.sampler;
+    let mut scored = 0;
+    let conf = next.point_set.observation_confidence.as_ref().unwrap();
+    for (p, (world, _)) in points.iter().enumerate() {
+        let c = &report.candidates[p];
+        let Some(kp) = c.keypoint else { continue };
+        let patch = patch_at(*world);
+        let reference = render_view_tile(
+            &patch,
+            &view(2),
+            Some(cap.project(2, *world)),
+            r,
+            sampler,
+            &Progress::none(),
+        );
+        let planes = bitmap_planes(&bitmap_from_tile(&reference), r);
+        let mut scorer = BitmapScorer::new(&planes, options.localize.window);
+        let tile = render_view_tile(
+            &patch,
+            &view(TARGET),
+            Some(kp),
+            r,
+            sampler,
+            &Progress::none(),
+        );
+        let score = scorer.score(&tile.planes(), None);
+        assert_eq!(c.zncc, score.blur_matched_zncc, "point {p}");
+        scored += 1;
+        let start = next.point_set.observation_offsets[p];
+        assert_eq!(
+            conf[start + 4],
+            observation_confidence_byte(c.zncc),
+            "point {p}"
+        );
+    }
+    assert!(scored > n / 2, "{scored} of {n} candidates scored");
+}
+
+/// The bars read the existing observations' blur-matched scores against the
+/// template, the reference observation's left out.
 #[test]
 fn the_bars_read_the_references_scores_against_the_template() {
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();

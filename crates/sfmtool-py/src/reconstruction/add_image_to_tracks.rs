@@ -20,8 +20,7 @@ use sfmtool_core::patch::keypoint_localize::TemplateKind;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::add_image_to_tracks::{
     add_image_to_tracks as core_add_image_to_tracks, AcceptRule, AddImageToTracksOptions,
-    AddImageToTracksReport, BasisStatistic, CandidateScore, PairRule, PairStatistic, PositionGate,
-    TemplateSource,
+    AddImageToTracksReport, BasisStatistic, PairRule, PairStatistic, PositionGate, TemplateSource,
 };
 use sfmtool_core::reconstruction::edited::EditedReconstruction;
 
@@ -170,7 +169,9 @@ impl PyEditedReconstruction {
     /// observation's render (or the stored bitmap, under ``"stored_bitmap"``).
     /// The image is searched once against it within ``search`` patch-grid
     /// pixels of the projection, refined to sub-pixel (``subpixel``), and
-    /// scored. The rule then judges the score
+    /// scored: its tile and each reference's, rendered at their keypoints, are
+    /// read against the template blur-matched, as the bench reads a row
+    /// against the stored bitmap. The rule then judges the score
     /// (see ``specs/core/reconstruction/add-image-to-tracks.md``). Nothing but the added
     /// observations changes: no point, frame, bitmap or camera moves, and
     /// nothing is re-triangulated. A **bulk** edit, so the value that comes
@@ -198,7 +199,8 @@ impl PyEditedReconstruction {
     ///     pair_statistic, pair_factor: For a two-reference track under
     ///         ``"track_basis"``: ``"min"``, ``"mean"`` or ``"max"`` of the
     ///         image's ZNCC against each reference must reach ``pair_factor``
-    ///         times the ZNCC between the two references.
+    ///         times the ZNCC between the two references. These pairwise ZNCCs
+    ///         are the search's, read plain.
     ///     min_zncc: A floor on the ZNCC every rule applies (default 0.5;
     ///         ``0`` disables it for the basis rules); the whole of ``"fixed"``.
     ///     position_gate: ``"image_mad"`` (default: median plus ``position_k``
@@ -208,10 +210,6 @@ impl PyEditedReconstruction {
     ///     template: ``"rendered"`` (default: the bitmap the point would store,
     ///         rendered from its references at their keypoints) or
     ///         ``"stored_bitmap"`` (the point's stored bitmap where it has one).
-    ///     score: Which reading the photometric bars judge: ``"template"``
-    ///         (default, the ZNCC the search correlates against the template),
-    ///         or the bench's ``"plain"`` or ``"blur_matched"`` score against
-    ///         the template as a bitmap. An experiment setting.
     ///     require_facing, subpixel, ascend_on_edge,
     ///         min_keypoint_separation_px: see the spec.
     ///     search: The search radius in patch-grid pixels.
@@ -233,11 +231,13 @@ impl PyEditedReconstruction {
     ///     or ``None``), ``projection``, ``search_keypoint`` and ``keypoint``
     ///     (``(N, 2)``, ``NaN`` where absent), ``offset_px``,
     ///     ``zncc_self_similarity_radius``,
-    ///     ``peak_zncc``, ``zncc``, ``judged``, ``bar``, and the lists
-    ///     ``references``, ``reference_zncc`` (each reference's plain ZNCC
-    ///     against the template, ``1.0`` for the reference observation where the
-    ///     template is its render), ``reference_pair_zncc`` (row-major ``n × n``)
-    ///     and ``pair_zncc``, with ``template`` (``"stored_bitmap"``,
+    ///     ``peak_zncc``, ``zncc`` (the new view's blur-matched score against
+    ///     the template, which the bars judge), ``judged``, ``bar``, and the lists
+    ///     ``references``, ``reference_zncc`` (each reference's blur-matched
+    ///     score against the template, ``1.0`` for the reference observation
+    ///     where the template is its render), ``reference_pair_zncc``
+    ///     (row-major ``n × n``) and ``pair_zncc`` (plain, the pair rule's),
+    ///     with ``template`` (``"stored_bitmap"``,
     ///     ``"reference_observation"``, ``"fused_mean"``, or ``None`` before the
     ///     template was settled) and ``reference_observation`` (``int64``, the
     ///     position in ``references`` of the point's reference observation, whose
@@ -263,7 +263,6 @@ impl PyEditedReconstruction {
         position_k = 3.0,
         position_floor_px = 1.0,
         template = "rendered",
-        score = "template",
         require_facing = true,
         subpixel = true,
         ascend_on_edge = false,
@@ -294,7 +293,6 @@ impl PyEditedReconstruction {
         position_k: f64,
         position_floor_px: f64,
         template: &str,
-        score: &str,
         require_facing: bool,
         subpixel: bool,
         ascend_on_edge: bool,
@@ -351,23 +349,12 @@ impl PyEditedReconstruction {
                 )))
             }
         };
-        let score = match score {
-            "template" => CandidateScore::Template,
-            "plain" => CandidateScore::BitmapPlain,
-            "blur_matched" => CandidateScore::BitmapBlurMatched,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "score must be \"template\", \"plain\" or \"blur_matched\", not {other:?}"
-                )))
-            }
-        };
         let defaults = AddImageToTracksOptions::default();
         let options = AddImageToTracksOptions {
             rule,
             min_zncc,
             position_gate,
             template,
-            score,
             require_facing,
             subpixel,
             ascend_on_edge,

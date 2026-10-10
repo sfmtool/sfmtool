@@ -210,9 +210,8 @@ impl ColumnLayout {
         let tile = crop + TILE_SIZE + 4.0;
         let keep = tile + TILE_SIZE + 8.0;
         let zncc = keep + KEEP_WIDTH + 6.0;
-        // Room for `50% ⏵ 53% whole`, the plain score against the bitmap
-        // and the blur-matched one, then the ZNCC grid.
-        let zncc_grid = zncc + 112.0;
+        // Room for `100% whole`, then the ZNCC grid.
+        let zncc_grid = zncc + 72.0;
         // The self-similarity column opens with the whole tile's surface plot.
         let self_similarity_plot = zncc_grid + GRID_SIDE + 10.0;
         // Room for `2.3 px whole`, then the self-similarity grid.
@@ -644,9 +643,11 @@ pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in pe
     At the cluster stage the match is against the reference's template. At the track stage it \
     is against the stored patch bitmap, the render of the reference row (or the mean of the \
     views where there is no reference), so the reference row reads 100%. A track stage with no \
-    bitmap yet has no score until the first render. Where the cell reads 50% ⏵ 53% whole, the \
-    first number is the plain score, which the bars judge, and the one after ⏵ is the \
-    blur-matched score: the bitmap blurred to this view's sharpness before the match.";
+    bitmap yet has no score until the first render. The track stage's numbers are \
+    blur-matched: where the bitmap is sharper than this view along every direction, the \
+    bitmap, and only the bitmap, is blurred to this view's sharpness before the match, so a \
+    blurrier view is not charged for detail it cannot show. These are the scores the bars \
+    judge. Hover a cell for the plain scores beside them.";
 
 /// The shift heading's hover text.
 pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where the \
@@ -1340,7 +1341,7 @@ impl TrackBody {
                                 if j.proposal == Verdict::Out { 1.0 } else { 0.0 },
                             )
                         }),
-                    SortColumn::Zncc => number_key(readings(|m| m.zncc, |m| m.plain_zncc)),
+                    SortColumn::Zncc => number_key(readings(|m| m.zncc, |m| m.blur_matched_zncc)),
                     SortColumn::SelfSimilarity => number_key(readings(
                         |m| m.zncc_self_similarity_radius,
                         |m| m.zncc_self_similarity_radius,
@@ -2324,10 +2325,11 @@ pub(super) fn set_reference_offer(
 /// What *Accept walk* would do to `row`, as its hover text, or `None` for a row
 /// the last fit did not keep at its seed.
 ///
-/// The numbers a person decides by: how far, to where, and the plain ZNCC
-/// against the stored bitmap at each end -- the row's own `plain_zncc`, read at the
-/// seed, and `walked_plain_zncc`, read at the walked peak. Every reading scores both
-/// against the same bitmap, so they compare.
+/// The numbers a person decides by: how far, to where, and the blur-matched
+/// ZNCC against the stored bitmap at each end, the score the bars judge -- the
+/// row's own `blur_matched_zncc`, read at the seed, and
+/// `walked_blur_matched_zncc`, read at the walked peak. Every reading scores
+/// both against the same bitmap, so they compare.
 pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<String> {
     let m = row.track.as_ref()?;
     let to = m.walked_to?;
@@ -2337,13 +2339,16 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
     };
     Some(format!(
         "Move this sighting {:.1} grid px, to ({:.1}, {:.1}), where the last fit's walk \
-         would have put it. ZNCC with the stored patch bitmap {} at the seed, {} at the \
-         walked peak. Pins it, as a hand placement does.",
+         would have put it. Blur-matched ZNCC with the stored patch bitmap {} at the \
+         seed, {} at the walked peak. Pins it, as a hand placement does.",
         m.walked_px.unwrap_or(f64::NAN),
         to[0],
         to[1],
-        zncc(m.plain_zncc, m.plain_zncc_middle),
-        zncc(m.walked_plain_zncc, m.walked_plain_zncc_middle),
+        zncc(m.blur_matched_zncc, m.blur_matched_zncc_middle),
+        zncc(
+            m.walked_blur_matched_zncc,
+            m.walked_blur_matched_zncc_middle
+        ),
     ))
 }
 

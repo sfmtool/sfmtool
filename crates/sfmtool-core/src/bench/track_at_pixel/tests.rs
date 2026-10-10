@@ -424,11 +424,11 @@ fn with_no_clusters_the_cascade_falls_through_to_the_neighbours_transfer() {
     assert_rebuilt(&scene, &track, &report);
 }
 
-/// The median gate reads the plain score against the stored bitmap over the
+/// The median gate reads the blur-matched score against the stored bitmap over the
 /// `in` rows, leaving out the reference observation, which scores `1` against
-/// its own render; the blur-matched score plays no part.
+/// its own render; the plain score plays no part.
 #[test]
-fn the_median_gate_reads_the_plain_score_against_the_bitmap() {
+fn the_median_gate_reads_the_blur_matched_score_against_the_bitmap() {
     let scene = Scene::new();
     let edited = held_out(&scene);
     let views = scene.views();
@@ -451,7 +451,12 @@ fn the_median_gate_reads_the_plain_score_against_the_bitmap() {
         .iter()
         .enumerate()
         .filter(|&(i, o)| o.verdict == Verdict::In && i != reference)
-        .map(|(_, o)| o.track.as_ref().and_then(|m| m.plain_zncc).expect("scored"))
+        .map(|(_, o)| {
+            o.track
+                .as_ref()
+                .and_then(|m| m.blur_matched_zncc)
+                .expect("scored")
+        })
         .collect();
     let expected = crate::numeric::median_in_place(&mut others);
     let Some(StageRecord::Final { zncc_median, .. }) = report.stages.last() else {
@@ -460,20 +465,20 @@ fn the_median_gate_reads_the_plain_score_against_the_bitmap() {
     assert_eq!(*zncc_median, expected);
     assert_eq!(finish::median_zncc(&track), expected);
 
-    // Another blur-matched score, or another score on the reference's own
-    // row, moves nothing; another plain score on an `in` row does.
+    // Another plain score, or another score on the reference's own
+    // row, moves nothing; another blur-matched score on an `in` row does.
     let mut changed = track.clone();
     for (i, o) in changed.observations.iter_mut().enumerate() {
         let m = o.track.as_mut().expect("a slot");
-        m.blur_matched_zncc = Some(0.0);
+        m.plain_zncc = Some(0.0);
         if i == reference {
-            m.plain_zncc = Some(0.0);
+            m.blur_matched_zncc = Some(0.0);
         }
     }
     assert_eq!(finish::median_zncc(&changed), expected);
     for (i, o) in changed.observations.iter_mut().enumerate() {
         if i != reference && o.verdict == Verdict::In {
-            o.track.as_mut().expect("a slot").plain_zncc = Some(0.25);
+            o.track.as_mut().expect("a slot").blur_matched_zncc = Some(0.25);
         }
     }
     assert_eq!(finish::median_zncc(&changed), 0.25);

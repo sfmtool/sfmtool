@@ -14,8 +14,10 @@
 //!   align_vs_congealing <in.sfmr> <out.json> [--ref-mode displaced|stored]
 //!     [--disp 0,0.5,1,2,3] [--min-views 3] [--workspace DIR] [--threads N]
 //!     [--references FILE] [--methods pd,ex] [--search S] [--top N]
-//!     [--bins LO-HI:N,...]
+//!     [--bins LO-HI:N,...] [--default-gates]
 //!
+//! `--default-gates` keeps the localizer's agreement gates at their defaults
+//! (they are off otherwise), for timing what they cost.
 //! `--methods` runs a subset of the methods, `--search` sets the localizer's
 //! search radius, `--top N` keeps the `N` longest tracks, and `--bins` keeps
 //! `N` tracks spread evenly over the eligible points in each track-length
@@ -292,6 +294,7 @@ fn main() {
     let displace_reference = ref_mode == "displaced";
     let top: Option<usize> = opt("--top").and_then(|s| s.parse().ok());
     let search_opt: Option<f64> = opt("--search").and_then(|s| s.parse().ok());
+    let default_gates = args.iter().any(|a| a == "--default-gates");
     let method_filter: Option<Vec<String>> =
         opt("--methods").map(|s| s.split(',').map(String::from).collect());
     let methods: Vec<&str> = METHODS
@@ -451,6 +454,11 @@ fn main() {
     };
     if let Some(sv) = search_opt {
         base.search = sv;
+    }
+    if default_gates {
+        let defaults = KeypointLocalizeParams::default();
+        base.min_absolute_zncc = defaults.min_absolute_zncc;
+        base.min_relative_zncc = defaults.min_relative_zncc;
     }
     eprintln!("search = {}", base.search);
 

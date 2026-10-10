@@ -110,9 +110,10 @@ projection, the searched and final keypoints, the offset from the projection,
 the ZNCC self-similarity radius of the new view's core
 (`zncc_self_similarity_radius`), what the template was (`template`, a
 `TemplateKind`, and `reference_observation`, the position among the references
-of the observation the template is rendered from), the new view's ZNCC against
-the template and against each reference, the references' ZNCCs against the
-template (`reference_zncc`) and their pairwise ZNCCs, and the number the rule
+of the observation the template is rendered from), the new view's blur-matched
+score against the template (`zncc`) and its plain ZNCC against each reference
+(`pair_zncc`), the references' blur-matched scores against the template
+(`reference_zncc`) and their plain pairwise ZNCCs, and the number the rule
 compared with its bar. A caller can see why a point was not
 added, and a harness can re-judge without re-running. The refusals are
 `no_patch`, `not_in_frame`, `grazing`, `back_facing`, `too_few_references`,
@@ -164,10 +165,9 @@ For a point `p` with existing observations in images `J`, and the target image
      reference observation and the rule picks none it would store
      (`FusedMean`).
 
-   The template is never blurred. Each reference's plain ZNCC against it
-   (`reference_zncc`, `1.0` for the reference observation where the template is
-   its render) and the pairwise ZNCCs between references are read from the same
-   renders.
+   The template the search and the sub-pixel step read is never blurred. The
+   pairwise ZNCCs between references, which only the pair rule reads, are read
+   plain from the same renders.
 3. **Search.** The target's context tile is rendered once around the point's
    projection and its own core's [ZNCC self-similarity
    radius](../patch/zncc-self-similarity-radius.md) is read (`unlocalizable`
@@ -184,10 +184,20 @@ For a point `p` with existing observations in images `J`, and the target image
    Gauss-Newton solve against the same template
    (`TrackReferences::refine_template`), moving only the target, with the
    solve's never-worse guard.
-5. **Score.** At the final keypoint the target's core is rendered, and its plain
-   ZNCC against the template and against each reference is taken by the same
-   scorer that took the references' scores. Each is one view's plain ZNCC
-   against the template, so the target's is comparable with theirs.
+5. **Score.** The bars judge each view's **blur-matched score** against the
+   template, read as the bench reads a row against the stored bitmap
+   ([../patch/blur-matched-zncc.md](../patch/blur-matched-zncc.md) § "Scores
+   against the stored bitmap"): the target's tile rendered at its final
+   keypoint and each reference's at its own keypoint, each scored by
+   `BitmapScorer` against the template as an RGBA bitmap (the stored bitmap,
+   the reference observation's render or the fused mean), the bitmap alone
+   blurred to the tile's sharpness where it is sharper along every direction.
+   The target's is `zncc`, each reference's `reference_zncc` (`1.0` for the
+   reference observation where the template is its render), so the target's is
+   comparable with theirs. The target's plain ZNCC against each reference
+   (`pair_zncc`), which the pair rule reads, is the search's, read plain. A
+   point with no stored bitmap is scored against the render it would store, so
+   no point needs another path.
 6. **Judge.** The rule decides (below). `min_zncc` is a floor the basis rules
    also apply (`0` disables it); under `FixedZncc` it is the whole rule.
 7. **Place.** The positional gate, then one observation per place: an accepted
@@ -198,12 +208,17 @@ For a point `p` with existing observations in images `J`, and the target image
    repeat that.
 
 Accepted observations are written with their keypoint and, where the value has
-the column, their ZNCC in `observation_confidence` on the byte scale the bench
-commit uses (`round(255·clamp(z, 0, 1))`), raised to `1` because `0` means
+the column, their blur-matched score (`zncc`) in `observation_confidence` on
+the byte scale the bench commit uses (`round(255·clamp(z, 0, 1))`), raised to `1` because `0` means
 unmeasured. Each track stays in image order. The stored per-point error is left
 as it was, since nothing moved the point.
 
 ## The judging rules
+
+Every rule but the pair rule reads blur-matched scores against the template
+(`zncc`, `reference_zncc`); the pair rule reads the search's plain pairwise
+ZNCCs (`pair_zncc`, `reference_pair_zncc`), which compare one view with
+another rather than with the template.
 
 - `FixedZncc`: accept when the ZNCC is at least `min_zncc`.
 - `TrackBasis`: the point's own references set the bar. With three or more, the
@@ -272,6 +287,27 @@ seoul_bull runs on this date prepared a fresh cache, so their cluster tracks
 can differ slightly from the run before 2026-10-09. The track bar and the pair
 rule change recall by under 1.2 points between 0.85 and 0.95, and 0.8 and 1.0;
 the full table is in the README.
+
+**The bars on the blur-matched score.** Measured again on 2026-10-10 with the
+same sweep, the bars reading the search's plain score and then the
+blur-matched score
+([`scripts/add_image_to_tracks/README.md`](../../../scripts/add_image_to_tracks/README.md)
+§ "The bars on the blur-matched score"; resected pose, recall / extra / bad /
+worse):
+
+| Rule | seoul_bull, plain | seoul_bull, blur-matched | kerry_park, plain | kerry_park, blur-matched |
+|---|---|---|---|---|
+| **Default, pooled bar `k = 2`** | 79.8% / 106 / 0 / 0 | **79.9% / 108 / 0 / 0** | 77.8% / 1143 / 1 / 13 | **77.8% / 1148 / 1 / 16** |
+| Pooled bar `k = 3` | 81.5% / 139 / 0 / 1 | 81.5% / 140 / 0 / 1 | 79.7% / 1327 / 6 / 28 | 79.4% / 1321 / 5 / 28 |
+| Pooled bar `k = 4` | 81.9% / 152 / 0 / 2 | 81.9% / 152 / 0 / 2 | 80.9% / 1519 / 9 / 42 | 80.6% / 1505 / 8 / 40 |
+| Floor `0.6` | 78.2% / 105 / 0 / 0 | 78.3% / 107 / 0 / 0 | 77.4% / 1128 / 1 / 15 | 77.6% / 1135 / 1 / 16 |
+
+Every bar is set from the references' own scores, and blur matching raises
+those together with the target's, so the switch moves recall by under half a
+point and the extra tracks by a few. The track bar at 0.85 and 0.95, the pair
+rule at 0.8 and 1.0 and the floor at 0.4 move as little on the blur-matched
+score as on the plain one. The defaults are kept and read the blur-matched
+score.
 
 ## Positional gate
 
@@ -346,7 +382,9 @@ it lands after it; a two-reference track is judged by the
 pair rule; `PooledOrTrack` accepts what either bar accepts; a photograph of a
 different texture is refused by every rule; a point out of frame is
 `not_in_frame`; a camera behind the plane is `back_facing`; two points at one
-place keep one observation; the confidence column grows in lockstep; a missing
+place keep one observation; the confidence column grows in lockstep; the new
+view's score, judged and stored in the confidence column, is its blur-matched
+score against the template, as `BitmapScorer` reads it directly; a missing
 reference image leaves that reference out; the preconditions refuse by name.
 Binding tests in
 [test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/reconstruction/test_add_image_to_tracks_rust_bindings.py)

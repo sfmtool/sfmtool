@@ -169,8 +169,8 @@ The reference is returned at exactly the keypoint it was given, with ZNCC
 **The template is never blurred.** A blurred template places views no closer
 and lowers the curvature of the correlation peak, so the peak is placed less
 precisely ([sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 6). A blur-matched score may be read afterwards, for judging a view, but
-the alignment reads the render as it is.
+Part 6). The agreement gates judge a view by its blur-matched score afterwards
+(step 5), but the alignment reads the render as it is.
 
 **One pass.** The template does not change while the views are aligned, so each
 view is searched once. There are no rounds, no convergence test and no weights
@@ -220,9 +220,19 @@ For one point with view set `G`:
 5. **Gates.** A searched view is dropped when its keypoint leaves the frame,
    when its keypoint sits more than `max_shift_px` from the point's projection
    (an absolute distance from `project_i(X_p)` in source px, not the move from
-   its start), when its ZNCC is finite and below `min_absolute_zncc`, or when it
-   is below `min_relative_zncc` times the median ZNCC of the views other than
-   the reference.
+   its start), when its blur-matched score is finite and below
+   `min_absolute_zncc`, or when it is below `min_relative_zncc` times the
+   median blur-matched score of the views other than the reference. The
+   **blur-matched score** is read where the alignment put the view, as the
+   bench reads a row against the stored bitmap
+   ([blur-matched-zncc.md](blur-matched-zncc.md) § "Scores against the stored
+   bitmap"): the template as a stored bitmap (the reference's tile rendered at
+   its keypoint by `render_view_tile`, or the fused mean), the view's tile
+   rendered at its final keypoint, and `BitmapScorer` blurring the bitmap
+   alone to the tile's sharpness where it is sharper along every direction.
+   The bitmap's blur assessment is read once per point, when the first view
+   needs it. Where both gates are off nothing reads the score and no view is
+   rendered for it.
 
 The search, the context tile and the kernels that make them cheap are in
 [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md).
@@ -275,7 +285,11 @@ input order:
 - `offsets_px`: the keypoint's distance from the point's projection, source px;
 - `zncc`: the plain ZNCC against the template at the search's integer peak:
   `1.0` for the reference, `NaN` for a view that was not searched because there
-  was no template;
+  was no template. No gate reads it;
+- `blur_matched_zncc`: the blur-matched score against the template at the
+  final keypoint, the one the agreement gates judge: `1.0` for the reference,
+  `NaN` for a view that was not searched, and for every view when both gates
+  are off;
 - `reference`: the image index of the reference observation the views were
   aligned to, or `None` where they were aligned to the fused mean or to nothing.
 
@@ -285,8 +299,8 @@ input order:
 |---|---|---|
 | `search` | 6 | the reach of each view's search around its starting keypoint, patch-grid px: the context tile's margin on every side, and the `±search` shift window |
 | `max_shift_px` | 3 | drop a view whose keypoint sits more than this from the point's projection (source px); never applied to the reference |
-| `min_relative_zncc` | 0.7 | drop a view whose ZNCC against the template falls below this fraction of the median over the views other than the reference; `0` disables |
-| `min_absolute_zncc` | 0.5 | drop a view whose ZNCC against the template is finite and below this floor, however many views remain; `0` disables |
+| `min_relative_zncc` | 0.7 | drop a view whose blur-matched score against the template falls below this fraction of the median over the views other than the reference; `0` disables |
+| `min_absolute_zncc` | 0.5 | drop a view whose blur-matched score against the template is finite and below this floor, however many views remain; `0` disables |
 | `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own core's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more rejects nothing; see [The member gate's default](#the-member-gates-default) |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the template and the ZNCC are scored on |
@@ -597,34 +611,54 @@ What it shows:
   "+"-descent remains as `SearchStrategy::PlusDescent` for a caller that wants
   the 11 to 18% of the time per track it saves.
 
-### The agreement gates on the plain score
+### The agreement gates on the blur-matched score
 
-The gates `min_absolute_zncc` and `min_relative_zncc` read the plain ZNCC
-against the reference render. Their bars were measured with the reference
-stored, one table per starting displacement rather than the runs pooled, over
-the views kept by both methods (the reference left out): a **good** view is
-within 1 px of the ground-truth keypoint, a **bad** one more than 1.5 px from
-it, each by the error of the method whose score is gated. Each cell is the
-share of good / bad views a bar drops, for the plain score of the exhaustive
-search and for congealing's leave-one-out score it replaced:
+The gates `min_absolute_zncc` and `min_relative_zncc` read the blur-matched
+score against the reference render at each view's final keypoint. Their bars
+were measured on the seoul_bull and kerry_park ground truths with the
+reference stored and the gates off, by the `align_vs_congealing` example
+recording each kept view's scores
+([scripts/keypoint_localization/README.md](../../../scripts/keypoint_localization/README.md)),
+one table per starting displacement, over the views the exhaustive search kept
+(the reference left out): a **good** view is within 1 px of the ground-truth
+keypoint, a **bad** one more than 1.5 px from it. Each cell is the share of
+good / bad views a bar drops, for the search's plain ZNCC at its integer peak
+(which the gates read before), the plain score against the reference render
+at the final keypoint, and the blur-matched score there:
 
-| dataset, disp | views | good / bad, plain | good / bad, leave-one-out | absolute 0.5, plain | absolute 0.5, leave-one-out | relative 0.7, plain | relative 0.7, leave-one-out |
-|---|---|---|---|---|---|---|---|
-| seoul_bull, 0 px | 872 | 781 / 67 | 781 / 49 | 0.6% / 13.4% | 0.4% / 4.1% | 0.6% / 7.5% | 0.5% / 2.0% |
-| seoul_bull, 0.5 px | 878 | 786 / 67 | 776 / 49 | 0.6% / 9.0% | 0.4% / 2.0% | 0.5% / 4.5% | 0.5% / 2.0% |
-| seoul_bull, 1 px | 871 | 775 / 66 | 666 / 70 | 0.6% / 7.6% | 0.5% / 0.0% | 0.5% / 3.0% | 0.6% / 0.0% |
-| kerry_park, 0 px | 2877 | 2810 / 45 | 2841 / 18 | 0.4% / 15.6% | 0.5% / 0.0% | 0.3% / 13.3% | 0.6% / 5.6% |
-| kerry_park, 0.5 px | 2863 | 2789 / 46 | 2784 / 26 | 0.4% / 15.2% | 0.4% / 7.7% | 0.3% / 17.4% | 0.6% / 7.7% |
-| kerry_park, 1 px | 2843 | 2759 / 46 | 2430 / 121 | 0.4% / 15.2% | 0.5% / 1.7% | 0.3% / 10.9% | 0.5% / 2.5% |
+| dataset, disp | views | good / bad | absolute 0.5: search / plain / blur-matched | relative 0.7: search / plain / blur-matched |
+|---|---|---|---|---|
+| seoul_bull, 0 px | 868 | 776 / 68 | 0.6 / 0.6 / 0.6% of good; 14.7 / 14.7 / 14.7% of bad | 0.6 / 0.5 / 0.5%; 8.8 / 8.8 / 8.8% |
+| seoul_bull, 0.5 px | 875 | 782 / 67 | 0.6 / 0.6 / 0.6%; 9.0 / 9.0 / 9.0% | 0.5 / 0.5 / 0.5%; 4.5 / 4.5 / 4.5% |
+| seoul_bull, 1 px | 868 | 774 / 67 | 0.6 / 0.6 / 0.6%; 9.0 / 9.0 / 9.0% | 0.5 / 0.5 / 0.5%; 4.5 / 4.5 / 4.5% |
+| kerry_park, 0 px | 2834 | 2768 / 45 | 0.4 / 0.4 / 0.4%; 15.6 / 17.8 / 15.6% | 0.3 / 0.3 / 0.3%; 13.3 / 13.3 / 11.1% |
+| kerry_park, 0.5 px | 2814 | 2741 / 46 | 0.4 / 0.4 / 0.4%; 15.2 / 17.4 / 15.2% | 0.3 / 0.3 / 0.3%; 17.4 / 15.2 / 13.0% |
+| kerry_park, 1 px | 2816 | 2732 / 45 | 0.4 / 0.4 / 0.4%; 15.6 / 17.8 / 15.6% | 0.3 / 0.3 / 0.3%; 11.1 / 13.3 / 15.6% |
 
-The absolute bars at 0.4 and 0.6 and the relative bars at 0.6 and 0.8 are in
-the README. The bad views are few (18 to 121 per table), so one view moves a
-share by up to 6 points. At the same bars the plain score drops about as many
-good views as the leave-one-out score did and, in every table, more of the
-bad ones, by up to several times. The defaults stay at 0.5 and 0.7, where each
-bar drops at most 0.6% of good views. The median plain score of a good view is
-lower than its leave-one-out score was, since a single sharp render correlates
-less with a view than the mean of the other views did.
+The bitmap is blurred for 21% of kerry_park's views (602 of 2834 at 0 px,
+raising the score by 0.028 at the median) and for 22 of seoul_bull's 868, so
+on seoul_bull the blur-matched score is the plain one almost everywhere. The
+bad views are few (45 to 68 per table), so one view moves a share by 1.5 to 2
+points; at that resolution the three scores drop the same share of good views
+at either bar, and the blur-matched score drops between two fewer and two more
+bad views than the search's score. The absolute bar at 0.6, which drops 1.1% to
+1.3% of kerry_park's good views on the search's score, drops 0.7% to 0.8% on
+the blur-matched one. On four solves (dino_dog_toy, MossyRailing,
+ChristmasTreeWithPresents, AltonaGalleryInTheParkBoyReading; 600 tracks each,
+0 px) the three scores differ by at most 0.5 points at either bar. The
+defaults stay at 0.5 and 0.7.
+
+**What it costs.** Scoring a view blur-matched renders its tile once more at
+the patch resolution, anchored at its final keypoint, and correlates it with
+the template, blurring the template where the pair calls for it; the render
+dominates. The search's context tile cannot stand in for it, since it is
+rendered around the starting keypoint with a margin. Timed with the
+`align_vs_congealing` example on one thread at 0 px with the reference stored,
+`--default-gates` against the gates off, the mean of five runs after two to
+warm up: a track takes 0.92 ms rather than 0.60 ms on seoul_bull (259
+tracks) and 2.54 ms rather than 1.73 ms on kerry_park (380 tracks), about 1.5
+times. With both gates off, as on the bench and in the example's other runs,
+no view is scored this way and nothing is added.
 
 ### A spot check on four other reconstructions
 

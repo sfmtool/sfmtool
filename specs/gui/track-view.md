@@ -551,7 +551,7 @@ set of numbers. The differences are these:
 the version at the cursor, held in `AppState` rather than on the bench
 ([`bench.md`](bench.md) § "The viewed track"). It is built as a put builds a
 bench track, labelled with the point's portable ID, so its rows arrive `in` and
-pinned and the score against the bitmap (`plain_zncc`) is read back from the point's stored
+pinned and the score against the bitmap (`blur_matched_zncc`) is read back from the point's stored
 confidence column, and the live evaluation keeps it evaluated as it keeps a
 bench track, so every number in the table means the same thing in both modes.
 It is never written anywhere: it is in no version, the Scene tree does not list
@@ -865,10 +865,10 @@ the heading of what it judges however far the table is scrolled, and the
 columns no bar judges leave room for the word *Thresholds* at its left. The
 minimum ZNCC and minimum middle ZNCC boxes stack in the *ZNCC* column, whole
 over mid, as its cell stacks the two readings. They read and take percent in
-whole steps, as that column reads, so on a new track they show 65 and 0 at
-the track stage while the track and the wire hold 0.65 and 0, and 70 and 70
+whole steps, as that column reads, so on a new track they show 70 and 50 at
+the track stage while the track and the wire hold 0.70 and 0.50, and 70 and 70
 at the cluster stage; a typed value may end in `%`. At the track stage both
-judge the plain score against the stored bitmap, and at the cluster stage the
+judge the blur-matched score against the stored bitmap, and at the cluster stage the
 achieved template ZNCC. A middle bar of 0 turns it off, and a row with no
 middle reading clears it.
 The self-similarity box, `px whole`, is the largest self-similarity radius, in
@@ -983,7 +983,7 @@ name is *Sort by …*. The keys are what the rows print:
 |---|---|
 | Img | the image's index |
 | Keep, Verdict | how many bars the row fails; among rows that fail the same number, the ones the bars propose `in` come first, so a row that fails none and is `out` because another sighting holds its image comes after the `in` rows |
-| ZNCC | the whole patch's ZNCC, at the track stage the plain score against the stored bitmap |
+| ZNCC | the whole patch's ZNCC, at the track stage the blur-matched score against the stored bitmap |
 | Self-similarity | the whole tile's radius |
 | Proj. err | the reprojection error in px |
 | Shift | the shift in px |
@@ -1045,8 +1045,10 @@ click on the switch, on the pin and on the heading's own pin does, and what the
 cell's colour means, and the *Verdict* heading's says what the column shows,
 that nothing here changes a verdict of the point, and that ticking *Edit* is the
 way to work on it. The *ZNCC* heading's says that at the track stage the
-number is the row's tile against the stored patch bitmap, read plain, which
-the bars judge, and that a value after `⏵` is the same pair read blur-matched.
+numbers are the row's tile against the stored patch bitmap, read blur-matched
+(the bitmap alone blurred to the view's sharpness where it is sharper along
+every direction), that these are the scores the bars judge, and that the
+cell's hover shows the plain scores beside them.
 
 **The *Keep* heading carries a pin**, in Edited mode, over the rows' pin column, and it
 toggles. While any row of the focused item is pinned, clicking it unpins every
@@ -1089,13 +1091,13 @@ that is not there prints a bare `-`, with no unit.
 | Keep (Edited) | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
 | Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, with the number of bars an `out` row fails in brackets (`out (2)`), in a cell tinted green or red by it; `-` untinted where nothing has measured the row, or on the pinned reference row the bars cannot judge until the bitmap is rendered again |
 | Img | the image's index; hovering it shows the file name whole, as hovering *Name* does | the same |
-| ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | against the stored patch bitmap, read plain, with the blur-matched score after an arrow where the bitmap was blurred and the two print differently (`50% ⏵ 53% whole`), over the middle ZNCC, then the ZNCC grid; the reference's own row reads `100%`; `-` where the row has no score, the Status cell saying why; hovering the numbers shows the stored bitmap, the bitmap as blurred for the row and the row's tile side by side, with the plain and blur-matched scores under them, and a note where the localizer could not read the row |
+| ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | against the stored patch bitmap, read blur-matched, the scores the bars judge: `53% whole` over `61% mid`, then the ZNCC grid; the reference's own row reads `100%`; `-` where the row has no score, the Status cell saying why; hovering the numbers shows the stored bitmap, the bitmap as blurred for the row and the row's tile side by side, with the plain and blur-matched scores under them, and a note where the localizer could not read the row |
 | Self-similarity | the surface plot, then the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid | the same |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak against the render of the track's reference, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane; `0` on the reference's own row |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
 | Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row the test that turned it away, `partial`, `clipped`, `oblique`, `ninth differs`, `agrees less` or `less sharp`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the reason and every reading |
-| Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the plain score against the stored bitmap of the tile at the walked peak (left out where there is none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`, or `the bitmap is to be rendered again before the row is scored` while an unpin leaves it pending its render); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
+| Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the blur-matched score against the stored bitmap of the tile at the walked peak (left out where there is none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`, or `the bitmap is to be rendered again before the row is scored` while an unpin leaves it pending its render); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
 
@@ -1437,20 +1439,21 @@ reference is the row it was rendered from: the file's reference observation,
 or the display render's own pick for a point the file stores at `-1`, held by
 its row's pin like any other.
 
-**The *ZNCC* column reads the stored bitmap at the track stage.** A row's ZNCC
-is its tile's windowed ZNCC with the track's stored patch bitmap, read plain
-over the samples both have (`TrackMeasurement::plain_zncc`), and the middle
-reading and the ZNCC grid are read from the same pair (`plain_zncc_middle`,
-`plain_zncc_grid`)
+**The *ZNCC* column reads the stored bitmap at the track stage, blur-matched.**
+A row's ZNCC is its tile's windowed ZNCC with the track's stored patch bitmap
+over the samples both have, the bitmap alone blurred to the row's sharpness
+where it is sharper than the row's tile along every direction by the ratio of
+1.25 (`TrackMeasurement::blur_matched_zncc`), and the middle reading and the
+ZNCC grid are read against the same bitmap (`blur_matched_zncc_middle`,
+`blur_matched_zncc_grid`)
 ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
-§ "Scores against the stored bitmap"). Where the bitmap was blurred to the row's
-sharpness (the bitmap sharper than the row's tile along every direction by the
-ratio of 1.25) and the blur-matched score prints differently, the first line
-carries it after an arrow, `50% ⏵ 53% whole`; otherwise it is one number. The
-reference's own row reads `100%`, which is not computed. The bars judge the
-plain score, and the cell and the grid are coloured by them. The bars are not
-meant to turn away an out-of-focus view: a blurred view of the right place is one to keep, and
-the plain score is the one the bar was measured on
+§ "Scores against the stored bitmap"). Where the bitmap is not blurred for the
+row these are the plain readings. The column prints only these numbers; the
+plain ones are in the hover. The reference's own row reads `100%`, which is
+not computed. The bars judge these scores, the cell and the grid are coloured
+by them, and the column sorts by the whole one. The bars are not meant to turn
+away an out-of-focus view: a blurred view of the right place is one to keep,
+and the blur-matched score is the one the bars were measured on
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Parameters"). A row with no score prints `-`, its Status
 cell says why, and the bars leave its verdict where it is. At the cluster
@@ -1459,7 +1462,7 @@ stage the ZNCC is the member's against the reference's template.
 **Hovering the numbers shows the comparison behind the score**
 ([`zncc_hover.rs`](../../crates/sfm-explorer/src/track_view/body/zncc_hover.rs)),
 at the track stage. A line says these are scores against the stored patch
-bitmap and that the min ZNCC bars judge the plain ones. Under it are three
+bitmap and that the min ZNCC bars judge the blur-matched ones. Under it are three
 tiles side by side, each 96 points across, the size the tile's own hover view
 draws the tile at: a third of its 288-point picture, which spans three times
 the patch's width:
@@ -1825,8 +1828,9 @@ In Edited mode only:
 - **Accept walk**, in the same menu on a track-stage row the last fit kept at
   its seed and on no other row: put the sighting where the fit's walk would have
   taken it (`walked_to`). Its hover text gives the distance, the pixel, and the
-  plain ZNCC pair against the stored bitmap (whole, then middle) at the seed
-  (`plain_zncc`) and at the walked peak (`walked_plain_zncc`), two readings against the same
+  blur-matched ZNCC pair against the stored bitmap (whole, then middle), the
+  score the bars judge, at the seed (`blur_matched_zncc`) and at the walked
+  peak (`walked_blur_matched_zncc`), two readings against the same
   bitmap that compare. The step is core's
   `sight_observation` at that pixel (`AppState::accept_bench_walk`), so the
   observation is pinned and the measurements read at the seed are dropped, the
@@ -2119,9 +2123,8 @@ texels, so their geometry is checked without reading pixels off the screen.
     reference, green for a reference the rule picks, red for one it does not
     with the pick grey, the pick alone for a track whose bitmap is a fused mean
     or that has none, and the hover naming the other row and how to accept the
-    pick; the track-stage *ZNCC* cell's plain score against the stored bitmap,
-    with the blur-matched score after an arrow where the two print differently
-    and one number otherwise, `100%` on the reference, `-` with the reason in
+    pick; the track-stage *ZNCC* cell's blur-matched score against the stored
+    bitmap, the plain one in the hover only, `100%` on the reference, `-` with the reason in
     the Status cell and the hover for a row with no score; the *ZNCC* hover
     drawing three tiles for a blurred row at the tile hover's third, the note
     in place of the blurred bitmap for an unblurred row, the bitmap alone on

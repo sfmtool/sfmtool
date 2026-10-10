@@ -343,3 +343,30 @@ plain (ex): n 871, good 775, bad 66; leave-one-out (congeal): n 871, good 666, b
   well above 5 px; one such track can raise a mean by more than 2 px
   (for example `pd` on kerry_park, `displaced`, 1 px: mean 2.469 px, median
   0.163 px). Compare the medians, and read the means with the last column.
+
+## The gates on the blur-matched score (2026-10-10)
+
+The agreement gates now read each view's blur-matched score against the
+reference render at its final keypoint. The branch build records, for every
+kept view, `pz` and `bz`: its plain and blur-matched scores read as the bench
+reads a row against the stored bitmap. With those in the output, `report.py`
+prints a second set of gate tables, "Gates on each score", setting the
+search's own score (`zncc`), `pz` and `bz` side by side at the same bars; it
+needs no congealing run:
+
+```bash
+for ds in seoul kerry; do
+  [ $ds = seoul ] && F=$SEOUL || F=$KERRY
+  $TB $F $S/scores/${ds}_stored_align.json --ref-mode stored --disp 0,0.5,1 \
+    --min-views 3 --threads 8 --methods ex
+done
+pixi run python scripts/keypoint_localization/report.py $S/scores
+```
+
+The tables and what they show are in
+[`specs/core/patch/patch-keypoint-localization.md`](../../specs/core/patch/patch-keypoint-localization.md)
+§ "The agreement gates on the blur-matched score". `--default-gates` keeps the
+agreement gates at their defaults instead of off; the time per track it adds
+is the cost of reading the blur-matched score, given in the same section
+(single-threaded runs at `--disp 0 --ref-mode stored --methods ex`, with and
+without the flag, alternated).

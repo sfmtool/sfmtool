@@ -360,14 +360,15 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         }
         for (key, value) in [
             // The row's score: its tile against the stored patch bitmap,
-            // plain, which the bars judge; 1 for the row the bitmap is the
-            // tile of.
+            // plain, shown beside the blur-matched one the bars judge; 1 for
+            // the row the bitmap is the tile of.
             ("plain_zncc", m.plain_zncc),
             // The same tile read over the middle of the tile only.
             ("plain_zncc_middle", m.plain_zncc_middle),
             // The same two with the bitmap alone blurred to the row's
-            // sharpness (the plain ones where it is not blurred), and the
-            // width of that blur in grid px (0 when read plain).
+            // sharpness (the plain ones where it is not blurred), which the
+            // bars judge, and the width of that blur in grid px (0 when read
+            // plain).
             ("blur_matched_zncc", m.blur_matched_zncc),
             ("blur_matched_zncc_middle", m.blur_matched_zncc_middle),
             ("bitmap_blur_sigma", m.bitmap_blur_sigma),
@@ -1501,8 +1502,9 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 /// painting -- where several would pass, the best-scoring takes the image.
 ///
 /// ``min_zncc`` and ``min_zncc_middle`` are the track stage's bars, on each
-/// row's plain score against the stored patch bitmap (``plain_zncc``,
-/// ``plain_zncc_middle``); ``cluster_min_zncc`` and ``cluster_min_zncc_middle`` are
+/// row's blur-matched score against the stored patch bitmap
+/// (``blur_matched_zncc``, ``blur_matched_zncc_middle``; defaults 0.70 and
+/// 0.50); ``cluster_min_zncc`` and ``cluster_min_zncc_middle`` are
 /// the cluster stage's, on the achieved template ZNCC. Each stage judges only
 /// its own pair. A track-stage row with no score against a bitmap is not
 /// judged.
@@ -1749,11 +1751,12 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// itself, ``0`` on the reference's own row), ``projection_offset_px``
 /// (how far the observation sits from the point's projection -- the number
 /// that says how far the *point* is off), the reprojection error, the ray
-/// angle, and its tile's ZNCC self-similarity radius. Each row's score
-/// (``plain_zncc``, ``plain_zncc_middle``, ``plain_zncc_grid``), which the
-/// bars judge, is its tile against the track's stored patch bitmap, plain,
-/// with the blur-matched readings beside it (``blur_matched_zncc``,
-/// ``blur_matched_zncc_middle``, ``blur_matched_zncc_grid``); a track with no bitmap scores no row, and
+/// angle, and its tile's ZNCC self-similarity radius. Each row's score is
+/// its tile against the track's stored patch bitmap, read blur-matched
+/// (``blur_matched_zncc``, ``blur_matched_zncc_middle``,
+/// ``blur_matched_zncc_grid``), which the bars judge, with the plain readings
+/// beside it (``plain_zncc``, ``plain_zncc_middle``, ``plain_zncc_grid``); a
+/// track with no bitmap scores no row, and
 /// the bars then leave every verdict where it is.
 ///
 /// By default (``render_bitmap=True``) the reading is the viewer's live

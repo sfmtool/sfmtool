@@ -67,7 +67,7 @@ const UNALIGNED: &str = "The localizer could not align this row to the reference
 /// What the hover says about `m`. `is_reference` says the bitmap is this
 /// row's own render.
 pub(super) fn zncc_hover_text(m: &TrackMeasurement, is_reference: bool) -> ZnccHoverText {
-    if m.plain_zncc.is_some() && is_reference {
+    if m.blur_matched_zncc.is_some() && is_reference {
         return ZnccHoverText::Reference(
             "This row is the track's reference: the patch bitmap is its render at its \
              keypoint, so its score against the bitmap is 1 (100%) and is not computed."
@@ -75,6 +75,15 @@ pub(super) fn zncc_hover_text(m: &TrackMeasurement, is_reference: bool) -> ZnccH
         );
     }
     let Some(plain) = m.plain_zncc else {
+        // A row read back from a committed point carries only the
+        // blur-matched score its `observation_confidence` stored.
+        if let Some(stored) = m.blur_matched_zncc.filter(|v| v.is_finite()) {
+            return ZnccHoverText::Unscored(format!(
+                "Read back from the committed point: its blur-matched score against the \
+                 stored patch bitmap was {:.0}%. The next evaluation scores it again.",
+                100.0 * stored
+            ));
+        }
         return ZnccHoverText::Unscored(match m.reason {
             Some(reason) => format!("No score against the stored patch bitmap: {reason}."),
             None => "No score against the stored patch bitmap.".to_string(),
@@ -166,7 +175,8 @@ pub(super) fn show_zncc_hover(
             let width = 3.0 * ZNCC_HOVER_TILE_SIDE + 2.0 * ui.spacing().item_spacing.x;
             ui.set_max_width(width);
             ui.label(
-                "Scores against the stored patch bitmap. The min ZNCC bars judge the plain ones.",
+                "Scores against the stored patch bitmap. The min ZNCC bars judge the \
+                 blur-matched ones.",
             );
             ui.horizontal_top(|ui| {
                 captioned(ui, tiles.bitmap, side, "Stored bitmap");

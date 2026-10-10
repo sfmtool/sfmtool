@@ -2577,8 +2577,74 @@ fn the_absolute_floor_drops_a_view_of_an_unrelated_texture() {
     assert_eq!(run(0.5).views, vec![0, 1, 2], "{:?}", open.zncc);
 }
 
+/// [`texture`] as an out-of-focus view sees it: each sinusoid attenuated as a
+/// Gaussian blur attenuates it, the finest most, to nothing.
+fn blurred_texture(x: f64, y: f64) -> f64 {
+    127.5 + 55.0 * 0.3 * (x * 17.0).sin() + 45.0 * 0.1 * (y * 23.0).cos()
+}
+
+/// The agreement gates read each view's blur-matched score against the
+/// reference render: an out-of-focus view of the right surface whose plain
+/// score is under the floor is kept where its blur-matched score clears it.
 #[test]
-fn the_gates_read_the_plain_score_against_the_reference() {
+fn the_gates_read_the_blur_matched_score_against_the_reference() {
+    let scene = four_view_scene([[0.0; 2]; 4], [texture, texture, texture, blurred_texture]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let set = [0u32, 1, 2, 3];
+    let run = |abs: f64| {
+        localize_patch_keypoints(
+            &patch,
+            &views,
+            &set,
+            None,
+            Some(0),
+            &only_zncc_gates(abs, 0.0),
+        )
+    };
+    // A floor that drops nothing, so every view is scored.
+    let open = run(1e-9);
+    assert_eq!(open.views, set);
+    assert_eq!(open.blur_matched_zncc[0], 1.0, "the reference");
+    let (plain, matched) = (open.zncc[3], open.blur_matched_zncc[3]);
+    assert!(
+        matched > plain + 0.02,
+        "blur matching lifts the blurred view: plain {plain}, blur-matched {matched}"
+    );
+    let between = 0.5 * (plain + matched);
+    assert_eq!(
+        run(between).views,
+        set,
+        "a floor over the plain score keeps it"
+    );
+    assert_eq!(
+        run(matched + 0.01).views,
+        vec![0, 1, 2],
+        "a floor over the blur-matched score drops it"
+    );
+}
+
+/// With both agreement gates off nothing reads the blur-matched score, so it
+/// is not computed.
+#[test]
+fn with_the_gates_off_no_view_is_scored_blur_matched() {
+    let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
+    let views = scene.views();
+    let res = localize_patch_keypoints(
+        &plane_patch(),
+        &views,
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &only_zncc_gates(0.0, 0.0),
+    );
+    assert_eq!(res.blur_matched_zncc.len(), res.views.len());
+    assert_eq!(res.blur_matched_zncc[0], 1.0);
+    assert!(res.blur_matched_zncc[1..].iter().all(|z| z.is_nan()));
+}
+
+#[test]
+fn the_gates_drop_a_partial_match_at_its_blur_matched_score() {
     // View 3 sees a half-occluded surface, so it matches the reference only
     // partly. Each bar, set just above its score, drops it and nothing else;
     // set just below, keeps it.
@@ -2599,18 +2665,19 @@ fn the_gates_read_the_plain_score_against_the_reference() {
             &only_zncc_gates(abs, rel),
         )
     };
-    let open = run(0.0, 0.0);
+    // A floor that drops nothing, so every view is scored blur-matched.
+    let open = run(1e-9, 0.0);
     assert_eq!(open.views, set);
-    let z3 = open.zncc[3];
+    let z3 = open.blur_matched_zncc[3];
     // The relative bar reads the median over the views other than the
     // reference: views 1, 2 and 3.
-    let mut others = open.zncc[1..].to_vec();
+    let mut others = open.blur_matched_zncc[1..].to_vec();
     others.sort_by(f64::total_cmp);
     let median = others[1];
     assert!(
         z3 > 0.1 && z3 < median - 0.1,
         "the fixture scores view 3 partly: {:?}",
-        open.zncc
+        open.blur_matched_zncc
     );
 
     assert_eq!(

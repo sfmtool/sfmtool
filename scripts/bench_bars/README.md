@@ -13,10 +13,12 @@ on either score
 Part 10).
 
 - `datasets.py`: the eight reconstructions and their paths. Two are the
-  checked-in ground truths; six are solves under `C:\DataSets`, one of them
-  (`xmas`) a 30-frame subset of a solve embedded with `embed_patches`, whose
-  docstring says how it was made. Every file is read in place and never
-  written. `--sfmr NAME=PATH` points `measure.py` at a file elsewhere.
+  checked-in ground truths; five are solves under `BENCH_BARS_DATASETS_DIR`
+  (an environment variable, `C:\DataSets` when unset), and the sixth, `xmas`,
+  is a 30-frame subset of a solve embedded with `embed_patches`, found at
+  `BENCH_BARS_XMAS`; the module docstring says how it was made. Every file is
+  read in place and never written. `--sfmr NAME=PATH` points `measure.py` at
+  a file elsewhere, overriding both.
 - `measure.py`: one dataset, one JSON line per row. For each of `--tracks`
   sampled points with at least four observations it puts the point on the
   bench, evaluates it with the bitmap rendered, and then plants rows in groups,
@@ -61,14 +63,16 @@ tree reconstructions. The sampling seed is fixed (`--seed`, default
 
 ## How the tables in editable-track.md were made
 
-The tables in § "Parameters" were made before this directory existed, by
-scripts of the same design: 150 tracks from each of the same eight
-reconstructions, seed 20261009, the same plants, bars and grid, and the
-analysis the sections of `analyze.py` reproduce. They read the plain score
-(then named `zncc`) beside the leave-one-out ZNCC, which has since been
-removed, and were taken while the localizer still congealed. `analyze.py`
-compares the plain and blur-matched scores instead, and a run on today's tree
-measures views aligned to the reference render.
+The tables in § "Parameters" (2026-10-10) are this harness's: `measure.py`
+on the eight datasets at 150 tracks each with the default seed, unsharded, on
+a build from before the bars were switched to the blur-matched score (the
+measurement reads both scores and neither depends on the bars), then
+`analyze.py`: sections 2 and 3 give the shares and per-reconstruction means,
+section 4 the held-out picks and the objective at the fixed bars, section 4b
+the other sets of rows, and section 5 the least member scores (the badlands
+note). An earlier measurement of the same design, on the plain score beside
+the leave-one-out ZNCC while the localizer still congealed, set the plain
+`0.65` bar the blur-matched `0.70` replaced; its scripts were not checked in.
 
 sfmtool has no public reader for a workspace image, so `datasets.read_image`
 reads it with OpenCV as the package's own loader does (`workspace_dir /

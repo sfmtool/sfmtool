@@ -700,7 +700,7 @@ which the bars cannot judge until that render -- computed with core's
 `verdicts_if_unpinned` over a copy of the track carrying those bars, the same
 computation the panel colours by. `has_bitmap` says whether the track has a
 stored patch bitmap, which the rows' `plain_zncc` and `blur_matched_zncc`
-scores are read against, and
+scores are read against (the bars judge `blur_matched_zncc`), and
 `bitmap_for_judging` whether that bitmap is one for judging only (below);
 `reference_observation` is the reference in use, the row the bitmap is rendered
 from, null for a bitmap that is the render of no row (a mean of the rows, one
@@ -3864,11 +3864,12 @@ unit direction as a point one unit from the world origin, which is the one thing
 a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat, with `walked_to`, the pixel the walk would have reached, and
-`walked_plain_zncc`, the plain score of the tile there against the stored
-bitmap (null where there is none), to set beside the row's `plain_zncc` at its
-seed, with `walked_plain_zncc_middle` and `walked_plain_zncc_grid` beside it,
-and `walked_blur_matched_zncc`, `walked_blur_matched_zncc_middle` and
-`walked_blur_matched_zncc_grid`, the same tile read blur-matched. **Both the
+`walked_blur_matched_zncc`, the blur-matched score of the tile there against
+the stored bitmap (null where there is none), the one judged, to set beside
+the row's `blur_matched_zncc` at its seed, with
+`walked_blur_matched_zncc_middle` and `walked_blur_matched_zncc_grid` beside
+it, and `walked_plain_zncc`, `walked_plain_zncc_middle` and
+`walked_plain_zncc_grid`, the same tile read plain. **Both the
 `cluster` and the `track` block carry a middle reading beside the whole-patch
 one** (the cluster block's `zncc_middle` beside `zncc`, the track block's
 `plain_zncc_middle` beside `plain_zncc` and `blur_matched_zncc_middle` beside
@@ -4023,16 +4024,17 @@ that takes the row off the track or turns it `out` drops both, and the live
 evaluation renders a new one from the rule's pick. Either way it scores every
 row against the new bitmap.
 
-**A track-stage row's `plain_zncc` is its score against the stored bitmap**
+**A track-stage row's `blur_matched_zncc` is its score against the stored
+bitmap**
 ([`../core/patch/blur-matched-zncc.md`](../core/patch/blur-matched-zncc.md)
 § "Scores against the stored bitmap"): the windowed ZNCC of its tile with the
-bitmap, read plain, over the samples both have, with `plain_zncc_middle` and
-`plain_zncc_grid` read from the same pair. The min ZNCC bars judge it. Beside it
-are `blur_matched_zncc`, the same after the bitmap alone is blurred to the
+bitmap over the samples both have, after the bitmap alone is blurred to the
 row's sharpness where it is sharper along every direction by the ratio of 1.25,
-`plain_zncc` where it is not, with `blur_matched_zncc_middle` and
-`blur_matched_zncc_grid` read against the same blurred bitmap (the plain
-middle and grid where the bitmap is not blurred); `bitmap_blur_sigma`, that blur's width in grid px, `0`
+with `blur_matched_zncc_middle` and `blur_matched_zncc_grid` read against the
+same blurred bitmap. The min ZNCC bars, whole and middle, judge them, and the
+cells are coloured by them. Beside them are `plain_zncc`, `plain_zncc_middle`
+and `plain_zncc_grid`, the same read against the bitmap as stored, equal to
+the blur-matched ones where the bitmap is not blurred; `bitmap_blur_sigma`, that blur's width in grid px, `0`
 where read plain; and `sharper_than_bitmap`, true where the row's tile is
 sharper than the bitmap along every direction. The reference's own row reads
 `1` for both scores, whole, middle and every ninth, `0` for `bitmap_blur_sigma` and null for
@@ -4042,10 +4044,10 @@ leaves the kept bitmap pending its render, and on a row whose score could not
 be read, and `reason` then says why (`there is no bitmap to score it against`
 for the first, `the bitmap is to be rendered again before the row is scored`
 for the second); the bars leave such a row's verdict where it is. No bar
-judges the `blur_matched_zncc` fields. A commit writes `plain_zncc` as the
+judges the `plain_zncc` fields. A commit writes `blur_matched_zncc` as the
 observation's confidence, and a track put on the bench from a point carries
-that confidence as its `plain_zncc` until the first
-evaluation. The keypoint localizer aligns every row to the render of the
+that confidence as its `blur_matched_zncc`, with no `plain_zncc`, until the
+first evaluation. The keypoint localizer aligns every row to the render of the
 track's reference observation, and `seed_shift_px` is how far the peak of that
 alignment sits from the row's keypoint, `0` on the reference's own row. Where
 the localizer could not read the row `seed_shift_px` is null and `reason` names
