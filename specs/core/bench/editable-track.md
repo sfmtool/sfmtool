@@ -2871,10 +2871,14 @@ read on its tile in grid px, the viewing angle, tilt direction and zoom of that
 tile, and its plain and blur-matched scores against the bitmap, the scores
 `NaN` where the commit writes no bitmap (a file without them, or a bitmap for
 judging) since they would name a bitmap the file does not hold. A commit into a
-reconstruction with no readings brings the columns, every other observation's
-row not measured. A reconstruction whose readings stand under other options
-than the bench's (the default self-similarity reading and the sampler rule at
-`a = 1.5`) gets rows with nothing measured. The
+reconstruction with no readings brings the columns, under the options the
+rows were read with, every other observation's row not measured. Each row
+stands under the options its tile was rendered and read with
+(`TrackMeasurement::reading_options`: the evaluation's resolution, its
+localizer's sampler, member coherence's window and the self-similarity
+reading's settings); a row whose options are not the reconstruction's, as
+where its readings were taken at another resolution, is written with nothing
+measured. The
 observations are written in image order, which is the order a stored track is in
 and every reader of one relies on. Where the reconstruction carries reference
 observations (it does wherever it carries patch frames), the record's

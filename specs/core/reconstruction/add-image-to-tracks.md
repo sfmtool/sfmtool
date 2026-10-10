@@ -220,8 +220,10 @@ unmeasured. Each also carries its
 tile's self-similarity ellipse, viewing angle, tilt and zoom, and its plain
 and blur-matched scores against the template where the template is the point's
 stored bitmap, `NaN` where it is the render the point would store. A value
-without readings gains the columns, every existing row not measured; one whose
-readings stand under other options than the default ones gets new rows with
+without readings gains the columns under the options the new views were read
+under, every existing row not measured; one whose
+readings stand under other options than those the new views were read under
+(another resolution, sampler or window) gets new rows with
 nothing measured. Every existing row is carried with its observation. Each
 track stays in image order. The stored per-point error is left as it was,
 since nothing moved the point.

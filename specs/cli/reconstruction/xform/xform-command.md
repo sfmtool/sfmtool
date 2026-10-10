@@ -641,7 +641,13 @@ sfm xform in.sfmr out.sfmr --minimal [wspath=<path>]
 
 An `--add-*` step is a no-op, with one printed line, on a reconstruction that
 already carries the column. To re-render at a different resolution, drop first:
-`--drop-patch-bitmaps --add-patch-bitmaps resolution=32`.
+`--drop-patch-bitmaps --add-patch-bitmaps resolution=32`. Bitmaps added at
+another resolution, or with another sampler, than the stored
+[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+were taken at drop those readings, which no longer describe the renders the
+file names; added at the same ones, the readings stay, with the scores of any
+point whose reference the render picked cleared. `--drop-patch-bitmaps` keeps
+them.
 
 **Drop, add and remove** are three different verbs here (see
 [GLOSSARY.md](../../../GLOSSARY.md)): *drop* discards an optional column and

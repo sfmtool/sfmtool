@@ -1437,6 +1437,10 @@ alone, which the file holds.
   "has_observation_confidence": false,
   "has_observation_readings": true,
   "observation_reading_options": {
+    "resolution": 24,
+    "sampler": "per_view",
+    "score_window": "gaussian_disk",
+    "score_window_sigma": 0.6,
     "max_radius": 3,
     "flat_floor": 0.5,
     "noise": 2.0,
@@ -1469,8 +1473,14 @@ alone, which the file holds.
   file without them has the bytes, and the content hash, it had before the
   columns existed. A missing flag is `false`.
 - `observation_reading_options`: present exactly with `has_observation_readings`
-  and required with it: what the readings were taken with, so a reader can
-  tell whether the stored radii are comparable with its own. `max_radius` is
+  and required with it, every key required: what the readings were taken
+  with, so a reader can tell whether the stored readings are comparable with
+  its own. `resolution` is the patch resolution `R` of the renders, in grid
+  px; `sampler` the sampler they were made with, `per_view` for the sampler
+  rule or `bilinear`, `bilinear_mip` or `anisotropic` for one sampler for
+  every view; `score_window` (`uniform`, `gaussian` or `gaussian_disk`) and
+  `score_window_sigma` (`null` for `uniform`) the window the scores were read
+  over. `max_radius` is
   the self-similarity reading's `r` in grid px, the largest shift searched and
   the largest radius read; `flat_floor` the template spread, in grey levels,
   under which a channel carries no texture; `noise` the noise `n` between two
@@ -1774,7 +1784,7 @@ sorts), present or absent together, flagged by `has_observation_readings`:
   bitmap's own readings and blur assessment, which are read from the bitmap.
 - **Units.** The grid px are those of the point's `R`, so the axes convert to
   scene units through the point's patch half-extents.
-- **Size.** 37 bytes an observation before compression. On the dino_dog_toy
+- **Size.** 38 bytes an observation before compression. On the dino_dog_toy
   `sfm embed-patches` output (262,430 observations) the eight entries take
   8.1 MB of a 44.3 MB file, about 31 bytes an observation after zstd; the
   float columns compress little, the flags column to almost nothing.
@@ -1788,28 +1798,46 @@ sorts), present or absent together, flagged by `has_observation_readings`:
   photograph clears the row; a writer that changes a point's reference
   observation reads its observations' scores against the new bitmap, or clears
   them (`NaN`) where it does not render them. Writers that write a bitmap
-  rendered again from the same reference keep the scores as records. A writer
-  whose rows were read under other options than the stored ones writes rows
-  with nothing measured rather than mixing options. In the writers this
-  repository has:
+  rendered again from the same reference, at the same resolution with the
+  same sampler, keep the scores as records.
+- **One set of options per column.** Every row stands under
+  `observation_reading_options`. Readings taken at another resolution, with
+  another sampler or score window, or with other reading settings are not
+  comparable, so a writer whose rows would stand under other options than the
+  stored ones writes those rows with nothing measured rather than mix them,
+  and a writer that reads every observation again carries a row it did not
+  read (a point without a patch, a photograph not to hand) only where the
+  stored options are its own. **Bitmaps at another resolution or from another
+  sampler drop the readings**: once the file's bitmaps are renders at another
+  `R`, or made with another sampler, than the readings record, no row
+  describes a render the file names, scores or radii, so the columns go. In
+  the writers this repository has:
   - the bench's commit writes each `in` row's readings from its evaluation,
-    with the scores where it writes the bitmap they were read against
+    under the options its tile was rendered and read with, with the scores
+    where it writes the bitmap they were read against
     ([../core/bench/editable-track.md](../core/bench/editable-track.md) §
     "Commit"), so Track at Pixel's tracks, which reach a file through a commit,
     are written that way too; Add Image to Tracks writes the new view's readings
-    from the tile it scored, its scores where the template is the stored bitmap;
+    from the tile it scored, under its resolution, the localizer's sampler and
+    its window, its scores where the template is the stored bitmap;
   - `sfm embed-patches` (after its last round, against the bitmaps it stores),
     `sfm xform --localize-keypoints`, `--refine-keypoints` and
-    `--refine-normals` read every observation again on its render
-    (`PatchCloud.read_observations`), with `NaN` scores where they store no
-    bitmap;
+    `--refine-normals` read every observation again on its render, under their
+    own resolution and sampler (`PatchCloud.read_observations`), with `NaN`
+    scores where they store no bitmap;
   - bundle adjustment (Rust and Python), the similarity transforms, point and
-    image filters, the covered-observation prune, `sfm merge` (by image name
-    and feature index), the viewer's edits and every other writer that
-    copies, removes or reorders observations carry the rows; a discovered
-    bearing's new observations are not measured;
-  - `--add-patch-bitmaps` and `clone_with_changes(reference_observations=...)`
-    clear the scores of each point whose reference changed;
+    image filters, the covered-observation prune, the viewer's edits and every
+    other writer that copies, removes or reorders observations carry the rows;
+    a discovered bearing's new observations are not measured; `sfm merge`
+    carries each row to the merged observation of the same image name and
+    feature index with its scores cleared, since the merged file stores none
+    of the source points' bitmaps;
+  - `clone_with_changes` clears the scores of each point whose reference
+    observation is another observation than before (compared by image name,
+    whether or not the tracks were replaced), and drops the columns where the
+    bitmaps it leaves are at another resolution than the readings;
+    `--add-patch-bitmaps` renders through it, and also drops the columns when
+    it renders with another sampler than the readings were taken with;
   - `sfm undistort`, the one writer that replaces the photographs, writes a
     new reconstruction with no readings.
 - **Older files.** A file without the flag reads with no readings, as every

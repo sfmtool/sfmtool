@@ -227,11 +227,13 @@ two parts instead: an immutable base, and the small set of edits made on it.
   a `PointSet` of their own with exactly the base's columns, whose observations
   index the base's image table. The one exception is the observation readings
   ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md) §
-  "Observation readings"), which the additions always carry and a record may
-  leave out: a record without them adds rows with nothing measured, and a
+  "Observation readings"), which a record may leave out and may bring to a
+  base without them: a record without them adds rows with nothing measured, and a
   record that brings measured rows to a base without them gives the
   materialised value the columns, the base's rows not measured, under the
-  base's options or the default ones. So a bench commit can store the readings
+  options the record states it read them under (`PointRecord::reading_options`);
+  a record whose options differ from the column's adds rows with nothing
+  measured. So a bench commit can store the readings
   it measured in a file that had none.
 
 The images and the cameras are the base's. An edit to the image table is not an
@@ -319,7 +321,7 @@ impl EditedReconstruction {
     pub fn has_keypoints(&self) -> bool;
     pub fn has_observation_confidence(&self) -> bool;
     pub fn has_observation_readings(&self) -> bool;
-    pub fn observation_reading_options(&self) -> ObservationReadingOptions; // the base's, or the default
+    pub fn observation_reading_options(&self) -> Option<ObservationReadingOptions>; // the base's, or the first record's
     pub fn has_patch_frames(&self) -> bool;
     pub fn has_patch_bitmaps(&self) -> bool;
     pub fn has_normal_confidence(&self) -> bool;
@@ -358,6 +360,7 @@ pub struct PointRecord {
     pub normal_confidence: Option<u8>,
     pub constraint: Option<(u8, f64, u32)>,
     pub reference_observation: Option<i32>, // an index into `observations`, or -1
+    pub reading_options: Option<ObservationReadingOptions>, // what its readings were taken under
 }
 
 pub struct RecordObservation {
