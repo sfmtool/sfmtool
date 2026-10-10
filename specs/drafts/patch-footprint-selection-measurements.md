@@ -379,3 +379,88 @@ The contact sheet `config-quota/config_contact_sheet.png` in the session scratch
 ## What the search decided
 
 No per-point reading measured here sets the hand-set size better than a constant 12 px half-extent across captures, while the human is consistent within a surface and differs by about a factor of two between surfaces. The per-point primitive is therefore narrowed to an anchor floor, the smallest footprint at native density at which all nine cells pass the self-similarity bar (v1 of [the cell-resolve section](#the-smallest-footprint-at-which-the-cells-resolve-2026-10-09)), used to place anchors that resolve a normal and an affine shape: [patch-footprint-selection.md](patch-footprint-selection.md). The footprint above the floor is chosen for a surface as a whole, in a later step proposed in [surface-footprint-analysis.md](surface-footprint-analysis.md), where the region-level form of the feature trends of the last section is the open question.
+
+## Whether the anchor readings depend on the footprint (2026-10-09)
+
+**Question.** [surface-footprint-analysis.md](surface-footprint-analysis.md) groups anchors by their cell plane normals, read at the anchor floor, and then gives each group one footprint. The normals carry over to the new footprint only if they do not depend on it. Do the nine piecewise cell displacements and statuses, the determinacy verdict and the cell plane normal change when one anchor is read at its floor, at a constant 12 px and at the hand-set size? And does the hand-set size give more accurate normals?
+
+**Data.**
+
+- **Code and machine.** Commit `e51f5360` (branch `bootstrap-core-migration`), with the extension built at that commit. Windows 11, Intel Core i9-14900HX, 63.7 GB RAM.
+- **Points.** The ground-truth points of the previous sections that have at least three distinct images: 245 of the 263 on seoul_bull and 369 of the 380 on kerry_park.
+- **Footprints**, each a half-extent in the point's reference view. **F**: the anchor floor, cell-resolve v1 at native density ([section](#the-smallest-footprint-at-which-the-cells-resolve-2026-10-09)), or 12 px on the 2.0% and 7.6% of points that have none. **C**: 12 px. **H**: the hand-set size. **C5**: 12.6 px, a 5% change, which measures how far the readings move under a change of footprint too small to matter; it is the noise floor of the comparison. F has a median of 8 px on both captures and H of 10.0 and 10.4 px. F, C and H lie within a factor of 1.25 of each other on 6.1% (seoul_bull) and 9.5% (kerry_park) of points.
+- **Clusters.** Each point is one cluster. Its members are its observations, one per image, each starting at the ground-truth keypoint, with an affine shape that is the ground-truth patch square projected into that view (the Jacobian `render_view_tile` reports at the keypoint) and scaled so that the half-extent in the reference view is the footprint. Every member therefore shows the same world square. One unrefined clusters `.matches` file per capture and footprint is written with `sfmtool.fileio.write_matches`, and `verify_matches` accepts it. The ground truths have no `.sift` files, so the image hashes are zero bytes and `member_features` numbers each image's members in order; the refinement reads neither. The file is read back with `read_matches` and refined with `refine_cluster_patches(..., piecewise=True)` at the current defaults (patch size 12, resolution 25, `min_zncc` 0.85, `max_shift_px` 3, member self-similarity bar 2.5, `move_shape` on, both gates at the refined shape on), with the member arrays scattered into per-image rows as `sfm cluster-patches` does, and the result is written as that command writes it. `cell_plane_normals` then runs at its defaults with the ground-truth poses and intrinsics. A second refinement with `move_shape` off gives the shapes the loop started from, to measure how far it moved each kept member.
+- **Reference member.** The refinement chooses as reference the member with the largest scale `√|det S|`. Since every member shows the same world square, that is the view in which the square appears largest, and it is the point's ground-truth reference view on only 32% to 37% of points. The kernel has no way to name a reference, so the template is the square in the view where it appears largest. The footprints are still the stated sizes in the ground-truth reference view, and the same square in every view.
+- **Readings.** Normal error is `acos|n·m|` against the ground-truth frame normal. Texture classes are those of the size-rule tables (`scale_free`, `flat_then_structured`, and the rest, 13 and 43 points).
+- **Scripts.** `run.py`, `analyze.py` and `boot.py` in the session scratch directory `anchor-size-dep/`, run with `pixi run -e dev python`; the `.matches` files are there too. Nothing here is checked in.
+
+**Members and the loop.** Counts over all members (1187 on seoul_bull, 3534 on kerry_park), at F / C / H:
+
+| | seoul_bull | kerry_park |
+|---|---|---|
+| kept | 424 / 423 / 408 | 1370 / 1375 / 1522 |
+| rejected for low ZNCC | 467 / 451 / 405 | 1228 / 1351 / 1018 |
+| rejected for shift | 17 / 15 / 11 | 12 / 7 / 9 |
+| unlocalizable at the SIFT or the refined shape, or too many capped cells | 20 / 34 / 130 | 543 / 418 / 617 |
+| not evaluated | 15 / 21 / 5 | 17 / 19 / 6 |
+| unrefinable clusters | 1 / 2 / 17 | 5 / 5 / 7 |
+
+A member has the same status at F, C and H in 74% (seoul_bull) and 66% (kerry_park) of cases, and is kept or refused alike at all three in 80% and 74%. The shape-moving loop applied its last update to at most 2 members in any run, and moved at most 9 kept members by more than 0.01 grid px, by a median of 0.1 to 0.27 grid px; it plays no part in what follows.
+
+**Cells.** On the members kept at both footprints of a pair, in clusters with the same reference image at both. "Status agrees" is the share of their cells with the same status; `r` is the Pearson correlation of the displacement components, in the member's image px, over the cells fitted at both; "differ" is the median length of the difference of those displacements, in image px.
+
+| Pair | seoul_bull: members, status agrees, `r`, differ | kerry_park: members, status agrees, `r`, differ |
+|---|---|---|
+| F–C | 359, 66%, 0.56, 0.19 | 1144, 69%, 0.68, 0.11 |
+| F–H | 335, 64%, 0.46, 0.19 | 1120, 60%, 0.52, 0.14 |
+| C–H | 332, 65%, 0.52, 0.21 | 1100, 58%, 0.53, 0.17 |
+| C–C5 (noise floor) | 406, 85%, 0.86, 0.12 | 1285, 78%, 0.85, 0.09 |
+
+56% to 63% (seoul_bull) and 44% to 48% (kerry_park) of the cells of kept members are fitted at each footprint. The median length of a fitted cell's displacement, in reference px, is 0.31 / 0.29 / 0.28 at F / C / H on seoul_bull and 0.25 / 0.27 / 0.26 on kerry_park (0.37 / 0.29 / 0.31 and 0.29 / 0.25 / 0.36 in grid px). The size of the displacements in image px does not change with the footprint, but which cells pass and where each one lands does, by more than a 5% change of footprint moves them.
+
+**Normals.** The angles are the median / p90 in degrees, over the points whose normal fixes both axes at every footprint compared.
+
+| | seoul_bull | kerry_park |
+|---|---|---|
+| both-axes normals at F / C / H | 126 / 138 / 128 | 208 / 203 / 209 |
+| verdict differs among F, C, H | 25% | 30% |
+| verdict differs between C and C5 | 8% | 11% |
+| both axes at F, C and H | 99 | 155 |
+| angle F–C | 6.9 / 50.3 | 2.3 / 19.9 |
+| angle F–H | 8.9 / 42.5 | 4.1 / 31.0 |
+| angle C–H | 6.8 / 47.7 | 3.8 / 34.0 |
+| angle C–C5 (noise floor; 129 and 180 points) | 4.1 / 23.3 | 2.6 / 12.6 |
+| angle F–H where F, C, H lie within ×1.25 (11 and 21 points) | 4.5 / 12.9 | 3.8 / 23.3 |
+| angle F–H, `scale_free` (49 and 95 points) | 9.3 / 33.3 | 3.2 / 14.0 |
+| angle F–H, `flat_then_structured` (46 and 48 points) | 8.1 / 45.1 | 4.6 / 46.3 |
+
+The verdict changes on 24% to 26% of `scale_free` points on both captures and on 25% (seoul_bull) and 36% (kerry_park) of `flat_then_structured` points.
+
+**Against the ground truth.** Normal error, median / p90 in degrees. "Own" is over the both-axes normals at that footprint; "paired" over the points with both axes at F, C and H.
+
+| | seoul_bull own | seoul_bull paired (99) | kerry_park own | kerry_park paired (155) |
+|---|---|---|---|---|
+| F | 18.9 / 54.3 (126) | 16.0 / 46.0 | 6.8 / 46.5 (208) | 6.6 / 40.9 |
+| C | 18.1 / 49.5 (138) | 15.8 / 46.6 | 7.1 / 47.5 (203) | 7.0 / 44.4 |
+| H | 15.0 / 49.8 (128) | 15.8 / 46.3 | 6.8 / 45.6 (209) | 6.8 / 39.6 |
+| mean viewing direction | | 29.5 / 50.5 | | 37.7 / 58.4 |
+
+On the paired points, the median per-point difference H − F is −1.0° on seoul_bull (90% bootstrap interval −2.2° to −0.0°; H is better on 58 of 99) and +0.0° on kerry_park (−0.3° to +0.4°; 76 of 155). H − C is +0.1° (−0.7° to +0.8°) and −0.0° (−0.3° to +0.3°). By texture class, H is better than F on seoul_bull's `scale_free` points (13.3° against 16.0°, 49 points) and worse on kerry_park's `flat_then_structured` points (16.3° against 12.4°, 48 points); on the other two class-capture pairs the three lie within 1.4°.
+
+**The route against the pipeline.** The cell plane normals were measured on the clusters `sfm cluster-patches --piecewise` writes at patch size 12, the files in the session scratch directory `rebase-seed/refine/`. A cluster of those files is matched to a ground-truth point of this section when its reference member lies within 3 px of the point's keypoint in that image, taking the first such cluster per point: 109 points on seoul_bull and 153 on kerry_park. Each matched point is also run through the route of this section at footprint **R**, the template footprint of the matched cluster (`6·√|det S_ref|` px in its reference view) carried into the ground-truth reference view, with a median of 8.1 px and 11.4 px. The matched clusters and route R have the same reference image on 32% and 22% of points.
+
+| | seoul_bull | kerry_park |
+|---|---|---|
+| pipeline, own (both-axes clusters) | 19.4 / 61.1 (60) | 18.0 / 60.3 (53) |
+| route at R, own | 17.9 / 60.0 (70) | 18.3 / 65.0 (91) |
+| route at C, own | 15.9 / 49.8 (72) | 11.9 / 52.4 (96) |
+| paired points, both axes in all three | 49 | 35 |
+| pipeline, paired | 18.7 / 45.3 | 18.0 / 60.0 |
+| route at R, paired | 14.2 / 41.7 | 10.3 / 51.0 |
+| route at C, paired | 12.9 / 47.2 | 11.3 / 53.8 |
+| angle pipeline–R | 12.2 / 39.3 | 9.3 / 44.1 |
+| angle R–C | 9.3 / 30.6 | 5.7 / 38.3 |
+
+The pipeline's figures on these points are those already published: a median error of 19.0° and 20.3° over every matched cluster ([cell-plane-normals.md](../core/patch/cell-plane-normals.md#what-the-measurements-show)) against 19.4° and 18.0° here. The route does not reproduce them within noise. At the same footprint its normals are 4° to 8° more accurate in median on the paired points and differ from the pipeline's by a median 12° and 9°, against a noise floor of 4° and 3°. Its clusters start where the pipeline's cannot: every member is a true observation, at the ground-truth keypoint, with the ground-truth shape, and the reference is the view where the square appears largest rather than the member with the largest SIFT scale. Its absolute errors are therefore those of ideally seeded clusters, and are lower than the pipeline's. The comparison between footprints is made within the one route, with everything but the footprint held fixed, and does not rest on the absolute errors.
+
+**Decision.** The anchor readings are not independent of the footprint. Going from the floor to the hand-set size changes the determinacy verdict on 25% to 30% of points, keeps the status of 60% to 64% of the cells of members kept at both, and turns a both-axes normal by a median 8.9° and 4.1° with p90 42° and 31°: about twice the median change and two to three times the p90 change of a 5% change of footprint. The hand-set footprint does not give more accurate normals: against the ground truth its median error is within 0.3° of the floor's and the constant's on kerry_park, and on seoul_bull better than the floor's by a median 1.0° per point and equal to the constant's. A normal read at the floor is therefore not the normal the anchor would read at its group's footprint, but it is as accurate as that one.
