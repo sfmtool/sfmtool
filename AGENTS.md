@@ -107,6 +107,19 @@ state, not function arguments. 26 public settings structs in `sfmtool-core` stil
 `*Params` or `*Config`; new ones use `*Options`. See `specs/GLOSSARY.md` §
 "Rust type names".
 
+### Library interface contracts
+
+- Every function that handles a reconstruction's points accepts points at
+  infinity (`w = 0` rows of `positions_xyzw`) and handles them correctly: no
+  unguarded division by `w`, rotation only for a direction, and a finite-only
+  function says so and skips `w = 0` rows visibly.
+- A function that can run longer than about a second takes a `&Progress` and
+  passes it down. There is one interface: a caller that wants no reporting
+  passes `&Progress::none()`, so no `foo` / `foo_with_progress` pairs and no
+  `Option<&Progress>`.
+
+`audit-hygiene` § E checks these in detail.
+
 ### Opening a pull request
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before

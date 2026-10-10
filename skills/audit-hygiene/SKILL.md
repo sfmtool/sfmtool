@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation. Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for library functions that break the interface contracts (support for points at infinity, a Progress argument on long-running work, no with/without-progress variants). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -122,6 +122,67 @@ Do not flag ordinary API reference prose. A long `Args:` block on a
 Python-visible binding is doing a job — a REPL user cannot click into `specs/`.
 The finding is rationale where reference belongs, not length by itself.
 
+### E. Library-wide interface contracts
+
+These are rules every library function in `sfmtool` (the Rust crates, the
+`sfmtool-py` bindings and the Python package) is held to, whatever module it is
+in. A violation is a finding even where the whole module is consistent with
+itself, so check them per function, not per convention split.
+
+14. **Points at infinity are supported.** A reconstruction's points are
+    homogeneous (`positions_xyzw`, a `w = 0` row is a unit direction; see
+    [`specs/formats/sfmr-file-format.md`](../../specs/formats/sfmr-file-format.md)),
+    and every library function that takes, returns or iterates over a
+    reconstruction's points must accept points at infinity in its interface and
+    handle them correctly. Look for:
+    - An interface that can only express finite points: a `positions_xyz` /
+      `[f64; 3]` / `Vec3` parameter or return value where the data can hold
+      `w = 0` rows, or a Python wrapper that slices `[:, :3]` off an xyzw array.
+    - A division by `w` with no `w = 0` branch, which turns a direction into
+      `inf`/`NaN` and then propagates it.
+    - Wrong geometry for a direction: translation or scale applied to a `w = 0`
+      row (only the rotation acts on it), a depth, distance, centroid, bounding
+      box or spatial index computed over directions as if they were positions,
+      or a reprojection or triangulation path that assumes a finite point.
+    - Points at infinity dropped silently. A function that has a real reason to
+      work on finite points only must say so in its contract and must skip or
+      reject `w = 0` rows visibly (a count in its result, an error), not filter
+      them out unreported. Converting directions to finite points is
+      `materialize_points_at_infinity`'s job, for a consumer that cannot store
+      `w = 0`, and should not be reinvented inline.
+    Confirm the bug before reporting it: read the function and, where cheap,
+    say what input shows it (for example a reconstruction with one `w = 0`
+    point passed to the transform). A function that never sees reconstruction
+    points (image warping, SIFT, descriptor matching) is out of scope.
+
+15. **Long-running functions take a `Progress`.** A library function whose
+    running time can exceed roughly a second on realistic input must take a
+    `&Progress` (`sfmtool_progress::Progress`, re-exported as
+    `sfmtool_core::progress::Progress`) and report and check cancellation
+    through it. Treat as above the threshold: a loop over every image, image
+    pair, track or point of a reconstruction; an iterative solver or RANSAC run;
+    reading or writing a whole `.sfmr`, `.sift`, `.matches` or `.camrig` file;
+    and any function that calls one that takes a `Progress`. Also report:
+    - A function that takes a `Progress` and then calls a long-running callee
+      with `&Progress::none()` instead of passing its own down (or a `phase` or
+      `split` of it). The caller's bar stalls and cancellation stops working
+      for that stage.
+    - A Python-facing binding of such a function that offers no way to pass
+      progress in (`ProgressCounter`, see `crates/sfmtool-py/src/py_progress.rs`).
+    Do not report short functions (a single reprojection, a per-point kernel
+    called from inside a loop that already reports): the threshold is about the
+    whole call, and a `Progress` on every helper is noise.
+
+16. **One interface, not a with-progress and a without-progress variant.** A
+    caller that wants no reporting passes `&Progress::none()`. A pair such as
+    `foo` / `foo_with_progress`, `foo` / `foo_silent`, or `foo` that only
+    forwards to `foo_inner(…, &Progress::none())` while both are public, is a
+    finding: merge them into one function that takes `&Progress` and update
+    the callers. The same applies to `Option<&Progress>` parameters and to a
+    `verbose: bool` or `show_progress: bool` flag next to or instead of a
+    `Progress`, which are a second interface in a different form. A private
+    helper that takes no `Progress` because it is short is not a variant.
+
 ## How to work
 
 1. Get a size overview: file line counts per directory.
@@ -134,7 +195,8 @@ The finding is rationale where reference belongs, not length by itself.
    assessments. Give each one `specs/GLOSSARY.md` and the convention majorities
    from step 2, in that order of authority, so their naming findings are
    comparable and none of them recommends converging onto a word the glossary
-   has already retired.
+   has already retired. Give each one the three contracts in section E as
+   well, so every subtree is checked against them.
 5. Consolidate findings, removing duplicates and ranking.
 
 ### Mechanical checks
@@ -177,6 +239,22 @@ worth more than a paragraph.
    how the glossary earns its keep. An entry whose residue is large and *newer*
    than the ruling is the one case where the glossary itself is the suspect:
    say so rather than filing a hundred findings.
+9. **Points-at-infinity scan** — grep library code for finite-only point
+   interfaces and unguarded homogeneous divisions: `positions_xyz\b`,
+   `\[:, *:3\]` on an xyzw array, `/ *w\b`, and public signatures taking
+   `[f64; 3]` / `Vec3` slices of reconstruction points. Report the hit count
+   per pattern, then read each hit and keep only those with no `w = 0`
+   handling (`is_at_infinity`, an explicit branch, a documented finite-only
+   contract with a visible skip count). Feeds check 14.
+10. **Progress coverage** — list public functions that loop over a whole
+    reconstruction, run a solver or read or write a whole file, and report how
+    many take a `&Progress`. Separately count `Progress::none()` in non-test
+    library code and read each one inside a function that itself has a
+    `Progress` in scope. Feeds check 15.
+11. **Progress variants** — grep for `_with_progress`, `_without_progress`,
+    `_no_progress`, `_silent`, `_quiet`, `Option<&Progress`, and
+    `verbose: bool` / `show_progress` parameters in library code. Each hit is a
+    candidate for check 16; report the count even when it is zero.
 
 ## Output
 
