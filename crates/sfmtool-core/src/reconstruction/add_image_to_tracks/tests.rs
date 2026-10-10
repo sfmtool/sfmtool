@@ -810,16 +810,28 @@ fn where_the_rule_picks_none_the_template_is_the_fused_mean() {
     }
 }
 
-/// [`texture`] as an out-of-focus photograph shows it: the finest sinusoid
-/// gone and the others attenuated, as a Gaussian blur attenuates them.
-fn blurred_texture(x: f64, y: f64) -> f64 {
-    127.5 + 55.0 * 0.3 * (x * 17.0).sin() + 45.0 * 0.1 * (y * 23.0).cos()
+/// A texture fine enough that the references' renders carry detail on the
+/// patch grid, for a stored bitmap sharper than an out-of-focus view.
+fn fine_texture(x: f64, y: f64) -> f64 {
+    127.5 + 50.0 * (x * 90.0).sin() + 40.0 * (y * 75.0).cos() + 30.0 * ((x - y) * 60.0).sin()
+}
+
+/// [`fine_texture`] as an out-of-focus photograph shows it: every sinusoid
+/// attenuated, the finest most.
+fn blurred_fine_texture(x: f64, y: f64) -> f64 {
+    127.5
+        + 50.0 * 0.15 * (x * 90.0).sin()
+        + 40.0 * 0.25 * (y * 75.0).cos()
+        + 30.0 * 0.4 * ((x - y) * 60.0).sin()
 }
 
 /// The new view's score, the one the bars judge and the confidence column
 /// stores, is its blur-matched score against the template, read as the bench
-/// reads a row against the stored bitmap, here for an out-of-focus
-/// photograph of the right surface.
+/// reads a row against the stored bitmap, both where the template is the
+/// reference observation's render and where it is the stored bitmap. The
+/// references see a fine texture and the new view an out-of-focus copy of it,
+/// so the template is blurred for some candidates and their score is not the
+/// plain one.
 #[test]
 fn the_new_views_score_is_blur_matched_against_the_template() {
     use crate::patch::reference_view::render_view_tile;
@@ -828,17 +840,19 @@ fn the_new_views_score_is_blur_matched_against_the_template() {
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
     let n = points.len();
+    for (i, &center) in CENTERS.iter().enumerate() {
+        let (q, t) = down_z(center);
+        let tex = if i == TARGET {
+            blurred_fine_texture
+        } else {
+            fine_texture
+        };
+        cap.repose(i, q, t, tex);
+    }
     cap.recon.point_set.reference_observations = Some(vec![2; n]);
     cap.recon.point_set.observation_confidence = Some(vec![200; cap.recon.point_set.tracks.len()]);
-    let (q, t) = down_z(CENTERS[TARGET]);
-    cap.repose(TARGET, q, t, blurred_texture);
-    let options = AddImageToTracksOptions {
-        rule: AcceptRule::FixedZncc,
-        min_zncc: -2.0,
-        position_gate: PositionGate::Off,
-        ..gate_off()
-    };
-    let (next, report) = run(&cap, &options);
+    let column = fused_bitmaps(&cap, &points, Vector3::zeros());
+    cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column.clone()));
     let poses = poses_of(&cap);
     let camera = pinhole();
     let view = |i: usize| ProjectedImage {
@@ -846,43 +860,124 @@ fn the_new_views_score_is_blur_matched_against_the_template() {
         cam_from_world: &poses[i],
         pyramid: &cap.pyramids[i],
     };
-    let r = options.localize.resolution as usize;
-    let sampler = options.localize.sampler;
-    let mut scored = 0;
-    let conf = next.point_set.observation_confidence.as_ref().unwrap();
-    for (p, (world, _)) in points.iter().enumerate() {
-        let c = &report.candidates[p];
-        let Some(kp) = c.keypoint else { continue };
-        let patch = patch_at(*world);
-        let reference = render_view_tile(
-            &patch,
-            &view(2),
-            Some(cap.project(2, *world)),
-            r,
-            sampler,
-            &Progress::none(),
+    for template in [TemplateSource::Rendered, TemplateSource::StoredBitmap] {
+        let options = AddImageToTracksOptions {
+            rule: AcceptRule::FixedZncc,
+            min_zncc: -2.0,
+            position_gate: PositionGate::Off,
+            template,
+            ..gate_off()
+        };
+        let (next, report) = run(&cap, &options);
+        let r = options.localize.resolution as usize;
+        let sampler = options.localize.sampler;
+        let (mut scored, mut blurred) = (0, 0);
+        let conf = next.point_set.observation_confidence.as_ref().unwrap();
+        for (p, (world, _)) in points.iter().enumerate() {
+            let c = &report.candidates[p];
+            let Some(kp) = c.keypoint else { continue };
+            if c.refusal.is_some() {
+                continue;
+            }
+            let patch = patch_at(*world);
+            let bitmap = match template {
+                TemplateSource::Rendered => bitmap_from_tile(&render_view_tile(
+                    &patch,
+                    &view(2),
+                    Some(cap.project(2, *world)),
+                    r,
+                    sampler,
+                    &Progress::none(),
+                )),
+                TemplateSource::StoredBitmap => {
+                    assert_eq!(c.template, Some(TemplateKind::StoredBitmap));
+                    column
+                        .index_axis(ndarray::Axis(0), p)
+                        .as_slice()
+                        .unwrap()
+                        .to_vec()
+                }
+            };
+            let planes = bitmap_planes(&bitmap, r);
+            let mut scorer = BitmapScorer::new(&planes, options.localize.window);
+            let tile = render_view_tile(
+                &patch,
+                &view(TARGET),
+                Some(kp),
+                r,
+                sampler,
+                &Progress::none(),
+            );
+            let score = scorer.score(&tile.planes(), None);
+            assert_eq!(c.zncc, score.blur_matched_zncc, "{template:?} point {p}");
+            scored += 1;
+            if score.blur_sigma > 0.0 && score.blur_matched_zncc != score.plain_zncc {
+                blurred += 1;
+            }
+            let start = next.point_set.observation_offsets[p];
+            assert_eq!(
+                conf[start + 4],
+                observation_confidence_byte(c.zncc),
+                "{template:?} point {p}"
+            );
+        }
+        assert!(
+            scored > n / 2,
+            "{template:?}: {scored} of {n} candidates scored"
         );
-        let planes = bitmap_planes(&bitmap_from_tile(&reference), r);
-        let mut scorer = BitmapScorer::new(&planes, options.localize.window);
-        let tile = render_view_tile(
-            &patch,
-            &view(TARGET),
-            Some(kp),
-            r,
-            sampler,
-            &Progress::none(),
-        );
-        let score = scorer.score(&tile.planes(), None);
-        assert_eq!(c.zncc, score.blur_matched_zncc, "point {p}");
-        scored += 1;
-        let start = next.point_set.observation_offsets[p];
-        assert_eq!(
-            conf[start + 4],
-            observation_confidence_byte(c.zncc),
-            "point {p}"
+        assert!(
+            blurred > 0,
+            "{template:?}: the template was blurred for no candidate"
         );
     }
-    assert!(scored > n / 2, "{scored} of {n} candidates scored");
+}
+
+/// A candidate refused before its new view was scored carries no reference
+/// scores, so the report holds blur-matched scores only; a scored one carries
+/// one per reference.
+#[test]
+fn a_candidate_refused_before_scoring_carries_no_reference_scores() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let cap = capture(&points);
+    // The default member gate refuses about half the cores as unlocalizable.
+    let options = AddImageToTracksOptions {
+        rule: AcceptRule::FixedZncc,
+        min_zncc: -2.0,
+        ..AddImageToTracksOptions::default()
+    };
+    let (_, report) = run(&cap, &options);
+    let mut refused = 0;
+    for c in &report.candidates {
+        match c.refusal {
+            Some(
+                Refusal::Unlocalizable
+                | Refusal::NoPeak
+                | Refusal::PeakAtEdge
+                | Refusal::Unscorable,
+            ) => {
+                refused += 1;
+                assert!(c.reference_zncc.is_empty(), "{:?}", c.refusal);
+            }
+            None => assert_eq!(c.reference_zncc.len(), c.references.len()),
+            _ => {}
+        }
+    }
+    assert!(refused > 0, "{:?}", report.refusal_counts());
+}
+
+/// A new view whose tile could not be read against the template (a `NaN`
+/// score) is refused as unscorable, not left for the rule to refuse as below
+/// its floor or bar.
+#[test]
+fn a_nan_score_is_unscorable() {
+    let mut c = CandidateReport::new(0);
+    settle_score(&mut c, vec![1.0, 0.8], f64::NAN);
+    assert_eq!(c.refusal, Some(Refusal::Unscorable));
+    let mut c = CandidateReport::new(0);
+    settle_score(&mut c, vec![1.0, 0.8], 0.2);
+    assert_eq!(c.refusal, None);
+    assert_eq!(c.zncc, 0.2);
+    assert_eq!(c.reference_zncc, vec![1.0, 0.8]);
 }
 
 /// The bars read the existing observations' blur-matched scores against the

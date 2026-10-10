@@ -14,7 +14,8 @@ Part 10).
 
 - `datasets.py`: the eight reconstructions and their paths. Two are the
   checked-in ground truths; five are solves under `BENCH_BARS_DATASETS_DIR`
-  (an environment variable, `C:\DataSets` when unset), and the sixth, `xmas`,
+  (an environment variable; its default, `C:\DataSets`, is this machine's
+  layout, so set it elsewhere), and the sixth, `xmas`,
   is a 30-frame subset of a solve embedded with `embed_patches`, found at
   `BENCH_BARS_XMAS`; the module docstring says how it was made. Every file is
   read in place and never written. `--sfmr NAME=PATH` points `measure.py` at
@@ -43,7 +44,7 @@ Part 10).
   bar, picks by leave-one-reconstruction-out, and prints: the counts, the
   geometry bars' shares, the turned-out and lost shares by similarity band, the
   per-reconstruction means, the held-out picks for each score, and the same
-  picks on four other sets of rows (sections 4b).
+  picks on four other sets of rows (section 4b).
 
 ```bash
 OUT=<a directory outside the repository>

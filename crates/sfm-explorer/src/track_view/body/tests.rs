@@ -743,6 +743,26 @@ fn the_zncc_cell_prints_the_score_against_the_bitmap() {
         super::measurements(&blurred, StageKind::Track, &current)[4],
         "localized"
     );
+
+    // A row read back from a committed point carries only the blur-matched
+    // score its confidence column stored: the cell prints it, and the hover
+    // says where it came from rather than that there is no score.
+    let mut read_back = row(0.5, 0.78, 0.0, false);
+    let slot = read_back.track.as_mut().unwrap();
+    slot.plain_zncc = None;
+    slot.plain_zncc_middle = None;
+    slot.blur_matched_zncc_middle = None;
+    slot.bitmap_blur_sigma = None;
+    slot.sharper_than_bitmap = None;
+    slot.seed_shift_px = None;
+    assert_eq!(text(&read_back), "78% whole\n- mid");
+    let said = hover(&read_back, false);
+    assert!(
+        said.contains("Read back from the committed point"),
+        "{said}"
+    );
+    assert!(said.contains("78%"), "{said}");
+    assert!(!said.contains("No score"), "{said}");
 }
 
 /// After a fit stores a bitmap, the row it is rendered from reads 100% in the

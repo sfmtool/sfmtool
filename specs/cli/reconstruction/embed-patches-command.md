@@ -60,8 +60,8 @@ as `OUTPUT`.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `--min-relative-zncc` | float | 0.7 | Minimum ZNCC a view must reach, as a fraction of its peers' — used both to admit candidate views (against the track-seeded template) and, when the views are aligned to the reference render, to drop a view whose ZNCC against it is below this fraction of the median over the views other than the reference. |
-| `--min-absolute-zncc` | float | `0.5` | Discard an **observation** whose ZNCC against the point's reference render is below this absolute floor, however few views the point has left. On a two-view point the relative bar compares the one view's score with itself and always passes, so this floor is what refuses a pair of unrelated surfaces, and a point it leaves below `--min-views` is dropped whole. `0` disables it. |
+| `--min-relative-zncc` | float | 0.7 | Minimum ZNCC a view must reach, as a fraction of its peers' — used both to admit candidate views (against the track-seeded template) and, when the views are aligned to the reference render, to drop a view whose blur-matched score against it is below this fraction of the median over the views other than the reference. |
+| `--min-absolute-zncc` | float | `0.5` | Discard an **observation** whose blur-matched score against the point's reference render is below this absolute floor, however few views the point has left. On a two-view point the relative bar compares the one view's score with itself and always passes, so this floor is what refuses a pair of unrelated surfaces, and a point it leaves below `--min-views` is dropped whole. `0` disables it. |
 | `--max-member-zncc-self-similarity-radius` | float | `2.5` | Discard an **observation** whose own patch tile fixes no 2D position: its [ZNCC self-similarity radius](../../core/patch/zncc-self-similarity-radius.md), how far the tile can slide over itself and still match itself, is above this, in **patch-grid** pixels. Applied to one view's tile before it is scored against anything, so a flat sky or water crop, or a lone straight edge, is not aligned at all. The radius reads at most `3`, so `3` or more turns nothing out. `0` disables it. The default is `2.5`, the bench's bar; see [the member gate's default](../../core/patch/patch-keypoint-localization.md#the-member-gates-default). |
 | `--search` | float | 6 | The reach of each view's search around its starting keypoint, in **patch-grid** pixels. |
 | `--max-shift-px` | float | 3.0 | Discard an **observation** whose keypoint sits more than this from the point's projection, in **source-image** pixels (an absolute distance, not the move from the seed). |
@@ -116,8 +116,9 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   position (its ZNCC self-similarity radius above
   `--max-member-zncc-self-similarity-radius`, when that gate is on), if its
   keypoint sits more than `--max-shift-px` from the point's projection, if its
-  ZNCC against the reference render is below `--min-absolute-zncc`, or if that
-  ZNCC falls below `--min-relative-zncc` of the median over the views other
+  blur-matched score against the reference render, read where the alignment
+  put it, is below `--min-absolute-zncc`, or if that
+  score falls below `--min-relative-zncc` of the median over the views other
   than the reference. The reference faces none of these gates after the
   grazing check, and a point can come out of localization below `--min-views`
   and be dropped whole.

@@ -15,10 +15,14 @@
 //! `specs/core/reconstruction/add-image-to-tracks.md`, which is the operation
 //! built on it.
 //!
-//! The numbers it reports are all one kind of measurement: the windowed ZNCC of
-//! a core rendered on the patch grid at a given keypoint, against the template
-//! or another core. An existing observation's score and the new view's are
-//! therefore comparable: each is one view's plain ZNCC against the template.
+//! The numbers it reports are all one kind of measurement: the search's plain
+//! windowed ZNCC of a core rendered on the patch grid at a given keypoint,
+//! against the template or another core. An existing observation's score and
+//! the new view's are therefore comparable: each is one view's plain ZNCC
+//! against the template. They are not the scores that judge: Add Image to
+//! Tracks, the caller, reads the references' and the new view's scores against
+//! the template blur-matched, as the bench reads a row against the stored
+//! bitmap, and keeps only the pairwise ZNCCs from here for its pair rule.
 
 use super::align::Template;
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
@@ -51,8 +55,10 @@ pub enum TemplateKind {
 }
 
 /// A point's existing observations (its references), each rendered on the
-/// patch grid at its own keypoint, and the template a new view is aligned to
-/// and judged against, with each reference's plain ZNCC against it.
+/// patch grid at its own keypoint, and the template a new view is aligned to,
+/// with each reference's plain ZNCC against it as the search reads it
+/// ([`Self::zncc`]). A caller that judges reads its own scores against the
+/// template; Add Image to Tracks reads them blur-matched.
 ///
 /// Built by [`TrackReferences::build`]. The per-reference cores are kept so
 /// that a new view can also be scored against each reference on its own.
@@ -70,9 +76,11 @@ pub struct TrackReferences {
     /// score out, since it is the template or what the template was rendered
     /// from.
     pub reference: Option<usize>,
-    /// Per reference, its plain ZNCC against the template at its own keypoint,
-    /// parallel to [`Self::references`]. The reference observation reads
-    /// exactly `1.0` where the template is its render.
+    /// Per reference, its plain ZNCC against the template at its own keypoint
+    /// as the search reads it, parallel to [`Self::references`]. The reference
+    /// observation reads exactly `1.0` where the template is its render. No
+    /// bar of Add Image to Tracks reads it; it reads its own blur-matched
+    /// scores.
     pub zncc: Vec<f64>,
     /// The pairwise ZNCC between references, row-major `n × n` with `1.0` on the
     /// diagonal.

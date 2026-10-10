@@ -1054,7 +1054,7 @@ pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
 /// `0.65` it replaced, the blur-matched `0.70` with the middle bar of
 /// [`BENCH_MIN_ZNCC_MIDDLE`] loses 2.1% of the blurred members that clear the
 /// geometry bars rather than 5.2%, and turns out 94.0% of the wrong views
-/// rather than 90.3%, for 5.8% of the members rather than 3.1%. The spec of
+/// rather than 90.3%, and loses 5.8% of the members rather than 3.1%. The spec of
 /// the editable track (specs/core/bench/editable-track.md) gives the tables.
 pub const BENCH_MIN_ZNCC: f64 = 0.70;
 

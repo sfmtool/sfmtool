@@ -26,8 +26,9 @@ from ._sfmr_path import check_sfmr_path
     show_default=True,
     help=(
         "Minimum ZNCC a view must reach, as a fraction of its peers' — admits "
-        "candidate views and drops poorly-registering ones when the views are "
-        "aligned to the reference render."
+        "candidate views, and drops poorly-registering ones when the views are "
+        "aligned to the reference render, by their blur-matched score against "
+        "it."
     ),
 )
 @click.option(
@@ -36,8 +37,8 @@ from ._sfmr_path import check_sfmr_path
     default=0.5,
     show_default=True,
     help=(
-        "Refuse an observation whose ZNCC against the point's reference render "
-        "is below this absolute floor. 0 disables it."
+        "Refuse an observation whose blur-matched score against the point's "
+        "reference render is below this absolute floor. 0 disables it."
     ),
 )
 @click.option(

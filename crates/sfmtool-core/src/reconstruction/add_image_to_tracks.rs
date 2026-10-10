@@ -280,7 +280,8 @@ pub enum Refusal {
     NoPeak,
     /// The correlation peak is on the edge of the searched window.
     PeakAtEdge,
-    /// The final keypoint's core could not be rendered in frame.
+    /// The final keypoint's core could not be rendered in frame, or its tile
+    /// could not be read against the template (a `NaN` blur-matched score).
     Unscorable,
     /// The ZNCC is below [`AddImageToTracksOptions::min_zncc`].
     BelowFloor,
@@ -336,7 +337,9 @@ pub struct CandidateReport {
     /// Per reference, its blur-matched score against the template at its own
     /// keypoint, read as the bench reads a row against the stored bitmap;
     /// `1.0` for the reference observation where the template is its render.
-    /// The scores the track and pooled bars are set from.
+    /// The scores the track and pooled bars are set from. Empty for a
+    /// candidate refused before its new view was scored, so the report holds
+    /// only blur-matched scores.
     pub reference_zncc: Vec<f64>,
     /// The references' pairwise ZNCCs, row-major `n × n`, as the search reads
     /// them (plain): what the pair rule reads.
@@ -908,7 +911,6 @@ impl Context<'_, '_> {
             .collect();
         out.template = Some(references.template_kind);
         out.reference_observation = references.reference;
-        out.reference_zncc = references.zncc.clone();
         out.reference_pair_zncc = references.pair_zncc.clone();
 
         // The search, from the projection.
@@ -964,8 +966,7 @@ impl Context<'_, '_> {
         out.pair_zncc = score.pair_zncc;
         let (references_z, z) =
             self.bitmap_scores(&patch, &local, &references, &ref_keypoints, keypoint);
-        out.reference_zncc = references_z;
-        out.zncc = z;
+        settle_score(&mut out, references_z, z);
         out
     }
 
@@ -1029,6 +1030,19 @@ impl Context<'_, '_> {
             })
             .collect();
         (references_z, read(0, keypoint))
+    }
+}
+
+/// Write a measured candidate's blur-matched scores into its report. A new
+/// view whose tile could not be read against the template (`NaN`) has no
+/// score, which is not a score under a bar, so it is refused as
+/// [`Refusal::Unscorable`] rather than left for the rule to refuse as below
+/// its floor or its bar.
+fn settle_score(out: &mut CandidateReport, references_zncc: Vec<f64>, zncc: f64) {
+    out.reference_zncc = references_zncc;
+    out.zncc = zncc;
+    if zncc.is_nan() {
+        out.refusal = Some(Refusal::Unscorable);
     }
 }
 

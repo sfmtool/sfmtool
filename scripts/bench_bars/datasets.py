@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The eight reconstructions the bench-bar measurement samples tracks from.
+r"""The eight reconstructions the bench-bar measurement samples tracks from.
 
 Two are the checked-in ground truths, whose members are correct; six are
 solves outside the repository, whose members are assumed correct. Every file is

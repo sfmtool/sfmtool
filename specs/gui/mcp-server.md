@@ -4054,8 +4054,9 @@ the localizer could not read the row `seed_shift_px` is null and `reason` names
 its refusal, whether or not
 the row has a score, and the bars leave its verdict where it is. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars,
-eight in all: at the track stage `min_zncc`, `0.65` on a new track, and
-`min_zncc_middle`, `0` (off) on a new track; at the cluster stage
+eight in all: at the track stage `min_zncc`, `0.70` on a new track, and
+`min_zncc_middle`, `0.50` on a new track, which judge the blur-matched score
+against the stored bitmap and its middle; at the cluster stage
 `cluster_min_zncc` and `cluster_min_zncc_middle`, `0.7` each, which judge the
 achieved template ZNCC and its middle; a middle bar is off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a
 new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
