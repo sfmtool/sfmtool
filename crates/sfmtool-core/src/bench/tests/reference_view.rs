@@ -1479,6 +1479,12 @@ fn a_track_at_minus_one_keeps_its_fused_mean_until_the_rule_picks_without_its_la
         .fallback = ReferenceFallback::None;
     assert!(reread.observations.iter().all(|o| o.pinned));
     assert_eq!(bitmap_target(&reread), Some(Some(pick)));
+
+    // A pick with no keypoint is a row no render takes the tile of, so the
+    // mean stands rather than being rendered again at every evaluation.
+    let mut unkeyed = reread.clone();
+    unkeyed.observations[pick].track.as_mut().unwrap().keypoint = None;
+    assert_eq!(bitmap_target(&unkeyed), None);
 }
 
 /// A track built on the bench whose bitmap names no row follows the same

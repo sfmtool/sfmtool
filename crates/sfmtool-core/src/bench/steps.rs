@@ -153,9 +153,10 @@ impl std::error::Error for CreateTrackError {}
 /// reconstruction already holds, plus the verdict column, with one exception: a point stored at
 /// `-1` whose bitmap names no row (a fused mean, or a bitmap stored before the reference was
 /// recorded) has its bitmap rendered from the reference-view rule's pick at the first evaluation
-/// that reads a pick the rule reached other than through its last fallback, and its rows are then
-/// scored against that render, as every writer renders a point at `-1`
-/// ([`bitmap_target`]).
+/// that renders the bitmap ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
+/// and reads a pick the rule reached other than through its last fallback, and its rows are then
+/// scored against that render, as every writer renders a point at `-1` ([`bitmap_target`]). A
+/// plain [`evaluate`](super::evaluate::evaluate) never moves it.
 ///
 /// A `sift_files` reconstruction is put on the bench like any other: inspecting
 /// a track is allowed everywhere, and it is [`commit`](super::commit::commit)

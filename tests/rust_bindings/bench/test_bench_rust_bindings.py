@@ -678,7 +678,10 @@ class TestEvaluating:
         evaluation that renders renders from the rule's pick, with every row
         still pinned, and makes it the reference."""
         bitmaps, references = embedded.patches.render_bitmaps(embedded, images)
+        bitmaps = np.array(bitmaps)
         references = np.array(references)
+        # A bitmap that is no row's tile: the rendered one turned a quarter.
+        bitmaps[long_track_point] = np.rot90(bitmaps[long_track_point])
         references[long_track_point] = -1
         stored = embedded.clone_with_changes(
             patch_bitmaps=bitmaps, reference_observations=references
@@ -687,11 +690,19 @@ class TestEvaluating:
         _, track = create_track(Bench(), edited, long_track_point)
         assert track.reference_observation is None
 
+        def committed_bitmap(t):
+            after, report = commit(edited, t)
+            recon, forward, _ = after.materialize()
+            return np.asarray(recon.patch_bitmaps)[forward[report["point"]]]
+
         plain, _ = evaluate(track, edited, images, render_bitmap=False)
         assert plain.reference_observation is None
-        assert any("zncc" in o["track"] for o in plain.observations)
+        np.testing.assert_array_equal(
+            committed_bitmap(plain), bitmaps[long_track_point]
+        )
         pick = plain.reference_view_observation
         assert pick is not None
+        assert plain.observation(pick)["track"]["zncc"] < 1.0
 
         rendered, _ = evaluate(track, edited, images)
         assert all(o["pinned"] for o in rendered.observations)
@@ -699,6 +710,7 @@ class TestEvaluating:
         assert rendered.reference_observation == rendered.reference_view_observation
         assert rendered.reference_observation == pick
         assert rendered.observation(pick)["track"]["zncc"] == 1.0
+        assert not np.array_equal(committed_bitmap(rendered), bitmaps[long_track_point])
 
     def test_a_re_pinned_reference_is_unpinned_again_as_if_never_unpinned(
         self, edited, images, long_track_point

@@ -120,10 +120,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the row that bitmap is rendered from (the reference in use), or null, \
                           and reference_view_observation, the row the reference-view rule \
                           picked, which can differ from it, or null. For a point stored at -1 \
-                          with a mean bitmap the evaluation renders the bitmap from the pick, \
-                          so the two agree, unless the rule reached its pick only through its \
-                          last fallback, where the mean stays and reference_observation is \
-                          null. While evaluating, the measurements are the \
+                          with a mean bitmap, the evaluation that renders the bitmap from the \
+                          pick reports the two equal; where the rule reached its pick only \
+                          through its last fallback, the mean stays and reference_observation \
+                          is null. While evaluating, the measurements are the \
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),

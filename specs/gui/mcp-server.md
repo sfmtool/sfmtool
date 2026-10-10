@@ -3987,12 +3987,13 @@ reference was recorded, or the render of an observation an edit has since
 removed from the point
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 stored bitmap"). Such a bitmap is held by no pin: the first evaluation that
-reads a pick the rule reached other than through its last fallback renders it
-from that pick, so for a point stored at `-1` (every point of a file older
-than `.sfmr` v12) `reference_observation` equals `reference_view_observation`
-once that evaluation is `current`, on the bench and in `get_point`'s
-evaluation block alike; with a pick reached only through the last fallback it
-stays null. Which row it is follows the pin of the row that holds it
+renders the bitmap and reads a pick the rule reached other than through its
+last fallback renders it from that pick, so for a point stored at `-1` with a
+bitmap (every point of a file older than `.sfmr` v12 that stores bitmaps) the
+evaluation that renders from that pick reports `reference_observation` and
+`reference_view_observation` equal, on the bench and in `get_point`'s
+evaluation block alike; with a pick reached only through the last fallback,
+`reference_observation` stays null. Which row it is follows the pin of the row that holds it
 ([bench.md](bench.md) § "The reference"). While that row is pinned every render
 renders from it, whichever row the rule picks, so `reference_observation` and
 `reference_view_observation` can differ; a track put on the bench from a point
