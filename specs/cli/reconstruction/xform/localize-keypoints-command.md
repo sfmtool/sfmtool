@@ -143,7 +143,7 @@ the binding's own default. The "Default" column lists those binding defaults.
 | `window_sigma`                 | `0.6`           | `localize_keypoints`                           |
 | `sampler`                      | `per_view`      | `localize_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` picks `anisotropic` or `bilinear_mip` for each view by the rule in [image-warping.md](../../../core/camera/image-warping.md#choosing-the-sampler-per-view), which also gives each sampler's cost) |
 | `robust_iters`                 | `3`             | `localize_keypoints` (IRLS passes for the fused mean, where it is the template) |
-| `search_strategy`              | `plus_descent`  | `localize_keypoints` (`plus_descent`/`exhaustive`) |
+| `search_strategy`              | `exhaustive`    | `localize_keypoints` (`exhaustive`/`plus_descent`) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), duplicate keys,
 or unparseable values raise `click.UsageError`, and so does a value out of its
@@ -190,4 +190,4 @@ Same envelope as `--refine-keypoints` / `--refine-normals`: the binding loads
 **all** full-resolution images (plus pyramids) into memory at once and releases
 the GIL during the search, parallelizing across points. Work scales with
 observations × the search area (`search²`), with each view searched once;
-`plus_descent` (default) scores far fewer shifts than `exhaustive`. There is no streaming of the image set.
+`plus_descent` scores far fewer shifts than `exhaustive` (the default). There is no streaming of the image set.

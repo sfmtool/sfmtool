@@ -190,16 +190,16 @@ from ._sfmr_path import check_sfmr_path
 @click.option(
     "--localize-search-strategy",
     "localize_search_strategy",
-    type=click.Choice(["plus_descent", "exhaustive"]),
-    default="plus_descent",
+    type=click.Choice(["exhaustive", "plus_descent"]),
+    default="exhaustive",
     show_default=True,
     help=(
-        "How the keypoint localizer searches the grid of candidate shifts for "
-        "each view. 'plus_descent' moves to the best of the four axis "
-        "neighbors until none scores higher, so it can stop at a local best. "
-        "'exhaustive' scores every shift in the grid; it is slower and always "
-        "finds the best shift. See "
-        "specs/core/patch/keypoint-localization-search-cache.md."
+        "How the keypoint localizer searches each view's shift window for the "
+        "best match to the reference render. 'exhaustive' (default) scores "
+        "every shift in the window and takes the highest peak. 'plus_descent' "
+        "climbs from the starting keypoint to the nearest peak, scoring fewer "
+        "shifts, and stops at a side peak more often when the start is 2 px or "
+        "more off. See specs/core/patch/patch-keypoint-localization.md."
     ),
 )
 @click.option(

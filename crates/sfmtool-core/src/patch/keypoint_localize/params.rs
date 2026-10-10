@@ -12,6 +12,20 @@ use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
 /// How each view's shift grid is traversed when it is aligned to the template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchStrategy {
+    /// Score every cell of the `(2·margin+1) × (2·margin+1)` shift grid via
+    /// the hand-rolled SIMD SAXPY accumulator (`compute_channel_grids`), then
+    /// take the argmax and the 3×3 quadratic sub-pixel fit around it: the
+    /// highest correlation peak in the window.
+    ///
+    /// **The default.** On the seoul_bull and kerry_park ground truths, with
+    /// every view (the reference included) started 0 to 3 px from the truth,
+    /// the median re-triangulated residual of its keypoints is level with or
+    /// below that of the congealing it replaced at every displacement, and
+    /// below the "+"-descent's from 2 px on, where the descent stops at a
+    /// nearer, lower peak; see `specs/core/patch/patch-keypoint-localization.md`,
+    /// "How the alignment was measured".
+    #[default]
+    Exhaustive,
     /// "+"-descent on the integer shift grid: starts at the view's starting
     /// keypoint, evaluates the 4 axis neighbours per step, moves to the best
     /// improver, and stops when no neighbour beats the current cell. Each cell
@@ -22,22 +36,10 @@ pub enum SearchStrategy {
     /// which reuses the 4 cardinal neighbours already in the cache and scores
     /// the 4 diagonal ones.
     ///
-    /// **The default.** It stops at the correlation peak nearest the starting
-    /// keypoint, which is the evidence for which of several similar peaks is
-    /// meant. On the seoul_bull and kerry_park ground truths it places views
-    /// closer to the truth than [`Exhaustive`](Self::Exhaustive) from starting
-    /// keypoints within 1 px of it, and is the faster of the two; see
-    /// `specs/core/patch/patch-keypoint-localization.md`, "How the alignment
-    /// was measured".
-    #[default]
+    /// It stops at the correlation peak nearest the starting keypoint, so it
+    /// scores fewer cells than [`Exhaustive`](Self::Exhaustive), but from a
+    /// start 2 px or more off that peak is often a side peak.
     PlusDescent,
-    /// Score every cell of the `(2·margin+1) × (2·margin+1)` shift grid via
-    /// the hand-rolled SIMD SAXPY accumulator (`compute_channel_grids`), then
-    /// argmax + the same 3×3 quadratic sub-pixel fit. The global maximum over the window; it
-    /// recovers from a starting keypoint 2 to 3 px off better than the
-    /// descent, and loses to it nearer the truth, where a side peak of a
-    /// repeated texture can score higher than the true one.
-    Exhaustive,
 }
 
 /// Tunables for [`localize_patch_keypoints`](super::localize_patch_keypoints).
@@ -145,7 +147,7 @@ impl Default for KeypointLocalizeParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             sampler: SamplerChoice::per_view(),
             robust_iters: 3,
-            search_strategy: SearchStrategy::PlusDescent,
+            search_strategy: SearchStrategy::Exhaustive,
         }
     }
 }

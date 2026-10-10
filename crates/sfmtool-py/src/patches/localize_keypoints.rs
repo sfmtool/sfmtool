@@ -102,9 +102,9 @@ impl PyPatchCloud {
     ///         view set that mixes observed views with expansion candidates: the
     ///         candidates have no observation, hence no keypoint, and take the
     ///         projection.
-    ///     search_strategy: ``"plus_descent"`` (default: climb from the starting
-    ///         keypoint to the nearest correlation peak) or ``"exhaustive"``
-    ///         (score every shift in the window and take the best).
+    ///     search_strategy: ``"exhaustive"`` (default: score every shift in the
+    ///         window and take the best) or ``"plus_descent"`` (climb from the
+    ///         starting keypoint to the nearest correlation peak).
     ///     reference_images: Optional mapping ``point_index -> image_index`` naming
     ///         each point's reference observation, the view whose render is the
     ///         template and whose keypoint is not moved. A point absent from the
@@ -139,7 +139,7 @@ impl PyPatchCloud {
         min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="per_view", robust_iters=3,
         point_indexes=None, starting_keypoints=None,
-        search_strategy="plus_descent", reference_images=None, progress=None
+        search_strategy="exhaustive", reference_images=None, progress=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(

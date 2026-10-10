@@ -267,7 +267,7 @@ spec).
 | `fronto_prior_weight` | `0.05` | normal refinement: weight `λ` of the additive fronto-parallel prior `λ·mean(v̂·n)²` pulling a low-parallax normal toward facing the cameras (`0` disables) |
 | `max_refine_views` (`--refine-max-views`) | `8` | normal refinement: cap the round-2+ refinement basis at the N most normal-informative views/point (`0` = all); output-lossless ([patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)) |
 | `subpixel` | `True` | keypoint refiner: run the ECC sub-pixel refinement against the reference render once per round; `False` moves no keypoint after the localizer (the bitmap render still runs) ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) |
-| `localize_search_strategy` | `plus_descent` | keypoint localizer: discrete shift-grid traversal — `plus_descent` (local descent) or `exhaustive` (full grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
+| `localize_search_strategy` | `exhaustive` | keypoint localizer: discrete shift-grid traversal — `exhaustive` (full grid) or `plus_descent` (local descent); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 
 ## Scope
 

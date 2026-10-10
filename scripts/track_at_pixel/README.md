@@ -227,7 +227,10 @@ noted):
 
 Recorded 2026-10-09, after keypoint localization came to align every view to
 the point's reference render and its sub-pixel step became a 2-D quadratic
-fit over the 3×3 neighbourhood of the correlation peak. The finish's median
+fit over the 3×3 neighbourhood of the correlation peak, and measured again
+the same day once its search became the exhaustive one
+(`SearchStrategy::Exhaustive`, which scores every shift of the window; it was
+the "+"-descent). The finish's median
 gate (`finish.min_zncc_median`) reads each `in` row's plain ZNCC against the
 stored bitmap, the reference row left out; its default is 0.7.
 `core_cascade`, full pass, every query of the checked-in ground truths, swept
@@ -238,32 +241,38 @@ out, since it reads the same score.
 
 | gate | seoul built | correct | wrong | precision | Kerry Park built | correct | wrong | precision |
 |---|---|---|---|---|---|---|---|---|
-| off | 1171 (91.7%) | 979 | 192 | 0.836 | 3197 (84.9%) | 2584 | 613 | 0.808 |
-| 0.6 | 1115 (87.3%) | 964 | 151 | 0.865 | 3067 (81.4%) | 2550 | 517 | 0.831 |
-| 0.65 | 1092 (85.5%) | 949 | 143 | 0.869 | 3046 (80.9%) | 2539 | 507 | 0.834 |
-| **0.7** | **1064 (83.3%)** | **928** | **136** | **0.872** | **2992 (79.4%)** | **2503** | **489** | **0.837** |
-| 0.75 | 1015 (79.5%) | 894 | 121 | 0.881 | 2876 (76.3%) | 2401 | 475 | 0.835 |
-| 0.8 | 909 (71.2%) | 811 | 98 | 0.892 | 2670 (70.9%) | 2230 | 440 | 0.835 |
+| off | 1147 (89.8%) | 974 | 173 | 0.849 | 3192 (84.7%) | 2618 | 574 | 0.820 |
+| 0.6 | 1103 (86.4%) | 961 | 142 | 0.871 | 3088 (82.0%) | 2585 | 503 | 0.837 |
+| 0.65 | 1082 (84.7%) | 950 | 132 | 0.878 | 3061 (81.3%) | 2568 | 493 | 0.839 |
+| **0.7** | **1055 (82.6%)** | **930** | **125** | **0.882** | **3007 (79.8%)** | **2534** | **473** | **0.843** |
+| 0.75 | 1013 (79.3%) | 904 | 109 | 0.892 | 2900 (77.0%) | 2438 | 462 | 0.841 |
+| 0.8 | 903 (70.7%) | 810 | 93 | 0.897 | 2707 (71.9%) | 2269 | 438 | 0.838 |
 
 Of 1277 seoul_bull and 3767 Kerry Park queries. The median position error of
-the built tracks falls from 0.16 to 0.13 ground-truth half-extents across the
-sweep on seoul_bull, and from 0.13 to 0.12 on Kerry Park. With the gate off,
-the median score of correct tracks is 0.86 (seoul_bull) and 0.89 (Kerry
-Park), and of tracks at the wrong position 0.76 and 0.85: on seoul_bull the
-gate removes more wrong tracks than correct ones, and on Kerry Park the two
-kinds score too close together for the gate to tell them apart well.
+the built tracks falls from 0.159 to 0.126 ground-truth half-extents across the
+sweep on seoul_bull; on Kerry Park it is 0.127 with the gate off, lowest at 0.7
+(0.118) and 0.123 at 0.8. With the gate off, the median score of correct
+tracks is 0.86 (seoul_bull) and 0.89 (Kerry Park), and of tracks at the wrong
+position 0.77 and 0.85: on seoul_bull the gate removes more wrong tracks than
+correct ones, and on Kerry Park the two kinds score too close together for the
+gate to tell them apart well.
 
-Precision is not flat on seoul_bull: it rises with every step, from 0.865 at
-0.6 to 0.892 at 0.8, while each step removes more correct tracks than the one
-before (15, 21, 34 and 83). On Kerry Park precision rises from 0.831 at 0.6 to
-0.837 at 0.7 and is flat from 0.65 to 0.8, within 0.3 points, while the
-correct tracks keep falling (from 2539 to 2230). The data does not single out
+Precision is not flat on seoul_bull: it rises with every step, from 0.871 at
+0.6 to 0.897 at 0.8, while each step removes more correct tracks than the one
+before (11, 20, 26 and 94). On Kerry Park precision rises from 0.837 at 0.6 to
+0.843 at 0.7 and is flat from 0.65 to 0.8, within 0.5 points, while the
+correct tracks keep falling (from 2568 to 2269). The data does not single out
 one value: 0.7 is where Kerry Park's precision is highest, by under half a
-point, and 0.7 is the value chosen, as a judgement call. Against it, 0.6 would
-return 2.8 (seoul_bull) and 1.2 (Kerry Park) points more correct tracks per
-query at a precision 0.7 and 0.6 points lower; 0.75 would return 2.7 and 2.7
-points fewer correct tracks per query, for 0.9 points more precision on
+point, and 0.7 is the value kept, as a judgement call. Against it, 0.6 would
+return 2.4 (seoul_bull) and 1.4 (Kerry Park) points more correct tracks per
+query at a precision 1.1 and 0.6 points lower; 0.75 would return 2.0 and 2.5
+points fewer correct tracks per query, for 1.0 point more precision on
 seoul_bull and 0.2 points less on Kerry Park.
+
+With the "+"-descent search, earlier the same day, the sweep built 0.2 to 1.9
+points more queries on seoul_bull at 0.5 to 1.3 points lower precision (at
+0.7: 1064 (83.3%) at 0.872), and Kerry Park's precision was 0.3 to 1.2 points
+lower at every gate (at 0.7: 2992 (79.4%) at 0.837).
 
 The empty pass builds no track on this date: with no reconstructed point, the
 point-or-bearing test has no observation to measure the reprojection noise

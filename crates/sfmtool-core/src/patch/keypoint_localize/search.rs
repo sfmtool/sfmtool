@@ -281,7 +281,12 @@ pub(super) fn search_shift(
                     sc.grid[s] / chf
                 };
                 sc.grid[s] = z;
-                if z > best.0 {
+                // An exact tie goes to the cell nearer the start, so a window
+                // that scores the same everywhere (a flat view scores 0 at
+                // every shift) leaves the view where it started, as the
+                // descent does, rather than at the window's first corner.
+                let nearer = || dy.abs() + dx.abs() < best.1.abs() + best.2.abs();
+                if z > best.0 || (z == best.0 && nearer()) {
                     best = (z, dy, dx);
                 }
             }

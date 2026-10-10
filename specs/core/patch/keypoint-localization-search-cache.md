@@ -139,21 +139,34 @@ buys the 8-lane width over 4-lane `f64`. The numerator is recovered exactly:
 
 `KeypointLocalizeParams::search_strategy` chooses which cells of the
 `(2·margin+1)²` shift grid are scored. Both strategies share the tile, the
-support, the template and the result: the integer peak, its sub-pixel
-parabolic refinement from the peak's axis neighbours, and the ZNCC at the
+support, the template and the result: the integer peak, its sub-pixel step
+from the quadratic fitted to the 3×3 cells around it, and the ZNCC at the
 integer peak.
 
 The choice is coupled to the kernel:
 
-- **Whole grid → accumulation kernel** (`Exhaustive`). Its cost does not depend
-  on the shape of the correlation surface, it is SIMD-friendly, and it returns
-  the global maximum over the window.
+- **Whole grid → accumulation kernel** (`Exhaustive`, the default). Its cost
+  does not depend on the shape of the correlation surface, it is SIMD-friendly,
+  and it returns the global maximum over the window, an exact tie going to the
+  cell nearer the start (a flat view scores 0 at every shift and stays put).
 - **Local descent → per-cell kernel** (`PlusDescent`). It visits few cells but
   pays the full support gather for each, so it wins only while it visits few
   enough, and it returns the peak nearest the starting keypoint rather than the
   highest one in the window.
 
-### "+"-descent (the default)
+**Why the whole grid is the default.** On the seoul_bull and kerry_park ground
+truths, with every view started 0 to 3 px from its ground-truth keypoint, the
+whole grid's keypoints re-triangulate as well as the descent's from within
+1 px and better from 2 px, where the descent stops at a nearer, lower peak.
+It costs 113 µs per search against the descent's 50 µs at the default window
+(13×13 cells), which is 1.1 to 1.2 times the descent's time per track, since
+the renders dominate. The measurements are in
+[patch-keypoint-localization.md](patch-keypoint-localization.md#how-the-alignment-was-measured).
+The accumulation kernel's AVX2 path covers spans up to 16 cells (`search` up
+to 8); a wider window runs the scalar kernel, and at `search` 9 the whole grid
+costs 1.7 to 2.0 times the descent per track.
+
+### "+"-descent
 
 Steepest ascent on the integer shift grid: start at `(dy, dx) = (0, 0)`, the
 view's starting keypoint, score the 4 axis neighbours, move to the best one that
@@ -176,17 +189,6 @@ accumulation (about 31 µs per search against about 145 µs on dino at the
 defaults). The scratch the descent uses (`pd_kerns`, `pd_tsums`,
 `pd_per_channel`, `pd_visited`) is reused across every view of a point, so it
 allocates nothing after the first view.
-
-**Why it is the default.** The descent stops at the correlation peak nearest
-the starting keypoint, which is the evidence for which of several similar peaks
-is meant. On the seoul_bull and kerry_park ground truths it places views closer
-to the truth than the whole-grid search from starting keypoints within 1 px of
-it, where a side peak of a repeated texture can score higher than the true one,
-and it is the faster of the two (0.42 against 0.52 ms per 3-5-view track on
-seoul_bull, 3.42 against 4.25 ms per track of 21 or more views on kerry_park).
-From starting keypoints 2 to 3 px off, the whole grid's global maximum does
-better. The measurements are in
-[patch-keypoint-localization.md](patch-keypoint-localization.md#how-the-alignment-was-measured).
 
 ## Sub-pixel hand-off
 

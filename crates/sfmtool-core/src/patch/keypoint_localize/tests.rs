@@ -287,10 +287,11 @@ fn infinity_point_seed_offsets_align_back() {
     // pull the off view back onto the reference's render — exercises the w == 0
     // branch of seed_offset (angular ray→offset inversion) and the w == 0
     // render/project path through the search. Pinned to
-    // `SearchStrategy::Exhaustive` because the 4-source-px seed shift puts view
-    // 3 ~3 grid steps from the reference through a multi-modal angular
-    // `dir_texture`; the default `PlusDescent` can walk into a local maximum on
-    // the way home, which is the documented trade-off.
+    // `SearchStrategy::Exhaustive` (the default, named so the test does not
+    // follow a change of it) because the 4-source-px seed shift puts view 3
+    // ~3 grid steps from the reference through a multi-modal angular
+    // `dir_texture`; `PlusDescent` can walk into a local maximum on the way
+    // home, which is the documented trade-off.
     let scene = Scene::infinity(
         &[
             [0.0, 0.0, 0.0],
@@ -1062,6 +1063,15 @@ fn the_member_gate_admits_at_or_under_its_bar_and_fails_nan() {
     let default = KeypointLocalizeParams::default();
     assert!(default.member_self_similarity_gate_is_on());
     assert_eq!(default.max_member_zncc_self_similarity_radius, 2.5);
+}
+
+#[test]
+fn the_default_search_scores_the_whole_window() {
+    assert_eq!(
+        KeypointLocalizeParams::default().search_strategy,
+        SearchStrategy::Exhaustive
+    );
+    assert_eq!(SearchStrategy::default(), SearchStrategy::Exhaustive);
 }
 
 #[test]

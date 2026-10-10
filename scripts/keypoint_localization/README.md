@@ -4,9 +4,9 @@ This directory compares two ways of localizing a point's keypoints across its
 track views:
 
 - **Alignment** (this branch): every view is aligned to the point's reference
-  render, scored by ZNCC against that template. Search strategy `pd`
-  (`SearchStrategy::PlusDescent`, the default) or `ex`
-  (`SearchStrategy::Exhaustive`).
+  render, scored by ZNCC against that template. Search strategy `ex`
+  (`SearchStrategy::Exhaustive`, the default) or `pd`
+  (`SearchStrategy::PlusDescent`).
 - **Congealing** (commit `83ffb08e` on `main`, before this branch): each view is
   aligned over rounds to the IRLS mean of the others, scored by a
   leave-one-out ZNCC.
@@ -19,7 +19,10 @@ Files:
   `try_localize_patch_keypoints` (methods `pd` and `ex`); built with
   `--features congeal` it calls the congealing `try_localize_patch_keypoints`
   of `83ffb08e` (method `congeal`). It writes one JSON file per run.
-- `report.py` reads those JSON files and prints the markdown tables below.
+- `report.py` reads those JSON files and prints the markdown tables below,
+  and a table of the time per track by track length. That table is from the
+  runs above, with 8 threads; the single-threaded timing quoted in
+  `specs/core/patch/patch-keypoint-localization.md` was run separately.
 
 ## Protocol
 
@@ -55,14 +58,14 @@ consensus-basis cap of 8 views).
   The last column counts tracks whose mean re-triangulated residual exceeds
   5 px, which flags Gauss-Newton failures that inflate the means.
 - **Gate tables** use `stored` mode and one table per displacement (0, 0.5,
-  1 px). The views are the (point, slot) pairs kept by both `congeal` and `pd`
+  1 px). The views are the (point, slot) pairs kept by both `congeal` and `ex`
   at that displacement, without the reference slot and without views that have
   no GT projection or whose score is missing (congealing reports NaN for a few
   views). A view is good when its raw error is below 1 px and bad above
   1.5 px, using the error of the method whose score is gated, so the good and
   bad counts differ between the two columns. The relative score is the score
   divided by the median score of the run's non-reference views of the point.
-  "Plain" is `pd`'s ZNCC against the template; "LOO" is congealing's
+  "Plain" is `ex`'s ZNCC against the template; "LOO" is congealing's
   leave-one-out ZNCC.
 
 ## Build
@@ -115,7 +118,10 @@ threads.
 ## Results (2026-10-09)
 
 Branch at commit `92ad37ef` plus the working-tree changes of that day (the 2-D
-quadratic sub-pixel fit), against `83ffb08e`.
+quadratic sub-pixel fit), against `83ffb08e`. Run again the same day after the
+default search became `ex`: every accuracy figure and every per-view result is
+unchanged, since the harness names the strategy of each run; the gate tables
+below now read `ex`'s score.
 
 ### Accuracy
 
@@ -201,83 +207,83 @@ quadratic sub-pixel fit), against `83ffb08e`.
 
 ### Gates (reference stored)
 
-#### kerry, reference stored, disp 0 px: 2876 views
+#### kerry, reference stored, disp 0 px: 2877 views
 
-plain (pd): n 2876, good 2821, bad 28; leave-one-out (congeal): n 2876, good 2840, bad 18.
-
-| gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
-|---|---|---|---|---|
-| absolute 0.4 | 0.2% | 3.6% | 0.3% | 0.0% |
-| absolute 0.5 | 0.5% | 7.1% | 0.5% | 0.0% |
-| absolute 0.6 | 1.3% | 14.3% | 0.8% | 11.1% |
-| relative 0.6 | 0.3% | 0.0% | 0.3% | 0.0% |
-| relative 0.7 | 0.5% | 7.1% | 0.6% | 5.6% |
-| relative 0.8 | 1.9% | 7.1% | 1.4% | 16.7% |
-
-#### kerry, reference stored, disp 0.5 px: 2862 views
-
-plain (pd): n 2862, good 2804, bad 28; leave-one-out (congeal): n 2862, good 2783, bad 26.
+plain (ex): n 2877, good 2810, bad 45; leave-one-out (congeal): n 2877, good 2841, bad 18.
 
 | gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
 |---|---|---|---|---|
-| absolute 0.4 | 0.2% | 3.6% | 0.3% | 3.8% |
-| absolute 0.5 | 0.5% | 7.1% | 0.4% | 7.7% |
-| absolute 0.6 | 1.5% | 17.9% | 0.8% | 7.7% |
-| relative 0.6 | 0.3% | 3.6% | 0.3% | 3.8% |
-| relative 0.7 | 0.4% | 7.1% | 0.6% | 7.7% |
-| relative 0.8 | 1.7% | 7.1% | 1.4% | 15.4% |
+| absolute 0.4 | 0.2% | 6.7% | 0.3% | 0.0% |
+| absolute 0.5 | 0.4% | 15.6% | 0.5% | 0.0% |
+| absolute 0.6 | 1.1% | 22.2% | 0.8% | 11.1% |
+| relative 0.6 | 0.2% | 8.9% | 0.3% | 0.0% |
+| relative 0.7 | 0.3% | 13.3% | 0.6% | 5.6% |
+| relative 0.8 | 1.7% | 17.8% | 1.4% | 16.7% |
+
+#### kerry, reference stored, disp 0.5 px: 2863 views
+
+plain (ex): n 2863, good 2789, bad 46; leave-one-out (congeal): n 2863, good 2784, bad 26.
+
+| gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
+|---|---|---|---|---|
+| absolute 0.4 | 0.1% | 8.7% | 0.3% | 3.8% |
+| absolute 0.5 | 0.4% | 15.2% | 0.4% | 7.7% |
+| absolute 0.6 | 1.3% | 23.9% | 0.8% | 7.7% |
+| relative 0.6 | 0.2% | 10.9% | 0.3% | 3.8% |
+| relative 0.7 | 0.3% | 17.4% | 0.6% | 7.7% |
+| relative 0.8 | 1.5% | 17.4% | 1.4% | 15.4% |
 
 #### kerry, reference stored, disp 1 px: 2843 views
 
-plain (pd): n 2843, good 2768, bad 32; leave-one-out (congeal): n 2843, good 2430, bad 121.
+plain (ex): n 2843, good 2759, bad 46; leave-one-out (congeal): n 2843, good 2430, bad 121.
 
 | gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
 |---|---|---|---|---|
-| absolute 0.4 | 0.4% | 6.2% | 0.2% | 0.8% |
-| absolute 0.5 | 0.7% | 9.4% | 0.5% | 1.7% |
-| absolute 0.6 | 1.7% | 18.8% | 0.8% | 6.6% |
-| relative 0.6 | 0.3% | 6.2% | 0.3% | 0.8% |
-| relative 0.7 | 0.5% | 9.4% | 0.5% | 2.5% |
-| relative 0.8 | 1.9% | 12.5% | 1.5% | 5.0% |
+| absolute 0.4 | 0.1% | 8.7% | 0.2% | 0.8% |
+| absolute 0.5 | 0.4% | 15.2% | 0.5% | 1.7% |
+| absolute 0.6 | 1.3% | 19.6% | 0.8% | 6.6% |
+| relative 0.6 | 0.1% | 8.7% | 0.3% | 0.8% |
+| relative 0.7 | 0.3% | 10.9% | 0.5% | 2.5% |
+| relative 0.8 | 1.6% | 17.4% | 1.5% | 5.0% |
 
 #### seoul, reference stored, disp 0 px: 872 views
 
-plain (pd): n 872, good 784, bad 59; leave-one-out (congeal): n 872, good 781, bad 49.
+plain (ex): n 872, good 781, bad 67; leave-one-out (congeal): n 872, good 781, bad 49.
 
 | gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
 |---|---|---|---|---|
-| absolute 0.4 | 0.4% | 11.9% | 0.0% | 0.0% |
-| absolute 0.5 | 0.9% | 15.3% | 0.4% | 4.1% |
-| absolute 0.6 | 4.2% | 20.3% | 2.0% | 6.1% |
-| relative 0.6 | 0.3% | 1.7% | 0.1% | 2.0% |
-| relative 0.7 | 0.8% | 8.5% | 0.5% | 2.0% |
-| relative 0.8 | 2.7% | 13.6% | 1.9% | 4.1% |
+| absolute 0.4 | 0.4% | 10.4% | 0.0% | 0.0% |
+| absolute 0.5 | 0.6% | 13.4% | 0.4% | 4.1% |
+| absolute 0.6 | 4.0% | 17.9% | 2.0% | 6.1% |
+| relative 0.6 | 0.1% | 1.5% | 0.1% | 2.0% |
+| relative 0.7 | 0.6% | 7.5% | 0.5% | 2.0% |
+| relative 0.8 | 2.6% | 11.9% | 1.9% | 4.1% |
 
 #### seoul, reference stored, disp 0.5 px: 878 views
 
-plain (pd): n 878, good 794, bad 59; leave-one-out (congeal): n 878, good 776, bad 49.
+plain (ex): n 878, good 786, bad 67; leave-one-out (congeal): n 878, good 776, bad 49.
 
 | gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
 |---|---|---|---|---|
-| absolute 0.4 | 0.6% | 10.2% | 0.0% | 2.0% |
-| absolute 0.5 | 1.0% | 11.9% | 0.4% | 2.0% |
-| absolute 0.6 | 4.4% | 15.3% | 1.7% | 2.0% |
-| relative 0.6 | 0.3% | 0.0% | 0.1% | 0.0% |
-| relative 0.7 | 0.6% | 5.1% | 0.5% | 2.0% |
-| relative 0.8 | 2.5% | 6.8% | 1.9% | 2.0% |
+| absolute 0.4 | 0.5% | 4.5% | 0.0% | 2.0% |
+| absolute 0.5 | 0.6% | 9.0% | 0.4% | 2.0% |
+| absolute 0.6 | 3.9% | 14.9% | 1.7% | 2.0% |
+| relative 0.6 | 0.1% | 0.0% | 0.1% | 0.0% |
+| relative 0.7 | 0.5% | 4.5% | 0.5% | 2.0% |
+| relative 0.8 | 2.2% | 7.5% | 1.9% | 2.0% |
 
 #### seoul, reference stored, disp 1 px: 871 views
 
-plain (pd): n 871, good 781, bad 58; leave-one-out (congeal): n 871, good 666, bad 70.
+plain (ex): n 871, good 775, bad 66; leave-one-out (congeal): n 871, good 666, bad 70.
 
 | gate | plain good dropped | plain bad dropped | LOO good dropped | LOO bad dropped |
 |---|---|---|---|---|
-| absolute 0.4 | 0.6% | 10.3% | 0.0% | 0.0% |
-| absolute 0.5 | 0.9% | 12.1% | 0.5% | 0.0% |
-| absolute 0.6 | 4.4% | 19.0% | 1.8% | 1.4% |
-| relative 0.6 | 0.3% | 0.0% | 0.2% | 0.0% |
-| relative 0.7 | 0.6% | 3.4% | 0.6% | 0.0% |
-| relative 0.8 | 2.9% | 6.9% | 2.3% | 0.0% |
+| absolute 0.4 | 0.6% | 4.5% | 0.0% | 0.0% |
+| absolute 0.5 | 0.6% | 7.6% | 0.5% | 0.0% |
+| absolute 0.6 | 3.9% | 13.6% | 1.8% | 1.4% |
+| relative 0.6 | 0.1% | 0.0% | 0.2% | 0.0% |
+| relative 0.7 | 0.5% | 3.0% | 0.6% | 0.0% |
+| relative 0.8 | 2.7% | 7.6% | 2.3% | 0.0% |
 
 ### Notes on these results
 

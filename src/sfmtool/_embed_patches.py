@@ -404,7 +404,7 @@ def embed_patches(
     fronto_prior_weight: float = 0.05,
     max_refine_views: int = 8,
     max_zncc_self_similarity_radius: float = DEFAULT_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
-    localize_search_strategy: str = "plus_descent",
+    localize_search_strategy: str = "exhaustive",
     sampler: str = "per_view",
     progress: Any = None,
 ) -> SfmrReconstruction:

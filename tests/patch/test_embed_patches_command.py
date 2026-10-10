@@ -567,6 +567,25 @@ def test_embed_patches_self_similarity_cull_defaults_to_the_member_gates_bar():
     assert signature.parameters["max_zncc_self_similarity_radius"].default == 2.5
 
 
+def test_embed_patches_localizer_search_defaults_to_exhaustive():
+    """The localizer scores every shift of its window by default, on the command
+    line, in `embed_patches` and in the binding; the "+"-descent stays a choice."""
+    import inspect
+
+    from sfmtool.patches import PatchCloud
+
+    command = main.get_command(None, "embed-patches")
+    options = {p.name: p for p in command.params}
+    option = options["localize_search_strategy"]
+    assert option.default == "exhaustive"
+    assert set(option.type.choices) == {"exhaustive", "plus_descent"}
+    signature = inspect.signature(ep.embed_patches)
+    assert signature.parameters["localize_search_strategy"].default == "exhaustive"
+    assert 'search_strategy="exhaustive"' in (
+        PatchCloud.localize_keypoints.__text_signature__ or ""
+    )
+
+
 def test_embed_patches_self_similarity_cull_drops_flat_and_edge_points():
     """The early cull drops the points whose round-1 consensus reads over the
     bar (a flat and an edge bitmap at the default), keeps a textured one and one
