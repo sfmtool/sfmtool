@@ -1464,15 +1464,22 @@ tiles side by side, each 96 points across, the size the tile's own hover view
 draws the tile at: a third of its 288-point picture, which spans three times
 the patch's width:
 
-1. the stored bitmap, the reference's render, captioned *Stored bitmap*;
+1. the stored bitmap, the reference's render, captioned *Stored bitmap*. It
+   is drawn at full brightness, as the score reads it, even where the header
+   dims a bitmap kept only for judging, so it and the blurred bitmap beside it
+   compare;
 2. the bitmap as blurred for this row, captioned with the blur's width in grid
    px (*Blurred by σ 0.83 grid px*). It is blurred by the row's
    `bitmap_blur_sigma` with core's kernel (`TilePlanes::blurred`), the one the
    blur-matched score was read on, so the picture is the bitmap the score
    compared. Where the pair was read unblurred, a note takes its place and
-   says why: the row's tile is sharper than the bitmap along every direction,
-   so it could replace the reference, or the bitmap is not sharper than the
-   row's tile along every direction by the ratio of 1.25;
+   says why, as far as the row's own readings tell: the row's tile is sharper
+   than the bitmap along every direction, so it could replace the reference;
+   the row's own sharpness could not be read (it has no self-similarity
+   ellipse); or, otherwise, that the bitmap was not blurred for the row
+   because it is not sharper than the row's tile along every direction by the
+   ratio of 1.25 or its own sharpness could not be read. The row does not
+   carry the bitmap's sharpness reading, so the last note names both;
 3. the row's own tile, captioned *This row*.
 
 Under the tiles a monospace table sets the plain and the blur-matched scores

@@ -2070,13 +2070,8 @@ impl TrackBody {
                 egui::Sense::hover(),
             )
             .on_hover_ui(|ui| {
-                let label = self
-                    .showing
-                    .as_ref()
-                    .map(|s| s.label.clone())
-                    .unwrap_or_default();
                 let tiles = ZnccHoverTiles {
-                    bitmap: self.ensure_track_patch(ui.ctx(), &label, track),
+                    bitmap: self.ensure_hover_bitmap(ui.ctx(), track),
                     blurred: m
                         .bitmap_blur_sigma
                         .filter(|&s| s > 0.0 && !is_reference)

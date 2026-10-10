@@ -132,6 +132,7 @@ pub fn windowed_zncc(a: &TilePlanes, b: &TilePlanes, window: &[f64]) -> f64;
 
 // patch::stored_bitmap: each observation against the stored bitmap.
 pub fn bitmap_planes(rgba: &[u8], resolution: usize) -> TilePlanes; // alpha > 0 is data
+pub fn stored_bitmap_planes(bitmap: ArrayView3<u8>) -> Option<TilePlanes>; // a track's bitmap, 1 to 4 channels
 pub struct BitmapScore {
     pub plain_zncc: f64,
     pub plain_zncc_middle: f64,     // the same pair over the middle square, window weights

@@ -1746,18 +1746,20 @@ fn a_refused_walk_is_on_the_wire_and_sighting_its_pixel_accepts_it() {
         to[1].as_f64().expect("a number"),
     ];
     assert!(measured["walked_px"].is_number(), "{measured}");
-    assert!(
-        measured["walked_plain_zncc"].is_number() || measured["walked_plain_zncc"].is_null(),
-        "{measured}"
-    );
-    // The blur-matched readings of the tile there sit beside the plain ones,
-    // present exactly where they are.
-    for part in ["", "_middle", "_grid"] {
-        assert_eq!(
-            measured[format!("walked_plain_zncc{part}")].is_null(),
-            measured[format!("walked_blur_matched_zncc{part}")].is_null(),
-            "{measured}"
+    // The fit rendered a bitmap, so the row is scored at its seed and the tile
+    // at the walked pixel is scored too, plain and blur-matched, whole, middle
+    // and per ninth.
+    assert!(measured["plain_zncc"].is_number(), "{measured}");
+    for set in ["walked_plain_zncc", "walked_blur_matched_zncc"] {
+        assert!(measured[set].is_number(), "{set}: {measured}");
+        assert!(
+            measured[format!("{set}_middle")].is_number(),
+            "{set}: {measured}"
         );
+        let grid = measured[format!("{set}_grid")]
+            .as_array()
+            .unwrap_or_else(|| panic!("no {set}_grid: {measured}"));
+        assert_eq!(grid.len(), 3, "{measured}");
     }
 
     call(

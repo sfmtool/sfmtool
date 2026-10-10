@@ -1193,6 +1193,8 @@ fn a_row_with_no_bitmap_to_read_against_is_unscored_and_left_alone() {
         assert_eq!(m.plain_zncc_middle, None, "row {i}");
         assert_eq!(m.plain_zncc_grid, None, "row {i}");
         assert_eq!(m.blur_matched_zncc, None, "row {i}");
+        assert_eq!(m.blur_matched_zncc_middle, None, "row {i}");
+        assert_eq!(m.blur_matched_zncc_grid, None, "row {i}");
         assert!(m.seed_shift_px.is_some(), "row {i}: the localizer read it");
         assert_eq!(m.reason, Some(Unmeasured::NoBitmap), "row {i}");
         assert!(bar_checks(observation, StageKind::Track, &read.thresholds).is_none());
@@ -6599,6 +6601,63 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
     assert!(scored > at_seed, "walked {scored}, at the seed {at_seed}");
     assert!(held.walked_plain_zncc_middle.is_some());
     assert!(held.walked_plain_zncc_grid.is_some());
+    assert!(held.walked_blur_matched_zncc.is_some());
+    assert!(held.walked_blur_matched_zncc_middle.is_some());
+    assert!(held.walked_blur_matched_zncc_grid.is_some());
+    // Both sets are the scorer's own reading of the tile at the walked pixel
+    // against the bitmap the fit rendered.
+    {
+        use crate::patch::member_coherence::MemberCoherenceParams;
+        use crate::patch::reference_view::render_view_tile;
+        use crate::patch::stored_bitmap::{stored_bitmap_planes, BitmapScorer};
+        let payload = fitted.track().expect("a track-stage payload");
+        let bitmap = payload.bitmap.as_ref().expect("the fit rendered a bitmap");
+        let bitmap = stored_bitmap_planes(bitmap.view()).expect("a square bitmap");
+        let frame = payload.placement.clone().expect("a track-stage frame");
+        let localize = EvaluateOptions::default().localize;
+        let tile = render_view_tile(
+            &frame,
+            &scene.views()[fitted.observations[0].image as usize],
+            Some(to),
+            localize.resolution.max(2) as usize,
+            localize.sampler,
+            &Progress::none(),
+        );
+        let direct = BitmapScorer::new(&bitmap, MemberCoherenceParams::default().window)
+            .score(&tile.planes(), None);
+        assert_eq!(held.walked_plain_zncc, Some(direct.plain_zncc));
+        assert_eq!(held.walked_plain_zncc_grid, Some(direct.plain_zncc_grid));
+        assert_eq!(
+            held.walked_blur_matched_zncc,
+            Some(direct.blur_matched_zncc)
+        );
+        assert_eq!(
+            held.walked_blur_matched_zncc_middle,
+            Some(direct.blur_matched_zncc_middle)
+        );
+        assert_eq!(
+            held.walked_blur_matched_zncc_grid,
+            Some(direct.blur_matched_zncc_grid)
+        );
+    }
+    let mut cleared = held.clone();
+    cleared.clear_walked_scores();
+    assert_eq!(
+        (
+            cleared.walked_plain_zncc,
+            cleared.walked_plain_zncc_middle,
+            cleared.walked_plain_zncc_grid,
+        ),
+        (None, None, None)
+    );
+    assert_eq!(
+        (
+            cleared.walked_blur_matched_zncc,
+            cleared.walked_blur_matched_zncc_middle,
+            cleared.walked_blur_matched_zncc_grid,
+        ),
+        (None, None, None)
+    );
     // A reading after the fit scores it again against the bitmap it reads.
     let (read, _) = evaluate_over(&scene, &edited, &fitted).expect("eight sightings in");
     let again = read.observations[0].track.as_ref().expect("a track slot");
@@ -6623,6 +6682,7 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
     assert_eq!(m.walked_px, None);
     assert_eq!(m.walked_to, None);
     assert_eq!(m.walked_plain_zncc, None);
+    assert_eq!(m.walked_blur_matched_zncc, None);
 }
 
 #[test]

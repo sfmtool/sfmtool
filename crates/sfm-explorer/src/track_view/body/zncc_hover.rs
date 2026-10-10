@@ -15,7 +15,8 @@
 //! blur-matched score was read on ([`blurred_bitmap_image`]).
 
 use sfmtool_core::bench::TrackMeasurement;
-use sfmtool_core::patch::blur_matched::{BlurScratch, TilePlanes};
+use sfmtool_core::patch::blur_matched::BlurScratch;
+use sfmtool_core::patch::stored_bitmap::stored_bitmap_planes;
 
 use super::reference::grid_lines;
 use super::tile::{CONTEXT_FACTOR, CONTEXT_HOVER_SIDE};
@@ -87,8 +88,20 @@ pub(super) fn zncc_hover_text(m: &TrackMeasurement, is_reference: bool) -> ZnccH
              direction, so it could replace the reference."
                 .to_string()
         }
-        None => "Read unblurred: the bitmap is not sharper than this row's tile along every \
-                 direction by the ratio of 1.25."
+        // The row carries its own sharpness reading but not the bitmap's, so
+        // the one reason the row can name for sure is a reading of its own
+        // that is missing.
+        None if !m
+            .zncc_self_similarity_ellipse
+            .is_some_and(|e| e.grid_px.axes.iter().all(|a| a.is_finite())) =>
+        {
+            "Read unblurred: this row's sharpness could not be read, so the bitmap was not \
+             blurred for it."
+                .to_string()
+        }
+        None => "Read unblurred: the bitmap was not blurred for this row. It is not sharper \
+                 than this row's tile along every direction by the ratio of 1.25, or its own \
+                 sharpness could not be read."
             .to_string(),
     };
     ZnccHoverText::Scored {
@@ -205,20 +218,8 @@ pub(super) fn blurred_bitmap_image(
     bitmap: ndarray::ArrayView3<'_, u8>,
     sigma: f64,
 ) -> Option<egui::ColorImage> {
-    let [h, w, channels] = [bitmap.shape()[0], bitmap.shape()[1], bitmap.shape()[2]];
-    if h != w || h == 0 || channels == 0 {
-        return None;
-    }
-    let samples: Vec<u8> = bitmap.iter().copied().collect();
-    let data: Vec<bool> = if channels == 2 || channels == 4 {
-        samples
-            .chunks_exact(channels)
-            .map(|p| p[channels - 1] > 0)
-            .collect()
-    } else {
-        vec![true; h * w]
-    };
-    let planes = TilePlanes::from_interleaved(&samples, h, channels, &data);
+    let planes = stored_bitmap_planes(bitmap)?;
+    let (h, w) = (planes.side, planes.side);
     let blurred = planes.blurred(sigma, &mut BlurScratch::default());
     let n = h * w;
     let level = |c: usize, k: usize| -> u8 {

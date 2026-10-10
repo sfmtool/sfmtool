@@ -35,7 +35,6 @@ use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
 
-use crate::patch::blur_matched::TilePlanes;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
@@ -55,7 +54,7 @@ use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
     SelfSimilarityParams,
 };
-use crate::patch::stored_bitmap::{bitmap_from_tile, BitmapScorer};
+use crate::patch::stored_bitmap::{bitmap_from_tile, stored_bitmap_planes, BitmapScorer};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -2161,25 +2160,11 @@ fn score_against_bitmap(
         return;
     };
     let resolution = first.1.resolution();
-    let planes = payload.bitmap.as_ref().and_then(|bitmap| {
-        let shape = bitmap.shape();
-        if shape[0] != resolution || shape[1] != resolution || shape[2] == 0 {
-            return None;
-        }
-        let channels = shape[2];
-        let samples: Vec<u8> = bitmap.iter().copied().collect();
-        let data: Vec<bool> = if channels == 4 || channels == 2 {
-            samples
-                .chunks_exact(channels)
-                .map(|p| p[channels - 1] > 0)
-                .collect()
-        } else {
-            vec![true; resolution * resolution]
-        };
-        Some(TilePlanes::from_interleaved(
-            &samples, resolution, channels, &data,
-        ))
-    });
+    let planes = payload
+        .bitmap
+        .as_ref()
+        .and_then(|bitmap| stored_bitmap_planes(bitmap.view()))
+        .filter(|planes| planes.side == resolution);
     let reference = payload.reference;
     // A bitmap the next render replaces is scored against by no row.
     let pending = next.bitmap_pending();

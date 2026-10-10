@@ -361,6 +361,30 @@ fn every_row_is_scored_against_the_stored_bitmap() {
             Some(direct.blur_matched_zncc),
             "row {i}"
         );
+        // The middle and the ninths, plain and blur-matched, are the scorer's
+        // too, the middle `None` where the scorer cannot read it.
+        let finite = |v: f64| v.is_finite().then_some(v);
+        assert_eq!(
+            m.plain_zncc_middle,
+            finite(direct.plain_zncc_middle),
+            "row {i}"
+        );
+        assert_eq!(
+            m.blur_matched_zncc_middle,
+            finite(direct.blur_matched_zncc_middle),
+            "row {i}"
+        );
+        let bits = |grid: [[f64; 3]; 3]| grid.map(|row| row.map(f64::to_bits));
+        assert_eq!(
+            m.plain_zncc_grid.map(bits),
+            Some(bits(direct.plain_zncc_grid)),
+            "row {i}"
+        );
+        assert_eq!(
+            m.blur_matched_zncc_grid.map(bits),
+            Some(bits(direct.blur_matched_zncc_grid)),
+            "row {i}"
+        );
         assert_eq!(m.bitmap_blur_sigma, Some(direct.blur_sigma), "row {i}");
         assert_eq!(
             m.sharper_than_bitmap,
@@ -915,6 +939,8 @@ fn assert_rendered_from(
     assert_eq!(m.plain_zncc_middle, Some(1.0), "{step}");
     assert_eq!(m.plain_zncc_grid, Some([[1.0; 3]; 3]), "{step}");
     assert_eq!(m.blur_matched_zncc, Some(1.0), "{step}");
+    assert_eq!(m.blur_matched_zncc_middle, Some(1.0), "{step}");
+    assert_eq!(m.blur_matched_zncc_grid, Some([[1.0; 3]; 3]), "{step}");
     // Every other row that has a tile is scored against the bitmap.
     for (i, o) in track.observations.iter().enumerate() {
         if i != row && o.verdict == Verdict::In {

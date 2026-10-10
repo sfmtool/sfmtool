@@ -311,6 +311,11 @@ pub struct TrackBody {
     /// that moves the track can change the bitmap and the blur. `None` is
     /// cached as the tile's is.
     blurred_bitmaps: HashMap<usize, Option<egui::TextureHandle>>,
+    /// The stored bitmap as the *ZNCC* hover draws it beside the blurred one:
+    /// at full brightness, unlike [`TrackBody::track_patch`], which dims a
+    /// bitmap kept for judging. Uploaded the first time a hover asks for it
+    /// and dropped with [`TrackBody::tiles`].
+    hover_bitmap: Option<Option<egui::TextureHandle>>,
     /// The track's own patch drawn left of the toolbar, uploaded, or `None`
     /// until it has been asked for since the track moved. The inner `None` is
     /// a track with nothing to show, cached as the tile's is. Dropped with
@@ -392,6 +397,7 @@ impl TrackBody {
             crops: HashMap::new(),
             crop_contexts: HashMap::new(),
             blurred_bitmaps: HashMap::new(),
+            hover_bitmap: None,
             track_patch: None,
             plots: HashMap::new(),
             rows: Vec::new(),
@@ -451,6 +457,7 @@ impl TrackBody {
         self.crops.clear();
         self.crop_contexts.clear();
         self.blurred_bitmaps.clear();
+        self.hover_bitmap = None;
         self.track_patch = None;
         if self
             .showing
@@ -1077,6 +1084,24 @@ impl TrackBody {
         texture.as_ref().map(|texture| texture.id())
     }
 
+    /// The stored bitmap at full brightness for the *ZNCC* hover, uploading
+    /// it if this is the first frame that has asked for it since the track
+    /// moved. `None` where the track has no bitmap at the track stage.
+    fn ensure_hover_bitmap(
+        &mut self,
+        ctx: &egui::Context,
+        track: &EditableTrack,
+    ) -> Option<egui::TextureId> {
+        let texture = self.hover_bitmap.get_or_insert_with(|| {
+            let sfmtool_core::bench::Stage::Track(payload) = &track.stage else {
+                return None;
+            };
+            let image = patch::stored_patch_image(payload.bitmap.as_ref()?.view())?;
+            Some(ctx.load_texture("bench_hover_bitmap", image, egui::TextureOptions::NEAREST))
+        });
+        texture.as_ref().map(|texture| texture.id())
+    }
+
     /// The stored bitmap blurred by `sigma` grid px for one row's *ZNCC*
     /// hover, uploading it if this is the first frame that has asked for it
     /// since the track moved. `None` where the track has no bitmap at the
@@ -1237,6 +1262,7 @@ impl TrackBody {
         self.crops.clear();
         self.crop_contexts.clear();
         self.blurred_bitmaps.clear();
+        self.hover_bitmap = None;
         self.track_patch = None;
         self.tiles_for = Some(key);
     }

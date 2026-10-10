@@ -475,6 +475,33 @@ pub fn bitmap_planes(rgba: &[u8], resolution: usize) -> TilePlanes {
     TilePlanes::from_interleaved(rgba, resolution, 4, &data)
 }
 
+/// The colour planes of a stored bitmap as a track holds it, `(R, R,
+/// channels)`: one channel grey, two grey and alpha, three RGB, four RGB and
+/// alpha, a sample whose alpha is `0` carrying no data. `None` for a bitmap
+/// that is not square or has no channels.
+///
+/// What the bench scores every row against ([`BitmapScorer`]), and what a
+/// display of the bitmap as blurred for a row blurs, so the picture is the
+/// tile the score read.
+pub fn stored_bitmap_planes(bitmap: ndarray::ArrayView3<'_, u8>) -> Option<TilePlanes> {
+    let [rows, cols, channels] = [bitmap.shape()[0], bitmap.shape()[1], bitmap.shape()[2]];
+    if rows != cols || rows == 0 || channels == 0 {
+        return None;
+    }
+    let samples: Vec<u8> = bitmap.iter().copied().collect();
+    let data: Vec<bool> = if channels == 2 || channels == 4 {
+        samples
+            .chunks_exact(channels)
+            .map(|p| p[channels - 1] > 0)
+            .collect()
+    } else {
+        vec![true; rows * cols]
+    };
+    Some(TilePlanes::from_interleaved(
+        &samples, rows, channels, &data,
+    ))
+}
+
 /// One observation's scores against the point's stored bitmap
 /// ([`BitmapScorer::score`]).
 #[derive(Debug, Clone, Copy, PartialEq)]

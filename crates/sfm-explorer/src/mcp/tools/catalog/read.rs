@@ -320,8 +320,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           plain_zncc_middle and plain_zncc_grid, and blur_matched_zncc, \
                           blur_matched_zncc_middle and blur_matched_zncc_grid; what is said \
                           below of the cluster block's zncc, zncc_middle and zncc_grid holds for \
-                          the track block's plain ones.) Both the cluster and the track block carry \
-                          zncc_middle beside zncc: the same samples correlated over only the \
+                          the track block's plain ones.) Both blocks carry a middle reading beside \
+                          the whole-patch one (zncc_middle at the cluster stage, \
+                          plain_zncc_middle and blur_matched_zncc_middle at the track stage): \
+                          the same samples correlated over only the \
                           middle square of the patch, half its width (rows and columns R/4 to \
                           R - R/4 of the patch grid, R being its size, given below). A high \
                           zncc with a low zncc_middle is an agreement \

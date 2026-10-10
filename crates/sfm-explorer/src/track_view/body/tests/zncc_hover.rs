@@ -6,6 +6,7 @@
 //! with no score, run through `Context::run_ui`.
 
 use sfmtool_core::bench::{TrackMeasurement, Unmeasured};
+use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 
 use super::super::zncc_hover::{
     blurred_bitmap_image, show_zncc_hover, zncc_hover_text, ZnccHoverText, ZnccHoverTiles,
@@ -42,6 +43,21 @@ fn scored(sigma: f64, sharper: bool) -> TrackMeasurement {
         sharper_than_bitmap: Some(sharper),
         seed_shift_px: Some(0.2),
         ..TrackMeasurement::default()
+    }
+}
+
+/// A round self-similarity ellipse of 0.6 grid px, the row's own sharpness
+/// reading.
+fn ellipse() -> SelfSimilarityEllipseUnits {
+    SelfSimilarityEllipseUnits {
+        grid_px: SelfSimilarityEllipse {
+            axes: [0.6, 0.6],
+            axes_is_at_least: [false; 2],
+            major_angle: f64::NAN,
+            matrix: [[0.36, 0.0], [0.0, 0.36]],
+        },
+        image_px: None,
+        patch: None,
     }
 }
 
@@ -108,9 +124,20 @@ fn an_unblurred_row_says_why_in_place_of_the_blurred_bitmap() {
     assert_eq!(textures, vec![BITMAP, TILE], "{text}");
     assert!(text.contains("Read unblurred"), "{text}");
     assert!(text.contains("could replace the reference"), "{text}");
-    let (textures, text) = drawn(&scored(0.0, false), false);
+    // A row with its own sharpness reading names both reasons the bitmap may
+    // not have been blurred; one without names the missing reading.
+    let mut read = scored(0.0, false);
+    read.zncc_self_similarity_ellipse = Some(ellipse());
+    let (textures, text) = drawn(&read, false);
     assert_eq!(textures, vec![BITMAP, TILE], "{text}");
     assert!(text.contains("ratio of 1.25"), "{text}");
+    assert!(text.contains("could not be read"), "{text}");
+    let (_, text) = drawn(&scored(0.0, false), false);
+    assert!(
+        text.contains("this row's sharpness could not be read"),
+        "{text}"
+    );
+    assert!(!text.contains("ratio of 1.25"), "{text}");
 }
 
 /// The reference's own row draws the bitmap alone and says its score is 1
