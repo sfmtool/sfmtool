@@ -235,7 +235,8 @@ impl PyEditedReconstruction {
     ///     the template, which the bars judge), ``judged``, ``bar``, and the lists
     ///     ``references``, ``reference_zncc`` (each reference's blur-matched
     ///     score against the template, ``1.0`` for the reference observation
-    ///     where the template is its render), ``reference_pair_zncc``
+    ///     where the template is its render; empty for a candidate refused
+    ///     before it was scored), ``reference_pair_zncc``
     ///     (row-major ``n × n``) and ``pair_zncc`` (plain, the pair rule's),
     ///     with ``template`` (``"stored_bitmap"``,
     ///     ``"reference_observation"``, ``"fused_mean"``, or ``None`` before the

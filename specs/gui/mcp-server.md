@@ -659,7 +659,7 @@ looking at is the one at the cursor, and this block reports it.
     "state": "current",              // current | evaluating | refused | failed
     "reason": null,                  // the sentence of a refusal or failure
     "running": false,
-    "thresholds": { "min_zncc": 0.8, "min_zncc_middle": 0.7,
+    "thresholds": { "min_zncc": 0.70, "min_zncc_middle": 0.50,
                     "cluster_min_zncc": 0.7, "cluster_min_zncc_middle": 0.7,
                     "max_shift_px": 6.0,
                     "max_zncc_self_similarity_radius": 2.5,

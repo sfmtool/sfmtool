@@ -949,12 +949,7 @@ fn a_candidate_refused_before_scoring_carries_no_reference_scores() {
     let mut refused = 0;
     for c in &report.candidates {
         match c.refusal {
-            Some(
-                Refusal::Unlocalizable
-                | Refusal::NoPeak
-                | Refusal::PeakAtEdge
-                | Refusal::Unscorable,
-            ) => {
+            Some(Refusal::Unlocalizable | Refusal::NoPeak | Refusal::PeakAtEdge) => {
                 refused += 1;
                 assert!(c.reference_zncc.is_empty(), "{:?}", c.refusal);
             }

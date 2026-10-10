@@ -804,13 +804,13 @@ row reads 1. The Python tests are in
 - **Directional blur.** No tile is blurred along one direction more than
   another. A view blurry along one direction only is read plain against a view
   sharp along it (§ "Which tile is blurred, and to what length").
-- **The bench's ZNCC bars blur-matched.** The bars judge each row's plain
-  score against the stored bitmap; blur-matched, they would stop reacting to
-  views that are out of focus. The localizer's own gates, which read each
-  view's plain ZNCC against the reference render it aligns the view to, and
-  Track at Pixel's median gate, which reads the plain score against the
-  bitmap, are not blur-matched either: the alignment runs against the
-  unblurred template, and the gates judge the score at its peak.
+- **Blur-matched alignment and pairwise rules.** Every bar and gate judges
+  the blur-matched score (§ "What reads the scores"), but two readings stay
+  plain: the alignment, which places each view against the unblurred
+  template, since a blurred template places views no closer and lowers the
+  peak's curvature; and Add Image to Tracks' pair rule, which reads the
+  search's plain pairwise ZNCCs between views rather than a score against the
+  template.
 - **The fused means' IRLS residuals.** The stored bitmap is the reference
   view's tile, not a mean ([reference-view.md](reference-view.md) § "The
   stored bitmap"). The kernels that still build a weighted mean as their

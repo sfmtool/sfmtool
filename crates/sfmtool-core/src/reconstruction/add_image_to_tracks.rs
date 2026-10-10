@@ -338,8 +338,9 @@ pub struct CandidateReport {
     /// keypoint, read as the bench reads a row against the stored bitmap;
     /// `1.0` for the reference observation where the template is its render.
     /// The scores the track and pooled bars are set from. Empty for a
-    /// candidate refused before its new view was scored, so the report holds
-    /// only blur-matched scores.
+    /// candidate refused before its new view was scored, so `reference_zncc`
+    /// holds blur-matched scores only; the plain pairwise
+    /// [`Self::reference_pair_zncc`] remains.
     pub reference_zncc: Vec<f64>,
     /// The references' pairwise ZNCCs, row-major `n × n`, as the search reads
     /// them (plain): what the pair rule reads.

@@ -198,7 +198,8 @@ For a point `p` with existing observations in images `J`, and the target image
    (`pair_zncc`), which the pair rule reads, is the search's, read plain. A
    point with no stored bitmap is scored against the render it would store, so
    no point needs another path. A candidate refused before this step carries
-   no `reference_zncc`, so the report holds blur-matched scores only, and a
+   no `reference_zncc`, so `reference_zncc` holds blur-matched scores only
+   (the plain `reference_pair_zncc` remains), and a
    target whose tile cannot be read against the template (a `NaN` score) is
    `unscorable`.
 6. **Judge.** The rule decides (below). `min_zncc` is a floor the basis rules

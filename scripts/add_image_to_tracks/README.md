@@ -24,6 +24,9 @@ to the rule is measured with.
 - `summarize.py`: the per-dataset, per-pose, per-strategy tables.
 - `misses.py`: every known track a rule refused, with the numbers behind the
   refusal and the original observation's own distance from its projection.
+  Its `ref_zncc_min` and `ref_zncc_median` are `None` for a miss refused
+  before its new view was scored (`no_peak`, `peak_at_edge`,
+  `unlocalizable`), which carries no reference scores.
 
 ```bash
 pixi run -e test python scripts/add_image_to_tracks/harness.py     --dataset seoul_bull --cache <dir> --out <dir> [--images 0,3] [--strategies default]
