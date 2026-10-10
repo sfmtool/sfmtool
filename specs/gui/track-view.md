@@ -403,7 +403,8 @@ tick.
 
 **Start cluster on the bench here raises Track View.** It turns Edited mode on,
 which makes it the same kind of gesture as *Edit on Bench*, and that one raises
-because a track staged into a panel nobody can see is a gesture with no answer.
+because a track staged into a panel that is not on screen gives the person
+no sign of what the gesture did.
 Neither raise covers the panel the gesture was made in: when Track View is a
 tab in that panel's node, it stays behind it, and the bench layer there shows
 the focused item ([panel-layout.md](panel-layout.md) § "A raise from a
@@ -500,7 +501,7 @@ layer", [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 
 With *Edit* clear and no point selected on the selected node, the panel draws
 its empty state: `No point selected` above a **Go to Point...** button, which is
-where a person with an ID in hand and no idea how to feed it in looks
+where a person who has an ID and does not know where to enter it looks
 ([goto-point.md](goto-point.md)). Under the button one line names the item a
 tick of *Edit* goes back to when there is one, *"Tick Edit to edit
 pt3d_a1b2c3d4_1207 again, click a recent item beside it, or double-click an item
@@ -558,7 +559,7 @@ panel was showing. The panel is handed `&AppState` and cannot build it, so the
 dock asks for it before drawing the panel (`AppState::refresh_viewed_track`).
 
 **What Viewed mode reads.** Everything about the point, including its position,
-colour and error, its whole track, each observation's keypoint, its patch frame
+colour and error, its whole track, each observation's keypoint, its patch placement
 and stored bitmap, and its triangulation diagnostics, is read through the
 version's overlay accessor rather than off the base, so a point an edit modified
 shows the track it holds now.
@@ -663,7 +664,7 @@ point a metre from the world origin. So the line is `Bearing (x, y, z), at
 infinity` for a bearing and `Position (x, y, z)` otherwise, *at infinity* being
 the Viewed header's word for the same thing. It comes from the track's own
 `at_infinity` and not from its patch's `w`, so a point put on the bench from a
-reconstruction with no patch frames reads as the bearing it is. A fit that
+reconstruction with no patch placements reads as the bearing it is. A fit that
 crosses the boundary changes the headline's first word, which is how a person
 sees that it crossed. The same flag puts **an infinity mark** (∞, U+221E, which
 egui's bundled fonts draw) left of the label, as the Viewed header puts one left
@@ -749,8 +750,9 @@ the point on the bench again"* -- in place of any state.
 [`edits/commit-track.md`](edits/commit-track.md)'s; the panel's part is that the
 point the commit produced becomes the selection, whether it replaced a point or
 created one, so the viewport's track rays and the observing frustums look at what
-was just written. The dock drops what the panels cached about
-the node's points in the same breath. **A commit of a track the point already
+was just written. A commit that pushes a version also makes the dock drop
+what the panels cached about the node's points, since that describes a value
+the node no longer holds. **A commit of a track the point already
 holds writes nothing**, and the button is not greyed for it: the press pushes no
 version and records the no-effect row *"Committed bull-nose: no effect, point
 4211 already holds this track"*, with that point selected.
@@ -1013,9 +1015,7 @@ cannot toggle a switch it passes over. A drag on the rows keeps moving briefly
 after the button is released, as egui's scroll area does on a touch screen.
 The scroll area drags on a touch screen only unless it is asked to drag always
 (`ScrollSource::ALL`), and the headings and the threshold row are outside it,
-so a drag of either is added to its offset by the panel. The tests cover a
-sideways wheel in both units, a middle and a left drag over the rows and the
-headings, and a drag begun on a switch.
+so a drag of either is added to its offset by the panel.
 
 The image's index is the first column, at the table's left edge, under
 *Img*; the crop of the photograph around the patch's outline is the second,
@@ -1419,7 +1419,7 @@ could not be evaluated. Where the rule reached its pick only through its last
 fallback, a render the rule decides stores the fused mean of the `in` rows,
 naming no row
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
-stored bitmap"). On a file with patch frames but no stored bitmaps, the bitmap
+stored bitmap"). On a file with patch placements but no stored bitmaps, the bitmap
 is the one SfM Explorer rendered for display when it opened the file, and the
 reference is the row it was rendered from: the file's reference observation,
 or the display render's own pick for a point the file stores at `-1`, held by
@@ -1436,7 +1436,7 @@ ratio of 1.25) and the blur-matched score prints differently, the first line
 carries it after an arrow, `50% ⏵ 53% whole`; otherwise it is one number. The
 reference's own row reads `100%`, which is not computed. The bars judge the
 plain score, and the cell and the grid are coloured by them. The bars are not
-there to catch focus: a blurred view of the right place is one to keep, and
+meant to turn away an out-of-focus view: a blurred view of the right place is one to keep, and
 the plain score is the one the bar was measured on
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Parameters"). Hovering the numbers (`reference::zncc_hover`)
@@ -1490,7 +1490,7 @@ its wider patch the same way, with the row's sampler and at the tile's
 sampling, so each texel picks the level the tile's own texel there does and the
 tile is still the middle of the picture texel for texel.
 
-**The track-stage frame is re-anchored on the observation's keypoint**
+**The track-stage tile's placement is re-anchored on the observation's keypoint**
 (`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
 the patch centre slides within its own plane, on its tangent sphere for a point
 at infinity, until it projects onto the keypoint this observation carries. The
@@ -1499,7 +1499,7 @@ aligned the pixels rather than at the point's geometric projection. The tiles of
 a well-localized track then match each other whatever discrepancy the geometry
 carries, and that discrepancy is what the *Proj. err* column reports: a column
 of matching tiles beside a large error is a well-aligned patch whose position or
-pose is off, not a bad match. The stored frame is used as it is when the
+pose is off, not a bad match. The stored placement is used as it is when the
 observation has no keypoint or the keypoint's ray cannot meet the patch
 (`patch::render_frame`).
 
@@ -1521,7 +1521,7 @@ lower levels where a warp shrinks the photograph. A failed decode is
 remembered so a missing file is not reopened every frame. Before the body
 draws, the dock asks for every image the drawn track observes: the focused
 item's in Edited mode, and in Viewed mode the selected point's, when the
-reconstruction carries patch frames, with the SIFT cache filled for them on a
+reconstruction carries patch placements, with the SIFT cache filled for them on a
 `sift_files` reconstruction. Asking (`state::display_photograph`) starts a
 decode on the rayon pool for each photograph the cache does not hold, and
 repaints when it lands; the body only peeks at the cache, and a row whose
@@ -1534,7 +1534,7 @@ first.
 over three times the patch's width (`tile::CONTEXT_FACTOR`), 288 points across,
 so a person can see what surrounds the patch and whether it sits on the surface
 they meant. The wider picture is rendered at the tile's own sampling, so the
-tile is its middle third texel for texel: at the track stage the tile's frame,
+tile is its middle third texel for texel: at the track stage the tile's placement,
 re-anchored where the observation sits, is widened three times about its centre
 and warped at three times the tile's resolution; at the cluster stage the kernel's
 sampler reads the member grid over three times the cluster's radius at three
@@ -1546,7 +1546,7 @@ reads. Over the picture are drawn:
 - at the track stage, a ring where the track's point projects into this
   photograph, or, before the track is triangulated, where its patch's centre
   projects: the other end of the distance the *Proj. err* cell reports. The
-  projected pixel is read onto the widened frame's plane
+  projected pixel is read onto the widened placement's plane
   (`OrientedPatch::keypoint_plane_offset`, the reading that anchors the tile),
   so the ring sits on the part of the photograph the picture shows at that
   pixel;
@@ -1576,7 +1576,7 @@ it. The crop is the photograph itself, cut around the outline Image Detail's
 bench layer strokes for the row, with that outline over it in the row's
 verdict colour and none of the layer's other marks: no dot, no normal, no SIFT
 features. At the track stage the outline is the patch re-anchored where the
-observation sits (`crate::bench::geometry::anchored_frame`, the frame the tile
+observation sits (`crate::bench::geometry::anchored_frame`, the placement the tile
 is rendered through) with its boundary projected through the camera's own
 model (`geometry::project_outline`, the function Image Detail strokes), so on a
 fisheye the edges show as the curves they are. At the cluster stage it is the
@@ -1652,7 +1652,7 @@ applying the bars makes it. For a pinned row it is what unpinning it would
 make it: its bars, and whether its image is free -- not already held by a
 pinned `in` sighting of the same image, or by an unpinned one the painting
 takes because it scores better. A switch that is on in a red cell, or off in a
-green one, is a hand ruling against the bars. The switch's hover text says what
+green one, is a verdict set by hand against what the bars propose. The switch's hover text says what
 the switch and the pin say, then why the bars propose what they do: that the
 row clears every bar, or which bars it fails, named as the headings name the
 readings (`ZNCC whole is under the bar`, `ZNCC mid is under the bar`, `Shift is
@@ -1814,22 +1814,22 @@ index the cluster patches are judged against, has moved. A session so finds the
 files the last one built without anyone asking, and a look that found nothing
 is remembered, so a node with neither file is not checked on every frame.
 
-#### A point with no patch frame
+#### A point with no patch placement
 
-A reconstruction whose points carry no patch frame, which is the usual case for
+A reconstruction whose points carry no patch placement, which is the usual case for
 a `sift_files` reconstruction imported from COLMAP, is drawn as any other, and
 what that shows is less than the rest of this section describes. `create_track`
-builds a track-stage track with no frame, and core's `evaluate_preconditions`
+builds a track-stage track with no placement, and core's `evaluate_preconditions`
 refuses it, so the toolbar shows the refusal sentence (*"Cannot evaluate
 pt3d_…: the track carries no patch to read against; …"*) and every
 number cell reads `-`, the reprojection error and ray angle included, and every
 *Verdict* cell `-`. The *Crop* and *Patch* cells are empty frames, and there is
 no crop hover view to carry the pixel and the feature index. The header still
 carries the point's summary (its colour, `xyzw`, error, track length, max pair
-angle, depth z and cond), which reads the point and needs no frame. So for such
-a point the panel shows its header and no per-observation readings. Which
-readings a frameless evaluation should produce and what the *Crop* cell would
-show without a frame are not decided here (§ "Non-goals").
+angle, depth z and cond), which reads the point and needs no placement. So for
+such a point the panel shows its header and no per-observation readings. Which
+readings an evaluation without a placement should produce and what the *Crop*
+cell would show without one are not decided here (§ "Non-goals").
 
 **Such an item is not edited here.** A `sift_files` reconstruction's bench is
 view-only ([`bench.md`](bench.md) § "A view-only bench"): every toolbar button
@@ -1837,7 +1837,7 @@ but *Discard* and *Rename*, the threshold boxes, the *Keep* switches and pins
 and the row menus' editing entries are greyed and take no click, with the
 sentence that names Convert to Embedded Patches as their hover. After the
 conversion, putting the point on the bench again (*Edit*, *Edit on Bench* or a
-double-click) rebuilds the item with the point's new patch frame, and from
+double-click) rebuilds the item with the point's new patch placement, and from
 then on it is edited like any other.
 
 #### The gestures that name a pixel
@@ -1926,234 +1926,219 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 
 ## Testing
 
-- **The panel**,
-  [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs),
-  headless through `Context::run_ui`, each frame asking for the viewed track
-  first as the dock does: the box reads the focused item, Edited mode
-  drawn with a focused item and Viewed mode on the origin without one, and following an
-  unfocus and a focus made outside the panel with no panel call in between;
-  ticking it over a selected point reporting `set_edit`, and applied, one
-  version putting the point on the bench, with a second tick after a clear
-  focusing the existing item and pushing no version; clearing it reporting
-  `set_edit`, no version and one `Selection` row `Stopped editing ...`, and the
-  next frame drawing the selected point's header; the box greyed with no point
-  selected and no item focused this session, a click on it reporting nothing,
-  the refusal naming the three ways in and the empty state carrying the bench
-  line; with no point selected and an earlier item, the box live, its hover
-  text `Tick to edit {label} again`, the empty state naming the item, and the
-  tick focusing it and selecting its origin with no version; the tick going
-  back to an item on another node, selecting that node, and passing over a
-  discarded item; a busy node greying the box only over a point not on the
-  bench; the empty state counting the items on a bench with none focused and
-  none recent; the empty state's *Go to Point...* asking for the dialog and an
-  idle frame not asking; a deleted and an out-of-range point taking the empty
-  state; a discard of the focused item leaving Edited mode; Edited mode
-  on a cluster drawing the cluster headline; a point selected while editing
-  drawing that point in Viewed mode with no version; and no
-  reconstruction drawing no box. The recent items strip, in the same module:
-  the chips most recent first with the focused item left out, the label cut in
-  its middle, and the item just left first after a clear; at most eight on a
-  wide panel, the most recent few on a narrow one, and none when the row has no
-  room beside the box; a chip click reporting `focus_item`, and applied,
-  focusing the item and selecting its origin with no version while a
-  background task holds the node; a rename keeping the chip under the new
-  label; a discard hiding the chip and its undo bringing it back; a chip for an
-  item on another node naming that node in its hover text and, clicked,
-  selecting that node, the item and its origin; the hover text's label, stage,
-  counts, origin, position, evaluation state and *Click to edit*, and no node
-  name with one reconstruction loaded; and the track's patch drawn from the
-  same texture on a second frame, a cluster with no template drawing an empty
-  frame, and its hover text saying it is new.
-- **The selection rules**,
+The panel is tested headless. A test draws it through egui's
+`Context::run_ui` with no window, asks for the viewed track before each frame as
+the dock does, and applies what the panel reports through the `AppState`
+methods the dock calls, so one test covers a gesture and the step it leads to.
+The body records what the table drew on every frame, not only under test, so an
+assertion about a row reads the table the app draws. The hover views are pure
+functions of the track, the observation and the photograph (`tile::context`)
+that return the box, the keypoint and the projection in the picture's own
+texels, so their geometry is checked without reading pixels off the screen.
+
+- **The box, the empty state and the recent items strip**:
+  [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs).
+  These tests establish the rules of § "The Edit checkbox" and § "Transitions"
+  that the box itself carries out: the mode follows the focused item, including
+  a focus or an unfocus made outside the panel with no call into it in between;
+  a tick over a point puts it on the bench in one version, and a second tick
+  after a clear focuses the same item with no version; a clear writes one
+  `Selection` row and no version, and the next frame shows the point in Viewed
+  mode; a tick with no point selected goes back to the most recent item on any
+  node, passing over a discarded one, and the hover text and the empty state
+  name that item first; with nothing to go back to the box is greyed, its
+  refusal names the three ways in, and a click on it reports nothing; and a busy node greys the box only over a point
+  not on the bench. They also cover the three forms of the empty state's line
+  and its *Go to Point...* button (§ "No point selected"), a deleted and an
+  out-of-range point taking the empty state, a discard leaving Edited mode, a
+  cluster drawn with the cluster headline, another point selected while editing
+  drawn in Viewed mode with no version, and no box with no reconstruction. For
+  the strip (§ "The recent items strip") they cover the order, the label cut in
+  its middle, how many chips a width holds, a click focusing the item and
+  selecting its node and origin with no version while a background task holds
+  the node, every line of the hover text, a discarded item's chip hidden and
+  brought back by the undo, and a chip keeping its place under its new label
+  after a rename. A chip's patch is uploaded once and drawn from the same
+  texture on the next frame, and a cluster with no template draws an empty
+  slot and its hover text says the item is new. That `set_editing` reads a
+  selected point the version at the cursor no longer holds as no point
+  selected, as the box does, so that a tick goes back to the most recent item
+  with no version rather than putting the missing point on the bench, is
+  tested in [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs)
+  § "The focused item".
+- **The selection rules**:
   [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs) § "The
-  selection rules": another point selected unfocusing with one `Stopped
-  editing` row and no version; the origin, a cleared point, an image or a
-  camera of the node, the node row and a cleared selection keeping the item
-  focused; an image, a camera, a point or the node row of another node
-  unfocusing; focusing selecting the node and the origin, or clearing the point
-  and keeping an image of that node for an item with no point; every put
-  (from a point, a cluster, a duplicate, a split) selecting what it focused;
-  clearing Edit and a discard selecting the origin or clearing the point, the
-  node staying selected; an item whose origin was deleted staying focused
-  through the deletion and focused with no point; a commit keeping the item
-  focused, a duplicate gaining an origin by its commit, and the undo of that
-  commit leaving it focused with no point selected; an undo past the put
-  unfocusing with the selection unchanged; and the recent list most recent
-  first, once each, skipping an item not on the bench and bringing it back on
-  the undo, pruned when its node closes and emptied by *Close All*. The wire's
-  half is in [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs)
-  (`select_point` unfocusing with no version, `focus_bench_item` and
-  `unfocus_bench_item` selecting the origin). The handle's claim on a click is
-  in [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs)
-  (a click on the ghost's centre over a feature of another point selecting no
-  point) and [viewer_3d/tests.rs](../../crates/sfm-explorer/src/viewer_3d/tests.rs)
-  (a click on the dot, a corner or an edge requesting no point pick).
-- **Viewed mode**,
-  [body/tests/viewed.rs](../../crates/sfm-explorer/src/track_view/body/tests/viewed.rs):
-  the body drawing the point's ID, the line saying how to change the track, no
-  toolbar button and no *Lock*, and a click on the verdict cell being the row's
-  with no verdict step; the headings matching Edited mode's with *Verdict* in
-  place of *Keep* and no *From*; each *Verdict* cell `in` or `out` as
-  `verdicts_if_unpinned` gives it, tinted to match, with the failing bar in its
-  hover text under strict bars, and `-` untinted on an unmeasured row; a drag
-  of each of the five boxes reporting the bars, recolouring the ZNCC readings
-  and the *Verdict* cells, and leaving every verdict `in`, the viewed track
-  unchanged, no version and no row; the bars surviving a selection change; the
-  "On the bench as …" line when an item from the point exists; the header's
-  summary for the viewed track and for a bench item at the track stage, and
-  none for a cluster; the crop caption's pixel and feature index, and the
-  `.sift` feature a row put on by index names; a frameless point drawn with its
-  refusal sentence and its header, empty *Crop* and *Patch* frames and `-`
-  cells; *Evaluating…* until the viewed evaluation lands and *Evaluated* after;
-  a row click selecting and revealing with no row pick, a double-click asking
-  for camera view; the header's go-to button; and the infinity mark left of a
-  point at infinity's ID and absent for a finite point.
-- **Edited mode**,
-  [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs), with
-  what the table drew recorded unconditionally so the assertions read the table
-  the app draws: nothing drawn with nothing focused; **no *Evaluate* button**,
-  the toolbar reading *Evaluating…* until the evaluation of a track just put on
-  the bench lands and *Evaluated* after it; every Status cell reading
-  *Evaluating…* until then and again after a verdict; a frameless bearing on the
-  bench showing core's refusal sentence where the state would be; **no item tabs**, the labels
-  of two other items on the bench appearing nowhere in what the frame painted; a
-  row per observation in index order; the *Reference* column marking the
-  reference and the rule's pick once the track is evaluated, `reference` on the
-  reference and `pick` on a pick that is not the reference; the marks green
-  for a reference the rule picks, red for one it does not with the pick grey,
-  and the pick alone for a track with a fused-mean bitmap or none, with the
-  hover naming the other row and how to accept the pick, and sorting by the
-  column putting the reference first and the pick next; every row printing its
-  viewing angle and pair ZNCC with the readings on hover, and the cell's word
-  and reason for each test that turns a row away, a dropped test, an `out` row,
-  the cluster stage and a refused evaluation; a verdict under the same observation index,
-  pinned; the *Keep* switch's cell taking a click the row behind it does not,
-  and turning a kept row out; a click on the pin pinning an unpinned row's
-  verdict as it stands and unpinning a pinned one, and *Unpin* offered from the
-  switch's menu
-  and the row's, a second unpin being no effect; the row menu on a row of a
-  multi-row selection unpinning every pinned selected row with the count in its
-  label, while the switch's menu names its row alone; the *Keep* heading's pin
-  unpinning every pinned row as one version, and with none pinned asking to pin
-  every row, which pins them as one version with one log row and keeps each
-  verdict, undoes in one step, and makes the next click unpin them all again;
-  its hover text in both states and its accessible name; the header counting kept, out
-  and pinned rows; the header printing the point's
-  ID once, beside a renamed label, and the old index for a point that is gone,
-  and a track from a point resolving the ID its copy button copies; a hover on
-  an elided name showing it whole, with the row still hovered; the *Keep*
-  cells' proposals matching what applying the bars produces on unpinned rows and
-  a drag leaving a pinned verdict; each line of the ZNCC cell judged by its own
-  bar, whole passing while mid fails and the reverse; the projection error, the
-  self-similarity middle, the status, the middle ZNCC with its bar off, a
-  missing reading, an unmeasured row and a refused evaluation drawn plain; a
-  drag of the boxes changing the judgement without stepping the track; a pinned
-  `in` row ruled against the bars proposed `out` with the failing bar in its
-  hover text, and unpinning it turning it `out`; of two sightings in one image
-  that clear every bar, the one that loses the image proposed `out` with the
-  image named in its hover text; the *Img* column at the table's left edge,
-  the crop after it under *Crop*, the tile after that under *Patch* and *Keep*
-  after them; the
-  headings as tall as the cells; the
-  cells following the stage; every row's tile at both stages,
-  and a fresh row's cut around its seed; a tile's hover view at both stages
-  holding the tile texel for texel in its middle third with the keypoint at the
-  box's centre, its projection mark mapping back through the picture's own frame
-  onto the projected pixel at the row's reprojection error, no mark at the
-  cluster stage, and resting the pointer on a tile showing the view for that
-  row alone while the row keeps its hover and its click; every row's crop at
-  both stages, the crop square,
-  holding every sample of the outline at least one pixel inside it, centred to
-  within the rounding and less than two pixels from both edges on its longer
-  side, its texels the photograph's own pixels, its hover view holding it
-  texel for texel in the middle third with the outline and the dot moved by one
-  crop, the hover view's dot on the observation's pixel and its ring on the
-  point's projection at the row's reprojection error with the caption stating
-  it, and no ring at the cluster stage, the axes
-  matching the projected edge midpoints' distance at the track stage and the
-  shape's columns at the cluster stage and printed in the caption, and resting
-  the pointer on a crop showing the view for that row alone while the row keeps
-  its hover and its click; the boxes showing the track's
-  bars outside a drag, following them when a step, an undo or a redo moves them,
-  and re-seating on another item; each box of the threshold row standing
-  under the heading of what it judges, whole over mid in the ZNCC column, and the
-  geometry search box above the table; a drag of the shift box pushing exactly one
-  version and one row on its release, with the track's bar where it was let go
-  and an undo taking bar and box back; no *Apply thresholds* button drawn; a
-  fit after a release to a zero bar keeping sightings at their seeds, *Accept
-  walk* absent from a row before that and offered on exactly the kept rows
-  after, reporting the observation, and accepting it moving the keypoint to the
-  walked pixel, pinned, in one version; the Status cell's reading sentence and
-  its `walked` form with and without the walked ZNCC; the ZNCC cell's
-  `whole / middle` percent form at both stages, and `-` for a missing middle; the
-  header's `Bearing (...)` and `Position (` lines; the infinity mark first in a bearing's header and absent from a position's; the track's patch slot empty before a fit and filled with the patch bitmap after it, with the toolbar to its right and the table's first heading not; the cluster stage's slot following whether a template is cut; a bitmap of one, three or four channels drawn opaque and an all-zero one not drawn; the row menu's search entries
-  and their remedies; a row click reporting the image and the pixel, and a
-  double-click asking for camera view with the pixel; *Lock* starting ticked, a
-  click clearing it and a second ticking it again with no version pushed and no
-  gesture reported, and the box drawn greyed at the cluster stage, where a click
-  leaves it as it was; the tile's frame re-anchored on each observation's own keypoint
-  and kept as stored with no keypoint and where the keypoint's ray cannot meet
-  the patch; a shrinking tile read from mip level 2 throughout and one that
-  shrinks nothing plain bilinear to the bit; the centre Jacobian of a
-  fronto-parallel patch diagonal at its width over the fallback `R` of 24, and
-  not over the tile's 64 texels, of a patch turned 30
-  degrees in its plane carrying the turn with its signs, and of a slanted patch
-  giving a range of zooms; a zoom for a tile whose middle is off the photograph,
-  the same as on it, none for a patch behind the camera, and none for a patch
-  seen edge on; a zoom read from the patch re-anchored on a keypoint moved a few
-  px off the projection, exactly that placement's Jacobian; a reconstruction
-  with no patch bitmaps giving every row the Jacobian at 24, and the same rows
-  with 48 px patch bitmaps a Jacobian half the size and zooms twice as large;
-  each row's *Zoom*
-  cell printing the zoom of its tile's Jacobian, and the same with no photograph
-  decoded; a click on *Zoom* ordering the rows by mean zoom both ways, a row
-  with no zoom last either way; the rows starting in increasing order of image,
-  a click on *Img* reversing that and a second putting it back; a click on
-  *Proj. err* ordering the rows largest error first and a second click smallest
-  first; a click on *Keep* ordering them by how many bars they fail, most first,
-  and a second click fewest first; a first click on each heading, *Reference*
-  among them, starting worst first where a bar judges the column
-  and increasing where none does, and a second click reversing; the track-stage
-  *ZNCC* cell printing the plain score against the bitmap with the
-  blur-matched one after an arrow where they print differently and one number
-  otherwise, `100%` on the reference, `-` with the reason in the Status cell
-  and the hover for a row with no score, and the hover giving the blur, the
-  `sharper` note and the leave-one-out ZNCC; after a fit, no *Bitmap* heading,
-  exactly one row marked as the reference, the one the stored bitmap names,
-  reading 100%, and every other row scored; *Set as reference* offered on an
-  `in` row with a keypoint only, greyed on the held reference, and the step
-  holding the row as the reference and the evaluation after it rendering the
-  bitmap from it; a row with no key sorting last
-  both ways, with ties in increasing order of image; every heading but *Crop*,
-  *Patch* and *From* ordering the rows; the *Verdict* text of an `out` row
-  counting the bars it fails, `out (2)`, and `out` alone for one that fails
-  none; the *Zoom* cell's two significant digits chosen after rounding, with both numbers printed where they agree; the
-  *Self-similarity* hover's table of ellipses in grid px, image px and world
-  space, each as major × minor axis and angle, with `+` on a lower bound and no
-  angle on a circle, every world length scaled to the one
-  unit its largest picks (metres to mm and µm, cm kept, feet to inches) with
-  the `+` kept, bare numbers under *scene units* with no unit on the file, in
-  scientific form under 0.001 and plain from there up, the whole table for a
-  patch at infinity in degrees, and for the cluster stage with `-` in the world
-  row, and an evaluated row carrying exactly the ellipses its measurement carries
-  at both stages; and a long image name cut in its middle, keeping the start of
-  the path and the end of the file name.
-- **The Scene tree**,
-  [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
-  single click on a Bench row selects its node and pushes no version; a
-  double-click from either group focuses, selects the node and raises the
-  panel with no version and one `Editing ...` row; a double-click on the
-  focused item pushes no version and writes no bench or selection row;
-  and the raise survives a double-click made while the dock is swapped out.
+  selection rules". These tests establish the invariant of § "Transitions" for
+  every gesture `AppState` decides rather than the panel: which selections keep
+  the item focused and which unfocus it, with one `Stopped editing` row and no
+  version; that a focus, every put and a clear select what § "Why each
+  transition is the one it is" says they select, a focus of an item with no
+  origin clearing the point and keeping a selected image of that node; that an item stays focused
+  through the deletion of its origin, through a commit, which gives a duplicate
+  its origin, and through the undo of that commit, with no point selected; that
+  an undo past the put unfocuses and leaves the selection as it was; and the
+  recent list's order, skipping and pruning. The same rules over the wire are
+  in [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs).
+  That a press on a bench-layer handle selects no point (§ "The selection and
+  the focused item") is tested in
+  [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs),
+  for the ghost's centre over a feature of another point, and in
+  [viewer_3d/tests.rs](../../crates/sfm-explorer/src/viewer_3d/tests.rs), for
+  the dot, a corner and an edge.
+- **Viewed mode**:
+  [body/tests/viewed.rs](../../crates/sfm-explorer/src/track_view/body/tests/viewed.rs).
+  These tests establish what § "One body in two modes" gives Viewed mode and
+  withholds from it: the headings of Edited mode with *Verdict* in place of
+  *Keep* and no *From*, no toolbar button and no *Lock*, and a click on a
+  *Verdict* cell belonging to the row and stepping no verdict. They establish
+  that each *Verdict* cell is the verdict the read-only bars give the row,
+  tinted to match and naming the failing bar in its hover text, and `-`
+  untinted on a row nothing has measured; that a drag of any of the five boxes
+  recolours the readings and the *Verdict* cells and changes nothing else, with
+  no version and no Action Log row; and that the bars survive a change of
+  selection. They also cover the header and its summary, which a bench item
+  shows at the track stage and not at the cluster stage, the go-to button, the
+  infinity mark,
+  the line under the header in both forms, the crop's pixel and feature index
+  for a row put on by index, the evaluation state, a point with no patch
+  placement (§ "A point with no patch placement"), and a row click and
+  double-click, which select and reveal with no row selection.
+- **Edited mode and the table**:
+  [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs).
+  These tests establish the rest of § "One body in two modes", section by
+  section:
+  - § "The toolbar": no *Evaluate* button, and the evaluation state in the
+    toolbar and the Status cells as the evaluation runs, lands and runs again,
+    with core's refusal sentence for a bearing that has no placement; no item
+    tabs, other items on the bench appearing nowhere in what the panel drew;
+    *Lock* starting ticked and toggling with no version and no gesture
+    reported, greyed at the cluster stage, where a click leaves it as it was.
+    With no item focused, Edited mode draws nothing.
+  - § "The header": the counts of kept, `out` and pinned rows, the Point ID
+    printed once beside a renamed label, the index of a point that is gone,
+    the ID the copy button copies, the `Bearing (...)` and `Position (` lines
+    with the infinity mark on a bearing alone, and the track's own patch slot:
+    empty before a fit, filled after it with the toolbar to its right,
+    following the template at the cluster stage, opaque for a bitmap of one,
+    three or four channels, and not drawn for an all-zero bitmap; a bitmap
+    kept only for judging drawn dimmed, its hover saying it is not the track's
+    patch and a commit does not write it, and the hover of a bitmap the next
+    render replaces saying so.
+  - § "The thresholds": each box under the heading of what it judges and the
+    geometry search box above the table; the boxes showing the track's bars
+    outside a drag and following a step, an undo, a redo and another item
+    focused; a release pushing exactly one version and one row, with the bar
+    where it was let go, which an undo takes back; no *Apply thresholds*
+    button; each judged line coloured by its own bar, so a whole ZNCC can pass
+    while its middle fails and the reverse; the readings no bar judges drawn
+    plain (the degrees of *Proj. err*, the self-similarity middle, the status,
+    the middle ZNCC with its bar off, a missing reading, an unmeasured row and
+    a refused evaluation); the *Keep* tint matching what applying the bars
+    gives an unpinned row, a drag leaving a pinned verdict as it was, a pinned
+    `in` row against the bars tinted `out` with the failing bar in its hover
+    text and turning `out` when unpinned, and of two sightings of one image that clear every bar, the one that
+    loses the image tinted `out` with the image named; and the row that holds
+    the reference, where unpinning it would move the bitmap, given no proposal,
+    its hover saying the bars cannot yet say what they would propose, rather
+    than that nothing has measured it.
+  - The *Keep* column and § "Row gestures": the switch taking a click the row
+    behind it does not, turning a kept row `out` and pinning the verdict it
+    sets; the pin pinning and unpinning; *Unpin* in the switch's menu and the
+    row's, where unpinning a row that is no longer pinned has no effect; the row menu unpinning every
+    pinned row of a selection with the count in its label, while the switch's
+    menu acts on its own row; the heading pin unpinning all, or pinning every
+    row at its verdict as one version and one row that one undo takes back,
+    with its hover text and accessible name in both states; the searches and
+    their remedies in the row menu; *Accept walk* offered on exactly the rows a
+    fit kept at their seeds and moving that keypoint to the walked pixel,
+    pinned, in one version; *Set as reference* in the row menu on an `in` row
+    with a keypoint, greyed on the held reference and absent on an `out` row,
+    making the row the reference, from which the live evaluation after it
+    renders the bitmap; unpinning the row that holds the reference, where the
+    rule picks another row, logging that the verdicts wait for the new bitmap,
+    after which the live evaluation renders from the pick and the pick is the
+    reference; and a row click and double-click reporting the image and the
+    pixel.
+  - § "The observation table": the order of the columns and the heading size;
+    one row per observation; the cells following the stage; the ZNCC cell's
+    `whole` and `mid` percent form and `-` for a missing middle; the Status
+    cell's sentences, including the walk with and without its ZNCC; the
+    *Reference* cell's pick, its word for each test, the tests dropped, the
+    angle and pair ZNCC on every row, its hover readings, and `-` at the
+    cluster stage and for a refused evaluation; the column's two marks,
+    `reference` on the reference and `pick` on a pick that is not the
+    reference, green for a reference the rule picks, red for one it does not
+    with the pick grey, the pick alone for a track whose bitmap is a fused mean
+    or that has none, and the hover naming the other row and how to accept the
+    pick; the track-stage *ZNCC* cell's plain score against the stored bitmap,
+    with the blur-matched score after an arrow where the two print differently
+    and one number otherwise, `100%` on the reference, `-` with the reason in
+    the Status cell and the hover for a row with no score, and the hover giving
+    the blur, the `sharper` note and the leave-one-out ZNCC; after a fit, no
+    *Bitmap* heading, exactly one row marked as the reference, the one the
+    stored bitmap names, reading `100%`, and every other row scored; `out (2)`
+    and `out` in the *Verdict* text; the *Zoom* cell's
+    two significant digits, chosen after rounding, with both numbers printed
+    where they agree; the self-similarity hover's table in its three units,
+    each ellipse as major × minor axis and angle with no angle on a circle,
+    the unit chosen, bare numbers under *scene units*, the `+` kept, scientific form under 0.001, degrees at infinity and
+    `-` in the world row at the cluster stage, and the hover carrying exactly
+    the ellipses of the row's measurement; and a long name cut in its middle,
+    shown whole on hover while the row stays hovered.
+  - The tiles and the crops: a tile on every row at both stages, a fresh row's
+    cut around its seed; the track-stage tile re-anchored on each
+    observation's keypoint, and kept as stored with no keypoint or where the
+    keypoint's ray cannot meet the patch; a shrinking tile read from its mip
+    level throughout and one that shrinks nothing identical to plain bilinear;
+    the hover view holding the tile, or the crop, texel for texel in its middle
+    third, with the dot on the observation's pixel and the projection mark at
+    the row's reprojection error, which the crop's caption states, no mark at
+    the cluster stage, and resting on
+    one row showing that row's view alone while the row keeps its hover and its
+    click; the crop square, every sample of the outline at least one pixel
+    inside it, centred to within the rounding so the outline is less than two
+    pixels from both edges along the longer side, its texels the photograph's
+    own pixels, and its caption's two axes matching the projected edge
+    midpoints at the track stage and the shape's columns at the cluster stage.
+  - The zoom (§ "The *Zoom* column says how much the patch magnifies the
+    photograph"): the centre Jacobian of a fronto-parallel patch is diagonal at
+    its width over `R`, the fallback 24 and not the tile's 64 texels; a patch
+    turned in its plane carries the turn in the Jacobian's off-diagonal
+    entries, signs included, and changes no zoom; a slanted patch gives a range
+    of zooms; a tile whose middle is off the photograph has the zoom it has on
+    it; a patch behind the camera or seen edge on has none; a keypoint moved
+    off the projection gives exactly the re-anchored placement's Jacobian; 48
+    px patch bitmaps give a Jacobian half the size and zooms twice as large as
+    no bitmaps; and the cell prints the zoom with no photograph decoded.
+  - The order of the rows (§ "The rows are ordered by a column"): increasing
+    by image at the start; each heading's first click worst first or
+    increasing as the table there says and a second click reversing it;
+    *Keep* by the number of bars failed, *Zoom* by the mean zoom and
+    *Reference* with the reference first and the pick next; a row with
+    no key last both ways and ties in increasing order of image; and *Crop*,
+    *Patch* and *From* ordering nothing.
+  - The scrolling (§ "The table scrolls both ways"): a sideways wheel, in both
+    the point and the line units egui reports, moving the rows, the headings
+    and the threshold row together; a middle and a left drag over the rows and
+    over the headings; and a drag begun on a switch moving nothing.
+- **The Scene tree**:
+  [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs).
+  These tests establish § "The Scene tree's Bench rows": a single click selects
+  the node with no version; a double-click from either group focuses the item,
+  selects the node and raises the panel with no version and one `Editing ...`
+  row, and on the focused item writes no row; and the raise survives a
+  double-click made while the dock is swapped out.
 - **Layout and wire**: [`panel-layout.md`](panel-layout.md) § "Testing" (the
   stock grid, the retired names refused, the startup load of an old default
   file) and [`mcp-server.md`](mcp-server.md) § "Testing" (the panel name,
-  `unfocus_bench_item`, the null `focused_item`).
-- **`ui_basic`**: a `screenshot` of `camera_intrinsics`, which the stock grid
-  keeps behind Track View, is refused with a message naming "Track View". No
-  windowed test of the box: what it decides is covered headlessly, and the
-  tab's presence by `layout/tests.rs`'s
-  `every_panel_appears_exactly_once_in_the_default`.
+  `unfocus_bench_item`, the null `focused_item`). That the stock grid holds the
+  tab exactly once is tested in
+  [layout/tests.rs](../../crates/sfm-explorer/src/layout/tests.rs).
+- **The windowed suite**,
+  [tests/ui_basic.rs](../../crates/sfm-explorer/tests/ui_basic.rs): a real
+  viewer refuses a `screenshot` of `camera_intrinsics`, which the stock grid
+  keeps behind Track View, with a message naming "Track View". It does not test
+  the box, since what the box decides is covered headlessly.
 
 ---
 
@@ -2179,8 +2164,8 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **Editing the patch by hand in this panel.** The hand edits that move it are
   the two bench layers' handles and the wire's patch tools
   ([`bench.md`](bench.md) § "The wire").
-- **Per-observation readings for a point with no patch frame** (§ "A point with
-  no patch frame"); a projected outline of the viewed track in Image Detail or
+- **Per-observation readings for a point with no patch placement** (§ "A point
+  with no patch placement"); a projected outline of the viewed track in Image Detail or
   a figure of it in the 3D viewer, which would need its own way of reading as
   not editable; the stored bitmap's alpha channel as a tile; a per-row highlight of
   the track ray in the 3D viewer; and a positional uncertainty display.
