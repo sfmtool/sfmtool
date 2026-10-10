@@ -11,10 +11,11 @@ use ndarray::Array3;
 
 use crate::bench::evaluate::open_localizer;
 use crate::bench::{
-    apply_thresholds, commit, create_track, evaluate, evaluate_rendering_bitmap, fit, pin_verdicts,
-    render_bitmap_in_place, score_bitmap, set_reference, set_stage, set_verdict, sight_observation,
-    split, tilt_patch, unpin_verdicts, verdicts_if_unpinned, Bench, BenchItem, CreateTrackOptions,
-    EditableTrack, EvaluateOptions, FitOptions, StageKind, TrackEditError, Unmeasured, Verdict,
+    apply_thresholds, bitmap_target, commit, create_track, evaluate, evaluate_rendering_bitmap,
+    fit, pin_verdicts, render_bitmap_in_place, score_bitmap, set_reference, set_stage, set_verdict,
+    sight_observation, split, tilt_patch, unpin_verdicts, verdicts_if_unpinned, Bench, BenchItem,
+    CreateTrackOptions, EditableTrack, EvaluateOptions, FitOptions, Provenance, StageKind,
+    TrackEditError, Unmeasured, Verdict,
 };
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
@@ -1334,6 +1335,166 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
         .expect("a third row");
     let (_, report) = unpin_verdicts(&first, &[third]).expect("a live row");
     assert!(!report.bitmap_pending);
+}
+
+/// The ground truth with point `p` stored at `-1`: its reference observation
+/// names no row and its stored bitmap is the fused mean of its views, as a
+/// file stored before the reference was recorded holds it. The point's track
+/// put on the bench, and the reconstruction.
+fn track_at_minus_one(truth: &GroundTruth, p: usize) -> (EditableTrack, EditedReconstruction) {
+    let views = truth.views();
+    let mut recon = truth.recon.clone();
+    let mut references = recon
+        .point_set
+        .reference_observations
+        .clone()
+        .expect("the ground truth has patch frames");
+    references[p] = -1;
+    recon.point_set.reference_observations = Some(references);
+    // The ground truth stores no bitmaps: a column of blank ones, with the
+    // fused mean in point `p`'s row.
+    let r = EvaluateOptions::default().patch_resolution(&truth.recon) as usize;
+    let mut bitmaps = ndarray::Array4::<u8>::zeros((recon.point_count(), r, r, 4));
+    let (patch, images, keypoints) = point_inputs(&truth.recon, p);
+    let params = KeypointSubpixelParams {
+        resolution: r as u32,
+        ..Default::default()
+    };
+    let fused = fuse_patch_bitmap(&patch, &views, &images, &keypoints, &params)
+        .expect("a fused mean renders");
+    for (stored, value) in bitmaps
+        .index_axis_mut(ndarray::Axis(0), p)
+        .iter_mut()
+        .zip(fused)
+    {
+        *stored = value;
+    }
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        p as u32,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = (**bench.track(&report.label).expect("just put on")).clone();
+    (track, edited)
+}
+
+/// The long track's point, the one [`GroundTruth::evaluated_track`] reads.
+fn long_track_point(truth: &GroundTruth) -> usize {
+    let offsets = &truth.recon.point_set.observation_offsets;
+    (0..truth.recon.point_count())
+        .find(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK)
+        .expect("the ground truth has a long track")
+}
+
+/// A track at `-1` comes on with its stored fused mean and no reference.
+/// Pins play no part: a reading that renders nothing scores the rows against
+/// the mean, and unpinning and pinning rows hands nothing on, while the
+/// first evaluation that renders renders the bitmap from the rule's pick and
+/// names it, and a commit saves the pick as the point's reference.
+#[test]
+fn a_track_at_minus_one_is_rendered_from_the_rule_s_pick_at_its_first_evaluation() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited) = track_at_minus_one(&truth, long_track_point(&truth));
+    assert!(track.observations.iter().all(|o| o.pinned));
+    let stored = track.track().unwrap().bitmap.clone();
+    assert!(stored.is_some());
+    assert_eq!(track.track().unwrap().reference, None);
+
+    // A plain reading keeps the mean and scores against it; the pins and the
+    // proposals are those of any track that holds no reference.
+    let (plain, _) = evaluate(
+        &track,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    assert_eq!(plain.track().unwrap().bitmap, stored);
+    assert!(!unscored(&plain));
+    let picked = rule_pick(&plain).expect("the rule picks one");
+    assert_eq!(bitmap_target(&plain), Some(Some(picked)));
+    assert!(verdicts_if_unpinned(&plain).iter().any(Option::is_some));
+    let row = (0..plain.observations.len())
+        .find(|&i| i != picked)
+        .expect("another row");
+    let (unpinned, report) = unpin_verdicts(&plain, &[row]).expect("a live row");
+    assert!(!report.bitmap_pending);
+    assert!(!unpinned.bitmap_pending());
+    assert!(!unscored(&unpinned), "an unpin clears no score");
+    assert_eq!(bitmap_target(&unpinned), Some(Some(picked)));
+
+    // The first evaluation that renders moves the bitmap to the pick.
+    let first = render_with(&track, &edited, &views);
+    assert_eq!(rule_pick(&first), Some(picked));
+    assert_rendered_from(&first, &views, &edited, picked, "the first evaluation");
+    assert_eq!(bitmap_target(&first), None);
+
+    // A commit saves the pick as the point's reference.
+    let (committed, report) = commit(&edited, &first).expect("the track commits");
+    let view = committed.point(report.point).expect("the committed point");
+    let images: Vec<u32> = view.observations().iter().map(|o| o.image_index).collect();
+    let at = view.reference_observation().expect("the column is carried");
+    assert!(at >= 0);
+    assert_eq!(images[at as usize], first.observations[picked].image);
+}
+
+/// Where the rule reaches its pick only through its last fallback, the render
+/// gives the fused mean the track at `-1` already stores, so the mean and
+/// `-1` stay; once a reading reaches a pick another way, the bitmap moves to
+/// it, whatever the pins.
+#[test]
+fn a_track_at_minus_one_keeps_its_fused_mean_until_the_rule_picks_without_its_last_fallback() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited) = track_at_minus_one(&truth, WITHOUT_ANY_POINT);
+    let first = render_with(&track, &edited, &views);
+    let stored = track.track().unwrap().bitmap.clone();
+    assert_eq!(first.track().unwrap().reference, None);
+    assert_eq!(first.track().unwrap().bitmap, stored);
+    let pick = rule_pick(&first).expect("the rule picks one");
+    let standing = |t: &EditableTrack| {
+        t.observations[pick]
+            .track
+            .as_ref()
+            .and_then(|m| m.reference_view)
+            .expect("a reading")
+    };
+    assert_eq!(standing(&first).fallback, ReferenceFallback::WithoutAny);
+    assert_eq!(bitmap_target(&first), None);
+
+    // A reading that reaches the same pick without the last fallback, as a
+    // later step's reading can.
+    let mut reread = first.clone();
+    reread.observations[pick]
+        .track
+        .as_mut()
+        .and_then(|m| m.reference_view.as_mut())
+        .expect("a reading")
+        .fallback = ReferenceFallback::None;
+    assert!(reread.observations.iter().all(|o| o.pinned));
+    assert_eq!(bitmap_target(&reread), Some(Some(pick)));
+}
+
+/// A track built on the bench whose bitmap names no row follows the same
+/// rule as a point at `-1`: the first evaluation renders from the pick.
+#[test]
+fn a_bench_built_track_with_a_fused_mean_is_rendered_from_the_pick() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (mut track, edited) = track_at_minus_one(&truth, long_track_point(&truth));
+    track.origin = None;
+    for o in &mut track.observations {
+        o.provenance = Provenance::Pixel;
+    }
+    let first = render_with(&track, &edited, &views);
+    let pick = rule_pick(&first).expect("the rule picks one");
+    assert_rendered_from(&first, &views, &edited, pick, "a bench-built track");
 }
 
 /// Unpinning the held reference, pinning it again and unpinning it once more

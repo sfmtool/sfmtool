@@ -34,7 +34,9 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     reference's row, or Set as reference on the pick, makes the pick the reference. While the \
     reference's row is pinned every render keeps it; a track put on the bench from a point has \
     every row pinned. Where the bitmap is the mean of the rows that are in, is one for judging \
-    only, or there is no bitmap yet, only the pick is marked.\n\n\
+    only, or there is no bitmap yet, only the pick is marked. A mean stays only until the first \
+    evaluation that renders from a pick the rule reached other than through its last fallback, \
+    which makes that pick the reference; with a pick reached only that way, the mean stays.\n\n\
     A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
     under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
     of the tile where it agrees with the other rows more than 0.3 below the track's typical \
@@ -92,6 +94,10 @@ pub(crate) struct ReferenceRows {
     /// Whether the track's bitmap is one for judging only
     /// (`TrackPayload::bitmap_for_judging`).
     pub(crate) judging: bool,
+    /// Whether the rule reached its pick only through its last fallback
+    /// (`ReferenceFallback::WithoutAny`), where a bitmap that names no row
+    /// stays the fused mean rather than moving to the pick.
+    pub(crate) pick_by_last_fallback: bool,
 }
 
 impl ReferenceRows {
@@ -112,6 +118,11 @@ impl ReferenceRows {
                 .and_then(|r| track.observations.get(r))
                 .is_some_and(|o| o.pinned),
             judging: track.track().is_some_and(|p| p.bitmap_for_judging),
+            pick_by_last_fallback: pick
+                .and_then(|p| track.observations.get(p))
+                .and_then(|o| o.track.as_ref())
+                .and_then(|m| m.reference_view)
+                .is_some_and(|s| s.fallback == ReferenceFallback::WithoutAny),
         }
     }
 
@@ -269,10 +280,18 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
                  from the rows with a keypoint, in or out, for the bars to score the rows \
                  against, and never committed. There is no reference to mark."
                 .to_string(),
-            None if rows.has_bitmap => "The reference-view rule's pick. The patch bitmap is \
-                 the mean of the rows that are in, the render of no row, so there is no \
-                 reference to mark. Set as reference on this row renders the bitmap from it."
-                .to_string(),
+            None if rows.has_bitmap => format!(
+                "The reference-view rule's pick. The patch bitmap is the mean of the rows \
+                 that are in, the render of no row, so there is no reference to mark. {} Set \
+                 as reference on this row renders the bitmap from it.",
+                if rows.pick_by_last_fallback {
+                    "The rule reached this row only through its last fallback, where the \
+                     render is that mean, so the mean stays."
+                } else {
+                    "The next evaluation that renders the bitmap renders it from this row and \
+                     makes this row the reference."
+                }
+            ),
             None => "The reference-view rule's pick. The track has no patch bitmap yet; the \
                  next render makes one."
                 .to_string(),

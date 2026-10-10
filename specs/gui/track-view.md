@@ -1386,7 +1386,17 @@ pick alternated between rows. The marks (`reference::ReferenceRows`,
   only the pick is marked, `pick` on a grey fill. The pick's hover says which:
   for a bitmap for judging, that fewer than two `in` rows carry a keypoint and
   the bitmap is rendered from the rows with one, in or out, and never
-  committed.
+  committed; for a fused mean, that *Set as reference* on the pick renders the
+  bitmap from it, and either that the next evaluation that renders renders the
+  bitmap from the pick and makes it the reference or, where the rule reached
+  the pick only through its last fallback, that the mean stays
+  (`ReferenceRows::pick_by_last_fallback`). So on a point stored at `-1` the
+  pick is grey only until the first evaluation that reads a pick the rule
+  reached other than through its last fallback, and from then on it is the
+  green reference; with a pick reached only through that fallback it stays
+  grey ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
+  "The stored bitmap's reference"). The same holds for the viewed point's
+  evaluation, which renders the same way.
 
 A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): a

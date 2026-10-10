@@ -774,14 +774,23 @@ pub(super) fn settle(
 /// rendered, from the reference it holds or the rule's pick, and so is one
 /// whose bitmap is for judging only
 /// ([`TrackPayload::bitmap_for_judging`]) once a row is `in`; while none is,
-/// that bitmap stands. A bitmap that
-/// names no row (a fused mean, or one stored before the reference was
-/// recorded) stands, and so does one whose reference its pinned row holds,
-/// whatever the rule picks. So does one the rule has not read yet: no row
-/// carries a standing to name a pick. Otherwise the bitmap moves to the rule's pick
-/// when that is another row; where the rule's pick is one only its last
-/// fallback reached, it moves to the fused mean unless it is that row's tile
-/// already, which is what the render gives where no fused mean renders.
+/// that bitmap stands.
+///
+/// A bitmap that names no row (a fused mean, or one stored before the
+/// reference was recorded, which a point at `-1` carries) moves to the rule's
+/// pick where the rule's last reading reached it other than through its last
+/// fallback, whatever the pins, as every writer renders a point at `-1`; the
+/// render then names the pick as the reference. Where the rule picks none,
+/// reaches its pick only through its last fallback, or has not read the
+/// track yet, it stands, since the render would give the fused mean again.
+///
+/// A bitmap that names a row stands where its pinned row holds the
+/// reference, whatever the rule picks, and where the rule has not read the
+/// track yet: no row carries a standing to name a pick. Otherwise it moves to
+/// the rule's pick when that is another row; where the rule's pick is one
+/// only its last fallback reached, it moves to the fused mean unless it is
+/// that row's tile already, which is what the render gives where no fused
+/// mean renders.
 pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     let payload = track.track()?;
     payload.placement.as_ref()?;
@@ -795,7 +804,12 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     if payload.bitmap_for_judging {
         return (keyed_in_rows(track) >= 2).then_some(held.or(stored));
     }
-    let reference = payload.reference?;
+    let Some(reference) = payload.reference else {
+        // A bitmap that names no row moves to a pick the rule reached other
+        // than through its last fallback (a reading of the rule is implied);
+        // otherwise the render would give the fused mean it already is.
+        return stored.map(Some);
+    };
     // A track the rule has not read yet has no pick to move to.
     let read = track
         .observations

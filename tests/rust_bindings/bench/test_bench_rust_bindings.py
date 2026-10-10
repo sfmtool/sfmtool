@@ -670,6 +670,36 @@ class TestEvaluating:
         assert rendered.observation(pick)["track"]["zncc"] == 1.0
         assert rendered.bitmap_pending is False
 
+    def test_a_point_stored_at_minus_one_takes_the_pick_at_its_first_render(
+        self, embedded, images, long_track_point
+    ):
+        """A point stored at -1 with a bitmap comes on with no reference; a
+        reading that renders nothing keeps the stored bitmap, and the first
+        evaluation that renders renders from the rule's pick, with every row
+        still pinned, and makes it the reference."""
+        bitmaps, references = embedded.patches.render_bitmaps(embedded, images)
+        references = np.array(references)
+        references[long_track_point] = -1
+        stored = embedded.clone_with_changes(
+            patch_bitmaps=bitmaps, reference_observations=references
+        )
+        edited = EditedReconstruction(stored)
+        _, track = create_track(Bench(), edited, long_track_point)
+        assert track.reference_observation is None
+
+        plain, _ = evaluate(track, edited, images, render_bitmap=False)
+        assert plain.reference_observation is None
+        assert any("zncc" in o["track"] for o in plain.observations)
+        pick = plain.reference_view_observation
+        assert pick is not None
+
+        rendered, _ = evaluate(track, edited, images)
+        assert all(o["pinned"] for o in rendered.observations)
+        assert rendered.bitmap_pending is False
+        assert rendered.reference_observation == rendered.reference_view_observation
+        assert rendered.reference_observation == pick
+        assert rendered.observation(pick)["track"]["zncc"] == 1.0
+
     def test_a_re_pinned_reference_is_unpinned_again_as_if_never_unpinned(
         self, edited, images, long_track_point
     ):

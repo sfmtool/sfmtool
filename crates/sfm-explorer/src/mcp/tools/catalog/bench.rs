@@ -555,7 +555,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           from their measurements, best score first and one in per image. \
                           Unpinning the row that holds the track's reference \
                           (stage_data.reference_observation) also hands the reference to the \
-                          reference-view rule's pick at the next render. in and \
+                          reference-view rule's pick at the next render. A bitmap that names \
+                          no row (reference_observation null with a bitmap, a point stored at \
+                          -1) is held by no pin, so unpinning hands nothing on there: the \
+                          evaluation renders it from the rule's pick whatever the pins. in and \
                           out name one observation; pin and unpin name one with observation, or \
                           several with observations, a list of indexes or \"all\", as one \
                           version. A track cannot see one image twice, so turning an observation \

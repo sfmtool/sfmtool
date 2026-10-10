@@ -744,7 +744,12 @@ pub struct TrackPayload {
     /// reference and pins it. A track put on the bench from a point has every
     /// row pinned, so the point's stored reference stays until the person
     /// unpins its row. A reference read from a column rendered for display is
-    /// the rule's pick on the file's track, and is held the same way. A commit
+    /// the rule's pick on the file's track, and is held the same way. A point
+    /// stored with no reference (`-1`) beside a bitmap that names no row
+    /// comes on with `None`, and the first evaluation that reads a pick the
+    /// rule reached other than through its last fallback renders the bitmap
+    /// from that pick and sets it here, whatever the pins
+    /// ([`bitmap_target`](super::evaluate::bitmap_target)). A commit
     /// writes this reference as the point's reference observation, beside the
     /// bitmap it is the render of where the reconstruction stores bitmaps.
     pub reference: Option<usize>,

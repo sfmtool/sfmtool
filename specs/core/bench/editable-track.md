@@ -1602,6 +1602,22 @@ point with a display bitmap comes on with the reference that bitmap was
 rendered from (a pick only the display render made, for a point the file
 stores at `-1`).
 
+**A bitmap that names no row follows the rule's pick.** A track whose
+reference is `None` beside a bitmap that is not one for judging (a point
+stored at `-1` with a fused mean, a file older than `.sfmr` v12, which the
+loader reads as `-1`, or a fused mean a render made on the bench) has its
+bitmap rendered from the reference-view rule's pick at the first evaluation
+that reads a pick the rule reached other than through its last fallback
+(`bitmap_target`, `evaluate_rendering_bitmap`), and the reference becomes that
+pick. Pins play no part, since no row holds such a bitmap. This is the rule
+every writer follows: a render runs the reference-view rule for a point at
+`-1`. Where the rule picks none or reaches its pick only through its last
+fallback, the render would give the fused mean again, so the mean and the
+`None` reference stand, and a later evaluation whose reading picks a row
+another way moves the bitmap. A plain `evaluate`, which renders nothing,
+scores the rows against the mean. A commit after the render saves the pick as
+the point's reference observation.
+
 The reference follows its row through every step that reorders or removes
 other rows. A step that makes the bitmap stale while the reference row stays
 on the track and `in` drops the bitmap and keeps the reference
@@ -1644,7 +1660,8 @@ row the reference is on says which of the two decides:
   pinned, a render runs the rule over the `in` rows and sets the bitmap and
   the reference together. `evaluate_rendering_bitmap` renders the bitmap
   again not only where the track has none but also where the reference row is
-  unpinned and the rule picks another row. Unpinning the held reference's row
+  unpinned and the rule picks another row, and where the bitmap names no row
+  and the rule picks a row (above). Unpinning the held reference's row
   (`unpin_verdicts`) where the rule picks another row keeps the bitmap and
   `TrackPayload::reference` until the render replaces them, and clears every
   row's scores against the bitmap, since they were read against a bitmap that
@@ -1786,7 +1803,11 @@ and every other measurement an evaluation would produce is left unmeasured.
 With no localizer reading (`seed_shift_px`) the bars judge no row until the
 first evaluation. So putting a track on the bench and doing
 nothing shows the numbers the reconstruction already holds plus the verdict
-column.
+column, with one exception: a point stored at `-1` whose bitmap names no row
+has that bitmap rendered from the reference-view rule's pick at the first
+evaluation that reads a pick the rule reached other than through its last
+fallback, and its rows are scored against that render (§ "The stored bitmap's
+reference").
 
 A `sift_files` reconstruction is put on the bench like any other: inspecting a
 track is allowed everywhere, and it is the commit that refuses to write one
@@ -3742,6 +3763,15 @@ unit-tested in `normal.rs` itself.
   it; the evaluation that reads the marked track again moves nothing.
 - With every row unpinned the reference follows the rule's pick at every
   render.
+- A point stored at `-1` with a fused-mean bitmap: a plain reading scores the
+  rows against the mean, an unpin there hands nothing on and clears no score,
+  and `verdicts_if_unpinned` proposes as for any track with no held
+  reference; the first evaluation that renders renders from the rule's pick
+  with every row still pinned and names it, and a commit saves the pick.
+  Where the rule reaches its pick only through its last fallback the mean and
+  `-1` stay, and a reading that reaches a pick another way moves the bitmap
+  whatever the pins. A track built on the bench with a fused mean follows the
+  same rule.
 - `set_reference` pins the row and drops the stale bitmap; the next render is
   from the row, while the rule's pick is still reported; setting it again
   changes nothing; it is refused on an `out` row and at the cluster stage.

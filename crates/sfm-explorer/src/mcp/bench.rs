@@ -1667,7 +1667,9 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 // The reference in use: the row the stored bitmap is rendered
                 // from, as an index into `observations`, or null for a track
                 // with no bitmap or one whose bitmap is the render of no row,
-                // a fused mean. It can differ from the rule's pick below while
+                // a fused mean, which the first evaluation that reads a pick
+                // the rule reached other than through its last fallback
+                // renders from that pick. It can differ from the rule's pick below while
                 // its row is pinned, between an unpin and the render that moves
                 // it to the pick, and where the pick alternated between rows
                 // within one evaluation.

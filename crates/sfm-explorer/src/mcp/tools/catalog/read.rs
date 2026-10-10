@@ -119,7 +119,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           reference_observation, \
                           the row that bitmap is rendered from (the reference in use), or null, \
                           and reference_view_observation, the row the reference-view rule \
-                          picked, which can differ from it, or null. While evaluating, the measurements are the \
+                          picked, which can differ from it, or null. For a point stored at -1 \
+                          with a mean bitmap the evaluation renders the bitmap from the pick, \
+                          so the two agree, unless the rule reached its pick only through its \
+                          last fallback, where the mean stays and reference_observation is \
+                          null. While evaluating, the measurements are the \
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
@@ -427,7 +431,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           reference in use, the row the stored bitmap is rendered from, null \
                           for a track with no bitmap or a bitmap that is the render of no row \
                           (a mean of the rows, one stored before the reference was recorded, or \
-                          the render of an observation since removed from the point); \
+                          the render of an observation since removed from the point); such a \
+                          bitmap is rendered from the rule's pick, which becomes the \
+                          reference, at the first evaluation that reads a pick the rule \
+                          reached other than through its last fallback, whatever the pins, \
+                          and stays the mean where the rule reaches its pick only that way; \
                           has_bitmap says whether there is a bitmap, and bitmap_for_judging \
                           whether it was rendered only so the bars can score the rows of a \
                           track fewer than two in rows of which carry a keypoint: from the \

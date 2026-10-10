@@ -503,6 +503,7 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         has_bitmap: true,
         reference_pinned: true,
         judging: false,
+        pick_by_last_fallback: false,
     };
     let drawn = cells(&agreed);
     assert_eq!(drawn[2].mark, ReferenceMark::Reference);
@@ -628,6 +629,21 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         } else {
             "no patch bitmap yet"
         };
+        assert!(hover.contains(says), "{hover}");
+    }
+    // A fused mean moves to the pick at the next evaluation that renders,
+    // unless the rule reached the pick only through its last fallback.
+    for (pick_by_last_fallback, says) in [
+        (false, "renders it from this row"),
+        (true, "so the mean stays"),
+    ] {
+        let fused = ReferenceRows {
+            reference: None,
+            reference_image: None,
+            pick_by_last_fallback,
+            ..agreed
+        };
+        let hover = cells(&fused)[2].hover.clone().expect("a hover");
         assert!(hover.contains(says), "{hover}");
     }
     // A bitmap for judging: only the pick is marked, and its hover says the

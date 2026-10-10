@@ -593,6 +593,10 @@ impl PyEditableTrack {
     /// reference-view rule picked (:attr:`reference_view_observation`). While
     /// the row is unpinned the next render (``evaluate(...,
     /// render_bitmap=True)``, :func:`fit`) moves it to the rule's pick.
+    /// A point stored at ``-1`` with a bitmap that names no row reads
+    /// ``None`` until the first evaluation that renders and reads a pick the
+    /// rule reached other than through its last fallback, which renders the
+    /// bitmap from that pick whatever the pins and makes it the reference.
     /// :func:`set_reference` makes a row the reference and pins it.
     #[getter]
     fn reference_observation(&self) -> Option<usize> {

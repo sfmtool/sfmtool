@@ -907,7 +907,12 @@ the reference is on:
   bench from a point has every row pinned, so the point's stored reference
   stays until the person unpins its row. A display-only pick, the one the viewer
   made to render a file's display bitmaps for a point the file stores no
-  reference for, is held the same way.
+  reference for, is held the same way. A point the file stores at `-1` beside
+  a bitmap that names no row (a fused mean, or a file older than `.sfmr` v12)
+  has no reference for a pin to hold: the first evaluation that reads a pick
+  the rule reached other than through its last fallback renders the bitmap
+  from that pick and makes it the reference, whatever the pins, and with a
+  pick reached only through that fallback the mean stays.
 - **An unpinned reference row hands it to the rule.** Unpinning the row
   (`AppState::unpin_bench_verdicts`, Track View's pin or *Unpin*, the wire's
   `set_bench_track_verdict` with `unpin`) moves the reference to the rule's
