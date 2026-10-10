@@ -435,6 +435,12 @@ impl SfmrReconstruction {
                     _ => None,
                 },
                 observation_confidence: data.observation_confidence.map(|c| c.to_vec()),
+                observation_readings: data.observation_readings.map(|r| {
+                    super::ObservationReadings {
+                        rows: r.rows(),
+                        options: r.options,
+                    }
+                }),
                 // The format reader fills it with `-1` for an older file with
                 // patch frames; a value built by hand with a frame and no
                 // column gets the same.
@@ -629,6 +635,9 @@ impl SfmrReconstruction {
                 .observation_confidence
                 .as_ref()
                 .map(|c| Array1::from_vec(c.clone())),
+            observation_readings: self.point_set.observation_readings.as_ref().map(|r| {
+                sfmtool_sfmr_format::ObservationReadingColumns::from_rows(&r.rows, r.options)
+            }),
             normal_confidence: self
                 .point_set
                 .normal_confidence

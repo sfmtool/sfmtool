@@ -26,10 +26,12 @@ use sfmtool_sfmr_format::{
     POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
+use crate::camera::sampler::SamplerChoice;
 use crate::patch::cloud::OrientedPatch;
 
 use super::data::{
-    ImageTable, ObservationSource, Point3D, PointConstraintColumns, PointSet, SfmrReconstruction,
+    observation_reading_options, ImageTable, ObservationReading, ObservationReadings,
+    ObservationSource, Point3D, PointConstraintColumns, PointSet, SfmrReconstruction,
     TrackObservation,
 };
 
@@ -161,6 +163,9 @@ pub struct RecordObservation {
     pub keypoint_xy: Option<[f32; 2]>,
     /// The photometric-sharpness confidence, when the base carries the column.
     pub confidence: Option<u8>,
+    /// The observation's readings on its own render, when the base carries
+    /// them ([`PointSet::observation_readings`]).
+    pub reading: Option<crate::reconstruction::ObservationReading>,
 }
 
 /// A whole point: its geometry, its whole track, and every per-point column the
@@ -264,6 +269,8 @@ fn observations_agree(a: &RecordObservation, b: &RecordObservation) -> bool {
     a.image_index == b.image_index
         && a.feature_index == b.feature_index
         && a.confidence == b.confidence
+        && a.reading.unwrap_or(ObservationReading::NOT_MEASURED)
+            == b.reading.unwrap_or(ObservationReading::NOT_MEASURED)
         && match (a.keypoint_xy, b.keypoint_xy) {
             (Some(x), Some(y)) => x
                 .iter()
@@ -333,6 +340,16 @@ impl<'a> PointView<'a> {
     pub fn observation_confidence(&self) -> Option<&'a [u8]> {
         let rows = self.rows();
         self.set.observation_confidence.as_ref().map(|c| &c[rows])
+    }
+
+    /// The readings of each observation on its own render, when the column
+    /// is carried ([`PointSet::observation_readings`]).
+    pub fn observation_readings(&self) -> Option<&'a [crate::reconstruction::ObservationReading]> {
+        let rows = self.rows();
+        self.set
+            .observation_readings
+            .as_ref()
+            .map(|r| &r.rows[rows])
     }
 
     /// The sub-pixel `(u, v)` of observation `k` of this track.
@@ -427,6 +444,7 @@ impl<'a> PointView<'a> {
                 feature_index: self.feature_indexes().map(|f| f[k]),
                 keypoint_xy: self.keypoint_xy(k),
                 confidence: self.observation_confidence().map(|c| c[k]),
+                reading: self.observation_readings().map(|r| r[k]),
             })
             .collect();
         PointRecord {
@@ -544,6 +562,7 @@ fn point_sets_equal(a: &PointSet, b: &PointSet) -> bool {
         && a.feature_indexes() == b.feature_indexes()
         && a.keypoints_xy() == b.keypoints_xy()
         && a.observation_confidence == b.observation_confidence
+        && a.observation_readings == b.observation_readings
         && a.patch_u_halfvec_xyz == b.patch_u_halfvec_xyz
         && a.patch_v_halfvec_xyz == b.patch_v_halfvec_xyz
         && a.patch_bitmaps_y_x_rgba.as_deref() == b.patch_bitmaps_y_x_rgba.as_deref()
@@ -857,6 +876,26 @@ impl EditedReconstruction {
         self.base.point_set.observation_confidence.is_some()
     }
 
+    /// Whether observations carry their readings
+    /// ([`PointSet::observation_readings`]).
+    pub fn has_observation_readings(&self) -> bool {
+        self.base.point_set.observation_readings.is_some()
+    }
+
+    /// The options a record's readings stand under: the base's where it
+    /// carries readings, and otherwise the default ones, which an edit that
+    /// brings readings to the base writes them under.
+    pub fn observation_reading_options(&self) -> crate::reconstruction::ObservationReadingOptions {
+        self.base
+            .point_set
+            .observation_readings
+            .as_ref()
+            .map_or_else(
+                || observation_reading_options(SamplerChoice::per_view()),
+                |r| r.options,
+            )
+    }
+
     /// Whether points carry a patch frame.
     pub fn has_patch_frames(&self) -> bool {
         self.base.point_set.patch_u_halfvec_xyz.is_some()
@@ -1005,6 +1044,15 @@ impl EditedReconstruction {
         if let Some(c) = &mut set.observation_confidence {
             for obs in &record.observations {
                 c.push(obs.confidence.expect("validated present"));
+            }
+        }
+        // The addition set always carries the readings column, so a record
+        // can bring readings to a base that has none; a record without one
+        // adds a row with nothing measured.
+        if let Some(r) = &mut set.observation_readings {
+            for obs in &record.observations {
+                r.rows
+                    .push(obs.reading.unwrap_or(ObservationReading::NOT_MEASURED));
             }
         }
         if let Some(u) = &mut set.patch_u_halfvec_xyz {
@@ -1385,6 +1433,33 @@ impl EditedReconstruction {
                 .collect()
         });
 
+        // Present where the base carries readings or an added record brought
+        // a measured one; a base row the base has none for is not measured.
+        let added_readings = self
+            .added
+            .observation_readings
+            .as_ref()
+            .expect("the addition set carries the readings column");
+        let observation_readings = (base.observation_readings.is_some()
+            || obs_rows
+                .iter()
+                .any(|&(is_base, row)| !is_base && added_readings.rows[row].is_measured()))
+        .then(|| ObservationReadings {
+            rows: obs_rows
+                .iter()
+                .map(|&(is_base, row)| {
+                    if is_base {
+                        base.observation_readings
+                            .as_ref()
+                            .map_or(ObservationReading::NOT_MEASURED, |r| r.rows[row])
+                    } else {
+                        added_readings.rows[row]
+                    }
+                })
+                .collect(),
+            options: added_readings.options,
+        });
+
         // A point's observations are copied as one run in their stored order,
         // so its index within the run is unchanged.
         let reference_observations = base.reference_observations.as_ref().map(|r| {
@@ -1423,6 +1498,7 @@ impl EditedReconstruction {
             tracks,
             observations,
             observation_confidence,
+            observation_readings,
             reference_observations,
             display_only_references,
             patch_u_halfvec_xyz: self.merge_halfvec(&base.patch_u_halfvec_xyz, &point_rows, true),
@@ -1783,6 +1859,16 @@ fn empty_like(base: &PointSet, image_count: usize) -> PointSet {
             .as_ref()
             .map(|_| PointConstraintColumns::all_free(0)),
         observation_confidence: base.observation_confidence.as_ref().map(|_| Vec::new()),
+        // Present whatever the base carries, under the base's options where it
+        // has readings and the default ones where it has none, so an edit can
+        // bring readings to a base without them.
+        observation_readings: Some(ObservationReadings {
+            rows: Vec::new(),
+            options: base.observation_readings.as_ref().map_or_else(
+                || observation_reading_options(SamplerChoice::per_view()),
+                |r| r.options,
+            ),
+        }),
         reference_observations: base.reference_observations.as_ref().map(|_| Vec::new()),
         // Present with the base's marks, so a rewritten point keeps its own.
         display_only_references: base.display_only_references.as_ref().map(|_| Vec::new()),

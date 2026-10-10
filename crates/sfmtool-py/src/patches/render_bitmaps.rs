@@ -11,8 +11,10 @@ use pyo3::prelude::*;
 
 use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::patch::observation_reading::read_cloud_observations;
 use sfmtool_core::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
 use sfmtool_core::progress::Progress;
+use sfmtool_core::reconstruction::{observation_reading_options, ObservationReadings};
 
 use super::args::parse_sampler;
 use super::cloud::PyPatchCloud;
@@ -147,5 +149,95 @@ impl PyPatchCloud {
             column.bitmaps.into_pyarray(py),
             PyArray1::from_vec(py, column.reference_observations),
         ))
+    }
+
+    /// Read every observation of every patch on its own ``R×R`` render, at the
+    /// patch's stored frame and each observation's stored keypoint, **moving
+    /// nothing**: the rows a writer that renders the observations stores as
+    /// :attr:`SfmrReconstruction.observation_readings`.
+    ///
+    /// Each tile is rendered as the stored bitmap is, through the patch
+    /// re-anchored on the keypoint with the sampler ``sampler`` picks, and
+    /// read for its ZNCC self-similarity ellipse, its viewing angle, tilt
+    /// direction and zoom, and its plain and blur-matched scores against the
+    /// point's stored bitmap in ``recon`` (``1`` for the point's reference
+    /// observation, ``NaN`` where the point has no stored bitmap). A row is
+    /// not measured (``NaN``) where its point has no patch in the cloud or
+    /// its tile has no data. Run it on the reconstruction whose bitmaps and
+    /// references are final, after ``clone_with_changes(patch_bitmaps=...,
+    /// reference_observations=...)``.
+    ///
+    /// Args:
+    ///     recon: The reconstruction the cloud was built from, carrying inline
+    ///         keypoints, and the bitmaps the scores read.
+    ///     images: One source image per reconstruction image, or an
+    ///         :class:`ImagePyramidSet`.
+    ///     resolution: The R×R grid, the bitmaps' resolution.
+    ///     sampler: ``"per_view"`` (default) or one sampler for every view.
+    ///     progress: Optional progress counter (unused; reserved).
+    ///
+    /// Returns:
+    ///     The readings dict ``clone_with_changes(observation_readings=...)``
+    ///     takes, one row per observation of ``recon``, with the options the
+    ///     rows were read under.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
+    #[pyo3(signature = (recon, images, *, resolution=24, sampler="per_view", progress=None))]
+    fn read_observations<'py>(
+        &self,
+        py: Python<'py>,
+        recon: &Bound<'py, PyAny>,
+        images: &Bound<'py, PyAny>,
+        resolution: u32,
+        sampler: &str,
+        progress: Option<ProgressCounter>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let _ = progress;
+        if resolution < 3 {
+            return Err(PyValueError::new_err(format!(
+                "resolution must be >= 3, got {resolution}"
+            )));
+        }
+        let (posed, recon_guard, _) =
+            resolve_patch_scene(recon, &self.inner, false, "view_sets", "per-patch views")?;
+        let recon = recon_guard.as_ref().map(|r| &r.inner).ok_or_else(|| {
+            PyValueError::new_err("read_observations needs a reconstruction, not a CameraViews")
+        })?;
+        if recon.keypoints_xy().is_none() {
+            return Err(PyValueError::new_err(
+                "read_observations needs the per-observation keypoints an embedded_patches \
+                 reconstruction stores",
+            ));
+        }
+        let sampler = parse_sampler(sampler)?;
+        let pyramid_set = resolve_pyramids(&posed, images)?;
+        let pyramids = pyramid_set.as_slice();
+        let views: Vec<Option<ProjectedImage<'_>>> = (0..posed.len())
+            .map(|i| {
+                Some(ProjectedImage {
+                    camera: &posed.cameras[i],
+                    cam_from_world: &posed.poses[i],
+                    pyramid: &pyramids[i],
+                })
+            })
+            .collect();
+        let rows = py
+            .detach(|| {
+                read_cloud_observations(
+                    &self.inner,
+                    recon,
+                    &views,
+                    resolution as usize,
+                    sampler,
+                    &Progress::none(),
+                )
+            })
+            .expect("nothing cancels a reading given no cancel flag");
+        crate::readings::readings_to_py(
+            py,
+            &ObservationReadings {
+                rows,
+                options: observation_reading_options(sampler),
+            },
+        )
     }
 }

@@ -37,6 +37,7 @@ from .._patch_compaction import (
     reference_observations_from_images,
     render_from_references,
     stored_reference_images,
+    with_observation_readings,
 )
 from ._patch_params import validate_patch_params
 
@@ -252,8 +253,15 @@ class RefineKeypointsTransform:
                 resolution=self.resolution,
                 sampler=self.sampler,
             )
-            return moved.clone_with_changes(
-                patch_bitmaps=bitmaps, reference_observations=references
+            # Every keypoint was rendered again, so every observation is read
+            # again on its render, against the bitmaps written.
+            return with_observation_readings(
+                moved.clone_with_changes(
+                    patch_bitmaps=bitmaps, reference_observations=references
+                ),
+                images,
+                resolution=self.resolution,
+                sampler=self.sampler,
             )
         # Stored bitmaps were rendered at the old keypoints, so they go, as
         # ``--refine-normals bitmaps=false`` drops them. With no bitmap written
@@ -266,8 +274,15 @@ class RefineKeypointsTransform:
             references = np.where(stored >= 0, stored, aligned).astype(np.int32)
         else:
             references = aligned
-        return recon.clone_with_changes(
-            keypoints_xy=kxy, patch_bitmaps=None, reference_observations=references
+        # The moved keypoints are read again on their renders, with no bitmap
+        # to score against, so the scores are NaN.
+        return with_observation_readings(
+            recon.clone_with_changes(
+                keypoints_xy=kxy, patch_bitmaps=None, reference_observations=references
+            ),
+            images,
+            resolution=self.resolution,
+            sampler=self.sampler,
         )
 
     def _print_summary(self, result: list[dict]) -> None:

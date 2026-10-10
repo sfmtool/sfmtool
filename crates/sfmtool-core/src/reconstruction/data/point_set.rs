@@ -160,6 +160,19 @@ pub struct PointSet {
     /// rides along untouched, and every pass that drops or reorders observations
     /// selects its rows in lockstep with `tracks`.
     pub observation_confidence: Option<Vec<u8>>,
+    /// Optional per-observation readings on each observation's own `R×R`
+    /// render (parallel to `tracks`): its self-similarity ellipse, the angle,
+    /// tilt and zoom of that render, and its plain and blur-matched scores
+    /// against the point's stored bitmap, persisted as the eight `tracks/`
+    /// columns flagged by `has_observation_readings`. `None` where the
+    /// reconstruction carries none.
+    ///
+    /// A row is a record of the render it names, not a claim about the
+    /// current render. Every pass that drops or reorders observations selects
+    /// its rows in lockstep with `tracks`, and a pass that moves geometry
+    /// carries them unchanged; a writer that renders an observation's tile
+    /// writes its row ([`Self::write_observation_readings`]).
+    pub observation_readings: Option<super::ObservationReadings>,
     /// Per point (parallel to `points`), the index of its **reference
     /// observation** within its own track, `0` to `observation_counts[i] - 1`:
     /// the observation the point's patch bitmap is, or is to be, rendered
@@ -448,6 +461,52 @@ impl PointSet {
         Some(point_rows.iter().map(|&p| marks[p]).collect())
     }
 
+    /// Write the readings `rows` names, `(observation, reading)`, taken under
+    /// `options`, into [`Self::observation_readings`].
+    ///
+    /// Where the reconstruction carries no readings, the column is created and
+    /// every other row is [`ObservationReading::NOT_MEASURED`](super::ObservationReading::NOT_MEASURED).
+    /// Where it carries readings taken under other options, every other row is
+    /// cleared the same way, since the column records one set of options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an observation index is out of range.
+    pub fn write_observation_readings(
+        &mut self,
+        rows: impl IntoIterator<Item = (usize, super::ObservationReading)>,
+        options: super::ObservationReadingOptions,
+    ) {
+        let count = self.tracks.len();
+        let readings = self
+            .observation_readings
+            .get_or_insert_with(|| super::ObservationReadings::not_measured(count, options));
+        if readings.options != options || readings.rows.len() != count {
+            *readings = super::ObservationReadings::not_measured(count, options);
+        }
+        for (j, row) in rows {
+            readings.rows[j] = row;
+        }
+    }
+
+    /// Clear the scores of point `point`'s observations to `NaN`, keeping the
+    /// rest of each row: what a writer that changes the point's reference
+    /// observation, and does not render its observations again, keeps.
+    pub fn clear_observation_scores(&mut self, point: usize) {
+        let (Some(readings), Some(range)) = (
+            self.observation_readings.as_mut(),
+            self.observation_offsets
+                .get(point)
+                .zip(self.observation_offsets.get(point + 1))
+                .map(|(&a, &b)| a..b),
+        ) else {
+            return;
+        };
+        for row in &mut readings.rows[range] {
+            *row = row.without_scores();
+        }
+    }
+
     /// [`Self::reference_observations`] as a save writes it: `-1` for each
     /// row [`Self::display_only_references`] marks, since a pick only the
     /// display render made is not the reconstruction's own.
@@ -499,6 +558,14 @@ impl PointSet {
                 return Err(format!(
                     "observation_confidence length ({}) must match observation count ({n_obs})",
                     confidence.len()
+                ));
+            }
+        }
+        if let Some(readings) = &self.observation_readings {
+            if readings.rows.len() != n_obs {
+                return Err(format!(
+                    "observation_readings length ({}) must match observation count ({n_obs})",
+                    readings.rows.len()
                 ));
             }
         }

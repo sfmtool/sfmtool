@@ -17,9 +17,12 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 
 use crate::patch::cloud::OrientedPatch;
+use crate::patch::observation_reading::stored_ellipse;
+use crate::patch::self_similarity::SelfSimilarityEllipseUnits;
 use crate::progress::Progress;
 use crate::readable::Readable;
 use crate::reconstruction::edited::EditedReconstruction;
+use crate::reconstruction::ObservationReading;
 
 use super::evaluate::{bitmap_target, clear_bitmap_scores, restate_reference_view};
 use super::fit::FitOptions;
@@ -143,10 +146,12 @@ impl std::error::Error for CreateTrackError {}
 /// they stand until a person hands them to the bars ([`unpin_verdicts`]), and
 /// the evaluations that read the track leave them where they are. The
 /// measurements are carried from what the record stores and nothing is
-/// recomputed: the score against the bitmap (`blur_matched_zncc`) is
-/// `observation_confidence` read back out of its byte scale where the column
-/// exists, which is what a commit writes there, and everything else an
-/// evaluation would compute is left unmeasured. With no localizer reading
+/// recomputed ([`stored_measurement`]): the stored readings of each
+/// observation's render, where the reconstruction carries them, with its
+/// `float32` scores against the bitmap, or else the blur-matched score
+/// (`blur_matched_zncc`) read back out of `observation_confidence`'s byte
+/// scale, and everything else an evaluation would compute is left
+/// unmeasured. With no localizer reading
 /// (`seed_shift_px`) the bars judge no row until the first evaluation. The point's stored reference
 /// observation comes on as the track's reference, and with every row pinned it is held until a
 /// person unpins its row. So putting a track on the bench and doing nothing shows the numbers the
@@ -199,20 +204,11 @@ pub fn create_track(
             verdict: Verdict::In,
             pinned: true,
             cluster: None,
-            track: Some(TrackMeasurement {
-                keypoint: view.keypoint_xy(k),
-                // The stored column is the row's blur-matched score against
-                // the stored bitmap in a byte scale; reading it back is carrying a
-                // measurement, not making one, and a commit of the untouched
-                // track writes the same byte again. A `0` byte is no
-                // measurement, so the row carries none.
-                blur_matched_zncc: view
-                    .observation_confidence()
-                    .map(|c| c[k])
-                    .filter(|&byte| byte != 0)
-                    .map(|byte| f64::from(byte) / f64::from(u8::MAX)),
-                ..TrackMeasurement::default()
-            }),
+            track: Some(stored_measurement(
+                view.keypoint_xy(k),
+                view.observation_readings().map(|r| r[k]),
+                view.observation_confidence().map(|c| c[k]),
+            )),
         })
         .collect::<Vec<_>>();
 
@@ -264,6 +260,57 @@ pub fn create_track(
             observation_count: count,
         },
     ))
+}
+
+/// A committed observation's row as [`create_track`] puts it on the bench:
+/// its keypoint, and the readings the reconstruction stores for it, carried
+/// rather than made.
+///
+/// Where the point stores the observation's readings
+/// ([`PointSet::observation_readings`](crate::PointSet::observation_readings))
+/// and the row was measured, its self-similarity radius and ellipse (in grid
+/// px), viewing angle, tilt direction and zoom are those of the render it
+/// records, and its plain and blur-matched scores against the stored bitmap
+/// are the `float32` scores. Where it stores no score, the blur-matched score is
+/// `observation_confidence` read back out of its byte scale, which is what a
+/// commit writes there, a `0` byte being no measurement. Everything else an
+/// evaluation computes is left unmeasured, and a commit of the untouched row
+/// writes the same row again ([`measurement_reading`](super::commit::measurement_reading)).
+pub fn stored_measurement(
+    keypoint: Option<[f32; 2]>,
+    reading: Option<ObservationReading>,
+    confidence: Option<u8>,
+) -> TrackMeasurement {
+    let reading = reading.filter(ObservationReading::is_measured);
+    let finite = |v: f32| (!v.is_nan()).then_some(f64::from(v));
+    let byte_score = confidence
+        .filter(|&byte| byte != 0)
+        .map(|byte| f64::from(byte) / f64::from(u8::MAX));
+    let Some(row) = reading else {
+        return TrackMeasurement {
+            keypoint,
+            blur_matched_zncc: byte_score,
+            ..TrackMeasurement::default()
+        };
+    };
+    let ellipse = stored_ellipse(&row);
+    let blur_matched = finite(row.blur_matched_bitmap_zncc);
+    TrackMeasurement {
+        keypoint,
+        zncc_self_similarity_radius: ellipse.map(|e| e.axes[0]),
+        zncc_self_similarity_ellipse: ellipse.map(|grid_px| SelfSimilarityEllipseUnits {
+            grid_px,
+            image_px: None,
+            patch: None,
+        }),
+        viewing_angle_deg: finite(row.cos_view_angle)
+            .map(|c| c.clamp(-1.0, 1.0).acos().to_degrees()),
+        tilt_direction_deg: finite(row.tilt_angle).map(f64::to_degrees),
+        zoom: (!row.zoom.iter().any(|z| z.is_nan())).then(|| row.zoom.map(f64::from)),
+        plain_zncc: finite(row.plain_bitmap_zncc),
+        blur_matched_zncc: blur_matched.or(byte_score),
+        ..TrackMeasurement::default()
+    }
 }
 
 /// The label core mints for a point when the caller names no point id.

@@ -386,6 +386,39 @@ impl PySfmrReconstruction {
         Some(PyArray1::from_slice(py, confidence))
     }
 
+    /// Each observation's readings on its own ``R×R`` render, as the ``.sfmr``
+    /// file stores them, or ``None`` when the reconstruction carries none.
+    ///
+    /// A dict of eight numpy arrays parallel to the track arrays, named as
+    /// the file names them: ``zncc_self_similarity_ellipse_axes`` ``(M, 2)``
+    /// float32 (semi-major and semi-minor axes, grid px; the semi-major axis
+    /// is the ZNCC self-similarity radius),
+    /// ``zncc_self_similarity_ellipse_axes_is_at_least`` ``(M, 2)`` uint8,
+    /// ``zncc_self_similarity_ellipse_major_angle`` ``(M,)`` float32 (radians
+    /// in ``[0, π)`` from the patch's ``u`` axis towards ``v``),
+    /// ``zncc_self_similarity_cos_view_angle`` ``(M,)`` float32,
+    /// ``zncc_self_similarity_tilt_angle`` ``(M,)`` float32 (radians in
+    /// ``[0, π)``, ``NaN`` facing the patch head on),
+    /// ``zncc_self_similarity_zoom`` ``(M, 2)`` float32 (``[least, most]``,
+    /// grid px per photograph px), ``plain_bitmap_zncc`` and
+    /// ``blur_matched_bitmap_zncc`` ``(M,)`` float32 (scores against the
+    /// stored bitmap, ``1`` for the reference observation); and ``"options"``,
+    /// a dict of the reading's ``max_radius``, ``flat_floor``, ``noise`` and
+    /// ``relative_tolerance`` and the sampler rule's ``anisotropic_threshold``.
+    /// ``NaN`` axes mean the observation was not measured; a ``NaN`` score
+    /// means it was not read. Set it with
+    /// ``clone_with_changes(observation_readings=...)``; every pass that drops
+    /// or reorders observations moves each row with its observation.
+    #[getter]
+    fn observation_readings<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.inner
+            .point_set
+            .observation_readings
+            .as_ref()
+            .map(|r| crate::readings::readings_to_py(py, r))
+            .transpose()
+    }
+
     /// Per point, the index of its **reference observation** within its own
     /// track (``0`` to ``observation_counts[i] - 1``), the observation the
     /// point's patch bitmap is, or is to be, rendered from, as a 1-D int32

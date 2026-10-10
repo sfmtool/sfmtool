@@ -455,3 +455,30 @@ def render_from_references(
     )
     bitmaps[named] = np.asarray(own)[named]
     return bitmaps, references
+
+
+def with_observation_readings(
+    recon: SfmrReconstruction,
+    images: Any,
+    *,
+    resolution: int,
+    sampler: str = "per_view",
+) -> SfmrReconstruction:
+    """``recon`` with every observation read again on its own render.
+
+    Each observation's tile is rendered at its stored keypoint through its
+    point's patch, as the stored bitmap is, and read for its self-similarity
+    ellipse, viewing angle, tilt and zoom, and its plain and blur-matched
+    scores against the point's stored bitmap
+    (``PatchCloud.read_observations``). Call it once the bitmaps and the
+    references are final, so the scores read the bitmaps the file stores. A
+    writer that renders the observations' tiles writes these rows; a value
+    without patch frames is returned unchanged.
+    """
+    cloud = recon.patches
+    if cloud is None or recon.keypoints_xy is None:
+        return recon
+    readings = cloud.read_observations(
+        recon, images, resolution=resolution, sampler=sampler
+    )
+    return recon.clone_with_changes(observation_readings=readings)

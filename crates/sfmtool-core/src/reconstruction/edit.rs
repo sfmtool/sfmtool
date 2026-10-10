@@ -238,6 +238,7 @@ impl SfmrReconstruction {
                     c
                 }),
                 observation_confidence: self.point_set.observation_confidence.clone(),
+                observation_readings: self.point_set.observation_readings.clone(),
                 // The bitmaps are unchanged, so each is still the render of
                 // the observation it was.
                 reference_observations: self.point_set.reference_observations.clone(),
@@ -355,6 +356,11 @@ impl SfmrReconstruction {
         // point row, and the two selections are different.
         let new_observation_confidence =
             select_observation_confidence(&self.point_set.observation_confidence, &kept_obs);
+        let new_observation_readings = self
+            .point_set
+            .observation_readings
+            .as_ref()
+            .map(|r| r.select(&kept_obs));
 
         // Points + observation counts. A patch frame is per-point, so it rides
         // along: subset keeps the rows for surviving points (geometry is
@@ -561,6 +567,7 @@ impl SfmrReconstruction {
                 normal_confidence: new_normal_confidence,
                 point_constraints: new_point_constraints,
                 observation_confidence: new_observation_confidence,
+                observation_readings: new_observation_readings,
                 reference_observations: new_reference_observations,
                 display_only_references: new_display_only_references,
                 observations: new_observations,
@@ -646,6 +653,11 @@ impl SfmrReconstruction {
         // never the point rows `keep_idx`.
         let new_observation_confidence =
             select_observation_confidence(&self.point_set.observation_confidence, &kept);
+        let new_observation_readings = self
+            .point_set
+            .observation_readings
+            .as_ref()
+            .map(|r| r.select(&kept));
         let new_tracks: Vec<TrackObservation> = kept
             .iter()
             .map(|&i| TrackObservation {
@@ -718,6 +730,7 @@ impl SfmrReconstruction {
                 normal_confidence: new_normal_confidence,
                 point_constraints: new_point_constraints,
                 observation_confidence: new_observation_confidence,
+                observation_readings: new_observation_readings,
                 // A surviving point keeps all its observations, so its index
                 // comes across unchanged.
                 reference_observations: self

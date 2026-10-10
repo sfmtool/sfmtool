@@ -593,6 +593,10 @@ fn prune_rows(
             .observation_confidence
             .as_ref()
             .map(|c| kept_obs.iter().map(|&row| c[row]).collect()),
+        observation_readings: set
+            .observation_readings
+            .as_ref()
+            .map(|r| r.select(&kept_obs)),
         // A point whose reference observation is pruned keeps its bitmap and
         // loses its reference.
         reference_observations: set.select_reference_observations(&keep_idx, &kept_obs),

@@ -132,6 +132,7 @@ class LocalizeKeypointsTransform:
             image_file_hashes_from_images,
             reference_images_by_point,
             stored_keypoints_by_point,
+            with_observation_readings,
         )
 
         images = load_workspace_images(recon)
@@ -186,6 +187,14 @@ class LocalizeKeypointsTransform:
             patch_bitmaps=None,
             min_views=self.min_views,
             keep_stored_references=True,
+        )
+        # Every kept observation was rendered at its new keypoint, so it is
+        # read again there; with no bitmap stored its scores are NaN.
+        out = with_observation_readings(
+            out,
+            images,
+            resolution=self.options.get("resolution", 24),
+            sampler=self.options.get("sampler", "per_view"),
         )
 
         self._print_summary(recon, out)

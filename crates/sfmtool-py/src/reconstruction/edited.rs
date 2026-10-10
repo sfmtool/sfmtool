@@ -120,6 +120,12 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
         .map(|v| v.extract())
         .transpose()?;
     let k = image_indexes.len();
+    // Optional whatever the base carries: a record without it adds rows with
+    // nothing measured.
+    let readings = match get(d, "observation_readings")? {
+        Some(v) => crate::readings::readings_from_py(&v, Some(k))?,
+        None => None,
+    };
     for (name, len) in [
         ("feature_indexes", feature_indexes.as_ref().map(|v| v.len())),
         ("keypoints_xy", keypoints.as_ref().map(|v| v.len())),
@@ -146,6 +152,7 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
                     .map(|kp| fixed::<2, f32>(kp[i].clone(), "keypoints_xy"))
                     .transpose()?,
                 confidence: confidence.as_ref().map(|c| c[i]),
+                reading: readings.as_ref().map(|r| r.rows[i]),
             })
         })
         .collect::<PyResult<Vec<_>>>()?;
@@ -235,6 +242,26 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
             .map(|o| o.confidence.unwrap_or_default())
             .collect();
         d.set_item("observation_confidence", PyArray1::from_vec(py, v))?;
+    }
+    if r.observations.iter().any(|o| o.reading.is_some()) {
+        let rows = r
+            .observations
+            .iter()
+            .map(|o| {
+                o.reading
+                    .unwrap_or(sfmtool_core::reconstruction::ObservationReading::NOT_MEASURED)
+            })
+            .collect();
+        let readings = sfmtool_core::reconstruction::ObservationReadings {
+            rows,
+            options: sfmtool_core::reconstruction::observation_reading_options(
+                sfmtool_core::camera::sampler::SamplerChoice::per_view(),
+            ),
+        };
+        d.set_item(
+            "observation_readings",
+            crate::readings::readings_to_py(py, &readings)?,
+        )?;
     }
     if let Some(u) = r.patch_u_halfvec {
         d.set_item("patch_u_halfvec", PyArray1::from_vec(py, u.to_vec()))?;
@@ -438,6 +465,10 @@ impl PyEditedReconstruction {
         d.set_item(
             "observation_confidence",
             self.inner.has_observation_confidence(),
+        )?;
+        d.set_item(
+            "observation_readings",
+            self.inner.has_observation_readings(),
         )?;
         d.set_item("patch_frames", self.inner.has_patch_frames())?;
         d.set_item("patch_bitmaps", self.inner.has_patch_bitmaps())?;

@@ -336,7 +336,13 @@ def _create_merged_reconstruction(
         images, source_reconstructions, camera_mapping
     )
 
+    extra = {}
+    readings = _merged_readings(source_reconstructions, images["names"], tracks)
+    if readings is not None:
+        extra["observation_readings"] = readings
+
     return first_recon.clone_with_changes(
+        **extra,
         cameras=cameras,
         camera_indexes=np.ascontiguousarray(images["camera_indexes"], dtype=np.uint32),
         image_names=images["names"],
@@ -366,6 +372,55 @@ def _create_merged_reconstruction(
         observation_counts=observation_counts,
         rig_frame_data=rig_frame_data,
     )
+
+
+def _merged_readings(source_reconstructions, image_names, tracks):
+    """The observation readings of the merged tracks, or ``None``.
+
+    An observation is its image and its feature, so each merged observation
+    takes the row of the source observation of the same image name and feature
+    index: a merge moves no keypoint and renders nothing, so the row is
+    carried as the record it is. An observation no source read, or one from a
+    source whose readings were taken under other options than the first
+    source's that has them, is not measured. ``None`` when no source carries
+    readings.
+    """
+    carrying = [r for r in source_reconstructions if r.observation_readings is not None]
+    if not carrying:
+        return None
+    first = carrying[0].observation_readings
+    options = first["options"]
+    keys = [k for k in first if k != "options"]
+    rows = {}
+    for recon in carrying:
+        readings = recon.observation_readings
+        if readings["options"] != options:
+            continue
+        names = [Path(n).as_posix() for n in recon.image_names]
+        img = np.asarray(recon.track_image_indexes)
+        feat = np.asarray(recon.track_feature_indexes)
+        for j in range(len(img)):
+            rows.setdefault(
+                (names[int(img[j])], int(feat[j])),
+                {k: readings[k][j] for k in keys},
+            )
+    names = [Path(n).as_posix() for n in image_names]
+    merged_img = np.asarray(tracks["image_indexes"])
+    merged_feat = np.asarray(tracks["feature_indexes"])
+    m = len(merged_img)
+    out = {
+        k: np.full((m,) + first[k].shape[1:], np.nan, dtype=first[k].dtype)
+        if first[k].dtype != np.uint8
+        else np.zeros((m,) + first[k].shape[1:], dtype=np.uint8)
+        for k in keys
+    }
+    for j in range(m):
+        row = rows.get((names[int(merged_img[j])], int(merged_feat[j])))
+        if row is not None:
+            for k in keys:
+                out[k][j] = row[k]
+    out["options"] = options
+    return out
 
 
 def _merge_rig_frame_data(images, source_reconstructions, camera_mapping):

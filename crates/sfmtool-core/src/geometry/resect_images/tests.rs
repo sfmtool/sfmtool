@@ -301,6 +301,7 @@ fn build_points(
             normal_confidence: None,
             point_constraints: None,
             observation_confidence: None,
+            observation_readings: None,
             reference_observations: None,
             display_only_references: None,
             observations: ObservationSource::EmbeddedPatches {

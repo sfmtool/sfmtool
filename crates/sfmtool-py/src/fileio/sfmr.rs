@@ -78,7 +78,8 @@ where
 ///   point_constraints, constraint_distances, constraint_reference_images,
 ///   patch_u_halfvec_xyz, patch_v_halfvec_xyz, patch_bitmaps_y_x_rgba,
 ///   image_indexes, feature_indexes, keypoints_xy, observation_confidence,
-///   point_indexes, observation_counts, reference_observations,
+///   observation_readings (a dict of the eight reading columns and their
+///   `"options"`, or `None`), point_indexes, observation_counts, reference_observations,
 ///   observed_depth_histogram_counts, thumbnails_y_x_rgb (numpy arrays;
 ///   `thumbnails_y_x_rgb` is `None` for a file without thumbnails).
 ///
@@ -216,6 +217,13 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     match data.observation_confidence {
         Some(c) => dict.set_item("observation_confidence", c.into_pyarray(py))?,
         None => dict.set_item("observation_confidence", py.None())?,
+    }
+    match data.observation_readings {
+        Some(r) => dict.set_item(
+            "observation_readings",
+            crate::readings::columns_to_py(py, r)?,
+        )?,
+        None => dict.set_item("observation_readings", py.None())?,
     }
     dict.set_item("point_indexes", data.point_indexes.into_pyarray(py))?;
     dict.set_item(
@@ -377,6 +385,12 @@ pub(crate) fn parse_sfmr_data_from_dict(
         optional_array::<u8, ndarray::Ix1>(data, "normal_confidence", "a 1D uint8 array")?;
     let observation_confidence =
         optional_array::<u8, ndarray::Ix1>(data, "observation_confidence", "a 1D uint8 array")?;
+    // The eight observation-reading columns, a dict or `None`; their row
+    // counts are the format writer's to check.
+    let observation_readings = match get_optional_item(data, "observation_readings")? {
+        Some(v) => crate::readings::columns_from_py(&v, None)?,
+        None => None,
+    };
 
     // The per-point constraint triple. Its cross-array rules -- present
     // together, constraint codes, a finite distance naming a real image, a ranged row's
@@ -490,6 +504,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         feature_indexes,
         keypoints_xy,
         observation_confidence,
+        observation_readings,
         point_indexes: point_indexes.as_array().as_standard_layout().into_owned(),
         observation_counts: observation_counts
             .as_array()

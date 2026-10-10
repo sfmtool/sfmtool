@@ -26,6 +26,7 @@ from sfmtool._patch_compaction import (
     reference_images_by_point,
     render_from_references,
     stored_reference_images,
+    with_observation_readings,
 )
 from sfmtool._pose_math import recon_camera_centers
 from sfmtool._progress import _poll_progress, _timed_step
@@ -870,5 +871,11 @@ def embed_patches(
             )
             result = result.clone_with_changes(
                 patch_bitmaps=final_bitmaps, reference_observations=references
+            )
+        # 5. Read every observation on its own render, against the bitmaps the
+        #    file stores: the rows each observation's readings are kept in.
+        with _timed_step(log, "  reading each observation on its render..."):
+            result = with_observation_readings(
+                result, pyramids, resolution=resolution, sampler=sampler
             )
     return result

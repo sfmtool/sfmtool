@@ -11,7 +11,7 @@ const OPTIONS: ObservationReadingOptions = ObservationReadingOptions {
     flat_floor: 0.5,
     noise: 2.0,
     relative_tolerance: 0.05,
-    anisotropic_threshold: 1.5,
+    anisotropic_threshold: Some(1.5),
 };
 
 /// A row whose every value says which observation it is: `tag` is unique per

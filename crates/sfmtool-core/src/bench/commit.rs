@@ -11,6 +11,8 @@
 
 use nalgebra::Vector3;
 
+use crate::patch::observation_reading::observation_reading;
+
 use crate::reconstruction::data::Point3D;
 use crate::reconstruction::edited::{
     EditError, EditedReconstruction, PointMap, PointRecord, RecordObservation,
@@ -287,6 +289,16 @@ pub fn commit(
         .map(|&i| (track.observations[i].image, i))
         .collect();
     rows.sort_by_key(|&(image, i)| (image, i));
+    // The rows' readings are the evaluation's, taken under the default
+    // reading options; a base whose readings stand under other options gets
+    // rows with nothing measured rather than readings it cannot compare. The
+    // scores are against the bitmap the evaluation read, which is the one
+    // written only where the commit writes a bitmap.
+    let readings_comparable = edited.observation_reading_options()
+        == crate::reconstruction::observation_reading_options(
+            crate::camera::sampler::SamplerChoice::per_view(),
+        );
+    let scores_stored = edited.has_patch_bitmaps() && payload.committable_bitmap().is_some();
     let mut observations = Vec::with_capacity(rows.len());
     for &(image, i) in &rows {
         if image as usize >= image_count {
@@ -313,6 +325,11 @@ pub fn commit(
                 measurement
                     .blur_matched_zncc
                     .map_or(0, crate::reconstruction::data::observation_confidence_byte)
+            }),
+            reading: Some(if readings_comparable {
+                measurement_reading(measurement, scores_stored)
+            } else {
+                crate::reconstruction::ObservationReading::NOT_MEASURED
             }),
         });
     }
@@ -528,4 +545,37 @@ fn mean_reprojection_error(track: &EditableTrack, kept: &[usize]) -> f32 {
 /// A world half-vector as the column's `f32` triple.
 fn halfvec(v: Vector3<f64>) -> [f32; 3] {
     [v.x as f32, v.y as f32, v.z as f32]
+}
+
+/// The row of readings a commit stores for an observation: what its last
+/// evaluation read on its render at the keypoint the commit writes, the
+/// self-similarity ellipse, the viewing angle, the tilt direction and the zoom
+/// ([`observation_reading`]), with its plain and blur-matched scores against
+/// the stored bitmap where `with_scores`, `NaN` where the row has none.
+///
+/// A row put on the bench from a committed point carries the readings the
+/// point stored until its first evaluation, so committing it again writes the
+/// same row.
+pub fn measurement_reading(
+    measurement: &super::track::TrackMeasurement,
+    with_scores: bool,
+) -> crate::reconstruction::ObservationReading {
+    let scores = (with_scores
+        && (measurement.plain_zncc.is_some() || measurement.blur_matched_zncc.is_some()))
+    .then(|| {
+        (
+            measurement.plain_zncc.unwrap_or(f64::NAN),
+            measurement.blur_matched_zncc.unwrap_or(f64::NAN),
+        )
+    });
+    observation_reading(
+        measurement
+            .zncc_self_similarity_ellipse
+            .as_ref()
+            .map(|e| &e.grid_px),
+        measurement.viewing_angle_deg,
+        measurement.tilt_direction_deg,
+        measurement.zoom,
+        scores,
+    )
 }

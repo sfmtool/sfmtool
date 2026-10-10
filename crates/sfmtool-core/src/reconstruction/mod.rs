@@ -41,7 +41,8 @@ pub use edited::{
 };
 
 pub use data::{
-    unit_quaternion_preserving, ImageTable, ObservationSource, Point3D, PointConstraintColumns,
-    PointSet, ReconstructionError, SfmrImage, SfmrReconstruction, SiftKeypointFill,
-    TrackObservation,
+    observation_reading_options, unit_quaternion_preserving, ImageTable, ObservationReading,
+    ObservationReadingOptions, ObservationReadings, ObservationSource, Point3D,
+    PointConstraintColumns, PointSet, ReconstructionError, SfmrImage, SfmrReconstruction,
+    SiftKeypointFill, TrackObservation,
 };

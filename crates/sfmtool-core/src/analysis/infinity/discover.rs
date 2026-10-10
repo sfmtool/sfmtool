@@ -714,6 +714,13 @@ impl SfmrReconstruction {
             if let Some(confidence) = recon.point_set.observation_confidence.as_mut() {
                 confidence.extend(std::iter::repeat_n(0u8, members.len()));
             }
+            // Nor read on any render.
+            if let Some(readings) = recon.point_set.observation_readings.as_mut() {
+                readings.rows.extend(std::iter::repeat_n(
+                    crate::reconstruction::ObservationReading::NOT_MEASURED,
+                    members.len(),
+                ));
+            }
             // Nothing outside the solve owns a track this pass discovered, so
             // its constraint row is free -- the row the reconstruction would
             // hold for it if it carried no constraint columns at all.

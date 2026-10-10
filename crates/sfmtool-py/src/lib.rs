@@ -99,6 +99,8 @@ pub(crate) mod helpers;
 
 pub(crate) mod csr_args;
 
+pub(crate) mod readings;
+
 // ── Geometric types ───────────────────────────────────────────────────────
 
 mod geometry;

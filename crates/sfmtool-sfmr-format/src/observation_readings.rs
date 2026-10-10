@@ -33,7 +33,8 @@ pub const OBSERVATION_READING_OPTIONS: &str = "observation_reading_options";
 /// means the score was not read, as where the point has no stored bitmap. The
 /// reference observation's scores are `1`.
 ///
-/// Equality compares the bits of every field, so two `NaN` rows are equal.
+/// Two rows are equal where every value is equal or `NaN` in both, so two
+/// rows with nothing measured are equal.
 #[derive(Debug, Clone, Copy)]
 pub struct ObservationReading {
     /// `[semi-major, semi-minor]` axes of the whole render's ZNCC
@@ -94,19 +95,17 @@ impl ObservationReading {
         }
     }
 
-    fn bits(&self) -> [u32; 10] {
+    fn floats(&self) -> [f32; 9] {
         [
-            self.ellipse_axes[0].to_bits(),
-            self.ellipse_axes[1].to_bits(),
-            u32::from(self.ellipse_axes_is_at_least[0])
-                | (u32::from(self.ellipse_axes_is_at_least[1]) << 1),
-            self.ellipse_major_angle.to_bits(),
-            self.cos_view_angle.to_bits(),
-            self.tilt_angle.to_bits(),
-            self.zoom[0].to_bits(),
-            self.zoom[1].to_bits(),
-            self.plain_bitmap_zncc.to_bits(),
-            self.blur_matched_bitmap_zncc.to_bits(),
+            self.ellipse_axes[0],
+            self.ellipse_axes[1],
+            self.ellipse_major_angle,
+            self.cos_view_angle,
+            self.tilt_angle,
+            self.zoom[0],
+            self.zoom[1],
+            self.plain_bitmap_zncc,
+            self.blur_matched_bitmap_zncc,
         ]
     }
 }
@@ -119,7 +118,12 @@ impl Default for ObservationReading {
 
 impl PartialEq for ObservationReading {
     fn eq(&self, other: &Self) -> bool {
-        self.bits() == other.bits()
+        self.ellipse_axes_is_at_least == other.ellipse_axes_is_at_least
+            && self
+                .floats()
+                .iter()
+                .zip(other.floats())
+                .all(|(a, b)| *a == b || (a.is_nan() && b.is_nan()))
     }
 }
 
@@ -140,8 +144,9 @@ pub struct ObservationReadingOptions {
     /// `ε`, the ZNCC deficit two views of the same surface show, as a
     /// fraction.
     pub relative_tolerance: f64,
-    /// The sampler rule's threshold `a` the renders were made under.
-    pub anisotropic_threshold: f64,
+    /// The sampler rule's threshold `a` the renders were made under; `None`
+    /// (`null`) where every render used one sampler whatever its zoom.
+    pub anisotropic_threshold: Option<f64>,
 }
 
 /// The eight observation-reading columns as stored, parallel to the other

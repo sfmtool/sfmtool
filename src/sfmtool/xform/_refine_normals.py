@@ -32,6 +32,7 @@ from ._images import load_workspace_images
 from .._patch_compaction import (
     reference_observations_from_images,
     render_from_references,
+    with_observation_readings,
 )
 from ._patch_params import validate_patch_params
 
@@ -250,10 +251,17 @@ class RefineNormalsTransform:
                 resolution=self.resolution,
                 sampler=self.sampler,
             )
-            return out.clone_with_changes(
+            out = out.clone_with_changes(
                 patch_bitmaps=bitmaps, reference_observations=references
             )
-        return recon.clone_with_changes(normals=normals, patches=cloud)
+        else:
+            out = recon.clone_with_changes(normals=normals, patches=cloud)
+        # Every observation's tile was rendered through the refined normal, so
+        # each is read again on that render, against the bitmaps the result
+        # stores.
+        return with_observation_readings(
+            out, images, resolution=self.resolution, sampler=self.sampler
+        )
 
     def _print_summary(
         self, photo: np.ndarray, init: np.ndarray, conf: np.ndarray

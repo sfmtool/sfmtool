@@ -163,6 +163,10 @@ struct DeferredChanges {
     /// is "was the kwarg passed", the inner one "with an array, or with `None`
     /// to drop the column".
     reference_observations: Option<Option<Vec<i32>>>,
+    /// `observation_readings`, settled after the tracks and the references:
+    /// the outer `Option` is "was the kwarg passed", the inner one "with a
+    /// dict, or with `None` to drop the columns".
+    observation_readings: Option<Option<sfmtool_core::reconstruction::ObservationReadings>>,
 }
 
 /// Apply one per-point keyword argument (positions, colors, errors, normals,
@@ -589,6 +593,12 @@ fn apply_observation_field(
                 recon.point_set.observation_confidence = Some(s.to_vec());
             }
         }
+        "observation_readings" => {
+            // `None` drops the columns, a dict replaces them, and omitting the
+            // kwarg carries the rows ([`settle_observation_readings`]). The row
+            // count is checked once the tracks are settled.
+            deferred.observation_readings = Some(crate::readings::readings_from_py(value, None)?);
+        }
         "keypoints_xy" if value.is_none() => {
             // Drop the optional inline copy a `sift_files` value carries; an
             // `embedded_patches` value's keypoints are its observations.
@@ -685,6 +695,7 @@ fn finalize(
         constraint_distances,
         constraint_reference_images,
         reference_observations,
+        observation_readings,
     } = deferred;
 
     apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
@@ -740,6 +751,13 @@ fn finalize(
         replacing_tracks,
         reference_observations,
     )?;
+    settle_observation_readings(
+        inner,
+        &mut recon,
+        old_point_count,
+        replacing_tracks,
+        observation_readings,
+    );
 
     // The track arrays and the observation-source columns can be supplied in the
     // same call (and are applied in separate passes), so guard against leaving a
@@ -1027,6 +1045,79 @@ fn settle_reference_observations(
     // point's geometry, and the reference observation is still in its track,
     // so a later render that gives the point a frame renders from it.
     Ok(())
+}
+
+/// Settle the observation readings once the tracks and the references are.
+///
+/// A passed value replaces them (`None` drops them); its row count is checked
+/// with the other per-observation columns. Otherwise the rows travel with
+/// their observations. Where the tracks are replaced and the point count is
+/// unchanged, each new observation takes the row of the observation of
+/// `inner` with the same point index and the same image name, and an
+/// observation `inner` does not have is not measured; where the point count
+/// changed, no observation can be matched, and the columns are dropped. Where
+/// the tracks are kept, every row is kept, except that a point whose reference
+/// observation changed has its scores cleared, since they were read against
+/// the bitmap of another reference.
+fn settle_observation_readings(
+    inner: &SfmrReconstruction,
+    recon: &mut SfmrReconstruction,
+    old_point_count: usize,
+    replacing_tracks: bool,
+    passed: Option<Option<sfmtool_core::reconstruction::ObservationReadings>>,
+) {
+    use sfmtool_core::reconstruction::{ObservationReading, ObservationReadings};
+    if let Some(passed) = passed {
+        recon.point_set.observation_readings = passed;
+        return;
+    }
+    let Some(old) = inner.point_set.observation_readings.as_ref() else {
+        return;
+    };
+    if replacing_tracks {
+        if recon.point_set.points.len() != old_point_count {
+            recon.point_set.observation_readings = None;
+            return;
+        }
+        let name = |r: &SfmrReconstruction, image: u32| -> String {
+            r.image_table.images[image as usize].name.clone()
+        };
+        let by_key: HashMap<(u32, String), ObservationReading> = inner
+            .point_set
+            .tracks
+            .iter()
+            .zip(&old.rows)
+            .map(|(t, &row)| ((t.point_index, name(inner, t.image_index)), row))
+            .collect();
+        let rows = recon
+            .point_set
+            .tracks
+            .iter()
+            .map(|t| {
+                by_key
+                    .get(&(t.point_index, name(recon, t.image_index)))
+                    .copied()
+                    .unwrap_or(ObservationReading::NOT_MEASURED)
+            })
+            .collect();
+        recon.point_set.observation_readings = Some(ObservationReadings {
+            rows,
+            options: old.options,
+        });
+        return;
+    }
+    if let (Some(before), Some(after)) = (
+        inner.point_set.reference_observations.as_ref(),
+        recon.point_set.reference_observations.clone(),
+    ) {
+        if before.len() == after.len() {
+            for (p, (a, b)) in before.iter().zip(&after).enumerate() {
+                if a != b {
+                    recon.point_set.clear_observation_scores(p);
+                }
+            }
+        }
+    }
 }
 
 /// Replace the tracks from the three track arrays, which must all be passed,

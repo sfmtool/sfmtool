@@ -39,6 +39,7 @@ mod conversion;
 mod demo;
 mod image_table;
 mod point_set;
+mod readings;
 mod recompute;
 mod sift_keypoints;
 
@@ -46,6 +47,9 @@ pub use affine_shape::patch_affine_shape;
 pub use image_table::ImageTable;
 pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{ObservationSource, PointSet};
+pub use readings::{
+    observation_reading_options, ObservationReading, ObservationReadingOptions, ObservationReadings,
+};
 pub use sift_keypoints::SiftKeypointFill;
 
 // Re-exported at the old path: `analysis::infinity::discover` imports it as

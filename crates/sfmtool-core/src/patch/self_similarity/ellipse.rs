@@ -132,6 +132,20 @@ impl SelfSimilarityEllipseUnits {
 }
 
 impl SelfSimilarityEllipse {
+    /// The ellipse with semi-axes `axes` (`[major, minor]`), their flags, and
+    /// its major axis at `major_angle`, its matrix rebuilt from them: how a
+    /// stored reading, which keeps the axes and the angle, is read back. With
+    /// a `NaN` angle the axes are taken as equal and the larger is used for
+    /// both in the matrix.
+    pub fn from_axes(axes: [f64; 2], axes_is_at_least: [bool; 2], major_angle: f64) -> Self {
+        Self {
+            axes,
+            axes_is_at_least,
+            major_angle,
+            matrix: matrix_of(axes, major_angle),
+        }
+    }
+
     /// The ellipse of a reading with no data: `NaN` throughout.
     pub(super) fn no_data() -> Self {
         Self {

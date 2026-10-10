@@ -511,7 +511,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
             );
             let (reproj_error, _) =
                 crate::metrics::compute_observation_metrics(point, image, camera, xy);
-            json!({
+            let mut entry = json!({
                 "camera_image_index": image_index,
                 "name": image.name,
                 "xy": [xy[0], xy[1]],
@@ -519,7 +519,11 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
                 // cannot carry — reported as null, which is the honest shape
                 // for "this observation has no reprojection error".
                 "reproj_error": reproj_error.is_finite().then_some(reproj_error),
-            })
+            });
+            if let Some(readings) = view.observation_readings() {
+                entry["stored_reading"] = stored_reading_json(&readings[k]);
+            }
+            entry
         })
         .collect();
 
@@ -539,6 +543,24 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         reply["evaluation"] = evaluation;
     }
     Ok(reply)
+}
+
+/// One observation's stored readings as `get_point` reports them, under the
+/// `.sfmr` column names without the `tracks/` prefix: what the reconstruction
+/// records of the observation's own render. A value not measured or not read
+/// (`NaN`) is null.
+fn stored_reading_json(row: &sfmtool_core::reconstruction::ObservationReading) -> Value {
+    let f = |v: f32| (!v.is_nan()).then_some(v);
+    json!({
+        "zncc_self_similarity_ellipse_axes": row.ellipse_axes.map(f),
+        "zncc_self_similarity_ellipse_axes_is_at_least": row.ellipse_axes_is_at_least,
+        "zncc_self_similarity_ellipse_major_angle": f(row.ellipse_major_angle),
+        "zncc_self_similarity_cos_view_angle": f(row.cos_view_angle),
+        "zncc_self_similarity_tilt_angle": f(row.tilt_angle),
+        "zncc_self_similarity_zoom": row.zoom.map(f),
+        "plain_bitmap_zncc": f(row.plain_bitmap_zncc),
+        "blur_matched_bitmap_zncc": f(row.blur_matched_bitmap_zncc),
+    })
 }
 
 /// The `evaluation` block of `get_point` for the viewed point: the viewed

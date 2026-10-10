@@ -1669,6 +1669,7 @@ fn evaluate_track(
             measurement.zncc_self_similarity_tolerance = None;
             measurement.viewing_angle_deg = None;
             measurement.tilt_direction_deg = None;
+            measurement.zoom = None;
             measurement.coverage = None;
             measurement.clipped_share = None;
             measurement.pair_zncc = None;
@@ -1715,6 +1716,9 @@ fn evaluate_track(
                 measurement.viewing_angle_deg = tile.viewing_angle.map(|a| a.angle_deg);
                 measurement.tilt_direction_deg =
                     tile.viewing_angle.and_then(|a| a.tilt_direction_deg);
+                measurement.zoom = tile
+                    .jacobian
+                    .map(crate::patch::observation_reading::zoom_of_jacobian);
                 measurement.coverage = Some(tile.coverage);
                 measurement.clipped_share = tile.clipped_share;
                 kept_tiles.push((i, tile));
