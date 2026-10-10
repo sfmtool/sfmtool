@@ -182,9 +182,7 @@ def test_enriched_output_states_the_refinement(cluster_matches_file: Path):
     """The refined file's geometry is the refinement's, exactly: the kernel's
     float64 answer downcast for every member it measured, and the input's own
     detection -- byte for byte -- for every member it never fitted."""
-    import cv2
-
-    from sfmtool.fileio import read_matches
+    from sfmtool.fileio import read_image_rgb, read_matches
     from sfmtool.matching import refine_cluster_patches
 
     result = CliRunner().invoke(
@@ -220,11 +218,9 @@ def test_enriched_output_states_the_refinement(cluster_matches_file: Path):
     member_images = np.asarray(src["member_images"])
     member_features = np.asarray(src["member_features"])
     for i, name in enumerate(src["image_names"]):
-        images.append(
-            np.ascontiguousarray(
-                cv2.imread(str(workspace_dir / name), cv2.IMREAD_COLOR)
-            )
-        )
+        # The command hands the kernel `read_image_rgb`'s pixels in BGR.
+        rgb = read_image_rgb(workspace_dir / name)
+        images.append(np.ascontiguousarray(rgb[:, :, ::-1]))
         count = int(src["feature_counts"][i])
         p = np.zeros((count, 2), dtype=np.float32)
         a = np.zeros((count, 2, 2), dtype=np.float32)

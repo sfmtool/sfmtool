@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from sfmtool.fileio import read_image_rgb
 from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool.sift.extract import SiftExtractionError
 from sfmtool.sift.file import feature_size, xxh128_of_file
@@ -101,14 +102,15 @@ def extract_sift_with_opencv(
     )
 
     def process_single_image(image_path):
-        image = cv2.imread(
-            str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        )
-        if image is None:
-            raise SiftExtractionError(f"Failed to load image: {image_path}")
+        try:
+            image = read_image_rgb(image_path)
+        except OSError as e:
+            raise SiftExtractionError(
+                f"Failed to load image: {image_path} ({e})"
+            ) from e
 
         height, width = image.shape[:2]
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
         keypoints, descriptors = sift.detectAndCompute(gray, None)
 
@@ -155,7 +157,6 @@ def extract_sift_with_opencv(
         thumbnail = cv2.resize(
             image, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
         )
-        thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
 
         return (
             feature_tool_metadata,

@@ -14,11 +14,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import cv2
 import numpy as np
 
 from sfmtool._filenames import number_from_filename
 from sfmtool._pose_math import camera_centers
+from sfmtool._sfmtool.fileio import read_image_rgb
 from sfmtool._sfmtool.reconstruction import RangeExpr
 from sfmtool._sfmtool.patches import render_consensus_atlas
 from sfmtool._sfmtool.geometry import RotQuaternion
@@ -217,10 +217,7 @@ def load_sources(
         cam = cameras[camera_indexes[i]]
         q = RotQuaternion(quats[i, 0], quats[i, 1], quats[i, 2], quats[i, 3])
         path = image_dir / name
-        bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise FileNotFoundError(f"Could not read source image: {path}")
-        sources.append((cam, q, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
+        sources.append((cam, q, read_image_rgb(path)))
     return sources
 
 

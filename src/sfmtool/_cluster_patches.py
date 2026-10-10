@@ -55,11 +55,10 @@ def _run_cluster_patches(
     from concurrent.futures import ThreadPoolExecutor
     from datetime import datetime
 
-    import cv2
     import numpy as np
 
     from ._progress import _poll_progress
-    from ._sfmtool.fileio import read_matches, write_matches
+    from ._sfmtool.fileio import read_image_rgb, read_matches, write_matches
     from ._sfmtool.matching import refine_cluster_patches as _refine
 
     data = read_matches(in_path)
@@ -106,14 +105,13 @@ def _run_cluster_patches(
     detected_shapes = np.asarray(data["member_affine_shapes"], dtype=np.float32)
 
     def _read_one(name: str):
-        img_path = workspace_dir / name
-        img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-        if img is None:
-            raise FileNotFoundError(f"Image not found or unreadable: {img_path}")
-        return np.ascontiguousarray(img)
+        # The kernel works in BGR, the order the viewer's cluster run hands
+        # it too, so the decoded RGB is reversed here.
+        rgb = read_image_rgb(workspace_dir / name)
+        return np.ascontiguousarray(rgb[:, :, ::-1])
 
     click.echo("Reading images...")
-    # Decode in a thread pool (cv2 releases the GIL), collecting results in
+    # Decode in a thread pool (the decoder releases the GIL), collecting results in
     # submission order so the list stays parallel to `image_names` (the
     # embed-patches pattern).
     with ThreadPoolExecutor() as pool:

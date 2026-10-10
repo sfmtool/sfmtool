@@ -92,7 +92,8 @@ image.
 ## Extraction-orchestration pipelining
 
 The Python extraction backend (`extract_sift_with_sfmtool`) processes images in
-three stages: load+decode (`cv2.imread`), extract (the Rust core, GIL released,
+three stages: load+decode (`sfmtool.fileio.read_image_rgb`, see
+[reading-photographs.md](../../core/camera/reading-photographs.md)), extract (the Rust core, GIL released,
 internally rayon-parallel), then save (`write_sift`, zstd+ZIP). Measured
 per-image stage split (ms): extract dominates at **85–91%** of the work;
 load+thumbnail+save together are only **~7% on large images (2040×1536), ~15% on
@@ -103,7 +104,7 @@ A load ∥ extract ∥ save pipeline is therefore a **single-digit-percent** win
 local/SSD storage, and is limited less by the GIL than by **CPU saturation**:
 the rayon extract already uses every core, so overlapping the save — or decoding
 the next image — *contends* for cores rather than hiding idle time. The one
-stage with genuine idle time to hide is the **disk read** (`cv2.imread` already
+stage with genuine idle time to hide is the **disk read** (`read_image_rgb` already
 releases the GIL) — *and*, on small images, the cores the per-image rayon extract
 cannot itself saturate (measured: 1→4 threads scales only **3.1×** on a 270×480
 image, ~23% idle), plus each image's serial floor (octave-0 build, setup). So
@@ -117,7 +118,7 @@ low-risk overlaps:
   caps memory to ~*K* decoded frames + pyramids. This hides disk-read latency
   **and** overlaps one image's serial floor with another's parallel work, so the
   cores the per-image rayon leaves idle on small images get filled. Because both
-  `cv2.imread` and the Rust extract release the GIL and rayon's *single global
+  `read_image_rgb` and the Rust extract release the GIL and rayon's *single global
   pool* caps total CPU threads at the core count, more in-flight images never
   oversubscribe — they just keep that pool fed. *K* must therefore scale *with*
   the core count to fill a many-core host, so it defaults to `os.cpu_count()`,
@@ -176,7 +177,7 @@ small slice when extract dominates (few cores, large images) but a growing
 fraction as cores scale and extract collapses toward its ~165 ms serial floor.
 
 **Why the save goes on the rayon pool, not a worker thread (the contention
-trap).** Decode is I/O-bound (`cv2.imread` waits on disk and releases the GIL),
+trap).** Decode is I/O-bound (`read_image_rgb` waits on disk and releases the GIL),
 so prefetching it on a Python thread is free — it never burns a core. The save is
 *CPU-bound* (single-stream zstd). An earlier attempt offloaded it to a dedicated
 `ThreadPoolExecutor` writer thread; that **regressed ~25–30%** (wall *and*

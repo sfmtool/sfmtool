@@ -30,6 +30,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .._sfmtool.fileio import read_image_rgb
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import RotQuaternion
 
@@ -142,9 +143,8 @@ def _render_image(
     trans = np.asarray(recon.translations[img_idx])
 
     img_path = Path(recon.workspace_dir) / recon.image_names[img_idx]
-    canvas = cv2.imread(str(img_path))
-    if canvas is None:
-        raise FileNotFoundError(f"could not read source image: {img_path}")
+    # The canvas is drawn on and written by OpenCV, which takes BGR.
+    canvas = cv2.cvtColor(read_image_rgb(img_path), cv2.COLOR_RGB2BGR)
     if upscale != 1.0:
         canvas = cv2.resize(
             canvas, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC

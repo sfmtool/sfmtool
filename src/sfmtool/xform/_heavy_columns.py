@@ -128,7 +128,8 @@ class AddThumbnailsTransform:
         if self.restores_minimal:
             _restore_note("--add-thumbnails", "thumbnails")
 
-        from ..sift.extract_sfmtool import read_image_bgr, thumbnail_of_bgr
+        from ..fileio import read_image_rgb
+        from ..sift.extract_sfmtool import thumbnail_of_rgb
         from ..sift.file import xxh128_of_file
 
         workspace = Path(recon.workspace_dir)
@@ -156,13 +157,14 @@ class AddThumbnailsTransform:
                     "does not match)"
                 )
                 continue
-            image = read_image_bgr(path)
-            if image is None:
+            try:
+                image = read_image_rgb(path)
+            except OSError:
                 failures.append(
                     f"{name} (no verified .sift, and the photograph is unreadable)"
                 )
                 continue
-            rows.append(np.ascontiguousarray(thumbnail_of_bgr(image), dtype=np.uint8))
+            rows.append(np.ascontiguousarray(thumbnail_of_rgb(image), dtype=np.uint8))
 
         if failures:
             listed = "\n    ".join(failures)

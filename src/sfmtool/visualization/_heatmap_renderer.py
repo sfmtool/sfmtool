@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .._sfmtool.fileio import read_image_rgb
 from .._sfmtool.geometry import RotQuaternion
 from ._colormap import value_to_color
 
@@ -127,14 +128,7 @@ def render_heatmap_overlay(
         show_colorbar: Whether to add a colorbar legend
     """
     # Load image
-    image = cv2.imread(
-        str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-    )
-    if image is None:
-        raise FileNotFoundError(f"Could not load image: {image_path}")
-
-    # Convert BGR to RGB for processing
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = read_image_rgb(image_path)
     height, width = image.shape[:2]
 
     # Create overlay

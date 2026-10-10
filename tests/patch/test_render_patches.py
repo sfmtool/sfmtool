@@ -195,9 +195,13 @@ class TestRenderPatches:
             image_filter=["_08"],
         )
         name = below[0][0]
-        source = cv2.imread(str(Path(recon.workspace_dir) / name))
-        painted = cv2.imread(str(below[0][2]))
-        dropped = cv2.imread(str(above[0][2]))
+        # The renderer decodes the source with `read_image_rgb`, so the
+        # untouched source is read the same way.
+        from sfmtool.fileio import read_image_rgb
+
+        source = read_image_rgb(Path(recon.workspace_dir) / name)
+        painted = read_image_rgb(below[0][2])
+        dropped = read_image_rgb(above[0][2])
         assert np.any(painted != source)  # below-threshold confidence is drawn
         assert np.array_equal(dropped, source)  # above-threshold drops everything
 

@@ -364,12 +364,12 @@ def main():
 
     from sfmtool.patches import ImagePyramidSet
     from sfmtool.reconstruction import SfmrReconstruction
-    from sfmtool._workspace_image import read_workspace_image
+    from sfmtool.fileio import read_image_rgb
 
     ds = prepare(args.dataset, args.cache)
     gt = SfmrReconstruction.load(ds.sfmr)
     names = list(gt.image_names)
-    images = [read_workspace_image(gt.workspace_dir, n) for n in names]
+    images = [read_image_rgb(Path(gt.workspace_dir) / n) for n in names]
     ctx = {
         "dataset": args.dataset,
         "gt": gt,

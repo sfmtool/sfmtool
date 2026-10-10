@@ -21,14 +21,14 @@ import cv2
 import numpy as np
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
+from sfmtool.fileio import read_image_rgb
 from sfmtool.sift.extract import SiftExtractionError
 from sfmtool.sift.file import xxh128_of_file
 
 __all__ = [
     "get_default_sfmtool_feature_options",
     "extract_sift_with_sfmtool",
-    "read_image_bgr",
-    "thumbnail_of_bgr",
+    "thumbnail_of_rgb",
 ]
 
 
@@ -72,28 +72,17 @@ def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> 
     }
 
 
-def read_image_bgr(image_path: Path | str) -> np.ndarray | None:
-    """Decode a photograph the way every SIFT extractor does.
+def thumbnail_of_rgb(image: np.ndarray) -> np.ndarray:
+    """The ``THUMBNAIL_SIZE`` square RGB thumbnail of an RGB photograph.
 
-    Colour, with EXIF orientation **ignored** (``IMREAD_IGNORE_ORIENTATION``),
-    so the pixels are the stored ones in the stored order and a keypoint or a
-    thumbnail row addresses the same pixel whatever orientation tag the file
-    carries. Returns the BGR array, or ``None`` when the file cannot be read.
+    The extractors' resize: ``INTER_AREA`` to the square, stretched. A
+    ``.sift`` thumbnail and a ``.sfmr`` thumbnail row made from the same
+    decode (``sfmtool.fileio.read_image_rgb``) are byte-identical because both
+    come through here.
     """
-    return cv2.imread(str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-
-
-def thumbnail_of_bgr(image: np.ndarray) -> np.ndarray:
-    """The ``THUMBNAIL_SIZE`` square RGB thumbnail of a BGR photograph.
-
-    The extractors' resize: ``INTER_AREA`` to the square, stretched, then BGR to
-    RGB. A ``.sift`` thumbnail and a ``.sfmr`` thumbnail row made from the same
-    decode are byte-identical because both come through here.
-    """
-    thumbnail = cv2.resize(
+    return cv2.resize(
         image, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
     )
-    return cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
 
 
 def _decode_image(image_path: Path):
@@ -101,18 +90,20 @@ def _decode_image(image_path: Path):
 
     Called inline at the head of each ``decode_and_extract`` task (fused with
     that image's extract), so it runs on one of the concurrent extract-worker
-    threads; ``cv2.imread``/``cv2.cvtColor``/``cv2.resize`` release the GIL, so
-    several images decode in parallel. Returns ``(image_path, rgb, thumbnail)``;
-    the BGR image is dropped here once the RGB and thumbnail are derived. A decode
+    threads; ``read_image_rgb`` and ``cv2.resize`` release the GIL, so several
+    images decode in parallel. The decode is ``sfmtool.fileio.read_image_rgb``,
+    the Rust decoder every extractor reads with, which ignores the EXIF
+    orientation, so the pixels are the stored ones in the stored order and a
+    keypoint or a thumbnail row addresses the same pixel whatever orientation
+    tag the file carries. Returns ``(image_path, rgb, thumbnail)``. A decode
     failure raises ``SiftExtractionError``, which the caller's FIFO surfaces in
     input order (see ``_stream_sift_with_sfmtool``).
     """
-    image = read_image_bgr(image_path)
-    if image is None:
-        raise SiftExtractionError(f"Failed to load image: {image_path}")
-    rgb = np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    thumbnail = thumbnail_of_bgr(image)
-    return image_path, rgb, thumbnail
+    try:
+        rgb = read_image_rgb(image_path)
+    except OSError as e:
+        raise SiftExtractionError(f"Failed to load image: {image_path} ({e})") from e
+    return image_path, rgb, thumbnail_of_rgb(rgb)
 
 
 def _extract_one(

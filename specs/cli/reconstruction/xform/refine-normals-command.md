@@ -33,8 +33,9 @@ naturally — with three characteristics that shape the design:
    `--remove-large-features` and `--find-points-at-infinity` both read the
    `.sift` files via `recon.workspace_dir` / `recon.image_names` /
    `recon.metadata()`. This op reads the **images** the same way, resolving
-   `workspace_dir / image_name` (the same path `scripts/patch_crossval.py`
-   already loads with `cv2.imread`). A missing image is a hard error
+   `workspace_dir / image_name`, decoded by `read_image_rgb`
+   ([reading-photographs.md](../../../core/camera/reading-photographs.md)).
+   A missing image is a hard error
    (`FileNotFoundError`), mirroring the SIFT-reading filters.
 
 3. **It takes an `embedded_patches` reconstruction only.** Refinement anchors

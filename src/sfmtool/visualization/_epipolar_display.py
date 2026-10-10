@@ -12,6 +12,7 @@ import numpy as np
 import pycolmap
 
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
+from .._sfmtool.fileio import read_image_rgb
 from ..sift.file import SiftReader, get_sift_path_for_image
 from .._sfmtool.analysis import epipolar_curves
 from .._sfmtool.geometry import RotQuaternion
@@ -787,14 +788,14 @@ def draw_epipolar_visualization(
             draw_lines,
         )
     else:
-        img1 = cv2.imread(
-            str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        )
-        img2 = cv2.imread(
-            str(image2_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        )
-        if img1 is None or img2 is None:
-            raise ValueError("Failed to load image files.")
+        try:
+            rgb1 = read_image_rgb(image1_path)
+            rgb2 = read_image_rgb(image2_path)
+        except OSError as e:
+            raise ValueError(f"Failed to load image files: {e}") from e
+        # The drawing and imwrite are OpenCV's, which take BGR.
+        img1 = cv2.cvtColor(rgb1, cv2.COLOR_RGB2BGR)
+        img2 = cv2.cvtColor(rgb2, cv2.COLOR_RGB2BGR)
         _draw_on_original(
             img1,
             img2,

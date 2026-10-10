@@ -691,15 +691,14 @@ so reading it is a 48 KiB decompression where the photograph is a full decode
 and a resize, and the two give the same bytes. That is why it is read first.
 
 **The photograph**, for an image whose `.sift` is missing or unverified:
-`workspace_dir / name` is decoded as colour with its EXIF orientation ignored,
-resized to 128 x 128 by area averaging and converted to RGB. That is the SIFT
-extractors' own decode and resize
-([extract_sfmtool.py](../../../../src/sfmtool/sift/extract_sfmtool.py),
-`read_image_bgr` and `thumbnail_of_bgr`), so each row is byte-identical to the
-`.sift` thumbnail an extractor writes for the same photograph, and to the row a
-file carried before `--drop-thumbnails`. The decode deliberately does not go
-through [_workspace_image.py](../../../../src/sfmtool/_workspace_image.py)
-`read_workspace_image`, which applies the orientation tag. In an
+`workspace_dir / name` is decoded to RGB by `sfmtool.fileio.read_image_rgb`,
+with its EXIF orientation ignored
+([reading-photographs.md](../../../core/camera/reading-photographs.md)), and
+resized to 128 x 128 by area averaging. That is the SIFT extractors' own decode
+and resize ([extract_sfmtool.py](../../../../src/sfmtool/sift/extract_sfmtool.py),
+`thumbnail_of_rgb`), so each row is byte-identical to the `.sift` thumbnail an
+extractor writes for the same photograph, and to the row a file carried before
+`--drop-thumbnails`. In an
 `embedded_patches` file a photograph read is first checked against the image's
 stored `image_file_hashes` entry, the hash that says "this is still the
 photograph the reconstruction was built from"; a mismatch fails the step.

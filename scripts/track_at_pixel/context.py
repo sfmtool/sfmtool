@@ -157,7 +157,7 @@ class DatasetContext:
             SfmrReconstruction,
         )
         from sfmtool.spatial import KdTree2d, KdTree3d, LazyKdForest
-        from sfmtool._workspace_image import read_workspace_image
+        from sfmtool.fileio import read_image_rgb
 
         self.prepared = prepared
         self.recon = SfmrReconstruction.load(prepared.sfmr)
@@ -165,7 +165,7 @@ class DatasetContext:
         self.image_names = list(recon.image_names)
         self.image_stems = [Path(n).stem for n in self.image_names]
         self.images = [
-            read_workspace_image(recon.workspace_dir, n) for n in self.image_names
+            read_image_rgb(Path(recon.workspace_dir) / n) for n in self.image_names
         ]
         self.pyramids = ImagePyramidSet(recon, self.images)
         self.forest = LazyKdForest(str(prepared.kdf))

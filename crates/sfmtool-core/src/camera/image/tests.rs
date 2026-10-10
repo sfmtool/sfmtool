@@ -189,3 +189,42 @@ fn test_pyramid_stops_at_small_dimension() {
     assert_eq!(pyr.level(1).width(), 2);
     assert_eq!(pyr.level(2).width(), 1);
 }
+
+// -----------------------------------------------------------------------
+// Reading image files
+// -----------------------------------------------------------------------
+
+#[test]
+fn read_rgba_keeps_a_png_alpha_and_matches_read_rgb_colour() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("alpha.png");
+    let pixels = vec![
+        10, 20, 30, 0, //
+        40, 50, 60, 128, //
+        70, 80, 90, 255,
+    ];
+    ::image::RgbaImage::from_raw(3, 1, pixels.clone())
+        .unwrap()
+        .save(&path)
+        .unwrap();
+
+    let rgba = ImageU8::read_rgba(&path).unwrap();
+    assert_eq!((rgba.width(), rgba.height(), rgba.channels()), (3, 1, 4));
+    assert_eq!(rgba.data(), &pixels[..]);
+
+    let rgb = ImageU8::read_rgb(&path).unwrap();
+    assert_eq!(rgb.data(), &[10, 20, 30, 40, 50, 60, 70, 80, 90]);
+}
+
+#[test]
+fn read_rgba_writes_opaque_alpha_for_an_image_without_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("opaque.png");
+    ::image::RgbImage::from_raw(2, 1, vec![1, 2, 3, 4, 5, 6])
+        .unwrap()
+        .save(&path)
+        .unwrap();
+
+    let rgba = ImageU8::read_rgba(&path).unwrap();
+    assert_eq!(rgba.data(), &[1, 2, 3, 255, 4, 5, 6, 255]);
+}

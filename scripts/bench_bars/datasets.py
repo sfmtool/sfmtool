@@ -121,14 +121,9 @@ def resolve(name: str, overrides: dict[str, str] | None = None) -> Path:
 def read_image(workspace_dir: str | Path, image_name: str) -> np.ndarray:
     """One workspace image as a contiguous RGB array, as the patch kernels read it.
 
-    sfmtool has no public reader for a workspace image, so this reads it with
-    OpenCV the way the package's own loader does: ``workspace_dir /
-    image_name``, converted from BGR to RGB.
+    Read with ``sfmtool.fileio.read_image_rgb``, the decoder the package's own
+    loader and the viewer use, at ``workspace_dir / image_name``.
     """
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
-    path = Path(workspace_dir) / image_name
-    bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        raise FileNotFoundError(f"image not found or unreadable: {path}")
-    return np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    return read_image_rgb(Path(workspace_dir) / image_name)

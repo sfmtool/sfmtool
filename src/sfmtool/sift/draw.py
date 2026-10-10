@@ -41,6 +41,7 @@ def draw_sift_features(
     """
     import cv2
 
+    from ..fileio import read_image_rgb
     from .file import SiftReader, get_sift_path_for_image
 
     image_path = Path(image_path)
@@ -49,11 +50,12 @@ def draw_sift_features(
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    image = cv2.imread(
-        str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-    )
-    if image is None:
-        raise ValueError(f"Failed to load image: {image_path}")
+    try:
+        rgb = read_image_rgb(image_path)
+    except OSError as e:
+        raise ValueError(f"Failed to load image: {image_path}") from e
+    # The drawing and imwrite below are OpenCV's, which take BGR.
+    image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
     sift_path = get_sift_path_for_image(
         image_path,

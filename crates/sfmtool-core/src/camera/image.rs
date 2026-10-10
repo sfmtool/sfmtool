@@ -50,10 +50,22 @@ impl ImageU8 {
     ///
     /// The EXIF orientation is ignored, as the feature extractors ignore it, so
     /// the pixels line up with the keypoints and with the camera's width and
-    /// height.
+    /// height. A grey image has its value repeated in the three channels, an
+    /// alpha channel is dropped, and a 16-bit image is scaled to 8 bits.
     pub fn read_rgb(path: &std::path::Path) -> Result<Self, ::image::ImageError> {
         let rgb = ::image::open(path)?.to_rgb8();
         Ok(Self::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
+    }
+
+    /// Decode the image file at `path` to 4-channel RGBA.
+    ///
+    /// The colour channels equal [`read_rgb`](Self::read_rgb)'s, and the EXIF
+    /// orientation is ignored in the same way. The alpha is the file's own
+    /// where it has one and 255 (opaque) where it has none, so `alpha > 0`
+    /// marks pixels with data, as in a reconstruction's stored patch bitmaps.
+    pub fn read_rgba(path: &std::path::Path) -> Result<Self, ::image::ImageError> {
+        let rgba = ::image::open(path)?.to_rgba8();
+        Ok(Self::new(rgba.width(), rgba.height(), 4, rgba.into_raw()))
     }
 
     /// Create a zeroed image with the given dimensions and channel count.
@@ -90,6 +102,12 @@ impl ImageU8 {
     /// Mutable access to the raw pixel data.
     pub fn data_mut(&mut self) -> &mut [u8] {
         &mut self.data
+    }
+
+    /// Consume the image and return its raw pixel data, in the layout
+    /// [`data`](Self::data) describes.
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
     }
 
     /// Get a single pixel value.

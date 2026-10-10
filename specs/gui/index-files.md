@@ -182,13 +182,10 @@ index's file name as `index`, and its content hash as `index_content_xxh128`.
 
 **Parity with the command line.** Over the same index and the same decoded
 pixels the file is the command-line steps' file array for array, down to the
-bits of every float. What can differ is the decode: the viewer reads JPEG with
-the `image` crate and the command line with OpenCV, and the two decoders
-disagree by up to 3 levels on about 1% of the pixels of a seoul_bull
-photograph. That leaves the clusters identical and moves the refinement: on
-seoul_bull, 40 of 12,629 member statuses and about half the member ZNCC values
-differ. With the viewer's decoded pixels handed to the command-line step
-instead of OpenCV's, every array is identical.
+bits of every float. The decoded pixels are the same too: the viewer and the
+command line both decode with the `image` crate
+([reading-photographs.md](../core/camera/reading-photographs.md)) and hand the
+refinement BGR, so every array is identical.
 
 ### Progress and stopping
 
@@ -340,8 +337,6 @@ a build over a node whose cluster patches are missing keeping its index).
 ## Non-goals
 
 The viewer does not watch the filesystem, and does not verify a file's contents
-beyond what its state needs. It does not decode photographs through OpenCV, so
-a JPEG capture's refinement can differ from the command line's by what the two
-decoders differ by (§ "Building them"). A build writes the files at the node's
+beyond what its state needs. A build writes the files at the node's
 own paths only; a pair under other names is made outside the viewer and opened
 with *Open...* or `open_index_files`.
