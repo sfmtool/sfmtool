@@ -25,6 +25,12 @@ MEASUREMENTS = {
     "no_subpixel": {"subpixel": False},
     # Only where the file stores bitmaps.
     "stored_bitmap": {"template": "stored_bitmap"},
+    # The bars read the bench's scores against the template instead of the
+    # search's: the plain score, and the blur-matched score (Part 10 of
+    # specs/drafts/sharper-patch-bitmap.md). The pair rule's pairwise ZNCCs
+    # are the search's under both.
+    "bench_plain": {"score": "plain"},
+    "blur_matched": {"score": "blur_matched"},
 }
 
 _TRACK = {"rule": "track_basis", "min_zncc": 0.0}

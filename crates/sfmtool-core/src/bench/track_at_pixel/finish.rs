@@ -66,6 +66,20 @@ pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
     }
 }
 
+/// The median blur-matched score against the stored bitmap
+/// ([`TrackMeasurement::blur_matched_zncc`]) over the same observations as
+/// [`median_zncc`], or negative infinity when none carries one: the reading
+/// [`FinishOptions::min_zncc_median`] gates on under
+/// [`FinishOptions::median_gate_blur_matched`].
+pub(super) fn median_blur_matched_zncc(track: &EditableTrack) -> f64 {
+    let mut z = in_readings(track, |m| m.blur_matched_zncc);
+    if z.is_empty() {
+        f64::NEG_INFINITY
+    } else {
+        median_in_place(&mut z)
+    }
+}
+
 /// The median plain middle score against the stored bitmap
 /// ([`TrackMeasurement::plain_zncc_middle`]) over the same observations as
 /// [`median_zncc`], or `NaN` when none carries one: the figure to set beside
@@ -499,7 +513,11 @@ fn gate(
 ) -> Result<EditableTrack, Refusal> {
     let offset = query_offset(&track, q, pixel);
     let n_in = in_count(&track);
-    let zncc = median_zncc(&track);
+    let zncc = if opts.median_gate_blur_matched {
+        median_blur_matched_zncc(&track)
+    } else {
+        median_zncc(&track)
+    };
     let zncc_middle = median_zncc_middle(&track);
     let mut record = |worst: Option<f64>| {
         stages.push(StageRecord::Final {

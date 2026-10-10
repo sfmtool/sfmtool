@@ -24,7 +24,10 @@ Files:
   compile and lint it against the current localizer, and it builds with the
   workspace's `Cargo.lock`.
 - `report.py` reads those JSON files and prints the accuracy and gate tables
-  below, and a table of the time per track by track length. The README leaves
+  below, and, from the branch build's `pz` and `bz` (each view's plain and
+  blur-matched score against the reference render, read as the bench reads a
+  row against the stored bitmap), the gates set on each score side by side;
+  those need no congealing run, and a table of the time per track by track length. The README leaves
   the time table out: the accuracy runs use 8 threads and are not a timing.
   The single-threaded timings quoted in
   `specs/core/patch/patch-keypoint-localization.md` come from the separate

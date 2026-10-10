@@ -7,7 +7,10 @@ Usage: python report.py OUT_DIR
 OUT_DIR holds `<dataset>_<ref-mode>_align.json` (methods pd and ex, from the
 branch build) and `<dataset>_<ref-mode>_congeal.json` (method congeal, from the
 83ffb08e build), for ref-mode `displaced` and `stored`. The gate tables read the
-plain score of `ex`, the default search.
+plain score of `ex`, the default search. Where the branch build wrote each
+view's bench scores against the reference render (`pz` plain, `bz`
+blur-matched), the score gate tables set the gates on each of the three scores
+side by side; they need no congealing run.
 """
 
 import json
@@ -155,6 +158,68 @@ def gate_tables(data):
     return lines
 
 
+SCORES = (("zncc", "localizer"), ("pz", "bench plain"), ("bz", "blur-matched"))
+
+
+def score_gate_tables(data):
+    """The gates on `ex`'s localizer score, the bench's plain score and the
+    blur-matched score against the reference render, per displacement."""
+    lines = []
+    for (dataset, mode), entry in sorted(data.items()):
+        if mode != "stored":
+            continue
+        for disp in GATE_DISPS:
+            runs = entry["runs"].get((disp, PLAIN))
+            if not runs:
+                continue
+            rows = []
+            for pid, point in entry["points"].items():
+                reference = point["reference"]
+                views = [
+                    v
+                    for v in runs.get(pid, [])
+                    if v["slot"] != reference
+                    and v["err"] is not None
+                    and all(v.get(k) is not None for k, _ in SCORES)
+                ]
+                if not views:
+                    continue
+                mids = {k: median([v[k] for v in views]) for k, _ in SCORES}
+                for v in views:
+                    rows.append(
+                        (v["err"], {k: (v[k], v[k] / mids[k]) for k, _ in SCORES})
+                    )
+            if not rows or "bz" not in rows[0][1]:
+                continue
+            good = [r for r in rows if r[0] < GOOD_PX]
+            bad = [r for r in rows if r[0] > BAD_PX]
+            lines.append(
+                f"### {dataset}, reference stored, disp {disp:g} px: {len(rows)} views, "
+                f"good {len(good)}, bad {len(bad)}"
+            )
+            lines.append("")
+            lines.append(
+                "| gate | "
+                + " | ".join(
+                    f"{label} good dropped | {label} bad dropped" for _, label in SCORES
+                )
+                + " |"
+            )
+            lines.append("|---|" + "---|---|" * len(SCORES))
+            gates = [("absolute", f, 0) for f in ABSOLUTE_FLOORS]
+            gates += [("relative", b, 1) for b in RELATIVE_BARS]
+            for kind, bar, col in gates:
+                cells = []
+                for key, _ in SCORES:
+                    for group in (good, bad):
+                        dropped = sum(r[1][key][col] < bar for r in group)
+                        share = 100 * dropped / len(group) if group else float("nan")
+                        cells.append(f"{share:.1f}%")
+                lines.append(f"| {kind} {bar:g} | " + " | ".join(cells) + " |")
+            lines.append("")
+    return lines
+
+
 def time_tables(data):
     """Mean ms per track at displacement 0, reference stored, by track length."""
     lines = [
@@ -193,8 +258,13 @@ def main():
     print("\n".join(accuracy_tables(data)))
     print("## Time per track (ms, tracks in the bin), disp 0, reference stored\n")
     print("\n".join(time_tables(data)))
-    print("## Gates (reference stored)\n")
-    print("\n".join(gate_tables(data)))
+    if any(m == "congeal" for entry in data.values() for _, m in entry["runs"]):
+        print("## Gates (reference stored)\n")
+        print("\n".join(gate_tables(data)))
+    score_lines = score_gate_tables(data)
+    if score_lines:
+        print("## Gates on each score (reference stored)\n")
+        print("\n".join(score_lines))
 
 
 if __name__ == "__main__":

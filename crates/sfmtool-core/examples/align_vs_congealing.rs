@@ -34,7 +34,12 @@
 //! slot in the track, `err` (px from the GT keypoint), `zncc` (the score the
 //! localizer reports: the plain score against the template for alignment, the
 //! leave-one-out score for congealing) and `retri` (the residual px after
-//! re-triangulating the kept views' keypoints at the stored poses).
+//! re-triangulating the kept views' keypoints at the stored poses). Built as
+//! it is, each kept view also carries `pz` and `bz`: its plain and
+//! blur-matched scores against the reference render, read as the bench reads a
+//! row against the stored bitmap (the view's tile rendered at its final
+//! keypoint, scored by `BitmapScorer` against the reference's tile at its
+//! keypoint), `1` for the reference itself.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -53,6 +58,10 @@ use sfmtool_core::patch::keypoint_localize::{
     try_localize_patch_keypoints, KeypointLocalization, KeypointLocalizeParams,
 };
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+#[cfg(not(congeal))]
+use sfmtool_core::patch::reference_view::render_view_tile;
+#[cfg(not(congeal))]
+use sfmtool_core::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
 use sfmtool_core::patch::PatchCloud;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
@@ -108,6 +117,47 @@ fn run_method(
     .unwrap();
     let z = loc.zncc.clone();
     (loc, z)
+}
+
+/// Per kept view, its plain and blur-matched scores against the reference's
+/// render, as the bench scores a row against the stored bitmap: each tile
+/// rendered at the view's final keypoint and read by [`BitmapScorer`] against
+/// the reference's tile. `None` for every view where there is no reference.
+#[cfg(not(congeal))]
+fn bitmap_scores(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    loc: &KeypointLocalization,
+    base: &KeypointLocalizeParams,
+) -> Vec<Option<(f64, f64)>> {
+    let r = base.resolution as usize;
+    let tile = |k: usize| {
+        render_view_tile(
+            patch,
+            &views[loc.views[k] as usize],
+            Some(loc.keypoints[k]),
+            r,
+            base.sampler,
+            &Progress::none(),
+        )
+    };
+    let Some(reference) = loc
+        .reference
+        .and_then(|im| loc.views.iter().position(|&v| v == im))
+    else {
+        return vec![None; loc.views.len()];
+    };
+    let planes = bitmap_planes(&bitmap_from_tile(&tile(reference)), r);
+    let mut scorer = BitmapScorer::new(&planes, base.window);
+    (0..loc.views.len())
+        .map(|k| {
+            if k == reference {
+                return Some((1.0, 1.0));
+            }
+            let s = scorer.score(&tile(k).planes(), None);
+            Some((s.plain_zncc, s.blur_matched_zncc))
+        })
+        .collect()
 }
 
 /// The branch's reference-view rule pick at the stored keypoints, as a slot.
@@ -456,6 +506,8 @@ fn main() {
                     let (loc, z) =
                         run_method(m, patch, &views, &view_set_c, &seeds, reference, &base);
                     let secs = t.elapsed().as_secs_f64();
+                    #[cfg(not(congeal))]
+                    let scores = bitmap_scores(patch, &views, &loc, &base);
                     let mut per = Vec::new();
                     let mut obs = Vec::new();
                     for (k, &imc) in loc.views.iter().enumerate() {
@@ -467,9 +519,15 @@ fn main() {
                         let seed_err = seeds[slot]
                             .zip(gt[slot])
                             .map(|(s, g)| (s[0] - g[0]).hypot(s[1] - g[1]));
-                        per.push(
-                            json!({"slot": slot, "err": err, "zncc": z[k], "seed_err": seed_err}),
-                        );
+                        #[allow(unused_mut)]
+                        let mut v =
+                            json!({"slot": slot, "err": err, "zncc": z[k], "seed_err": seed_err});
+                        #[cfg(not(congeal))]
+                        if let Some((pz, bz)) = scores[k] {
+                            v["pz"] = json!(pz);
+                            v["bz"] = json!(bz);
+                        }
+                        per.push(v);
                     }
                     if let Some(rs) = retriangulate(patch.center.coords, &obs) {
                         for (k, v) in per.iter_mut().enumerate() {

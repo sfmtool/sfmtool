@@ -193,6 +193,12 @@ pub struct FinishOptions {
     /// leave-one-out score it replaced (5.8%), and passes 0.7% of the same
     /// tracks with every keypoint moved 15 to 30 px off.
     pub min_zncc_median: f64,
+    /// Whether [`Self::min_zncc_median`] reads the median blur-matched score
+    /// against the stored bitmap
+    /// ([`TrackMeasurement::blur_matched_zncc`](super::track::TrackMeasurement::blur_matched_zncc))
+    /// rather than the plain one. An experiment setting for measuring the gate
+    /// on either score; `false` by default.
+    pub median_gate_blur_matched: bool,
     /// Gate: how far the queried sighting's keypoint may sit from the pixel, in
     /// px.
     pub max_query_offset_px: f64,
@@ -216,6 +222,7 @@ impl Default for FinishOptions {
             clean_rounds: 2,
             min_in_views: 3,
             min_zncc_median: 0.7,
+            median_gate_blur_matched: false,
             max_query_offset_px: 2.0,
             max_projection_offset_px: 1.5,
         }

@@ -39,8 +39,12 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
     project_unclipped, KeypointLocalizeParams, TemplateKind, TrackReferences,
 };
-use crate::patch::keypoint_subpixel::{refine_view_against_reference, KeypointSubpixelParams};
+use crate::patch::keypoint_subpixel::{
+    refine_view_against_reference, KeypointSubpixelParams, ReferenceTemplate,
+};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::reference_view::render_view_tile;
+use crate::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
 use crate::reconstruction::bundle_adjust::is_posed;
@@ -182,6 +186,22 @@ pub enum TemplateSource {
     StoredBitmap,
 }
 
+/// Which reading of the new view and of the references against the template
+/// the photometric bars judge. An experiment setting, for measuring the bars
+/// on the bench's scores; the default is [`Self::Template`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateScore {
+    /// The windowed ZNCC of the view's core against the template that the
+    /// search correlates ([`TrackReferences`]).
+    Template,
+    /// The bench's plain score against the template: the view's tile rendered
+    /// at its keypoint, read by [`BitmapScorer`] against the template as an
+    /// RGBA bitmap.
+    BitmapPlain,
+    /// The bench's blur-matched score against the same bitmap.
+    BitmapBlurMatched,
+}
+
 /// The rules one call judges each candidate by.
 #[derive(Debug, Clone)]
 pub struct AddImageToTracksOptions {
@@ -195,6 +215,9 @@ pub struct AddImageToTracksOptions {
     pub position_gate: PositionGate,
     /// What the new view is searched against.
     pub template: TemplateSource,
+    /// Which reading the photometric bars judge. The pair rule's pairwise
+    /// ZNCCs are read as the search reads them whatever this is.
+    pub score: CandidateScore,
     /// Refuse a finite point whose patch plane has the new camera on the other
     /// side from the majority of the cameras that observe it.
     pub require_facing: bool,
@@ -244,6 +267,7 @@ impl Default for AddImageToTracksOptions {
                 floor_px: 1.0,
             },
             template: TemplateSource::Rendered,
+            score: CandidateScore::Template,
             require_facing: true,
             subpixel: true,
             ascend_on_edge: false,
@@ -952,7 +976,75 @@ impl Context<'_, '_> {
         };
         out.zncc = score.zncc;
         out.pair_zncc = score.pair_zncc;
+        if self.options.score != CandidateScore::Template {
+            let (references_z, z) =
+                self.bitmap_scores(&patch, &local, &references, &ref_keypoints, keypoint);
+            out.reference_zncc = references_z;
+            out.zncc = z;
+        }
         out
+    }
+
+    /// The references' and the new view's scores against the template read as
+    /// the bench reads a row against the stored bitmap, plain or blur-matched
+    /// as [`AddImageToTracksOptions::score`] says: each view's tile rendered at
+    /// its keypoint ([`render_view_tile`]) and scored by [`BitmapScorer`]
+    /// against the template as an RGBA bitmap. The reference observation reads
+    /// `1` where the template is its render. `local` is the measured point's
+    /// views, the target first; `ref_keypoints` is parallel to `local[1..]`.
+    fn bitmap_scores(
+        &self,
+        patch: &OrientedPatch,
+        local: &[ProjectedImage<'_>],
+        references: &TrackReferences,
+        ref_keypoints: &[[f64; 2]],
+        keypoint: [f64; 2],
+    ) -> (Vec<f64>, f64) {
+        let render = |l: usize, kp: [f64; 2], r: usize| {
+            render_view_tile(
+                patch,
+                &local[l],
+                Some(kp),
+                r,
+                self.localize.sampler,
+                &Progress::none(),
+            )
+        };
+        let (bitmap, r) = match references.refine_template() {
+            ReferenceTemplate::Bitmap(b) => (b.to_vec(), ((b.len() / 4) as f64).sqrt() as usize),
+            ReferenceTemplate::Observation { image, keypoint } => {
+                let r = self.localize.resolution as usize;
+                (bitmap_from_tile(&render(image as usize, keypoint, r)), r)
+            }
+        };
+        let planes = bitmap_planes(&bitmap, r);
+        let mut scorer = BitmapScorer::new(&planes, self.localize.window);
+        let blur = self.options.score == CandidateScore::BitmapBlurMatched;
+        let mut read = |l: usize, kp: [f64; 2]| {
+            let s = scorer.score(&render(l, kp, r).planes(), None);
+            if blur {
+                s.blur_matched_zncc
+            } else {
+                s.plain_zncc
+            }
+        };
+        let rendered_from = |k: usize| {
+            references.template_kind == TemplateKind::ReferenceObservation
+                && references.reference == Some(k)
+        };
+        let references_z = references
+            .references
+            .iter()
+            .enumerate()
+            .map(|(k, &l)| {
+                if rendered_from(k) {
+                    1.0
+                } else {
+                    read(l as usize, ref_keypoints[l as usize - 1])
+                }
+            })
+            .collect();
+        (references_z, read(0, keypoint))
     }
 }
 

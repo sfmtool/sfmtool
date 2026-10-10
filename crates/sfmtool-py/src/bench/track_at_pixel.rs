@@ -148,6 +148,7 @@ fn set_option(
         "finish.clean_rounds" => f.clean_rounds,
         "finish.min_in_views" => f.min_in_views,
         "finish.min_zncc_median" => f.min_zncc_median,
+        "finish.median_gate_blur_matched" => f.median_gate_blur_matched,
         "finish.max_query_offset_px" => f.max_query_offset_px,
         "finish.max_projection_offset_px" => f.max_projection_offset_px,
         "clusters.search_radius_px" => c.search_radius_px,
