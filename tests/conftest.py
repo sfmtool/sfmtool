@@ -599,14 +599,14 @@ def _mean_colors_at(
     image_paths: list[Path], image_indexes, point_indexes, uv, point_count
 ):
     """Per-point mean RGB of each observation's pixel, as ``(P, 3)`` uint8."""
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
     sums = np.zeros((point_count, 3), dtype=np.float64)
     for i, path in enumerate(image_paths):
         sel = np.flatnonzero(image_indexes == i)
         if len(sel) == 0:
             continue
-        rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        rgb = read_image_rgb(path)
         h, w = rgb.shape[:2]
         col = np.clip(np.floor(uv[sel, 0]).astype(np.int64), 0, w - 1)
         row = np.clip(np.floor(uv[sel, 1]).astype(np.int64), 0, h - 1)

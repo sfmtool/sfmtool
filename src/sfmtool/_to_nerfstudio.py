@@ -16,6 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ._sfmtool.fileio import image_has_alpha, read_image_rgb, read_image_rgba
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 
@@ -180,6 +181,9 @@ def _build_pyramid_for_image(
         new_w = max(1, w // factor)
         new_h = max(1, h // factor)
         downscaled = cv2.resize(src_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        # cv2.imwrite takes BGR or BGRA.
+        to_bgr = cv2.COLOR_RGBA2BGRA if src_image.shape[2] == 4 else cv2.COLOR_RGB2BGR
+        downscaled = cv2.cvtColor(downscaled, to_bgr)
         level_dir = output_dir / f"images_{factor}"
         level_dir.mkdir(parents=True, exist_ok=True)
         ok = cv2.imwrite(
@@ -239,9 +243,11 @@ def export_to_nerfstudio(
         _place_one_image(src, dst)
 
         if num_downscales > 0:
-            src_image = cv2.imread(str(src), cv2.IMREAD_UNCHANGED)
-            if src_image is None:
-                raise RuntimeError(f"Failed to load image for pyramid: {src}")
+            # RGBA when the file has an alpha channel, so the pyramid keeps it.
+            if image_has_alpha(src):
+                src_image = read_image_rgba(src)
+            else:
+                src_image = read_image_rgb(src)
             _build_pyramid_for_image(
                 src_image, output_dir, basename, num_downscales, jpeg_quality
             )

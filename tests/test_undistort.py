@@ -4,6 +4,7 @@
 """Tests for image undistortion functionality."""
 
 import json
+import shutil
 from pathlib import Path
 
 import cv2
@@ -11,6 +12,13 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
+from sfmtool.fileio import (
+    image_has_alpha,
+    read_image_rgb,
+    read_image_rgba,
+    read_sfmr,
+    write_sfmr,
+)
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 from sfmtool._undistort_images import (
@@ -676,3 +684,69 @@ class TestUndistortE2E:
         output_dir = sfmr_path.parent / f"{sfmr_path.stem}_undistorted"
         if output_dir.exists():
             shutil.rmtree(output_dir)
+
+
+# =============================================================================
+# PNG sources: alpha is kept, a 16-bit source is written at 8 bits
+# =============================================================================
+
+
+def _as_png(sfmr_path: Path, index: int, pixels_bgr: np.ndarray) -> Path:
+    """A copy of the reconstruction in the same workspace whose image `index` is
+    a PNG holding `pixels_bgr` (written by OpenCV, so in BGR or BGRA order),
+    with that image's `.sift` copied under the new name."""
+    data = read_sfmr(sfmr_path)
+    recon = SfmrReconstruction.load(sfmr_path)
+    workspace = Path(recon.workspace_dir)
+    old_name = data["image_names"][index]
+    new_name = str(Path(old_name).with_suffix(".png").as_posix())
+    old_path = workspace / old_name
+    assert cv2.imwrite(str(workspace / new_name), pixels_bgr)
+    for sift in old_path.parent.rglob(Path(old_name).name + ".sift"):
+        shutil.copy(sift, sift.with_name(Path(new_name).name + ".sift"))
+    data["image_names"] = list(data["image_names"])
+    data["image_names"][index] = new_name
+    out = sfmr_path.with_name("png_source.sfmr")
+    write_sfmr(out, data)
+    return out
+
+
+def _source_shape(sfmr_path: Path, index: int) -> tuple[int, int]:
+    recon = SfmrReconstruction.load(sfmr_path)
+    rgb = read_image_rgb(Path(recon.workspace_dir) / recon.image_names[index])
+    return rgb.shape[:2]
+
+
+def test_undistorting_an_rgba_png_keeps_its_alpha(seoul_bull_workspace, tmp_path):
+    h, w = _source_shape(seoul_bull_workspace, 0)
+    rng = np.random.default_rng(5)
+    bgra = rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+    bgra[..., 3] = 255
+    bgra[: h // 2, :, 3] = 0  # the top half carries no data
+    sfmr = _as_png(seoul_bull_workspace, 0, bgra)
+
+    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path)
+
+    out = output_dir / recon.image_names[0]
+    assert out.suffix == ".png"
+    assert image_has_alpha(out)
+    rgba = read_image_rgba(out)
+    assert (rgba[: h // 4, w // 4 : 3 * w // 4, 3] == 0).all()
+    assert (rgba[3 * h // 4 :, w // 4 : 3 * w // 4, 3] == 255).all()
+    # The JPEG sources stay without alpha.
+    assert not image_has_alpha(output_dir / recon.image_names[1])
+
+
+def test_undistorting_a_16_bit_png_writes_8_bits(seoul_bull_workspace, tmp_path):
+    h, w = _source_shape(seoul_bull_workspace, 0)
+    bgr16 = np.full((h, w, 3), 40000, dtype=np.uint16)
+    sfmr = _as_png(seoul_bull_workspace, 0, bgr16)
+
+    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path)
+
+    written = cv2.imread(str(output_dir / recon.image_names[0]), cv2.IMREAD_UNCHANGED)
+    assert written.dtype == np.uint8
+    assert written.shape[2] == 3
+    # 40000 / 65535 of full scale is 156 at 8 bits.
+    middle = written[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
+    assert (np.abs(middle.astype(int) - 156) <= 1).all()

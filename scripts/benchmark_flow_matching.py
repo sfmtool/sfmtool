@@ -110,11 +110,12 @@ def main():
 
     # Import after arg parsing for fast --help
     import cv2
+    from sfmtool.fileio import read_image_rgb
     from sfmtool.flow import compute_optical_flow, gpu_available
     from sfmtool.feature_match._flow_matching import flow_match_sequential
 
     # Print setup info
-    img = cv2.imread(str(images[0]))
+    img = read_image_rgb(images[0])
     h, w = img.shape[:2]
     print(f"Images: {n} (frames {args.start} to {end - 1})")
     print(f"Resolution: {w}x{h} ({w*h:,} pixels)")
@@ -126,9 +127,9 @@ def main():
     # Warmup: run one flow computation to initialize GPU
     if gpu_available():
         print("Warming up GPU...")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img2 = cv2.imread(str(images[1]))
-        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img2 = read_image_rgb(images[1])
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
         compute_optical_flow(gray, gray2, preset=args.preset)
         print()
 

@@ -57,7 +57,7 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool.geometry import RigidTransform
 from sfmtool.flow import ImagePyramid, WarpMap
-from sfmtool.fileio import read_matches, read_sift
+from sfmtool.fileio import read_image_rgb, read_matches, read_sift
 
 
 def find_sift_paths(workspace: str, names: list[str]) -> dict[str, str]:
@@ -134,14 +134,15 @@ def make_renderer(
 
     ``color`` renders 3-channel BGR patches; otherwise single-channel luminance.
     """
-    flag = cv2.IMREAD_COLOR if color else cv2.IMREAD_GRAYSCALE
     images, kpts, cache, pyrs = {}, {}, {}, {}
 
     def get(idx):
         if idx not in images:
-            img = cv2.imread(os.path.join(workspace, names[idx]), flag)
-            if img is None:
-                raise FileNotFoundError(names[idx])
+            rgb = read_image_rgb(os.path.join(workspace, names[idx]))
+            if color:
+                img = rgb[:, :, ::-1]  # the patches are rendered and shown in BGR
+            else:
+                img = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
             images[idx] = np.ascontiguousarray(img)
             d = read_sift(sift_paths[names[idx]])
             kpts[idx] = (
@@ -362,10 +363,8 @@ def strips_mode_3d(
 
     def image(i):
         if i not in images:
-            img = cv2.imread(os.path.join(workspace, names[i]), cv2.IMREAD_COLOR)
-            if img is None:
-                raise FileNotFoundError(names[i])
-            images[i] = np.ascontiguousarray(img)
+            rgb = read_image_rgb(os.path.join(workspace, names[i]))
+            images[i] = np.ascontiguousarray(rgb[:, :, ::-1])  # BGR, as above
         return images[i]
 
     # Group observations by 3D point id.

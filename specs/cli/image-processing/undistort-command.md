@@ -67,7 +67,10 @@ subdirectory of the image's parent. For example an image at
 
 Undistorted images are written at the same relative paths they occupied in the
 source workspace. The `.sfmr`'s `image_names` therefore uses identical relative
-paths.
+paths. Each source is read with `read_image_rgb`, or with `read_image_rgba`
+when `image_has_alpha` says it has an alpha channel, so a source with alpha is
+written with alpha; the images have 8 bits per channel
+([reading-photographs.md](../../core/camera/reading-photographs.md)).
 
 ### Workspace config (`.sfm-workspace.json`)
 

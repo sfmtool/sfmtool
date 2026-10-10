@@ -22,12 +22,12 @@ import time
 import cv2
 import numpy as np
 
+from sfmtool.fileio import read_image_rgb
 from sfmtool.flow import compute_optical_flow, gpu_available
 
 
 def load_grayscale(path: str) -> np.ndarray:
-    img = cv2.imread(path)
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return cv2.cvtColor(read_image_rgb(path), cv2.COLOR_RGB2GRAY)
 
 
 def benchmark(img0, img1, preset, use_gpu, n_runs):

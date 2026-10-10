@@ -228,3 +228,46 @@ fn read_rgba_writes_opaque_alpha_for_an_image_without_one() {
     let rgba = ImageU8::read_rgba(&path).unwrap();
     assert_eq!(rgba.data(), &[1, 2, 3, 255, 4, 5, 6, 255]);
 }
+
+#[test]
+fn the_contents_not_the_extension_choose_the_decoder() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("real.png");
+    ::image::RgbImage::from_raw(2, 1, vec![1, 2, 3, 4, 5, 6])
+        .unwrap()
+        .save(&png)
+        .unwrap();
+    let misnamed = dir.path().join("actually_png.jpg");
+    std::fs::copy(&png, &misnamed).unwrap();
+
+    assert_eq!(
+        ImageU8::read_rgb(&misnamed).unwrap().data(),
+        &[1, 2, 3, 4, 5, 6]
+    );
+    assert_eq!(
+        ImageU8::read_rgba(&misnamed).unwrap().data(),
+        &[1, 2, 3, 255, 4, 5, 6, 255]
+    );
+}
+
+#[test]
+fn image_has_alpha_reads_the_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let rgba = dir.path().join("rgba.png");
+    let rgb = dir.path().join("rgb.png");
+    ::image::RgbaImage::from_raw(1, 1, vec![1, 2, 3, 4])
+        .unwrap()
+        .save(&rgba)
+        .unwrap();
+    ::image::RgbImage::from_raw(1, 1, vec![1, 2, 3])
+        .unwrap()
+        .save(&rgb)
+        .unwrap();
+    let misnamed = dir.path().join("rgba.jpg");
+    std::fs::copy(&rgba, &misnamed).unwrap();
+
+    assert!(image_has_alpha(&rgba).unwrap());
+    assert!(image_has_alpha(&misnamed).unwrap());
+    assert!(!image_has_alpha(&rgb).unwrap());
+    assert!(image_has_alpha(&dir.path().join("missing.png")).is_err());
+}

@@ -218,8 +218,9 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     assert_eq!(got.member_features, clusters.member_features);
     assert_eq!(built.feature_counts.to_vec(), counts);
 
-    // `sfm cluster-patches`: the photographs as `cv2.imread` hands them back,
-    // the detections scattered to their rows, one refinement call.
+    // `sfm cluster-patches`: the photographs as `read_image_rgb` decodes them,
+    // reversed to BGR, the detections scattered to their rows, one refinement
+    // call.
     let pyramids: Vec<ImageU8Pyramid> = recon
         .image_table
         .images

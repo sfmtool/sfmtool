@@ -326,7 +326,7 @@ def embed_patches_command(
         # steady progress through the decode instead of one silent block.
         report_every = max(1, n_images // 20)
         load_start = time.perf_counter()
-        # Decode in a thread pool (cv2 releases the GIL), collecting results in
+        # Decode in a thread pool (the decoder releases the GIL), collecting results in
         # submission order so `images` stays parallel to `image_names`.
         with ThreadPoolExecutor() as pool:
             futures = [

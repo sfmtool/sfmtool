@@ -67,14 +67,14 @@ def mutual_matches(query: np.ndarray, train: np.ndarray):
 
 def extract_rust(image_path: Path):
     """Run the sfmtool Rust SIFT on an RGB image; returns (positions, affine, desc)."""
-    import cv2
 
+    from sfmtool.fileio import read_image_rgb
     from sfmtool.sift import extract_sift as rust_extract_sift
 
-    bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        _die(f"could not read image {image_path}")
-    rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    try:
+        rgb = read_image_rgb(image_path)
+    except OSError as e:
+        _die(f"could not read image {image_path}: {e}")
     positions, affine_shapes, descriptors = rust_extract_sift(rgb)
     return positions, affine_shapes, descriptors
 

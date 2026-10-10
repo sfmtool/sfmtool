@@ -742,8 +742,9 @@ fn member_detections(
 
 /// Every photograph decoded into a full pyramid, in the node's order.
 ///
-/// **In OpenCV's channel order.** `sfm cluster-patches` reads its photographs
-/// with `cv2.imread`, which hands back blue, green, red; the refinement
+/// **In blue, green, red order.** `sfm cluster-patches` reads its photographs
+/// with `read_image_rgb` and reverses the channels to BGR for the kernel, the
+/// order its refinement was first built and measured in; the refinement
 /// averages a score over the channels, so the order is the order of a
 /// floating-point sum, and matching it keeps the two builds' arithmetic the
 /// same.

@@ -121,7 +121,7 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     point — finite or infinity — carries a real stored bitmap (nonzero alpha):
     culled points are dropped instead of kept with an all-black bitmap, and
     infinity points get a rendered texture, not a zero row."""
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Turn one well-observed point into a point at infinity, in the direction the
@@ -141,14 +141,7 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     assert bool(np.asarray(recon.point_is_at_infinity)[pi])
 
     ws = recon.workspace_dir
-    images = [
-        np.ascontiguousarray(
-            cv2.cvtColor(
-                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-            )
-        )
-        for name in recon.image_names
-    ]
+    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
 
     out = ep.embed_patches(recon, images, resolution=12)
     assert out.feature_source == "embedded_patches"
@@ -172,7 +165,7 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
     bridge; it sources image hashes from the embedded recon, not by re-reading the
     ``.sift`` files. Make the sift-hash helper blow up — the run must still succeed.
     """
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
     def _boom(_recon):
         raise AssertionError("embed_patches should not re-read .sift for hashes")
@@ -181,14 +174,7 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
-    images = [
-        np.ascontiguousarray(
-            cv2.cvtColor(
-                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-            )
-        )
-        for name in recon.image_names
-    ]
+    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
     out = ep.embed_patches(recon, images, resolution=12)
     assert out.feature_source == "embedded_patches"
     # The hashes are exactly the bridge's (images aren't culled, only points), so
@@ -203,7 +189,7 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
     """The re-layer's intent: normal refinement runs with use_stored_keypoints=True
     (anchoring on the carried-in SIFT detections), not the reprojected center.
     Spy on PatchCloud.refine_normals to capture the flag the pipeline passes."""
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
     from sfmtool.patches import PatchCloud
 
@@ -218,14 +204,7 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
-    images = [
-        np.ascontiguousarray(
-            cv2.cvtColor(
-                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-            )
-        )
-        for name in recon.image_names
-    ]
+    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
     ep.embed_patches(recon, images, resolution=12)
     assert captured.get("use_stored_keypoints") is True
 
@@ -280,18 +259,11 @@ def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
     the cap never drops an observation itself, but the slightly different
     round-2 normal can flip a borderline grazing-drop / sub-pixel-cull decision
     (observed: 10 observations in ~10000 on this fixture)."""
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
-    images = [
-        np.ascontiguousarray(
-            cv2.cvtColor(
-                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-            )
-        )
-        for name in recon.image_names
-    ]
+    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
 
     # Pin the baseline to all-views (max_refine_views=0) so this stays a
     # capped-vs-uncapped comparison independent of the pipeline default (8).
@@ -482,17 +454,10 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
 
 
 def _rgb_images(recon) -> list[np.ndarray]:
-    import cv2
+    from sfmtool.fileio import read_image_rgb
 
     ws = recon.workspace_dir
-    return [
-        np.ascontiguousarray(
-            cv2.cvtColor(
-                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-            )
-        )
-        for name in recon.image_names
-    ]
+    return [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
 
 
 def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace):

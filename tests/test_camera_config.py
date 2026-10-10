@@ -412,14 +412,11 @@ class TestBuildIntrinsicsFromCameraConfig:
         assert d["parameters"]["tangential_distortion_p2"] == 0.0
 
     def test_full_block_at_native_resolution(self, isolated_test_image: Path):
-        import cv2
+        from sfmtool.fileio import read_image_rgb
 
         from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
-        img = cv2.imread(
-            str(isolated_test_image),
-            cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION,
-        )
+        img = read_image_rgb(isolated_test_image)
         actual_h, actual_w = img.shape[:2]
 
         block = {
@@ -449,14 +446,11 @@ class TestBuildIntrinsicsFromCameraConfig:
         assert d["parameters"]["focal_length_y"] == pytest.approx(313.0)
 
     def test_full_block_uniform_downscale(self, isolated_test_image: Path):
-        import cv2
+        from sfmtool.fileio import read_image_rgb
 
         from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
-        img = cv2.imread(
-            str(isolated_test_image),
-            cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION,
-        )
+        img = read_image_rgb(isolated_test_image)
         actual_h, actual_w = img.shape[:2]
 
         # Calibration at 4x the actual size
@@ -492,14 +486,11 @@ class TestBuildIntrinsicsFromCameraConfig:
         assert d["parameters"]["radial_distortion_k2"] == pytest.approx(0.01)
 
     def test_aspect_mismatch_raises(self, isolated_test_image: Path):
-        import cv2
+        from sfmtool.fileio import read_image_rgb
 
         from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
-        img = cv2.imread(
-            str(isolated_test_image),
-            cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION,
-        )
+        img = read_image_rgb(isolated_test_image)
         actual_h, actual_w = img.shape[:2]
 
         # Calibrated with different aspect

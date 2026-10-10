@@ -222,7 +222,8 @@ which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
 
 - `src/sfmtool/_commands/embed_patches.py` — the Click command (argument
   parsing, validation, default-output derivation, image load, write-out). The
-  image decode runs in a thread pool (cv2 releases the GIL), preserving
+  image decode (`read_image_rgb`) runs in a thread pool (the decoder
+  releases the GIL), preserving
   `image_names` order.
 - `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: a single
   `SfmrReconstruction.to_embedded_patches` bridge (the only `.sift` read) followed

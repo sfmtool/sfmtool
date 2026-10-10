@@ -1,9 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for reading image files: the header-only
-//! `image_dimensions` and the full decodes `read_image_rgb` and
-//! `read_image_rgba`.
+//! Python bindings for reading image files: the header-only reads
+//! `image_dimensions` and `image_has_alpha`, and the full decodes
+//! `read_image_rgb` and `read_image_rgba`.
 
 use std::path::PathBuf;
 
@@ -19,6 +19,18 @@ use sfmtool_core::camera::image::ImageU8;
 #[pyfunction]
 pub fn image_dimensions(path: PathBuf) -> PyResult<(u32, u32)> {
     image::image_dimensions(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+}
+
+/// Whether the image file at `path` stores an alpha channel, from its header
+/// alone.
+///
+/// The contents, not the extension, choose the decoder, as in
+/// `read_image_rgb`. A caller that writes the image back out reads it with
+/// `read_image_rgba` when this is true, so the alpha survives, and with
+/// `read_image_rgb` otherwise. The errors are `read_image_rgb`'s.
+#[pyfunction]
+pub fn image_has_alpha(path: PathBuf) -> PyResult<bool> {
+    sfmtool_core::camera::image::image_has_alpha(&path).map_err(|e| read_error(&path, e))
 }
 
 /// Decode the image file at `path` to a `y_x_rgb` `uint8` array, `(H, W, 3)`.
@@ -62,15 +74,7 @@ fn to_array<'py>(
     path: &std::path::Path,
     decoded: Result<ImageU8, image::ImageError>,
 ) -> PyResult<Bound<'py, PyArray3<u8>>> {
-    let image = decoded.map_err(|e| {
-        let message = format!("could not read image {}: {e}", path.display());
-        match &e {
-            image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
-                pyo3::exceptions::PyFileNotFoundError::new_err(message)
-            }
-            _ => pyo3::exceptions::PyOSError::new_err(message),
-        }
-    })?;
+    let image = decoded.map_err(|e| read_error(path, e))?;
     let shape = (
         image.height() as usize,
         image.width() as usize,
@@ -81,8 +85,21 @@ fn to_array<'py>(
     Ok(array.into_pyarray(py))
 }
 
+/// The Python exception for an image file that could not be read, naming
+/// `path`: `FileNotFoundError` for a missing file, `OSError` otherwise.
+fn read_error(path: &std::path::Path, e: image::ImageError) -> PyErr {
+    let message = format!("could not read image {}: {e}", path.display());
+    match &e {
+        image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
+            pyo3::exceptions::PyFileNotFoundError::new_err(message)
+        }
+        _ => pyo3::exceptions::PyOSError::new_err(message),
+    }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(image_dimensions, m)?)?;
+    m.add_function(wrap_pyfunction!(image_has_alpha, m)?)?;
     m.add_function(wrap_pyfunction!(read_image_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(read_image_rgba, m)?)?;
     Ok(())

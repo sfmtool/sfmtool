@@ -50,9 +50,12 @@ DEFAULT_IMAGES = [
 
 
 def load_gray(path, max_width=640):
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise SystemExit(f"could not read {path}")
+    from sfmtool.fileio import read_image_rgb
+
+    try:
+        img = cv2.cvtColor(read_image_rgb(path), cv2.COLOR_RGB2GRAY)
+    except OSError as e:
+        raise SystemExit(f"could not read {path}: {e}") from e
     if max_width and img.shape[1] > max_width:
         scale = max_width / img.shape[1]
         img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)

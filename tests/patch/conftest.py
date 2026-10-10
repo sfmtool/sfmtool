@@ -14,15 +14,10 @@ import numpy as np
 
 def load_images(recon) -> list[np.ndarray]:
     """Every image of a reconstruction, decoded to contiguous RGB."""
-    import cv2  # heavy module, only needed by the integration tests
+    from sfmtool.fileio import read_image_rgb
 
     ws = recon.workspace_dir
-    images = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        assert bgr is not None, f"could not read {name}"
-        images.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
-    return images
+    return [read_image_rgb(os.path.join(ws, name)) for name in recon.image_names]
 
 
 def sample_point_ids(cloud, n: int = 200, seed: int = 0, restrict_to=None) -> list[int]:

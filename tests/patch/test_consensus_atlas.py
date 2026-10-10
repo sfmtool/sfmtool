@@ -46,7 +46,7 @@ def _seoul_bull_rig_and_sources(
     ``sources`` is the list of ``(CameraIntrinsics, RotQuaternion, ndarray)``
     tuples both ``build_rotation_only`` and ``render_consensus_atlas`` accept.
     """
-    import cv2  # local import — heavy module, only needed by integration
+    from sfmtool.fileio import read_image_rgb
 
     recon = SfmrReconstruction.load(sfmr_path)
     cameras = recon.cameras
@@ -64,9 +64,7 @@ def _seoul_bull_rig_and_sources(
     for i, name in enumerate(image_names):
         cam = cameras[camera_indexes[i]]
         q = RotQuaternion(quats[i, 0], quats[i, 1], quats[i, 2], quats[i, 3])
-        bgr = cv2.imread(str(image_dir / name), cv2.IMREAD_COLOR)
-        assert bgr is not None
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        rgb = read_image_rgb(image_dir / name)
         sources.append((cam, q, rgb))
 
     return rig, sources

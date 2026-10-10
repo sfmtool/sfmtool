@@ -22,6 +22,7 @@ import numpy as np
 
 from ._sfmtool import THUMBNAIL_SIZE
 from ._sfmtool.reconstruction import SfmrReconstruction
+from ._sfmtool.fileio import image_has_alpha, read_image_rgb, read_image_rgba
 from ._sfmtool.flow import WarpMap
 
 
@@ -330,10 +331,10 @@ def undistort_reconstruction_images(
         cam_idx = camera_indexes[i]
         cam_meta = cameras_meta[cam_idx]
 
-        # Load image
-        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
-        if image is None:
-            raise RuntimeError(f"Failed to load image: {image_path}")
+        # Load the image as RGB, or as RGBA when the file has an alpha channel
+        # so that the undistorted image keeps it.
+        has_alpha = image_has_alpha(image_path)
+        image = read_image_rgba(image_path) if has_alpha else read_image_rgb(image_path)
 
         height, width = image.shape[:2]
 
@@ -363,15 +364,18 @@ def undistort_reconstruction_images(
         output_image_path = output_dir / image_name
         output_image_path.parent.mkdir(parents=True, exist_ok=True)
 
-        success = cv2.imwrite(str(output_image_path), undistorted)
+        # cv2.imwrite takes BGR or BGRA.
+        to_bgr = cv2.COLOR_RGBA2BGRA if has_alpha else cv2.COLOR_RGB2BGR
+        success = cv2.imwrite(str(output_image_path), cv2.cvtColor(undistorted, to_bgr))
         if not success:
             raise RuntimeError(f"Failed to save undistorted image: {output_image_path}")
 
-        # Step 3: Generate the thumbnail from the undistorted image (BGR -> RGB)
-        thumb_bgr = cv2.resize(
-            undistorted, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
+        # Step 3: Generate the RGB thumbnail from the undistorted image
+        thumbnail_rgb = cv2.resize(
+            np.ascontiguousarray(undistorted[:, :, :3]),
+            (THUMBNAIL_SIZE, THUMBNAIL_SIZE),
+            interpolation=cv2.INTER_AREA,
         )
-        thumbnail_rgb = cv2.cvtColor(thumb_bgr, cv2.COLOR_BGR2RGB)
         thumbnails.append(thumbnail_rgb)
 
         # Step 4: Read source .sift file and transform features

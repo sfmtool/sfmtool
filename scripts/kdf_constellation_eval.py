@@ -568,6 +568,8 @@ def dump_disagreements(records, images, out_dir: Path, limit: int):
     """
     try:
         import cv2
+
+        from sfmtool.fileio import read_image_rgb
     except ImportError:
         print("opencv unavailable; skipping crops")
         return []
@@ -577,8 +579,12 @@ def dump_disagreements(records, images, out_dir: Path, limit: int):
     for record in records:
         if len(written) >= limit:
             break
-        left_image = cv2.imread(str(images[record["image"]]))
-        if left_image is None:
+        # Drawn and written with OpenCV, which takes BGR.
+        try:
+            left_image = cv2.cvtColor(
+                read_image_rgb(images[record["image"]]), cv2.COLOR_RGB2BGR
+            )
+        except OSError:
             continue
         cx, cy = record["centre"]
         radius = record["radius"]
@@ -589,8 +595,11 @@ def dump_disagreements(records, images, out_dir: Path, limit: int):
         ):
             if len(written) >= limit:
                 break
-            right_image = cv2.imread(str(images[other]))
-            if right_image is None:
+            try:
+                right_image = cv2.cvtColor(
+                    read_image_rgb(images[other]), cv2.COLOR_RGB2BGR
+                )
+            except OSError:
                 continue
             a = np.asarray(affine, dtype=np.float64)
             # Map the patch's bounding box through the warp and cut its hull.

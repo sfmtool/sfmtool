@@ -14,6 +14,8 @@ from pathlib import Path
 import click
 import cv2
 
+from .._sfmtool.fileio import image_dimensions, read_image_rgb
+
 _FISHEYE_SENSOR_NAMES = ["fisheye_left", "fisheye_right"]
 
 # Per-sensor frame filename template. The `%06d` field is both ffmpeg's
@@ -176,13 +178,10 @@ def _extract_side_by_side(
         if not frame_files:
             raise ValueError(f"No frames extracted from {insv_path}")
 
-        first_frame = cv2.imread(
-            str(frame_files[0]), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        )
-        if first_frame is None:
-            raise ValueError(f"Failed to read extracted frame: {frame_files[0]}")
-
-        h, w = first_frame.shape[:2]
+        try:
+            w, h = image_dimensions(frame_files[0])
+        except OSError as e:
+            raise ValueError(f"Failed to read extracted frame: {frame_files[0]}") from e
         if w != 2 * h:
             raise ValueError(
                 f"Expected 2:1 aspect ratio (dual fisheye side by side), "
@@ -196,11 +195,10 @@ def _extract_side_by_side(
             if (i + 1) % 100 == 0 or (i + 1) == total:
                 click.echo(f"\r  Splitting frames: {i + 1}/{total}", nl=False)
 
-            frame = cv2.imread(
-                str(frame_file), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-            )
-            if frame is None:
-                raise ValueError(f"Failed to read extracted frame: {frame_file}")
+            try:
+                frame = read_image_rgb(frame_file)
+            except OSError as e:
+                raise ValueError(f"Failed to read extracted frame: {frame_file}") from e
 
             h, w = frame.shape[:2]
             mid = w // 2
@@ -208,8 +206,13 @@ def _extract_side_by_side(
             right = frame[:, mid:]
 
             frame_name = frame_file.name
-            cv2.imwrite(str(sensor_dirs[0] / frame_name), left)
-            cv2.imwrite(str(sensor_dirs[1] / frame_name), right)
+            # cv2.imwrite takes BGR.
+            cv2.imwrite(
+                str(sensor_dirs[0] / frame_name), cv2.cvtColor(left, cv2.COLOR_RGB2BGR)
+            )
+            cv2.imwrite(
+                str(sensor_dirs[1] / frame_name), cv2.cvtColor(right, cv2.COLOR_RGB2BGR)
+            )
         click.echo()
 
     finally:

@@ -13,6 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .._sfmtool.fileio import image_dimensions, read_image_rgb
 from .._sfmtool.geometry import RotQuaternion
 
 # Per-sensor frame filename template. The `%06d` field is both the output
@@ -166,13 +167,10 @@ def convert_panoramas(
     rotations = _cubemap_rotations()
 
     # Read first panorama to determine face size
-    first_pano = cv2.imread(
-        str(pano_paths[0]), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-    )
-    if first_pano is None:
-        raise ValueError(f"Failed to read panorama image: {pano_paths[0]}")
-
-    pano_h, pano_w = first_pano.shape[:2]
+    try:
+        pano_w, pano_h = image_dimensions(pano_paths[0])
+    except OSError as e:
+        raise ValueError(f"Failed to read panorama image: {pano_paths[0]}") from e
     if face_size is None:
         face_size = default_face_size(pano_w)
 
@@ -187,11 +185,10 @@ def convert_panoramas(
     # position in sorted order — so each sensor's images carry a `.camrig`
     # frame field and frames pair up across faces.
     for frame_idx, pano_path in enumerate(pano_paths):
-        pano = cv2.imread(
-            str(pano_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        )
-        if pano is None:
-            raise ValueError(f"Failed to read panorama image: {pano_path}")
+        try:
+            pano = read_image_rgb(pano_path)
+        except OSError as e:
+            raise ValueError(f"Failed to read panorama image: {pano_path}") from e
 
         frame_name = _PANO_FRAME_PATTERN % frame_idx
         for i, (name, rotation) in enumerate(zip(face_names, rotations)):
@@ -200,7 +197,7 @@ def convert_panoramas(
             out_path = face_dirs[i] / frame_name
             cv2.imwrite(
                 str(out_path),
-                face,
+                cv2.cvtColor(face, cv2.COLOR_RGB2BGR),  # cv2.imwrite takes BGR
                 [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
             )
 

@@ -102,9 +102,11 @@ consumer reads the cells.
    arrays and reads only the rows its members name, so the member values are
    scattered back to those rows, sized by `feature_counts[i]` — which presents
    them exactly as a `.sift` read would.
-3. **Refine.** Load the images with cv2 (color) — decoded through a thread
-   pool (cv2 releases the GIL; the embed-patches pattern), results collected
-   in submission order — present the seed geometry from step 2 in
+3. **Refine.** Load the images with `sfmtool.fileio.read_image_rgb`
+   ([reading-photographs.md](../../core/camera/reading-photographs.md)) and
+   reverse the channels to BGR, the order the kernel is given in the viewer
+   too — decoded through a thread pool (the decoder releases the GIL; the
+   embed-patches pattern), results collected in submission order — present the seed geometry from step 2 in
    images-section order,
    and call `_sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,

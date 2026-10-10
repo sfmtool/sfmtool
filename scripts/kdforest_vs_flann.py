@@ -25,6 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from sfmtool.fileio import read_image_rgb
 from sfmtool.spatial import KdForest
 
 TREES = 4
@@ -41,7 +42,7 @@ def extract_descriptors(max_images: int = 8, per_image_cap: int = 4000) -> np.nd
     images = sorted(DATASET.glob("*.jpg"))[:max_images]
     chunks = []
     for path in images:
-        gray = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        gray = cv2.cvtColor(read_image_rgb(path), cv2.COLOR_RGB2GRAY)
         _, desc = sift.detectAndCompute(gray, None)
         if desc is not None:
             chunks.append(desc[:per_image_cap])

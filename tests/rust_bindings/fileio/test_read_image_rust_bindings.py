@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from sfmtool.fileio import read_image_rgb, read_image_rgba
+from sfmtool.fileio import image_has_alpha, read_image_rgb, read_image_rgba
 
 _DATA = Path(__file__).resolve().parents[3] / "test-data" / "images"
 
@@ -65,6 +65,20 @@ def test_rgba_keeps_a_png_alpha(tmp_path):
 
     np.testing.assert_array_equal(read_image_rgba(path), rgba)
     np.testing.assert_array_equal(read_image_rgb(path), rgba[..., :3])
+    assert image_has_alpha(path)
+    assert not image_has_alpha(_seoul_bull_images()[0])
+
+
+def test_the_contents_not_the_extension_choose_the_decoder(tmp_path):
+    rgba = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+    ok, encoded = cv2.imencode(".png", cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+    assert ok
+    path = tmp_path / "actually_png.jpg"
+    path.write_bytes(encoded.tobytes())
+
+    assert image_has_alpha(path)
+    np.testing.assert_array_equal(read_image_rgba(path), rgba)
+    np.testing.assert_array_equal(read_image_rgb(path), rgba[..., :3])
 
 
 def _with_exif_orientation(jpeg: bytes, orientation: int) -> bytes:
@@ -108,7 +122,7 @@ def test_exif_orientation_is_ignored(tmp_path):
 
 def test_a_missing_file_raises_file_not_found_naming_the_path(tmp_path):
     missing = tmp_path / "missing.jpg"
-    for reader in (read_image_rgb, read_image_rgba):
+    for reader in (read_image_rgb, read_image_rgba, image_has_alpha):
         with pytest.raises(FileNotFoundError, match="missing.jpg"):
             reader(missing)
 
@@ -116,6 +130,6 @@ def test_a_missing_file_raises_file_not_found_naming_the_path(tmp_path):
 def test_an_undecodable_file_raises_oserror_naming_the_path(tmp_path):
     bad = tmp_path / "bad.jpg"
     bad.write_bytes(b"not a jpeg")
-    for reader in (read_image_rgb, read_image_rgba):
+    for reader in (read_image_rgb, read_image_rgba, image_has_alpha):
         with pytest.raises(OSError, match="bad.jpg"):
             reader(bad)

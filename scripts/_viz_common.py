@@ -23,6 +23,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from sfmtool.fileio import read_image_rgb
 from sfmtool.patches import PatchCloud
 from sfmtool.reconstruction import SfmrReconstruction
 
@@ -104,10 +105,9 @@ def load_images(recon) -> list[np.ndarray]:
     ws = recon.workspace_dir
     out = []
     for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise FileNotFoundError(f"could not read image {name!r} under {ws}")
-        out.append(np.ascontiguousarray(bgr))
+        # The images are drawn on with OpenCV, which takes BGR.
+        rgb = read_image_rgb(os.path.join(ws, name))
+        out.append(np.ascontiguousarray(rgb[:, :, ::-1]))
     return out
 
 

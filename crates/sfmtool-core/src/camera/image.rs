@@ -51,9 +51,10 @@ impl ImageU8 {
     /// The EXIF orientation is ignored, as the feature extractors ignore it, so
     /// the pixels line up with the keypoints and with the camera's width and
     /// height. A grey image has its value repeated in the three channels, an
-    /// alpha channel is dropped, and a 16-bit image is scaled to 8 bits.
+    /// alpha channel is dropped, and a 16-bit image is scaled to 8 bits. The
+    /// file's contents, not its extension, choose the decoder.
     pub fn read_rgb(path: &std::path::Path) -> Result<Self, ::image::ImageError> {
-        let rgb = ::image::open(path)?.to_rgb8();
+        let rgb = Self::decode(path)?.to_rgb8();
         Ok(Self::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
     }
 
@@ -64,8 +65,16 @@ impl ImageU8 {
     /// where it has one and 255 (opaque) where it has none, so `alpha > 0`
     /// marks pixels with data, as in a reconstruction's stored patch bitmaps.
     pub fn read_rgba(path: &std::path::Path) -> Result<Self, ::image::ImageError> {
-        let rgba = ::image::open(path)?.to_rgba8();
+        let rgba = Self::decode(path)?.to_rgba8();
         Ok(Self::new(rgba.width(), rgba.height(), 4, rgba.into_raw()))
+    }
+
+    /// Decode the file at `path` with the decoder its contents name, not its
+    /// extension, so a PNG saved under a `.jpg` name still reads.
+    fn decode(path: &std::path::Path) -> Result<::image::DynamicImage, ::image::ImageError> {
+        ::image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .decode()
     }
 
     /// Create a zeroed image with the given dimensions and channel count.
@@ -159,6 +168,21 @@ impl ImageU8 {
             data: out_data,
         }
     }
+}
+
+/// Whether the image file at `path` stores an alpha channel, read from its
+/// header alone, never the pixel data.
+///
+/// The contents, not the extension, choose the decoder, as in
+/// [`ImageU8::read_rgb`]. A caller that writes an image back out reads it with
+/// [`ImageU8::read_rgba`] when this is true, so the alpha survives, and with
+/// [`ImageU8::read_rgb`] otherwise.
+pub fn image_has_alpha(path: &std::path::Path) -> Result<bool, ::image::ImageError> {
+    use ::image::ImageDecoder;
+    let decoder = ::image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .into_decoder()?;
+    Ok(decoder.color_type().has_alpha())
 }
 
 /// Gaussian pyramid of [`ImageU8`] images for anisotropic resampling.

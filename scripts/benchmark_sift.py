@@ -291,7 +291,9 @@ def main() -> None:
             images = dataset_images(spec)
             sizes = size_override or spec["sizes"]
             if cv2 is not None:
-                h, w = cv2.imread(str(images[0])).shape[:2]
+                from sfmtool.fileio import image_dimensions
+
+                w, h = image_dimensions(images[0])
                 res = f"{w}x{h}"
             else:
                 res = "?"

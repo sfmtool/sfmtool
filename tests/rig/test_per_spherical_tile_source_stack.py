@@ -426,15 +426,13 @@ class TestPerSphericalTileSourceStackOnReconstruction:
         rig = SphericalTileRig(n=320, arc_per_pixel=2 * np.pi / 512, seed=1234)
         rig.set_patch_size(_next_pow2(rig.patch_size))
 
-        import cv2
+        from sfmtool.fileio import read_image_rgb
 
         sources = []
         for i, name in enumerate(image_names):
             cam = cameras[camera_indexes[i]]
             q = RotQuaternion(quats[i, 0], quats[i, 1], quats[i, 2], quats[i, 3])
-            bgr = cv2.imread(str(image_dir / name), cv2.IMREAD_COLOR)
-            assert bgr is not None, f"failed to read {image_dir / name}"
-            img = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            img = read_image_rgb(image_dir / name)
             sources.append((cam, q, img))
 
         stack = PerSphericalTileSourceStack.build_rotation_only(rig, sources)

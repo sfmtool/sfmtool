@@ -106,7 +106,7 @@ class Workload:
     """One reconstruction + images + a fixed sampled point subset."""
 
     def __init__(self, sfmr_path: str, n_points: int, seed: int):
-        import cv2
+        from sfmtool.fileio import read_image_rgb
 
         from sfmtool import patches, reconstruction
 
@@ -114,10 +114,9 @@ class Workload:
         self.recon = reconstruction.SfmrReconstruction.load(sfmr_path)
         ws = self.recon.workspace_dir
         t0 = time.perf_counter()
+        # BGR, the channel order this bench's earlier runs were measured in.
         self.images = [
-            np.ascontiguousarray(
-                cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-            )
+            np.ascontiguousarray(read_image_rgb(os.path.join(ws, name))[:, :, ::-1])
             for name in self.recon.image_names
         ]
         self.load_s = time.perf_counter() - t0

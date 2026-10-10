@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Readers, writers and verifiers for the `.sfmr`, `.sift`, `.matches` and
-`.camrig` formats, COLMAP binary and database interop, `image_dimensions`
-and `write_web_export`.
+`.camrig` formats, COLMAP binary and database interop, the image readers
+`read_image_rgb` and `read_image_rgba` (the decoder the Rust code reads
+photographs with; `y_x_rgb` / `y_x_rgba` `uint8` arrays, EXIF orientation
+ignored), the header reads `image_dimensions` and `image_has_alpha`, and
+`write_web_export`.
 
 This module is the public home of the `sfmtool._sfmtool.fileio` bindings. It
 is named `fileio` rather than `io` so that `from sfmtool import *` does not

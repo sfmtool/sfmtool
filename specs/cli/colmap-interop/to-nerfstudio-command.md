@@ -192,7 +192,10 @@ indirection than code. The reference `ns-process-data` output is also
 For each level `i` in `1..=num_downscales`, the originals are downsampled by
 `2**i` with `cv2.INTER_AREA` (better antialiasing than bilinear for
 shrinking) and written to `images_{2**i}/` as JPEG at `--jpeg-quality`. Each
-source image is read once and emits all pyramid levels in a single pass.
+source image is read once and emits all pyramid levels in a single pass. It is
+read with `read_image_rgb`, or `read_image_rgba` when it has an alpha channel
+([reading-photographs.md](../../core/camera/reading-photographs.md)), at 8 bits
+per channel.
 
 `--num-downscales 0` skips the pyramid entirely; nerfstudio will resample on
 the fly.
