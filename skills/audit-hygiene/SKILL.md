@@ -53,6 +53,27 @@ prioritized list of structural fixes.
    deliberate, justified copy — read it and decide, don't assume either way. The
    fix for a finding is usually one shared constant plus a test, not a rewrite.
 
+   A comment names only the copies its author knew about. Before stating how
+   many copies there are, search for the duplicated **content** itself (the
+   variant list, the literal, the formula) across the workspace, the bindings
+   included, and cite the count that search found. A function that already
+   holds the same content under some name is the shared home to propose, and
+   its name is the one to use. A 2026-10-08 finding that proposed
+   `has_bare_focal` counted two copies of a camera-model list by following a
+   *mirrors* comment; there were four, one of them already a public function
+   named `focal_is_releasable`.
+
+   **Check a proposed name against everything it would classify.** A name for
+   a new shared predicate, constant or set is a claim about which items belong.
+   Enumerate the whole domain (every variant of the enum, every registered
+   model) and confirm the name is true of exactly the items in the list and
+   false of every other. If a natural-sounding property also holds for items
+   outside the list, it is the wrong name: name the reason the list exists,
+   which is usually stated in the comment at the copy you are reading.
+   `has_bare_focal` failed this check: `SIMPLE_RADIAL`, `RADIAL` and
+   `RADIAL_FISHEYE` also have a single focal, but bundle adjustment does not
+   release it.
+
 ### C. Naming and convention consistency
 
 **Read [`specs/GLOSSARY.md`](../../specs/GLOSSARY.md) before running any check in
