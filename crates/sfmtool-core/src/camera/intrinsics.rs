@@ -501,50 +501,6 @@ impl CameraModel {
             _ => !self.needs_ray_path(),
         }
     }
-
-    /// Whether bundle adjustment can release this model's focal: true for
-    /// `SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`,
-    /// `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, false for every other model.
-    ///
-    /// The adjustment's analytic focal column `∂(u, v)/∂f = (u − cx)/f` is
-    /// exact only when the projection is `u = f·x_d + cx` with one focal and a
-    /// distorted coordinate `x_d` that does not itself read `f`. The five
-    /// models have that form: `x_d = rx/(−rz)` for `SIMPLE_PINHOLE`,
-    /// `x_d = θ·ûx` with `θ = atan2(ρ, rz)` for `EQUIDISTANT_FISHEYE`,
-    /// `x_d = θ·(1 + k1·θ²)·ûx` with the same ray-derived `θ` for
-    /// `SIMPLE_RADIAL_FISHEYE`, and, for the two spline models, a
-    /// dimensionless radial spline on the ray's own radial coordinate
-    /// (`x_d = (θ + δ(θ))·ûx` for `SFMTOOL_FISHEYE`, `x_d = (ρ + δ(ρ))·ûx`
-    /// with `ρ = ρ_xy/rz` for `SFMTOOL_PINHOLE`). Every other model either has
-    /// a second focal `fy`, which the kernel has no slot for, or applies its
-    /// coefficients to a normalized coordinate that depends on `f` (the
-    /// multi-coefficient fisheye family recovers `θ` from `r/f`).
-    ///
-    /// The bundle adjustment kernel's focal gate,
-    /// [`focal_is_releasable`](crate::reconstruction::bundle_adjust::focal_is_releasable),
-    /// the Python binding's `opt_f` check and `CameraIntrinsics::with_focal`
-    /// all ask this method, so they agree on the set.
-    pub fn focal_is_releasable(&self) -> bool {
-        // Exhaustive on purpose, with no `_` arm: a new model has to be
-        // classified here before it will build.
-        match self {
-            CameraModel::SimplePinhole { .. }
-            | CameraModel::EquidistantFisheye { .. }
-            | CameraModel::SimpleRadialFisheye { .. }
-            | CameraModel::SfmtoolFisheye { .. }
-            | CameraModel::SfmtoolPinhole { .. } => true,
-            CameraModel::Pinhole { .. }
-            | CameraModel::SimpleRadial { .. }
-            | CameraModel::Radial { .. }
-            | CameraModel::OpenCV { .. }
-            | CameraModel::OpenCVFisheye { .. }
-            | CameraModel::RadialFisheye { .. }
-            | CameraModel::ThinPrismFisheye { .. }
-            | CameraModel::RadTanThinPrismFisheye { .. }
-            | CameraModel::FullOpenCV { .. }
-            | CameraModel::Equirectangular { .. } => false,
-        }
-    }
 }
 
 /// Camera intrinsic parameters with image dimensions.
@@ -767,19 +723,11 @@ impl CameraIntrinsics {
         self.model.has_distortion()
     }
 
-    /// This camera at focal `f`, for a model whose focal
-    /// [`CameraModel::focal_is_releasable`] admits, and an unchanged clone for
-    /// every other model. Focal optimization is gated on the same method, so
-    /// no other camera ever sees a moved focal.
+    /// This camera at focal `f`. Every model with a single `focal_length`
+    /// takes `f`; a model with two focals (`focal_length_x`,
+    /// `focal_length_y`) comes back as an unchanged clone.
     pub(crate) fn with_focal(&self, f: f64) -> CameraIntrinsics {
         let mut out = self.clone();
-        if !self.model.focal_is_releasable() {
-            return out;
-        }
-        // The arms are every model with one `focal_length` field, which is a
-        // fact about the variant's fields rather than a second copy of the
-        // release set. A releasable model with two focals would reach the
-        // panic in the first test that releases it.
         match &mut out.model {
             CameraModel::SimplePinhole { focal_length, .. }
             | CameraModel::SimpleRadial { focal_length, .. }
@@ -789,10 +737,13 @@ impl CameraIntrinsics {
             | CameraModel::EquidistantFisheye { focal_length, .. }
             | CameraModel::SfmtoolFisheye { focal_length, .. }
             | CameraModel::SfmtoolPinhole { focal_length, .. } => *focal_length = f,
-            other => unreachable!(
-                "{} has a releasable focal but no single focal_length",
-                other.model_name()
-            ),
+            CameraModel::Pinhole { .. }
+            | CameraModel::OpenCV { .. }
+            | CameraModel::OpenCVFisheye { .. }
+            | CameraModel::ThinPrismFisheye { .. }
+            | CameraModel::RadTanThinPrismFisheye { .. }
+            | CameraModel::FullOpenCV { .. }
+            | CameraModel::Equirectangular { .. } => {}
         }
         out
     }
@@ -839,4 +790,4 @@ impl CameraIntrinsics {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

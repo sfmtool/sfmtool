@@ -1730,6 +1730,50 @@ fn observation_blocks<const CAM_COLS: usize>(
     }
 }
 
+/// Whether this kernel can release the focal of a camera of this model: true
+/// for `SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`,
+/// `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, false for every other model.
+///
+/// This is a property of this implementation's focal column, not of the
+/// camera. The analytic `∂(u, v)/∂f = (u − cx)/f` is exact only when the
+/// projection is `u = f·x_d + cx` with one focal and a distorted coordinate
+/// `x_d` that does not itself read `f`. The five models have that form:
+/// `x_d = rx/(−rz)` for `SIMPLE_PINHOLE`, `x_d = θ·ûx` with
+/// `θ = atan2(ρ, rz)` for `EQUIDISTANT_FISHEYE`, `x_d = θ·(1 + k1·θ²)·ûx`
+/// with the same ray-derived `θ` for `SIMPLE_RADIAL_FISHEYE`, and, for the two
+/// spline models, a dimensionless radial spline on the ray's own radial
+/// coordinate (`x_d = (θ + δ(θ))·ûx` for `SFMTOOL_FISHEYE`,
+/// `x_d = (ρ + δ(ρ))·ûx` with `ρ = ρ_xy/rz` for `SFMTOOL_PINHOLE`). Every
+/// other model either has a second focal `fy`, which this kernel has no slot
+/// for, or applies its coefficients to a normalized coordinate that depends on
+/// `f` (the multi-coefficient fisheye family recovers `θ` from `r/f`).
+///
+/// This is the one list of those models. The focal gate in [`Lens::new`]
+/// reads it, and so does the public per-camera
+/// `reconstruction::bundle_adjust::focal_is_releasable`, which the viewer and
+/// the Python binding ask.
+pub(crate) fn focal_is_releasable(model: &CameraModel) -> bool {
+    // Exhaustive on purpose, with no `_` arm: a new model has to be
+    // classified here before it will build.
+    match model {
+        CameraModel::SimplePinhole { .. }
+        | CameraModel::EquidistantFisheye { .. }
+        | CameraModel::SimpleRadialFisheye { .. }
+        | CameraModel::SfmtoolFisheye { .. }
+        | CameraModel::SfmtoolPinhole { .. } => true,
+        CameraModel::Pinhole { .. }
+        | CameraModel::SimpleRadial { .. }
+        | CameraModel::Radial { .. }
+        | CameraModel::OpenCV { .. }
+        | CameraModel::OpenCVFisheye { .. }
+        | CameraModel::RadialFisheye { .. }
+        | CameraModel::ThinPrismFisheye { .. }
+        | CameraModel::RadTanThinPrismFisheye { .. }
+        | CameraModel::FullOpenCV { .. }
+        | CameraModel::Equirectangular { .. } => false,
+    }
+}
+
 /// One camera's state across the staged loop: the camera the caller handed in,
 /// the releases its model admits, and the current values of the parameters
 /// those releases move.
@@ -1755,10 +1799,10 @@ impl<'a> Lens<'a> {
     /// parameter fixed, whatever the other cameras of the solve do.
     fn new(base: &'a CameraIntrinsics, opt_f: bool, opt_k1: bool, opt_bspline: bool) -> Self {
         // The analytic focal column `∂(u, v)/∂f = (u − cx)/f` is exact only
-        // on the models `CameraModel::focal_is_releasable` admits (its doc
-        // says why). Every other model degrades to a fixed focal here; the
-        // binding rejects it loudly first.
-        let opt_f = opt_f && base.model.focal_is_releasable();
+        // on the models `focal_is_releasable` admits (its doc says why).
+        // Every other model degrades to a fixed focal here; the binding
+        // rejects it loudly first.
+        let opt_f = opt_f && focal_is_releasable(&base.model);
         // The curvature rung exists on exactly one model:
         // `SIMPLE_RADIAL_FISHEYE` is the only one whose single radial
         // coefficient acts on the ray's own `θ`, which is what makes

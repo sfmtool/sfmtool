@@ -6751,3 +6751,24 @@ fn an_unscored_point_is_not_counted_as_changed() {
         "the unscored point was counted"
     );
 }
+
+/// The focal release set is pinned for every registered model, so a change to
+/// it is a deliberate edit to this list as well.
+#[test]
+fn focal_is_releasable_is_pinned_for_every_model() {
+    const RELEASABLE: &[&str] = &[
+        "SIMPLE_PINHOLE",
+        "EQUIDISTANT_FISHEYE",
+        "SIMPLE_RADIAL_FISHEYE",
+        "SFMTOOL_FISHEYE",
+        "SFMTOOL_PINHOLE",
+    ];
+    for cam in crate::camera::intrinsics::tests::all_cameras() {
+        let name = cam.model_name();
+        assert_eq!(
+            focal_is_releasable(&cam.model),
+            RELEASABLE.contains(&name),
+            "{name}"
+        );
+    }
+}

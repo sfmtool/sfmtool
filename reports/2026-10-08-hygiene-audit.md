@@ -266,7 +266,7 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Proposed fix: one method that both sites call.
 - Effort: low. Risk: low.
 
-> _Status (2026-10-09): **Done** — added `CameraModel::focal_is_releasable` (named for the glossary's *release*, and after the existing per-camera `reconstruction::bundle_adjust::focal_is_releasable`; "bare focal" would wrongly include `SIMPLE_RADIAL` and `RADIAL_FISHEYE`), an exhaustive match with no `_` arm and a test pinning it for every registered model. The list was written four times, not two: the kernel gate, `with_focal`, `reconstruction::bundle_adjust::focal_is_releasable` and the Python binding's `opt_f` check now all call it, branch `hygiene-fix-1009-07-has-bare-focal`._
+> _Status (2026-10-09): **Done** — the list now lives once, as `focal_is_releasable` in the kernel module `geometry/bundle_adjust.rs`, not as a `CameraModel` method: which models can release the focal is a property of the kernel's analytic focal column `(u − cx)/f`, so it stays with the algorithm. It is an exhaustive match with no `_` arm, pinned for every registered model by a test in the kernel's tests. The list was written four times, not two: the kernel gate calls it, the public `reconstruction::bundle_adjust::focal_is_releasable` delegates to it, and the Python binding's `opt_f` check calls that public function. `CameraIntrinsics::with_focal` no longer reads the set at all: it sets the focal on every single-focal model and leaves two-focal models unchanged, which is behaviour-preserving because the kernel only moves a focal after its gate. PR #898._
 
 ## Rust: the bench
 

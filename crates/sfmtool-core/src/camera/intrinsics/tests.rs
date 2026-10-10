@@ -248,7 +248,11 @@ fn sfmtool_pinhole() -> CameraIntrinsics {
     }
 }
 
-fn all_cameras() -> Vec<CameraIntrinsics> {
+/// One camera of every registered model, which
+/// `all_cameras_covers_every_registered_model` checks. Crate-visible so a test
+/// elsewhere that must classify every model, such as the bundle adjustment's
+/// focal release set, can walk the same corpus.
+pub(crate) fn all_cameras() -> Vec<CameraIntrinsics> {
     vec![
         pinhole(),
         simple_pinhole(),
@@ -1836,27 +1840,32 @@ fn only_the_spline_models_are_flagged_beta() {
     assert!(notes[0].starts_with("Beta:"));
 }
 
-/// Which models release the focal is pinned for every registered model, and
-/// `with_focal` moves the focal on exactly those.
+/// `with_focal` moves the focal on every model with a single focal and leaves
+/// a model with two focals unchanged.
 #[test]
-fn focal_is_releasable_is_pinned_for_every_model() {
-    const RELEASABLE: &[&str] = &[
-        "SIMPLE_PINHOLE",
-        "EQUIDISTANT_FISHEYE",
-        "SIMPLE_RADIAL_FISHEYE",
-        "SFMTOOL_FISHEYE",
-        "SFMTOOL_PINHOLE",
-    ];
+fn with_focal_moves_only_a_single_focal() {
     for cam in all_cameras() {
         let name = cam.model_name();
-        let expected = RELEASABLE.contains(&name);
-        assert_eq!(cam.model.focal_is_releasable(), expected, "{name}");
+        let (fx, fy) = cam.focal_lengths();
+        let single_focal = !matches!(
+            cam.model,
+            CameraModel::Pinhole { .. }
+                | CameraModel::OpenCV { .. }
+                | CameraModel::OpenCVFisheye { .. }
+                | CameraModel::ThinPrismFisheye { .. }
+                | CameraModel::RadTanThinPrismFisheye { .. }
+                | CameraModel::FullOpenCV { .. }
+                | CameraModel::Equirectangular { .. }
+        );
+        if single_focal {
+            assert_eq!(fx, fy, "{name}");
+        }
 
-        let moved = cam.with_focal(cam.focal_lengths().0 * 1.5);
-        if expected {
-            let (fx, fy) = moved.focal_lengths();
-            assert_relative_eq!(fx, cam.focal_lengths().0 * 1.5);
-            assert_relative_eq!(fy, fx);
+        let moved = cam.with_focal(fx * 1.5);
+        if single_focal {
+            assert_eq!(moved.focal_lengths(), (fx * 1.5, fx * 1.5), "{name}");
+            // Nothing but the focal moved.
+            assert_eq!(moved.with_focal(fx), cam, "{name}");
         } else {
             assert_eq!(moved, cam, "{name}");
         }

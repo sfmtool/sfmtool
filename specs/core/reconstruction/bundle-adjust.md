@@ -171,11 +171,15 @@ on a model with no distortion the kernel can free.
 [`focal_is_releasable`] and [`distortion_is_releasable`] are public and per
 camera for the same reason, so a caller offering the releases as choices can
 grey each choice on its own camera instead of taking it and refusing. The focal
-answer depends on the model alone, so `focal_is_releasable` delegates to
-`CameraModel::focal_is_releasable`, the one list of the five models
+answer depends on the model alone. The list of the five models
 (`SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`,
-`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) that the kernel's focal gate, the Python
-binding's `opt_f` check and `CameraIntrinsics::with_focal` also read.
+`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) is written once, as the crate-private
+`focal_is_releasable` in the kernel module
+[`geometry/bundle_adjust.rs`](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs),
+because it is a property of that kernel's analytic focal column, not of the
+camera model: the kernel's focal gate reads it, and the public
+`focal_is_releasable` here delegates to it, so the viewer and the Python
+binding's `opt_f` check get the same answer.
 
 **The distortion is released only with the focal, per camera.** The kernel has
 two distortion releases, each exact on its own models: `opt_k1` frees `k1` on
