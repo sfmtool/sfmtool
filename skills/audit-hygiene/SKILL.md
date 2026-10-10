@@ -74,6 +74,20 @@ prioritized list of structural fixes.
    `RADIAL_FISHEYE` also have a single focal, but bundle adjustment does not
    release it.
 
+   **Put the shared item in the module whose reasoning it encodes, not on the
+   type it lists.** A set of enum variants is often a fact about an
+   algorithm (which models a solver can handle, which formats a reader
+   supports), not a fact about the enum. Read why the list exists. If the
+   reason is in an algorithm's code (a derivative, a kernel's slots, a
+   format's fields), the shared home is in that algorithm's module, and the
+   enum's own module stays free of it. A method on the enum is right only when
+   the property holds for the type whatever code uses it. The release list
+   above is a property of the bundle adjustment kernel's analytic focal
+   column, so it belongs in `geometry::bundle_adjust`, not on `CameraModel`.
+   Code on the type that copies the algorithm's list (a setter that refuses
+   the models the algorithm does not release) is a second finding: fix that
+   code to state only the type's own fact.
+
 ### C. Naming and convention consistency
 
 **Read [`specs/GLOSSARY.md`](../../specs/GLOSSARY.md) before running any check in
