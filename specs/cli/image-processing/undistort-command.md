@@ -69,7 +69,8 @@ Undistorted images are written at the same relative paths they occupied in the
 source workspace. The `.sfmr`'s `image_names` therefore uses identical relative
 paths. Each source is read with `read_image_rgb`, or with `read_image_rgba`
 when `image_has_alpha` says it has an alpha channel, so a source with alpha is
-written with alpha; the images have 8 bits per channel
+written with alpha. The images have 8 bits per channel, and a grey source is
+written as a 3-channel image
 ([reading-photographs.md](../../core/camera/reading-photographs.md)).
 
 ### Workspace config (`.sfm-workspace.json`)

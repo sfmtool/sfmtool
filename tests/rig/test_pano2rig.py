@@ -188,6 +188,25 @@ class TestConvertPanoramas:
         face_img = cv2.imread(str(output_dir / "front" / "frame_000000.jpg"))
         assert face_img.shape[:2] == (64, 64)
 
+    def test_face_keeps_the_panorama_colour(self, tmp_path):
+        # One colour whose channels all differ, so a red/blue swap between the
+        # read and the write shows in the face.
+        from sfmtool.fileio import read_image_rgb
+
+        rgb = (200, 50, 10)
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        pano_bgr = np.empty((200, 400, 3), dtype=np.uint8)
+        pano_bgr[...] = rgb[::-1]  # cv2.imwrite takes BGR
+        cv2.imwrite(str(input_dir / "pano_000.jpg"), pano_bgr)
+        output_dir = tmp_path / "output"
+
+        convert_panoramas(input_dir, output_dir, face_size=32)
+
+        face = read_image_rgb(output_dir / "front" / "frame_000000.jpg")
+        centre = face[16, 16].astype(int)
+        assert (np.abs(centre - rgb) <= 6).all(), centre
+
     def test_empty_input_raises(self, tmp_path):
         input_dir = tmp_path / "empty"
         input_dir.mkdir()

@@ -73,7 +73,8 @@ pixels to OpenCV for drawing or `imwrite` converts to BGR itself, at that call.
 
 ## Code that reads photographs
 
-Every Python image read in `src/` and `scripts/` goes through the bindings:
+Every Python image read in `src/` and `scripts/` goes through the bindings,
+except the two below:
 
 - `read_workspace_image` in
   [_workspace_image.py](../../../src/sfmtool/_workspace_image.py), the

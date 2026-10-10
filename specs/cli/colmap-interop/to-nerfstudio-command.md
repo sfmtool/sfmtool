@@ -194,8 +194,11 @@ For each level `i` in `1..=num_downscales`, the originals are downsampled by
 shrinking) and written to `images_{2**i}/` as JPEG at `--jpeg-quality`. Each
 source image is read once and emits all pyramid levels in a single pass. It is
 read with `read_image_rgb`, or `read_image_rgba` when it has an alpha channel
-([reading-photographs.md](../../core/camera/reading-photographs.md)), at 8 bits
-per channel.
+([reading-photographs.md](../../core/camera/reading-photographs.md)), so the
+levels have 8 bits per channel, keep a source's alpha, and hold a grey source as
+3 channels. `images/` is a byte copy of each original (§ "5. Image Placement
+and Filenames"), so a 16-bit source gives a 16-bit image in `images/` beside
+8-bit downscaled levels.
 
 `--num-downscales 0` skips the pyramid entirely; nerfstudio will resample on
 the fly.

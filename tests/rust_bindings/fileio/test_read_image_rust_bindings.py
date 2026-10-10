@@ -11,7 +11,12 @@ import cv2
 import numpy as np
 import pytest
 
-from sfmtool.fileio import image_has_alpha, read_image_rgb, read_image_rgba
+from sfmtool.fileio import (
+    image_dimensions,
+    image_has_alpha,
+    read_image_rgb,
+    read_image_rgba,
+)
 
 _DATA = Path(__file__).resolve().parents[3] / "test-data" / "images"
 
@@ -77,6 +82,7 @@ def test_the_contents_not_the_extension_choose_the_decoder(tmp_path):
     path.write_bytes(encoded.tobytes())
 
     assert image_has_alpha(path)
+    assert image_dimensions(path) == (3, 2)
     np.testing.assert_array_equal(read_image_rgba(path), rgba)
     np.testing.assert_array_equal(read_image_rgb(path), rgba[..., :3])
 

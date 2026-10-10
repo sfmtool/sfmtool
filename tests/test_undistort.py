@@ -719,13 +719,16 @@ def _source_shape(sfmr_path: Path, index: int) -> tuple[int, int]:
 
 def test_undistorting_an_rgba_png_keeps_its_alpha(seoul_bull_workspace, tmp_path):
     h, w = _source_shape(seoul_bull_workspace, 0)
-    rng = np.random.default_rng(5)
-    bgra = rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+    # One colour whose channels all differ, so a red/blue swap on the way
+    # through the reader, the remap, the write or the thumbnail shows.
+    rgb = (200, 50, 10)
+    bgra = np.empty((h, w, 4), dtype=np.uint8)
+    bgra[..., :3] = rgb[::-1]  # cv2.imwrite takes BGRA
     bgra[..., 3] = 255
     bgra[: h // 2, :, 3] = 0  # the top half carries no data
     sfmr = _as_png(seoul_bull_workspace, 0, bgra)
 
-    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path)
+    recon, output_dir, _, undistorted = _run_undistort(sfmr, tmp_path)
 
     out = output_dir / recon.image_names[0]
     assert out.suffix == ".png"
@@ -733,6 +736,10 @@ def test_undistorting_an_rgba_png_keeps_its_alpha(seoul_bull_workspace, tmp_path
     rgba = read_image_rgba(out)
     assert (rgba[: h // 4, w // 4 : 3 * w // 4, 3] == 0).all()
     assert (rgba[3 * h // 4 :, w // 4 : 3 * w // 4, 3] == 255).all()
+    oh, ow = rgba.shape[:2]
+    np.testing.assert_array_equal(rgba[oh // 2, ow // 2, :3], rgb)
+    thumbnail = np.asarray(undistorted.thumbnails_y_x_rgb)[0]
+    np.testing.assert_array_equal(thumbnail[64, 64], rgb)
     # The JPEG sources stay without alpha.
     assert not image_has_alpha(output_dir / recon.image_names[1])
 

@@ -253,6 +253,19 @@ class TestToNerfstudioE2E:
             base = Path(frame["file_path"]).name
             assert (out / "images_2" / base).exists()
 
+        # The downscaled level keeps the original's colour: a red/blue swap
+        # between the read and the write would move the red and blue means
+        # apart by their difference, which the precondition makes large.
+        from sfmtool.fileio import read_image_rgb
+
+        base = Path(data["frames"][0]["file_path"]).name
+        original = read_image_rgb(out / data["frames"][0]["file_path"])
+        level = read_image_rgb(out / "images_2" / base)
+        original_mean = original.reshape(-1, 3).mean(axis=0)
+        level_mean = level.reshape(-1, 3).mean(axis=0)
+        assert abs(original_mean[0] - original_mean[2]) > 10, original_mean
+        np.testing.assert_allclose(level_mean, original_mean, atol=2.0)
+
     def test_ply_has_header_and_vertices(self, pinhole_sfmr_17_images, tmp_path):
         out = tmp_path / "ns_dataset"
         runner = CliRunner()
