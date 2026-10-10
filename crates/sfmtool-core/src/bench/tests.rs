@@ -6735,7 +6735,7 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
 #[test]
 fn the_bench_s_shift_bar_defaults_to_the_localizer_s_search_radius() {
     assert_eq!(Thresholds::default().max_shift_px, 6.0);
-    assert_eq!(Thresholds::default().max_projection_error_px, 3.0);
+    assert_eq!(Thresholds::default().max_projection_error_px, 15.0);
     assert_eq!(Thresholds::default().max_shift_px, BENCH_MAX_SHIFT_PX);
     assert_eq!(
         KeypointLocalizeParams::default().search,

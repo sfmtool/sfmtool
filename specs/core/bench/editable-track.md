@@ -196,7 +196,7 @@ impl Thresholds {
 // self-similarity bar under the largest shift the radius reads, and the
 // projection error bar in source-image px.
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
-pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 3.0;
+pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 15.0;
 pub const BENCH_MIN_ZNCC: f64 = 0.70;                // measured (§ "Parameters")
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.50;         // chosen from the same measurement
 pub const BENCH_CLUSTER_MIN_ZNCC: f64 = 0.7;         // not measured
@@ -3011,7 +3011,10 @@ which turned out sightings a person would keep; they are not measured.
 `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, the keypoint localizer's default
 member bar, which the bench applies in its painting rather than in the kernel
 (§ "The ZNCC self-similarity radius"). `max_projection_error_px` is
-`BENCH_MAX_PROJECTION_ERROR_PX`, 3 source-image px. A track keeps the bars it
+`BENCH_MAX_PROJECTION_ERROR_PX`, 15 source-image px, permissive on purpose:
+the bench is where a person finds the observations that do not quite fit the
+point, and bundle adjustment then pulls the point and the cameras together. A
+track keeps the bars it
 was made with: one created under an earlier default carries that default until
 someone moves it.
 
@@ -3183,7 +3186,7 @@ solve embedded for the measurement, whose making the file describes. The
 | `cluster_min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach at the cluster stage. `BENCH_CLUSTER_MIN_ZNCC_MIDDLE`, not measured; `0` turns it off, and a row with no middle reading clears it. |
 | `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, to the point's projection, is judged by `max_projection_error_px`. |
 | `max_zncc_self_similarity_radius` | `2.5` | The largest ZNCC self-similarity radius an observation's own tile may have, in patch-grid px: `zncc_self_similarity_radius` of the cluster measurement at the cluster stage and of the track measurement at the track stage. `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The radius reads at most `3`, meaning "3 or more", so a bar of `3` or more turns nothing out; a row with no reading clears it and a `NaN` fails it (§ "The ZNCC self-similarity radius"). |
-| `max_projection_error_px` | `3.0` | The largest reprojection error an observation may have, in source-image px: `reprojection_error` where the track is triangulated and `projection_offset_px` before it is. Track stage only. It judges the point as much as the sighting: a mis-triangulated point fails it on every row, the observations that would move the point back among them. `BENCH_MAX_PROJECTION_ERROR_PX`; `0` turns it off, a row with no reading clears it and a `NaN` fails it. The track-at-pixel cascade builds its tracks with it off. |
+| `max_projection_error_px` | `15.0` | The largest reprojection error an observation may have, in source-image px: `reprojection_error` where the track is triangulated and `projection_offset_px` before it is. Track stage only. It judges the point as much as the sighting: a mis-triangulated point fails it on every row, the observations that would move the point back among them. `BENCH_MAX_PROJECTION_ERROR_PX`; `0` turns it off, a row with no reading clears it and a `NaN` fails it. The track-at-pixel cascade builds its tracks with it off. |
 | `geometry_search_min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a candidate has to reach for a geometry search to admit it. It judges no observation, so the evaluation, the painting and `apply_thresholds` do not read it. From `ViewSelectParams::default`. |
 
 The reading's two memory bounds are not thresholds either: nothing about them is

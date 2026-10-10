@@ -673,7 +673,7 @@ looking at is the one at the cursor, and this block reports it.
                     "cluster_min_zncc": 0.7, "cluster_min_zncc_middle": 0.7,
                     "max_shift_px": 6.0,
                     "max_zncc_self_similarity_radius": 2.5,
-                    "max_projection_error_px": 3.0,
+                    "max_projection_error_px": 15.0,
                     "geometry_search_min_relative_zncc": 0.7 },
     "has_bitmap": true,              // the track has a stored bitmap
     "bitmap_for_judging": false,     // the bitmap was rendered only for the bars
@@ -4082,7 +4082,7 @@ achieved template ZNCC and its middle; a middle bar is off at `0`; and `max_zncc
 new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
 further is painted `out`, a row with no reading clears it, and at `3`, the
 largest radius read, it turns nothing out. `max_projection_error_px`, in
-source-image px and `3` on a new track, judges `reprojection_error`, or
+source-image px and `15` on a new track, judges `reprojection_error`, or
 `projection_offset_px` before the track is triangulated, at the track stage
 only; `0` turns it off, and a row with no reading clears it.
 The bound is the track's `max_shift_px`, 6 px by default on the bench. **A refused

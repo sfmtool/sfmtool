@@ -4844,10 +4844,10 @@ fn the_projection_error_bar_judges_the_px_line() {
     }
 }
 
-/// The bench's default bar is 3 px, and its box stands in the threshold row.
+/// The bench's default bar is 15 px, and its box stands in the threshold row.
 #[test]
-fn the_projection_error_bar_defaults_to_3_px() {
-    assert_eq!(Thresholds::default().max_projection_error_px, 3.0);
+fn the_projection_error_bar_defaults_to_15_px() {
+    assert_eq!(Thresholds::default().max_projection_error_px, 15.0);
     assert!(super::table::PROJECTION_ERROR_TIP.contains("box under this heading"));
 }
 
