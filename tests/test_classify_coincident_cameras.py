@@ -144,8 +144,18 @@ def test_coincident_cameras_unblock_feature_size_embedding(
     pidx = _pick_point_with_observer_count(recon, 3)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
-    # Before: the coincident point has no readable world size → the sizing error.
-    with pytest.raises(Exception, match="coincident with the camera centre"):
+    # Before: the coincident point has no readable world size → the sizing error,
+    # which attributes all three observations to the zero viewing distance and
+    # names the collapsed poses as the cause.
+    with pytest.raises(
+        Exception,
+        match=(
+            rf"point {pidx}'s patch .* none of its 3 observation\(s\) gave a usable "
+            r"keypoint scale \(3 at zero distance from the camera centre\)\. "
+            r"A point at zero distance from its cameras means those frames' poses "
+            r"have collapsed onto the point"
+        ),
+    ):
         collapsed.to_embedded_patches(
             normal="mean_viewing", extent="feature_size", extent_value=2.5
         )

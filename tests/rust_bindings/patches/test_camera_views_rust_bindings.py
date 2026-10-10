@@ -226,7 +226,9 @@ class TestFromTracksValidation:
         tpi = np.array([0, 0], np.uint32)
         tii = np.array([0, 1], np.uint32)
         scales = np.array([np.nan, np.nan], np.float64)
-        with pytest.raises(ValueError, match="usable keypoint scale"):
+        with pytest.raises(
+            ValueError, match=r"\(2 with a keypoint scale that could not be read\)"
+        ):
             PatchCloud.from_tracks(
                 views,
                 positions,
