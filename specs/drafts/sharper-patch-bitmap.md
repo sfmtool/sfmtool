@@ -6,7 +6,7 @@
   - the Jacobian measures resolution, whether it is compressed by obliquity or by lens distortion;
   - the angle measures how sensitive the view is to errors in the patch model, and along which direction;
 - the sampler is chosen per view from the Jacobian's anisotropy, so an oblique or distorted view keeps the detail along its less compressed axis (Part 3). That step is built, with the threshold `a = 1.5`;
-- the `.sfmr` file stores each observation's self-similarity radius, measured on its own `R×R` render, as a measurement in grid px. It does not store the derived sharpness or the final weight. Every operation that re-renders a point's bitmap reads the stored radii, and recomputes the geometric factors from the file's current geometry (Part 7);
+- the `.sfmr` file stores each observation's readings on its own `R×R` render: its self-similarity ellipse in grid px, the angle, tilt and zoom of that render, and its plain and blur-matched scores against the stored bitmap as `float32`. It does not store a derived sharpness, a weight or a covariance, nor the stored bitmap's own readings, which are read from the bitmap. A row is a record of the render it names: a writer that renders the observation's tile reads it again, a writer without the photographs carries it through, and no reader applies a tolerance to treat it as a reading of another render (Part 7);
 - the self-similarity reading summarises its region by an ellipse, whose semi-major axis is the radius, in place of the contour's furthest point, the slide and the reach (Part 2). That step is built;
 - the self-similarity radius the weights read is the reading of exactly the `R×R` tile, with no pixels from outside it (Part 1). That prerequisite is built;
 - the per-view measurements of Part 4 that the reference view needs are built and reported by the bench for every track it evaluates: each view's coverage, clipped share, viewing angle and tilt direction, its median ZNCC with the other views, and its agreement over each ninth of the tile with the cell deficit read from it. So is the reference-view rule of Part 5, which picks one view from those readings and says, for each other view, which test turned it away. Track View marks the pick and shows the readings, and the wire and the Python bindings carry them, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes. The view it picks is the one whose render is stored as the patch bitmap (Part 5);
@@ -27,7 +27,7 @@ Amends:
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md): the weighted consensus
 - [core/bench/editable-track.md](../core/bench/editable-track.md): the reference held by its row's pin, *Set as reference*, and the ZNCC bars (`min_zncc`, whole and middle) judging the plain score against the bitmap, re-measured (Part 8)
 - [gui/track-view.md](../gui/track-view.md) and [gui/mcp-server.md](../gui/mcp-server.md): the *Reference* column's marks, no *Bitmap* column, the *ZNCC* column against the bitmap, and the wire's reference fields (Part 8)
-- [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity columns in `tracks/`, and the bitmap's blur assessment in `points3d/` (Part 7); `observation_confidence` as the plain score against the bitmap (Part 7, built)
+- [formats/sfmr-file-format.md](../formats/sfmr-file-format.md): per-observation self-similarity and score columns in `tracks/` (Part 7); `observation_confidence` as the plain score against the bitmap (Part 7, built)
 
 ## Purpose
 
@@ -103,9 +103,9 @@ Every kernel that renders a view's tile, the bench's evaluation, the member gate
 
 ## Part 4: what each view can contribute
 
-The measurements the reference view reads are built: coverage, the clipped share, the viewing angle and tilt direction, and the ZNCC between observation bitmaps over the whole tile and per ninth ([core/patch/reference-view.md](../core/patch/reference-view.md)). Storing them (Part 7), and the brightness and colour readings, are not.
+The measurements the reference view reads are built: coverage, the clipped share, the viewing angle and tilt direction, and the ZNCC between observation bitmaps over the whole tile and per ninth ([core/patch/reference-view.md](../core/patch/reference-view.md)). Storing the self-similarity readings (Part 7), and the brightness and colour readings, are not.
 
-A sharper template needs to know, for each view, how much detail its tile carries and how well it lines up with the others. This part takes stock of what we can measure on the views' bitmaps that serves that goal, and notes what else each measurement serves. A measurement is then made once, stored (Part 7), and read by every consumer. The weights (Part 5) are one of those consumers.
+A sharper template needs to know, for each view, how much detail its tile carries and how well it lines up with the others. This part takes stock of what we can measure on the views' bitmaps that serves that goal, and notes what else each measurement serves. A measurement that needs the photograph is then made once, stored (Part 7), and read by every consumer that has none. The weights (Part 5) are one of those consumers.
 
 ### What we can measure
 
@@ -184,7 +184,7 @@ Blur matching is applied where it does change the result, to the scores of the o
 **Built: the stored bitmap is the reference view's render.** The point's patch bitmap is the reference view's `R×R` tile, rendered as the rule read it: through the point's patch re-anchored on the reference observation's keypoint, at the reconstruction's patch resolution `R`, with the sampler the rule in Part 3 picks for that view. It replaces the fused mean in `patch_bitmaps_y_x_rgba` and wherever the bitmap is stored, and the file records which observation it is, in `tracks/reference_observations` (Part 7). Every writer of the bitmap renders it with `patch::stored_bitmap` (the bench's fit, `sfm embed-patches`, `sfm xform --add-patch-bitmaps`, the sub-pixel refiner's and normal refinement's bitmap outputs, conversion to embedded patches, and the viewer's display bitmaps); where the rule picks no view, or reaches its pick only through its last fallback, the bitmap is the fused mean and records `-1`. A writer that renders the bitmap of a point that already stores a reference renders it from that observation rather than running the rule again (Part 7). On the 661 pool tracks the stored bitmap's self-similarity semi-major axis fell from a median of 1.21 grid px for the fused mean to 0.66, and rendering it costs within 10% of the fuse ([core/patch/reference-view.md](../core/patch/reference-view.md) § "Cost of the stored bitmap").
 - **Why not a mean.** The photographs differ in exposure and white balance. The ZNCC is blind to those differences, but a mean of the tiles is not. Without a model of each photograph's brightness and colour shift, a mean over differently exposed photographs mixes colours that never appeared together on the surface, and its detail is blurred by every view that does not line up exactly. A single view has neither problem.
 - **What a single view costs.** It keeps that view's noise, and any highlight or occluder the measurements missed. The bitmap also changes all at once when another view comes to rank higher.
-- **The bitmap's blur assessment.** The bitmap's blur assessment ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)), its semi-axes unblurred and after the two probe blurs, is read once per track, on the bitmap, with the reading its own ellipse came from. Every observation's score against the bitmap reads its width off that one assessment (Part 6). Stored beside the bitmap (Part 7), it lets a view added later, by Add Image to Tracks or a bench geometry search, be scored against the stored bitmap with no reading of the other views.
+- **The bitmap's blur assessment.** The bitmap's blur assessment ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)), its semi-axes unblurred and after the two probe blurs, is read once per track, on the bitmap, with the reading its own ellipse came from. Every observation's score against the bitmap reads its width off that one assessment (Part 6). It is read from the stored bitmap, so a view added later, by Add Image to Tracks or a bench geometry search, is scored against the stored bitmap with no reading of the other views. It is not stored, since the bitmap it is read from is (Part 7).
 
 **Only the renders are read.** Choosing the reference, the bitmap, its blur assessment and the scores against it all read the views' `R×R` renders at the reconstruction's patch resolution, and nothing else: no grid coarser than `R`, and no pixels of the photograph outside the tile. What the rule picks is then the tile that is stored. (The localizer's search reads no coarser level either; Part 9 measured one and did not build it.)
 
@@ -256,26 +256,24 @@ The exponents `p`, `q` and `k` are measured (see [Evaluation](#evaluation)). `f`
 
 **What it does not correct, and is not meant to.** A view out of focus scores as well, blur-matched, as a sharp one of the same content. Its blur is still in its self-similarity radius, which the reference-view rule and the weights of Part 5 read, in the plain ZNCC beside it, and in the ellipse term of its covariance; the bars that should see a focus miss read the plain value.
 
-## Part 7: storing the self-similarity radii in the `.sfmr` file
+## Part 7: storing each observation's readings in the `.sfmr` file
 
-Each observation's self-similarity radius is the one input to the weights that needs the photograph and a shift search. The other inputs need no photograph: the footprint and the viewing angle come from geometry, and the IRLS agreement is cheap once the views are rendered. So the file stores the radii, and every operation that re-renders a point's bitmap reads them instead of measuring again. These operations include:
-- `embed-patches`;
-- the bench fit's render;
-- `render_patch_bitmap` / `render_patch_cloud_bitmaps`;
-- conversion to embedded patches;
-- any later re-render.
-
-The file stores the radius itself, in grid px, not a ratio to the track's shortest radius or the weight `w_v`. A ratio and a weight depend on the rest of the track and on functional forms that are still being tuned. A radius is a measurement with units, and it serves more than this draft:
-- the weights here (`g` is computed from it at render time);
+An observation's self-similarity radius, and its score against the stored bitmap, are read on the observation's own `R×R` render, and that render is never stored. Reading either again means loading the photograph, rendering the tile and, for the radius, a shift search. The footprint and the viewing angle need no photograph, since they come from geometry, and the stored bitmap's own readings need none either, since the bitmap is in the file. So the file stores each observation's readings, and an operation without the photographs reads them there. They serve:
+- the per-observation covariance that bundle adjustment weights an observation by (Part 6, § "The per-observation covariance"), which reads the observation's ellipse and its score, and runs without the photographs;
 - the cull bars (`max_zncc_self_similarity_radius`), applied without the photographs;
 - the ellipse as a confidence bound on the point on the patch plane, converted to scene units through the patch's half-extents;
 - the Track View, which can show a committed track's readings before its evaluation runs.
+
+The reference-view rule is not among them: it reads the pair ZNCC and the cell deficit as well, which need the renders, so a writer running it reads the radii on those renders.
+
+The file stores the radius itself, in grid px, and the score itself, not a ratio to the track's shortest radius, the weight `w_v` or a covariance. A ratio, a weight and a covariance depend on the rest of the track and on functional forms and constants that are still being tuned. A reading is a measurement with units.
 
 ### What is stored
 
 For observation `j` of point `i`, measured on the observation's own `R×R` render:
 - **The render.** It goes through point `i`'s patch, re-anchored on observation `j`'s keypoint, at the point's patch resolution `R`. It uses the sampler the rule in Part 3 picks for that view. This is the tile the bench and the member gates read (Part 1).
 - **The reading.** The overlap reading, with the default `max_radius` `r`.
+- **The scores.** The render's plain ZNCC against the point's stored bitmap, and its blur-matched ZNCC against it (Part 6), the two scores the bench reads for every row. A view aligned to the reference render (Part 9) is scored at the place the alignment put it, so the plain score is the alignment's peak value.
 
 Optional columns, parallel to the other `tracks/*` arrays. Their names follow the glossary: the measurement is the ZNCC self-similarity radius, its region is summarised by the contour's ellipse, whose semi-major axis is the radius, and a value whose true length may be larger is "at least" that value. Each 0/1 column is named after the value it qualifies and has the same shape, so no column needs a legend.
 
@@ -287,12 +285,20 @@ Optional columns, parallel to the other `tracks/*` arrays. Their names follow th
 | `tracks/zncc_self_similarity_cos_view_angle` | `(M,)` `float32` | `cos θ = −n · d̂` of the render the radius was read on: `n` the re-anchored patch's outward normal, `d̂` the unit ray from the camera centre through the observation's keypoint. Positive where the patch faces the camera |
 | `tracks/zncc_self_similarity_tilt_angle` | `(M,)` `float32` | `α`, the angle of that render's tilt direction (`d̂` projected into the patch plane) from the patch's u axis towards its v axis, radians in `[0, π)`. `NaN` where the view faces the patch head on |
 | `tracks/zncc_self_similarity_zoom` | `(M, 2)` `float32` | `[least, most]` zoom of that render: `[1/σ_major, 1/σ_minor]` of the Jacobian of the patch grid into the photograph at the patch centre, grid px per photograph px |
+| `tracks/bitmap_zncc` | `(M,)` `float32` | The render's plain ZNCC against the point's stored bitmap. `1` for the reference observation, whose score is not computed |
+| `tracks/blur_matched_bitmap_zncc` | `(M,)` `float32` | The render's blur-matched ZNCC against the point's stored bitmap. `1` for the reference observation |
 
-- **What the last three columns describe.** They record the geometry of the render the radius was read on, not the file's current geometry. The format text says so in those words.
+The two score columns' names are working names, settled with the glossary when this part is built.
+
+- **What the angle, tilt and zoom columns describe.** They record the geometry of the render the readings were taken on, not the file's current geometry. The format text says so in those words. With them, each row states which render it is a reading of (§ "Keeping the readings true").
   - **Why the prefix.** They carry the `zncc_self_similarity_` prefix so a reader sees they belong to that measurement.
   - **Why store them.** All need the camera model to recompute. The angle and the tilt direction need the keypoint unprojected, and the zoom needs the projection's derivative. Storing them gives a reader the exact measured values without implementing the camera models.
+- **Why `float32` scores.** The covariance reads `1 − ZNCC`. Near a good match that difference is small, and the `uint8` steps of `observation_confidence` are too coarse for it: at a score of 0.98 one step is a fifth of `1 − ZNCC`.
+- **Why both scores.** Whether the covariance reads the plain or the blur-matched score is not decided (Part 6), and both need the photograph to read again.
 - **The fallback render.** Where the keypoint's ray cannot meet the patch plane (parallel to it, or the plane behind the camera), the render uses the stored patch without re-anchoring, and `d̂` is the ray to the stored patch's centre. Such a view is at or past grazing, so its value is near zero or negative either way.
-- **Not measured.** `NaN` in the ellipse axes means the observation was not measured. Its angles and zoom are then `NaN` and its flags 0.
+- **Not measured.** `NaN` in the ellipse axes means the observation was not measured. Its angles and zoom are then `NaN` and its flags 0. `NaN` in a score means it was not read, as where the point has no stored bitmap; the radius and the scores are written together by the writers below, but a point without a bitmap has a radius and no score.
+- **Present together.** The eight columns are present or absent together, flagged by one entry in `tracks/metadata.json`; a row can be `NaN` in all of them.
+- **The version.** They are optional columns of version 12, which has not been released, so they need no further version bump. They are part of `tracks_xxh128` when present, in their lexicographic slots.
 - **Metadata.** `tracks/metadata.json` records `r` and the flat floor, the noise and the relative tolerance the reading used, so a reader can tell whether stored radii are comparable with its own. It also records the sampler threshold `a` the renders were made under (Part 3), from which a reader works out each render's sampler from its stored zoom. `sfm embed-patches` already records `anisotropic_threshold` in the file's `tool_options`, but `tool_options` describes one tool run, and a later re-render of the radii, such as `sfm xform --add-patch-bitmaps sampler=per_view`, records no threshold there, so the radii need their own record.
 - **Grid px.** The grid px are those of the point's `R` (`points3d/metadata.json`'s `patch_bitmap_resolution`), so the radius converts to scene units through the point's patch half-extents, as the ellipse does.
 
@@ -314,35 +320,35 @@ The stored bitmap is one observation's render (Part 5), so the file records, for
 - **The hash.** The entry is part of `tracks_xxh128` when present, in its lexicographic slot, after `point_indexes`.
 - **Loading an older file.** A loader that reads a file below version 12 with patch frames creates the column and fills it with `-1`, so in memory every reconstruction with patch frames has one, and every later save writes it. A file below version 12 without patch frames gets no column.
 
-### The bitmap's blur assessment
+### The bitmap's own readings are not stored
 
-With the reference recorded, the file can also record the bitmap's blur assessment per point, an optional column parallel to the other `points3d/*` arrays: its self-similarity semi-axes `[major, minor]` in grid px, and the semi-axes after each of the two probe blurs, `(N, 3, 2)` `float32` in all, `NaN` where it was not read. With it a writer scores a view against the stored bitmap, blur-matched, without reading the bitmap again, as Add Image to Tracks does for an added view. The probe widths are recorded in `points3d/metadata.json`, since the assessment is comparable only with one read at the same widths. Its name is settled with the glossary when this part is built. Like the radii, the assessment describes the bitmap as rendered; a writer that re-renders the bitmap reads it again.
+The stored bitmap's ellipse and its blur assessment ([core/patch/blur-matched-zncc.md](../core/patch/blur-matched-zncc.md)), its semi-axes unblurred and after the two probe blurs, are not stored. They are functions of the bitmap alone, and the bitmap is in the file, so a reader without the photographs reads them exactly from it, at the cost of three self-similarity readings of one tile per point. A stored copy would only be one more value to keep in step with the bitmap. Add Image to Tracks, which scores an added view against the stored bitmap, reads the assessment from the bitmap; if that is measured as a real cost, a stored assessment is reconsidered then.
 
-### When a stored radius stops describing the view
+### Keeping the readings true
 
-A radius describes one render: the point's patch (centre, normal, axes, half-extents), the observation's keypoint, the image's pose and intrinsics, and the photograph. These change often, and by small amounts. Bundle adjustment moves every pose, and Fit and normal refinement move keypoints and normals.
+A reading describes one render: the point's patch (centre, normal, axes, half-extents), the observation's keypoint, the image's pose and intrinsics, the photograph, and, for the scores, the stored bitmap. These change often, and by small amounts: bundle adjustment moves every pose, and Fit and normal refinement move keypoints and normals. Once any of them changes, the current render differs from the one read, and its readings would differ too.
 
-**The reader judges staleness, not the writer.** A writer that changes the geometry does not have to clear or re-measure the radii. It carries the stored values through, and a writer that copies, filters or reorders observations does the same. A reader that uses a radius compares the stored angle and zoom with the ones it computes from the current geometry:
-- small differences mean the radius still describes this view;
-- a large change means it no longer does. Examples are a normal refit that turns the patch 20°, a resize that halves the zoom, or a keypoint moved onto other texture.
+**A row is a record of the render it names, not a claim about the current render.** The angle, tilt and zoom columns say which render that was, so the row stays true however the geometry moves after it. A reading is kept with the observation the way the keypoint is: bundle adjustment does not re-measure a keypoint after moving the poses, and the keypoint stays the measurement it was. No reader applies a tolerance to decide that a reading from another render describes this one.
 
-Each consumer applies the tolerance that suits it. A weight can tolerate more drift than a cull bar.
+**The writers:**
+- **A writer that renders an observation's tile reads it again and writes the row.** That is every writer that localizes, refines or fits a keypoint or a normal, scores the observations or runs the reference-view rule: the bench's Fit and evaluation (written at commit), `sfm embed-patches` and its rounds, `sfm xform --localize-keypoints` and `--refine-keypoints`, Track at Pixel, candidate track spawning and Add Image to Tracks. Once the tile is rendered the reading is the cheap part, so the rows are refreshed wherever the photographs are touched. A keypoint moves only through such a writer, so a moved keypoint is always read again.
+- **A writer without the photographs carries the rows through unchanged.** That is bundle adjustment, the similarity transforms, filters, merges and every writer that copies, removes or reorders observations, which moves each row with its observation.
+- **A writer that replaces an observation's photograph clears its row** (`NaN`, flags 0), since the snapshot does not record the photograph and cannot show that change.
+- **A writer that changes a point's reference observation** reads the scores of its observations against the new bitmap, or clears them where it does not render the observations. A bitmap rendered again from the same reference keeps the scores as records, as the radii are kept when the geometry moves.
 
-**Two cases the stored conditions cannot detect, so a writer clears the radius (sets it to `NaN`):**
-- a keypoint moved so far that the render covers different texture while the angle and zoom stay about the same, as when a Fit walks an observation to another place;
-- the observation's photograph replaced.
-
-The threshold for "so far" is stated in grid px, e.g. more than half the radius's own `r`.
+**A consumer that needs the current render's reading,** and has the photographs, compares the row's angle, tilt and zoom with the current geometry, and reads again where any of them differs. With no photographs it uses the row as the measurement it is.
 
 ### A hand-set weight
 
-The bench can down-weight a view by hand, e.g. a photograph the user sees is out of focus. That is a judgement, not a measurement, so it lives in its own optional column, `tracks/appearance_weight_override` (`(M,)` `float32`, `NaN` where not set). A render multiplies it into `w_v`. It never overwrites the measured radius, so a later re-measurement does not erase the user's decision, and a reader can always tell which is which.
+The bench can down-weight a view by hand, e.g. a photograph the user sees is out of focus. That is a judgement, not a measurement, so it never overwrites a stored reading. Since the stored bitmap is a single view's render, the weighted mean it was proposed for no longer builds the bitmap; the weight belongs with the per-observation covariance, as a scale on it, and is specified with it.
 
 ### `observation_confidence`
 
 The format already has an optional per-observation column, `tracks/observation_confidence` (`uint8`). Its spec defined it as the observation's photometric sharpness relative to its track's consensus, while the bench commit and Add Image to Tracks filled it with the observation's leave-one-out ZNCC against the consensus, which this draft shows is biased against sharp views (§ "The problem, measured"). Three changes were considered to keep the column's meaning and its contents in agreement: fill it from the stored radius, quantizing `ρ_min / ρ_v`; fill it from the observation's score against the stored bitmap; or redefine it as the leave-one-out ZNCC.
 
 **Decided and built:** the column holds the observation's plain ZNCC against the point's stored bitmap, the score the bench's bars judge, stored as `round(255 · clamp(z, 0, 1))`, so the reference observation reads `255`. The bench commit writes it (`0` for a row with no score) and reads it back into a track put on the bench; Add Image to Tracks writes the new view's score against the same template, raised to `1`. The leave-one-out ZNCC is gone with congealing (Part 9), so that choice no longer exists, and the plain score is the one the bars read rather than the blur-matched one. The column keeps this meaning until the per-observation covariance replaces it ([formats/sfmr-file-format.md](../formats/sfmr-file-format.md) § "`tracks/observation_confidence.{M}.uint8.zst`"). The radius columns do not depend on the choice.
+
+With `tracks/bitmap_zncc` stored, `observation_confidence` holds the same score at `uint8` precision. It stays, written from the same score, since the bench reads it back into a track put on the bench and it is present without the self-similarity columns; whether it is retired is decided with the covariance.
 
 ## Part 8: the reference on the bench
 
@@ -445,7 +451,6 @@ Measured again on 2026-10-09 after the localizer's sub-pixel step became a 3×3 
 
 ## Open questions
 
-- **The staleness tolerances** a consumer applies to the stored angle and zoom (Part 7), and the keypoint distance past which a writer clears a stored radius.
 - **Which pairs to correlate** (Part 5), and whether the pairwise ZNCC's coarse-grid sharpness (member coherence's `sharpness_deficit`) adds anything beside the self-similarity radius.
 - **Member coherence on the stored bitmap** (Part 5): whether it keeps deciding on the full matrix of its members' pairs, or decides on each member's blur-matched score against the stored bitmap, which costs `k − 1` correlations but makes every verdict depend on the reference.
 - **The covariance's ZNCC** (Part 6): whether the per-observation covariance reads the plain ZNCC at the localizer's peak or the blur-matched score against the stored bitmap, with `k` calibrated again for the latter.
