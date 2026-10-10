@@ -114,10 +114,8 @@ class Workload:
         self.recon = reconstruction.SfmrReconstruction.load(sfmr_path)
         ws = self.recon.workspace_dir
         t0 = time.perf_counter()
-        # BGR, the channel order this bench's earlier runs were measured in.
         self.images = [
-            np.ascontiguousarray(read_image_rgb(os.path.join(ws, name))[:, :, ::-1])
-            for name in self.recon.image_names
+            read_image_rgb(os.path.join(ws, name)) for name in self.recon.image_names
         ]
         self.load_s = time.perf_counter() - t0
 
