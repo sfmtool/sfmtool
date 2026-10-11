@@ -164,9 +164,9 @@ The version is `AppState::delete_points`'s, so its label and its Action Log
 entry are that edit's: `Deleted 3412 points in <label>`, or `Deleted point 7 in
 <label>` for a stroke that painted one point, with the version step text the
 Action Log entry carries for every edit
-([`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of edit"). The entry has no "brush" suffix,
-because the version is the same whether the brush or the wire deleted the
-points.
+([`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of
+edit"). The entry has no "brush" suffix, because the version is the same
+whether the brush or the wire deleted the points.
 
 The edit follows the existing rules for a point edit: a selection on a deleted
 point is cleared and an undo does not restore it
@@ -187,7 +187,7 @@ check is made once, at the commit.
 This exists. It is the atomic many-point form of `delete_point`, bound through
 `sfmtool-py` as `EditedReconstruction.delete_points`, and is specified in
 [`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
-§ "Rust API".
+§ "The overlay: a base plus its edits", under its "Rust API".
 
 A point edit's unshared cost is its overlay, so a stroke of `N` points costs
 `4N` bytes per version beyond the overlay it shares, and the overlay is cloned
@@ -303,8 +303,8 @@ release.
 - **The flag** (`scene_renderer/upload/tests.rs`, `noop` backend): previewed
   points get `4` and go back to `1` when the pointer moves off them; painted
   points get `3`, go back to `1` on cancel, and to `0` after the commit.
-- **Wire** (`mcp/tests/edit.rs`): `set_viewer_3d_display` switches the tool and refuses
-  `delete_brush` while the Move Camera lock is held.
+- **Wire** (`mcp/tests/edit.rs`): `set_viewer_3d_display` switches the tool
+  and refuses `delete_brush` while the Move Camera lock is held.
 - **End to end** (`ui_basic`, once `drag` exists): a drag across a known
   region of the seoul bull ground truth deletes points, and their count matches
   the Action Log entry.

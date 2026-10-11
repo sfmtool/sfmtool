@@ -251,9 +251,9 @@ same indexes: an observation in the deleted image is dropped, and an item left
 with none is discarded ([bench.md](bench.md) § "One history for the pair").
 
 An edit that cannot run changes nothing and returns the sentence saying why: no
-point selected, an empty list of points, a point already deleted, an image already gone, or the node's
-last image, which cannot be deleted because a reconstruction with no images is
-not one.
+point selected, an empty list of points, a point already deleted, an image
+already gone, or the node's last image, which cannot be deleted because a
+reconstruction with no images is not one.
 
 ### What a bulk edit owes the rest of the viewer
 
@@ -492,8 +492,7 @@ the type lives, in `crates/sfmtool-core/src/reconstruction/edited/tests.rs`.
 `crates/sfm-explorer/src/state/edits/tests.rs` covers the two edits end to end --
 that a point edit leaves the base the same `Arc` and moves the count by one, that
 a many-point delete is one version whose map is the sorted unique list and which
-one undo reverses, that
-a bulk edit produces a new base with an empty overlay under the same `ReconId`,
+one undo reverses, that a bulk edit produces a new base with an empty overlay under the same `ReconId`,
 that a refused edit leaves the history alone, and what the Action Log records.
 
 `crates/sfm-explorer/src/display_transform/tests.rs` covers the third half: that

@@ -2972,8 +2972,8 @@ re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
 is what it is for.
 
 **Point edits close up at the next whole new base.** A point edit
-(`delete_point`, `delete_points`, `retriangulate_point`, `commit_bench_track`) keeps every other
-index where it was by leaving the gone point's slot open. Every edit that gives
+(`delete_point`, `delete_points`, `retriangulate_point`, `commit_bench_track`)
+keeps every other index where it was by leaving the gone point's slot open. Every edit that gives
 the node a whole new base, and a `save_reconstruction` that is not a minimal
 copy, first folds those pending point edits into the value: a deleted point's
 slot closes up and every point after it moves down, a replaced point goes back
@@ -3179,8 +3179,8 @@ Go to Point dialog use, so an id means the same thing wherever it is sent.
 
 **`delete_points` is many point deletes as one version**, which one undo
 reverses. It is `AppState::delete_points`, the call `delete_point` makes with a
-one-element list ([document-model.md](document-model.md) § "Two kinds of edit"), so
-the reply has `delete_point`'s shape. `points` are bare indexes into the
+one-element list ([document-model.md](document-model.md) § "Two kinds of
+edit"), so the reply has `delete_point`'s shape. `points` are bare indexes into the
 reconstruction the call names; they need not be sorted, and an index named twice
 counts once. Every index is checked before any is deleted, so a list naming a
 point that is out of range or already deleted is refused whole, as is an empty
@@ -5074,8 +5074,7 @@ where a test hands no host over.
   names, and leaves that one sentence in the log as `Mcp`; `delete_points`
   pushes one version for its whole list with the same reply, and a list naming
   a dead point, an empty list or one that is not whole numbers is refused and
-  pushes nothing; `delete_camera_image`
-  shrinks the image table; the resection and the adjustment push a
+  pushes nothing; `delete_camera_image` shrinks the image table; the resection and the adjustment push a
   version and report the estimate and the residuals. What each family *does* to
   a reconstruction is asserted in `state::edits::tests`, over the same
   `AppState` calls these make.
