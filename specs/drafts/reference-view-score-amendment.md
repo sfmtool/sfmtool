@@ -55,8 +55,10 @@ The stored bitmap
 ([`stored_bitmap.rs`](../../crates/sfmtool-core/src/patch/stored_bitmap.rs))
 is the pick's tile, except where the rule picks nothing or reaches its pick
 only through `without_any` (`ReferenceRender::stored_reference`). There it is
-the fused mean of the views, and the point records the reference `-1`; on a
-solve of `dino_dog_toy` that is 559 of 18,991 points, as
+the fused mean of the views, and the point records the reference `-1` (a
+`without_any` pick is stored after all where no fused mean renders). On a
+solve of `dino_dog_toy`, 559 of 18,991 points take the fused mean through
+`without_any`, as
 [reference-view.md](../core/patch/reference-view.md#the-stored-bitmap)
 reports.
 
@@ -162,7 +164,8 @@ an exponential) because:
 
 - inside the band the factor is exactly `1`, so the views that pass today's
   thresholds are ranked by `r_eff` alone, and the band edges start at today's
-  thresholds, which were tuned against the hand picks;
+  thresholds, of which the agreement margin and the cell deficit bar were
+  tuned against the hand picks;
 - past the band it keeps growing without a cliff, so a view slightly past a
   threshold is slightly worse rather than out, which is the balance Problem 1
   asks for;
@@ -215,8 +218,8 @@ makes a view look better than one that has it:
   view (a starting value; the per-dataset medians of the stored bitmap's
   radius in
   [reference-view.md](../core/patch/reference-view.md#cost-of-the-stored-bitmap)
-  run from 0.40 to 1.06 grid px), so the pick is made by the angle and the penalties alone. Today the rule
-  picks nothing in that case.
+  run from 0.40 to 1.06 grid px), so the pick is made by the angle and the
+  penalties alone. Today the rule picks nothing in that case.
 - **No pair ZNCC**: the shortfall is the largest shortfall among the views
   that have one. Where no view has one, `A_v = 1` for every view, as today the
   agreement test then passes every candidate.
@@ -262,8 +265,8 @@ laid out like one from in front, sample for sample, and all the views of such
 a point see the patch from the same side. The likely cause is a normal that
 points into the surface, and under that reading `θ'` is the angle each view
 sees the surface at. The fused mean the stored bitmap holds today for these
-points is a mean of the same tiles (it leaves out a view behind the camera,
-not a view behind the patch), so a single view's
+points is a mean of the same tiles (it leaves out a view that does not
+project the point, not a view behind the patch), so a single view's
 tile is as consistent with the others as the mean was, and sharper. Normal
 refinement's obliquity prior already weights by `|v̂ · n|`, which is the same
 for both sides.
@@ -300,7 +303,7 @@ no bitmap the way they report a point with fewer than two views today
 (`render_patch_cloud_bitmaps`) gives such a point a zero row and `-1`, and
 `sfm embed-patches` drops it as it drops any point with no bitmap. How many
 points that is, against the 3% that store a fused mean today on
-`dino_dog_toy`, is counted during the tuning. A point with fewer than two
+`dino_dog_toy` through `without_any` alone, is counted during the tuning. A point with fewer than two
 views keeps getting no bitmap, as today.
 
 **A fused mean already in a file** stays readable. A file older than `.sfmr`
@@ -313,7 +316,7 @@ that picks a row, which is now every evaluation where some row is eligible).
 
 - **Normal refinement's weighted consensus** Φ stays: it chooses a normal by
   scoring the views against their own weighted mean, not against the stored
-  bitmap, and `PatchViewStack::fuse` stays for it. Its `representative` output
+  bitmap. Its `representative` output
   is the pick's tile; where no view is eligible, `representative` and
   `reference` are `None` in place of the fused mean of the retained render.
 - **The localizer and the sub-pixel refiner** align to the fused mean today
@@ -335,15 +338,16 @@ that picks a row, which is now every evaluation where some row is eligible).
 - **The bench's bitmap for judging** is the rule's pick among every row with a
   keypoint, or their fused mean today; it becomes the pick, or no bitmap where
   no row is eligible.
-- `fuse_patch_bitmap`, `fuse_patch_bitmap_reporting` and
-  `BitmapKind::FusedMean` lose every caller outside their tests and are
-  removed, unless the implementation keeps `fuse_patch_bitmap` for the
+- `fuse_patch_bitmap`, `fuse_patch_bitmap_reporting`,
+  `BitmapKind::FusedMean` and `PatchViewStack::fuse` (whose only callers are
+  normal refinement's and the sub-pixel refiner's fused-mean bitmaps, not Φ)
+  lose every caller outside their tests and are removed, unless the implementation keeps `fuse_patch_bitmap` for the
   comparisons in [sharper-patch-bitmap.md](sharper-patch-bitmap.md#evaluation).
 
 ## What changes elsewhere
 
-These are proposals; the names follow [GLOSSARY.md](../GLOSSARY.md) (§
-"`*Options`" for the settings struct) and are settled in its reference-view
+These are proposals; the names follow [GLOSSARY.md](../GLOSSARY.md) (its
+`*Options` entry under § "Rust type names" for the settings struct) and are settled in its reference-view
 entry when the change is built.
 
 **Core API**
@@ -356,7 +360,7 @@ pub struct ReferenceViewOptions {   // impl Default, the starting values above
     pub agreement_scale: f64,       // 0.15
     pub cell_deficit_band: f64,     // 0.3
     pub cell_deficit_scale: f64,    // 0.3
-    pub coverage_band: f64,         // 0.99
+    pub coverage_band: f64,         // 0.99, the coverage C_v is 1 at or above
     pub coverage_scale: f64,        // 0.03
     pub clipped_band: f64,          // 0.05
     pub clipped_scale: f64,         // 0.05
@@ -383,12 +387,12 @@ pub fn choose_reference_view(views: &[ReferenceReadings], resolution: usize,
 ```
 
 - `ReferenceTest`, `ReferenceFallback`, `ReferenceChoice::fallback` and
-  `ReferenceChoice::rejected_by` go. The constants
-  `REFERENCE_MIN_COVERAGE`, `REFERENCE_MAX_CLIPPED_SHARE`,
-  `REFERENCE_MAX_VIEWING_ANGLE_DEG`, `REFERENCE_FACING_LIMIT_DEG`,
-  `REFERENCE_MAX_CELL_DEFICIT` and `REFERENCE_AGREEMENT_MARGIN` become the
-  fields of `ReferenceViewOptions`, so the tuning can sweep them without
-  rebuilding. `REFERENCE_MIN_JUDGED_CELL_ZNCC` and
+  `ReferenceChoice::rejected_by` go. `REFERENCE_MAX_VIEWING_ANGLE_DEG` goes,
+  replaced by the angle term, and `REFERENCE_FACING_LIMIT_DEG` by the choice
+  of side. The constants `REFERENCE_MIN_COVERAGE`,
+  `REFERENCE_MAX_CLIPPED_SHARE`, `REFERENCE_MAX_CELL_DEFICIT` and
+  `REFERENCE_AGREEMENT_MARGIN` become the bands of `ReferenceViewOptions`,
+  so the tuning can sweep them without rebuilding. `REFERENCE_MIN_JUDGED_CELL_ZNCC` and
   `REFERENCE_MIN_CELL_SAMPLES` are part of how the cell deficit is read, not of
   the rule, and stay.
 - The rule needs `R` for `c`, so it takes the resolution; `read_track` passes
